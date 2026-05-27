@@ -33,7 +33,10 @@
  *     content, msg_id or event_id, msg_seq, msg_reference}.
  *  Step 5/6 — On 2xx, mark attempt "delivered" + return externalMessageId.
  *     Network error → mark "unknown" + throw RetryableTransportError.
- *  Step 7 — On QQ duplicate-msg_seq code (40034015 / msg duplicate),
+ *  Step 7 — On a QQ "duplicate msg_seq" response (codes vary by endpoint:
+ *     `304022` / `304023` on the media-message path, `40034015` on the
+ *     text-message path — both are documented as "message duplicate"
+ *     elsewhere; see openclaw-qqbot src/api.ts for the field survey),
  *     if any prior attempt is in {unknown, unknown_assumed} the message
  *     was almost certainly delivered earlier — return {} (no
  *     externalMessageId) + mark deliveryAmbiguous="success_likely".
@@ -100,13 +103,19 @@ interface QqLinkMetadataState {
 const URL_PATTERN = /\bhttps?:\/\/([^\s<>"]+)/gi
 
 /**
- * The QQ open platform's duplicate-msg_seq response. Empirically
- * surfaces as 304022 or 304023 across the message-send and
- * media-message endpoints; we treat both as "duplicate" for the
- * G6 step 7 ambiguous-success branch. New codes can be added here
- * without touching the rest of the flow.
+ * QQ open platform "duplicate msg_seq" responses. Endpoint surface
+ * varies:
+ *   - text  /v2/.../messages (msg_type 0/2) → 40034015 in the v2 wiki.
+ *   - media /v2/.../messages (msg_type 7)   → 304022 / 304023 in the
+ *     media-message wiki (the 304xxx family carries upload/media result
+ *     codes, and the duplicate cases are documented there separately).
+ *
+ * Both mean "the platform already accepted a message with this
+ * (anchor, msg_seq) pair"; the G6 step 7 ambiguous-success branch
+ * treats them the same. Add new codes here as the QQ wiki splits new
+ * surfaces off.
  */
-const QQ_DUPLICATE_MSG_SEQ_CODES = new Set([304022, 304023])
+const QQ_DUPLICATE_MSG_SEQ_CODES = new Set([304022, 304023, 40034015])
 
 /**
  * Transient error codes the chunked-upload and message-send paths can
@@ -124,7 +133,7 @@ export async function sendQqMessage(
   const config = readQqAccountConfig(input.account)
   const meta = readQqMetadata(input.linkMetadata)
 
-  // Step 0: local determinism that doesn't touch any quota.
+  // Step 0a: local determinism that doesn't touch any quota.
   // Pass connectionMode so interaction_prompt parts render as a real
   // keyboard for long_connection accounts and degrade to fallback text
   // for webhook accounts (Stage 8 WS-only gate).
@@ -137,6 +146,24 @@ export async function sendQqMessage(
     })
   }
   enforceConfiguredUrlDomains(plan, config)
+
+  // Step 0b: media preflight BEFORE the anchor reservation. QQ caps
+  // passive-reply quota at 5 per inbound anchor; an upload failure (or
+  // a retryable 5xx during upload) that fires after reserveFirstSend
+  // would burn one of those five slots for nothing. Upload here so
+  // RetryableTransportError bubbles up before any reservation work.
+  // Cached file_info wins, no re-upload — the cache key includes
+  // (account, scope, target, fileType, content hash) so two attempts
+  // on the same content hit the cache.
+  const planItem = plan[0]!
+  const fileInfo =
+    planItem.kind === "media"
+      ? await resolveFileInfo({
+          account: input.account,
+          endpoint: input.endpoint,
+          plan: planItem,
+        })
+      : null
 
   // Step 1: crash recovery — reclassify stale in_flight attempts
   await reclassifyStaleAttempts(input, meta)
@@ -171,13 +198,11 @@ export async function sendQqMessage(
   // if it really wanted both. Future revisions can chain plan items
   // by reserving a fresh msg_seq per send.
   const { url } = endpointUrlFor(input)
-  const planItem = plan[0]!
-  const body = await buildOutboundBody({
+  const body = buildOutboundBody({
     plan: planItem,
+    fileInfo,
     reservation,
     replyTo: input.replyTo?.externalMessageId,
-    account: input.account,
-    endpoint: input.endpoint,
   })
 
   let res: Response
@@ -400,17 +425,16 @@ interface QqOutboundBody {
 }
 
 /**
- * Materialize a single QqSendPlanItem into the body QQ expects. Async
- * because media plans may upload bytes / pull a cached file_info as
- * part of the construction.
+ * Materialize a single QqSendPlanItem into the body QQ expects. Sync
+ * now that media upload moved to Step 0b — `fileInfo` is pre-resolved
+ * by the caller and threaded in for the media branch.
  */
-async function buildOutboundBody(params: {
+function buildOutboundBody(params: {
   plan: QqSendPlanItem
+  fileInfo: string | null
   reservation: QqReservation
   replyTo?: string
-  account: OutboundSendInput["account"]
-  endpoint: OutboundSendInput["endpoint"]
-}): Promise<QqOutboundBody> {
+}): QqOutboundBody {
   const body: QqOutboundBody = {
     msg_type: params.plan.msgType,
     msg_seq: params.reservation.msgSeq,
@@ -432,13 +456,16 @@ async function buildOutboundBody(params: {
     body.markdown = params.plan.payload.markdown
     body.keyboard = params.plan.payload.keyboard
   } else {
-    // media plan — upload + cache file_info
-    const fileInfo = await resolveFileInfo({
-      account: params.account,
-      endpoint: params.endpoint,
-      plan: params.plan,
-    })
-    body.media = { file_info: fileInfo }
+    // media plan — file_info comes from the Step 0b preflight; throwing
+    // here would be a programmer error since we only reach this branch
+    // when planItem.kind === "media".
+    if (params.fileInfo === null) {
+      throw new PermanentTransportError(
+        "qq: media plan but fileInfo not pre-resolved (Step 0b skipped)",
+        { code: "qq_internal_media_preflight_missing" }
+      )
+    }
+    body.media = { file_info: params.fileInfo }
     body.msg_type = QQ_MSG_TYPE.MEDIA
     // The platform requires a non-empty content even for media messages;
     // send a single space so the message renders cleanly.

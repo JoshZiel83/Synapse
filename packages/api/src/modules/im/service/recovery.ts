@@ -26,9 +26,11 @@
  * responsibility is per-projection, not per-link).
  */
 
+import type { PoolClient } from "pg"
 import { sql } from "kysely"
 import {
   db,
+  executeSqlOn,
   type DatabaseTransaction,
   type KyselyDb,
 } from "../../../infrastructure/database/kysely.js"
@@ -178,4 +180,213 @@ export async function recoverProjectionForBindingChangedLink(
   } else {
     await db.transaction().execute(run)
   }
+}
+
+/**
+ * Re-arm `interaction_transport_projections` rows that were skipped for
+ * a now-resolvable reason. Called from account/binding mutation paths
+ * (see `updateTransportAccount`, `upsertConversationTransportBinding`,
+ * `updateConversationTransportSettings`, etc.) so the operator's UI
+ * action — flipping `webhookInboundConfirmed`, re-enabling outbound,
+ * reactivating the account, or replacing the binding — actually
+ * triggers a fresh projection attempt rather than waiting for the next
+ * approval to retry the dead row.
+ *
+ * The mapping of event → re-armable reasons matches the plan's
+ * "ON CONFLICT" set: never re-arm `not_supported_in_v1` here (only the
+ * `binding_created_or_replaced` event widens the allowed kinds), and
+ * never re-arm `interaction_already_resolved_or_expired` (that's
+ * permanent).
+ */
+export type SkippedRecoveryEvent =
+  | { kind: "config_webhook_confirmed"; transportAccountId: string }
+  | {
+      kind: "connection_mode_changed_to_long_connection"
+      transportAccountId: string
+    }
+  | { kind: "account_status_activated"; transportAccountId: string }
+  | {
+      kind: "outbound_re_enabled"
+      transportAccountId: string
+      transportEndpointId: string
+    }
+  | {
+      kind: "binding_created_or_replaced"
+      conversationId: string
+      transportAccountId: string
+      transportEndpointId: string
+    }
+
+export interface RecoverySummary {
+  rearmedProjections: number
+}
+
+/**
+ * Apply the recovery event from within a Kysely transaction (the typical
+ * caller is `updateTransportAccount`, which already wraps its UPDATE in
+ * `db.transaction().execute()`). Uses Kysely's `sql\`...\``.execute(tx)`
+ * so the row count comes back consistently.
+ *
+ * Callers running inside a pg.PoolClient transaction (the binding
+ * upsert in `upsertConversationTransportBinding`) should call the
+ * `*ViaClient` variant below.
+ */
+export async function recoverSkippedProjectionsForRecoveryEvent(
+  exec: DbOrTx,
+  event: SkippedRecoveryEvent
+): Promise<RecoverySummary> {
+  const reasons = reasonsForEvent(event.kind)
+  switch (event.kind) {
+    case "config_webhook_confirmed":
+    case "connection_mode_changed_to_long_connection":
+    case "account_status_activated": {
+      const result = await sql<{ id: string }>`
+        UPDATE interaction_transport_projections p
+        SET status = 'pending',
+            next_attempt_at = NOW(),
+            attempts = 0,
+            error = NULL,
+            transport_message_link_id = NULL,
+            updated_at = NOW()
+        FROM conversation_transport_bindings ctb
+        WHERE ctb.conversation_id = p.conversation_id
+          AND ctb.transport_account_id = ${event.transportAccountId}
+          AND p.status = 'skipped'
+          AND p.error = ANY (${reasons}::text[])
+        RETURNING p.id
+      `.execute(exec)
+      return { rearmedProjections: result.rows.length }
+    }
+    case "outbound_re_enabled": {
+      const result = await sql<{ id: string }>`
+        UPDATE interaction_transport_projections p
+        SET status = 'pending',
+            next_attempt_at = NOW(),
+            attempts = 0,
+            error = NULL,
+            transport_message_link_id = NULL,
+            updated_at = NOW()
+        FROM conversation_transport_bindings ctb
+        WHERE ctb.conversation_id = p.conversation_id
+          AND ctb.transport_account_id = ${event.transportAccountId}
+          AND ctb.transport_endpoint_id = ${event.transportEndpointId}
+          AND p.status = 'skipped'
+          AND p.error = ANY (${reasons}::text[])
+        RETURNING p.id
+      `.execute(exec)
+      return { rearmedProjections: result.rows.length }
+    }
+    case "binding_created_or_replaced": {
+      const result = await sql<{ id: string }>`
+        UPDATE interaction_transport_projections p
+        SET status = 'pending',
+            next_attempt_at = NOW(),
+            attempts = 0,
+            error = NULL,
+            transport_message_link_id = NULL,
+            updated_at = NOW()
+        WHERE p.conversation_id = ${event.conversationId}
+          AND p.status = 'skipped'
+          AND p.error = ANY (${reasons}::text[])
+        RETURNING p.id
+      `.execute(exec)
+      return { rearmedProjections: result.rows.length }
+    }
+  }
+}
+
+/**
+ * PoolClient-flavored variant — same semantics, different exec. Bindings
+ * upsert lives in a pg.PoolClient transaction (so it can mix Kysely
+ * compiled-query execution with raw SQL on the same connection), and
+ * needs this overload to participate in the same atomic commit as the
+ * binding INSERT.
+ */
+export async function recoverSkippedProjectionsForRecoveryEventViaClient(
+  client: PoolClient,
+  event: SkippedRecoveryEvent
+): Promise<RecoverySummary> {
+  const reasons = reasonsForEvent(event.kind)
+  switch (event.kind) {
+    case "config_webhook_confirmed":
+    case "connection_mode_changed_to_long_connection":
+    case "account_status_activated": {
+      const result = await executeSqlOn<{ id: string }>(
+        client,
+        `
+          UPDATE interaction_transport_projections p
+          SET status = 'pending',
+              next_attempt_at = NOW(),
+              attempts = 0,
+              error = NULL,
+              transport_message_link_id = NULL,
+              updated_at = NOW()
+          FROM conversation_transport_bindings ctb
+          WHERE ctb.conversation_id = p.conversation_id
+            AND ctb.transport_account_id = $1
+            AND p.status = 'skipped'
+            AND p.error = ANY ($2::text[])
+          RETURNING p.id
+        `,
+        [event.transportAccountId, reasons]
+      )
+      return { rearmedProjections: result.rows.length }
+    }
+    case "outbound_re_enabled": {
+      const result = await executeSqlOn<{ id: string }>(
+        client,
+        `
+          UPDATE interaction_transport_projections p
+          SET status = 'pending',
+              next_attempt_at = NOW(),
+              attempts = 0,
+              error = NULL,
+              transport_message_link_id = NULL,
+              updated_at = NOW()
+          FROM conversation_transport_bindings ctb
+          WHERE ctb.conversation_id = p.conversation_id
+            AND ctb.transport_account_id = $1
+            AND ctb.transport_endpoint_id = $2
+            AND p.status = 'skipped'
+            AND p.error = ANY ($3::text[])
+          RETURNING p.id
+        `,
+        [event.transportAccountId, event.transportEndpointId, reasons]
+      )
+      return { rearmedProjections: result.rows.length }
+    }
+    case "binding_created_or_replaced": {
+      const result = await executeSqlOn<{ id: string }>(
+        client,
+        `
+          UPDATE interaction_transport_projections p
+          SET status = 'pending',
+              next_attempt_at = NOW(),
+              attempts = 0,
+              error = NULL,
+              transport_message_link_id = NULL,
+              updated_at = NOW()
+          WHERE p.conversation_id = $1
+            AND p.status = 'skipped'
+            AND p.error = ANY ($2::text[])
+          RETURNING p.id
+        `,
+        [event.conversationId, reasons]
+      )
+      return { rearmedProjections: result.rows.length }
+    }
+  }
+}
+
+function reasonsForEvent(kind: SkippedRecoveryEvent["kind"]): string[] {
+  const base = [
+    "no_binding",
+    "outbound_disabled",
+    "webhook_inbound_unavailable",
+  ]
+  // Widen for binding_created_or_replaced — the new binding may satisfy
+  // the allowedTransportKinds set even if the old one did not.
+  return kind === "binding_created_or_replaced"
+    ? [...base, "not_supported_in_v1"]
+    : base
 }

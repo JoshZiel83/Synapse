@@ -181,19 +181,60 @@ test("failed deliveryStatus → proceeds (original regression)", async () => {
 
 // ─── account status ───
 
-test("account status != active → updateStatus skipped/account_disabled", async () => {
+test("link.account.status='disabled' → still loads binding (no early skip), routes through binding classification", async () => {
+  // Regression for the "old account disabled but binding switched to a
+  // new active account" case: the worker must NOT use the link snapshot's
+  // account status to short-circuit, otherwise binding_changed recovery
+  // never fires.
   const calls: Array<Record<string, unknown>> = []
+  let getBindingCalled = false
   const deps = baseDeps({
     loadLink: async () =>
-      outboundLink({ account: { id: "acc-1", status: "disabled" } }),
+      outboundLink({
+        transportAccountId: "acc-old",
+        account: { id: "acc-old", status: "disabled" },
+      }),
+    getBinding: async () => {
+      getBindingCalled = true
+      // Same account+endpoint as the link, both disabled → classifies as
+      // account_disabled (NOT binding_changed) after the binding load.
+      return {
+        account: { id: "acc-old", status: "disabled" },
+        endpoint: { id: "ep-1" },
+        outboundEnabled: true,
+      }
+    },
     updateStatus: async (params) => {
       calls.push(params as any)
       return null
     },
   })
   const result = await processImTransportDeliveryJob({ linkId: "x" }, deps)
-  assert.deepEqual(result, { success: true, reason: "account disabled" })
+  assert.equal(getBindingCalled, true)
+  assert.equal(result.reason, "binding unavailable")
   assert.deepEqual(calls[0].metadata, { skippedReason: "account_disabled" })
+})
+
+test("link account disabled BUT binding switched to new active account → binding_changed recovery", async () => {
+  let recovered = false
+  const deps = baseDeps({
+    loadLink: async () =>
+      outboundLink({
+        transportAccountId: "acc-old",
+        account: { id: "acc-old", status: "disabled" },
+      }),
+    getBinding: async () => ({
+      account: { id: "acc-new", status: "active" },
+      endpoint: { id: "ep-new" },
+      outboundEnabled: true,
+    }),
+    recoverBindingChangedLink: async () => {
+      recovered = true
+    },
+  })
+  const result = await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  assert.equal(recovered, true)
+  assert.equal(result.reason, "binding changed (recovered)")
 })
 
 // ─── binding checks ───

@@ -165,15 +165,12 @@ export async function processImTransportDeliveryJob(
       reason: `already ${link.deliveryStatus}`,
     }
   }
-  if (link.account.status !== "active") {
-    await deps.updateStatus({
-      linkId,
-      status: "skipped",
-      metadata: { skippedReason: "account_disabled" },
-    })
-    return { success: true, reason: "account disabled" }
-  }
-
+  // CRITICAL: load the current binding BEFORE inspecting `link.account.status`.
+  // The link snapshot's account may be disabled but the conversation's
+  // current binding might point at a new active QQ account — that case
+  // belongs in `binding_changed` recovery, not `account_disabled` skip.
+  // Returning early on `link.account.status !== "active"` here would
+  // permanently strand the link.
   const binding = await deps.getBinding({
     workspaceId: link.workspaceId,
     conversationId: link.conversationId,
@@ -185,19 +182,13 @@ export async function processImTransportDeliveryJob(
     binding.account.id !== link.transportAccountId ||
     binding.endpoint.id !== link.transportEndpointId
   ) {
+    // First classify the "binding mismatch" case before the disabled
+    // checks, so a switched-account-with-old-disabled correctly routes
+    // through recovery.
     const isBindingChanged =
       !!binding &&
-      binding.account.status === "active" &&
-      binding.outboundEnabled &&
       (binding.account.id !== link.transportAccountId ||
         binding.endpoint.id !== link.transportEndpointId)
-    const skippedReason = !binding
-      ? "binding_missing"
-      : binding.account.status !== "active"
-        ? "account_disabled"
-        : !binding.outboundEnabled
-          ? "binding_disabled"
-          : "binding_changed"
     if (isBindingChanged) {
       // Atomically reset any projection pinned to this link + mark the
       // old link terminal so the sweeper won't keep re-enqueueing it.
@@ -206,6 +197,11 @@ export async function processImTransportDeliveryJob(
       await deps.recoverBindingChangedLink(linkId)
       return { success: true, reason: "binding changed (recovered)" }
     }
+    const skippedReason = !binding
+      ? "binding_missing"
+      : binding.account.status !== "active"
+        ? "account_disabled"
+        : "binding_disabled"
     await deps.updateStatus({
       linkId,
       status: "skipped",

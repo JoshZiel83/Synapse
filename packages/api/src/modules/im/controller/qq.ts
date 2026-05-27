@@ -17,7 +17,11 @@
  */
 
 import type { FastifyInstance } from "fastify"
-import { createTransportAccount, updateTransportAccount } from "../service.js"
+import {
+  createTransportAccount,
+  getTransportAccountById,
+  updateTransportAccount,
+} from "../service.js"
 import {
   qqAccountSchema,
   refreshTransportRuntimeState,
@@ -96,24 +100,43 @@ export default async function imQqController(
               ...(body.botSecret ? { botSecret: body.botSecret } : {}),
             }
           : undefined
-      const config =
+      // `updateTransportAccount` replaces `config` wholesale when a value
+      // is passed, so we MUST merge the partial body into the current
+      // server-side config — otherwise PUT {webhookInboundConfirmed:true}
+      // would wipe `configuredUrlDomains` (and vice-versa). Read the
+      // existing account, merge by key, send the full object.
+      let config: Record<string, unknown> | undefined
+      const hasConfigField =
         body.webhookInboundConfirmed !== undefined ||
         body.allowProactiveBestEffort !== undefined ||
         body.configuredUrlDomains !== undefined
-          ? {
-              ...(body.webhookInboundConfirmed !== undefined
-                ? { webhookInboundConfirmed: body.webhookInboundConfirmed }
-                : {}),
-              ...(body.allowProactiveBestEffort !== undefined
-                ? {
-                    allowProactiveBestEffort: body.allowProactiveBestEffort,
-                  }
-                : {}),
-              ...(body.configuredUrlDomains !== undefined
-                ? { configuredUrlDomains: body.configuredUrlDomains }
-                : {}),
-            }
-          : undefined
+      if (hasConfigField) {
+        const existing = await getTransportAccountById(accountId)
+        if (!existing || existing.workspaceId !== workspaceId) {
+          return reply.status(404).send({ error: "qq account not found" })
+        }
+        if (existing.transportKind !== "qq") {
+          return reply.status(409).send({
+            error: `account ${accountId} is not a QQ account`,
+          })
+        }
+        const existingConfig =
+          existing.config && typeof existing.config === "object"
+            ? (existing.config as Record<string, unknown>)
+            : {}
+        config = {
+          ...existingConfig,
+          ...(body.webhookInboundConfirmed !== undefined
+            ? { webhookInboundConfirmed: body.webhookInboundConfirmed }
+            : {}),
+          ...(body.allowProactiveBestEffort !== undefined
+            ? { allowProactiveBestEffort: body.allowProactiveBestEffort }
+            : {}),
+          ...(body.configuredUrlDomains !== undefined
+            ? { configuredUrlDomains: body.configuredUrlDomains }
+            : {}),
+        }
+      }
 
       const account = await updateTransportAccount({
         workspaceId,

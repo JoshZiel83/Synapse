@@ -22,7 +22,55 @@ import type {
   TransportKind,
 } from "@synapse/shared/types"
 import { assertSupportedEndpointType } from "../connectors/index.js"
-import { normalizeBindingRow, parseJsonObject } from "./_helpers.js"
+import { readQqAccountConfig } from "../connectors/qq/qq-account-config.js"
+import {
+  normalizeAccountRow,
+  normalizeBindingRow,
+  parseJsonObject,
+} from "./_helpers.js"
+import {
+  recoverSkippedProjectionsForRecoveryEvent,
+  recoverSkippedProjectionsForRecoveryEventViaClient,
+} from "./recovery.js"
+
+/**
+ * Per-transport defaults applied when CREATING a binding. The legacy
+ * default `outbound_enabled = true` is still right for Feishu / Weixin
+ * / Wecom, but a QQ webhook account whose operator has not yet flipped
+ * `webhookInboundConfirmed` should default outbound DISABLED — otherwise
+ * the projection worker will produce link rows that fail (we can't reply
+ * without an inbound anchor) and the operator has to manually toggle
+ * outbound off on every new binding.
+ *
+ * The auto-disabled marker on metadata lets recovery hooks distinguish
+ * "system disabled because OQ2 hadn't been verified" (re-enable when
+ * webhookInboundConfirmed flips to true) from "operator explicitly
+ * disabled this binding" (leave it alone).
+ */
+export interface BindingDefaults {
+  outboundEnabled: boolean
+  metadata: Record<string, unknown>
+}
+
+export function transportKindDefaultsForBindings(params: {
+  transportKind: TransportKind
+  connectionMode: string | undefined
+  accountConfig: Record<string, unknown> | undefined
+}): BindingDefaults {
+  if (params.transportKind === "qq" && params.connectionMode === "webhook") {
+    // Synthetic account shape — readQqAccountConfig only reads `config`.
+    const config = readQqAccountConfig({
+      config: params.accountConfig ?? {},
+    } as never)
+    if (!config.webhookInboundConfirmed) {
+      return {
+        outboundEnabled: false,
+        metadata: { autoDisabledReason: "webhook_inbound_unavailable" },
+      }
+    }
+  }
+  return { outboundEnabled: true, metadata: {} }
+}
 import {
   assertConversationInboundActor,
   loadTransportAccountRow,
@@ -173,6 +221,30 @@ export async function upsertConversationTransportBinding(params: {
     inboundActorId: params.inboundActorId,
   })
 
+  // Per-transport defaults — currently only QQ webhook + !confirmed
+  // forces outbound off + a marker so the recovery hook (when the
+  // operator flips webhookInboundConfirmed) knows it may auto-re-enable
+  // this binding. The caller's explicit `outboundEnabled` always wins,
+  // so manual UI choices override the per-transport default.
+  const defaults = transportKindDefaultsForBindings({
+    transportKind: account.transport_kind as TransportKind,
+    connectionMode: account.connection_mode as string | undefined,
+    accountConfig: parseJsonObject(account.config) as Record<string, unknown>,
+  })
+  const effectiveOutboundEnabled =
+    params.outboundEnabled ?? defaults.outboundEnabled
+  // Only stamp the auto-disabled marker when the caller did NOT pass an
+  // explicit `outboundEnabled` value AND the per-transport default
+  // disabled outbound. Without this gate, a user-driven create with
+  // explicit `outboundEnabled: false` would also be flagged for auto
+  // re-enable, which the plan explicitly forbids.
+  const bindingMetadata: Record<string, unknown> = {
+    ...(params.metadata || {}),
+    ...(params.outboundEnabled === undefined && !defaults.outboundEnabled
+      ? defaults.metadata
+      : {}),
+  }
+
   await transaction(async (client) => {
     const endpointRow = await executeTakeFirst<{ id: string }>(
       client,
@@ -217,11 +289,11 @@ export async function upsertConversationTransportBinding(params: {
           conversation_id: params.conversationId,
           transport_account_id: params.transportAccountId,
           transport_endpoint_id: endpointId,
-          outbound_enabled: params.outboundEnabled ?? true,
+          outbound_enabled: effectiveOutboundEnabled,
           inbound_actor_mode: inboundActorMode,
           inbound_actor_id: inboundActorId,
-          metadata: (params.metadata ||
-            {}) as TableInsert<"conversation_transport_bindings">["metadata"],
+          metadata:
+            bindingMetadata as TableInsert<"conversation_transport_bindings">["metadata"],
           created_at: sql`NOW()`,
           updated_at: sql`NOW()`,
         })
@@ -237,6 +309,20 @@ export async function upsertConversationTransportBinding(params: {
           })
         )
     )
+
+    // Recovery: a fresh / replaced binding may resolve projections that
+    // were previously skipped for any of the recoverable reasons
+    // (no_binding / not_supported_in_v1 / outbound_disabled /
+    // webhook_inbound_unavailable). Fire in the same tx so the create +
+    // re-arm commit together. `client` here is a pg.PoolClient (see
+    // `transaction(async (client) => ...)` above) so we use the
+    // PoolClient-flavored variant of the helper.
+    await recoverSkippedProjectionsForRecoveryEventViaClient(client, {
+      kind: "binding_created_or_replaced",
+      conversationId: params.conversationId,
+      transportAccountId: params.transportAccountId,
+      transportEndpointId: endpointId,
+    })
   })
 
   return getConversationTransportBinding({
@@ -295,12 +381,30 @@ export async function updateConversationTransportSettings(params: {
     } as TableInsert<"conversation_transport_bindings">["metadata"]
   }
 
-  await db
-    .updateTable("conversation_transport_bindings")
-    .set(updates)
-    .where("workspace_id", "=", params.workspaceId)
-    .where("conversation_id", "=", params.conversationId)
-    .execute()
+  // Wrap in a tx so the outbound_enabled change + projection recovery
+  // land atomically. Without this a crash between the binding UPDATE
+  // and the recovery SQL would leave skipped projections stranded even
+  // though the operator just re-enabled outbound.
+  await db.transaction().execute(async (tx) => {
+    await tx
+      .updateTable("conversation_transport_bindings")
+      .set(updates)
+      .where("workspace_id", "=", params.workspaceId)
+      .where("conversation_id", "=", params.conversationId)
+      .execute()
+
+    // Recovery: if outbound just flipped false → true, re-arm any
+    // `outbound_disabled` projections pinned to this conversation's
+    // (account, endpoint). The endpoint id is taken from the original
+    // existing row — outbound toggling never replaces the endpoint.
+    if (params.outboundEnabled === true && existing.outboundEnabled === false) {
+      await recoverSkippedProjectionsForRecoveryEvent(tx, {
+        kind: "outbound_re_enabled",
+        transportAccountId: existing.account.id,
+        transportEndpointId: existing.endpoint.id,
+      })
+    }
+  })
 
   return getConversationTransportBinding({
     workspaceId: params.workspaceId,

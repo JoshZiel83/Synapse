@@ -50,8 +50,8 @@ import {
 import {
   enqueueOutboundDelivery,
   persistOutboundLinkRowRaw,
-  resolveBindingForOutbound,
 } from "../modules/im/service/delivery-links.js"
+import { getConversationTransportBinding } from "../modules/im/service.js"
 import { encodeForConversationItem } from "../modules/im/messaging/canonical-encoding.js"
 import { readQqAccountConfig } from "../modules/im/connectors/qq/qq-account-config.js"
 import {
@@ -163,6 +163,12 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
     errors: 0,
   }
 
+  // Link IDs to enqueue AFTER the outer tx commits — queueMicrotask is
+  // not safe here because a microtask scheduled inside a Promise body
+  // can fire before the wrapping `transaction(...)` resolves the COMMIT
+  // round-trip, leaving the BullMQ worker to read a not-yet-visible row.
+  const linkIdsToEnqueue: string[] = []
+
   // One outer tx per batch; FOR UPDATE SKIP LOCKED gives us isolation
   // across worker replicas.
   await transaction(async (client) => {
@@ -182,7 +188,7 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
     stats.picked = result.rows.length
     for (const row of result.rows) {
       try {
-        const outcome = await processOne(client, row)
+        const outcome = await processOne(client, row, linkIdsToEnqueue)
         if (outcome === "projected") stats.projected += 1
         else if (outcome === "skipped") stats.skipped += 1
         else if (outcome === "failed") stats.failed += 1
@@ -204,6 +210,20 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
     }
   })
 
+  // Now that the outer tx is committed, enqueue every collected linkId.
+  // Doing this here (instead of via queueMicrotask inside the tx) is the
+  // only ordering that guarantees the link row is visible to the BullMQ
+  // worker by the time the job runs.
+  for (const linkId of linkIdsToEnqueue) {
+    try {
+      await enqueueOutboundDelivery(linkId)
+    } catch (err) {
+      console.warn("[interaction-projection] post-commit enqueue failed", err, {
+        linkId,
+      })
+    }
+  }
+
   return stats
 }
 
@@ -211,27 +231,22 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
  * Process one projection row. Returns the terminal outcome — caller
  * tallies stats; we own the row's final state-update inside the same
  * outer tx.
+ *
+ * `linkIdsToEnqueue` is appended to when this row produces (or rebinds
+ * to) a deliverable link. The caller flushes the array AFTER the outer
+ * transaction commits, since BullMQ jobs scheduled before commit can be
+ * picked up by the worker before the link row is visible.
  */
 async function processOne(
   client: PoolClient,
-  row: PendingRow
+  row: PendingRow,
+  linkIdsToEnqueue: string[]
 ): Promise<"projected" | "skipped" | "failed"> {
   // Idempotence: if a previous run wrote a link, just enqueue and mark
   // projected. Don't rebuild item/link/token.
   if (row.transport_message_link_id) {
     await markRowProjected(client, row.id, row.transport_message_link_id)
-    // Queue side-effect goes outside this tx; we collect linkIds via a
-    // local array — but a single row is fine to enqueue inline post-commit.
-    // The outer caller commits this tx automatically; we defer enqueue via
-    // a microtask-style next() so it lands after the tx.
-    queueMicrotask(() => {
-      enqueueOutboundDelivery(row.transport_message_link_id!).catch((err) =>
-        console.warn(
-          "[interaction-projection] enqueue after idempotent project failed",
-          err
-        )
-      )
-    })
+    linkIdsToEnqueue.push(row.transport_message_link_id)
     return "projected"
   }
 
@@ -270,37 +285,37 @@ async function processOne(
     }
   }
 
-  // Strict-order branch resolution.
-  const binding = await resolveBindingForOutbound({
+  // Strict-order branch resolution per plan (G5 §"跨 IM 行为规避"):
+  //   1. no_binding
+  //   2. not_supported_in_v1            (binding.transportKind !∈ allowed)
+  //   3. webhook_inbound_unavailable    (QQ webhook + !webhookInboundConfirmed)
+  //   4. outbound_disabled              (account inactive OR outbound off)
+  //   5. fallback / keyboard delivery
+  //
+  // We load the binding directly here (rather than going through
+  // `resolveBindingForOutbound`) so the QQ webhook gate at step 3 can
+  // fire even when outbound is disabled — without this ordering, every
+  // unconfirmed-webhook account would be reported as the more generic
+  // `outbound_disabled`, and the recovery hook for
+  // `webhook_inbound_unavailable` would never see anything to re-arm.
+  const binding = await getConversationTransportBinding({
     workspaceId: row.workspace_id,
     conversationId: row.conversation_id,
-    allowedTransportKinds: ALLOWED_TRANSPORT_KINDS,
   })
-  if (!binding.ok) {
-    if (binding.reason === "no_binding") {
-      await skipRow(client, row.id, "no_binding")
-      return "skipped"
-    }
-    if (binding.reason === "not_supported_in_v1") {
-      await skipRow(client, row.id, "not_supported_in_v1")
-      return "skipped"
-    }
-    if (
-      binding.reason === "account_inactive" ||
-      binding.reason === "outbound_disabled"
-    ) {
-      await skipRow(client, row.id, "outbound_disabled")
-      return "skipped"
-    }
-    if (binding.reason === "webhook_inbound_unavailable") {
-      await skipRow(client, row.id, "webhook_inbound_unavailable")
-      return "skipped"
-    }
-    await skipRow(client, row.id, `unknown:${binding.reason}`)
+  if (!binding) {
+    await skipRow(client, row.id, "no_binding")
+    return "skipped"
+  }
+  if (
+    !ALLOWED_TRANSPORT_KINDS.includes(
+      binding.transportKind as (typeof ALLOWED_TRANSPORT_KINDS)[number]
+    )
+  ) {
+    await skipRow(client, row.id, "not_supported_in_v1")
     return "skipped"
   }
 
-  const account = binding.binding.account
+  const account = binding.account
   const isQqWebhook =
     account.transportKind === "qq" && account.connectionMode === "webhook"
   if (isQqWebhook) {
@@ -309,6 +324,11 @@ async function processOne(
       await skipRow(client, row.id, "webhook_inbound_unavailable")
       return "skipped"
     }
+  }
+
+  if (account.status !== "active" || !binding.outboundEnabled) {
+    await skipRow(client, row.id, "outbound_disabled")
+    return "skipped"
   }
 
   // Load the full interaction summary so we know what grant options /
@@ -372,7 +392,7 @@ async function processOne(
       workspaceId: row.workspace_id,
       conversationId: row.conversation_id,
       itemId: item.id,
-      binding: binding.binding,
+      binding,
     })
     await markRowProjected(client, row.id, persisted.linkId)
     projectionLinkId = persisted.linkId
@@ -397,17 +417,11 @@ async function processOne(
     return row.attempts + 1 >= MAX_ATTEMPTS ? "failed" : "skipped"
   }
 
-  // Tx commits below this function; enqueue must happen after.
+  // Outer tx commits after this function returns; the caller flushes
+  // `linkIdsToEnqueue` post-commit so the BullMQ worker doesn't race
+  // ahead of the link row's visibility.
   if (projectionLinkId) {
-    const linkId = projectionLinkId
-    queueMicrotask(() => {
-      enqueueOutboundDelivery(linkId).catch((err) =>
-        console.warn(
-          "[interaction-projection] enqueue after first project failed",
-          err
-        )
-      )
-    })
+    linkIdsToEnqueue.push(projectionLinkId)
   }
   return "projected"
 }

@@ -43,6 +43,7 @@ import {
   parseJsonObject,
   readTrimmedString,
 } from "./_helpers.js"
+import { recoverSkippedProjectionsForRecoveryEvent } from "./recovery.js"
 
 // ───────────────────────── Assertions ─────────────────────────
 
@@ -554,34 +555,83 @@ export async function updateTransportAccount(params: {
     inboundActorMode: nextInboundActorMode,
     inboundActorId: nextInboundActorId,
   })
-  const row = await db
-    .updateTable("transport_accounts")
-    .set({
-      display_name: params.displayName?.trim() || existing.display_name,
-      owner_scope: nextOwnerScope,
-      owner_workspace_member_id: resolvedOwnerWorkspaceMemberId,
-      inbound_actor_mode: nextInboundActorMode,
-      inbound_actor_id: resolvedInboundActorId,
-      connection_mode: nextConnectionMode,
-      status: nextStatus,
-      credentials:
-        normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
-      config: (params.config !== undefined
-        ? params.config
-        : parseJsonObject(
-            existing.config
-          )) as TableInsert<"transport_accounts">["config"],
-      metadata: (params.metadata !== undefined
-        ? params.metadata
-        : parseJsonObject(
-            existing.metadata
-          )) as TableInsert<"transport_accounts">["metadata"],
-      updated_at: sql`NOW()`,
-    })
-    .where("workspace_id", "=", params.workspaceId)
-    .where("id", "=", params.accountId)
-    .returningAll()
-    .executeTakeFirstOrThrow()
+  const row = await db.transaction().execute(async (tx) => {
+    const updated = await tx
+      .updateTable("transport_accounts")
+      .set({
+        display_name: params.displayName?.trim() || existing.display_name,
+        owner_scope: nextOwnerScope,
+        owner_workspace_member_id: resolvedOwnerWorkspaceMemberId,
+        inbound_actor_mode: nextInboundActorMode,
+        inbound_actor_id: resolvedInboundActorId,
+        connection_mode: nextConnectionMode,
+        status: nextStatus,
+        credentials:
+          normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
+        config: (params.config !== undefined
+          ? params.config
+          : parseJsonObject(
+              existing.config
+            )) as TableInsert<"transport_accounts">["config"],
+        metadata: (params.metadata !== undefined
+          ? params.metadata
+          : parseJsonObject(
+              existing.metadata
+            )) as TableInsert<"transport_accounts">["metadata"],
+        updated_at: sql`NOW()`,
+      })
+      .where("workspace_id", "=", params.workspaceId)
+      .where("id", "=", params.accountId)
+      .returningAll()
+      .executeTakeFirstOrThrow()
+
+    // Recovery hooks: detect transitions that re-enable previously
+    // skipped interaction projections, and re-arm matching rows in
+    // the same tx so a crash between state change and recovery can't
+    // strand approvals.
+    const wasActive = (existing.status as string) === "active"
+    const isNowActive = nextStatus === "active"
+    if (!wasActive && isNowActive) {
+      await recoverSkippedProjectionsForRecoveryEvent(tx, {
+        kind: "account_status_activated",
+        transportAccountId: params.accountId,
+      })
+    }
+    const previousConnectionMode = existing.connection_mode as
+      | string
+      | undefined
+    if (
+      previousConnectionMode === "webhook" &&
+      nextConnectionMode === "long_connection"
+    ) {
+      await recoverSkippedProjectionsForRecoveryEvent(tx, {
+        kind: "connection_mode_changed_to_long_connection",
+        transportAccountId: params.accountId,
+      })
+    }
+    if (
+      existing.transport_kind === "qq" &&
+      nextConnectionMode === "webhook" &&
+      params.config !== undefined
+    ) {
+      // Only fire when the QQ webhook account just got its OQ2 gate
+      // flipped on. We compare against the previous parsed config so
+      // a re-PUT of the same value doesn't fire spurious recoveries.
+      const previousConfig = parseJsonObject(existing.config) as Record<
+        string,
+        unknown
+      >
+      const wasConfirmed = previousConfig.webhookInboundConfirmed === true
+      const isNowConfirmed = params.config.webhookInboundConfirmed === true
+      if (!wasConfirmed && isNowConfirmed) {
+        await recoverSkippedProjectionsForRecoveryEvent(tx, {
+          kind: "config_webhook_confirmed",
+          transportAccountId: params.accountId,
+        })
+      }
+    }
+    return updated
+  })
 
   return normalizeAccountRow(row)
 }

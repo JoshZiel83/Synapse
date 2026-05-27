@@ -526,6 +526,92 @@ function TransportSessionInboundActorFields({
   )
 }
 
+interface QqAccountConfigDraft {
+  webhookInboundConfirmed: boolean
+  configuredUrlDomains: string
+}
+
+function QqAccountConfigEditor({
+  account,
+  draft,
+  saving,
+  onChangeDraft,
+  onSave,
+}: {
+  account: TransportAccountSummary
+  draft: QqAccountConfigDraft | undefined
+  saving: boolean
+  onChangeDraft: (next: QqAccountConfigDraft) => void
+  onSave: () => void
+}) {
+  // Lazy-init the draft from the live account when the user first
+  // expands this row. We don't seed in state because the parent doesn't
+  // know which accounts the user is currently viewing.
+  const live: QqAccountConfigDraft = draft ?? {
+    webhookInboundConfirmed:
+      (account.config as Record<string, unknown> | undefined)
+        ?.webhookInboundConfirmed === true,
+    configuredUrlDomains: Array.isArray(
+      (account.config as Record<string, unknown> | undefined)
+        ?.configuredUrlDomains
+    )
+      ? (
+          (account.config as Record<string, unknown>)
+            .configuredUrlDomains as string[]
+        ).join("\n")
+      : "",
+  }
+  return (
+    <div className="space-y-3 rounded-2xl border border-dashed bg-muted/20 p-4">
+      <div className="text-xs font-medium text-foreground">
+        QQ account config
+      </div>
+      {account.connectionMode === "webhook" ? (
+        <Label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={live.webhookInboundConfirmed}
+            onChange={(event) =>
+              onChangeDraft({
+                ...live,
+                webhookInboundConfirmed: event.target.checked,
+              })
+            }
+            className="size-4"
+          />
+          Webhook inbound confirmed (OQ2 verified)
+        </Label>
+      ) : null}
+      <div className="space-y-1">
+        <Label htmlFor={`qq-domains-${account.id}`}>
+          Allowed URL domains (one per line)
+        </Label>
+        <textarea
+          id={`qq-domains-${account.id}`}
+          value={live.configuredUrlDomains}
+          onChange={(event) =>
+            onChangeDraft({
+              ...live,
+              configuredUrlDomains: event.target.value,
+            })
+          }
+          className="min-h-20 w-full rounded-md border bg-background px-3 py-2 text-sm"
+          placeholder={"dashboard.example.com\nlinks.example.com"}
+        />
+        <p className="text-xs text-muted-foreground">
+          Must match QQ console &quot;消息URL配置&quot; entries. Wildcards and
+          IPs are rejected by the server normalizer.
+        </p>
+      </div>
+      <div className="flex justify-end">
+        <Button size="sm" variant="outline" disabled={saving} onClick={onSave}>
+          {saving ? "Saving..." : "Save QQ config"}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export default function ImPage() {
   const { workspaceId, workspaceName } = useWorkspace()
   const [loading, setLoading] = useState(true)
@@ -563,6 +649,19 @@ export default function ImPage() {
     useState<WeixinFormState>(EMPTY_WEIXIN_FORM)
   const [qqForm, setQqForm] = useState<QqFormState>(EMPTY_QQ_FORM)
   const [creatingQq, setCreatingQq] = useState(false)
+  // Per-account QQ config edit drafts. Keyed by accountId; initialized
+  // lazily from the loaded account so re-loads don't blow away pending
+  // edits.
+  const [qqConfigDrafts, setQqConfigDrafts] = useState<
+    Record<
+      string,
+      {
+        webhookInboundConfirmed: boolean
+        configuredUrlDomains: string
+      }
+    >
+  >({})
+  const [savingQqConfigId, setSavingQqConfigId] = useState<string | null>(null)
   const [weixinSession, setWeixinSession] =
     useState<WeixinQrLoginSessionSummary | null>(null)
   const [weixinQrImageUrl, setWeixinQrImageUrl] = useState<string | null>(null)
@@ -1130,6 +1229,59 @@ export default function ImPage() {
       )
     } finally {
       setSavingAccountId(null)
+    }
+  }
+
+  async function handleSaveQqConfig(account: TransportAccountSummary) {
+    if (!workspaceId) return
+    if (account.transportKind !== "qq") return
+    const draft = qqConfigDrafts[account.id]
+    if (!draft) return
+    setSavingQqConfigId(account.id)
+    setError(null)
+    const configuredUrlDomains = draft.configuredUrlDomains
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    try {
+      const result = await api.updateQqTransportAccount(
+        workspaceId,
+        account.id,
+        {
+          webhookInboundConfirmed: draft.webhookInboundConfirmed,
+          configuredUrlDomains,
+        }
+      )
+      const updatedAccount = result?.account
+      if (updatedAccount) {
+        setAccounts((current) =>
+          current.map((entry) =>
+            entry.id === updatedAccount.id ? updatedAccount : entry
+          )
+        )
+        // Reset the draft to match server-confirmed state so the
+        // textarea reflects normalization (lowercasing, IDNA, etc.).
+        const cfg = (updatedAccount.config || {}) as Record<string, unknown>
+        setQqConfigDrafts((current) => ({
+          ...current,
+          [account.id]: {
+            webhookInboundConfirmed: cfg.webhookInboundConfirmed === true,
+            configuredUrlDomains: Array.isArray(cfg.configuredUrlDomains)
+              ? (cfg.configuredUrlDomains as string[]).join("\n")
+              : "",
+          },
+        }))
+      }
+      toast.success("QQ account config saved")
+    } catch (saveError) {
+      console.error("Failed to update QQ account config:", saveError)
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Failed to update QQ account config"
+      )
+    } finally {
+      setSavingQqConfigId(null)
     }
   }
 
@@ -2027,6 +2179,20 @@ export default function ImPage() {
                           }))
                         }
                       />
+                      {account.transportKind === "qq" ? (
+                        <QqAccountConfigEditor
+                          account={account}
+                          draft={qqConfigDrafts[account.id]}
+                          saving={savingQqConfigId === account.id}
+                          onChangeDraft={(next) =>
+                            setQqConfigDrafts((current) => ({
+                              ...current,
+                              [account.id]: next,
+                            }))
+                          }
+                          onSave={() => void handleSaveQqConfig(account)}
+                        />
+                      ) : null}
                       <div className="flex items-center justify-between gap-3">
                         <div className="space-y-1 text-xs text-muted-foreground">
                           <div>Effective owner: {draftOwnerLabel}</div>

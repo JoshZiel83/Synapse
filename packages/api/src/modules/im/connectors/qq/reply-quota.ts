@@ -108,20 +108,35 @@ export async function reserveFirstSend(
     anchor: QqLatestInboundAnchor
   }
 ): Promise<ReserveResult> {
-  const ttl =
-    params.endpointType === "group"
-      ? GROUP_RESERVATION_TTL_SECONDS
-      : C2C_RESERVATION_TTL_SECONDS
-  const quotaTtl =
+  const windowSeconds =
     params.endpointType === "group"
       ? QQ_GROUP_REPLY_WINDOW_SECONDS
       : QQ_C2C_REPLY_WINDOW_SECONDS
-  const expiresAtMs =
-    Date.now() +
-    (params.endpointType === "group"
-      ? QQ_GROUP_REPLY_WINDOW_SECONDS
-      : QQ_C2C_REPLY_WINDOW_SECONDS) *
-      1000
+  const retrySlackSeconds =
+    params.endpointType === "group"
+      ? GROUP_RESERVATION_TTL_SECONDS - QQ_GROUP_REPLY_WINDOW_SECONDS
+      : C2C_RESERVATION_TTL_SECONDS - QQ_C2C_REPLY_WINDOW_SECONDS
+  // CRITICAL: the QQ passive-reply window opens when the inbound event
+  // is *received by the platform*, NOT when we reserve. Anchoring
+  // expiresAt at `anchor.receivedAt + windowSeconds` keeps us honest:
+  // an inbound that arrived 4m 50s ago in a group only has ~10s left,
+  // not a fresh 5 minutes. Reservation TTL also accounts for the time
+  // already elapsed since `receivedAt` so Redis cleans up at the right
+  // moment.
+  const receivedAtMs = Date.parse(params.anchor.receivedAt)
+  const validReceivedAt = Number.isFinite(receivedAtMs)
+    ? receivedAtMs
+    : Date.now()
+  const expiresAtMs = validReceivedAt + windowSeconds * 1000
+  const now = Date.now()
+  if (expiresAtMs <= now) {
+    return { ok: false, reason: "no_anchor" }
+  }
+  const remainingWindowSeconds = Math.ceil((expiresAtMs - now) / 1000)
+  const ttl = Math.max(remainingWindowSeconds + retrySlackSeconds, 60)
+  // quotaTtl tracks the window length from receivedAt; clamp so we
+  // don't seed a key that's already (or almost) expired.
+  const quotaTtl = Math.max(remainingWindowSeconds, 60)
   const result = (await redis.eval(
     RESERVE_LUA,
     2,

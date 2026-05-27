@@ -40,6 +40,14 @@ type DbOrTx = KyselyDb | DatabaseTransaction
  * `queueConversationTransportProjection` returns null silently; the new
  * `interaction-projection` worker uses the reason to mark
  * `interaction_transport_projections.error` accordingly.
+ *
+ * The reasons returned here are deliberately transport-agnostic. The QQ
+ * `webhook_inbound_unavailable` gate is a connector-specific check the
+ * caller layers on top after seeing the binding (it needs to read QQ
+ * `account.config.webhookInboundConfirmed`, which this helper has no
+ * business knowing about). Callers should branch on `account_inactive` /
+ * `outbound_disabled` only AFTER their own per-transport gate runs, so
+ * the strict ordering from the plan stays correct.
  */
 export type ResolveOutboundBindingResult =
   | {
@@ -53,7 +61,6 @@ export type ResolveOutboundBindingResult =
         | "account_inactive"
         | "outbound_disabled"
         | "not_supported_in_v1"
-        | "webhook_inbound_unavailable"
     }
 
 export async function resolveBindingForOutbound(params: {
