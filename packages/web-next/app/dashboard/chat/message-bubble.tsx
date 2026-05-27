@@ -1478,8 +1478,13 @@ function InteractionCard({
                 <p className="mt-2 text-sm">
                   This tool needs a target origin/scope you haven&apos;t
                   granted. Open{" "}
-                  <strong>Settings → Runtime Authorizations</strong> to add a
-                  grant for this capability, then re-trigger the tool.
+                  <a
+                    href="/dashboard/settings/runtime-authorizations"
+                    className="font-medium underline underline-offset-2"
+                  >
+                    Settings → Runtime Authorizations
+                  </a>{" "}
+                  to add a grant for this capability, then re-trigger the tool.
                 </p>
                 {(() => {
                   const ra = runtimeAuthorization.requestedAction as {

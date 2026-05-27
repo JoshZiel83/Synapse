@@ -494,10 +494,28 @@ export function createChromeDevtoolsMcpBuiltin(
         driftedExposures: [...driftedExposures],
       })
     } catch (err) {
+      // Drift check itself failed (tools/list threw, JSON canonicalization
+      // crashed, etc.). We can't trust the sidecar's surface — fail every
+      // browser tool closed until the operator investigates. Without this
+      // the runtime would happily forward calls under the old (assumed)
+      // safety contract.
       state.status = "degraded"
-      log.warn("chrome-devtools-mcp drift check failed", {
-        error: (err as Error).message,
-      })
+      state.disabledReason = `drift check failed: ${(err as Error).message}`
+      for (const plan of exposurePlans) {
+        if (plan.enabled) {
+          plan.enabled = false
+          plan.disabledReason = state.disabledReason
+        }
+      }
+      // Mark every advertised tool as drifted so the per-call guard in
+      // doInvoke also fails closed (defence in depth).
+      for (const t of Object.keys(BROWSER_TOOL_MAP)) {
+        state.driftedTools.add(t)
+      }
+      log.warn(
+        "chrome-devtools-mcp drift check failed — all browser exposures disabled",
+        { error: (err as Error).message }
+      )
     }
   }
 
@@ -774,6 +792,25 @@ export function createChromeDevtoolsMcpBuiltin(
         message: `sidecar unavailable: ${state.startupError ?? "unknown"}`,
       })
     }
+    // Re-check drift state AFTER ensureSidecar — the very first call into
+    // the provider triggers sidecar startup + runDriftCheck inside this
+    // function, so the pre-mutex check at invoke() can't see drift on
+    // call #1. Without this re-check, the first tainted call forwards.
+    if (state.driftedTools.has(toolName)) {
+      return toolErrorResult({
+        code: "runtime_constraint",
+        message: `tool ${toolName} schema drifted from pinned chrome-devtools-mcp@${PINNED_VERSION}; refresh static schemas and redeploy`,
+      })
+    }
+    // Same reason — the exposure plan might have been disabled by drift
+    // detection during the just-completed ensureSidecar/runDriftCheck.
+    const planNow = exposurePlans.find((p) => p.key === descriptor.exposure)
+    if (!planNow || !planNow.enabled) {
+      return toolErrorResult({
+        code: "runtime_constraint",
+        message: `capability disabled: ${planNow?.disabledReason ?? "exposure disabled"}`,
+      })
+    }
     const grants = browserGrants(envelope)
 
     // ── all_pages special-case ───────────────────────────────────────────────
@@ -817,28 +854,40 @@ export function createChromeDevtoolsMcpBuiltin(
           : effective.kind === "page_id"
             ? "runtime_page_id"
             : "runtime_active_page"
-      // Self-describing message — the structured `details` block is
-      // preserved across the API boundary (see capability-projection/
-      // service.ts) for future UI widgets, but until those land we make
-      // sure the visible text already tells the operator what to do.
-      const visibleMessage =
-        `${scopeCheck.reason}. ` +
-        `Required operation: ${descriptor.operation}. ` +
-        `Current URL: ${targetUrl}. ` +
-        `Open Settings → Runtime Authorizations to add a grant for ${
-          scope.origin ?? targetUrl
-        }.`
+      // Page enumeration defence: when the caller chose a page by index
+      // (`close_page` / `select_page` / etc.), do NOT echo that page's
+      // URL or origin back on denial — that would let any caller with
+      // *some* same-operation grant probe every open tab. argument_url
+      // and current_page are different: the caller already knows the
+      // URL (they supplied it OR they have it on their own page).
+      const leakSafe = effective.kind === "page_id"
+      const visibleMessage = leakSafe
+        ? `${descriptor.operation} denied on the requested page. ` +
+          `Open Settings → Runtime Authorizations to add a grant covering the target.`
+        : `${scopeCheck.reason}. ` +
+          `Required operation: ${descriptor.operation}. ` +
+          `Current URL: ${targetUrl}. ` +
+          `Open Settings → Runtime Authorizations to add a grant for ${
+            scope.origin ?? targetUrl
+          }.`
       return toolErrorResult({
         code: "permission_denied",
         message: visibleMessage,
-        details: {
-          currentUrl: targetUrl,
-          neededOperations: [descriptor.operation],
-          scopeSource,
-          origin: scope.origin,
-          suggestion:
-            "Add a grant for this origin via Settings → Runtime Authorizations",
-        },
+        details: leakSafe
+          ? {
+              neededOperations: [descriptor.operation],
+              scopeSource,
+              suggestion:
+                "Add a grant for this page via Settings → Runtime Authorizations",
+            }
+          : {
+              currentUrl: targetUrl,
+              neededOperations: [descriptor.operation],
+              scopeSource,
+              origin: scope.origin,
+              suggestion:
+                "Add a grant for this origin via Settings → Runtime Authorizations",
+            },
       })
     }
 

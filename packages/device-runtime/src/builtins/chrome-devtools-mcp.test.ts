@@ -648,8 +648,14 @@ test(
         resolve(addr.port)
       })
     })
+    // Hoisted: dispose MUST fire even if an assertion or a thrown error
+    // aborts the test body. Otherwise the spawned sidecar leaks past test
+    // termination and the wrapping `timeout` is the only thing that kills
+    // it — making failures hang.
+    let provider: ReturnType<typeof createChromeDevtoolsMcpBuiltin> | null =
+      null
     try {
-      const provider = createChromeDevtoolsMcpBuiltin({
+      provider = createChromeDevtoolsMcpBuiltin({
         headless: true,
       })
       const envelope = envWithGrants([
@@ -672,8 +678,14 @@ test(
         envelope,
       })
       assert.equal(snap.isError ?? false, false)
-      await provider.dispose?.()
     } finally {
+      if (provider) {
+        try {
+          await provider.dispose?.()
+        } catch {
+          /* best-effort */
+        }
+      }
       await new Promise<void>((r) => server.close(() => r()))
     }
   }
@@ -901,4 +913,103 @@ test("onUnexpectedExit nulls state.client — next call ensureSidecar fails fast
   ).toString()
   // Must surface as a sidecar/runtime_constraint problem, not as authz.
   assert.match(errMsg, /sidecar|exited|unavailable|runtime_constraint/i)
+})
+
+test("page_id permission_denied does NOT leak target page URL or origin", async () => {
+  // Attacker holds a same-operation grant for allowed.com but tries to
+  // probe close_page({pageIdx}) for an unrelated tab.
+  const client = makeFakeClient({
+    handlers: {
+      list_pages: async () => ({
+        structuredContent: [
+          { pageId: 0, url: "https://allowed.com", isActive: true },
+          // The "secret" page whose URL the attacker is trying to learn.
+          {
+            pageId: 1,
+            url: "https://internal.example/secret-path",
+            isActive: false,
+          },
+        ],
+      }),
+      close_page: async () => ({ content: [{ type: "text", text: "closed" }] }),
+    },
+  })
+  const provider = createChromeDevtoolsMcpBuiltin({
+    mcpClientFactory: async () => client,
+  })
+  const envelope = envWithGrants([
+    {
+      action: "write",
+      scope_type: "origin",
+      origin: "https://allowed.com",
+      operations: ["page.navigate"],
+    },
+  ])
+  const r = await provider.invokeTool!({
+    toolName: "close_page",
+    args: { pageIdx: 1 },
+    envelope,
+  })
+  assert.equal(r.isError, true)
+  const synapseErr = r._meta?.synapse_error as
+    | { message?: string; details?: Record<string, unknown> }
+    | undefined
+  const text = (r.content[0] as { text?: string })?.text ?? ""
+  const messageStr = synapseErr?.message ?? ""
+  const detailsStr = JSON.stringify(synapseErr?.details ?? {})
+  // None of the response surfaces should leak the target page URL.
+  assert.doesNotMatch(text, /internal\.example|secret-path/)
+  assert.doesNotMatch(messageStr, /internal\.example|secret-path/)
+  assert.doesNotMatch(detailsStr, /internal\.example|secret-path/)
+  // Specifically: no `currentUrl` / `origin` in details (those are the
+  // leak vectors for page_id targets).
+  assert.equal(
+    (synapseErr?.details as { currentUrl?: string } | undefined)?.currentUrl,
+    undefined
+  )
+  assert.equal(
+    (synapseErr?.details as { origin?: string } | undefined)?.origin,
+    undefined
+  )
+  // scopeSource should still be present so the chat card knows what to
+  // render — that field is not sensitive.
+  assert.equal(
+    (synapseErr?.details as { scopeSource?: string } | undefined)?.scopeSource,
+    "runtime_page_id"
+  )
+})
+
+test("page_id permission_denied — argument_url still echoes URL (caller already knows it)", async () => {
+  // Sanity: argument_url path keeps the URL in the error so the LLM can
+  // surface a useful diagnostic. The leak defence is specifically for
+  // page_id where the caller did NOT supply the URL.
+  const client = makeFakeClient({
+    handlers: {
+      new_page: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    },
+  })
+  const provider = createChromeDevtoolsMcpBuiltin({
+    mcpClientFactory: async () => client,
+  })
+  const envelope = envWithGrants([
+    {
+      action: "write",
+      scope_type: "origin",
+      origin: "https://allowed.com",
+      operations: ["page.navigate"],
+    },
+  ])
+  const r = await provider.invokeTool!({
+    toolName: "new_page",
+    args: { url: "https://blocked.com" },
+    envelope,
+  })
+  assert.equal(r.isError, true)
+  const synapseErr = r._meta?.synapse_error as
+    | { details?: Record<string, unknown> }
+    | undefined
+  assert.equal(
+    (synapseErr?.details as { currentUrl?: string } | undefined)?.currentUrl,
+    "https://blocked.com"
+  )
 })

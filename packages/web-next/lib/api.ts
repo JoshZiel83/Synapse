@@ -1868,6 +1868,21 @@ class ApiClient {
       { method: "DELETE" }
     )
   }
+  // v3.1: manual runtime-authorization grant endpoint. The chat card for
+  // active-page / page_id / all_pages browser tools renders "Manual grant
+  // required" — this is the endpoint that backs the Settings page.
+  createManualRuntimeAuthorizationGrant(
+    wsId: string,
+    body: {
+      device_capability_id: string
+      policy: Record<string, unknown>
+    }
+  ): Promise<{ grant: Record<string, unknown> }> {
+    return this.fetch(`/workspaces/${wsId}/runtime-authorization-grants`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+  }
 
   // Automation Event Sources
   getAutomationEventSources(
