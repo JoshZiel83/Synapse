@@ -2,12 +2,31 @@
 
 import {
   CONVERSATION_PARTICIPANT_TYPE,
+  describeTransportKind,
+  isTransportKind,
   type ConversationEntityRef,
+  type TransportConnectorCapability,
+  type TransportKind,
 } from "@synapse/shared"
 
 import type { ConversationMember } from "@/stores/chat-store"
 
-export function getConversationMemberSubtitle(member: ConversationMember) {
+/**
+ * Per-workspace IM connector metadata map. Sourced from the
+ * `ConnectorMetadataProvider` in `@/lib/im-connector-metadata`;
+ * passed as an optional parameter into pure-utility functions so
+ * the utilities themselves stay hook-free (and SSR-friendly).
+ */
+export type ConnectorMetadataMap = Map<
+  TransportKind,
+  TransportConnectorCapability
+>
+type Metadata = ConnectorMetadataMap | undefined
+
+export function getConversationMemberSubtitle(
+  member: ConversationMember,
+  metadata?: Metadata
+) {
   if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return member.title || member.role || "Actor"
   }
@@ -20,7 +39,10 @@ export function getConversationMemberSubtitle(member: ConversationMember) {
       : "External participant"
   }
   if (member.transportKind) {
-    return `Workspace user · reachable via ${formatTransportKindLabel(member.transportKind)}`
+    return `Workspace user · reachable via ${formatTransportKindLabel(
+      member.transportKind,
+      metadata
+    )}`
   }
   return "Workspace user"
 }
@@ -35,18 +57,22 @@ export function getConversationMemberTypeLabel(member: ConversationMember) {
   return "Workspace user"
 }
 
+/**
+ * Resolve a user-facing transport label. Priority:
+ *   1. `metadata.displayName` from the connector capability (true SoT)
+ *   2. `describeTransportKind` static fallback (covers SSR/initial
+ *      paint before the provider mounts)
+ *   3. `String(kind)` when metadata absent and kind not in
+ *      `TRANSPORT_KINDS` (defensive — should not normally happen)
+ */
 export function formatTransportKindLabel(
-  kind: ConversationMember["transportKind"]
+  kind: ConversationMember["transportKind"],
+  metadata?: Metadata
 ) {
-  if (!kind) return undefined
-  switch (kind) {
-    case "feishu":
-      return "Feishu"
-    case "weixin":
-      return "WeChat"
-    default:
-      return String(kind)
-  }
+  if (!isTransportKind(kind)) return undefined
+  const fromMeta = metadata?.get(kind)?.displayName
+  if (fromMeta) return fromMeta
+  return describeTransportKind(kind)
 }
 
 export function getConversationMemberContactHref(

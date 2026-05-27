@@ -25,10 +25,12 @@ import type {
 } from "@synapse/shared/types"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
+  describeTransportKind,
   extractText,
   formatMentionText,
   getDefaultModelEngineKind,
   isToolResultOrigin,
+  isTransportKind,
   MCP_TOOL_NAMESPACE_SEPARATOR,
   normalizeCanonicalContentBlocks,
   resolveThreadSemantics,
@@ -84,6 +86,7 @@ import {
   updateToolCallStatus,
 } from "../execution/service.js"
 import { getSession } from "../session/service.js"
+import { getTransportConnectorCapability } from "../im/connectors/index.js"
 
 export { buildActorPrompt } from "./prompt-builder.js"
 
@@ -365,19 +368,19 @@ async function loadToolResolveConversationParticipants(params: {
           `Conversation ${params.conversationId} has workspace participant ${member.id} without workspace_member_id`
         )
       }
-      const transportKind =
-        member.transport_kind === "feishu" ||
-        member.transport_kind === "weixin" ||
-        member.transport_kind === "qq"
-          ? member.transport_kind
-          : undefined
+      const transportKind = isTransportKind(member.transport_kind)
+        ? member.transport_kind
+        : undefined
       entries.push({
         participantType: "workspace_member",
         id: workspaceMemberId,
         participantId: member.id,
         name: member.user_name || "User",
         title: transportKind
-          ? `Workspace member · reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
+          ? `Workspace member · reachable via ${
+              getTransportConnectorCapability(transportKind)?.displayName ??
+              describeTransportKind(transportKind)
+            }`
           : "Workspace member",
         role: "Workspace member",
       })

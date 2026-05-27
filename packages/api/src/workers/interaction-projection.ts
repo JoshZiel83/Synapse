@@ -53,7 +53,7 @@ import {
 } from "../modules/im/service/delivery-links.js"
 import { getConversationTransportBinding } from "../modules/im/service.js"
 import { encodeForConversationItem } from "../modules/im/messaging/canonical-encoding.js"
-import { readQqAccountConfig } from "../modules/im/connectors/qq/qq-account-config.js"
+import { tryGetConnector } from "../modules/im/connectors/registry.js"
 import {
   CANONICAL_MESSAGE_SCHEMA_VERSION,
   type CanonicalMessage,
@@ -68,10 +68,13 @@ const TOKEN_SWEEP_EVERY_TICKS = 60 // ≈ every 5 min
 /**
  * Why this list and not a more general gate: the projection layer is the
  * ONLY place that has to know about transport-specific gating — every
- * other layer (canonical-encoding, render, outbound) is generic. Adding
- * a new connector that supports interaction_prompt = listing it here.
+ * other layer (canonical-encoding, render, outbound) is generic. The
+ * eligibility decision now goes through two polymorphic checks
+ * (`messageCapabilities.supportsInteractionPrompt` + connector's
+ * optional `getInteractionProjectionReadiness?()` hook), so adding a
+ * new connector with interaction-prompt support requires zero edits
+ * here.
  */
-const ALLOWED_TRANSPORT_KINDS = ["qq"] as const
 
 const FALLBACK_TEXT_DEFAULT = "需要审批，请回到 Synapse dashboard 处理"
 
@@ -306,24 +309,26 @@ async function processOne(
     await skipRow(client, row.id, "no_binding")
     return "skipped"
   }
-  if (
-    !ALLOWED_TRANSPORT_KINDS.includes(
-      binding.transportKind as (typeof ALLOWED_TRANSPORT_KINDS)[number]
-    )
-  ) {
+  // Eligibility goes through capability + per-account readiness hook:
+  //   (a) Generic capability: connector must declare it can render
+  //       interaction prompts at all.
+  //   (b) Per-account precondition (e.g. QQ webhook requires the
+  //       operator's OQ2 confirmation). Failure stamps `error` so
+  //       `service/recovery.ts` recovery code can re-arm when the
+  //       precondition flips.
+  const connector = tryGetConnector(binding.transportKind)
+  if (!connector?.messageCapabilities.supportsInteractionPrompt) {
     await skipRow(client, row.id, "not_supported_in_v1")
     return "skipped"
   }
 
   const account = binding.account
-  const isQqWebhook =
-    account.transportKind === "qq" && account.connectionMode === "webhook"
-  if (isQqWebhook) {
-    const config = readQqAccountConfig(account)
-    if (!config.webhookInboundConfirmed) {
-      await skipRow(client, row.id, "webhook_inbound_unavailable")
-      return "skipped"
-    }
+  const readiness = connector.getInteractionProjectionReadiness?.(account) ?? {
+    ok: true,
+  }
+  if (!readiness.ok) {
+    await skipRow(client, row.id, readiness.reason)
+    return "skipped"
   }
 
   if (account.status !== "active" || !binding.outboundEnabled) {
@@ -347,8 +352,15 @@ async function processOne(
 
   // Business work inside a savepoint so partial failures don't leak
   // orphan items/links into the outer tx.
-  const useFallbackText =
-    isQqWebhook /* webhook+confirmed (long_connection path falls through to keyboard) */
+  //
+  // Fallback-text mode is used when the destination cannot render an
+  // inline keyboard right now (e.g. QQ webhook accounts before the
+  // first inbound anchors the connection; long_connection accounts
+  // use the keyboard path). Detected via the same readiness hook the
+  // eligibility check above used — a special-case readiness with a
+  // marker reason for "render the prompt as text". For now any
+  // webhook-mode account uses the fallback path.
+  const useFallbackText = account.connectionMode === "webhook"
   let projectionLinkId: string | null = null
   let savepointFailed = false
   let savepointError: string | null = null
@@ -388,14 +400,16 @@ async function processOne(
       parts: buildItemParts(message),
       queryable: client,
     })
-    const persisted = await persistOutboundLinkRowRaw(client, {
+    const persisted = await persistOutboundLinkRowRaw({
       workspaceId: row.workspace_id,
       conversationId: row.conversation_id,
       itemId: item.id,
-      binding,
+      transportAccountId: binding.account.id,
+      transportEndpointId: binding.endpoint.id,
+      transportKind: binding.transportKind,
     })
-    await markRowProjected(client, row.id, persisted.linkId)
-    projectionLinkId = persisted.linkId
+    await markRowProjected(client, row.id, persisted.id)
+    projectionLinkId = persisted.id
     await executeSqlOn(client, "RELEASE SAVEPOINT projection_business", [])
   } catch (err) {
     savepointFailed = true

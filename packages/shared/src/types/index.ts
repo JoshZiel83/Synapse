@@ -3175,6 +3175,40 @@ export type ConversationParticipantType =
   (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
 
 export type TransportKind = (typeof TRANSPORT_KINDS)[number]
+
+/**
+ * Runtime guard for `TransportKind`. Use instead of hard-coding
+ * `value === "feishu" || value === "weixin"` chains in dispatch sites —
+ * those drift out of sync when new transports land.
+ */
+export function isTransportKind(value: unknown): value is TransportKind {
+  return (
+    typeof value === "string" &&
+    (TRANSPORT_KINDS as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * Static fallback label for a `TransportKind`. Intentionally NOT
+ * exhaustiveness-checked: adding a new transport must not require
+ * editing this file. The authoritative display name is on
+ * `TransportConnectorCapability.displayName`; this helper only fires
+ * when the metadata provider hasn't mounted yet (client) or no
+ * connector is registered (server-side prose).
+ */
+export function describeTransportKind(kind: TransportKind): string {
+  switch (kind) {
+    case "feishu":
+      return "Feishu"
+    case "weixin":
+      return "WeChat"
+    case "wecom":
+      return "WeCom"
+    default:
+      return String(kind)
+  }
+}
+
 export type TransportConnectionMode =
   (typeof TRANSPORT_CONNECTION_MODES)[number]
 export type TransportEndpointType = (typeof TRANSPORT_ENDPOINT_TYPES)[number]
@@ -3222,6 +3256,25 @@ export interface TransportConnectorCapability {
   supportedEndpointTypes: TransportEndpointType[]
   supportsDirectMessages: boolean
   supportsGroupMessages: boolean
+  /**
+   * User-facing label exposed via the connectors metadata API. Frontend
+   * components use this as the authoritative display name; the static
+   * `describeTransportKind` is only a fallback.
+   */
+  displayName: string
+  /**
+   * Public asset path for this connector's icon (served from
+   * `web-next/public`). Centralized so frontend doesn't hard-code
+   * `/icon/${kind}.svg` and per-kind UI variants don't drift apart.
+   */
+  iconAssetPath: string
+  /**
+   * UI feature flag: render the connector-specific base-URL config
+   * panel. Currently only Weixin v1 sets this true (gateway base URL).
+   * Replaces the previous `transportKind === "weixin"` hard-coded gate
+   * in the dashboard.
+   */
+  showsBaseUrlConfig?: boolean
 }
 
 export type TransportAccountOwnerScope =
@@ -4756,10 +4809,7 @@ function isConversationEntityRef(
     (entity.transportAddressId === undefined ||
       typeof entity.transportAddressId === "string") &&
     (entity.transportKind === undefined ||
-      entity.transportKind === "feishu" ||
-      entity.transportKind === "weixin" ||
-      entity.transportKind === "wecom" ||
-      entity.transportKind === "qq") &&
+      isTransportKind(entity.transportKind)) &&
     (entity.name === undefined || typeof entity.name === "string") &&
     (entity.title === undefined || typeof entity.title === "string") &&
     (entity.role === undefined || typeof entity.role === "string") &&

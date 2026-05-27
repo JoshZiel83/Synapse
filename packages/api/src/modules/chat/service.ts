@@ -38,6 +38,7 @@ import {
   type ConversationMessageSubtype,
   type ConversationParticipantType,
   type ConversationReplyRef,
+  isTransportKind,
 } from "@synapse/shared"
 import type {
   ConversationEntityRef,
@@ -52,6 +53,7 @@ import type {
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
   InteractionRequestSummary,
+  TransportKind,
 } from "@synapse/shared/types"
 import { transaction } from "../../infrastructure/database/index.js"
 import {
@@ -497,9 +499,7 @@ async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
 function asParticipantTransportKind(
   value: string | null | undefined
 ): ConversationEntityRef["transportKind"] {
-  return value === "feishu" || value === "weixin" || value === "qq"
-    ? value
-    : undefined
+  return isTransportKind(value) ? value : undefined
 }
 
 function participantDisplayName(row: ParticipantRow): string {
@@ -3936,12 +3936,9 @@ function mapTransportContext(
     value.direction === "inbound" || value.direction === "outbound"
       ? value.direction
       : undefined
-  const transportKind =
-    value.transportKind === "feishu" ||
-    value.transportKind === "weixin" ||
-    value.transportKind === "qq"
-      ? value.transportKind
-      : undefined
+  const transportKind = isTransportKind(value.transportKind)
+    ? value.transportKind
+    : undefined
   if (!direction || !transportKind) {
     return undefined
   }
@@ -3985,7 +3982,7 @@ async function loadTransportDeliveriesForItems(
   const result = await executeSqlOn<{
     item_id: string
     link_id: string
-    transport_kind: "feishu" | "weixin" | "qq"
+    transport_kind: TransportKind
     direction: "inbound" | "outbound"
     delivery_status: "pending" | "sent" | "failed" | "skipped"
     external_message_id: string | null

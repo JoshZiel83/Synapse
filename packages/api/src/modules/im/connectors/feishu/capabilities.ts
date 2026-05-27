@@ -3,6 +3,8 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
 
 export const FEISHU_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "feishu",
+  displayName: "Feishu",
+  iconAssetPath: "/icon/feishu.svg",
   supportedConnectionModes: ["webhook", "long_connection"],
   supportedEndpointTypes: ["direct", "group"],
   supportsDirectMessages: true,
@@ -24,14 +26,10 @@ export const FEISHU_MESSAGE_CAPABILITIES: MessageCapabilities = {
   // to text placeholders.
   supportsImage: true,
   supportsFile: true,
-  // Feishu has no separate voice/video send today; both fall through to
-  // generic file upload. Until a dedicated renderer is added, these stay
-  // false and degradation rewrites voice/video → system_marker.
+  // V1: no audio/video upload implementation; interaction projection
+  // not yet wired up for Feishu cards.
   supportsVoice: false,
   supportsVideo: false,
-  // No native interaction_prompt → card renderer yet; degradation produces
-  // fallback text. Flip when render.ts learns to emit an interactive card
-  // for the new part.
   supportsInteractionPrompt: false,
   maxTextBytes: 30_000,
   // Feishu bot can only @ users it has previously seen in the conversation;

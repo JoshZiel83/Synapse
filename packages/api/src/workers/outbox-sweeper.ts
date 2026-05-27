@@ -25,7 +25,11 @@
  *     rows and (re-)enqueues them via the shared
  *     `enqueueOrRetryTransportDeliveryLink` helper.
  *   - Self-throttles: every retry bumps
- *     `metadata.qq.sweeperRetryCount` and `metadata.qq.lastSweeperRetryAt`;
+ *     `metadata.delivery.sweeperRetryCount` and
+ *     `metadata.delivery.lastSweeperRetryAt` (transport-neutral
+ *     namespace; legacy `metadata.qq.*` slots are read as fallback
+ *     for in-flight links carried over from before the namespace
+ *     migration);
  *     ≥3 attempts in 10 minutes or ≥10 lifetime attempts or 24h since
  *     creation → dead-letter
  *     (`delivery_status='failed', metadata.lastError='exceeded_sweeper_retry_budget'`).
@@ -191,8 +195,11 @@ async function bumpEnqueueRetryCount(linkId: string): Promise<number> {
       ? qq.deliveryEnqueueRetryCount
       : 0
   const next = prev + 1
-  await patchTransportMessageLinkMetadata(linkId, {
-    qq: { deliveryEnqueueRetryCount: next },
+  await patchTransportMessageLinkMetadata({
+    linkId,
+    patch: {
+      qq: { deliveryEnqueueRetryCount: next },
+    },
   })
   return next
 }
@@ -421,17 +428,34 @@ async function processCandidate(candidate: SweepCandidate): Promise<void> {
 type BudgetCheck = "ok" | "skip" | "dead_letter"
 
 function checkSweeperBudget(candidate: SweepCandidate): BudgetCheck {
-  const qq = (
+  // Sweeper retry state lives in `metadata.delivery.*` (transport-
+  // neutral namespace). Old links written under the QQ-specific
+  // `metadata.qq.*` slot before the namespace migration are read as
+  // a fallback so a deploy without a backfill doesn't reset the
+  // budget for in-flight links.
+  const delivery = (
+    candidate.metadata.delivery &&
+    typeof candidate.metadata.delivery === "object"
+      ? (candidate.metadata.delivery as Record<string, unknown>)
+      : {}
+  ) as Record<string, unknown>
+  const legacyQq = (
     candidate.metadata.qq && typeof candidate.metadata.qq === "object"
       ? (candidate.metadata.qq as Record<string, unknown>)
       : {}
   ) as Record<string, unknown>
   const count =
-    typeof qq.sweeperRetryCount === "number" ? qq.sweeperRetryCount : 0
+    typeof delivery.sweeperRetryCount === "number"
+      ? delivery.sweeperRetryCount
+      : typeof legacyQq.sweeperRetryCount === "number"
+        ? legacyQq.sweeperRetryCount
+        : 0
   const lastAt =
-    typeof qq.lastSweeperRetryAt === "string"
-      ? Date.parse(qq.lastSweeperRetryAt)
-      : 0
+    typeof delivery.lastSweeperRetryAt === "string"
+      ? Date.parse(delivery.lastSweeperRetryAt)
+      : typeof legacyQq.lastSweeperRetryAt === "string"
+        ? Date.parse(legacyQq.lastSweeperRetryAt)
+        : 0
   const ageHours = (Date.now() - candidate.createdAt.getTime()) / 3_600_000
 
   if (
@@ -456,17 +480,32 @@ async function bumpSweeperRetryStamp(linkId: string): Promise<void> {
     .limit(1)
     .executeTakeFirst()
   const current = parseJsonObject(row?.metadata) as Record<string, unknown>
-  const qq = (
+  // Read from the neutral namespace; fall back to the legacy QQ
+  // slot so retry budgets carried forward from pre-migration links
+  // aren't reset to zero.
+  const delivery = (
+    current.delivery && typeof current.delivery === "object"
+      ? (current.delivery as Record<string, unknown>)
+      : {}
+  ) as Record<string, unknown>
+  const legacyQq = (
     current.qq && typeof current.qq === "object"
       ? (current.qq as Record<string, unknown>)
       : {}
   ) as Record<string, unknown>
   const prev =
-    typeof qq.sweeperRetryCount === "number" ? qq.sweeperRetryCount : 0
-  await patchTransportMessageLinkMetadata(linkId, {
-    qq: {
-      sweeperRetryCount: prev + 1,
-      lastSweeperRetryAt: new Date().toISOString(),
+    typeof delivery.sweeperRetryCount === "number"
+      ? delivery.sweeperRetryCount
+      : typeof legacyQq.sweeperRetryCount === "number"
+        ? legacyQq.sweeperRetryCount
+        : 0
+  await patchTransportMessageLinkMetadata({
+    linkId,
+    patch: {
+      delivery: {
+        sweeperRetryCount: prev + 1,
+        lastSweeperRetryAt: new Date().toISOString(),
+      },
     },
   })
 }

@@ -31,22 +31,27 @@ export interface MessageCapabilities {
   supportsReply: boolean
   supportsImage: boolean
   supportsFile: boolean
-  /** Native voice (audio) attachment send. Connectors that have only
-   *  generic file upload (and that's how voice would have to be sent) set
-   *  this false; degradation drops voice → system_marker(voice_placeholder)
-   *  with the transcript if present. */
+  /**
+   * Voice messages (audio_silk / audio_mp3 parts). False on every
+   * platform that doesn't currently implement audio render/upload —
+   * leaving this true would let voice parts reach `sendMessage` and
+   * silently fail. Enable per-connector only when actual upload path
+   * lands.
+   */
   supportsVoice: boolean
-  /** Native video attachment send. */
+  /**
+   * Short-video messages. Same conservative default as `supportsVoice`.
+   */
   supportsVideo: boolean
   /**
-   * Native server-side "approval card" with clickable buttons that produce
-   * a callback this connector can route back to `resolveInteractionRequest`.
-   * For QQ this is Inline Keyboard + INTERACTION_CREATE. For Feishu this
-   * would be a card with action elements (not implemented in v1; keep
-   * false until the Feishu renderer learns the new part).
-   *
-   * When false, degradation rewrites `interaction_prompt` parts to the
-   * part's `fallbackText` so the user at least sees a notice.
+   * Inline interaction prompts (buttons / inline keyboard /
+   * runtime-authorization prompt projection). For QQ this is Inline
+   * Keyboard + INTERACTION_CREATE. Connectors that opt in receive
+   * `interaction_prompt` canonical parts; others see them degrade
+   * away (rewritten to the part's `fallbackText`). The
+   * `interaction-projection` worker uses this flag plus the optional
+   * `getInteractionProjectionReadiness?()` hook as the dispatch gate
+   * (replaces the per-kind worker hard-code).
    */
   supportsInteractionPrompt: boolean
   maxTextBytes: number

@@ -7,10 +7,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION =
-  "2026-05-27-qq-transport-kind-plus-interaction-projection-tables"
-const CURRENT_SCHEMA_DESCRIPTION =
-  "add 'qq' to transport_accounts/transport_addresses/transport_message_links transport_kind enums; new interaction_action_tokens + interaction_transport_projections tables for QQ inline-keyboard projection; new conversation_transport_bindings(account, conversation) index for recovery lookups; prior baseline: device runtime v3 cutover merged into dev"
+/**
+ * `schema_migrations.version` is `VARCHAR(64)` (see
+ * `ensureSchemaMigrationsTable` below). Keep the slug short — long
+ * names that drift past 64 chars cause `INSERT INTO schema_migrations`
+ * to error on a fresh bootstrap (`value too long for type
+ * character varying(64)`). Multi-feature releases should bump this to
+ * a single short slug; put narrative detail in
+ * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
+ * `bootstrap.test.ts` enforces the length invariant.
+ */
+export const CURRENT_SCHEMA_VERSION = "2026-05-28-im-shared-prep-qq"
+export const CURRENT_SCHEMA_DESCRIPTION =
+  "IM connector shared prep + QQ Bot connector with interaction projection. Shared prep: TransportConnectorCapability displayName/iconAssetPath/showsBaseUrlConfig, MessageCapabilities voice/video/interactionPrompt fields, polymorphic validateConfig/getBindingDefaults/planAccountRecoveryActions/getInteractionProjectionReadiness hooks, transactional updateTransportAccount + recovery executor, single connectors/register-all entrypoint. QQ-specific schema: add 'qq' to transport_accounts/transport_addresses/transport_message_links transport_kind enums; new interaction_action_tokens + interaction_transport_projections tables for QQ inline-keyboard projection; new conversation_transport_bindings(account, conversation) index for recovery lookups."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

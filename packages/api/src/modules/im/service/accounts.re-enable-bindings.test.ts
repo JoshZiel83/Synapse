@@ -1,166 +1,79 @@
+/**
+ * Contract test for the generic re-enable SQL shape.
+ *
+ * The QQ branch originally shipped this under
+ * `buildReEnableAutoDisabledQqWebhookBindingsSql` — purely
+ * QQ-specific naming. Shared prep promotes the helper to a
+ * transport-neutral builder (`buildReEnableAutoDisabledBindingsSql`)
+ * driven by the `reason` marker passed in. This test pins the SQL
+ * contract so a future refactor can't silently:
+ *   - forget to remove the `autoDisabledReason` marker (would let a
+ *     manually-disabled binding get re-enabled on the next recovery
+ *     cycle);
+ *   - drop the per-workspace filter (cross-workspace leak);
+ *   - swap the IS NOT DISTINCT FROM check for `=` (NULL handling
+ *     diverges and certain edges stop matching).
+ *
+ * Stays compilation-only — no Postgres connection required.
+ */
+
 import test from "node:test"
 import assert from "node:assert/strict"
-import {
-  DummyDriver,
-  Kysely,
-  PostgresAdapter,
-  PostgresIntrospector,
-  PostgresQueryCompiler,
-} from "kysely"
-import { buildReEnableAutoDisabledQqWebhookBindingsSql } from "./accounts.js"
-import { shouldReEnableAutoDisabledBinding } from "./account-recovery-planner.js"
+import { buildReEnableAutoDisabledBindingsSql } from "./recovery.js"
 
-// SQL-shape contract test for `reEnableAutoDisabledQqWebhookBindings`.
-//
-// The pure JS predicate `shouldReEnableAutoDisabledBinding` already
-// locks in WHICH rows should be re-enabled, but it doesn't catch the
-// case where someone edits the SQL UPDATE in accounts.ts in a way that
-// silently drifts from the predicate. This file closes that gap:
-//
-//  1. Compile the SQL builder offline using Kysely's DummyDriver, so
-//     the test never touches the live pg.Pool. This is critical:
-//     importing the live `db` from a unit test starts the connection
-//     pool and prevents the test runner from exiting cleanly.
-//  2. Assert the WHERE clause encodes EXACTLY the same predicate the
-//     JS function uses, the SET clause flips outbound_enabled + removes
-//     the marker, and `transport_account_id` is bound parametrically
-//     (no SQL injection).
-//  3. Cross-check with the JS predicate against synthetic rows — if
-//     the SQL changes, the test wants to see the equivalent change in
-//     the predicate (and vice-versa).
-
-// Offline Kysely instance — no real connection, just the
-// dialect/compiler so RawBuilder.compile() can format Postgres
-// placeholders. Reused across tests.
-const offlineDb = new Kysely<Record<string, never>>({
-  dialect: {
-    createAdapter: () => new PostgresAdapter(),
-    createDriver: () => new DummyDriver(),
-    createIntrospector: (k) => new PostgresIntrospector(k),
-    createQueryCompiler: () => new PostgresQueryCompiler(),
-  },
-})
-
-test("compiled SQL: targets conversation_transport_bindings UPDATE", () => {
-  const compiled =
-    buildReEnableAutoDisabledQqWebhookBindingsSql("acc-foo").compile(offlineDb)
-  // Verb + table.
-  assert.match(compiled.sql, /UPDATE conversation_transport_bindings/)
-})
-
-test("compiled SQL: SET clause flips outbound + removes marker + bumps updated_at", () => {
-  const compiled =
-    buildReEnableAutoDisabledQqWebhookBindingsSql("acc-foo").compile(offlineDb)
-  // The three side-effects we actually intend; absence of any one of
-  // these is a bug (e.g. forgetting `updated_at = NOW()` would leave
-  // the row's timestamp stale and confuse the dashboard's "Last
-  // updated" column).
-  assert.match(compiled.sql, /SET\s+outbound_enabled = TRUE/)
-  assert.match(compiled.sql, /metadata = metadata - 'autoDisabledReason'/)
-  assert.match(compiled.sql, /updated_at = NOW\(\)/)
-})
-
-test("compiled SQL: WHERE encodes the same predicate as shouldReEnableAutoDisabledBinding", () => {
-  const compiled =
-    buildReEnableAutoDisabledQqWebhookBindingsSql("acc-foo").compile(offlineDb)
-  // 1. account scope — caller-supplied id is in parameters[0], NOT
-  //    inlined into the SQL string.
-  assert.match(compiled.sql, /transport_account_id = \$1/)
-  assert.deepEqual(compiled.parameters, ["acc-foo"])
-  // 2. only outbound-already-disabled rows.
-  assert.match(compiled.sql, /outbound_enabled = FALSE/)
-  // 3. only rows with the system-auto-disable marker for QQ's webhook
-  //    OQ2 gate. The marker string MUST match the constant the binding
-  //    upsert writes (see transportKindDefaultsForBindings in
-  //    bindings.ts); changing one without the other strands rows.
-  assert.match(
-    compiled.sql,
-    /metadata\s*->>\s*'autoDisabledReason'\s*=\s*'webhook_inbound_unavailable'/
+test("buildReEnableAutoDisabledBindingsSql sets outbound_enabled = TRUE", () => {
+  const q = buildReEnableAutoDisabledBindingsSql({
+    workspaceId: "ws-1",
+    reason: "webhook_inbound_unavailable",
+  })
+  assert.match(q.sql, /set\b.*"outbound_enabled"\s*=\s*\$/i)
+  // Param order in Kysely's compiled output: outbound_enabled = $1,
+  // workspaceId = $2, reason = $3. Assert by value rather than index
+  // so a reordering of WHERE clauses doesn't false-positive.
+  assert.ok(
+    q.parameters.includes(true),
+    `expected outbound_enabled=true parameter (got ${JSON.stringify(q.parameters)})`
   )
 })
 
-test("compiled SQL: contract matches JS predicate row-by-row on synthetic data", () => {
-  // If the JS predicate and the SQL ever disagree on a synthetic input,
-  // it means a refactor broke one of them. Walk a small matrix of
-  // binding shapes that exercise each WHERE clause arm.
-  const accountId = "acc-target"
-  const cases: Array<{
-    label: string
-    binding: Parameters<typeof shouldReEnableAutoDisabledBinding>[0]
-    expectSelected: boolean
-  }> = [
-    {
-      label:
-        "matching account, outbound=false, marker=webhook_inbound_unavailable",
-      binding: {
-        id: "b-match",
-        transportAccountId: accountId,
-        outboundEnabled: false,
-        metadata: { autoDisabledReason: "webhook_inbound_unavailable" },
-      },
-      expectSelected: true,
-    },
-    {
-      label: "matching account, outbound=true (already enabled) → skip",
-      binding: {
-        id: "b-on",
-        transportAccountId: accountId,
-        outboundEnabled: true,
-        metadata: { autoDisabledReason: "webhook_inbound_unavailable" },
-      },
-      expectSelected: false,
-    },
-    {
-      label:
-        "matching account, outbound=false, marker absent (user-disabled) → skip",
-      binding: {
-        id: "b-manual",
-        transportAccountId: accountId,
-        outboundEnabled: false,
-        metadata: {},
-      },
-      expectSelected: false,
-    },
-    {
-      label: "matching account, marker has a different reason → skip",
-      binding: {
-        id: "b-other-reason",
-        transportAccountId: accountId,
-        outboundEnabled: false,
-        metadata: { autoDisabledReason: "operator_override" },
-      },
-      expectSelected: false,
-    },
-    {
-      label: "different account, otherwise valid → skip",
-      binding: {
-        id: "b-cross",
-        transportAccountId: "acc-other",
-        outboundEnabled: false,
-        metadata: { autoDisabledReason: "webhook_inbound_unavailable" },
-      },
-      expectSelected: false,
-    },
-  ]
-  // 1. JS predicate agrees with our expectSelected matrix.
-  for (const c of cases) {
-    assert.equal(
-      shouldReEnableAutoDisabledBinding(c.binding, accountId),
-      c.expectSelected,
-      `JS predicate disagreed on case "${c.label}"`
-    )
-  }
-  // 2. The SQL's WHERE clause encodes the same three filters that
-  //    drove the JS matrix. If a future SQL edit adds a new filter
-  //    without updating the predicate (or vice versa), one of the
-  //    WHERE regexes above will start failing — that's the contract
-  //    we want to lock down.
-  const compiled =
-    buildReEnableAutoDisabledQqWebhookBindingsSql(accountId).compile(offlineDb)
-  assert.match(compiled.sql, /transport_account_id = \$1/)
-  assert.match(compiled.sql, /outbound_enabled = FALSE/)
+test("buildReEnableAutoDisabledBindingsSql removes the autoDisabledReason marker", () => {
+  const q = buildReEnableAutoDisabledBindingsSql({
+    workspaceId: "ws-1",
+    reason: "webhook_inbound_unavailable",
+  })
   assert.match(
-    compiled.sql,
-    /metadata\s*->>\s*'autoDisabledReason'\s*=\s*'webhook_inbound_unavailable'/
+    q.sql,
+    /metadata\s*-\s*'autoDisabledReason'/i,
+    "must remove the marker via jsonb `-` operator"
   )
+})
+
+test("buildReEnableAutoDisabledBindingsSql filters by workspace_id and matching reason", () => {
+  const q = buildReEnableAutoDisabledBindingsSql({
+    workspaceId: "ws-1",
+    reason: "webhook_inbound_unavailable",
+  })
+  assert.match(q.sql, /where\b.*"workspace_id"\s*=\s*\$/i)
+  assert.match(
+    q.sql,
+    /metadata->>'autoDisabledReason'.*IS\s+NOT\s+DISTINCT\s+FROM\s*\$/i,
+    "must use IS NOT DISTINCT FROM so a NULL marker doesn't accidentally match"
+  )
+  // Reason parameter must be threaded through unchanged.
+  assert.ok(
+    q.parameters.includes("webhook_inbound_unavailable"),
+    `reason parameter must reach the query (got ${JSON.stringify(q.parameters)})`
+  )
+  assert.ok(
+    q.parameters.includes("ws-1"),
+    `workspaceId parameter must reach the query (got ${JSON.stringify(q.parameters)})`
+  )
+})
+
+test("buildReEnableAutoDisabledBindingsSql touches updated_at", () => {
+  const q = buildReEnableAutoDisabledBindingsSql({
+    workspaceId: "ws-1",
+    reason: "webhook_inbound_unavailable",
+  })
+  assert.match(q.sql, /"updated_at"\s*=\s*NOW\(\)/i)
 })

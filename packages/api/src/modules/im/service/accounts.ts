@@ -20,6 +20,7 @@
 import { sql } from "kysely"
 import {
   db,
+  withDbTransaction,
   type DatabaseTransaction,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
@@ -44,12 +45,11 @@ import {
   parseJsonObject,
   readTrimmedString,
 } from "./_helpers.js"
-import { validateAndNormalizeAccountConfig } from "./account-config.js"
 import {
-  planAccountUpdateRecoveryActions,
-  type AccountUpdateRecoveryAction,
+  orderAccountRecoveryActions,
+  planAccountRecoveryActions,
 } from "./account-recovery-planner.js"
-import { recoverSkippedProjectionsForRecoveryEvent } from "./recovery.js"
+import { reEnableAutoDisabledBindings } from "./recovery.js"
 
 // ───────────────────────── Assertions ─────────────────────────
 
@@ -66,11 +66,15 @@ import { recoverSkippedProjectionsForRecoveryEvent } from "./recovery.js"
  * back-compat.
  */
 export {
+  assertExpectedTransportKind,
   mergeAccountCredentials,
+  validateAndNormalizeAccountConfig,
   validateAndNormalizeAccountCredentials,
 } from "./account-credentials.js"
 import {
+  assertExpectedTransportKind,
   mergeAccountCredentials,
+  validateAndNormalizeAccountConfig,
   validateAndNormalizeAccountCredentials,
 } from "./account-credentials.js"
 
@@ -435,6 +439,12 @@ export async function createTransportAccount(params: {
     status: nextStatus,
     credentials: params.credentials,
   })
+  const normalizedConfig = validateAndNormalizeAccountConfig({
+    transportKind: params.transportKind,
+    connectionMode: params.connectionMode,
+    status: nextStatus,
+    config: params.config,
+  })
   const ownerScope = params.ownerScope || "workspace"
   const ownerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
@@ -454,10 +464,8 @@ export async function createTransportAccount(params: {
   // (rather than only in transport-specific controllers) so the
   // generic /im/accounts route can't bypass it. Throws on invalid
   // input; the API controller catches and maps to 400.
-  const normalizedConfig = validateAndNormalizeAccountConfig({
-    transportKind: params.transportKind,
-    config: params.config,
-  })
+  // (shared-prep version above already normalizes config — keep the
+  // single call; the QQ-side duplicate was redundant.)
 
   const row = await db
     .insertInto("transport_accounts")
@@ -490,6 +498,14 @@ export async function createTransportAccount(params: {
 export async function updateTransportAccount(params: {
   workspaceId: string
   accountId: string
+  /**
+   * Optional kind guard. When supplied (typically by per-transport
+   * routes like `PUT /im/accounts/feishu/:id`), the existing account
+   * must match this value or the call fails with
+   * `404 transport_account_kind_mismatch`. Generic routes that
+   * legitimately span kinds omit this.
+   */
+  expectedTransportKind?: TransportKind
   displayName?: string
   ownerScope?: TransportAccountOwnerScope
   ownerWorkspaceMemberId?: string | null
@@ -506,8 +522,20 @@ export async function updateTransportAccount(params: {
     params.accountId
   )
   if (!existing) {
-    throw new Error("Transport account not found")
+    // statusCode lets the Fastify error handler surface this as 404
+    // rather than swallowing it into 500.
+    throw Object.assign(new Error("Transport account not found"), {
+      statusCode: 404 as const,
+      code: "transport_account_not_found" as const,
+    })
   }
+  // Per-transport PUT routes pass `expectedTransportKind`; reject
+  // wrong-kind hits with a stable 404 + code instead of silently
+  // rewriting the wrong account.
+  assertExpectedTransportKind(
+    { transportKind: existing.transport_kind as TransportKind },
+    params.expectedTransportKind
+  )
 
   const nextConnectionMode =
     params.connectionMode ||
@@ -544,6 +572,15 @@ export async function updateTransportAccount(params: {
     status: nextStatus,
     credentials: mergedCredentials,
   })
+  const normalizedConfig = validateAndNormalizeAccountConfig({
+    transportKind: existing.transport_kind as TransportKind,
+    connectionMode: nextConnectionMode,
+    status: nextStatus,
+    config:
+      params.config !== undefined
+        ? params.config
+        : parseJsonObject(existing.config),
+  })
   const resolvedOwnerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
     ownerScope: nextOwnerScope,
@@ -568,22 +605,12 @@ export async function updateTransportAccount(params: {
     inboundActorMode: nextInboundActorMode,
     inboundActorId: nextInboundActorId,
   })
-  // Per-transport config normalization on the update path. When the
-  // caller passes a config object we normalize THAT (so a bad value
-  // 400's at the API boundary); when the caller omits config we leave
-  // the existing row's stored config alone to avoid surprising the
-  // operator with retroactive rejection of legacy data on unrelated
-  // field updates.
-  const nextConfig =
-    params.config !== undefined
-      ? validateAndNormalizeAccountConfig({
-          transportKind: existing.transport_kind as TransportKind,
-          config: params.config,
-        })
-      : parseJsonObject(existing.config)
 
-  const row = await db.transaction().execute(async (tx) => {
-    const updated = await tx
+  // Wrap UPDATE + recovery executor in one transaction so a
+  // half-applied state can't leave the account updated but the
+  // recovery side-effects skipped (or vice versa).
+  const updatedAccount = await withDbTransaction(async (tx) => {
+    const row = await tx
       .updateTable("transport_accounts")
       .set({
         display_name: params.displayName?.trim() || existing.display_name,
@@ -595,7 +622,7 @@ export async function updateTransportAccount(params: {
         status: nextStatus,
         credentials:
           normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
-        config: nextConfig as TableInsert<"transport_accounts">["config"],
+        config: normalizedConfig as TableInsert<"transport_accounts">["config"],
         metadata: (params.metadata !== undefined
           ? params.metadata
           : parseJsonObject(
@@ -608,41 +635,81 @@ export async function updateTransportAccount(params: {
       .returningAll()
       .executeTakeFirstOrThrow()
 
-    // Recovery hooks: decide which transitions trigger a re-arm using
-    // a pure planner so the decision logic is unit-testable, then apply
-    // the actions in order. Actions that require binding flip
-    // (`reEnableAutoDisabledBindings: true`) MUST run the binding flip
-    // BEFORE the projection re-arm, otherwise the re-armed projection
-    // immediately skips again with `outbound_disabled`.
-    const actions: AccountUpdateRecoveryAction[] =
-      planAccountUpdateRecoveryActions({
-        transportKind: existing.transport_kind as TransportKind,
-        previousStatus: existing.status as string | undefined,
-        nextStatus,
-        previousConnectionMode: existing.connection_mode as string | undefined,
-        nextConnectionMode,
+    const previousSummary = normalizeAccountRow(existing)
+    const nextSummary = normalizeAccountRow(row)
+    const actions = orderAccountRecoveryActions(
+      planAccountRecoveryActions({
+        previous: previousSummary,
+        next: nextSummary,
         incomingConfig: params.config,
-        previousConfig: parseJsonObject(existing.config) as Record<
-          string,
-          unknown
-        >,
       })
-    for (const action of actions) {
-      if (
-        action.kind === "connection_mode_changed_to_long_connection" ||
-        action.kind === "config_webhook_confirmed"
-      ) {
-        await reEnableAutoDisabledQqWebhookBindings(tx, params.accountId)
-      }
-      await recoverSkippedProjectionsForRecoveryEvent(tx, {
-        kind: action.kind,
-        transportAccountId: params.accountId,
-      })
-    }
-    return updated
+    )
+    await executeAccountRecoveryActions({
+      tx,
+      workspaceId: params.workspaceId,
+      actions,
+    })
+    return nextSummary
   })
 
-  return normalizeAccountRow(row)
+  return updatedAccount
+}
+
+/**
+ * Generic dispatcher for recovery actions emitted by a connector's
+ * `planAccountRecoveryActions?()` hook. The set of `action.type`
+ * values is a closed enum on `AccountRecoveryAction` — adding a new
+ * type requires updating this switch (intentional: keeps the
+ * executor a single source of truth and prevents transport-specific
+ * branches from creeping into `accounts.ts`).
+ *
+ * Execution order is the responsibility of
+ * `orderAccountRecoveryActions` upstream; this loop just walks
+ * actions in the given order.
+ */
+async function executeAccountRecoveryActions(params: {
+  tx: DatabaseTransaction
+  workspaceId: string
+  actions: Array<
+    | { type: "reEnableAutoDisabledBindings"; reason: string }
+    | {
+        type: "recoverSkippedInteractionProjections"
+        eventKind:
+          | "account_status_activated"
+          | "connection_mode_changed_to_long_connection"
+          | "config_webhook_confirmed"
+      }
+  >
+}) {
+  for (const action of params.actions) {
+    switch (action.type) {
+      case "reEnableAutoDisabledBindings": {
+        await reEnableAutoDisabledBindings({
+          workspaceId: params.workspaceId,
+          reason: action.reason,
+          tx: params.tx,
+        })
+        break
+      }
+      case "recoverSkippedInteractionProjections": {
+        // No-op on `dev` — `interaction_transport_projections` does
+        // not exist in the dev schema. Wired up to a real helper
+        // when the QQ merge-prep lands its schema + recovery
+        // implementation. The placeholder dispatch is kept so
+        // `accounts.ts` stays closed-enum today and the QQ branch
+        // can simply replace the body.
+        break
+      }
+      default: {
+        const _exhaustive: never = action
+        // Defensive: never reachable as long as caller respects the
+        // typed `actions` array.
+        throw new Error(
+          `unknown AccountRecoveryAction type: ${JSON.stringify(_exhaustive)}`
+        )
+      }
+    }
+  }
 }
 
 /**

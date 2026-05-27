@@ -25,6 +25,7 @@ import type {
 import type { MessageCapabilities } from "../messaging/degradation.js"
 import {
   mergeAccountCredentials,
+  validateAndNormalizeAccountConfig,
   validateAndNormalizeAccountCredentials,
 } from "./account-credentials.js"
 
@@ -39,6 +40,9 @@ const STUB_CAPS: MessageCapabilities = {
   supportsReply: false,
   supportsImage: false,
   supportsFile: false,
+  supportsVoice: false,
+  supportsVideo: false,
+  supportsInteractionPrompt: false,
   maxTextBytes: 1_000,
   directMentionPolicy: "attached_only",
 }
@@ -58,6 +62,8 @@ const stubConnector: TransportConnector = {
   transportKind: STUB_KIND,
   capability: {
     transportKind: STUB_KIND,
+    displayName: "Stub WeChat",
+    iconAssetPath: "/icon/weixin.svg",
     supportedConnectionModes: ["long_connection"],
     supportedEndpointTypes: ["direct"],
     supportsDirectMessages: true,
@@ -72,6 +78,19 @@ const stubConnector: TransportConnector = {
     return {
       ok: true,
       normalized: { token: token.trim(), source: "normalized-by-stub" },
+    }
+  },
+  // Mirrors validateCredentials but on the `config` channel — used to
+  // exercise the polymorphic dispatch in
+  // `validateAndNormalizeAccountConfig` below.
+  validateConfig(input) {
+    const baseUrl = input.config?.baseUrl
+    if (typeof baseUrl === "string" && baseUrl.startsWith("ftp://")) {
+      return { ok: false, errors: ["baseUrl must not use ftp://"] }
+    }
+    return {
+      ok: true,
+      normalized: { ...input.config, normalizedBy: "stub" },
     }
   },
   async startAccount() {
@@ -143,17 +162,21 @@ test("validateAndNormalizeAccountCredentials: disabled status skips validation",
   assert.deepEqual(out, { not: "valid" })
 })
 
-test("validateAndNormalizeAccountCredentials: invalid input throws connector errors", () => {
-  assert.throws(
-    () =>
-      validateAndNormalizeAccountCredentials({
-        transportKind: STUB_KIND,
-        connectionMode: "long_connection",
-        status: "active",
-        credentials: {},
-      }),
-    /token is required/
-  )
+test("validateAndNormalizeAccountCredentials: invalid input throws 400 transport_credentials_invalid", () => {
+  try {
+    validateAndNormalizeAccountCredentials({
+      transportKind: STUB_KIND,
+      connectionMode: "long_connection",
+      status: "active",
+      credentials: {},
+    })
+    assert.fail("expected throw")
+  } catch (err) {
+    const e = err as Error & { statusCode?: unknown; code?: unknown }
+    assert.match(e.message, /token is required/)
+    assert.equal(e.statusCode, 400)
+    assert.equal(e.code, "transport_credentials_invalid")
+  }
 })
 
 test("validateAndNormalizeAccountCredentials: returns connector normalized form", () => {
@@ -170,15 +193,83 @@ test("validateAndNormalizeAccountCredentials: returns connector normalized form"
   assert.equal(out.source, "normalized-by-stub")
 })
 
-test("validateAndNormalizeAccountCredentials: unknown transport_kind throws", () => {
-  assert.throws(
-    () =>
-      validateAndNormalizeAccountCredentials({
-        transportKind: "not-a-real-kind" as any,
-        connectionMode: "long_connection",
-        status: "active",
-        credentials: {},
-      }),
-    /no connector registered/i
-  )
+test("validateAndNormalizeAccountCredentials: unknown transport_kind throws 400 transport_kind_unsupported", () => {
+  try {
+    validateAndNormalizeAccountCredentials({
+      transportKind: "not-a-real-kind" as any,
+      connectionMode: "long_connection",
+      status: "active",
+      credentials: {},
+    })
+    assert.fail("expected throw")
+  } catch (err) {
+    const e = err as Error & { statusCode?: unknown; code?: unknown }
+    assert.match(e.message, /no connector registered/i)
+    assert.equal(e.statusCode, 400)
+    assert.equal(e.code, "transport_kind_unsupported")
+  }
+})
+
+test("validateAndNormalizeAccountConfig: disabled status skips validation", () => {
+  const out = validateAndNormalizeAccountConfig({
+    transportKind: STUB_KIND,
+    connectionMode: "long_connection",
+    status: "disabled",
+    config: { baseUrl: "ftp://invalid" },
+  })
+  assert.deepEqual(out, { baseUrl: "ftp://invalid" })
+})
+
+test("validateAndNormalizeAccountConfig: invalid input throws 400 transport_config_invalid", () => {
+  try {
+    validateAndNormalizeAccountConfig({
+      transportKind: STUB_KIND,
+      connectionMode: "long_connection",
+      status: "active",
+      config: { baseUrl: "ftp://example.com" },
+    })
+    assert.fail("expected throw")
+  } catch (err) {
+    const e = err as Error & { statusCode?: unknown; code?: unknown }
+    assert.match(e.message, /baseUrl/)
+    assert.equal(e.statusCode, 400)
+    assert.equal(e.code, "transport_config_invalid")
+  }
+})
+
+test("validateAndNormalizeAccountConfig: returns connector normalized form", () => {
+  const out = validateAndNormalizeAccountConfig({
+    transportKind: STUB_KIND,
+    connectionMode: "long_connection",
+    status: "active",
+    config: { baseUrl: "wss://gw.example.com" },
+  })
+  assert.equal(out.baseUrl, "wss://gw.example.com")
+  assert.equal(out.normalizedBy, "stub")
+})
+
+test("validateAndNormalizeAccountConfig: connector without validateConfig passes config through", () => {
+  // Use a transportKind we haven't stubbed validateConfig on — fall back
+  // to feishu which is registered (in the test process the real Feishu
+  // connector or another stub may take this slot; either way it must
+  // not declare validateConfig in this test).
+  const otherKind = "feishu" as const
+  if (!tryGetConnector(otherKind)) {
+    // No connector at all → unknown-kind path, not the contract this
+    // test is exercising. Skip.
+    return
+  }
+  const c = tryGetConnector(otherKind)
+  if (c?.validateConfig) {
+    // Real Feishu connector defines validateConfig — skip; this case
+    // is exercised by the per-connector test files.
+    return
+  }
+  const out = validateAndNormalizeAccountConfig({
+    transportKind: otherKind,
+    connectionMode: "long_connection",
+    status: "active",
+    config: { anything: "ok" },
+  })
+  assert.deepEqual(out, { anything: "ok" })
 })

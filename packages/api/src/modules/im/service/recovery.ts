@@ -1,38 +1,37 @@
 /**
- * Recovery helpers (G5): respond to state-change events that make a
- * previously-skipped projection or link deliverable again. Triggered from
- * IM bindings/accounts mutation paths and from the outbox sweeper.
+ * Shared, transport-neutral recovery helpers used by the IM delivery
+ * worker (binding-changed link marking) and the generic account
+ * recovery dispatch loop (binding re-enable SQL).
  *
- * Two ideas hold this module together:
- *
- *   1) **canDeliverNow(linkId)** — single predicate every recovery path
- *      consults before flipping a link `skipped → pending`. The check is
- *      "current binding still matches the link's account/endpoint AND
- *      account is active AND outbound is enabled". Without this predicate
- *      the sweeper would keep re-pending links that the delivery worker
- *      immediately re-skips, producing a hot loop.
- *
- *   2) **recoverProjectionForBindingChangedLink** — invoked from the
- *      delivery worker's binding-unavailable branch when the current
- *      binding's account/endpoint no longer matches the link. Old link
- *      goes terminal (`skippedReason='binding_changed' +
- *      replacedByProjectionRecovery=true`), the projection row is reset
- *      so the next projection-worker tick rebuilds token/item/link under
- *      the new binding. Same tx so projection-reset + link-terminal land
- *      together.
- *
- * The recovery helpers that turn account/binding state changes into
- * projection re-opens live in `interactions/recovery.ts` (their
- * responsibility is per-projection, not per-link).
+ * Scope:
+ *   - Mark a stale link `skipped` with `metadata.skippedReason
+ *     = "binding_changed"` (the worker's binding-mismatch branch).
+ *   - Build a transport-neutral SQL that lifts `outbound_enabled = TRUE`
+ *     for bindings whose `metadata.autoDisabledReason` matches a given
+ *     marker (and atomically removes the marker).
+ *   - Re-arm `interaction_transport_projections` rows that were skipped
+ *     for a now-resolvable reason (account/connection-mode/config
+ *     transitions + binding-level events). The QQ merge-prep brought
+ *     in the interaction projection table and these helpers; they're
+ *     transport-neutral by row design — any connector that opts into
+ *     interaction projection participates without further code here.
+ *   - `canDeliverNow` + `recoverSkippedDisabledLink` for the outbox
+ *     sweeper's gate-then-flip-then-enqueue dance.
+ *   - `recoverProjectionForBindingChangedLink` for the delivery worker
+ *     when current binding's (account, endpoint) no longer matches
+ *     the link snapshot.
  */
 
 import type { PoolClient } from "pg"
 import { sql } from "kysely"
+import type {
+  DatabaseTransaction,
+  KyselyDb,
+} from "../../../infrastructure/database/kysely.js"
 import {
   db,
   executeSqlOn,
-  type DatabaseTransaction,
-  type KyselyDb,
+  type TableUpdate,
 } from "../../../infrastructure/database/kysely.js"
 import {
   getConversationTransportBinding,
@@ -41,6 +40,105 @@ import {
 } from "../service.js"
 
 type DbOrTx = KyselyDb | DatabaseTransaction
+
+export type SkipReason = "binding_changed" | (string & {})
+
+/**
+ * Mark a transport_message_link as `skipped` with a stable
+ * `metadata.skippedReason`. Sweeper and account/binding recovery code
+ * scan this top-level key (`metadata->>'skippedReason'`) — do NOT
+ * write under `metadata.delivery.*` for skipReason, that namespace is
+ * reserved for ambiguity / sweeper retry counters etc.
+ *
+ * Accepts an optional `tx` so callers can compose with other writes
+ * in the same transaction (binding mutation, projection reset).
+ */
+export async function markLinkSkipped(params: {
+  linkId: string
+  reason: SkipReason
+  tx?: DatabaseTransaction
+}): Promise<void> {
+  const exec = params.tx ?? db
+  await exec
+    .updateTable("transport_message_links")
+    .set({
+      delivery_status: "skipped",
+      // jsonb merge with the existing metadata so we don't clobber
+      // delivery.* / per-connector fields. Postgres `||` does a
+      // SHALLOW merge — the top-level `skippedReason` key is what
+      // the sweeper / recovery match on, so a shallow merge is the
+      // right tool here.
+      metadata:
+        sql`metadata || ${JSON.stringify({ skippedReason: params.reason })}::jsonb` as unknown as TableUpdate<"transport_message_links">["metadata"],
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", params.linkId)
+    .execute()
+}
+
+/**
+ * Atomically re-enable every binding in `workspaceId` that was
+ * auto-disabled under `reason` (matched against
+ * `metadata->>'autoDisabledReason'`) AND remove the marker so the
+ * binding can't be redundantly re-enabled in the future.
+ *
+ * Generic helper — connector-agnostic. The `reason` string is the
+ * connector's own marker (e.g. QQ writes `webhook_inbound_unavailable`
+ * via `getBindingDefaults?()`). Multiple connectors can use the same
+ * marker without conflict; the WHERE clause is per-workspace.
+ *
+ * SQL contract (asserted by `accounts.re-enable-bindings.test.ts`):
+ *  - `outbound_enabled = TRUE`
+ *  - `metadata = metadata - 'autoDisabledReason'`
+ *  - `updated_at = NOW()`
+ *  - filter: workspace_id = $1 AND metadata->>'autoDisabledReason' = $2
+ */
+export async function reEnableAutoDisabledBindings(params: {
+  workspaceId: string
+  reason: string
+  tx?: DatabaseTransaction
+}): Promise<{ updated: number }> {
+  const exec = params.tx ?? db
+  const compiled = buildReEnableAutoDisabledBindingsSql(params)
+  const result = await exec.executeQuery(compiled)
+  // pg's RowDescription doesn't carry an UPDATE row count, but
+  // node-postgres surfaces it as `rowCount` on the wrapped result.
+  // Kysely's `executeQuery` returns the same shape via `result.rows`
+  // + a `numAffectedRows` field. Either may be undefined under
+  // alternate dialects — coalesce to 0 to keep the function total.
+  const affected = (result as unknown as { numAffectedRows?: bigint | number })
+    .numAffectedRows
+  return {
+    updated:
+      typeof affected === "bigint" ? Number(affected) : Number(affected ?? 0),
+  }
+}
+
+/**
+ * Pure SQL builder for the re-enable UPDATE — exposed so the
+ * contract test can assert the SQL shape (column updates + WHERE
+ * clause) without booting Postgres.
+ */
+export function buildReEnableAutoDisabledBindingsSql(params: {
+  workspaceId: string
+  reason: string
+}) {
+  return db
+    .updateTable("conversation_transport_bindings")
+    .set({
+      outbound_enabled: true,
+      metadata:
+        sql`metadata - 'autoDisabledReason'` as unknown as TableUpdate<"conversation_transport_bindings">["metadata"],
+      updated_at: sql`NOW()`,
+    })
+    .where("workspace_id", "=", params.workspaceId)
+    .where(
+      sql`(metadata->>'autoDisabledReason') IS NOT DISTINCT FROM ${params.reason}` as unknown as never
+    )
+    .compile()
+}
+
+// ─── Projection-aware recovery (interaction_transport_projections) ───
 
 export type CanDeliverNowResult =
   | { ok: true }
@@ -57,12 +155,9 @@ export type CanDeliverNowResult =
 /**
  * Is the link's intended (account, endpoint) still the conversation's
  * current binding, and is that binding actually deliverable?
- *
- * Used by:
- *   - the outbox sweeper to gate skipped→pending flips for
- *     binding_disabled/account_disabled links
- *   - the binding/account recovery helpers below as a final guard
- *     before re-opening a projection
+ * Sweeper / per-link recovery checks this before flipping any
+ * skipped→pending — without it the sweeper would just re-skip in a
+ * tight loop.
  */
 export async function canDeliverNow(
   linkId: string
@@ -74,32 +169,23 @@ export async function canDeliverNow(
     conversationId: link.conversationId,
   })
   if (!binding) return { ok: false, reason: "binding_missing" }
-  if (binding.account.status !== "active") {
+  if (binding.account.status !== "active")
     return { ok: false, reason: "account_disabled" }
-  }
-  if (!binding.outboundEnabled) {
+  if (!binding.outboundEnabled)
     return { ok: false, reason: "outbound_disabled" }
-  }
   if (
     binding.account.id !== link.transportAccountId ||
     binding.endpoint.id !== link.transportEndpointId
-  ) {
+  )
     return { ok: false, reason: "endpoint_mismatch" }
-  }
   return { ok: true }
 }
 
 /**
- * Recover a `skipped` link with `skippedReason` in
- * `('binding_disabled','account_disabled')` whose current binding now
- * passes `canDeliverNow`. Flips delivery_status back to `pending` and
- * drops the `skippedReason` marker so the sweeper won't keep
- * re-processing it. Does NOT enqueue a job — the sweeper calls
- * `enqueueOrRetryTransportDeliveryLink` after this returns.
- *
- * Callers must call `canDeliverNow(linkId)` first; this helper does NOT
- * re-verify (sweeper already did, and we want this to be a tight
- * commit-then-enqueue pair).
+ * Flip a `skipped` link back to `pending` (sweeper's flip step). Drops
+ * the `skippedReason` marker so the sweeper doesn't re-pick the same
+ * row. Callers MUST run `canDeliverNow(linkId)` first; this helper
+ * does not re-verify.
  */
 export async function recoverSkippedDisabledLink(
   linkId: string
@@ -119,37 +205,18 @@ export async function recoverSkippedDisabledLink(
 }
 
 /**
- * The delivery worker calls this from its binding-unavailable branch when
- * the current binding's account/endpoint no longer matches the link
- * (i.e. the conversation binding was replaced). Three things happen
- * atomically:
- *
- *   1. Any `interaction_transport_projections` row that points at this
- *      link is reset (status='pending', transport_message_link_id=NULL,
- *      attempts=0, ...) so the projection worker rebuilds token + item +
- *      link under the new binding.
- *   2. The old link is marked terminal: `delivery_status='skipped'`,
- *      `metadata.skippedReason='binding_changed'`, and
- *      `metadata.replacedByProjectionRecovery=true` (an audit signal so
- *      the sweeper knows this is not retryable).
- *   3. No enqueue — the projection worker's next tick will pick up the
- *      reset row and produce a fresh link/job.
- *
- * If no projection row references this link, only step 2 runs. Either
- * way the function is idempotent.
- *
- * `exec` lets the caller (delivery worker, in its outer try/catch)
- * pass an existing tx; if omitted we open our own.
+ * Called from the delivery worker's binding-mismatch branch when the
+ * current binding has been replaced. Resets any
+ * `interaction_transport_projections` row that points at this link AND
+ * terminalizes the old link with
+ * `metadata.replacedByProjectionRecovery=true` so the sweeper knows
+ * this isn't retryable. Same tx by default.
  */
 export async function recoverProjectionForBindingChangedLink(
   linkId: string,
   exec?: DbOrTx
 ): Promise<void> {
   const run = async (tx: DbOrTx) => {
-    // Step 1: reset any projection pinned to this link. The table only
-    // lives if interactions/recovery has been wired up (G5 / Stage 8);
-    // tolerate missing-table on early deploys by catching FK-shaped
-    // errors at the caller boundary.
     await sql`
       UPDATE interaction_transport_projections
       SET status = 'pending',
@@ -161,9 +228,6 @@ export async function recoverProjectionForBindingChangedLink(
       WHERE transport_message_link_id = ${linkId}
         AND status = 'projected'
     `.execute(tx)
-
-    // Step 2: terminalize the old link. Use raw SQL for the jsonb merge
-    // so Kysely's typed Updateable<JsonValue> column doesn't fight us.
     await sql`
       UPDATE transport_message_links
       SET delivery_status = 'skipped',
@@ -175,28 +239,17 @@ export async function recoverProjectionForBindingChangedLink(
       WHERE id = ${linkId}
     `.execute(tx)
   }
-  if (exec) {
-    await run(exec)
-  } else {
-    await db.transaction().execute(run)
-  }
+  if (exec) await run(exec)
+  else await db.transaction().execute(run)
 }
 
 /**
- * Re-arm `interaction_transport_projections` rows that were skipped for
- * a now-resolvable reason. Called from account/binding mutation paths
- * (see `updateTransportAccount`, `upsertConversationTransportBinding`,
- * `updateConversationTransportSettings`, etc.) so the operator's UI
- * action — flipping `webhookInboundConfirmed`, re-enabling outbound,
- * reactivating the account, or replacing the binding — actually
- * triggers a fresh projection attempt rather than waiting for the next
- * approval to retry the dead row.
- *
- * The mapping of event → re-armable reasons matches the plan's
- * "ON CONFLICT" set: never re-arm `not_supported_in_v1` here (only the
- * `binding_created_or_replaced` event widens the allowed kinds), and
- * never re-arm `interaction_already_resolved_or_expired` (that's
- * permanent).
+ * The closed-enum recovery events that account/binding mutation paths
+ * trigger. Mapping → re-armable reasons in `reasonsForEvent`. Never
+ * re-arm `not_supported_in_v1` from anything other than
+ * `binding_created_or_replaced` (the new binding may satisfy
+ * supportsInteractionPrompt where the old one didn't), and never
+ * re-arm `interaction_already_resolved_or_expired` (that's terminal).
  */
 export type SkippedRecoveryEvent =
   | { kind: "config_webhook_confirmed"; transportAccountId: string }
@@ -222,14 +275,9 @@ export interface RecoverySummary {
 }
 
 /**
- * Apply the recovery event from within a Kysely transaction (the typical
- * caller is `updateTransportAccount`, which already wraps its UPDATE in
- * `db.transaction().execute()`). Uses Kysely's `sql\`...\``.execute(tx)`
- * so the row count comes back consistently.
- *
- * Callers running inside a pg.PoolClient transaction (the binding
- * upsert in `upsertConversationTransportBinding`) should call the
- * `*ViaClient` variant below.
+ * Re-arm skipped projection rows in response to a state-change event.
+ * Kysely-tx flavored; the binding upsert path uses
+ * `*ViaClient` for pg.PoolClient transactions.
  */
 export async function recoverSkippedProjectionsForRecoveryEvent(
   exec: DbOrTx,
@@ -296,11 +344,8 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
 }
 
 /**
- * PoolClient-flavored variant — same semantics, different exec. Bindings
- * upsert lives in a pg.PoolClient transaction (so it can mix Kysely
- * compiled-query execution with raw SQL on the same connection), and
- * needs this overload to participate in the same atomic commit as the
- * binding INSERT.
+ * PoolClient-flavored variant — same semantics as above but driven
+ * from a pg.PoolClient transaction (the binding upsert path).
  */
 export async function recoverSkippedProjectionsForRecoveryEventViaClient(
   client: PoolClient,
@@ -384,8 +429,6 @@ function reasonsForEvent(kind: SkippedRecoveryEvent["kind"]): string[] {
     "outbound_disabled",
     "webhook_inbound_unavailable",
   ]
-  // Widen for binding_created_or_replaced — the new binding may satisfy
-  // the allowedTransportKinds set even if the old one did not.
   return kind === "binding_created_or_replaced"
     ? [...base, "not_supported_in_v1"]
     : base

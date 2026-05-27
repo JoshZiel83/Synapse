@@ -523,11 +523,11 @@ async function ensureControllersForSession(input: {
     },
   })
 
-  // Typing adapter — separate controller, separate lifecycle. Adapter is
-  // null on platforms without typing capability (e.g. Feishu).
-  // Pass `lastInboundMessageRef` so connectors that require an inbound
-  // anchor (e.g. QQ C2C input_notify needs msg_id) can build a valid
-  // request; connectors that don't need it ignore the field.
+  // Typing adapter — separate controller, separate lifecycle. Adapter
+  // is null on platforms without typing capability (e.g. Feishu).
+  // Connectors that need controller config overrides (e.g. QQ
+  // input_notify wants 50s heartbeat) return `{ adapter, config }`;
+  // unwrap to keep both shapes working.
   const typingAdapterResult = connector.createTypingAdapter({
     account,
     endpointRef: {
@@ -535,6 +535,9 @@ async function ensureControllersForSession(input: {
       externalId: link.endpointExternalId,
       metadata: {},
     },
+    // The current claim is anchored on the last inbound message that
+    // produced this turn; some platforms (QQ C2C `input_notify`) need
+    // the inbound msg_id to construct a valid typing request.
     lastInboundMessageRef: {
       externalMessageId,
       endpointExternalId: link.endpointExternalId,

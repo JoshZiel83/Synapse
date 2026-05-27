@@ -9,15 +9,12 @@
 import { sql } from "kysely"
 import {
   db,
-  executeSqlOn,
+  withDbTransaction,
   type DatabaseTransaction,
-  type KyselyDb,
-  type QueryExecutor,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
 import { v4 as uuidv4 } from "uuid"
 import type {
-  ConversationTransportBindingSummary,
   TransportDeliveryStatus,
   TransportKind,
 } from "@synapse/shared/types"
@@ -30,118 +27,88 @@ import {
 } from "./_helpers.js"
 import { getConversationTransportBinding } from "../service.js"
 
-type DbOrTx = KyselyDb | DatabaseTransaction
-
 /**
- * Step 1 of the projection split (G5): resolve the binding for an outbound
- * projection and return `null` early when the link must not be created.
+ * Recursively merge `patch` into `target`, returning a new object.
+ * Plain objects are merged key-by-key; arrays and primitives in
+ * `patch` overwrite the matching slot wholesale (arrays merging is
+ * almost always wrong for delivery metadata, and the worker only
+ * needs object-level merge semantics).
  *
- * Caller decides what to do with `null`: the legacy
- * `queueConversationTransportProjection` returns null silently; the new
- * `interaction-projection` worker uses the reason to mark
- * `interaction_transport_projections.error` accordingly.
- *
- * The reasons returned here are deliberately transport-agnostic. The QQ
- * `webhook_inbound_unavailable` gate is a connector-specific check the
- * caller layers on top after seeing the binding (it needs to read QQ
- * `account.config.webhookInboundConfirmed`, which this helper has no
- * business knowing about). Callers should branch on `account_inactive` /
- * `outbound_disabled` only AFTER their own per-transport gate runs, so
- * the strict ordering from the plan stays correct.
+ * Used by `patchTransportMessageLinkMetadata` so writes to
+ * `metadata.delivery.*` from the sweeper don't clobber sibling
+ * `metadata.delivery.*` keys an in-flight `sendMessage` patched
+ * before it crashed (and vice versa).
  */
-export type ResolveOutboundBindingResult =
-  | {
-      ok: true
-      binding: ConversationTransportBindingSummary
+export function deepMergeJsonObjects(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...target }
+  for (const [key, value] of Object.entries(patch)) {
+    const existing = out[key]
+    if (
+      existing &&
+      typeof existing === "object" &&
+      !Array.isArray(existing) &&
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+    ) {
+      out[key] = deepMergeJsonObjects(
+        existing as Record<string, unknown>,
+        value as Record<string, unknown>
+      )
+    } else {
+      out[key] = value
     }
-  | {
-      ok: false
-      reason:
-        | "no_binding"
-        | "account_inactive"
-        | "outbound_disabled"
-        | "not_supported_in_v1"
-    }
+  }
+  return out
+}
 
-export async function resolveBindingForOutbound(params: {
+export async function queueConversationTransportProjection(params: {
   workspaceId: string
   conversationId: string
-  /**
-   * Optional list of transport_kinds this projection supports. Used by the
-   * interaction-projection worker (v1: ["qq"]) to keep approval prompts
-   * off Feishu/Weixin until those connectors gain interaction-prompt
-   * rendering. Leave undefined for kind-agnostic projections (the legacy
-   * outbound path).
-   */
-  allowedTransportKinds?: readonly TransportKind[]
-}): Promise<ResolveOutboundBindingResult> {
+  itemId: string
+  direction?: "inbound" | "outbound"
+  externalMessageId?: string
+  externalReplyToId?: string
+  externalThreadId?: string
+  metadata?: Record<string, unknown>
+}) {
+  const direction = params.direction || "outbound"
   const binding = await getConversationTransportBinding({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
   })
-  if (!binding) return { ok: false, reason: "no_binding" }
-  if (
-    params.allowedTransportKinds &&
-    !params.allowedTransportKinds.includes(binding.transportKind)
-  ) {
-    return { ok: false, reason: "not_supported_in_v1" }
+  if (!binding) {
+    return null
   }
-  if (binding.account.status !== "active") {
-    return { ok: false, reason: "account_inactive" }
+  if (direction === "outbound" && binding.account.status !== "active") {
+    return null
   }
-  if (!binding.outboundEnabled) {
-    return { ok: false, reason: "outbound_disabled" }
+  if (direction === "outbound" && !binding.outboundEnabled) {
+    return null
   }
-  return { ok: true, binding }
-}
 
-/**
- * Step 2 of the projection split (G5): create the transport_message_links
- * row inside an external transaction. Returns the linkId. Does NOT enqueue
- * a BullMQ job; call `enqueueOutboundDelivery(linkId)` AFTER the outer
- * transaction commits.
- *
- * Use this from worker code that needs both the link row and a related
- * write (e.g. `interaction_transport_projections.status='projected'`) to
- * happen atomically.
- */
-export async function persistOutboundLinkRow(
-  exec: DbOrTx,
-  params: {
-    workspaceId: string
-    conversationId: string
-    itemId: string
-    binding: ConversationTransportBindingSummary
-    direction?: "inbound" | "outbound"
-    externalMessageId?: string
-    externalReplyToId?: string
-    externalThreadId?: string
-    metadata?: Record<string, unknown>
-  }
-): Promise<{
-  linkId: string
-  row: ReturnType<typeof normalizeTransportMessageLinkRow>
-}> {
-  const direction = params.direction || "outbound"
-  const row = await exec
+  const link = await db
     .insertInto("transport_message_links")
     .values({
       id: uuidv4(),
       workspace_id: params.workspaceId,
       conversation_id: params.conversationId,
       item_id: params.itemId,
-      transport_account_id: params.binding.account.id,
-      transport_endpoint_id: params.binding.endpoint.id,
-      transport_kind: params.binding.transportKind,
+      transport_account_id: binding.account.id,
+      transport_endpoint_id: binding.endpoint.id,
+      transport_kind: binding.transportKind,
       direction,
       delivery_status: "pending",
       external_message_id: params.externalMessageId || null,
       external_reply_to_id: params.externalReplyToId || null,
       external_thread_id: params.externalThreadId || null,
       metadata: {
-        bindingId: params.binding.id,
-        endpointType: params.binding.endpoint.endpointType,
-        endpointExternalId: params.binding.endpoint.externalId,
+        bindingId: binding.id,
+        endpointType: binding.endpoint.endpointType,
+        endpointExternalId: binding.endpoint.externalId,
         ...(params.metadata || {}),
       } as TableInsert<"transport_message_links">["metadata"],
       created_at: sql`NOW()`,
@@ -159,162 +126,17 @@ export async function persistOutboundLinkRow(
         })
     )
     .returningAll()
-    .executeTakeFirstOrThrow()
-  return { linkId: row.id, row: normalizeTransportMessageLinkRow(row) }
-}
-
-/**
- * Step 3 of the projection split (G5): enqueue the BullMQ delivery job
- * for an existing transport_message_links row. Must be called AFTER the
- * tx that wrote the row commits — otherwise the worker may pick up the
- * job before the row is visible.
- *
- * This is a thin wrapper around `enqueueTransportDeliveryJobs([linkId])`
- * kept here so projection-side code never imports the queue module
- * directly (avoiding the circular shape `workers → service → workers`).
- */
-export async function enqueueOutboundDelivery(linkId: string): Promise<void> {
-  await enqueueTransportDeliveryJobs([linkId])
-}
-
-/**
- * Raw-SQL variant of `persistOutboundLinkRow` that takes a `QueryExecutor`
- * (PoolClient, pool, or any `{query(text, params)}` shim) instead of a
- * Kysely `DbOrTx`. Used by the interaction-projection worker which runs
- * inside a `transaction(async client => ...)` block where `client` is a
- * raw `pg.PoolClient` (so we can also call `executeSqlOn` for the
- * SAVEPOINT + SELECT FOR UPDATE pieces).
- *
- * Behavior is intentionally identical to the Kysely variant — same INSERT
- * with the same `ON CONFLICT (item_id, transport_endpoint_id, direction)`
- * upsert clause. Coverage by integration tests on either path stays
- * representative because both flow through the same SQL.
- */
-export async function persistOutboundLinkRowRaw(
-  client: QueryExecutor,
-  params: {
-    workspaceId: string
-    conversationId: string
-    itemId: string
-    binding: ConversationTransportBindingSummary
-    direction?: "inbound" | "outbound"
-    externalMessageId?: string
-    externalReplyToId?: string
-    externalThreadId?: string
-    metadata?: Record<string, unknown>
-  }
-): Promise<{
-  linkId: string
-  row: ReturnType<typeof normalizeTransportMessageLinkRow>
-}> {
-  const direction = params.direction || "outbound"
-  const linkMetadata: Record<string, unknown> = {
-    bindingId: params.binding.id,
-    endpointType: params.binding.endpoint.endpointType,
-    endpointExternalId: params.binding.endpoint.externalId,
-    ...(params.metadata || {}),
-  }
-  const id = uuidv4()
-  const result = await executeSqlOn(
-    client,
-    `
-      INSERT INTO transport_message_links (
-        id, workspace_id, conversation_id, item_id,
-        transport_account_id, transport_endpoint_id, transport_kind,
-        direction, delivery_status,
-        external_message_id, external_reply_to_id, external_thread_id,
-        metadata, created_at, updated_at
-      )
-      VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, 'pending',
-        $9, $10, $11, $12::jsonb, NOW(), NOW()
-      )
-      ON CONFLICT (item_id, transport_endpoint_id, direction)
-      DO UPDATE SET
-        external_message_id = COALESCE(EXCLUDED.external_message_id, transport_message_links.external_message_id),
-        external_reply_to_id = COALESCE(EXCLUDED.external_reply_to_id, transport_message_links.external_reply_to_id),
-        external_thread_id = COALESCE(EXCLUDED.external_thread_id, transport_message_links.external_thread_id),
-        metadata = transport_message_links.metadata || EXCLUDED.metadata,
-        updated_at = NOW()
-      RETURNING *
-    `,
-    [
-      id,
-      params.workspaceId,
-      params.conversationId,
-      params.itemId,
-      params.binding.account.id,
-      params.binding.endpoint.id,
-      params.binding.transportKind,
-      direction,
-      params.externalMessageId || null,
-      params.externalReplyToId || null,
-      params.externalThreadId || null,
-      JSON.stringify(linkMetadata),
-    ]
-  )
-  const row = result.rows[0]
-  if (!row) {
-    throw new Error(
-      `persistOutboundLinkRowRaw: insert returned no row for item ${params.itemId}`
-    )
-  }
-  return { linkId: row.id, row: normalizeTransportMessageLinkRow(row) }
-}
-
-/**
- * Legacy wrapper preserved for existing callers
- * (session/service.ts session push, im/service/ingest.ts inbound dedupe).
- *
- * Behavior on inbound (`direction:"inbound"`): writes the row only;
- * never enqueues a BullMQ job. Behavior on outbound:
- * resolveBinding → persist → enqueue (no transaction; the three steps
- * are sequential and the enqueue happens after the row is committed).
- *
- * Returns null when the binding is missing / account inactive / outbound
- * disabled — matching the legacy "silently skip" contract.
- */
-export async function queueConversationTransportProjection(params: {
-  workspaceId: string
-  conversationId: string
-  itemId: string
-  direction?: "inbound" | "outbound"
-  externalMessageId?: string
-  externalReplyToId?: string
-  externalThreadId?: string
-  metadata?: Record<string, unknown>
-}) {
-  const direction = params.direction || "outbound"
-  const binding = await getConversationTransportBinding({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-  })
-  if (!binding) return null
-  if (direction === "outbound" && binding.account.status !== "active") {
-    return null
-  }
-  if (direction === "outbound" && !binding.outboundEnabled) return null
-
-  const { row, linkId } = await persistOutboundLinkRow(db, {
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    itemId: params.itemId,
-    binding,
-    direction,
-    externalMessageId: params.externalMessageId,
-    externalReplyToId: params.externalReplyToId,
-    externalThreadId: params.externalThreadId,
-    metadata: params.metadata,
-  })
-  if (direction === "outbound") {
-    await enqueueOutboundDelivery(linkId).catch((error) => {
+    .executeTakeFirst()
+  if (link && direction === "outbound") {
+    await enqueueTransportDeliveryJobs([link.id]).catch((error) => {
       console.error(
-        `[im] Failed to enqueue transport delivery job for link ${linkId}:`,
+        `[im] Failed to enqueue transport delivery job for link ${link.id}:`,
         error
       )
     })
   }
-  return row
+
+  return link
 }
 
 export async function findTransportMessageLinkByExternalMessage(params: {
@@ -348,28 +170,97 @@ export async function updateTransportMessageLinkStatus(params: {
   externalMessageId?: string
   metadata?: Record<string, unknown>
   error?: string
+  tx?: DatabaseTransaction
 }) {
-  const extraMetadata = {
+  const extraMetadata: Record<string, unknown> = {
     ...(params.metadata || {}),
     ...(params.error ? { lastError: params.error } : {}),
   }
-  const row = await db
-    .updateTable("transport_message_links")
-    .set({
-      delivery_status: params.status,
-      ...(params.externalMessageId
-        ? { external_message_id: params.externalMessageId }
-        : {}),
-      metadata: sql`transport_message_links.metadata || ${JSON.stringify(extraMetadata)}::jsonb`,
-      ...(params.status === "sent"
-        ? { delivered_at: sql`COALESCE(delivered_at, NOW())` }
-        : {}),
-      updated_at: sql`NOW()`,
-    })
-    .where("id", "=", params.linkId)
-    .returningAll()
-    .executeTakeFirst()
-  return row ? normalizeTransportMessageLinkRow(row) : null
+  // Postgres jsonb `||` is a SHALLOW merge — writing
+  // `{ delivery: { lastSweeperRetryAt: ... } }` would replace the
+  // entire `delivery` subtree, blowing away `delivery.ambiguous` etc.
+  // Use `patchTransportMessageLinkMetadata` (deep merge in
+  // application code) to keep everything that shares a namespace.
+  return await runWithTransaction(params.tx, async (tx) => {
+    const existing = await tx
+      .selectFrom("transport_message_links")
+      .select("metadata")
+      .where("id", "=", params.linkId)
+      .forUpdate()
+      .executeTakeFirst()
+    const current = parseJsonObject(existing?.metadata)
+    const merged = deepMergeJsonObjects(current, extraMetadata)
+    const row = await tx
+      .updateTable("transport_message_links")
+      .set({
+        delivery_status: params.status,
+        ...(params.externalMessageId
+          ? { external_message_id: params.externalMessageId }
+          : {}),
+        metadata: merged as TableInsert<"transport_message_links">["metadata"],
+        ...(params.status === "sent"
+          ? { delivered_at: sql`COALESCE(delivered_at, NOW())` }
+          : {}),
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", params.linkId)
+      .returningAll()
+      .executeTakeFirst()
+    return row ? normalizeTransportMessageLinkRow(row) : null
+  })
+}
+
+/**
+ * Deep-merge a JSON patch into `transport_message_links.metadata`.
+ * Called as `OutboundSendInput.patchLinkMetadata` from inside
+ * `connector.sendMessage` so connectors can persist per-attempt
+ * state (msg_seq, in-flight markers, ambiguity flags) before the
+ * HTTP round-trip, surviving a process crash mid-flight.
+ *
+ * Semantics:
+ *  - `SELECT … FOR UPDATE` locks the link row in the supplied
+ *    (or freshly opened) transaction so a parallel attempt on the
+ *    same link serializes after this one rather than racing.
+ *  - Application-level deep merge means writing
+ *    `{ delivery: { sweeperRetryCount: 3 } }` keeps any other
+ *    `metadata.delivery.*` keys intact (`delivery.ambiguous`,
+ *    `delivery.lastSweeperRetryAt`, …).
+ *  - Pass `tx` when composing with surrounding writes (e.g. the
+ *    worker's job-cleanup or sweeper SQL); omit to open a single-
+ *    shot transaction.
+ */
+export async function patchTransportMessageLinkMetadata(params: {
+  linkId: string
+  patch: Record<string, unknown>
+  tx?: DatabaseTransaction
+}): Promise<void> {
+  if (!params.patch || Object.keys(params.patch).length === 0) return
+  await runWithTransaction(params.tx, async (tx) => {
+    const existing = await tx
+      .selectFrom("transport_message_links")
+      .select("metadata")
+      .where("id", "=", params.linkId)
+      .forUpdate()
+      .executeTakeFirst()
+    const current = parseJsonObject(existing?.metadata)
+    const merged = deepMergeJsonObjects(current, params.patch)
+    await tx
+      .updateTable("transport_message_links")
+      .set({
+        metadata: merged as TableInsert<"transport_message_links">["metadata"],
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", params.linkId)
+      .execute()
+  })
+}
+
+async function runWithTransaction<T>(
+  tx: DatabaseTransaction | undefined,
+  fn: (tx: DatabaseTransaction) => Promise<T>
+): Promise<T> {
+  if (tx) return fn(tx)
+  return withDbTransaction(fn)
 }
 
 export async function loadTransportMessageLinkForDelivery(linkId: string) {
@@ -460,64 +351,22 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
 }
 
 /**
- * Deep-merge a patch into `transport_message_links.metadata`. G6 callback:
- * connectors invoke this from within `sendMessage` to persist per-attempt
- * state (msg_seq, anchor reservation, attempts.<n>.outcome) BEFORE the
- * HTTP POST, so a crash mid-flight doesn't lose the record.
- *
- * Implementation: `SELECT … FOR UPDATE` → application-level deep merge →
- * `UPDATE`. The row lock serializes concurrent attempts on the same link
- * so neither overwrites the other.
- *
- * Postgres jsonb `||` is shallow merge — does NOT recurse into nested
- * objects (it would overwrite `metadata.qq` entirely with the patch's
- * `qq` object). We therefore deep merge in application code.
- *
- * Arrays are replaced wholesale (not concatenated). Connectors should
- * structure attempt history as `{ "0": {...}, "1": {...} }` keyed by
- * attemptNumber instead of an array to keep updates additive.
- */
-export async function patchTransportMessageLinkMetadata(
-  linkId: string,
-  patch: Record<string, unknown>
-): Promise<void> {
-  await db.transaction().execute(async (tx) => {
-    const row = await tx
-      .selectFrom("transport_message_links")
-      .select(["metadata"])
-      .where("id", "=", linkId)
-      .forUpdate()
-      .limit(1)
-      .executeTakeFirst()
-    if (!row) return
-    const current = parseJsonObject(row.metadata) as Record<string, unknown>
-    const merged = deepMergeJsonObjects(current, patch)
-    await tx
-      .updateTable("transport_message_links")
-      .set({
-        metadata: merged as TableInsert<"transport_message_links">["metadata"],
-        updated_at: sql`NOW()`,
-      })
-      .where("id", "=", linkId)
-      .execute()
-  })
-}
-
-/**
- * Delete a single top-level key from `transport_message_links.metadata`.
- * Used by recovery paths to clear `skippedReason` after flipping a link
- * back to `pending`. Postgres jsonb supports `metadata - $key` for this
- * directly so we don't need a SELECT…UPDATE roundtrip.
+ * Drop a top-level key from `transport_message_links.metadata` (jsonb
+ * `-` operator). Used by recovery flips that need to clear stale
+ * markers like `skippedReason` without rewriting the rest of the
+ * metadata object. Accepts a Kysely transaction so callers can keep
+ * the delete in the same commit as the related UPDATE.
  */
 export async function removeTransportMessageLinkMetadataKey(
-  exec: DbOrTx,
+  tx: DatabaseTransaction,
   linkId: string,
   key: string
 ): Promise<void> {
-  await exec
+  await tx
     .updateTable("transport_message_links")
     .set({
-      metadata: sql`transport_message_links.metadata - ${key}`,
+      metadata:
+        sql`metadata - ${key}` as unknown as TableInsert<"transport_message_links">["metadata"],
       updated_at: sql`NOW()`,
     })
     .where("id", "=", linkId)
@@ -525,32 +374,51 @@ export async function removeTransportMessageLinkMetadataKey(
 }
 
 /**
- * Recursive jsonb-shaped deep merge: `patch` keys take precedence,
- * but nested plain objects are merged key-by-key. Arrays and scalars
- * are replaced wholesale.
- *
- * Exported for unit-test coverage; production code reaches it via
- * `patchTransportMessageLinkMetadata`.
+ * Persist a fully-formed `transport_message_links` row directly.
+ * Used by the interaction-projection worker to insert a link
+ * already keyed to a freshly-minted action token before enqueueing
+ * delivery.
  */
-export function deepMergeJsonObjects(
-  base: Record<string, unknown>,
-  patch: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...base }
-  for (const [key, patchValue] of Object.entries(patch)) {
-    const baseValue = out[key]
-    if (isPlainObject(baseValue) && isPlainObject(patchValue)) {
-      out[key] = deepMergeJsonObjects(
-        baseValue as Record<string, unknown>,
-        patchValue as Record<string, unknown>
-      )
-    } else {
-      out[key] = patchValue
-    }
-  }
-  return out
+export async function persistOutboundLinkRowRaw(params: {
+  workspaceId: string
+  conversationId: string
+  itemId: string
+  transportAccountId: string
+  transportEndpointId: string
+  transportKind: TransportKind
+  metadata?: Record<string, unknown>
+}): Promise<{ id: string }> {
+  const row = await db
+    .insertInto("transport_message_links")
+    .values({
+      id: uuidv4(),
+      workspace_id: params.workspaceId,
+      conversation_id: params.conversationId,
+      item_id: params.itemId,
+      transport_account_id: params.transportAccountId,
+      transport_endpoint_id: params.transportEndpointId,
+      transport_kind: params.transportKind,
+      direction: "outbound",
+      delivery_status: "pending",
+      external_message_id: null,
+      external_reply_to_id: null,
+      external_thread_id: null,
+      metadata: (params.metadata ||
+        {}) as TableInsert<"transport_message_links">["metadata"],
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return { id: row.id }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
+/**
+ * Enqueue a freshly-created link for outbound delivery — the
+ * interaction-projection worker writes the link row, then calls this
+ * to push the job onto BullMQ with the standard
+ * `IM_TRANSPORT_DELIVERY_JOB_DEFAULTS` (attempts + backoff).
+ */
+export async function enqueueOutboundDelivery(linkId: string): Promise<void> {
+  await enqueueTransportDeliveryJobs([linkId])
 }

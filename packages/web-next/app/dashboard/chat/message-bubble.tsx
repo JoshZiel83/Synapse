@@ -78,6 +78,7 @@ import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
 import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
 import { buildReplyPreviewText, getEntityDisplayName } from "./reply-utils"
+import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import {
   formatTransportKindLabel,
   getAuthorContactHref,
@@ -347,9 +348,13 @@ function TransportSummary({
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
 }) {
+  const connectorMetadata = useConnectorMetadata()
   const inboundLabel =
     transport?.direction === "inbound" && transport.transportKind
-      ? `via ${formatTransportKindLabel(transport.transportKind)}`
+      ? `via ${formatTransportKindLabel(
+          transport.transportKind,
+          connectorMetadata
+        )}`
       : null
   const outboundDeliveries = (transportDeliveries || []).filter(
     (delivery) => delivery.direction === "outbound"
@@ -370,7 +375,10 @@ function TransportSummary({
         </Badge>
       ) : null}
       {outboundDeliveries.map((delivery) => {
-        const transportLabel = formatTransportKindLabel(delivery.transportKind)
+        const transportLabel = formatTransportKindLabel(
+          delivery.transportKind,
+          connectorMetadata
+        )
         return (
           <Badge
             key={delivery.linkId}
@@ -2462,6 +2470,7 @@ export default function MessageBubble({
 }: MessageBubbleProps) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const connectorMetadata = useConnectorMetadata()
   const isChildResult = role === "child_result"
   const isSystem = role === "system"
   const isError = role === "error"
@@ -2547,7 +2556,7 @@ export default function MessageBubble({
     }
     if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
       return authorMember
-        ? getConversationMemberSubtitle(authorMember)
+        ? getConversationMemberSubtitle(authorMember, connectorMetadata)
         : "External participant"
     }
     if (

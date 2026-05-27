@@ -3,6 +3,7 @@ import cors from "@fastify/cors"
 import cookie from "@fastify/cookie"
 import websocket from "@fastify/websocket"
 import multipart from "@fastify/multipart"
+import { ZodError } from "zod"
 import { config } from "./config/index.js"
 import {
   assertRequiredSchema,
@@ -134,6 +135,24 @@ async function main() {
       return reply.status(400).send({
         error: "Invalid request",
         code: "invalid_request",
+      })
+    }
+
+    // Centralized ZodError → 400. Without this, per-transport
+    // controllers (Feishu, Weixin, WeCom, QQ, DingTalk, …) each have
+    // to wrap their `schema.parse()` in try/catch or the failure
+    // becomes a 500. Stable `code: "invalid_request"` lets clients
+    // discriminate validation errors from other 4xx codes; existing
+    // WeCom integration tests already rely on this constant.
+    if (error instanceof ZodError) {
+      return reply.status(400).send({
+        error: "validation failed",
+        code: "invalid_request",
+        issues: error.issues.map((issue) => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        })),
       })
     }
 

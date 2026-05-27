@@ -15,6 +15,8 @@ import type {
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
 } from "@synapse/shared"
+import { describeTransportKind } from "@synapse/shared"
+import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import {
   ArrowUpRight,
   Bot,
@@ -162,19 +164,6 @@ const EMPTY_QQ_FORM: QqFormState = {
   configuredUrlDomains: "",
 }
 
-function prettyTransportKind(kind: "feishu" | "weixin" | "wecom" | "qq") {
-  switch (kind) {
-    case "feishu":
-      return "Feishu"
-    case "weixin":
-      return "WeChat"
-    case "wecom":
-      return "WeCom"
-    case "qq":
-      return "QQ"
-  }
-}
-
 function prettyTransportAccountOwnerScope(scope: TransportAccountOwnerScope) {
   return scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE
     ? "Workspace-owned"
@@ -222,19 +211,18 @@ function formatDateTime(value?: string) {
   }
 }
 
-function buildWebhookUrl(
-  transportKind: "feishu" | "weixin" | "wecom" | "qq",
-  accountId: string
-) {
+function buildWebhookUrl(account: TransportAccountSummary) {
   if (typeof window === "undefined") return ""
   try {
-    // Legacy /im/public/feishu/... endpoint is the only kind-specific
-    // shape kept for backwards compat. Everything else uses the
-    // generic /api/v1/im/webhooks/:transportKind/:accountId route.
+    // Feishu keeps its legacy alias so existing Feishu app
+    // event-subscription configs don't have to be re-pointed. All
+    // other transports (QQ, future WebSocket-replacement webhooks)
+    // go through the generic `/api/v1/im/webhooks/:kind/:id` route
+    // wired up in public-controller.ts.
     const path =
-      transportKind === "feishu"
-        ? `${API_BASE}/im/public/feishu/accounts/${accountId}/webhook`
-        : `${API_BASE}/im/webhooks/${transportKind}/${accountId}`
+      account.transportKind === "feishu"
+        ? `${API_BASE}/im/public/feishu/accounts/${account.id}/webhook`
+        : `${API_BASE}/im/webhooks/${account.transportKind}/${account.id}`
     return new URL(path, window.location.origin).toString()
   } catch {
     return ""
@@ -614,6 +602,13 @@ function QqAccountConfigEditor({
 
 export default function ImPage() {
   const { workspaceId, workspaceName } = useWorkspace()
+  const connectorMetadata = useConnectorMetadata()
+  // Resolve a transport label inside the component so we can read
+  // the live connector metadata. Falls back to `describeTransportKind`
+  // before the provider has loaded.
+  const prettyTransportKind = (
+    kind: TransportAccountSummary["transportKind"]
+  ) => connectorMetadata?.get(kind)?.displayName ?? describeTransportKind(kind)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [creatingFeishu, setCreatingFeishu] = useState(false)
@@ -1979,10 +1974,8 @@ export default function ImPage() {
                 savingAccountId === account.id ||
                 disconnectingAccountId === account.id
               const webhookUrl =
-                (account.transportKind === "feishu" ||
-                  account.transportKind === "qq") &&
                 account.connectionMode === "webhook"
-                  ? buildWebhookUrl(account.transportKind, account.id)
+                  ? buildWebhookUrl(account)
                   : ""
               const draft = accountSettingsDrafts[account.id] || {
                 ownerScope: account.ownerScope,
@@ -2055,7 +2048,8 @@ export default function ImPage() {
                   </div>
 
                   <div className="min-w-0 space-y-3">
-                    {account.transportKind === "weixin" ? (
+                    {connectorMetadata?.get(account.transportKind)
+                      ?.showsBaseUrlConfig === true ? (
                       <div className="text-xs text-muted-foreground">
                         Base URL:{" "}
                         {String(

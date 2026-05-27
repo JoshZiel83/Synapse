@@ -273,6 +273,11 @@ async function onSendFailure(
   // Step 7: duplicate-msg_seq + prior unknown attempt → ambiguous success
   if (failure.code && QQ_DUPLICATE_MSG_SEQ_CODES.has(failure.code)) {
     if (hadPriorUnknownAttempt(meta, input.attemptNumber)) {
+      // Record the per-attempt outcome under the QQ namespace
+      // (truly protocol-specific) and the neutral ambiguity flag
+      // under `metadata.delivery.*` so the generic worker/sweeper
+      // can scan a single namespace regardless of which connector
+      // produced the link.
       await input.patchLinkMetadata({
         qq: {
           attempts: {
@@ -282,12 +287,14 @@ async function onSendFailure(
               errorCode: String(failure.code),
             },
           },
-          deliveryAmbiguous: "success_likely",
         },
+        delivery: { ambiguous: true },
       })
-      // No externalMessageId available — worker.updateStatus skips the
-      // external_message_id column when it's undefined.
-      return { externalMessageId: undefined }
+      // Explicit `deliveryAmbiguous: true` + no id satisfies the
+      // shared worker contract: it marks the link `sent` with
+      // `external_message_id` NULL instead of rejecting the
+      // missing id as a connector bug.
+      return { deliveryAmbiguous: true }
     }
     // Genuine duplicate without prior unknown: programmer error / corrupt
     // anchor state. Don't retry forever.

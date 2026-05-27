@@ -170,11 +170,12 @@ export default async function imQqController(
         if (!existing || existing.workspaceId !== workspaceId) {
           return reply.status(404).send({ error: "qq account not found" })
         }
-        if (existing.transportKind !== "qq") {
-          return reply.status(409).send({
-            error: `account ${accountId} is not a QQ account`,
-          })
-        }
+        // Wrong-kind hits are caught by shared `assertExpectedTransportKind`
+        // inside `updateTransportAccount` (it sees
+        // `expectedTransportKind: "qq"` we pass below) and surface as
+        // 404 `transport_account_kind_mismatch`. Removing the local 409
+        // branch keeps the response code stable across every per-kind
+        // PUT (Feishu / WeCom / DingTalk / QQ).
         const existingConfig =
           existing.config && typeof existing.config === "object"
             ? (existing.config as Record<string, unknown>)
@@ -205,6 +206,10 @@ export default async function imQqController(
       const account = await updateTransportAccount({
         workspaceId,
         accountId,
+        // Per-transport route guard — assertExpectedTransportKind in
+        // updateTransportAccount throws 404 `transport_account_kind_mismatch`
+        // when the row's kind doesn't match "qq".
+        expectedTransportKind: "qq",
         displayName: body.displayName,
         ownerScope: body.ownerScope,
         ownerWorkspaceMemberId: body.ownerWorkspaceMemberId,
