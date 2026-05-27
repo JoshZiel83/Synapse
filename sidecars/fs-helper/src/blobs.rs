@@ -30,19 +30,18 @@ impl BlobStore {
 
     /// Stream-copy `src` into a blob, double-hashing source + blob; verifies
     /// the source hash equals `expected_sha256` if provided. Returns
-    /// (sha256, size, dedup_flag). If blob already exists, no rewrite is
-    /// performed and `dedup_flag = true`. NEVER hardlink — plan §2.
+    /// (sha256, size, dedup_flag). Opens the source with `O_NOFOLLOW` so a
+    /// symlink swap between the TS-side safeResolve and this call cannot
+    /// redirect the snapshot's target. If blob already exists, no rewrite
+    /// is performed and `dedup_flag = true`. NEVER hardlink — plan §2.
     pub fn put_streaming(
         &self,
         src: &Path,
         expected_sha256: Option<&str>,
     ) -> Result<(String, u64, bool), RpcError> {
-        let mut src_file = fs::File::open(src)?;
+        let mut src_file = open_nofollow(src)?;
         let mut src_hash = Sha256::new();
-        let tmp_path = self
-            .root
-            .join(format!("incoming.{}", uuid_like()));
-        // Ensure parent dir exists; we don't know the final sha yet so use root.
+        let tmp_path = self.root.join(format!("incoming.{}", uuid_like()));
         let mut tmp_file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -89,7 +88,6 @@ impl BlobStore {
             return Ok((src_sha, total, true));
         }
         fs::rename(&tmp_path, &final_path)?;
-        // tighten perms
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -143,6 +141,42 @@ impl BlobStore {
             fs::remove_file(&p)?;
         }
         Ok(())
+    }
+}
+
+/// Open `src` with O_NOFOLLOW so a final-component symlink swap can't
+/// redirect us to a different file after path validation. On platforms
+/// without O_NOFOLLOW the symlink risk is documented as residual (plan §1
+/// Known limitations).
+fn open_nofollow(src: &Path) -> Result<fs::File, RpcError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        Ok(fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc_o_nofollow())
+            .open(src)?)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(fs::File::open(src)?)
+    }
+}
+
+#[cfg(unix)]
+fn libc_o_nofollow() -> i32 {
+    // Avoid taking a libc dependency just for this constant.
+    #[cfg(target_os = "linux")]
+    {
+        0x20000 // O_NOFOLLOW on Linux
+    }
+    #[cfg(target_os = "macos")]
+    {
+        0x100 // O_NOFOLLOW on macOS / BSD
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        0
     }
 }
 

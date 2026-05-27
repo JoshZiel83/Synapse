@@ -251,24 +251,34 @@ impl HistoryStore {
         let sha = g.sha256.clone().ok_or_else(|| {
             RpcError::Internal(format!("history row {path}@{version} prior_exists=true but blob_sha256 NULL"))
         })?;
-        let bytes = self.blobs.read(&sha)?;
-        const INLINE_THRESHOLD: usize = 8 * 1024 * 1024;
-        if bytes.len() <= INLINE_THRESHOLD {
+        const INLINE_THRESHOLD: u64 = 8 * 1024 * 1024;
+        // Decide on mode using the recorded metadata size — NOT the full
+        // blob bytes. Otherwise a 5 GiB historical blob would be slurped
+        // into memory just to discover it's too big for inline mode.
+        if g.size <= INLINE_THRESHOLD {
+            let bytes = self.blobs.read(&sha)?;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
             return Ok(HistoryRestoreResult {
-                mode: "inline", content_b64: Some(b64), tmp_token: None,
-                sha256: Some(sha), size: Some(g.size),
+                mode: "inline",
+                content_b64: Some(b64),
+                tmp_token: None,
+                sha256: Some(sha),
+                size: Some(g.size),
             });
         }
-        // Stage to /.synapse-internal/restore/restore-<32hex>.
+        // Stage large blob to /.synapse-internal/restore/restore-<32hex>
+        // via streaming copy (stage_to streams through 64 KiB buffer).
         let token = format!("restore-{}", make_token());
         let dest = root.join(".synapse-internal").join("restore").join(&token);
         std::fs::create_dir_all(dest.parent().unwrap())?;
         self.blobs.stage_to(&sha, &dest)?;
         let _ = self.work_dir.exists(); // touch field
         Ok(HistoryRestoreResult {
-            mode: "tmp_token", content_b64: None, tmp_token: Some(token),
-            sha256: Some(sha), size: Some(g.size),
+            mode: "tmp_token",
+            content_b64: None,
+            tmp_token: Some(token),
+            sha256: Some(sha),
+            size: Some(g.size),
         })
     }
 

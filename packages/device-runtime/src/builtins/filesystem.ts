@@ -6,6 +6,7 @@
 
 import { existsSync } from "node:fs"
 import { Buffer } from "node:buffer"
+import { createHash } from "node:crypto"
 import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
   DeviceCatalogExposure,
@@ -1660,6 +1661,12 @@ async function handleHistoryRestore(
         op: "pre_restore",
       })
       // Phase 4: restore execution.
+      // Use the metadata fetched in phase 1 (meta.sha256) as the
+      // authoritative historical hash. The sidecar's restore response
+      // also returns sha256 for inline mode, but we never trust runtime
+      // helper output unverified — we hash the bytes ourselves before
+      // writing.
+      const expectedHistSha = meta.sha256
       const restoreResult = await ctx.helper!.historyRestore({
         path: canonical,
         version,
@@ -1675,6 +1682,21 @@ async function handleHistoryRestore(
       } else if (restoreResult.mode === "inline") {
         const b64 = restoreResult.content_b64 ?? ""
         const buf = Buffer.from(b64, "base64")
+        // Verify the decoded bytes hash to the historical sha. Closes the
+        // "corrupted blob silently restored" attack: a tampered blob in
+        // the work-dir would otherwise be written into user-visible space
+        // and the user'd attribute it to the historical version.
+        if (expectedHistSha) {
+          const h = createHash("sha256")
+          h.update(buf)
+          const got = h.digest("hex")
+          if (got !== expectedHistSha) {
+            throw new ToolFailure(
+              "runtime_constraint",
+              `restore_blob_corrupt: inline content sha mismatch (got ${got}, expected ${expectedHistSha})`
+            )
+          }
+        }
         await ctx.backend.atomicWrite(canonical, new Uint8Array(buf), {
           createOnly: !curPriorExists,
           createParents: false,
@@ -1694,6 +1716,10 @@ async function handleHistoryRestore(
           token,
           destCanonical: canonical,
           expectedShaForCAS: curPriorExists ? curSha : null,
+          // renameInternalTmpInto re-hashes the staged file and rejects
+          // if it doesn't match — closes the "tampered staging file"
+          // attack window.
+          expectedSourceSha: expectedHistSha ?? null,
         })
         restored = true
       } else {

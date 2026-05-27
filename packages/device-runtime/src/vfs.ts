@@ -339,6 +339,7 @@ export interface ExtendedLocalBackend extends VfsBackend {
     token: string
     destCanonical: string
     expectedShaForCAS?: string | null
+    expectedSourceSha?: string | null
   }): Promise<{ sha256: string; mtimeMs: number; bytesWritten: number }>
   resolveInternalPath(kind: "tmp" | "restore", token: string): string
   withPathLock<T>(canonical: string, fn: () => Promise<T>): Promise<T>
@@ -551,19 +552,27 @@ export function createLocalFsBackend(
     if (sopts?.maxBytes !== undefined && stat.size > sopts.maxBytes) {
       return { sha256: null, size: stat.size, truncated: true }
     }
-    const hash = createHash("sha256")
-    const stream = createReadStream(host, {
-      // O_NOFOLLOW is unavailable via createReadStream options; we already
-      // safeResolve which lstat-rejects special files. The final-component
-      // symlink risk on the read path is documented residual.
-      highWaterMark: 64 * 1024,
-    })
-    let bytes = 0
-    for await (const chunk of stream as AsyncIterable<Buffer>) {
-      hash.update(chunk)
-      bytes += chunk.length
+    // O_NOFOLLOW closes the lstat-vs-open swap window. createReadStream
+    // would silently follow a final-component symlink planted between the
+    // safeResolve check and here, and the resulting hash would name the
+    // symlink target's content — which is exactly how a snapshot could
+    // record sensitive content under an unprivileged path.
+    const fh = await fsp.open(host, fsConstants.O_RDONLY | O_NOFOLLOW_FLAG)
+    try {
+      const hash = createHash("sha256")
+      const stream = fh.createReadStream({
+        autoClose: false,
+        highWaterMark: 64 * 1024,
+      })
+      let bytes = 0
+      for await (const chunk of stream as AsyncIterable<Buffer>) {
+        hash.update(chunk)
+        bytes += chunk.length
+      }
+      return { sha256: hash.digest("hex"), size: bytes, truncated: false }
+    } finally {
+      await fh.close().catch(() => {})
     }
-    return { sha256: hash.digest("hex"), size: bytes, truncated: false }
   }
 
   async function readBytes(
@@ -790,10 +799,17 @@ export function createLocalFsBackend(
     token: string
     destCanonical: string
     expectedShaForCAS?: string | null
+    /**
+     * When set, the staged source file's sha256 must equal this value or
+     * the rename is aborted (the staged tmp is unlinked). Used by
+     * `fs_history_restore` to verify the helper-staged blob matches the
+     * historical sha — closes the "tampered staging" attack window where
+     * something modified /.synapse-internal/restore/<token> between
+     * sidecar staging and TS rename.
+     */
+    expectedSourceSha?: string | null
   }): Promise<{ sha256: string; mtimeMs: number; bytesWritten: number }> {
     const srcHost = resolveInternalPath(ropts.kind, ropts.token)
-    // src must be regular file, not a symlink (sidecar created with
-    // O_CREAT|O_EXCL 0600); refuse anything else.
     let srcSt: import("node:fs").Stats
     try {
       srcSt = await fsp.lstat(srcHost)
@@ -806,13 +822,16 @@ export function createLocalFsBackend(
         `internal tmp is not a regular file: ${srcHost}`
       )
     }
-    // Compute src hash for the return + optional CAS verify.
-    const hash = createHash("sha256")
-    const stream = createReadStream(srcHost, { highWaterMark: 64 * 1024 })
-    for await (const chunk of stream as AsyncIterable<Buffer>) {
-      hash.update(chunk)
+    // Compute src hash via O_NOFOLLOW fd. createReadStream would follow a
+    // final-component symlink — even though we lstat'd above, the swap
+    // window between lstat and open is closed only by O_NOFOLLOW.
+    const srcSha = await streamSha256Host(srcHost)
+    if (ropts.expectedSourceSha != null && srcSha !== ropts.expectedSourceSha) {
+      await fsp.unlink(srcHost).catch(() => {})
+      throw new InternalTokenError(
+        `restore_blob_corrupt: staged ${srcHost} sha ${srcSha} != expected ${ropts.expectedSourceSha}`
+      )
     }
-    const srcSha = hash.digest("hex")
     const destHost = await safeResolve(ropts.destCanonical)
     if (ropts.expectedShaForCAS != null) {
       let current: { sha256: string | null; size: number; truncated: boolean }
@@ -841,6 +860,28 @@ export function createLocalFsBackend(
     }
     const st = await fsp.stat(destHost)
     return { sha256: srcSha, mtimeMs: st.mtimeMs, bytesWritten: srcSt.size }
+  }
+
+  /**
+   * Stream-hash a host path using an O_NOFOLLOW fd. Used by internal-tmp
+   * code paths and by streamSha256 (canonical), both of which must NOT
+   * follow a final-component symlink.
+   */
+  async function streamSha256Host(hostPath: string): Promise<string> {
+    const fh = await fsp.open(hostPath, fsConstants.O_RDONLY | O_NOFOLLOW_FLAG)
+    try {
+      const hash = createHash("sha256")
+      const stream = fh.createReadStream({
+        autoClose: false,
+        highWaterMark: 64 * 1024,
+      })
+      for await (const chunk of stream as AsyncIterable<Buffer>) {
+        hash.update(chunk)
+      }
+      return hash.digest("hex")
+    } finally {
+      await fh.close().catch(() => {})
+    }
   }
 
   // ─────────────────────────── legacy minimal surface ────────────────────────

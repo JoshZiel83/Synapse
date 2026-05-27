@@ -72,7 +72,11 @@ async fn main() -> Result<()> {
             max_snapshot_bytes: cli.max_snapshot_bytes,
         },
     )?;
-    let index = index::IndexStore::open(&cli.work_dir, &cli.fs_index_ignore)?;
+    let index = index::IndexStore::open_with_tika(
+        &cli.work_dir,
+        &cli.fs_index_ignore,
+        cli.tika_endpoint.as_deref(),
+    )?;
     let state = Arc::new(State {
         cli,
         history: Mutex::new(history),

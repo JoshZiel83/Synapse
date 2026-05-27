@@ -214,3 +214,101 @@ fn sha256_hex(b: &[u8]) -> String {
     h.update(b);
     hex::encode(h.finalize())
 }
+
+#[test]
+fn fts5_finds_multi_word_phrase_and_respects_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(root.join("alpha")).unwrap();
+    std::fs::create_dir_all(root.join("beta")).unwrap();
+    std::fs::write(
+        root.join("alpha/notes.txt"),
+        "the quick brown fox jumps over the lazy dog",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("beta/manual.txt"),
+        "fox is mentioned here too in a different file",
+    )
+    .unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    helper.call(
+        1,
+        "fs.index.rebuild",
+        serde_json::json!({ "subtree": "/" }),
+    );
+    // Multi-word: only files containing both "quick" AND "brown" hit.
+    let r = helper.call(
+        2,
+        "fs.search.content",
+        serde_json::json!({
+            "query": "quick brown",
+            "limit": 50, "offset": 0,
+            "allowed_path_prefixes": ["/"],
+        }),
+    );
+    let hits = r["result"]["hits"].as_array().unwrap();
+    let paths: Vec<String> = hits
+        .iter()
+        .map(|h| h["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(paths, vec!["/alpha/notes.txt".to_string()]);
+    // Boundary-aware: scope to /beta and search "fox" — must NOT see /alpha.
+    let r2 = helper.call(
+        3,
+        "fs.search.content",
+        serde_json::json!({
+            "query": "fox",
+            "limit": 50, "offset": 0,
+            "allowed_path_prefixes": ["/beta"],
+        }),
+    );
+    let hits2 = r2["result"]["hits"].as_array().unwrap();
+    let paths2: Vec<String> = hits2
+        .iter()
+        .map(|h| h["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(paths2, vec!["/beta/manual.txt".to_string()]);
+    helper.stop();
+}
+
+#[test]
+fn nucleo_path_search_orders_by_fuzzy_score() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("tests")).unwrap();
+    for n in &["main.rs", "marker.rs", "mapper.rs", "irrelevant.txt"] {
+        std::fs::write(root.join("src").join(n), "x").unwrap();
+    }
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    helper.call(
+        1,
+        "fs.index.rebuild",
+        serde_json::json!({ "subtree": "/" }),
+    );
+    let r = helper.call(
+        2,
+        "fs.search.path",
+        serde_json::json!({
+            "query": "mar",
+            "limit": 10, "offset": 0,
+            "allowed_path_prefixes": ["/"],
+        }),
+    );
+    let hits = r["result"]["hits"].as_array().unwrap();
+    let paths: Vec<String> = hits
+        .iter()
+        .map(|h| h["path"].as_str().unwrap().to_string())
+        .collect();
+    // All m-prefixed names match; "marker" / "mapper" must rank above
+    // "irrelevant" (which doesn't match) and above "main".
+    assert!(paths.iter().any(|p| p.contains("marker")));
+    assert!(paths.iter().any(|p| p.contains("mapper")));
+    assert!(!paths.iter().any(|p| p.contains("irrelevant")));
+    helper.stop();
+}

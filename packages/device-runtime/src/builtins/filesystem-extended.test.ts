@@ -70,11 +70,21 @@ function makeFakeHelper() {
       op: "pre_write" | "pre_edit" | "pre_restore"
     }) => {
       versionSeq += 1
+      // For content-bearing rows, derive a recorded sha from synthetic bytes
+      // we can also return from restore. This keeps history.get and
+      // history.restore aligned (real sidecar guarantees this by reading
+      // the same blob both times).
+      let recordedSha: string | null = null
+      if (input.prior_exists) {
+        const cryptoMod = await import("node:crypto")
+        const bytes = Buffer.from(`fake-restored-${versionSeq}`, "utf8")
+        recordedSha = cryptoMod.createHash("sha256").update(bytes).digest("hex")
+      }
       history.push({
         version: versionSeq,
         path: input.path,
         prior_exists: input.prior_exists,
-        prior_sha256: input.expected_sha256 ?? null,
+        prior_sha256: recordedSha,
         prior_size: input.prior_size,
         prior_mtime_ms: input.prior_mtime_ms,
         op: input.op,
@@ -160,12 +170,12 @@ function makeFakeHelper() {
       const row = history.find((r) => r.path === path && r.version === version)
       if (!row) throw new Error("-32004: cross-path version")
       if (!row.prior_exists) return { mode: "delete" } as HistoryRestoreResult
-      const fake = Buffer.from("restored", "utf8")
+      const synthetic = Buffer.from(`fake-restored-${row.version}`, "utf8")
       return {
         mode: "inline",
-        content_b64: fake.toString("base64"),
+        content_b64: synthetic.toString("base64"),
         sha256: row.prior_sha256 ?? undefined,
-        size: row.prior_size,
+        size: synthetic.length,
       } as HistoryRestoreResult
     },
     indexRebuild: async () => ({ task_id: "rebuild-1" }) as IndexRebuildResult,
@@ -1079,5 +1089,64 @@ test("fs_search hidden when enableRead=false even with index/live available", as
     assert.ok(!names.includes("fs_index_rebuild"))
   } finally {
     cleanup()
+  }
+})
+
+test("fs_history_restore rejects when sidecar returns corrupt blob (sha mismatch)", async () => {
+  const root = freshRoot()
+  const work = freshWorkDir()
+  const fake = makeFakeHelper()
+  try {
+    const builtin = createFilesystemBuiltin({
+      rootPath: root,
+      helperPath: "/usr/bin/true",
+      helperWorkDir: work,
+      enableWrite: true,
+      enableDelete: true,
+      enableHistory: true,
+      enableIndex: false,
+      enableLiveSearch: false,
+      skipWorkDirAssertion: true,
+      helperClientImpl: fake.helper,
+    })
+    await builtin.invokeTool!({
+      toolName: "fs_write",
+      args: { path: "/f", content: "orig", encoding: "utf-8" },
+      envelope: makeEnvelope([{ access: "write", pathPrefixes: ["/"] }]),
+    })
+    await builtin.invokeTool!({
+      toolName: "fs_write",
+      args: { path: "/f", content: "next", encoding: "utf-8" },
+      envelope: makeEnvelope([{ access: "write", pathPrefixes: ["/"] }]),
+    })
+    const ver = fake.history.find(
+      (h) => h.path === "/f" && h.prior_exists === true
+    )!.version
+    // Make the fake helper return WRONG bytes for restore — simulate a
+    // tampered/corrupted blob. The TS handler must reject with
+    // restore_blob_corrupt before writing anything.
+    const originalRestore = fake.helper.historyRestore
+    fake.helper.historyRestore = async (input) => {
+      const r = await originalRestore.call(fake.helper, input)
+      if (r.mode === "inline") {
+        return { ...r, content_b64: Buffer.from("BOGUS").toString("base64") }
+      }
+      return r
+    }
+    const r = await builtin.invokeTool!({
+      toolName: "fs_history_restore",
+      args: { path: "/f", version: ver },
+      envelope: makeEnvelope([{ access: "write", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, true)
+    assert.match(
+      getMeta(r).synapse_error?.message ?? "",
+      /restore_blob_corrupt/
+    )
+    // File still has the second write's content, NOT BOGUS.
+    assert.equal((await fsp.readFile(join(root, "f"))).toString(), "next")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(work, { recursive: true, force: true })
   }
 })
