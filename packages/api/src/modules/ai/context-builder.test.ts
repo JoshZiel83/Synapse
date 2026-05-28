@@ -171,7 +171,11 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
 
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolName, "real_tool", "tool_calls table wins over metadata")
-  assert.equal(tr.origin.kind, "mcp_device", "tool_results.metadata origin wins")
+  assert.equal(
+    tr.origin.kind,
+    "mcp_device",
+    "tool_results.metadata origin wins"
+  )
   assert.deepEqual(tr.structuredContent, { authoritative: true })
   assert.equal(
     extractText(tr.content),

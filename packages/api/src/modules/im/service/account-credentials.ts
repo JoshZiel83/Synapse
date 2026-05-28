@@ -123,19 +123,34 @@ export function mergeAccountCredentials(
  * instead of silently rewriting the wrong account's metadata. Generic
  * routes that legitimately span kinds omit the expected kind.
  *
+ * Accepts either the camelCase `TransportAccountSummary` shape
+ * (`transportKind`) or the snake_case raw DB row shape
+ * (`transport_kind`). Production controllers call this from raw
+ * `loadTransportAccountRow(...)` results (snake_case); normalized
+ * callers pass camelCase. Both must yield the same error.
+ *
  * The code is `transport_account_kind_mismatch` (not `_not_found`) so
  * UI can distinguish "you supplied a wrong id under this kind" from
- * "the row does not exist at all".
+ * "the row does not exist at all". The message embeds both the
+ * account id (when present) and the expected kind so logs / tests
+ * can pin the specific row that was almost-modified.
  */
 export function assertExpectedTransportKind(
-  existing: Pick<TransportAccountSummary, "transportKind">,
+  existing:
+    | { id?: string; transportKind: TransportKind }
+    | { id?: string; transport_kind: string },
   expectedKind?: TransportKind
 ): void {
   if (!expectedKind) return
-  if (existing.transportKind === expectedKind) return
+  const actualKind =
+    "transportKind" in existing
+      ? existing.transportKind
+      : (existing.transport_kind as TransportKind)
+  if (actualKind === expectedKind) return
+  const id = existing.id ? `${existing.id} ` : ""
   throw Object.assign(
     new Error(
-      `Transport account is ${existing.transportKind}, expected ${expectedKind}`
+      `Transport account ${id}is not a ${expectedKind} account (was ${actualKind})`
     ),
     {
       statusCode: 404 as const,

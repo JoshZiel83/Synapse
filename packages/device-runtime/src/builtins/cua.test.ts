@@ -31,10 +31,12 @@ test("cua builtin exposes 4 tools + cua builtin_kind", async () => {
   assert.equal(exposures.length, 1)
   assert.equal(exposures[0]!.builtin_kind, "cua")
   const names = exposures[0]!.tools.map((t) => t.name)
-  assert.deepEqual(
-    names.sort(),
-    ["cua_capture_display", "cua_click", "cua_list_displays", "cua_type_text"]
-  )
+  assert.deepEqual(names.sort(), [
+    "cua_capture_display",
+    "cua_click",
+    "cua_list_displays",
+    "cua_type_text",
+  ])
 })
 
 test("cua builtin returns structured error when helper path is missing", async () => {

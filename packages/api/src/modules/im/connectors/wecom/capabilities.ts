@@ -2,20 +2,24 @@ import type { TransportConnectorCapability } from "@synapse/shared/types"
 import type { MessageCapabilities } from "../../messaging/degradation.js"
 
 /**
- * Placeholder capabilities for the v2 Enterprise WeChat (WeCom) connector.
+ * Capabilities for the v1 WeCom (Enterprise WeChat) AI-Bot connector.
  *
- * Lists no supported connection modes so the existing account-create UI
- * naturally rejects attempts to provision a WeCom account until the v2
- * connector implementation lands.
+ * v1 ships only the long-connection AI-Bot API mode
+ * (`wss://openws.work.weixin.qq.com`). Webhook callback, group-robot
+ * single-direction webhook, and self-built app `message/send` are
+ * deliberately out of scope; see docs/wecom-connector.md.
+ *
+ * Text + markdown only in v1. No image/file/voice/card. Active reply only,
+ * no @-mention rendering, no reply quoting (groups quote source automatically).
  */
 export const WECOM_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "wecom",
   displayName: "WeCom",
   iconAssetPath: "/icon/wecom.svg",
-  supportedConnectionModes: [],
-  supportedEndpointTypes: [],
-  supportsDirectMessages: false,
-  supportsGroupMessages: false,
+  supportedConnectionModes: ["long_connection"],
+  supportedEndpointTypes: ["direct", "group"],
+  supportsDirectMessages: true,
+  supportsGroupMessages: true,
 }
 
 export const WECOM_MESSAGE_CAPABILITIES: MessageCapabilities = {
@@ -24,14 +28,16 @@ export const WECOM_MESSAGE_CAPABILITIES: MessageCapabilities = {
   canTyping: false,
   canSendCard: false,
   canStream: false,
-  supportsGroup: false,
+  supportsGroup: true,
   supportsMention: false,
   supportsReply: false,
   supportsImage: false,
   supportsFile: false,
+  // v1 WeCom: text + markdown only. No audio/video upload path
+  // implemented; interaction-prompt projection not wired up.
   supportsVoice: false,
   supportsVideo: false,
   supportsInteractionPrompt: false,
-  maxTextBytes: 0,
+  maxTextBytes: 4096,
   directMentionPolicy: "attached_only",
 }

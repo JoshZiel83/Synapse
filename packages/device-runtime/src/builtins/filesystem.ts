@@ -3,10 +3,7 @@
 // advertised but list_dir reports "no root configured" so the operator sees
 // it on the dashboard and wires a path.
 
-import type {
-  CatalogProvider,
-  CatalogToolInvocationResult,
-} from "../types.js"
+import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,

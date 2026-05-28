@@ -2,7 +2,11 @@
 // chain. The MCP host calls verify() before any side effect; failures map to
 // the device-side error codes in DEVICE_MCP_ERROR_CODES.
 
-import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto"
+import {
+  createHash,
+  createPublicKey,
+  verify as cryptoVerify,
+} from "node:crypto"
 import {
   canonicalizeEnvelopePayload,
   type OperationEnvelope,
