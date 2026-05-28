@@ -133,7 +133,7 @@ export type DeviceOperationAttemptsStatus = "abandoned" | "acknowledged" | "fail
 
 export type DeviceOperationAttemptsTransport = "control_plane_task" | "mcp_http";
 
-export type DeviceOperationsPrincipalKind = "actor" | "actor_in_conversation" | "conversation" | "remote_agent" | "workspace_member";
+export type DeviceOperationsPrincipalKind = "actor" | "conversation" | "remote_agent" | "workspace_member";
 
 export type DeviceOperationsStatus = "awaiting_authorization" | "cancelled" | "created" | "dispatched" | "expired" | "failed" | "output_streaming" | "received" | "started" | "succeeded";
 
@@ -283,7 +283,7 @@ export type ResourceAccessBindingsStatus = "active" | "revoked";
 
 export type RuntimeAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
-export type RuntimeAuthorizationGrantsScope = "actor" | "actor_in_conversation" | "conversation" | "once" | "remote_agent" | "workspace";
+// subject-scope-refactor: RuntimeAuthorizationGrantsScope dropped at cutover; scope is now expressed via subject_id + scope_subject_id.
 
 export type RuntimeAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
 
@@ -315,7 +315,7 @@ export type SkillMirrorSourcesSyncStatus = "error" | "pending" | "synced";
 
 export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
-export type SubjectKind = "actor" | "conversation" | "conversation_actor_context" | "external" | "remote_agent" | "system" | "user" | "workspace" | "workspace_member";
+export type SubjectKind = "actor" | "conversation" | "external" | "remote_agent" | "system" | "user" | "workspace" | "workspace_member";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -371,7 +371,6 @@ export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
 export interface AccessSubjects {
   actor_id: string | null;
-  conversation_actor_context_id: string | null;
   conversation_id: string | null;
   created_at: Generated<Timestamp>;
   external_identity_key: string | null;
@@ -1095,7 +1094,7 @@ export interface DeviceOperations {
   input_payload: Generated<Json>;
   operation_timeout_ms: number | null;
   principal_kind: DeviceOperationsPrincipalKind;
-  principal_subject_id: string | null;
+  principal_subject_id: string;
   requires_replan: Generated<boolean>;
   result_hash: string | null;
   runtime_session_id: string | null;
@@ -1414,8 +1413,8 @@ export interface InteractionRuntimeAuthorizationRequests {
   device_tool_stable_key: string;
   grant_options: Generated<Json>;
   interaction_id: string;
-  principal_conversation_actor_context_id: string | null;
-  principal_remote_agent_id: string | null;
+  principal_scope_subject_id: string | null;
+  principal_subject_id: string;
   reason: Generated<string>;
   request_mode: RuntimeAuthorizationRequestMode;
   requested_action: Generated<Json>;
@@ -1948,6 +1947,7 @@ export interface ResourceAccessBindings {
   remote_agent_id: string | null;
   resource_type: ResourceAccessBindingResourceType;
   revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
   source: Generated<ResourceAccessBindingsSource>;
   status: Generated<ResourceAccessBindingsStatus>;
   subject_id: string;
@@ -1956,7 +1956,6 @@ export interface ResourceAccessBindings {
 
 export interface RuntimeAuthorizationGrants {
   consumed_at: Timestamp | null;
-  conversation_actor_context_id: string | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
   device_capability_id: string;
@@ -1966,14 +1965,14 @@ export interface RuntimeAuthorizationGrants {
   policy: Generated<Json>;
   retention: RuntimeAuthorizationGrantsRetention;
   revoked_at: Timestamp | null;
-  scope: RuntimeAuthorizationGrantsScope;
+  scope_subject_id: string | null;
   source_interaction_id: string | null;
   source_request_args: Generated<Json>;
   source_retry_nonce: string | null;
   source_runtime_session_id: string | null;
   source_task_id: string | null;
   status: Generated<RuntimeAuthorizationGrantsStatus>;
-  subject_id: string | null;
+  subject_id: string;
   superseded_at: Timestamp | null;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;

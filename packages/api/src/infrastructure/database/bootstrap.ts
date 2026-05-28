@@ -17,9 +17,9 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
  * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
  * `bootstrap.test.ts` enforces the length invariant.
  */
-export const CURRENT_SCHEMA_VERSION = "2026-05-28-im-shared-prep-all"
+export const CURRENT_SCHEMA_VERSION = "2026-05-29-subject-scope-refactor"
 export const CURRENT_SCHEMA_DESCRIPTION =
-  "IM connector shared prep + WeCom v1 + DingTalk Stream v1 + QQ Bot v1. Shared prep: TransportConnectorCapability displayName/iconAssetPath/showsBaseUrlConfig, MessageCapabilities voice/video/interactionPrompt fields, polymorphic validateConfig/getBindingDefaults/planAccountRecoveryActions/getInteractionProjectionReadiness hooks, transactional updateTransportAccount + recovery executor, single connectors/register-all entrypoint. Adds 'dingtalk' + 'qq' to transport_accounts/transport_addresses/transport_message_links transport_kind enums. QQ-only: new interaction_action_tokens + interaction_transport_projections tables for QQ inline-keyboard projection; new conversation_transport_bindings(account, conversation) index for recovery lookups."
+  "subject-scope-refactor merge into device-runtime-v3: runtime_authorization_grants drops scope enum + conversation_actor_context_id; adds scope_subject_id + four-dimension dispatch index + tg_runtime_authorization_grant_validate trigger with subject/scope whitelist (actor|remote_agent + conversation only). interaction_runtime_authorization_requests drops principal_remote_agent_id + principal_conversation_actor_context_id; adds principal_subject_id NOT NULL + principal_scope_subject_id (ON DELETE RESTRICT). resource_access_bindings adds scope_subject_id + partial index + tg_rab_validate trigger. access_subjects drops conversation_actor_context_id column + 'conversation_actor_context' subject_kind value. device_operations_principal_kind drops 'actor_in_conversation'; CHECK tightened to require principal_subject_id for all 4 kinds; FK to access_subjects changes ON DELETE SET NULL → RESTRICT. New SQL helpers: is_workspace_bound_subject_kind, is_scope_eligible_subject, is_memory_owner_subject_kind, access_subject_workspace_id, device_*_workspace_id. memory_spaces/memory_access_grants schema lands in Batch 11."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

@@ -48,7 +48,6 @@ import {
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_REQUEST_STATUSES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
@@ -90,7 +89,6 @@ import type {
   PluginConnectionsOwnerScope,
   PluginConnectionsStatus,
   RuntimeAuthorizationGrantsRetention,
-  RuntimeAuthorizationGrantsScope,
   RuntimeAuthorizationGrantsStatus,
   RuntimeAuthorizationRequestMode,
   RelationshipApprovalMode,
@@ -369,12 +367,9 @@ type _RelationshipRequestStatusMatchesDb = Assert<
     RelationshipRequestStatus
   >
 >
-type _RuntimeAuthorizationGrantScopeMatchesDb = Assert<
-  IsEqual<
-    (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number],
-    RuntimeAuthorizationGrantsScope
-  >
->
+// subject-scope-refactor: RuntimeAuthorizationGrantsScope DB enum dropped at cutover.
+// scope is now expressed via runtime_authorization_grants.subject_id + scope_subject_id.
+// type _RuntimeAuthorizationGrantScopeMatchesDb deleted with the enum.
 type _RuntimeAuthorizationGrantStatusMatchesDb = Assert<
   IsEqual<
     (typeof RUNTIME_AUTHORIZATION_GRANT_STATUSES)[number],
