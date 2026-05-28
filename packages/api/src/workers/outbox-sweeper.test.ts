@@ -1,0 +1,251 @@
+/**
+ * Pure-function tests for the outbox sweeper's metadata-namespace +
+ * budget logic. Coverage is intentionally scoped to the parts that
+ * don't require a live BullMQ queue or Postgres connection:
+ *
+ *   - `readEnqueueRetryCount` / `readSweeperRetryCount` /
+ *     `readLastSweeperRetryAtMs` — assert that writes go to the
+ *     neutral `metadata.delivery.*` namespace while legacy
+ *     `metadata.qq.*` slots are still readable (migration safety
+ *     for links carried across the deploy).
+ *
+ *   - `decideSweeperBudget` — the dead-letter / skip / ok decision
+ *     tree, pinned to specific (count, lastRetry, age, now) shapes
+ *     so a future tweak to the burst window or lifetime cap doesn't
+ *     silently move the threshold.
+ *
+ *   - `canonicalJobId` — the BullMQ-job-id dedup key. Sweeper +
+ *     projection worker both rely on this string being stable per
+ *     link.
+ *
+ * The orchestration paths (`processCandidate`, `runOneSweep`) still
+ * need an integration test with a real Redis-backed BullMQ queue and
+ * a real Postgres; that's tracked separately. Pinning the pure parts
+ * here is the smallest move that catches the kind of regression the
+ * reviewer flagged (namespace drift on the rename).
+ */
+
+import test from "node:test"
+import assert from "node:assert/strict"
+import {
+  canonicalJobId,
+  decideSweeperBudget,
+  readEnqueueRetryCount,
+  readLastSweeperRetryAtMs,
+  readSweeperRetryCount,
+  SWEEPER_BUDGET_PER_10MIN,
+  SWEEPER_BUDGET_PER_LINK,
+  SWEEPER_BUDGET_MAX_AGE_HOURS,
+} from "./outbox-sweeper.js"
+
+// ─── namespace migration: enqueue retry count ───
+
+test("readEnqueueRetryCount: returns 0 on empty metadata", () => {
+  assert.equal(readEnqueueRetryCount({}), 0)
+})
+
+test("readEnqueueRetryCount: reads from neutral metadata.delivery namespace", () => {
+  assert.equal(
+    readEnqueueRetryCount({ delivery: { deliveryEnqueueRetryCount: 4 } }),
+    4
+  )
+})
+
+test("readEnqueueRetryCount: falls back to legacy metadata.qq for pre-migration links", () => {
+  assert.equal(
+    readEnqueueRetryCount({ qq: { deliveryEnqueueRetryCount: 7 } }),
+    7
+  )
+})
+
+test("readEnqueueRetryCount: neutral namespace wins over legacy when both present", () => {
+  // Realistic post-migration state: a new write landed in
+  // `metadata.delivery.*` for an already-bumped link that still
+  // carried a legacy `metadata.qq.*` value. The new write must win
+  // or the budget would silently regress.
+  assert.equal(
+    readEnqueueRetryCount({
+      delivery: { deliveryEnqueueRetryCount: 5 },
+      qq: { deliveryEnqueueRetryCount: 2 },
+    }),
+    5
+  )
+})
+
+test("readEnqueueRetryCount: ignores non-number values in either namespace", () => {
+  // Defensive: a corrupted JSON column shouldn't produce NaN or
+  // bypass the budget.
+  assert.equal(
+    readEnqueueRetryCount({
+      delivery: { deliveryEnqueueRetryCount: "not-a-number" },
+    }),
+    0
+  )
+  assert.equal(
+    readEnqueueRetryCount({
+      qq: { deliveryEnqueueRetryCount: null },
+    }),
+    0
+  )
+})
+
+// ─── namespace migration: sweeper retry count ───
+
+test("readSweeperRetryCount: neutral metadata.delivery namespace", () => {
+  assert.equal(readSweeperRetryCount({ delivery: { sweeperRetryCount: 3 } }), 3)
+})
+
+test("readSweeperRetryCount: falls back to legacy metadata.qq", () => {
+  assert.equal(readSweeperRetryCount({ qq: { sweeperRetryCount: 9 } }), 9)
+})
+
+test("readSweeperRetryCount: neutral wins over legacy when both present", () => {
+  assert.equal(
+    readSweeperRetryCount({
+      delivery: { sweeperRetryCount: 1 },
+      qq: { sweeperRetryCount: 100 },
+    }),
+    1
+  )
+})
+
+// ─── namespace migration: sweeper retry timestamp ───
+
+test("readLastSweeperRetryAtMs: ISO string in neutral namespace → epoch ms", () => {
+  // The sweeper writes `new Date().toISOString()`; this verifies the
+  // reader handles that exact shape rather than only specific
+  // timezone offsets.
+  const iso = "2026-05-28T10:00:00.000Z"
+  assert.equal(
+    readLastSweeperRetryAtMs({ delivery: { lastSweeperRetryAt: iso } }),
+    Date.parse(iso)
+  )
+})
+
+test("readLastSweeperRetryAtMs: falls back to legacy metadata.qq", () => {
+  const iso = "2026-05-28T11:00:00.000Z"
+  assert.equal(
+    readLastSweeperRetryAtMs({ qq: { lastSweeperRetryAt: iso } }),
+    Date.parse(iso)
+  )
+})
+
+test("readLastSweeperRetryAtMs: returns 0 when no timestamp present", () => {
+  assert.equal(readLastSweeperRetryAtMs({}), 0)
+})
+
+// ─── budget predicate ───
+//
+// `decideSweeperBudget` is the pure core of `checkSweeperBudget`. The
+// branching is:
+//   - `dead_letter`: lifetime retry count hit, OR link age >= 24h
+//   - `skip`:        burst budget (3 retries / 10min window) full
+//   - `ok`:          otherwise
+//
+// Pinning specific (count, lastRetry, age) shapes guards against
+// silent regression if someone tweaks the thresholds — the tests
+// would have to be updated explicitly.
+
+const NOW = 1_700_000_000_000 // arbitrary fixed epoch ms
+const ONE_HOUR_MS = 3_600_000
+
+test("decideSweeperBudget: under all caps → ok", () => {
+  assert.equal(
+    decideSweeperBudget({
+      retryCount: 0,
+      lastRetryAtMs: 0,
+      linkCreatedAtMs: NOW - ONE_HOUR_MS, // 1h old
+      now: NOW,
+    }),
+    "ok"
+  )
+})
+
+test("decideSweeperBudget: lifetime count at the cap → dead_letter", () => {
+  assert.equal(
+    decideSweeperBudget({
+      retryCount: SWEEPER_BUDGET_PER_LINK,
+      lastRetryAtMs: 0,
+      linkCreatedAtMs: NOW - ONE_HOUR_MS,
+      now: NOW,
+    }),
+    "dead_letter"
+  )
+})
+
+test("decideSweeperBudget: link older than max age → dead_letter even with 0 retries", () => {
+  assert.equal(
+    decideSweeperBudget({
+      retryCount: 0,
+      lastRetryAtMs: 0,
+      linkCreatedAtMs: NOW - SWEEPER_BUDGET_MAX_AGE_HOURS * ONE_HOUR_MS,
+      now: NOW,
+    }),
+    "dead_letter"
+  )
+})
+
+test("decideSweeperBudget: burst window full → skip", () => {
+  // Three retries (the per-10-min cap) within the window → skip
+  // rather than enqueue another immediately.
+  assert.equal(
+    decideSweeperBudget({
+      retryCount: SWEEPER_BUDGET_PER_10MIN,
+      lastRetryAtMs: NOW - 30_000, // 30s ago, well inside the 10min window
+      linkCreatedAtMs: NOW - ONE_HOUR_MS,
+      now: NOW,
+    }),
+    "skip"
+  )
+})
+
+test("decideSweeperBudget: burst-window stale (>10min) lets the next retry through", () => {
+  // Same retryCount as the skip case above, but the last attempt
+  // is older than the 10-minute window so the burst counter is
+  // effectively reset.
+  assert.equal(
+    decideSweeperBudget({
+      retryCount: SWEEPER_BUDGET_PER_10MIN,
+      lastRetryAtMs: NOW - 11 * 60 * 1000, // 11min ago
+      linkCreatedAtMs: NOW - ONE_HOUR_MS,
+      now: NOW,
+    }),
+    "ok"
+  )
+})
+
+test("decideSweeperBudget: dead_letter wins over skip when both fire", () => {
+  // If the link is both over the burst budget AND past lifetime/age,
+  // it must dead-letter rather than just skip — otherwise it'd loop
+  // forever as the burst skip clears.
+  assert.equal(
+    decideSweeperBudget({
+      retryCount: SWEEPER_BUDGET_PER_LINK,
+      lastRetryAtMs: NOW - 30_000,
+      linkCreatedAtMs: NOW - ONE_HOUR_MS,
+      now: NOW,
+    }),
+    "dead_letter"
+  )
+})
+
+// ─── BullMQ job id dedup contract ───
+
+test("canonicalJobId: deterministic per link id", () => {
+  assert.equal(canonicalJobId("abc"), canonicalJobId("abc"))
+})
+
+test("canonicalJobId: differs per link id", () => {
+  assert.notEqual(canonicalJobId("abc"), canonicalJobId("def"))
+})
+
+test("canonicalJobId: prefixed (so unrelated queue names can coexist)", () => {
+  // No need to lock the exact prefix string — the contract is
+  // "namespaced enough that a raw linkId collision with another
+  // queue's job id is impossible". A non-trivial prefix length is
+  // the proxy.
+  assert.ok(
+    canonicalJobId("abc").length > "abc".length,
+    `expected canonical id to be prefixed; got ${canonicalJobId("abc")}`
+  )
+})

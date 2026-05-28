@@ -62,9 +62,9 @@ const PENDING_STALE_INTERVAL = "5 minutes"
 const FAILED_RECOVERABLE_INTERVAL = "1 hour"
 const SKIPPED_RECOVERABLE_INTERVAL = "24 hours"
 
-const SWEEPER_BUDGET_PER_LINK = 10
-const SWEEPER_BUDGET_PER_10MIN = 3
-const SWEEPER_BUDGET_MAX_AGE_HOURS = 24
+export const SWEEPER_BUDGET_PER_LINK = 10
+export const SWEEPER_BUDGET_PER_10MIN = 3
+export const SWEEPER_BUDGET_MAX_AGE_HOURS = 24
 
 const QUEUE_NAME_PREFIX = "im-transport-delivery"
 
@@ -170,14 +170,59 @@ async function enqueueOnce(
   }
 }
 
-function canonicalJobId(linkId: string): string {
+/**
+ * Deterministic BullMQ jobId for a given link. `enqueueOrRetryTransportDeliveryLink`
+ * uses this so the same link can't be enqueued twice while a prior job
+ * is still in flight; the BullMQ queue does its own jobId dedup +
+ * we explicitly check `queue.getJob(baseJobId)` for the
+ * waiting/active/etc states. Exposed so the test can assert the
+ * jobId-as-dedup-key contract without reaching into BullMQ internals.
+ */
+export function canonicalJobId(linkId: string): string {
   return `${QUEUE_NAME_PREFIX}-${linkId}`
+}
+
+/**
+ * Read the current "enqueue retry count" off a link's metadata.
+ *
+ * Writes go to the neutral `metadata.delivery.deliveryEnqueueRetryCount`
+ * slot (consistent with `sweeperRetryCount` / `lastSweeperRetryAt`),
+ * but the reader falls back to the legacy `metadata.qq.*` slot so
+ * in-flight links carried over from before the namespace migration
+ * don't reset their budget. Exposed for the
+ * `outbox-sweeper.test.ts` namespace-migration coverage.
+ */
+export function readEnqueueRetryCount(
+  metadata: Record<string, unknown>
+): number {
+  const delivery = (
+    metadata.delivery && typeof metadata.delivery === "object"
+      ? (metadata.delivery as Record<string, unknown>)
+      : {}
+  ) as Record<string, unknown>
+  if (typeof delivery.deliveryEnqueueRetryCount === "number") {
+    return delivery.deliveryEnqueueRetryCount
+  }
+  const legacyQq = (
+    metadata.qq && typeof metadata.qq === "object"
+      ? (metadata.qq as Record<string, unknown>)
+      : {}
+  ) as Record<string, unknown>
+  if (typeof legacyQq.deliveryEnqueueRetryCount === "number") {
+    return legacyQq.deliveryEnqueueRetryCount
+  }
+  return 0
 }
 
 async function bumpEnqueueRetryCount(linkId: string): Promise<number> {
   // Single round-trip: read metadata, compute next, persist via the
   // existing deep-merge helper. The helper internally uses
   // SELECT FOR UPDATE + UPDATE so concurrent bumps serialize.
+  //
+  // Reads via `readEnqueueRetryCount` (neutral namespace with legacy
+  // QQ fallback); writes go to the neutral `metadata.delivery.*`
+  // slot so non-QQ connectors flowing through the same sweeper don't
+  // grow `metadata.qq.*` ghost keys.
   const row = await db
     .selectFrom("transport_message_links")
     .select(["metadata"])
@@ -185,20 +230,12 @@ async function bumpEnqueueRetryCount(linkId: string): Promise<number> {
     .limit(1)
     .executeTakeFirst()
   const current = parseJsonObject(row?.metadata) as Record<string, unknown>
-  const qq = (
-    current.qq && typeof current.qq === "object"
-      ? (current.qq as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  const prev =
-    typeof qq.deliveryEnqueueRetryCount === "number"
-      ? qq.deliveryEnqueueRetryCount
-      : 0
+  const prev = readEnqueueRetryCount(current)
   const next = prev + 1
   await patchTransportMessageLinkMetadata({
     linkId,
     patch: {
-      qq: { deliveryEnqueueRetryCount: next },
+      delivery: { deliveryEnqueueRetryCount: next },
     },
   })
   return next
@@ -427,48 +464,105 @@ async function processCandidate(candidate: SweepCandidate): Promise<void> {
 
 type BudgetCheck = "ok" | "skip" | "dead_letter"
 
-function checkSweeperBudget(candidate: SweepCandidate): BudgetCheck {
-  // Sweeper retry state lives in `metadata.delivery.*` (transport-
-  // neutral namespace). Old links written under the QQ-specific
-  // `metadata.qq.*` slot before the namespace migration are read as
-  // a fallback so a deploy without a backfill doesn't reset the
-  // budget for in-flight links.
+/**
+ * Read the current sweeper retry count off a link's metadata.
+ *
+ * Writes go to the neutral `metadata.delivery.sweeperRetryCount`
+ * slot; the reader falls back to the legacy `metadata.qq.*` slot so
+ * deploys without a backfill don't reset the budget for in-flight
+ * links. Exposed for `outbox-sweeper.test.ts`.
+ */
+export function readSweeperRetryCount(
+  metadata: Record<string, unknown>
+): number {
   const delivery = (
-    candidate.metadata.delivery &&
-    typeof candidate.metadata.delivery === "object"
-      ? (candidate.metadata.delivery as Record<string, unknown>)
+    metadata.delivery && typeof metadata.delivery === "object"
+      ? (metadata.delivery as Record<string, unknown>)
       : {}
   ) as Record<string, unknown>
+  if (typeof delivery.sweeperRetryCount === "number") {
+    return delivery.sweeperRetryCount
+  }
   const legacyQq = (
-    candidate.metadata.qq && typeof candidate.metadata.qq === "object"
-      ? (candidate.metadata.qq as Record<string, unknown>)
+    metadata.qq && typeof metadata.qq === "object"
+      ? (metadata.qq as Record<string, unknown>)
       : {}
   ) as Record<string, unknown>
-  const count =
-    typeof delivery.sweeperRetryCount === "number"
-      ? delivery.sweeperRetryCount
-      : typeof legacyQq.sweeperRetryCount === "number"
-        ? legacyQq.sweeperRetryCount
-        : 0
-  const lastAt =
-    typeof delivery.lastSweeperRetryAt === "string"
-      ? Date.parse(delivery.lastSweeperRetryAt)
-      : typeof legacyQq.lastSweeperRetryAt === "string"
-        ? Date.parse(legacyQq.lastSweeperRetryAt)
-        : 0
-  const ageHours = (Date.now() - candidate.createdAt.getTime()) / 3_600_000
+  if (typeof legacyQq.sweeperRetryCount === "number") {
+    return legacyQq.sweeperRetryCount
+  }
+  return 0
+}
 
+/**
+ * Read the last sweeper retry timestamp (ms-since-epoch) off a
+ * link's metadata. Same neutral/legacy fallback as
+ * `readSweeperRetryCount`. Returns 0 when no timestamp is set
+ * (matches the original logic — "never retried" rather than "always
+ * eligible").
+ */
+export function readLastSweeperRetryAtMs(
+  metadata: Record<string, unknown>
+): number {
+  const delivery = (
+    metadata.delivery && typeof metadata.delivery === "object"
+      ? (metadata.delivery as Record<string, unknown>)
+      : {}
+  ) as Record<string, unknown>
+  if (typeof delivery.lastSweeperRetryAt === "string") {
+    return Date.parse(delivery.lastSweeperRetryAt)
+  }
+  const legacyQq = (
+    metadata.qq && typeof metadata.qq === "object"
+      ? (metadata.qq as Record<string, unknown>)
+      : {}
+  ) as Record<string, unknown>
+  if (typeof legacyQq.lastSweeperRetryAt === "string") {
+    return Date.parse(legacyQq.lastSweeperRetryAt)
+  }
+  return 0
+}
+
+/**
+ * Pure budget predicate — pulled out of `checkSweeperBudget` so the
+ * branching can be tested without constructing a full SweepCandidate
+ * + faking Date.now. `now` defaults to `Date.now()`; tests pin it.
+ *
+ *   - returns `dead_letter` when lifetime count hit or link is older
+ *     than the age cap;
+ *   - returns `skip` when the per-10-minute burst budget is full;
+ *   - otherwise `ok`.
+ */
+export function decideSweeperBudget(input: {
+  retryCount: number
+  lastRetryAtMs: number
+  linkCreatedAtMs: number
+  now: number
+}): BudgetCheck {
+  const ageHours = (input.now - input.linkCreatedAtMs) / 3_600_000
   if (
-    count >= SWEEPER_BUDGET_PER_LINK ||
+    input.retryCount >= SWEEPER_BUDGET_PER_LINK ||
     ageHours >= SWEEPER_BUDGET_MAX_AGE_HOURS
   ) {
     return "dead_letter"
   }
-  const tenMinutesAgo = Date.now() - 10 * 60 * 1000
-  if (lastAt > tenMinutesAgo && count >= SWEEPER_BUDGET_PER_10MIN) {
+  const tenMinutesAgo = input.now - 10 * 60 * 1000
+  if (
+    input.lastRetryAtMs > tenMinutesAgo &&
+    input.retryCount >= SWEEPER_BUDGET_PER_10MIN
+  ) {
     return "skip"
   }
   return "ok"
+}
+
+function checkSweeperBudget(candidate: SweepCandidate): BudgetCheck {
+  return decideSweeperBudget({
+    retryCount: readSweeperRetryCount(candidate.metadata),
+    lastRetryAtMs: readLastSweeperRetryAtMs(candidate.metadata),
+    linkCreatedAtMs: candidate.createdAt.getTime(),
+    now: Date.now(),
+  })
 }
 
 async function bumpSweeperRetryStamp(linkId: string): Promise<void> {
@@ -480,25 +574,10 @@ async function bumpSweeperRetryStamp(linkId: string): Promise<void> {
     .limit(1)
     .executeTakeFirst()
   const current = parseJsonObject(row?.metadata) as Record<string, unknown>
-  // Read from the neutral namespace; fall back to the legacy QQ
-  // slot so retry budgets carried forward from pre-migration links
-  // aren't reset to zero.
-  const delivery = (
-    current.delivery && typeof current.delivery === "object"
-      ? (current.delivery as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  const legacyQq = (
-    current.qq && typeof current.qq === "object"
-      ? (current.qq as Record<string, unknown>)
-      : {}
-  ) as Record<string, unknown>
-  const prev =
-    typeof delivery.sweeperRetryCount === "number"
-      ? delivery.sweeperRetryCount
-      : typeof legacyQq.sweeperRetryCount === "number"
-        ? legacyQq.sweeperRetryCount
-        : 0
+  // Read via the shared helper so the legacy `metadata.qq.*`
+  // fallback applies uniformly. Writes always go to the neutral
+  // `metadata.delivery.*` slot.
+  const prev = readSweeperRetryCount(current)
   await patchTransportMessageLinkMetadata({
     linkId,
     patch: {
