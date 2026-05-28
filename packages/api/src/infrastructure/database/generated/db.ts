@@ -347,11 +347,11 @@ export type TransportAccountsOwnerScope = "workspace" | "workspace_member";
 
 export type TransportAccountsStatus = "active" | "disabled" | "error";
 
-export type TransportAccountsTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportAccountsTransportKind = "dingtalk" | "feishu" | "wecom" | "weixin";
 
 export type TransportAddressesAddressType = "bot" | "system" | "user";
 
-export type TransportAddressesTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportAddressesTransportKind = "dingtalk" | "feishu" | "wecom" | "weixin";
 
 export type TransportEndpointsEndpointType = "direct" | "group";
 
@@ -359,7 +359,7 @@ export type TransportMessageLinksDeliveryStatus = "failed" | "pending" | "sent" 
 
 export type TransportMessageLinksDirection = "inbound" | "outbound";
 
-export type TransportMessageLinksTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportMessageLinksTransportKind = "dingtalk" | "feishu" | "wecom" | "weixin";
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 

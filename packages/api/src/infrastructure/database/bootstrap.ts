@@ -17,9 +17,9 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
  * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
  * `bootstrap.test.ts` enforces the length invariant.
  */
-export const CURRENT_SCHEMA_VERSION = "2026-05-28-im-connectors-shared-prep"
+export const CURRENT_SCHEMA_VERSION = "2026-05-28-im-shared-prep-dingtalk"
 export const CURRENT_SCHEMA_DESCRIPTION =
-  "IM connector shared prep: TransportConnectorCapability displayName/iconAssetPath/showsBaseUrlConfig, MessageCapabilities voice/video/interactionPrompt fields, polymorphic validateConfig/getBindingDefaults/planAccountRecoveryActions/getInteractionProjectionReadiness hooks, transactional updateTransportAccount + recovery executor, single connectors/register-all entrypoint. Schema unchanged from device-runtime-v3 cutover; this version bump documents the application-layer refactor that ships alongside."
+  "IM connector shared prep + DingTalk Stream connector v1. Shared prep: TransportConnectorCapability displayName/iconAssetPath/showsBaseUrlConfig, MessageCapabilities voice/video/interactionPrompt fields, polymorphic validateConfig/getBindingDefaults/planAccountRecoveryActions/getInteractionProjectionReadiness hooks, transactional updateTransportAccount + recovery executor, single connectors/register-all entrypoint. Adds 'dingtalk' to transport_accounts_transport_kind / transport_addresses_transport_kind / transport_message_links_transport_kind enums."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

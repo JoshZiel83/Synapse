@@ -14,6 +14,8 @@ import type {
   TransportExternalUserSummary,
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
+  DingtalkDeviceFlowSessionSummary,
+  DingtalkDeviceFlowStartResponse,
 } from "@synapse/shared"
 import { describeTransportKind } from "@synapse/shared"
 import { useConnectorMetadata } from "@/lib/im-connector-metadata"
@@ -48,7 +50,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { API_BASE, api } from "@/lib/api"
+import { API_BASE, api, ApiError } from "@/lib/api"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared"
 
 type TransportAccountOwnerFormState = {
@@ -77,6 +79,12 @@ type WecomFormState = TransportAccountOwnerFormState & {
   botId: string
   secret: string
   baseWsUrl: string
+}
+
+type DingtalkFormState = TransportAccountOwnerFormState & {
+  displayName: string
+  clientId: string
+  clientSecret: string
 }
 
 type WorkspaceDirectoryMember = {
@@ -136,6 +144,16 @@ const EMPTY_WECOM_FORM: WecomFormState = {
   botId: "",
   secret: "",
   baseWsUrl: "",
+  ownerScope: "workspace",
+  ownerWorkspaceMemberId: "",
+  inboundActorMode: "none",
+  inboundActorId: "",
+}
+
+const EMPTY_DINGTALK_FORM: DingtalkFormState = {
+  displayName: "",
+  clientId: "",
+  clientSecret: "",
   ownerScope: "workspace",
   ownerWorkspaceMemberId: "",
   inboundActorMode: "none",
@@ -539,6 +557,22 @@ export default function ImPage() {
   const [weixinSession, setWeixinSession] =
     useState<WeixinQrLoginSessionSummary | null>(null)
   const [weixinQrImageUrl, setWeixinQrImageUrl] = useState<string | null>(null)
+  const [dingtalkForm, setDingtalkForm] =
+    useState<DingtalkFormState>(EMPTY_DINGTALK_FORM)
+  const [dingtalkSession, setDingtalkSession] =
+    useState<DingtalkDeviceFlowSessionSummary | null>(null)
+  const [dingtalkQrImageUrl, setDingtalkQrImageUrl] = useState<string | null>(
+    null
+  )
+  // When the Device Flow start fails (providerStartFailed:true) or the
+  // poll transitions to fail/expired, we flip this so the manual form
+  // becomes the primary affordance.
+  const [dingtalkManualMode, setDingtalkManualMode] = useState(false)
+  const [dingtalkTransientError, setDingtalkTransientError] = useState<
+    string | null
+  >(null)
+  const [creatingDingtalk, setCreatingDingtalk] = useState(false)
+  const [creatingDingtalkManual, setCreatingDingtalkManual] = useState(false)
 
   const sortedWorkspaceMembers = useMemo(
     () =>
@@ -606,6 +640,38 @@ export default function ImPage() {
       cancelled = true
     }
   }, [weixinSession?.qrCodeUrl])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function renderDingtalkQr() {
+      const target = dingtalkSession?.verificationUriComplete?.trim()
+      if (!target) {
+        setDingtalkQrImageUrl(null)
+        return
+      }
+      try {
+        const imageUrl = await QRCode.toDataURL(target, {
+          width: 288,
+          margin: 1,
+          color: { dark: "#111827", light: "#ffffff" },
+        })
+        if (!cancelled) {
+          setDingtalkQrImageUrl(imageUrl)
+        }
+      } catch (error) {
+        console.error("Failed to render DingTalk QR image:", error)
+        if (!cancelled) {
+          setDingtalkQrImageUrl(null)
+        }
+      }
+    }
+
+    void renderDingtalkQr()
+    return () => {
+      cancelled = true
+    }
+  }, [dingtalkSession?.verificationUriComplete])
 
   function syncSessionDrafts(nextSessions: TransportSessionSummary[]) {
     setSessionDrafts(
@@ -775,6 +841,107 @@ export default function ImPage() {
       cancelled = true
     }
   }, [workspaceId, weixinSession])
+
+  useEffect(() => {
+    if (!workspaceId || !dingtalkSession) return
+    const activeWorkspaceId = workspaceId
+    const activeSessionId = dingtalkSession.sessionId
+    const intervalSeconds = dingtalkSession.intervalSeconds || 5
+    // Stop polling on terminal states. Reload accounts on success so the
+    // newly-connected DingTalk row shows up in the bottom list.
+    if (dingtalkSession.status !== "waiting") {
+      if (dingtalkSession.status === "success") {
+        void loadData(true)
+      }
+      if (
+        dingtalkSession.status === "fail" ||
+        dingtalkSession.status === "expired"
+      ) {
+        setDingtalkManualMode(true)
+      }
+      return
+    }
+
+    let cancelled = false
+
+    async function poll() {
+      try {
+        const result = await api.pollDingtalkDeviceFlow(
+          activeWorkspaceId,
+          activeSessionId
+        )
+        if (cancelled) return
+        // Successful poll resets the transient error banner.
+        setDingtalkTransientError(null)
+        // Skip the setter when the payload is a no-op: the previous version
+        // re-rendered the whole DingTalk Card (and re-rasterized the QR via
+        // a downstream useEffect) on every interval, even when nothing
+        // changed. Compare the user-visible fields directly.
+        const next = result?.session ?? null
+        setDingtalkSession((prev) => {
+          if (
+            prev?.sessionId === next?.sessionId &&
+            prev?.status === next?.status &&
+            prev?.message === next?.message &&
+            prev?.userCode === next?.userCode &&
+            prev?.verificationUriComplete === next?.verificationUriComplete &&
+            prev?.transportAccount?.id === next?.transportAccount?.id
+          ) {
+            return prev
+          }
+          return next
+        })
+        if (result?.session?.transportAccount) {
+          toast.success("DingTalk account connected")
+          await loadData(true)
+          return
+        }
+        if (
+          result?.session?.status === "fail" ||
+          result?.session?.status === "expired"
+        ) {
+          setDingtalkManualMode(true)
+          return
+        }
+      } catch (pollError) {
+        if (cancelled) return
+        // 502 is the controller's signal that the upstream registration
+        // provider is having a transient hiccup — keep polling, just
+        // surface a banner. Anything else (401/403/404/500) stops the
+        // loop with an error so a misconfigured backend doesn't poll
+        // forever.
+        if (pollError instanceof ApiError && pollError.status === 502) {
+          setDingtalkTransientError(
+            pollError.message ||
+              "Registration provider transient error, retrying..."
+          )
+          // fall through to schedule the next poll
+        } else {
+          console.error("Failed to poll DingTalk Device Flow:", pollError)
+          setError(
+            pollError instanceof Error
+              ? pollError.message
+              : "Failed to poll DingTalk Device Flow"
+          )
+          return
+        }
+      }
+
+      if (!cancelled) {
+        setTimeout(() => {
+          if (!cancelled) {
+            void poll()
+          }
+        }, intervalSeconds * 1000)
+      }
+    }
+
+    void poll()
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceId, dingtalkSession])
 
   async function handleCreateFeishuAccount() {
     if (!workspaceId) return
@@ -975,6 +1142,131 @@ export default function ImPage() {
       )
     } finally {
       setCreatingWeixin(false)
+    }
+  }
+
+  async function handleStartDingtalkDeviceFlow() {
+    if (!workspaceId) return
+    if (!dingtalkForm.displayName.trim()) {
+      setError("Display name is required to start DingTalk registration.")
+      return
+    }
+    if (
+      dingtalkForm.ownerScope === "workspace_member" &&
+      !dingtalkForm.ownerWorkspaceMemberId
+    ) {
+      setError("Select a workspace member owner for the DingTalk account.")
+      return
+    }
+    if (
+      dingtalkForm.inboundActorMode === "specified_actor" &&
+      !dingtalkForm.inboundActorId
+    ) {
+      setError("Select an actor for inbound routing.")
+      return
+    }
+    setCreatingDingtalk(true)
+    setError(null)
+    setDingtalkTransientError(null)
+    try {
+      const result: DingtalkDeviceFlowStartResponse =
+        await api.startDingtalkDeviceFlow(workspaceId, {
+          displayName: dingtalkForm.displayName.trim(),
+          ownerScope: dingtalkForm.ownerScope,
+          ownerWorkspaceMemberId:
+            dingtalkForm.ownerScope === "workspace_member"
+              ? dingtalkForm.ownerWorkspaceMemberId
+              : null,
+          inboundActorMode: dingtalkForm.inboundActorMode,
+          inboundActorId:
+            dingtalkForm.inboundActorMode === "specified_actor"
+              ? dingtalkForm.inboundActorId
+              : null,
+        })
+      if (result.providerStartFailed) {
+        // Provider business/transient error during init/begin — switch
+        // the UI to the manual form with an explanatory toast, no need
+        // to throw or block the user.
+        setDingtalkSession(null)
+        setDingtalkManualMode(true)
+        toast.warning(
+          result.error
+            ? `DingTalk Device Flow unavailable: ${result.error}`
+            : "DingTalk Device Flow unavailable; please enter credentials manually."
+        )
+      } else {
+        setDingtalkSession(result.session)
+        setDingtalkManualMode(false)
+        toast.success("DingTalk QR ready — scan with the DingTalk mobile app")
+      }
+    } catch (createError) {
+      console.error("Failed to start DingTalk Device Flow:", createError)
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to start DingTalk Device Flow"
+      )
+    } finally {
+      setCreatingDingtalk(false)
+    }
+  }
+
+  async function handleCreateDingtalkManual() {
+    if (!workspaceId) return
+    if (!dingtalkForm.clientId.trim() || !dingtalkForm.clientSecret.trim()) {
+      setError("Both clientId and clientSecret are required.")
+      return
+    }
+    if (!dingtalkForm.displayName.trim()) {
+      setError("Display name is required for the manual DingTalk account.")
+      return
+    }
+    if (
+      dingtalkForm.ownerScope === "workspace_member" &&
+      !dingtalkForm.ownerWorkspaceMemberId
+    ) {
+      setError("Select a workspace member owner for the DingTalk account.")
+      return
+    }
+    if (
+      dingtalkForm.inboundActorMode === "specified_actor" &&
+      !dingtalkForm.inboundActorId
+    ) {
+      setError("Select an actor for inbound routing.")
+      return
+    }
+    setCreatingDingtalkManual(true)
+    setError(null)
+    try {
+      await api.createDingtalkAccountManual(workspaceId, {
+        clientId: dingtalkForm.clientId.trim(),
+        clientSecret: dingtalkForm.clientSecret.trim(),
+        displayName: dingtalkForm.displayName.trim(),
+        ownerScope: dingtalkForm.ownerScope,
+        ownerWorkspaceMemberId:
+          dingtalkForm.ownerScope === "workspace_member"
+            ? dingtalkForm.ownerWorkspaceMemberId
+            : null,
+        inboundActorMode: dingtalkForm.inboundActorMode,
+        inboundActorId:
+          dingtalkForm.inboundActorMode === "specified_actor"
+            ? dingtalkForm.inboundActorId
+            : null,
+      })
+      toast.success("DingTalk account created")
+      setDingtalkForm(EMPTY_DINGTALK_FORM)
+      setDingtalkSession(null)
+      setDingtalkManualMode(false)
+      await loadData(true)
+    } catch (createError) {
+      console.error("Failed to create DingTalk account manually:", createError)
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to create DingTalk account"
+      )
+    } finally {
+      setCreatingDingtalkManual(false)
     }
   }
 
@@ -1684,6 +1976,226 @@ export default function ImPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Add DingTalk Bot</CardTitle>
+          <CardDescription>
+            Connect a DingTalk enterprise robot via Stream mode. The default
+            flow uses the scan-to-authorize Device Flow; if the registration
+            provider is unavailable, the form falls back to manual entry of
+            AppKey + AppSecret.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="dingtalk-display-name">Display name</Label>
+              <Input
+                id="dingtalk-display-name"
+                placeholder="DingTalk Bot"
+                value={dingtalkForm.displayName}
+                onChange={(event) =>
+                  setDingtalkForm((current) => ({
+                    ...current,
+                    displayName: event.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <TransportAccountOwnerFields
+            idPrefix="dingtalk"
+            ownerScope={dingtalkForm.ownerScope}
+            ownerWorkspaceMemberId={dingtalkForm.ownerWorkspaceMemberId}
+            workspaceMembers={sortedWorkspaceMembers}
+            onOwnerScopeChange={(value) =>
+              setDingtalkForm((current) => ({
+                ...current,
+                ownerScope: value,
+                ownerWorkspaceMemberId:
+                  value === "workspace" ? "" : current.ownerWorkspaceMemberId,
+                // The backend rejects `follow_owner_chief_actor` for
+                // workspace-owned accounts (controller/_shared.ts:132).
+                // Mirror the Feishu/Weixin flow: reset to "none" when the
+                // owner switches back so the user doesn't submit a stale
+                // combination that fails 400.
+                inboundActorMode:
+                  value === "workspace" &&
+                  current.inboundActorMode === "follow_owner_chief_actor"
+                    ? "none"
+                    : current.inboundActorMode,
+              }))
+            }
+            onOwnerWorkspaceMemberIdChange={(value) =>
+              setDingtalkForm((current) => ({
+                ...current,
+                ownerWorkspaceMemberId: value,
+              }))
+            }
+          />
+
+          <TransportAccountInboundActorFields
+            idPrefix="dingtalk"
+            ownerScope={dingtalkForm.ownerScope}
+            inboundActorMode={dingtalkForm.inboundActorMode}
+            inboundActorId={dingtalkForm.inboundActorId}
+            actors={actorOptions}
+            onInboundActorModeChange={(value) =>
+              setDingtalkForm((current) => ({
+                ...current,
+                inboundActorMode: value,
+                inboundActorId:
+                  value === "specified_actor" ? current.inboundActorId : "",
+              }))
+            }
+            onInboundActorIdChange={(value) =>
+              setDingtalkForm((current) => ({
+                ...current,
+                inboundActorId: value,
+              }))
+            }
+          />
+
+          {dingtalkManualMode ? (
+            <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900/50 dark:bg-amber-950/20">
+              <div className="text-sm font-medium text-foreground">
+                Manual AppKey / AppSecret
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Paste the credentials from the DingTalk Open Platform (Developer
+                Console → your app → Credentials).
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="dingtalk-client-id">Client ID (AppKey)</Label>
+                  <Input
+                    id="dingtalk-client-id"
+                    placeholder="dingxxxxxxxxxxxxxxxx"
+                    value={dingtalkForm.clientId}
+                    onChange={(event) =>
+                      setDingtalkForm((current) => ({
+                        ...current,
+                        clientId: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dingtalk-client-secret">
+                    Client Secret (AppSecret)
+                  </Label>
+                  <Input
+                    id="dingtalk-client-secret"
+                    type="password"
+                    placeholder="•••••••••••••••"
+                    value={dingtalkForm.clientSecret}
+                    onChange={(event) =>
+                      setDingtalkForm((current) => ({
+                        ...current,
+                        clientSecret: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={() => void handleCreateDingtalkManual()}
+                  disabled={creatingDingtalkManual}
+                >
+                  {creatingDingtalkManual
+                    ? "Saving..."
+                    : "Create DingTalk account"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setDingtalkManualMode(false)
+                    setDingtalkSession(null)
+                    setDingtalkTransientError(null)
+                  }}
+                  disabled={creatingDingtalkManual}
+                >
+                  Back to scan
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button
+              onClick={() => void handleStartDingtalkDeviceFlow()}
+              disabled={creatingDingtalk}
+            >
+              {creatingDingtalk
+                ? "Starting..."
+                : "Scan to register DingTalk bot"}
+            </Button>
+          )}
+
+          {dingtalkSession ? (
+            <div className="space-y-3 rounded-2xl border bg-muted/20 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    Device Flow session
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Status: {dingtalkSession.status}
+                  </div>
+                </div>
+                <Badge variant="outline">{dingtalkSession.status}</Badge>
+              </div>
+
+              {dingtalkQrImageUrl ? (
+                <div className="overflow-hidden rounded-2xl border bg-white p-3">
+                  <Image
+                    src={dingtalkQrImageUrl}
+                    alt="DingTalk authorize QR"
+                    width={288}
+                    height={288}
+                    unoptimized
+                    className="mx-auto max-h-72 w-full max-w-72 rounded-xl object-contain"
+                  />
+                </div>
+              ) : null}
+
+              {dingtalkSession.userCode ? (
+                <div className="rounded-xl bg-background px-3 py-2 text-sm">
+                  User code:{" "}
+                  <span className="font-mono font-semibold tracking-wide">
+                    {dingtalkSession.userCode}
+                  </span>
+                </div>
+              ) : null}
+
+              {dingtalkSession.message ? (
+                <div className="text-sm text-muted-foreground">
+                  {dingtalkSession.message}
+                </div>
+              ) : null}
+
+              {dingtalkTransientError ? (
+                <div className="text-xs text-amber-600 dark:text-amber-400">
+                  {dingtalkTransientError}
+                </div>
+              ) : null}
+
+              <div className="text-xs text-muted-foreground">
+                Expires: {formatDateTime(dingtalkSession.expiresAt)}
+              </div>
+
+              {dingtalkSession.transportAccount ? (
+                <div className="rounded-xl bg-background px-3 py-3 text-sm">
+                  Connected account:{" "}
+                  <span className="font-medium text-foreground">
+                    {dingtalkSession.transportAccount.displayName}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

@@ -3379,6 +3379,77 @@ export interface CurrentUserWeixinBindingSummary {
   pendingAutoLinkWorkspaceMemberName?: string
 }
 
+// ============ DingTalk Device Flow registration types ============
+
+/**
+ * Public-facing status enum for DingTalk Device Flow registration sessions.
+ * Lowercase to match Weixin QR session conventions. Provider raw uppercase
+ * states (WAITING/SUCCESS/FAIL/EXPIRED/UNKNOWN) are mapped at controller
+ * boundary; UNKNOWN -> "fail" with a descriptive message.
+ */
+export type DingtalkDeviceFlowStatus =
+  | "waiting"
+  | "success"
+  | "fail"
+  | "expired"
+
+/**
+ * Summary of a DingTalk Device Flow registration session.
+ *
+ * Contract:
+ * - Returned by both POST /device-registration/start (wrapped in success
+ *   variant of `DingtalkDeviceFlowStartResponse`) and GET /device-registration/
+ *   :sessionId (wrapped in `DingtalkDeviceFlowPollResponse`).
+ * - `transportAccount` is filled when status === "success" so the UI can
+ *   render the newly connected account without a separate accounts reload
+ *   (mirrors Weixin `qr-login.ts:280` precedent).
+ * - The provider's `deviceCode` is intentionally NOT exposed here; it stays
+ *   in the Redis store on the API side.
+ */
+export interface DingtalkDeviceFlowSessionSummary {
+  sessionId: string
+  workspaceId: UUID
+  status: DingtalkDeviceFlowStatus
+  message?: string
+  verificationUriComplete: string
+  verificationUri?: string
+  userCode?: string
+  expiresInSeconds: number
+  intervalSeconds: number
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  expiresAt: Timestamp
+  transportAccount?: TransportAccountSummary
+}
+
+/**
+ * Response shape for POST /im/accounts/dingtalk/device-registration/start.
+ *
+ * Explicit discriminated union — success branch *must* carry
+ * `providerStartFailed: false` so callers can use the discriminant directly
+ * (`response.providerStartFailed`) without resorting to `in` checks.
+ *
+ * Provider business errors (errcode != 0, source disabled, etc.) and
+ * transient network/5xx failures during init/begin both surface here with
+ * `providerStartFailed: true`; the route NEVER returns a 5xx in that case,
+ * letting the UI handle the failure uniformly via the union type instead of
+ * splitting between ApiError catches and union narrowing.
+ */
+export type DingtalkDeviceFlowStartResponse =
+  | { providerStartFailed: false; session: DingtalkDeviceFlowSessionSummary }
+  | { providerStartFailed: true; error: string }
+
+/**
+ * Response shape for GET /im/accounts/dingtalk/device-registration/:sessionId.
+ *
+ * All session states (waiting / success / fail / expired) wrap the summary
+ * in `{ session }` — clients always read `response.session.status`. Mirrors
+ * the Weixin QR `{ session }` envelope (controller/weixin.ts:258).
+ */
+export interface DingtalkDeviceFlowPollResponse {
+  session: DingtalkDeviceFlowSessionSummary
+}
+
 export interface TransportExternalUserSessionRef {
   conversationId?: UUID
   conversationTitle?: string

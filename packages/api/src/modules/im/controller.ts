@@ -33,6 +33,7 @@ import {
 import imFeishuController from "./controller/feishu.js"
 import imWecomController from "./controller/wecom.js"
 import imWeixinController from "./controller/weixin.js"
+import imDingtalkController from "./controller/dingtalk.js"
 
 export default async function imController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
@@ -43,6 +44,7 @@ export default async function imController(app: FastifyInstance) {
   await imFeishuController(app)
   await imWecomController(app)
   await imWeixinController(app)
+  await imDingtalkController(app)
 
   app.get<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/connectors",

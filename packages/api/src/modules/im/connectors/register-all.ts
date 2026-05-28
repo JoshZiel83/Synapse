@@ -19,3 +19,4 @@
 import "./feishu/index.js"
 import "./weixin/index.js"
 import "./wecom/index.js"
+import "./dingtalk/index.js"
