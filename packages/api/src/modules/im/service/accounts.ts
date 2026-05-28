@@ -49,7 +49,10 @@ import {
   orderAccountRecoveryActions,
   planAccountRecoveryActions,
 } from "./account-recovery-planner.js"
-import { reEnableAutoDisabledBindings } from "./recovery.js"
+import {
+  recoverSkippedProjectionsForRecoveryEvent,
+  reEnableAutoDisabledBindings,
+} from "./recovery.js"
 
 // ───────────────────────── Assertions ─────────────────────────
 
@@ -647,6 +650,7 @@ export async function updateTransportAccount(params: {
     await executeAccountRecoveryActions({
       tx,
       workspaceId: params.workspaceId,
+      accountId: params.accountId,
       actions,
     })
     return nextSummary
@@ -670,6 +674,15 @@ export async function updateTransportAccount(params: {
 async function executeAccountRecoveryActions(params: {
   tx: DatabaseTransaction
   workspaceId: string
+  /**
+   * The account whose update triggered planning. We need its id so the
+   * `recoverSkippedInteractionProjections` dispatch can target the
+   * correct `transport_account_id` in
+   * `interaction_transport_projections` recovery — the connector hook
+   * is account-scoped and doesn't carry the id through the action
+   * data shape.
+   */
+  accountId: string
   actions: Array<
     | { type: "reEnableAutoDisabledBindings"; reason: string }
     | {
@@ -692,12 +705,15 @@ async function executeAccountRecoveryActions(params: {
         break
       }
       case "recoverSkippedInteractionProjections": {
-        // No-op on `dev` — `interaction_transport_projections` does
-        // not exist in the dev schema. Wired up to a real helper
-        // when the QQ merge-prep lands its schema + recovery
-        // implementation. The placeholder dispatch is kept so
-        // `accounts.ts` stays closed-enum today and the QQ branch
-        // can simply replace the body.
+        // Re-arm skipped `interaction_transport_projections` rows
+        // matching this account's id + the connector-supplied event
+        // kind. Same tx so the recovery commits with the account
+        // UPDATE; a crash between the two would leave projections
+        // stranded.
+        await recoverSkippedProjectionsForRecoveryEvent(params.tx, {
+          kind: action.eventKind,
+          transportAccountId: params.accountId,
+        })
         break
       }
       default: {
@@ -710,44 +726,4 @@ async function executeAccountRecoveryActions(params: {
       }
     }
   }
-}
-
-/**
- * Flip every binding under this account that was system-auto-disabled
- * because of the QQ webhook OQ2 gate back to `outbound_enabled=true`
- * and remove the marker. Skips bindings the user manually disabled
- * (`metadata.autoDisabledReason` absent or different) because we want
- * those to stay how the user left them.
- *
- * Raw SQL because Kysely's typed `.set({metadata: sql\`...\`})` chokes
- * on the json operator we need (`metadata - 'autoDisabledReason'`).
- *
- * Split into a builder + executor so the contract test
- * (`accounts.re-enable-bindings.test.ts`) can compile the SQL offline
- * and assert the exact UPDATE/WHERE/SET clauses, while production still
- * runs through the live Kysely transaction. Without this, the JS
- * predicate in account-recovery-planner.ts could drift from the actual
- * SQL WHERE clause without any test catching it.
- */
-export function buildReEnableAutoDisabledQqWebhookBindingsSql(
-  transportAccountId: string
-) {
-  return sql`
-    UPDATE conversation_transport_bindings
-    SET outbound_enabled = TRUE,
-        metadata = metadata - 'autoDisabledReason',
-        updated_at = NOW()
-    WHERE transport_account_id = ${transportAccountId}
-      AND outbound_enabled = FALSE
-      AND metadata ->> 'autoDisabledReason' = 'webhook_inbound_unavailable'
-  `
-}
-
-async function reEnableAutoDisabledQqWebhookBindings(
-  tx: DatabaseTransaction,
-  transportAccountId: string
-): Promise<void> {
-  await buildReEnableAutoDisabledQqWebhookBindingsSql(
-    transportAccountId
-  ).execute(tx)
 }
