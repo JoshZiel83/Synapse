@@ -111,6 +111,45 @@ if (!tryGetConnector(STUB_KIND)) {
   registerConnector(stubConnector)
 }
 
+// Companion stub for the "connector without validateConfig" path
+// below. Lives on a real TRANSPORT_KIND value the registry will
+// accept (this test file doesn't import register-all.js, so the wecom
+// slot is otherwise empty under node --test's per-file isolation).
+// We can't reuse STUB_KIND because that stub deliberately implements
+// validateConfig to exercise the polymorphic path.
+const PASSTHROUGH_KIND = "wecom" as const
+const passthroughStub: TransportConnector = {
+  transportKind: PASSTHROUGH_KIND,
+  capability: {
+    transportKind: PASSTHROUGH_KIND,
+    displayName: "Stub WeCom",
+    iconAssetPath: "/icon/wecom.svg",
+    supportedConnectionModes: ["long_connection"],
+    supportedEndpointTypes: ["direct"],
+    supportsDirectMessages: true,
+    supportsGroupMessages: false,
+  },
+  messageCapabilities: STUB_CAPS,
+  validateCredentials() {
+    return { ok: true }
+  },
+  // Deliberately no validateConfig — that's the contract this stub
+  // exists to verify.
+  async startAccount() {
+    throw new Error("stub")
+  },
+  async sendMessage() {
+    throw new Error("stub")
+  },
+  createStatusReactionAdapter: () => null,
+  createTypingAdapter: () => null,
+  parseInboundMentions: () => ({ text: "", mentions: [] }),
+  renderOutboundMention: () => "",
+}
+if (!tryGetConnector(PASSTHROUGH_KIND)) {
+  registerConnector(passthroughStub)
+}
+
 test("mergeAccountCredentials: undefined incoming returns existing unchanged", () => {
   const existing = { appId: "cli_x", appSecret: "old" }
   const out = mergeAccountCredentials(existing, undefined)
@@ -249,24 +288,15 @@ test("validateAndNormalizeAccountConfig: returns connector normalized form", () 
 })
 
 test("validateAndNormalizeAccountConfig: connector without validateConfig passes config through", () => {
-  // Use a transportKind we haven't stubbed validateConfig on — fall back
-  // to feishu which is registered (in the test process the real Feishu
-  // connector or another stub may take this slot; either way it must
-  // not declare validateConfig in this test).
-  const otherKind = "feishu" as const
-  if (!tryGetConnector(otherKind)) {
-    // No connector at all → unknown-kind path, not the contract this
-    // test is exercising. Skip.
-    return
-  }
-  const c = tryGetConnector(otherKind)
-  if (c?.validateConfig) {
-    // Real Feishu connector defines validateConfig — skip; this case
-    // is exercised by the per-connector test files.
-    return
-  }
+  // Use the dedicated PASSTHROUGH_KIND stub which deliberately does
+  // NOT implement validateConfig. This pins the contract that the
+  // helper treats an absent validator as "any config is acceptable"
+  // — not an error, not a silent rejection. Previously this test
+  // tried to discover a no-validateConfig connector at runtime and
+  // returned early when it couldn't find one, so a regression that
+  // dropped this branch would silently pass.
   const out = validateAndNormalizeAccountConfig({
-    transportKind: otherKind,
+    transportKind: PASSTHROUGH_KIND,
     connectionMode: "long_connection",
     status: "active",
     config: { anything: "ok" },
