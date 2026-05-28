@@ -466,7 +466,7 @@ test(
 
       await expectReject(
         db
-          .insertInto("relay_authorization_grants")
+          .insertInto("runtime_authorization_grants")
           .values({
             workspace_id: wsId,
             relay_device_id: deviceId,
@@ -504,7 +504,7 @@ test(
 
       await expectReject(
         db
-          .insertInto("relay_authorization_grants")
+          .insertInto("runtime_authorization_grants")
           .values({
             workspace_id: wsId,
             relay_device_id: deviceId,
@@ -540,7 +540,7 @@ test(
       // membership check or the workspace alignment.
       await expectReject(
         db
-          .insertInto("relay_authorization_grants")
+          .insertInto("runtime_authorization_grants")
           .values({
             workspace_id: wsA,
             relay_device_id: a.deviceId,
@@ -582,7 +582,7 @@ test(
 
       await expectReject(
         db
-          .insertInto("relay_authorization_grants")
+          .insertInto("runtime_authorization_grants")
           .values({
             workspace_id: wsId,
             relay_device_id: deviceId,

@@ -282,7 +282,7 @@ export function isScopeEligibleSubject(ref: SubjectRef): boolean {
 
 /**
  * The kinds legitimate as subjects of a workspace-bound authorization row
- * (resource_access_bindings / relay_authorization_grants / memory_access_grants).
+ * (resource_access_bindings / runtime_authorization_grants / memory_access_grants).
  * Excludes user / external / system — those are platform-wide subjects that
  * cannot anchor a workspace-bound grant.
  */
