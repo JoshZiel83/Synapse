@@ -3,6 +3,7 @@ import cors from "@fastify/cors"
 import cookie from "@fastify/cookie"
 import websocket from "@fastify/websocket"
 import multipart from "@fastify/multipart"
+import { ZodError } from "zod"
 import { config } from "./config/index.js"
 import {
   assertRequiredSchema,
@@ -39,6 +40,7 @@ import automationModule from "./modules/automation/index.js"
 import filesModule from "./modules/files/index.js"
 import memoryModule from "./modules/memory/index.js"
 import mcpPluginsModule from "./modules/mcp-plugins/index.js"
+import devicesModule from "./modules/devices/index.js"
 import modelGroupsModule from "./modules/model-groups/index.js"
 import platformModule from "./modules/platform/index.js"
 import auditModule from "./modules/audit/index.js"
@@ -49,10 +51,6 @@ import {
 } from "./modules/im/runtime.js"
 import { syncConfiguredPlatformAdmins } from "./modules/platform/admin-service.js"
 import { initBuiltinRegistry } from "./modules/mcp-plugins/builtin/index.js"
-import {
-  initRelayManager,
-  shutdownAllRelays,
-} from "./modules/mcp-plugins/relay-manager.js"
 import {
   initInstanceManagerListeners,
   shutdownAllInstances,
@@ -68,6 +66,14 @@ import {
 } from "./workers/automation-scheduler.js"
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js"
 import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js"
+import {
+  startInteractionProjectionWorker,
+  stopInteractionProjectionWorker,
+} from "./workers/interaction-projection.js"
+import {
+  startTransportOutboxSweeper,
+  stopTransportOutboxSweeper,
+} from "./workers/outbox-sweeper.js"
 import { installActorStatusHooks } from "./modules/im/integration/actor-status-hooks.js"
 import { startMemoryIndexingWorker } from "./workers/memory-indexing.js"
 import { startFileParsingWorker } from "./workers/file-parsing.js"
@@ -129,6 +135,24 @@ async function main() {
       return reply.status(400).send({
         error: "Invalid request",
         code: "invalid_request",
+      })
+    }
+
+    // Centralized ZodError → 400. Without this, per-transport
+    // controllers (Feishu, Weixin, WeCom, QQ, DingTalk, …) each have
+    // to wrap their `schema.parse()` in try/catch or the failure
+    // becomes a 500. Stable `code: "invalid_request"` lets clients
+    // discriminate validation errors from other 4xx codes; existing
+    // WeCom integration tests already rely on this constant.
+    if (error instanceof ZodError) {
+      return reply.status(400).send({
+        error: "validation failed",
+        code: "invalid_request",
+        issues: error.issues.map((issue) => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        })),
       })
     }
 
@@ -207,6 +231,7 @@ async function main() {
   await app.register(filesModule)
   await app.register(memoryModule)
   await app.register(mcpPluginsModule)
+  await app.register(devicesModule)
   await app.register(modelGroupsModule)
   await app.register(platformModule)
   await app.register(auditModule)
@@ -215,7 +240,6 @@ async function main() {
   try {
     await initBuiltinRegistry()
     initInstanceManagerListeners()
-    await initRelayManager()
   } catch (err) {
     console.error("Failed to initialize MCP runtime:", err)
     process.exit(1)
@@ -279,6 +303,8 @@ async function main() {
   startAutomationExecutionWorker()
   startSessionThinkingWorker()
   startImTransportDeliveryWorker()
+  startTransportOutboxSweeper()
+  startInteractionProjectionWorker()
   installActorStatusHooks()
   startMemoryIndexingWorker()
   startFileParsingWorker()
@@ -346,6 +372,23 @@ async function main() {
         app.log.error({ err }, "Transport runtime shutdown timed out")
       })
       await waitWithTimeout(
+        "outbox sweeper shutdown",
+        stopTransportOutboxSweeper(),
+        3000
+      ).catch((err) => {
+        app.log.error({ err }, "Outbox sweeper shutdown timed out")
+      })
+      await waitWithTimeout(
+        "interaction projection worker shutdown",
+        stopInteractionProjectionWorker(),
+        3000
+      ).catch((err) => {
+        app.log.error(
+          { err },
+          "Interaction projection worker shutdown timed out"
+        )
+      })
+      await waitWithTimeout(
         "worker shutdown",
         shutdownAllWorkers(),
         3000
@@ -378,13 +421,6 @@ async function main() {
         3000
       ).catch((err) => {
         app.log.error({ err }, "Plugin instance shutdown timed out")
-      })
-      await waitWithTimeout(
-        "relay runtime shutdown",
-        shutdownAllRelays(),
-        3000
-      ).catch((err) => {
-        app.log.error({ err }, "Relay runtime shutdown timed out")
       })
       await waitWithTimeout("fastify close", app.close(), 5000).catch((err) => {
         app.log.error({ err }, "Fastify close timed out")

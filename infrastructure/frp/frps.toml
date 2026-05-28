@@ -1,0 +1,28 @@
+# Synapse Device Runtime v3 — frps configuration.
+# Docs: docs/device-runtime-v3.md §4.4 / §7.3.
+#
+# The control listener is public (frpc dials it from arbitrary networks).
+# Proxied app endpoints (the device's MCP HTTP server) are exposed on the
+# internal docker network only — never bound to a host port.
+
+bindAddr = "0.0.0.0"
+bindPort = 7000
+
+# Reverse-tunneled HTTP routes for device MCP endpoints. The API container
+# resolves an internal URL of the form http://tunnel-edge:8080/d/<token>
+# via DeviceTunnelRegistry; the runtime registers a route under that token.
+vhostHTTPPort = 8080
+
+# Per-device-service tokens are issued through the Control Plane after hello;
+# frpc presents the token to authenticate. v3.0 uses a single tenant secret
+# bootstrapped from env; PR #12 switches to per-service issued tokens.
+auth.method = "token"
+auth.token = "${FRP_SHARED_TOKEN:-replace-me-in-production}"
+
+# Allow client subdomain routing for future per-device hostnames; v3 paths use
+# a single vhost with the token in the URL prefix so this is informational.
+subdomainHost = "tunnel.synapse.internal"
+
+log.to = "console"
+log.level = "info"
+log.maxDays = 3

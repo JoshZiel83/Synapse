@@ -25,8 +25,19 @@ import {
 } from "@synapse/shared"
 import { sql } from "kysely"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
-import { normalizeRelayBuiltinAuthorizationKind } from "../mcp-plugins/relay-invoke-options.js"
 import { getSession, updateSessionStatus } from "./service.js"
+
+// Device-runtime v3 (PR #20): the relay-invoke-options helper is gone. Replicate
+// the trimmed-string normalization inline so the relay-tool fallback branch in
+// buildDeviceBuiltinToolBlocks still works for legacy task rows that may still
+// carry a builtinKind metadata field.
+function normalizeDeviceBuiltinAuthorizationKind(
+  value: unknown
+): string | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
 
 function runtimeHashKey(conversationId: string) {
   return `runtime:conversation:${conversationId}`
@@ -246,9 +257,9 @@ async function loadProcessingTargetsForTurn(
   }))
 }
 
-async function loadRelayExposureSummary(exposureId: string) {
+async function loadDeviceExposureSummary(exposureId: string) {
   const row = await db
-    .selectFrom("relay_exposures")
+    .selectFrom("device_exposures")
     .select(["id", "device_id", "metadata"])
     .where("id", "=", exposureId)
     .limit(1)
@@ -321,7 +332,7 @@ function buildGenericToolResultBlocks(params: {
   return []
 }
 
-async function buildRelayBuiltinToolBlocks(params: {
+async function buildDeviceBuiltinToolBlocks(params: {
   toolName: string
   input: unknown
   requestPayload?: Record<string, unknown>
@@ -346,9 +357,9 @@ async function buildRelayBuiltinToolBlocks(params: {
       ? params.requestPayload.exposureId
       : ""
   const exposureSummary = exposureId
-    ? await loadRelayExposureSummary(exposureId)
+    ? await loadDeviceExposureSummary(exposureId)
     : null
-  const builtinKind = normalizeRelayBuiltinAuthorizationKind(
+  const builtinKind = normalizeDeviceBuiltinAuthorizationKind(
     exposureSummary?.metadata?.builtinKind
   )
 
@@ -578,8 +589,8 @@ async function buildToolActivityDetail(turnId: string) {
     const blocks =
       toolCall.tool_kind === "builtin"
         ? await buildBuiltinToolBlocks(blockParams)
-        : toolCall.tool_kind === "mcp_relay"
-          ? await buildRelayBuiltinToolBlocks(blockParams)
+        : toolCall.tool_kind === "mcp_device"
+          ? await buildDeviceBuiltinToolBlocks(blockParams)
           : {
               requestBlocks: buildGenericToolRequestBlocks(
                 displayTitle,

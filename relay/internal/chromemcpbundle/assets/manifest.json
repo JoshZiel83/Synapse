@@ -1,9 +1,0 @@
-{
-  "prepared": true,
-  "assetVersion": "cdm-7333c65761f1",
-  "platform": "windows-amd64",
-  "nodeAssetVersion": "node-24.14.1-windows-amd64",
-  "packageDir": "p",
-  "entryScript": "p/build/src/bin/chrome-devtools-mcp.js",
-  "packageVersion": "0.20.0"
-}

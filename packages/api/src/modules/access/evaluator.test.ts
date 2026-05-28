@@ -528,38 +528,6 @@ test(
 )
 
 test(
-  "checkPermission(relay_capability.use) is true for the device owner and false for an unrelated member",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const { workspaceId, ownerMemberId, guestMemberId } =
-        await seedOwnerMemberAndGuest(db)
-      const deviceId = await insertRelayDevice(db, workspaceId, ownerMemberId)
-      const exposureId = await insertRelayExposure(db, deviceId)
-      const capabilityId = await insertRelayCapability(
-        db,
-        workspaceId,
-        exposureId
-      )
-      const ownerOk = await checkPermission(db, {
-        resourceType: "relay_capability",
-        resourceId: capabilityId,
-        permission: "use",
-        subject: { type: "workspace_member", id: ownerMemberId },
-      })
-      assert.equal(ownerOk, true)
-      const guestDenied = await checkPermission(db, {
-        resourceType: "relay_capability",
-        resourceId: capabilityId,
-        permission: "use",
-        subject: { type: "workspace_member", id: guestMemberId },
-      })
-      assert.equal(guestDenied, false)
-    })
-  }
-)
-
-test(
   "checkPermission(automation_event_source.*) is denied without a binding (and the route falls through to default false)",
   { timeout: 5 * 60_000 },
   async () => {
@@ -728,29 +696,6 @@ test(
 )
 
 test(
-  "lookupResources(relay_capability.use) includes admin-managed device capabilities",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const { workspaceId, ownerMemberId } = await seedOwnerMemberAndGuest(db)
-      const deviceId = await insertRelayDevice(db, workspaceId, ownerMemberId)
-      const exposureId = await insertRelayExposure(db, deviceId)
-      const capabilityId = await insertRelayCapability(
-        db,
-        workspaceId,
-        exposureId
-      )
-      const ids = await lookupResources(db, {
-        resourceType: "relay_capability",
-        permission: "use",
-        subject: { type: "workspace_member", id: ownerMemberId },
-      })
-      assert.ok(ids.includes(capabilityId))
-    })
-  }
-)
-
-test(
   "lookupResources(automation_event_source.use) returns granted ids via the resource_access_bindings registry",
   { timeout: 5 * 60_000 },
   async () => {
@@ -822,86 +767,55 @@ test(
 )
 
 test(
-  "checkPermission(relay_device.view) is true for the device owner and false for an unrelated member",
+  "checkPermission(conversation_actor_context.memory_read) is true for the actor that owns the context and false otherwise",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const { workspaceId, ownerMemberId, guestMemberId } =
-        await seedOwnerMemberAndGuest(db)
-      const deviceId = await insertRelayDevice(db, workspaceId, ownerMemberId)
-      const ownerOk = await checkPermission(db, {
-        resourceType: "relay_device",
-        resourceId: deviceId,
-        permission: "view",
-        subject: { type: "workspace_member", id: ownerMemberId },
+      const userId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, userId)
+      const actorId = await insertActor(db, workspaceId)
+      const otherActor = await insertActor(db, workspaceId)
+      const conversationId = await insertConversation(db, { workspaceId })
+      await addActorParticipant(db, conversationId, actorId)
+      const contextRow = await db
+        .insertInto("conversation_actor_contexts")
+        .values({ conversation_id: conversationId, actor_id: actorId })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      const ok = await checkPermission(db, {
+        resourceType: "conversation_actor_context",
+        resourceId: contextRow.id as string,
+        permission: "memory_read",
+        subject: { type: "actor", id: actorId },
       })
-      assert.equal(ownerOk, true)
-      const guestDenied = await checkPermission(db, {
-        resourceType: "relay_device",
-        resourceId: deviceId,
-        permission: "view",
-        subject: { type: "workspace_member", id: guestMemberId },
+      assert.equal(ok, true)
+      const denied = await checkPermission(db, {
+        resourceType: "conversation_actor_context",
+        resourceId: contextRow.id as string,
+        permission: "memory_read",
+        subject: { type: "actor", id: otherActor },
       })
-      assert.equal(guestDenied, false)
+      assert.equal(denied, false)
     })
   }
 )
 
 test(
-  "checkPermission(relay_device.*) returns false for unknown permission and for missing device",
+  "checkPermission(conversation_actor_context.*) returns false for non-existent context",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const { workspaceId, ownerMemberId } = await seedOwnerMemberAndGuest(db)
-      const deviceId = await insertRelayDevice(db, workspaceId, ownerMemberId)
-      const unknown = await checkPermission(db, {
-        resourceType: "relay_device",
-        resourceId: deviceId,
-        permission: "weird_permission",
-        subject: { type: "workspace_member", id: ownerMemberId },
-      })
-      assert.equal(unknown, false)
-      const missing = await checkPermission(db, {
-        resourceType: "relay_device",
+      const userId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, userId)
+      const memberId = await insertWorkspaceMember(db, workspaceId, userId)
+      const allowed = await checkPermission(db, {
+        resourceType: "conversation_actor_context",
         resourceId: "00000000-0000-0000-0000-000000000000",
-        permission: "view",
-        subject: { type: "workspace_member", id: ownerMemberId },
+        permission: "memory_read",
+        subject: { type: "workspace_member", id: memberId },
       })
-      assert.equal(missing, false)
-    })
-  }
-)
-
-test(
-  "checkPermission(relay_exposure.view) delegates to the device permission check",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const { workspaceId, ownerMemberId, guestMemberId } =
-        await seedOwnerMemberAndGuest(db)
-      const deviceId = await insertRelayDevice(db, workspaceId, ownerMemberId)
-      const exposureId = await insertRelayExposure(db, deviceId)
-      const ownerOk = await checkPermission(db, {
-        resourceType: "relay_exposure",
-        resourceId: exposureId,
-        permission: "view",
-        subject: { type: "workspace_member", id: ownerMemberId },
-      })
-      assert.equal(ownerOk, true)
-      const guestDenied = await checkPermission(db, {
-        resourceType: "relay_exposure",
-        resourceId: exposureId,
-        permission: "manage",
-        subject: { type: "workspace_member", id: guestMemberId },
-      })
-      assert.equal(guestDenied, false)
-      const missing = await checkPermission(db, {
-        resourceType: "relay_exposure",
-        resourceId: "00000000-0000-0000-0000-000000000000",
-        permission: "view",
-        subject: { type: "workspace_member", id: ownerMemberId },
-      })
-      assert.equal(missing, false)
+      assert.equal(allowed, false)
     })
   }
 )
@@ -913,21 +827,12 @@ test(
     await withTestDb(async (db) => {
       const { workspaceId, ownerMemberId, guestMemberId } =
         await seedOwnerMemberAndGuest(db)
-      // D4: memory_spaces now keyed by owner_subject_id; owner=workspace
-      // matches the legacy "workspace_shared" preset.
-      const { upsertAccessSubject } = await import("./subject-registry.js")
-      const { SUBJECT_KIND } = await import("@synapse/shared")
-      const ownerSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.WORKSPACE,
-        workspaceId,
-      })
       const spaceRow = await db
         .insertInto("memory_spaces")
         .values({
           workspace_id: workspaceId,
-          owner_subject_id: ownerSubjectId,
-          namespace_key: "default",
-        } as any)
+          space_type: "workspace_shared",
+        })
         .returning("id")
         .executeTakeFirstOrThrow()
       const itemRow = await db
@@ -1229,58 +1134,6 @@ async function insertPluginInstallation(
   return row.id as string
 }
 
-async function insertRelayDevice(
-  db: AnyDb,
-  workspaceId: string,
-  ownerMemberId: string
-): Promise<string> {
-  const row = await db
-    .insertInto("relay_devices")
-    .values({
-      workspace_id: workspaceId,
-      owner_workspace_member_id: ownerMemberId,
-      title: "dev",
-      public_key: "pk",
-      public_key_fingerprint: `fp-${Math.random().toString(36).slice(2, 10)}`,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return row.id as string
-}
-
-async function insertRelayExposure(
-  db: AnyDb,
-  deviceId: string
-): Promise<string> {
-  const row = await db
-    .insertInto("relay_exposures")
-    .values({
-      device_id: deviceId,
-      stable_key: `sk-${Math.random().toString(36).slice(2, 10)}`,
-      display_name: "exp",
-      transport: "stdio",
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return row.id as string
-}
-
-async function insertRelayCapability(
-  db: AnyDb,
-  workspaceId: string,
-  exposureId: string
-): Promise<string> {
-  const row = await db
-    .insertInto("relay_capabilities")
-    .values({
-      workspace_id: workspaceId,
-      exposure_id: exposureId,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return row.id as string
-}
-
 async function insertAutomationEventSource(
   db: AnyDb,
   workspaceId: string,
@@ -1331,7 +1184,6 @@ async function insertBinding(
     resourceType:
       | "installed_skill"
       | "plugin_installation"
-      | "relay_capability"
       | "automation_event_source"
       | "actor"
       | "remote_agent"
@@ -1379,8 +1231,6 @@ async function insertBinding(
         params.resourceType === "plugin_installation"
           ? params.resourceId
           : null,
-      relay_capability_id:
-        params.resourceType === "relay_capability" ? params.resourceId : null,
       automation_event_source_id:
         params.resourceType === "automation_event_source"
           ? params.resourceId

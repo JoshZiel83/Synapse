@@ -10,10 +10,16 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
  */
 export const WEIXIN_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "weixin",
+  displayName: "WeChat",
+  iconAssetPath: "/icon/weixin.svg",
   supportedConnectionModes: ["long_connection"],
   supportedEndpointTypes: ["direct"],
   supportsDirectMessages: true,
   supportsGroupMessages: false,
+  // Weixin v1 routes traffic through a configurable ilinkai gateway —
+  // the dashboard exposes a `baseWsUrl` panel. Other connectors don't
+  // need this and leave the flag undefined.
+  showsBaseUrlConfig: true,
 }
 
 export const WEIXIN_MESSAGE_CAPABILITIES: MessageCapabilities = {
@@ -27,6 +33,9 @@ export const WEIXIN_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsReply: false,
   supportsImage: false,
   supportsFile: false,
+  supportsVoice: false,
+  supportsVideo: false,
+  supportsInteractionPrompt: false,
   maxTextBytes: 5_000,
   // Personal WeChat 1:1 chats contain exactly one human; the only
   // mention you can address is the peer themselves.

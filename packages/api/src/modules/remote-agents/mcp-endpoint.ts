@@ -18,7 +18,7 @@ import {
 } from "./service.js"
 import { requireRemoteAgentConversationAccess } from "../chat/service.js"
 import { executeSql } from "../../infrastructure/database/kysely.js"
-import { resolveMcpToolsForRemoteAgent } from "../mcp-plugins/tool-resolver.js"
+import { projectToolsForPrincipal } from "../capability-projection/index.js"
 
 type ActiveTransport = {
   transport: StreamableHTTPServerTransport
@@ -81,6 +81,35 @@ function toolDefinitionToZodShape(
     shape[key] = required.has(key) ? base : base.optional()
   }
   return shape
+}
+
+// PR #14: surface a [device:<name>] / [plugin:<name>] / [skill:<name>]
+// origin badge in the tool description so reverse-MCP callers can attribute
+// results back to the source. Tool definitions carry source kind in the
+// ToolDefinition.source field today; v3 will additionally carry
+// device-attributed bindings via capability-projection (PR #7).
+function describeToolOrigin(def: ToolDefinition): string {
+  const meta = def as unknown as {
+    source?: { kind?: string; displayName?: string; deviceName?: string }
+    sourceType?: string
+  }
+  const source = meta.source
+  const kind = source?.kind ?? meta.sourceType
+  const name = source?.deviceName ?? source?.displayName ?? source?.kind ?? null
+  if (!kind) return ""
+  switch (kind) {
+    case "device_capability":
+    case "device":
+      return name ? `[device:${name}]` : "[device]"
+    case "plugin_installation":
+    case "plugin":
+      return name ? `[plugin:${name}]` : "[plugin]"
+    case "installed_skill":
+    case "skill":
+      return name ? `[skill:${name}]` : "[skill]"
+    default:
+      return ""
+  }
 }
 
 function registerImTools(params: {
@@ -244,29 +273,44 @@ async function registerResolvedTools(params: {
 }): Promise<() => Promise<void>> {
   // The resolver evaluates resource_access_bindings exactly like an actor
   // would (workspace + conversation grants for the remote-agent path) and
-  // returns ready-to-execute plugin + relay tool definitions. We mount each
-  // one as a passthrough that calls back into the same executor.
+  // returns ready-to-execute plugin + device_capability tool definitions.
+  // We mount each one as a passthrough that calls back into the same
+  // executor.
   //
   // conversationKind + conversationBoundary are LOAD-BEARING here: the
   // resolver's conversation_type mask filter (loadVisiblePlugins +
-  // loadVisibleRelayExposures) rejects rows that don't match the conversation
+  // projectDeviceTools) rejects rows that don't match the conversation
   // type, and shared/utils:maskAllowsConversationType returns false when
-  // either field is missing. Without these two values plugin / relay tools
+  // either field is missing. Without these two values plugin / device tools
   // would be silently filtered out even when authorization passes.
-  const resolved = await resolveMcpToolsForRemoteAgent({
+  const resolved = await projectToolsForPrincipal({
     workspaceId: params.workspaceId,
-    remoteAgentId: params.remoteAgentId,
+    principal: {
+      kind: "remote_agent",
+      remoteAgentId: params.remoteAgentId,
+      conversationId: params.conversationId,
+    },
     conversationId: params.conversationId,
     conversationKind: params.conversationKind,
     conversationBoundary: params.conversationBoundary,
+    consumer: "reverse_mcp",
     sessionId: params.sessionKey,
   })
   for (const def of resolved.tools as ToolDefinition[]) {
     try {
+      // Augment description with a [device:Name] / [plugin:Name] /
+      // [skill:Name] origin badge so the remote agent (and the conversation
+      // transcript surface) can attribute tool results back to their device.
+      // The ToolDefinition.namespacedToolName carries the source kind prefix
+      // for plugin/device tools; we surface that as a leading bracketed tag.
+      const originBadge = describeToolOrigin(def)
+      const decoratedDescription = originBadge
+        ? `${originBadge} ${def.description ?? ""}`.trim()
+        : def.description
       params.server.registerTool(
         def.name,
         {
-          description: def.description,
+          description: decoratedDescription,
           inputSchema: toolDefinitionToZodShape(def),
         },
         async (input: Record<string, unknown>) => {
@@ -324,11 +368,12 @@ async function createSessionTransport(params: {
   conversationKind: "private" | "group" | "virtual"
   conversationBoundary: ConversationBoundary
 }): Promise<ActiveTransport> {
-  // sessionId is used downstream as a cache scope (relay tool runtime context
-  // map keys, "session:<id>:turn:<uuid>" reuse keys) AND historically fed into
-  // a UUID-typed column lookup in subject-resolution. The subject-resolution
-  // path is now gated on actorId so non-UUID values are safe there, but we
-  // still hand the resolver a real UUID so any future caller that treats
+  // sessionId is used downstream as a cache scope (device-tool runtime
+  // context map keys, "session:<id>:turn:<uuid>" reuse keys) AND
+  // historically fed into a UUID-typed column lookup in subject-
+  // resolution. The subject-resolution path is now gated on actorId so
+  // non-UUID values are safe there, but we still hand the resolver a
+  // real UUID so any future caller that treats
   // sessionId as a UUID does not silently break the reverse-MCP surface.
   const sessionKey = randomUUID()
   const server = new McpServer(
@@ -344,9 +389,10 @@ async function createSessionTransport(params: {
   // Deliberately NOT wrapped in try/catch: an earlier version swallowed the
   // resolver failure and mounted only the IM tools, which meant a UUID-column
   // crash in the resolver looked like a clean tools/list to the caller while
-  // plugin/relay grants silently disappeared. Re-throwing here makes the
-  // failure surface as an initialize HTTP 500 — the loud failure mode is the
-  // correct one for the "tool projection" acceptance point in the plan.
+  // plugin / device_capability grants silently disappeared. Re-throwing here
+  // makes the failure surface as an initialize HTTP 500 — the loud failure
+  // mode is the correct one for the "tool projection" acceptance point in
+  // the plan.
   const pluginShutdown = await registerResolvedTools({
     server,
     workspaceId: params.workspaceId,

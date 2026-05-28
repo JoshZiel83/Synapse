@@ -3,7 +3,8 @@ import fs from "node:fs/promises"
 import bcryptjs from "bcryptjs"
 import { basename, dirname, extname, resolve } from "node:path"
 import { fileURLToPath } from "url"
-import { textBlocks } from "@synapse/shared"
+import { SUBJECT_KIND, textBlocks } from "@synapse/shared"
+import { upsertAccessSubject } from "../../modules/access/subject-registry.js"
 import { createGeneratedUserAvatarFile } from "../../modules/avatar/service.js"
 import { seedBuiltinMcpPlugins } from "../../modules/mcp-plugins/service.js"
 import { seedPlatformDefaultGroup } from "../../modules/model-groups/service.js"
@@ -12,6 +13,7 @@ import { importSeededClawhubMarketplaceSkill } from "../../modules/skills/servic
 import { ensureStorageDir } from "../storage/index.js"
 import { transaction } from "./index.js"
 import type { CatalogVersionFilesFileRole } from "./generated/db.js"
+import { db } from "./kysely.js"
 import { executeSql, executeSqlOn } from "./kysely.js"
 import { ensurePublisher } from "./seed-utils.js"
 import {
@@ -84,26 +86,28 @@ async function seedDefaultActorDiscoveryProfiles(params: {
   actorIds: string[]
 }) {
   for (const actorId of params.actorIds) {
+    const subjectId = await upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.ACTOR,
+      actorId,
+    })
     await executeSql(
       `INSERT INTO workspace_relationship_profiles (
          workspace_id,
-         subject_type,
-         subject_actor_id,
+         subject_id,
          identity_search_enabled,
          approval_mode,
          qr_token,
          created_by_workspace_member_id
        )
-       VALUES ($1, 'actor', $2, TRUE, 'auto', $3, $4)
-       ON CONFLICT (workspace_id, subject_actor_id)
-         WHERE subject_type = 'actor' AND subject_actor_id IS NOT NULL
+       VALUES ($1, $2, TRUE, 'auto', $3, $4)
+       ON CONFLICT (workspace_id, subject_id)
        DO UPDATE SET
          identity_search_enabled = EXCLUDED.identity_search_enabled,
          approval_mode = EXCLUDED.approval_mode,
          updated_at = NOW()`,
       [
         params.workspaceId,
-        actorId,
+        subjectId,
         crypto.randomUUID(),
         params.workspaceMemberId,
       ]

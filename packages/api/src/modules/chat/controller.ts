@@ -7,7 +7,7 @@ import {
   INTERACTION_DECISIONS,
   PLAN_APPROVAL_DECISIONS,
   PUSH_TOKEN_PLATFORMS,
-  RELAY_AUTHORIZATION_PRESETS,
+  RUNTIME_AUTHORIZATION_PRESETS,
 } from "@synapse/shared"
 import { CanonicalContentBlockSchema } from "@synapse/shared/schemas"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -59,8 +59,8 @@ const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 const jsonRecordSchema = z.record(z.any()).optional()
 
 // CanonicalContentBlock zod is owned by @synapse/shared so any future
-// consumer (relay-imported messages, CLI ingest, etc.) validates against
-// the same shape the chat HTTP API enforces here.
+// consumer (ingest CLI, device-runtime, etc.) validates against the same
+// shape the chat HTTP API enforces here.
 const canonicalContentBlockSchema = CanonicalContentBlockSchema
 
 const createConversationSchema = z.object({
@@ -206,27 +206,29 @@ const resolveInteractionPlanApprovalSchema = resolveInteractionCommandSchema
   })
   .strict()
 
-const resolveInteractionRelayApproveSchema = resolveInteractionCommandSchema
-  .extend({
-    decision: z.literal(INTERACTION_DECISIONS[0]),
-    preset: z.enum(RELAY_AUTHORIZATION_PRESETS),
-    selectedGrantOptionId: z.string().trim().min(1),
-    note: z.string().trim().optional(),
-  })
-  .strict()
+const resolveInteractionRuntimeAuthorizationApproveSchema =
+  resolveInteractionCommandSchema
+    .extend({
+      decision: z.literal(INTERACTION_DECISIONS[0]),
+      preset: z.enum(RUNTIME_AUTHORIZATION_PRESETS),
+      selectedGrantOptionId: z.string().trim().min(1),
+      note: z.string().trim().optional(),
+    })
+    .strict()
 
-const resolveInteractionRelayRejectSchema = resolveInteractionCommandSchema
-  .extend({
-    decision: z.literal(INTERACTION_DECISIONS[1]),
-    note: z.string().trim().optional(),
-  })
-  .strict()
+const resolveInteractionRuntimeAuthorizationRejectSchema =
+  resolveInteractionCommandSchema
+    .extend({
+      decision: z.literal(INTERACTION_DECISIONS[1]),
+      note: z.string().trim().optional(),
+    })
+    .strict()
 
 const resolveInteractionSchema = z.union([
   resolveInteractionUserInputSchema,
   resolveInteractionPlanApprovalSchema,
-  resolveInteractionRelayApproveSchema,
-  resolveInteractionRelayRejectSchema,
+  resolveInteractionRuntimeAuthorizationApproveSchema,
+  resolveInteractionRuntimeAuthorizationRejectSchema,
 ])
 
 function getRequestUserId(request: any) {

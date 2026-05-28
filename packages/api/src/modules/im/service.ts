@@ -80,9 +80,13 @@ export {
 } from "./service/bindings.js"
 
 export {
+  enqueueOutboundDelivery,
   findTransportMessageLinkByExternalMessage,
   loadTransportMessageLinkForDelivery,
+  patchTransportMessageLinkMetadata,
+  persistOutboundLinkRowRaw,
   queueConversationTransportProjection,
+  removeTransportMessageLinkMetadataKey,
   updateTransportMessageLinkStatus,
 } from "./service/delivery-links.js"
 

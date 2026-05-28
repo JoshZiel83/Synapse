@@ -1,6 +1,5 @@
 import { sql } from "kysely"
-import { SUBJECT_KIND, MEMORY_PERMISSION } from "@synapse/shared"
-import type { MemoryPermission, SubjectRef } from "@synapse/shared"
+import { SUBJECT_KIND } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import {
@@ -8,7 +7,6 @@ import {
   evaluateWorkspacePermission,
 } from "./rbac-rules.js"
 import { upsertAccessSubject } from "./subject-registry.js"
-import { memoryGrantMatches } from "../memory/access-grant-storage.js"
 
 type AccessResourceType =
   | "platform"
@@ -20,9 +18,10 @@ type AccessResourceType =
   | "installed_skill"
   | "plugin_installation"
   | "automation_event_source"
-  | "relay_device"
-  | "relay_exposure"
-  | "relay_capability"
+  | "device"
+  | "device_exposure"
+  | "device_capability"
+  | "conversation_actor_context"
   | "conversation"
   | "memory_space"
   | "memory_item"
@@ -30,15 +29,14 @@ type AccessResourceType =
   | "model_profile"
 
 type PermissionSubject = {
-  type: "user" | "workspace_member" | "actor" | "remote_agent" | "workspace"
+  type:
+    | "user"
+    | "workspace_member"
+    | "actor"
+    | "workspace"
+    | "conversation_actor_context"
   id: string
 }
-
-// PR3: re-export the runtime principal context shape so callers can pass it
-// to scope-aware overloads of checkPermission / hasResourceGrant. The full
-// builder lives in subject-resolution.ts; this is just the type surface
-// evaluator consumers need.
-export type { RuntimePrincipalContext } from "./subject-resolution.js"
 
 const PLATFORM_RESOURCE_ID = "synapse"
 
@@ -71,6 +69,13 @@ type ConversationRow = {
   workspace_id: string
   kind: "private" | "group" | "virtual"
   boundary: "internal" | "external"
+}
+
+type ConversationActorContextRow = {
+  id: string
+  actor_id: string
+  conversation_id: string
+  session_id: string | null
 }
 
 type ResourceGrantMatch = {
@@ -170,6 +175,18 @@ async function loadConversationRow(
     .where("conversation.id", "=", conversationId)
     .limit(1)
     .executeTakeFirst()) as unknown as ConversationRow | null
+}
+
+async function loadConversationActorContext(
+  db: KyselyDb,
+  contextId: string
+): Promise<ConversationActorContextRow | null> {
+  return (await db
+    .selectFrom("conversation_actor_contexts")
+    .select(["id", "actor_id", "conversation_id", "session_id"])
+    .where("id", "=", contextId)
+    .limit(1)
+    .executeTakeFirst()) as ConversationActorContextRow | null
 }
 
 async function loadPlatformAccessKeysForUser(db: KyselyDb, userId: string) {
@@ -355,9 +372,7 @@ async function hasActorPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   actorId: string,
-  permission: string,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  permission: string
 ): Promise<boolean> {
   const actor = await loadActorRow(db, actorId)
   if (!actor || !actor.is_active) {
@@ -405,17 +420,10 @@ async function hasActorPermission(
   //     binding written by the approval flow.
   const canUse =
     canManage ||
-    (await hasResourceGrant(
-      db,
-      "actor",
-      actorId,
-      {
-        type: "workspace_member",
-        id: access.id,
-      },
-      runtimeScopeSubjectIds,
-      runtimeSubjectIds
-    ))
+    (await hasResourceGrant(db, "actor", actorId, {
+      type: "workspace_member",
+      id: access.id,
+    }))
 
   switch (permission) {
     case "discover":
@@ -440,9 +448,7 @@ async function hasRemoteAgentPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   remoteAgentId: string,
-  permission: string,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  permission: string
 ): Promise<boolean> {
   const remoteAgent = await loadRemoteAgentRow(db, remoteAgentId)
   if (!remoteAgent || !remoteAgent.is_active) {
@@ -469,17 +475,10 @@ async function hasRemoteAgentPermission(
   // be granted; the publishing workspace's auto-write happens on create.
   const canUse =
     canManage ||
-    (await hasResourceGrant(
-      db,
-      "remote_agent",
-      remoteAgentId,
-      {
-        type: "workspace_member",
-        id: access.id,
-      },
-      runtimeScopeSubjectIds,
-      runtimeSubjectIds
-    ))
+    (await hasResourceGrant(db, "remote_agent", remoteAgentId, {
+      type: "workspace_member",
+      id: access.id,
+    }))
 
   switch (permission) {
     case "discover":
@@ -496,19 +495,84 @@ async function hasRemoteAgentPermission(
   }
 }
 
+async function hasConversationActorContextPermission(
+  db: KyselyDb,
+  subject: PermissionSubject,
+  contextId: string,
+  permission: string
+): Promise<boolean> {
+  const context = await loadConversationActorContext(db, contextId)
+  if (!context) {
+    return false
+  }
+
+  if (subject.type === "actor") {
+    const membership =
+      subject.id === context.actor_id
+        ? await hasActiveConversationMembership(db, {
+            conversationId: context.conversation_id,
+            actorId: subject.id,
+          })
+        : null
+
+    if (!membership) {
+      return false
+    }
+
+    switch (permission) {
+      case "memory_read":
+      case "memory_edit":
+      case "memory_retarget":
+      case "memory_delete":
+        return true
+      default:
+        return false
+    }
+  }
+
+  if (subject.type !== "workspace_member") {
+    return false
+  }
+
+  const inConversation = await hasActiveConversationMembership(db, {
+    conversationId: context.conversation_id,
+    workspaceMemberId: subject.id,
+  })
+  if (!inConversation) {
+    return false
+  }
+
+  switch (permission) {
+    case "memory_read":
+    case "memory_edit":
+      return hasActorPermission(db, subject, context.actor_id, permission)
+    case "memory_retarget":
+    case "memory_delete":
+      return hasActorPermission(db, subject, context.actor_id, permission)
+    default:
+      return false
+  }
+}
+
 type ResourceGrantRow = {
   resource_id: string
-  subject_kind: string
-  subject_workspace_id_via_join: string | null
-  subject_workspace_member_id_via_join: string | null
-  subject_actor_id_via_join: string | null
-  subject_conversation_id_via_join: string | null
+  target_type:
+    | "workspace"
+    | "workspace_member"
+    | "conversation"
+    | "actor"
+    | "actor_in_conversation"
+  subject_workspace_id: string | null
+  subject_workspace_member_id: string | null
+  subject_actor_id: string | null
+  subject_conversation_id: string | null
+  subject_conversation_actor_context_id: string | null
 }
 
 type BindableResourceTypeLocal =
   | "installed_skill"
   | "plugin_installation"
-  | "relay_capability"
+  | "device_capability"
   | "automation_event_source"
   | "actor"
   | "remote_agent"
@@ -518,7 +582,7 @@ function bindableResourceIdColumn(
 ):
   | "installed_skill_id"
   | "plugin_installation_id"
-  | "relay_capability_id"
+  | "device_capability_id"
   | "automation_event_source_id"
   | "actor_id"
   | "remote_agent_id" {
@@ -527,8 +591,8 @@ function bindableResourceIdColumn(
       return "installed_skill_id"
     case "plugin_installation":
       return "plugin_installation_id"
-    case "relay_capability":
-      return "relay_capability_id"
+    case "device_capability":
+      return "device_capability_id"
     case "automation_event_source":
       return "automation_event_source_id"
     case "actor":
@@ -542,113 +606,89 @@ async function listResourceGrantRows(
   db: KyselyDb,
   resourceType: BindableResourceTypeLocal,
   resourceId: string | null,
-  subject: PermissionSubject,
-  // PR3: optional scope context. When undefined → filter to scope_subject_id IS NULL
-  // (legacy callers don't see scoped-subject grants). When non-null → filter
-  // scope_subject_id IS NULL OR scope_subject_id ∈ runtimeScopeSubjectIds.
-  runtimeScopeSubjectIds?: readonly string[],
-  // P1 fix (post-D4): the per-principal `subject.type` branches below only
-  // match bindings whose `subject_id` points at the principal itself
-  // (workspace / actor / remote_agent / workspace_member subjects). They
-  // don't surface grants written against group subjects the principal is
-  // currently *inside* — most notably `subject=conversation C` grants when
-  // the principal is an active participant of C. `runtimeSubjectIds` is the
-  // full set of subject_ids the principal can claim under right now (from
-  // `RuntimePrincipalContext`); we OR it into the matcher so those group
-  // grants are surfaced. Without this parameter the function preserves the
-  // legacy per-principal-only matching (which is still correct, just narrower).
-  runtimeSubjectIds?: readonly string[]
+  subject: PermissionSubject
 ): Promise<ResourceGrantRow[]> {
   const resourceIdColumn = bindableResourceIdColumn(resourceType)
 
   let query = db
     .selectFrom("resource_access_bindings as binding")
     .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
+    .leftJoin(
+      "conversation_actor_contexts as cac",
+      "cac.id",
+      "subj.conversation_actor_context_id"
+    )
     .select([
       sql<string>`COALESCE(
         binding.installed_skill_id::text,
         binding.plugin_installation_id::text,
-        binding.relay_capability_id::text,
         binding.automation_event_source_id::text,
         binding.actor_id::text,
         binding.remote_agent_id::text
       )`.as("resource_id"),
-      sql<string>`subj.kind`.as("subject_kind"),
-      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
-      sql<string | null>`subj.workspace_member_id`.as(
-        "subject_workspace_member_id_via_join"
+      sql<
+        | "workspace"
+        | "workspace_member"
+        | "conversation"
+        | "actor"
+        | "actor_in_conversation"
+      >`CASE subj.kind
+        WHEN 'workspace' THEN 'workspace'
+        WHEN 'workspace_member' THEN 'workspace_member'
+        WHEN 'conversation' THEN 'conversation'
+        WHEN 'actor' THEN 'actor'
+        WHEN 'conversation_actor_context' THEN 'actor_in_conversation'
+      END`.as("target_type"),
+      "subj.workspace_id as subject_workspace_id",
+      "subj.workspace_member_id as subject_workspace_member_id",
+      sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
+        "subject_actor_id"
       ),
-      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
-      sql<string | null>`subj.conversation_id`.as(
-        "subject_conversation_id_via_join"
+      sql<
+        string | null
+      >`COALESCE(subj.conversation_id, cac.conversation_id)`.as(
+        "subject_conversation_id"
       ),
+      "subj.conversation_actor_context_id as subject_conversation_actor_context_id",
     ])
     .where("binding.status", "=", "active")
-
-  // PR3: scope filter — `subject_id ∈ runtime AND (scope_subject_id IS NULL OR
-  // scope_subject_id ∈ runtimeScopeSubjectIds)`. When no scope context is
-  // provided we keep the conservative "NULL scope only" filter so legacy
-  // callers don't accidentally see scoped grants.
-  if (runtimeScopeSubjectIds && runtimeScopeSubjectIds.length > 0) {
-    query = query.where((eb) =>
-      eb.or([
-        eb("binding.scope_subject_id", "is", null),
-        eb("binding.scope_subject_id", "in", [...runtimeScopeSubjectIds]),
-      ])
-    )
-  } else {
-    query = query.where("binding.scope_subject_id", "is", null)
-  }
 
   if (resourceId) {
     query = query.where(`binding.${resourceIdColumn}` as any, "=", resourceId)
   }
 
-  // P1 fix: combine the per-principal matcher (legacy) with a runtime-subject
-  // matcher (post-D4) so group-subject bindings — most notably
-  // `subject=conversation C` — match active participants.
-  const extraRuntimeSubjectIds =
-    runtimeSubjectIds && runtimeSubjectIds.length > 0
-      ? [...runtimeSubjectIds]
-      : null
-
   if (subject.type === "workspace") {
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", subject.id),
-        ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
+    query = query
+      .where("subj.kind", "=", "workspace")
+      .where("subj.workspace_id", "=", subject.id)
   } else if (subject.type === "actor") {
+    query = query
+      .where("subj.kind", "=", "actor")
+      .where("subj.actor_id", "=", subject.id)
+  } else if (subject.type === "conversation_actor_context") {
+    const context = await loadConversationActorContext(db, subject.id)
+    if (!context) {
+      return []
+    }
+    const membership = await hasActiveConversationMembership(db, {
+      conversationId: context.conversation_id,
+      actorId: context.actor_id,
+    })
+    if (!membership) {
+      return []
+    }
+    const contextId = subject.id
+    const conversationId = context.conversation_id
     query = query.where((eb) =>
       eb.or([
         eb.and([
-          eb("subj.kind", "=", "actor"),
-          eb("subj.actor_id", "=", subject.id),
+          eb("subj.kind", "=", "conversation_actor_context"),
+          eb("subj.conversation_actor_context_id", "=", contextId),
         ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
-      ])
-    )
-  } else if (subject.type === "remote_agent") {
-    // PR4 fix: previously fell through to the `return []` below, which meant
-    // a remote_agent principal never matched any binding even when the
-    // binding's subject_id pointed at exactly that remote_agent.
-    query = query.where((eb) =>
-      eb.or([
         eb.and([
-          eb("subj.kind", "=", "remote_agent"),
-          eb("subj.remote_agent_id", "=", subject.id),
+          eb("subj.kind", "=", "conversation"),
+          eb("subj.conversation_id", "=", conversationId),
         ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
       ])
     )
   } else if (subject.type === "workspace_member") {
@@ -673,9 +713,6 @@ async function listResourceGrantRows(
           eb("subj.kind", "=", "workspace_member"),
           eb("subj.workspace_member_id", "=", subject.id),
         ]),
-        ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
-          : []),
       ])
     )
   } else {
@@ -689,17 +726,13 @@ async function hasResourceGrant(
   db: KyselyDb,
   resourceType: BindableResourceTypeLocal,
   resourceId: string,
-  subject: PermissionSubject,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  subject: PermissionSubject
 ) {
   const rows = await listResourceGrantRows(
     db,
     resourceType,
     resourceId,
-    subject,
-    runtimeScopeSubjectIds,
-    runtimeSubjectIds
+    subject
   )
   return rows.length > 0
 }
@@ -708,18 +741,9 @@ async function listGrantedResourceIds(
   db: KyselyDb,
   resourceType: BindableResourceTypeLocal,
   subject: PermissionSubject,
-  limit?: number,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  limit?: number
 ) {
-  const rows = await listResourceGrantRows(
-    db,
-    resourceType,
-    null,
-    subject,
-    runtimeScopeSubjectIds,
-    runtimeSubjectIds
-  )
+  const rows = await listResourceGrantRows(db, resourceType, null, subject)
   const ids = Array.from(new Set(rows.map((row) => row.resource_id)))
   return typeof limit === "number" && limit > 0 ? ids.slice(0, limit) : ids
 }
@@ -802,7 +826,7 @@ async function listManageablePluginInstallationIds(
   return rows.map((row) => row.id)
 }
 
-async function listManageableRelayCapabilityIds(
+async function listManageableDeviceCapabilityIds(
   db: KyselyDb,
   subject: PermissionSubject,
   limit?: number
@@ -817,19 +841,21 @@ async function listManageableRelayCapabilityIds(
   }
 
   let query = db
-    .selectFrom("relay_capabilities as capability")
+    .selectFrom("device_capabilities as capability")
     .innerJoin(
-      "relay_exposures as exposure",
+      "device_exposures as exposure",
       "exposure.id",
       "capability.exposure_id"
     )
-    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
+    .innerJoin("devices as device", "device.id", "exposure.device_id")
     .select("capability.id")
     .where("capability.workspace_id", "=", access.workspaceId)
     .where("capability.status", "=", "active")
     .orderBy("capability.updated_at", "desc")
 
-  if (!workspacePermissionFromAccess(access, "manage_relays")) {
+  // Only device_admin (manage_devices) can list every workspace's device
+  // capabilities; otherwise we surface only the ones the actor owns.
+  if (!workspacePermissionFromAccess(access, "manage_devices")) {
     query = query.where("device.owner_workspace_member_id", "=", access.id)
   }
 
@@ -841,9 +867,7 @@ async function hasInstalledSkillPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   skillId: string,
-  permission: string,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("installed_skills")
@@ -856,16 +880,7 @@ async function hasInstalledSkillPermission(
   }
 
   if (permission === "use" || permission === "view") {
-    if (
-      await hasResourceGrant(
-        db,
-        "installed_skill",
-        skillId,
-        subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds
-      )
-    ) {
+    if (await hasResourceGrant(db, "installed_skill", skillId, subject)) {
       return true
     }
   }
@@ -892,9 +907,7 @@ async function hasPluginInstallationPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   installationId: string,
-  permission: string,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("plugin_installations")
@@ -908,14 +921,7 @@ async function hasPluginInstallationPermission(
 
   if (permission === "use" || permission === "view") {
     if (
-      await hasResourceGrant(
-        db,
-        "plugin_installation",
-        installationId,
-        subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds
-      )
+      await hasResourceGrant(db, "plugin_installation", installationId, subject)
     ) {
       return true
     }
@@ -939,93 +945,20 @@ async function hasPluginInstallationPermission(
   return canManage
 }
 
-async function hasRelayDevicePermission(
-  db: KyselyDb,
-  subject: PermissionSubject,
-  deviceId: string,
-  permission: string
-): Promise<boolean> {
-  const row = await db
-    .selectFrom("relay_devices")
-    .select(["workspace_id", "owner_workspace_member_id"])
-    .where("id", "=", deviceId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
-    return false
-  }
-
-  if (subject.type === "user") {
-    if (permission !== "authorize_relay_authorization") {
-      return false
-    }
-    return hasPlatformPermission(db, subject, "manage")
-  }
-
-  if (subject.type !== "workspace_member") {
-    return false
-  }
-
-  const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== row.workspace_id) {
-    return false
-  }
-
-  const canManage =
-    workspacePermissionFromAccess(access, "manage_relays") ||
-    row.owner_workspace_member_id === access.id
-
-  switch (permission) {
-    case "view":
-    case "manage":
-    case "delete":
-    case "authorize_relay_authorization":
-      return canManage
-    default:
-      return false
-  }
-}
-
-async function hasRelayExposurePermission(
-  db: KyselyDb,
-  subject: PermissionSubject,
-  exposureId: string,
-  permission: string
-): Promise<boolean> {
-  const row = await db
-    .selectFrom("relay_exposures as exposure")
-    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
-    .select(["device.id as device_id"])
-    .where("exposure.id", "=", exposureId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row?.device_id) {
-    return false
-  }
-  return hasRelayDevicePermission(
-    db,
-    subject,
-    row.device_id,
-    permission === "view" ? "view" : "manage"
-  )
-}
-
-async function hasRelayCapabilityPermission(
+async function hasDeviceCapabilityPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   capabilityId: string,
-  permission: string,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  permission: string
 ): Promise<boolean> {
   const row = await db
-    .selectFrom("relay_capabilities as capability")
+    .selectFrom("device_capabilities as capability")
     .innerJoin(
-      "relay_exposures as exposure",
+      "device_exposures as exposure",
       "exposure.id",
       "capability.exposure_id"
     )
-    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
+    .innerJoin("devices as device", "device.id", "exposure.device_id")
     .select([
       "capability.workspace_id",
       "capability.status",
@@ -1042,17 +975,10 @@ async function hasRelayCapabilityPermission(
   if (
     permission === "use" ||
     permission === "view" ||
-    permission === "request_relay_authorization"
+    permission === "request_runtime_authorization"
   ) {
     if (
-      await hasResourceGrant(
-        db,
-        "relay_capability",
-        capabilityId,
-        subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds
-      )
+      await hasResourceGrant(db, "device_capability", capabilityId, subject)
     ) {
       return true
     }
@@ -1067,26 +993,18 @@ async function hasRelayCapabilityPermission(
     return false
   }
 
+  // device_admin (manage_devices) can manage every device capability in
+  // the workspace; otherwise the binding owner is the only one allowed.
   const canManage =
-    workspacePermissionFromAccess(access, "manage_relays") ||
+    workspacePermissionFromAccess(access, "manage_devices") ||
     row.owner_workspace_member_id === access.id
-
-  if (
-    permission === "view" ||
-    permission === "use" ||
-    permission === "request_relay_authorization"
-  ) {
-    return canManage
-  }
   return canManage
 }
 
 async function listActorIds(
   db: KyselyDb,
   subject: PermissionSubject,
-  limit?: number,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  limit?: number
 ) {
   if (subject.type !== "workspace_member") {
     return subject.type === "actor" ? [subject.id] : []
@@ -1128,14 +1046,7 @@ async function listActorIds(
       .where("a.created_by_workspace_member_id", "=", access.id)
       .orderBy("a.created_at", "desc")
       .execute(),
-    listGrantedResourceIds(
-      db,
-      "actor",
-      subject,
-      undefined,
-      runtimeScopeSubjectIds,
-      runtimeSubjectIds
-    ),
+    listGrantedResourceIds(db, "actor", subject),
   ])
   return finalizeResourceIdList(
     [ownActors.map((row) => row.id), grantedIds],
@@ -1146,9 +1057,7 @@ async function listActorIds(
 async function listRemoteAgentIds(
   db: KyselyDb,
   subject: PermissionSubject,
-  limit?: number,
-  runtimeScopeSubjectIds?: readonly string[],
-  runtimeSubjectIds?: readonly string[]
+  limit?: number
 ) {
   if (subject.type !== "workspace_member") {
     return []
@@ -1194,14 +1103,7 @@ async function listRemoteAgentIds(
       .where("created_by_workspace_member_id", "=", access.id)
       .orderBy("created_at", "desc")
       .execute(),
-    listGrantedResourceIds(
-      db,
-      "remote_agent",
-      subject,
-      undefined,
-      runtimeScopeSubjectIds,
-      runtimeSubjectIds
-    ),
+    listGrantedResourceIds(db, "remote_agent", subject),
   ])
   return finalizeResourceIdList(
     [ownAgents.map((row) => row.id), grantedIds],
@@ -1395,421 +1297,121 @@ async function hasModelProfilePermission(
   return false
 }
 
-type MemorySpaceLoadedRow = {
-  id: string
-  workspace_id: string
-  owner_subject_id: string
-  scope_subject_id: string | null
-  namespace_key: string
-  owner_kind: string
-  owner_workspace_id: string | null
-  owner_actor_id: string | null
-  owner_remote_agent_id: string | null
-  owner_workspace_member_id: string | null
-  owner_conversation_id: string | null
-  scope_kind: string | null
-  scope_conversation_id: string | null
-}
-
-async function loadMemorySpaceWithSubjects(
-  db: KyselyDb,
-  memorySpaceId: string
-): Promise<MemorySpaceLoadedRow | null> {
-  const row = await db
-    .selectFrom("memory_spaces as ms")
-    .innerJoin(
-      "access_subjects as owner_subj",
-      "owner_subj.id",
-      "ms.owner_subject_id"
-    )
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "ms.scope_subject_id"
-    )
-    .select([
-      "ms.id as id",
-      "ms.workspace_id as workspace_id",
-      "ms.owner_subject_id as owner_subject_id",
-      "ms.scope_subject_id as scope_subject_id",
-      "ms.namespace_key as namespace_key",
-      "owner_subj.kind as owner_kind",
-      "owner_subj.workspace_id as owner_workspace_id",
-      "owner_subj.actor_id as owner_actor_id",
-      "owner_subj.remote_agent_id as owner_remote_agent_id",
-      "owner_subj.workspace_member_id as owner_workspace_member_id",
-      "owner_subj.conversation_id as owner_conversation_id",
-      "scope_subj.kind as scope_kind",
-      "scope_subj.conversation_id as scope_conversation_id",
-    ])
-    .where("ms.id", "=", memorySpaceId)
-    .limit(1)
-    .executeTakeFirst()
-  return (row as unknown as MemorySpaceLoadedRow | undefined) ?? null
-}
-
-/**
- * D4: owner-implicit permission for a memory_space, given the loaded space
- * row. The rule per the plan:
- *   - owner=workspace_member  -> ALL permissions {read, recall, write, edit, delete, manage}
- *   - owner=actor             -> {read, recall, write, edit, delete} (no manage)
- *   - owner=remote_agent      -> {read, recall, write, edit} (no delete, no manage)
- *   - owner=workspace         -> view-grants-read/recall; manage_memories-grants-write/edit/delete/manage
- *   - owner=conversation      -> active participant grants {read, recall, write, edit}
- *
- * `scope_subject_id` is a strong constraint and gates ALL owner kinds — when
- * a space is scoped to conversation C, callers outside C cannot read/recall/
- * write/edit it regardless of owner kind or workspace permissions. The single
- * exception is the workspace-admin manage override (`manage_memories`), which
- * only unlocks `manage` / `delete` so an admin can clean up scoped spaces
- * without being able to silently view their contents.
- *
- * Asymmetric admin/creator path (post-D4 round 3 review fix, narrowed
- * further in round 4 review): for `actor` and `remote_agent` owners,
- * **write only** admits a curation path — workspace admins /
- * `actor_admin` / `remote_agent_admin` / the resource's creator can
- * author new content into the space. Read/recall stay strictly private,
- * AND `edit` / `delete` are NOT in the curation path either: edit on an
- * existing item lets the caller PUT and read back the contents, which
- * would defeat the "admin can curate seed memories without later being
- * able to read what accumulated" invariant. Removed-edit is a deliberate
- * narrowing — admin who needs to amend a private memory must hold an
- * explicit memory_access_grant. The strict allowlist is enforced by
- * routing through `hasActorPermission(... "edit")` / `hasRemoteAgentPermission(... "edit")`
- * which return only `canManage` (admin / *_admin / creator) — not the
- * `canUse` superset that would have admitted any caller with an
- * `actor.memory_edit` grant.
- */
-async function hasMemorySpaceOwnerImplicitPermission(
-  db: KyselyDb,
-  subject: PermissionSubject,
-  space: MemorySpaceLoadedRow,
-  permission: string,
-  runtimeContext?: {
-    runtimeSubjectIds?: readonly string[]
-    runtimeScopeSubjectIds?: readonly string[]
-  }
-): Promise<boolean> {
-  const inRuntime = (subjectId: string) =>
-    runtimeContext?.runtimeSubjectIds?.includes(subjectId) ?? false
-
-  const scopeOk =
-    !space.scope_subject_id ||
-    (runtimeContext?.runtimeScopeSubjectIds?.includes(space.scope_subject_id) ??
-      false)
-
-  const adminManageOverride = async (): Promise<boolean> => {
-    if (permission !== "manage" && permission !== "delete") return false
-    return hasWorkspacePermission(
-      db,
-      subject,
-      space.workspace_id,
-      "manage_memories"
-    )
-  }
-
-  if (!scopeOk) {
-    return adminManageOverride()
-  }
-
-  switch (space.owner_kind) {
-    case "workspace_member":
-      if (inRuntime(space.owner_subject_id)) {
-        return true // all permissions
-      }
-      return adminManageOverride()
-    case "actor":
-      if (inRuntime(space.owner_subject_id)) {
-        return permission !== "manage"
-      }
-      // Curation path (post-D4 round 4 narrowing): admins / actor_admin /
-      // actor creator can author NEW content (write only) into the
-      // actor's private memory space. `edit` and `delete` are NOT in
-      // this allowlist — edit on an existing item lets the caller PUT
-      // and read back the contents (defeats the read-isolation invariant)
-      // and delete should require an explicit memory_access_grant or the
-      // workspace manage_memories override below. Calling
-      // `hasActorPermission(actor, "edit")` returns the strict canManage
-      // (admin/*_admin/creator) — not `canUse`, which would have admitted
-      // anyone with an `actor.memory_edit` grant.
-      if (
-        space.owner_actor_id &&
-        permission === "write" &&
-        (await hasActorPermission(db, subject, space.owner_actor_id, "edit"))
-      ) {
-        return true
-      }
-      return adminManageOverride()
-    case "remote_agent":
-      if (inRuntime(space.owner_subject_id)) {
-        return (
-          permission === "read" ||
-          permission === "recall" ||
-          permission === "write" ||
-          permission === "edit"
-        )
-      }
-      // Same write-only curation pattern as actor — see comment above.
-      if (
-        space.owner_remote_agent_id &&
-        permission === "write" &&
-        (await hasRemoteAgentPermission(
-          db,
-          subject,
-          space.owner_remote_agent_id,
-          "edit"
-        ))
-      ) {
-        return true
-      }
-      return adminManageOverride()
-    case "workspace":
-      if (permission === "read" || permission === "recall") {
-        if (subject.type === "actor") {
-          const actor = await loadActorRow(db, subject.id)
-          return Boolean(
-            actor &&
-            actor.workspace_id === space.workspace_id &&
-            actor.is_active
-          )
-        }
-        return hasWorkspacePermission(db, subject, space.workspace_id, "view")
-      }
-      return hasWorkspacePermission(
-        db,
-        subject,
-        space.workspace_id,
-        "manage_memories"
-      )
-    case "conversation":
-      if (!space.owner_conversation_id) return false
-      if (permission === "manage" || permission === "delete") {
-        return hasConversationPermission(
-          db,
-          subject,
-          space.owner_conversation_id,
-          permission === "manage" ? "manage" : "memory_delete"
-        )
-      }
-      return hasConversationPermission(
-        db,
-        subject,
-        space.owner_conversation_id,
-        permission === "read" || permission === "recall"
-          ? "memory_read"
-          : "memory_edit"
-      )
-    default:
-      return false
-  }
-}
-
 async function hasMemoryItemPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   memoryItemId: string,
-  permission: string,
-  runtimeContext?: {
-    runtimeSubjectIds?: readonly string[]
-    runtimeScopeSubjectIds?: readonly string[]
-  }
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("memory_items as mi")
+    .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
+    .leftJoin(
+      "conversation_actor_contexts as cac",
+      "cac.id",
+      "ms.anchor_conversation_actor_context_id"
+    )
     .select([
-      "mi.id as memory_item_id",
-      "mi.memory_space_id as memory_space_id",
+      "mi.workspace_id",
+      "ms.space_type",
+      "ms.anchor_conversation_id",
+      "ms.anchor_actor_id",
+      "ms.anchor_workspace_member_id",
+      "ms.anchor_conversation_actor_context_id",
+      "cac.actor_id as context_actor_id",
+      "cac.conversation_id as context_conversation_id",
     ])
     .where("mi.id", "=", memoryItemId)
     .limit(1)
     .executeTakeFirst()
-  if (!row) return false
-
-  // Space-level permission (owner-implicit OR space-level grant).
-  if (
-    await hasMemorySpacePermission(
-      db,
-      subject,
-      row.memory_space_id,
-      permission,
-      runtimeContext
-    )
-  ) {
-    return true
+  if (!row) {
+    return false
   }
 
-  // Item-level grant overlay — only honored when caller provided a runtime
-  // context.
-  if (
-    runtimeContext?.runtimeSubjectIds &&
-    runtimeContext.runtimeSubjectIds.length > 0
-  ) {
-    const grantPermission = mapEvaluatorPermissionToMemoryPermission(permission)
-    if (grantPermission) {
-      const granted = await memoryGrantMatches(db, {
-        memorySpaceId: row.memory_space_id,
-        memoryItemId: row.memory_item_id,
-        permission: grantPermission,
-        runtimeSubjectIds: runtimeContext.runtimeSubjectIds,
-        runtimeScopeSubjectIds: runtimeContext.runtimeScopeSubjectIds ?? [],
-        mode: "with-item",
-      })
-      if (granted) return true
-    }
-  }
-
-  return false
-}
-
-function mapEvaluatorPermissionToMemoryPermission(
-  permission: string
-): MemoryPermission | null {
-  switch (permission) {
-    case "read":
-      return MEMORY_PERMISSION.READ
-    case "recall":
-      return MEMORY_PERMISSION.RECALL
-    case "edit":
-      return MEMORY_PERMISSION.EDIT
-    case "write":
-      return MEMORY_PERMISSION.WRITE
-    case "delete":
-      return MEMORY_PERMISSION.DELETE
-    case "manage":
-      return MEMORY_PERMISSION.MANAGE
+  switch (row.space_type) {
+    case "workspace_shared":
+      if (subject.type === "actor") {
+        const actor = await loadActorRow(db, subject.id)
+        if (!actor || actor.workspace_id !== row.workspace_id) {
+          return false
+        }
+        return (
+          permission === "read" ||
+          permission === "recall" ||
+          permission === "edit"
+        )
+      }
+      return hasWorkspacePermission(
+        db,
+        subject,
+        row.workspace_id,
+        permission === "read" || permission === "recall"
+          ? "view"
+          : "manage_memories"
+      )
+    case "conversation_shared":
+      if (!row.anchor_conversation_id) {
+        return false
+      }
+      return hasConversationPermission(
+        db,
+        subject,
+        row.anchor_conversation_id,
+        permission === "read" || permission === "recall"
+          ? "memory_read"
+          : permission === "edit"
+            ? "memory_edit"
+            : permission === "retarget"
+              ? "memory_retarget"
+              : "memory_delete"
+      )
+    case "actor_private":
+      if (!row.anchor_actor_id) {
+        return false
+      }
+      return hasActorPermission(
+        db,
+        subject,
+        row.anchor_actor_id,
+        permission === "read" || permission === "recall"
+          ? "memory_read"
+          : permission === "edit"
+            ? "memory_edit"
+            : permission === "retarget"
+              ? "memory_retarget"
+              : "memory_delete"
+      )
+    case "participant_private":
+      if (!row.anchor_conversation_actor_context_id) {
+        return false
+      }
+      return hasConversationActorContextPermission(
+        db,
+        subject,
+        row.anchor_conversation_actor_context_id,
+        permission === "read" || permission === "recall"
+          ? "memory_read"
+          : permission === "edit"
+            ? "memory_edit"
+            : permission === "retarget"
+              ? "memory_retarget"
+              : "memory_delete"
+      )
+    case "user_private":
+      if (subject.type === "workspace_member") {
+        if (row.anchor_workspace_member_id === subject.id) {
+          return true
+        }
+      }
+      return hasWorkspacePermission(
+        db,
+        subject,
+        row.workspace_id,
+        "manage_memories"
+      )
     default:
-      return null
+      return false
   }
-}
-
-/**
- * D4: space-level permission. Either:
- *   - owner-implicit (owner_subject_id ∈ runtimeSubjectIds AND scope match),
- *     subject to the per-owner-kind matrix in hasMemorySpaceOwnerImplicitPermission,
- *   - or an active space-level memory_access_grants row matches.
- *
- * Item-level grants are NOT considered here — they only count when an item id
- * is also supplied (see hasMemoryItemPermission).
- */
-async function hasMemorySpacePermission(
-  db: KyselyDb,
-  subject: PermissionSubject,
-  memorySpaceId: string,
-  permission: string,
-  runtimeContext?: {
-    runtimeSubjectIds?: readonly string[]
-    runtimeScopeSubjectIds?: readonly string[]
-  }
-): Promise<boolean> {
-  const space = await loadMemorySpaceWithSubjects(db, memorySpaceId)
-  if (!space) return false
-
-  // Owner-implicit first — cheap and covers the common case.
-  if (
-    await hasMemorySpaceOwnerImplicitPermission(
-      db,
-      subject,
-      space,
-      permission,
-      runtimeContext
-    )
-  ) {
-    return true
-  }
-
-  // Space-level grant overlay.
-  if (
-    runtimeContext?.runtimeSubjectIds &&
-    runtimeContext.runtimeSubjectIds.length > 0
-  ) {
-    const grantPermission = mapEvaluatorPermissionToMemoryPermission(permission)
-    if (grantPermission) {
-      const granted = await memoryGrantMatches(db, {
-        memorySpaceId: space.id,
-        permission: grantPermission,
-        runtimeSubjectIds: runtimeContext.runtimeSubjectIds,
-        runtimeScopeSubjectIds: runtimeContext.runtimeScopeSubjectIds ?? [],
-        mode: "space-only",
-      })
-      if (granted) return true
-    }
-  }
-
-  return false
-}
-
-/**
- * Post-D4 round 3 review: evaluate the owner-implicit memory_space
- * permission against a (workspace_id, owner_subject_id + decoded fields,
- * scope_subject_id) tuple WITHOUT requiring an existing space row. Used
- * by the create / move auth gate so we can decide allowance before
- * INSERTing a placeholder space (the previous flow created an empty
- * orphan row on every denied write).
- *
- * No grant overlay is consulted — by definition the space doesn't exist
- * yet, so no `memory_access_grants` row can target it. The caller path
- * uses this only for the "space not yet in DB" branch; existing spaces
- * still go through `checkPermission(memory_space, id, ...)` which
- * applies the full owner-implicit + grant matrix.
- */
-export async function hasMemorySpaceOwnerImplicitPermissionForTuple(
-  db: KyselyDb,
-  subject: PermissionSubject,
-  tuple: {
-    workspaceId: string
-    owner: SubjectRef
-    scope?: SubjectRef
-    ownerSubjectId: string
-    scopeSubjectId: string | null
-  },
-  permission: string,
-  runtimeContext?: {
-    runtimeSubjectIds?: readonly string[]
-    runtimeScopeSubjectIds?: readonly string[]
-  }
-): Promise<boolean> {
-  // Build a synthetic MemorySpaceLoadedRow from the decomposed inputs.
-  // owner_kind drives the per-kind branch in hasMemorySpaceOwnerImplicitPermission;
-  // owner_*_id fields are filled from the SubjectRef so the curation
-  // (admin/creator) paths can resolve the underlying resource.
-  const synthetic: MemorySpaceLoadedRow = {
-    id: "(synthetic-not-in-db)",
-    workspace_id: tuple.workspaceId,
-    owner_subject_id: tuple.ownerSubjectId,
-    scope_subject_id: tuple.scopeSubjectId,
-    namespace_key: "(synthetic)",
-    owner_kind: tuple.owner.kind,
-    owner_workspace_id:
-      tuple.owner.kind === SUBJECT_KIND.WORKSPACE
-        ? tuple.owner.workspaceId
-        : null,
-    owner_actor_id:
-      tuple.owner.kind === SUBJECT_KIND.ACTOR ? tuple.owner.actorId : null,
-    owner_remote_agent_id:
-      tuple.owner.kind === SUBJECT_KIND.REMOTE_AGENT
-        ? tuple.owner.remoteAgentId
-        : null,
-    owner_workspace_member_id:
-      tuple.owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? tuple.owner.memberId
-        : null,
-    owner_conversation_id:
-      tuple.owner.kind === SUBJECT_KIND.CONVERSATION
-        ? tuple.owner.conversationId
-        : null,
-    scope_kind: tuple.scope?.kind ?? null,
-    scope_conversation_id:
-      tuple.scope?.kind === SUBJECT_KIND.CONVERSATION
-        ? tuple.scope.conversationId
-        : null,
-  }
-  return hasMemorySpaceOwnerImplicitPermission(
-    db,
-    subject,
-    synthetic,
-    permission,
-    runtimeContext
-  )
 }
 
 export async function checkPermission(
@@ -1819,23 +1421,6 @@ export async function checkPermission(
     resourceId: string
     permission: string
     subject: PermissionSubject
-    /**
-     * PR3: optional scope context. When provided, scope-aware visibility
-     * filtering kicks in (subject ∈ runtime AND (scope IS NULL OR scope ∈
-     * runtimeScopeSubjectIds)). When omitted, the legacy filter applies
-     * (scope IS NULL only). Callers that build a RuntimePrincipalContext
-     * via `buildRuntimePrincipalContext` should pass its
-     * `runtimeScopeSubjectIds` through here.
-     */
-    runtimeScopeSubjectIds?: readonly string[]
-    /**
-     * PR5: subject_id set the principal can claim under (the same field on
-     * RuntimePrincipalContext). Required for memory_access_grants matching
-     * — the grant table's subject_id is matched against this set. Callers
-     * that don't pass it get the legacy memory permission decision tree
-     * only (no explicit grants honored).
-     */
-    runtimeSubjectIds?: readonly string[]
   }
 ) {
   if (!params.resourceId) {
@@ -1867,81 +1452,49 @@ export async function checkPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission,
-        params.runtimeScopeSubjectIds,
-        params.runtimeSubjectIds
+        params.permission
       )
     case "remote_agent":
       return hasRemoteAgentPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission,
-        params.runtimeScopeSubjectIds,
-        params.runtimeSubjectIds
+        params.permission
+      )
+    case "conversation_actor_context":
+      return hasConversationActorContextPermission(
+        db,
+        params.subject,
+        params.resourceId,
+        params.permission
       )
     case "memory_item":
       return hasMemoryItemPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission,
-        {
-          runtimeSubjectIds: params.runtimeSubjectIds,
-          runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
-        }
-      )
-    case "memory_space":
-      return hasMemorySpacePermission(
-        db,
-        params.subject,
-        params.resourceId,
-        params.permission,
-        {
-          runtimeSubjectIds: params.runtimeSubjectIds,
-          runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
-        }
+        params.permission
       )
     case "installed_skill":
       return hasInstalledSkillPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission,
-        params.runtimeScopeSubjectIds,
-        params.runtimeSubjectIds
+        params.permission
       )
     case "plugin_installation":
       return hasPluginInstallationPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission,
-        params.runtimeScopeSubjectIds,
-        params.runtimeSubjectIds
+        params.permission
       )
-    case "relay_device":
-      return hasRelayDevicePermission(
+    case "device_capability":
+      return hasDeviceCapabilityPermission(
         db,
         params.subject,
         params.resourceId,
         params.permission
-      )
-    case "relay_exposure":
-      return hasRelayExposurePermission(
-        db,
-        params.subject,
-        params.resourceId,
-        params.permission
-      )
-    case "relay_capability":
-      return hasRelayCapabilityPermission(
-        db,
-        params.subject,
-        params.resourceId,
-        params.permission,
-        params.runtimeScopeSubjectIds,
-        params.runtimeSubjectIds
       )
     case "model_group":
       return hasModelGroupPermission(
@@ -1969,23 +1522,6 @@ export async function lookupResources(
     permission: string
     subject: PermissionSubject
     limit?: number
-    /**
-     * PR-fix-round-3: scope-aware visibility. Without these, the underlying
-     * `listGrantedResourceIds` defaults to the conservative
-     * "scope_subject_id IS NULL only" filter, so a scoped grant
-     * (e.g. subject=actor + scope=conversation) never appears in any
-     * tool/skill/plugin listing — `checkPermission` could pass but the
-     * resource wouldn't be enumerated. Callers that already built a
-     * RuntimePrincipalContext should pass these through.
-     */
-    runtimeScopeSubjectIds?: readonly string[]
-    /**
-     * P1 fix (post-D4): runtime subject_ids the principal can claim. When
-     * provided, bindings whose subject_id ∈ runtimeSubjectIds match too
-     * (covers `subject=conversation C` bindings for active participants).
-     * Callers with a RuntimePrincipalContext should pass this through.
-     */
-    runtimeSubjectIds?: readonly string[]
   }
 ) {
   switch (params.resourceType) {
@@ -1993,25 +1529,13 @@ export async function lookupResources(
       return params.permission === "view" ||
         params.permission === "discover" ||
         params.permission === "invoke"
-        ? listActorIds(
-            db,
-            params.subject,
-            params.limit,
-            params.runtimeScopeSubjectIds,
-            params.runtimeSubjectIds
-          )
+        ? listActorIds(db, params.subject, params.limit)
         : []
     case "remote_agent":
       return params.permission === "view" ||
         params.permission === "discover" ||
         params.permission === "invoke"
-        ? listRemoteAgentIds(
-            db,
-            params.subject,
-            params.limit,
-            params.runtimeScopeSubjectIds,
-            params.runtimeSubjectIds
-          )
+        ? listRemoteAgentIds(db, params.subject, params.limit)
         : []
     case "model_group":
       return params.permission === "use" || params.permission === "view"
@@ -2025,9 +1549,7 @@ export async function lookupResources(
                 db,
                 "installed_skill",
                 params.subject,
-                params.limit,
-                params.runtimeScopeSubjectIds,
-                params.runtimeSubjectIds
+                params.limit
               ),
               await listManageableInstalledSkillIds(
                 db,
@@ -2046,9 +1568,7 @@ export async function lookupResources(
                 db,
                 "plugin_installation",
                 params.subject,
-                params.limit,
-                params.runtimeScopeSubjectIds,
-                params.runtimeSubjectIds
+                params.limit
               ),
               await listManageablePluginInstallationIds(
                 db,
@@ -2059,21 +1579,19 @@ export async function lookupResources(
             params.limit
           )
         : []
-    case "relay_capability":
+    case "device_capability":
       return params.permission === "use" ||
         params.permission === "view" ||
-        params.permission === "request_relay_authorization"
+        params.permission === "request_runtime_authorization"
         ? finalizeResourceIdList(
             [
               await listGrantedResourceIds(
                 db,
-                "relay_capability",
+                "device_capability",
                 params.subject,
-                params.limit,
-                params.runtimeScopeSubjectIds,
-                params.runtimeSubjectIds
+                params.limit
               ),
-              await listManageableRelayCapabilityIds(
+              await listManageableDeviceCapabilityIds(
                 db,
                 params.subject,
                 params.limit
@@ -2088,9 +1606,7 @@ export async function lookupResources(
             db,
             "automation_event_source",
             params.subject,
-            params.limit,
-            params.runtimeScopeSubjectIds,
-            params.runtimeSubjectIds
+            params.limit
           )
         : []
     default:

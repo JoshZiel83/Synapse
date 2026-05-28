@@ -72,7 +72,7 @@ const toolRows = [
   },
   {
     icon: Wrench,
-    name: "桌面 Relay",
+    name: "桌面设备",
     scope: "设备",
     status: "待批准",
     statusTone: "bg-amber-500/14 text-amber-700",

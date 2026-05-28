@@ -50,7 +50,7 @@ test("buildSessionContextItems: tool_result session message becomes tool_result_
         toolCallId: "call-42",
         toolName: "View",
         origin: {
-          kind: "mcp_relay",
+          kind: "mcp_device",
           deviceId: "dev-1",
           exposureStableKey: "synapse.builtin.filesystem.v1",
         },
@@ -68,7 +68,7 @@ test("buildSessionContextItems: tool_result session message becomes tool_result_
   assert.equal(tr.toolName, "View")
   assert.equal(tr.isError, false)
   assert.deepEqual(tr.structuredContent, { path: "/tmp/x", lines: 1 })
-  assert.equal(tr.origin.kind, "mcp_relay")
+  assert.equal(tr.origin.kind, "mcp_device")
   assert.equal(tr.origin.deviceId, "dev-1")
   const text = extractText(tr.content)
   assert.equal(text, "file contents: hello")
@@ -148,7 +148,7 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
     toolName: "real_tool",
     content: textBlocks("authoritative payload from tool_results table"),
     isError: false,
-    origin: { kind: "mcp_relay", deviceId: "dev-x", exposureStableKey: "k" },
+    origin: { kind: "mcp_device", deviceId: "dev-x", exposureStableKey: "k" },
     structuredContent: { authoritative: true },
   })
 
@@ -171,7 +171,11 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
 
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolName, "real_tool", "tool_calls table wins over metadata")
-  assert.equal(tr.origin.kind, "mcp_relay", "tool_results.metadata origin wins")
+  assert.equal(
+    tr.origin.kind,
+    "mcp_device",
+    "tool_results.metadata origin wins"
+  )
   assert.deepEqual(tr.structuredContent, { authoritative: true })
   assert.equal(
     extractText(tr.content),

@@ -9,8 +9,8 @@ import assert from "node:assert/strict"
 import { normalizeMcpToolResult } from "./result-normalizer.js"
 import type { ToolResultOrigin } from "@synapse/shared"
 
-const MCP_RELAY_ORIGIN: ToolResultOrigin = {
-  kind: "mcp_relay",
+const MCP_DEVICE_ORIGIN: ToolResultOrigin = {
+  kind: "mcp_device",
   deviceId: "dev-1",
   deviceName: "MacBook Pro",
   exposureStableKey: "synapse.builtin.filesystem.v1",
@@ -34,9 +34,9 @@ const CALLABLE_PLUGIN_ORIGIN: ToolResultOrigin = {
 
 test("string result propagates origin to NormalizedMcpToolResult", async () => {
   const result = await normalizeMcpToolResult("hello", "ws-1", {
-    origin: MCP_RELAY_ORIGIN,
+    origin: MCP_DEVICE_ORIGIN,
   })
-  assert.deepEqual(result.origin, MCP_RELAY_ORIGIN)
+  assert.deepEqual(result.origin, MCP_DEVICE_ORIGIN)
   assert.equal(result.content.length, 1)
   assert.equal(result.content[0].type, "text")
 })
@@ -95,7 +95,7 @@ test("structuredContent-only object input flows through with origin", async () =
 test("origin kind enumeration covers all 5 documented ToolResultOrigin kinds", async () => {
   const origins: ToolResultOrigin[] = [
     { kind: "mcp_remote", serverKey: "s" },
-    { kind: "mcp_relay", deviceId: "d", exposureStableKey: "e" },
+    { kind: "mcp_device", deviceId: "d", exposureStableKey: "e" },
     { kind: "callable_plugin", pluginKey: "p" },
     { kind: "builtin", toolKind: "create_memory" },
     { kind: "model_response", providerType: "anthropic" },

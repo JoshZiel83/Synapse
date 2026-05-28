@@ -1,6 +1,8 @@
 import {
   ACTOR_DOC_VISIBILITIES,
   ACTOR_ROLES,
+  ACCESS_TARGET_TYPES,
+  CAPABILITY_ACCESS_TARGET_TYPES,
   CONTACT_DIRECT_STATES,
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
@@ -46,6 +48,8 @@ import {
   MEMORY_INDEX_STATUSES,
   MEMORY_ITEM_STATES,
   MEMORY_RECALL_TYPES,
+  MEMORY_SPACE_TYPES,
+  MEMORY_SCOPES,
   MEMORY_STABILITIES,
   MEMORY_STATUSES,
   PLUGIN_AUTH_CONNECTION_STATUSES,
@@ -59,19 +63,21 @@ import {
   RELATIONSHIP_PROFILE_SUBJECT_TYPES,
   RELATIONSHIP_REQUEST_STATUSES,
   RELATIONSHIP_SCAN_OUTCOMES,
-  RELAY_ACCESS_DENIAL_KINDS,
-  RELAY_ACCESS_DENIAL_RESOLUTIONS,
-  RELAY_AUTHORIZATION_BROWSER_ACTIONS,
-  RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES,
-  RELAY_AUTHORIZATION_CAPABILITIES,
-  RELAY_AUTHORIZATION_COMMAND_EXECUTORS,
-  RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES,
-  RELAY_AUTHORIZATION_CUA_ACCESSES,
-  RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES,
-  RELAY_AUTHORIZATION_GRANT_RETENTIONS,
-  RELAY_AUTHORIZATION_GRANT_STATUSES,
-  RELAY_AUTHORIZATION_PRESETS,
-  RELAY_AUTHORIZATION_REQUEST_MODES,
+  DEVICE_ACCESS_DENIAL_KINDS,
+  DEVICE_ACCESS_DENIAL_RESOLUTIONS,
+  RUNTIME_AUTHORIZATION_BROWSER_ACTIONS,
+  RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES,
+  RUNTIME_AUTHORIZATION_CAPABILITIES,
+  RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS,
+  RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES,
+  RUNTIME_AUTHORIZATION_CUA_ACCESSES,
+  RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES,
+  RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
+  RUNTIME_AUTHORIZATION_GRANT_STATUSES,
+  RUNTIME_AUTHORIZATION_PRESETS,
+  RUNTIME_AUTHORIZATION_REQUEST_MODES,
   SESSION_COLLABORATION_MODES,
   SESSION_INTERRUPT_TYPES,
   SESSION_STATUSES,
@@ -101,7 +107,6 @@ import {
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
-import type { ScopedSubjectTarget, SubjectRef } from "../access/subject.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
@@ -109,8 +114,6 @@ import type {
   CommandlinePolicy as CommandlinePolicyBase,
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
-
-export * from "./relay.js"
 
 // ============ Common ============
 export type UUID = string
@@ -480,6 +483,8 @@ export const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, WorkItemStatus[]> = {
 }
 
 // ============ Memory ============
+export type MemorySpaceType = (typeof MEMORY_SPACE_TYPES)[number]
+export type MemoryScope = (typeof MEMORY_SCOPES)[number]
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number]
 export type MemoryItemState = (typeof MEMORY_ITEM_STATES)[number]
 export type MemoryStatus = (typeof MEMORY_STATUSES)[number]
@@ -491,11 +496,14 @@ export interface MemoryEntry {
   id: UUID
   workspaceId: UUID
   spaceId: UUID
-  // D4: memory_spaces is now (owner_subject_id, scope_subject_id?, namespace_key).
-  // The wire shape exposes owner / scope as SubjectRefs and the literal namespace key.
-  owner: SubjectRef
-  scope?: SubjectRef
-  namespaceKey: string
+  spaceType: MemorySpaceType
+  ownerScope: MemoryScope
+  actorId?: UUID
+  conversationId?: UUID
+  workspaceMemberId?: UUID
+  ownerActorId?: UUID
+  ownerConversationId?: UUID
+  ownerWorkspaceMemberId?: UUID
   category: MemoryCategory
   state: MemoryItemState
   status: MemoryStatus
@@ -518,9 +526,9 @@ export interface MemoryEntry {
   indexError?: string
   createdAt: Timestamp
   updatedAt: Timestamp
-  /** Display-friendly labels derived from owner / scope subject joins. */
-  ownerLabel?: string
-  scopeLabel?: string
+  actorName?: string
+  conversationTitle?: string
+  workspaceMemberName?: string
 }
 
 export type Memory = MemoryEntry
@@ -566,12 +574,12 @@ export type AutomationCreatorKind = "workspace_member" | "session" | "system"
 export type AutomationTriggerKind = "schedule" | "event"
 export type AutomationSourceKind =
   | "clock"
-  | "relay"
+  | "device"
   | "webhook"
   | "internal"
   | "integration"
 export type AutomationEventProviderKind =
-  | "relay"
+  | "device"
   | "webhook"
   | "internal"
   | "integration"
@@ -825,9 +833,6 @@ export type EventType =
   | "chat.sync.event"
   | "runtime.updated"
   | "mcp.config.changed"
-  | "relay.connected"
-  | "relay.disconnected"
-  | "relay.servers_updated"
   | "chat.typing"
 
 export interface SystemEvent {
@@ -949,7 +954,7 @@ export type ActorRuntimeToolKind =
   | "callable"
   | "action"
   | "mcp_plugin"
-  | "mcp_relay"
+  | "mcp_device"
   | "provider_builtin"
   | "a2a_proxy"
 
@@ -1711,8 +1716,8 @@ export type PlatformAssetFileOriginSystem =
 export type FileParseRunStatus = (typeof FILE_PARSE_RUN_STATUSES)[number]
 export type FileParseOutputKind = (typeof FILE_PARSE_OUTPUT_KINDS)[number]
 
-export interface RelayMcpFileSourceMetadata {
-  kind: "relay_mcp"
+export interface DeviceMcpFileSourceMetadata {
+  kind: "device_mcp"
   deviceId: UUID
   deviceDisplayName?: string
   exposureId: UUID
@@ -1731,7 +1736,7 @@ export interface FileOriginSummary {
   providerKey?: string
   parentFileId?: UUID | null
   externalResourceKey?: string
-  details?: RelayMcpFileSourceMetadata | Record<string, unknown>
+  details?: DeviceMcpFileSourceMetadata | Record<string, unknown>
 }
 
 export interface FileCreateOriginInput {
@@ -1933,7 +1938,7 @@ export type ToolResultOrigin =
       serverName?: string
     }
   | {
-      kind: "mcp_relay"
+      kind: "mcp_device"
       deviceId: string
       deviceName?: string
       exposureId?: string
@@ -1959,7 +1964,7 @@ export type ToolResultOrigin =
 
 export const TOOL_RESULT_ORIGIN_KINDS = [
   "mcp_remote",
-  "mcp_relay",
+  "mcp_device",
   "callable_plugin",
   "builtin",
   "model_response",
@@ -2198,6 +2203,16 @@ export interface ToolDefinition {
     properties: Record<string, ToolParameterProperty>
     required: string[]
   }
+  // Origin metadata so consumers that surface tools to a model (e.g. the
+  // reverse-MCP endpoint that exposes Synapse tools to a remote agent) can
+  // render a "[device:Name]" / "[plugin:Name]" attribution. Optional because
+  // most ad-hoc ToolDefinitions don't have an upstream source.
+  source?: {
+    kind: "device_capability" | "plugin_installation" | "installed_skill"
+    displayName?: string
+    deviceName?: string
+  }
+  sourceType?: "builtin" | "mcp_plugin" | "mcp_device"
 }
 
 export interface ToolCall {
@@ -2303,19 +2318,19 @@ export interface CapabilityInvocationContext {
   providerCallId?: string
   namespacedToolName?: string
   toolName?: string
-  sourceType?: "builtin" | "mcp_plugin" | "relay_capability"
+  sourceType?: "builtin" | "mcp_plugin" | "device_capability"
 }
 
 export interface ToolSurfaceItem {
   id: string
   name: string
-  source: "builtin" | "plugin_installation" | "relay_capability"
+  source: "builtin" | "plugin_installation" | "device_capability"
 }
 
 export interface SkillSurfaceItem {
   id: string
   slug: string
-  source: "installed" | "auto_activated"
+  source: "installed"
 }
 
 export interface CapabilitySurface {
@@ -2379,7 +2394,7 @@ export type PluginTransport =
   | "builtin"
   | "stdio"
   | "http"
-  | "relay"
+  | "device"
   | "filesystem"
 export type ConversationBoundary = (typeof CONVERSATION_BOUNDARIES)[number]
 export type ConversationTypeKey = (typeof CONVERSATION_TYPE_KEYS)[number]
@@ -2387,18 +2402,21 @@ export type ConversationTypeMask = number
 export type CapabilityConversationTypePolicyResourceFamily =
   (typeof CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES)[number]
 export type AttachmentTargetType = (typeof ATTACHMENT_TARGET_TYPES)[number]
+export type AccessTargetType = (typeof ACCESS_TARGET_TYPES)[number]
+export type CapabilityAccessTargetType =
+  (typeof CAPABILITY_ACCESS_TARGET_TYPES)[number]
 export type ReuseScope = (typeof REUSE_SCOPES)[number]
 export type MarketplaceSourceType =
   | "builtin"
   | "official"
   | "workspace_upload"
   | "user_upload"
-  | "relay_derived"
+  | "device_derived"
 export type MarketplaceLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
-  | "relay_derivation"
+  | "device_derivation"
 export type MarketplaceSyncMode =
   | "notify"
   | "manual_merge"
@@ -2413,7 +2431,7 @@ export type MarketplaceRequirementTargetKind = "package" | "tag"
 export type PluginInstallationMode =
   | "manual"
   | "seeded"
-  | "relay_derived"
+  | "device_derived"
   | "package_required"
   | "package_recommended"
 export type MarketplaceVersionStatus =
@@ -2480,15 +2498,19 @@ export interface AttachmentTarget {
   workspaceMemberId?: string
 }
 
-/**
- * D3: AccessTarget collapsed to the single `ScopedSubjectTarget` shape.
- * Consumers carry `{ subject: SubjectRef; scope?: SubjectRef }` and read
- * `target.subject.kind` / `target.scope?.kind` for discrimination — there is
- * no `type` field any more.
- */
-export type AccessTarget = ScopedSubjectTarget
+export interface AccessTarget {
+  type: AccessTargetType
+  actorId?: string
+  conversationId?: string
+  workspaceMemberId?: string
+}
 
-export type CapabilityAccessTarget = ScopedSubjectTarget
+export interface CapabilityAccessTarget {
+  type: CapabilityAccessTargetType
+  actorId?: string
+  conversationId?: string
+  workspaceMemberId?: string
+}
 
 export interface PluginAuthValueSource {
   source: "config" | "env" | "literal" | "derived"
@@ -2589,6 +2611,7 @@ export interface PluginConfigFieldState {
 
 export interface AccessPolicy {
   requiredPermissions: string[]
+  defaultAccessTargetType?: CapabilityAccessTargetType
   reason?: string
 }
 
@@ -2842,6 +2865,7 @@ export interface PluginInstallPlan {
   grantPlan?: {
     requiresGrant: boolean
     requiredPermissions: string[]
+    suggestedAccessTargetType?: CapabilityAccessTargetType
     reason?: string
   }
 }
@@ -2924,16 +2948,11 @@ export interface AvailableSkillSummary {
   description: string
   version: string
   accessTarget: CapabilityAccessTarget
-  sourceKind?: "installed" | "relay_auto_loaded"
+  sourceKind?: "installed"
   entryPoint?: string
 }
 
-export type SkillAccessTargetType =
-  | "workspace"
-  | "workspace_member"
-  | "conversation"
-  | "actor"
-  | "actor_in_conversation"
+export type SkillAccessTargetType = CapabilityAccessTargetType
 
 export type SkillSourceType = "github" | "clawhub"
 export type SkillMirrorRefreshMode = "manual"
@@ -3077,22 +3096,9 @@ export interface McpInstallation extends PluginInstallationView {
   plugin?: McpPlugin
 }
 
-export interface McpRelay {
+export interface McpDeviceServer {
   id: string
-  userId?: string
-  workspaceId?: string
-  name: string
-  authToken: string
-  isConnected: boolean
-  lastConnectedAt?: string
-  metadata: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
-}
-
-export interface McpRelayServer {
-  id: string
-  relayId: string
+  deviceId: string
   name: string
   transport: "builtin" | "stdio" | "http"
   command?: string
@@ -3111,7 +3117,7 @@ export interface McpToolCallLog {
   actorId?: string
   userId?: string
   pluginId: string
-  relayId?: string
+  deviceId?: string
   toolName: string
   input: Record<string, unknown>
   output?: string
@@ -3128,7 +3134,7 @@ export interface McpEventLog {
   workspaceId?: string
   userId?: string
   pluginId?: string
-  relayId?: string
+  deviceId?: string
   eventType: string
   eventData: Record<string, unknown>
   createdAt: string
@@ -3169,6 +3175,40 @@ export type ConversationParticipantType =
   (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
 
 export type TransportKind = (typeof TRANSPORT_KINDS)[number]
+
+/**
+ * Runtime guard for `TransportKind`. Use instead of hard-coding
+ * `value === "feishu" || value === "weixin"` chains in dispatch sites —
+ * those drift out of sync when new transports land.
+ */
+export function isTransportKind(value: unknown): value is TransportKind {
+  return (
+    typeof value === "string" &&
+    (TRANSPORT_KINDS as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * Static fallback label for a `TransportKind`. Intentionally NOT
+ * exhaustiveness-checked: adding a new transport must not require
+ * editing this file. The authoritative display name is on
+ * `TransportConnectorCapability.displayName`; this helper only fires
+ * when the metadata provider hasn't mounted yet (client) or no
+ * connector is registered (server-side prose).
+ */
+export function describeTransportKind(kind: TransportKind): string {
+  switch (kind) {
+    case "feishu":
+      return "Feishu"
+    case "weixin":
+      return "WeChat"
+    case "wecom":
+      return "WeCom"
+    default:
+      return String(kind)
+  }
+}
+
 export type TransportConnectionMode =
   (typeof TRANSPORT_CONNECTION_MODES)[number]
 export type TransportEndpointType = (typeof TRANSPORT_ENDPOINT_TYPES)[number]
@@ -3216,6 +3256,25 @@ export interface TransportConnectorCapability {
   supportedEndpointTypes: TransportEndpointType[]
   supportsDirectMessages: boolean
   supportsGroupMessages: boolean
+  /**
+   * User-facing label exposed via the connectors metadata API. Frontend
+   * components use this as the authoritative display name; the static
+   * `describeTransportKind` is only a fallback.
+   */
+  displayName: string
+  /**
+   * Public asset path for this connector's icon (served from
+   * `web-next/public`). Centralized so frontend doesn't hard-code
+   * `/icon/${kind}.svg` and per-kind UI variants don't drift apart.
+   */
+  iconAssetPath: string
+  /**
+   * UI feature flag: render the connector-specific base-URL config
+   * panel. Currently only Weixin v1 sets this true (gateway base URL).
+   * Replaces the previous `transportKind === "weixin"` hard-coded gate
+   * in the dashboard.
+   */
+  showsBaseUrlConfig?: boolean
 }
 
 export type TransportAccountOwnerScope =
@@ -3318,6 +3377,77 @@ export interface CurrentUserWeixinBindingSummary {
   externalUser?: TransportExternalUserSummary
   pendingAutoLinkWorkspaceMemberId?: UUID
   pendingAutoLinkWorkspaceMemberName?: string
+}
+
+// ============ DingTalk Device Flow registration types ============
+
+/**
+ * Public-facing status enum for DingTalk Device Flow registration sessions.
+ * Lowercase to match Weixin QR session conventions. Provider raw uppercase
+ * states (WAITING/SUCCESS/FAIL/EXPIRED/UNKNOWN) are mapped at controller
+ * boundary; UNKNOWN -> "fail" with a descriptive message.
+ */
+export type DingtalkDeviceFlowStatus =
+  | "waiting"
+  | "success"
+  | "fail"
+  | "expired"
+
+/**
+ * Summary of a DingTalk Device Flow registration session.
+ *
+ * Contract:
+ * - Returned by both POST /device-registration/start (wrapped in success
+ *   variant of `DingtalkDeviceFlowStartResponse`) and GET /device-registration/
+ *   :sessionId (wrapped in `DingtalkDeviceFlowPollResponse`).
+ * - `transportAccount` is filled when status === "success" so the UI can
+ *   render the newly connected account without a separate accounts reload
+ *   (mirrors Weixin `qr-login.ts:280` precedent).
+ * - The provider's `deviceCode` is intentionally NOT exposed here; it stays
+ *   in the Redis store on the API side.
+ */
+export interface DingtalkDeviceFlowSessionSummary {
+  sessionId: string
+  workspaceId: UUID
+  status: DingtalkDeviceFlowStatus
+  message?: string
+  verificationUriComplete: string
+  verificationUri?: string
+  userCode?: string
+  expiresInSeconds: number
+  intervalSeconds: number
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  expiresAt: Timestamp
+  transportAccount?: TransportAccountSummary
+}
+
+/**
+ * Response shape for POST /im/accounts/dingtalk/device-registration/start.
+ *
+ * Explicit discriminated union — success branch *must* carry
+ * `providerStartFailed: false` so callers can use the discriminant directly
+ * (`response.providerStartFailed`) without resorting to `in` checks.
+ *
+ * Provider business errors (errcode != 0, source disabled, etc.) and
+ * transient network/5xx failures during init/begin both surface here with
+ * `providerStartFailed: true`; the route NEVER returns a 5xx in that case,
+ * letting the UI handle the failure uniformly via the union type instead of
+ * splitting between ApiError catches and union narrowing.
+ */
+export type DingtalkDeviceFlowStartResponse =
+  | { providerStartFailed: false; session: DingtalkDeviceFlowSessionSummary }
+  | { providerStartFailed: true; error: string }
+
+/**
+ * Response shape for GET /im/accounts/dingtalk/device-registration/:sessionId.
+ *
+ * All session states (waiting / success / fail / expired) wrap the summary
+ * in `{ session }` — clients always read `response.session.status`. Mirrors
+ * the Weixin QR `{ session }` envelope (controller/weixin.ts:258).
+ */
+export interface DingtalkDeviceFlowPollResponse {
+  session: DingtalkDeviceFlowSessionSummary
 }
 
 export interface TransportExternalUserSessionRef {
@@ -3472,66 +3602,69 @@ export interface PlanApprovalInteractionSummary {
 export type InteractionDecision = (typeof INTERACTION_DECISIONS)[number]
 export type PlanApprovalDecision = (typeof PLAN_APPROVAL_DECISIONS)[number]
 
-export type RelayAuthorizationPreset =
-  (typeof RELAY_AUTHORIZATION_PRESETS)[number]
+export type RuntimeAuthorizationPreset =
+  (typeof RUNTIME_AUTHORIZATION_PRESETS)[number]
 
-export type RelayAuthorizationRequestMode =
-  (typeof RELAY_AUTHORIZATION_REQUEST_MODES)[number]
+export type RuntimeAuthorizationRequestMode =
+  (typeof RUNTIME_AUTHORIZATION_REQUEST_MODES)[number]
 
-export type RelayAccessDenialKind = (typeof RELAY_ACCESS_DENIAL_KINDS)[number]
+export type DeviceAccessDenialKind = (typeof DEVICE_ACCESS_DENIAL_KINDS)[number]
 
-export type RelayAccessDenialResolution =
-  (typeof RELAY_ACCESS_DENIAL_RESOLUTIONS)[number]
+export type DeviceAccessDenialResolution =
+  (typeof DEVICE_ACCESS_DENIAL_RESOLUTIONS)[number]
 
-export interface RelayAccessDenialDescriptor {
-  kind: RelayAccessDenialKind
-  resolution: RelayAccessDenialResolution
+export interface DeviceAccessDenialDescriptor {
+  kind: DeviceAccessDenialKind
+  resolution: DeviceAccessDenialResolution
 }
 
-export type RelayAuthorizationGrantRetention =
-  (typeof RELAY_AUTHORIZATION_GRANT_RETENTIONS)[number]
+export type RuntimeAuthorizationGrantScope =
+  (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number]
 
-export type RelayAuthorizationGrantStatus =
-  (typeof RELAY_AUTHORIZATION_GRANT_STATUSES)[number]
+export type RuntimeAuthorizationGrantRetention =
+  (typeof RUNTIME_AUTHORIZATION_GRANT_RETENTIONS)[number]
 
-export type RelayAuthorizationCapability =
-  (typeof RELAY_AUTHORIZATION_CAPABILITIES)[number]
+export type RuntimeAuthorizationGrantStatus =
+  (typeof RUNTIME_AUTHORIZATION_GRANT_STATUSES)[number]
 
-export type RelayAuthorizationBrowserScopeType =
-  (typeof RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES)[number]
+export type RuntimeAuthorizationCapability =
+  (typeof RUNTIME_AUTHORIZATION_CAPABILITIES)[number]
 
-export type RelayAuthorizationCommandExecutor =
-  (typeof RELAY_AUTHORIZATION_COMMAND_EXECUTORS)[number]
+export type RuntimeAuthorizationBrowserScopeType =
+  (typeof RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES)[number]
 
-export type RelayAuthorizationCommandMatchType =
-  (typeof RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES)[number]
+export type RuntimeAuthorizationCommandExecutor =
+  (typeof RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS)[number]
 
-export type RelayAuthorizationFilesystemAccess =
-  (typeof RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES)[number]
+export type RuntimeAuthorizationCommandMatchType =
+  (typeof RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES)[number]
 
-export type RelayAuthorizationCUAAccess =
-  (typeof RELAY_AUTHORIZATION_CUA_ACCESSES)[number]
+export type RuntimeAuthorizationFilesystemAccess =
+  (typeof RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES)[number]
 
-export type RelayAuthorizationBrowserAction =
-  (typeof RELAY_AUTHORIZATION_BROWSER_ACTIONS)[number]
+export type RuntimeAuthorizationCUAAccess =
+  (typeof RUNTIME_AUTHORIZATION_CUA_ACCESSES)[number]
 
-export interface RelayAuthorizationFilesystemPolicy extends FilesystemPolicyBase {}
+export type RuntimeAuthorizationBrowserAction =
+  (typeof RUNTIME_AUTHORIZATION_BROWSER_ACTIONS)[number]
 
-export interface RelayAuthorizationCUAPolicy extends CUAPolicyBase {}
+export interface RuntimeAuthorizationFilesystemPolicy extends FilesystemPolicyBase {}
 
-export interface RelayAuthorizationBrowserPolicy extends BrowserPolicyBase {}
+export interface RuntimeAuthorizationCUAPolicy extends CUAPolicyBase {}
 
-export interface RelayAuthorizationCommandlinePolicy extends CommandlinePolicyBase {}
+export interface RuntimeAuthorizationBrowserPolicy extends BrowserPolicyBase {}
 
-export interface RelayAuthorizationRequestedAction {
-  capability: RelayAuthorizationCapability
+export interface RuntimeAuthorizationCommandlinePolicy extends CommandlinePolicyBase {}
+
+export interface RuntimeAuthorizationRequestedAction {
+  capability: RuntimeAuthorizationCapability
   toolName: string
   summary: string
   detail?: string
-  filesystem?: RelayAuthorizationFilesystemPolicy
-  cua?: RelayAuthorizationCUAPolicy
-  browser?: RelayAuthorizationBrowserPolicy
-  commandline?: RelayAuthorizationCommandlinePolicy & {
+  filesystem?: RuntimeAuthorizationFilesystemPolicy
+  cua?: RuntimeAuthorizationCUAPolicy
+  browser?: RuntimeAuthorizationBrowserPolicy
+  commandline?: RuntimeAuthorizationCommandlinePolicy & {
     commandText: string
   }
 }
@@ -3539,56 +3672,50 @@ export interface RelayAuthorizationRequestedAction {
 // P4: now derived from the Zod GrantPolicySchema (see
 // packages/shared/src/access/policies). Hand-written extension types below
 // (Summary/View) compose on top so they keep their extra identity fields.
-export type RelayAuthorizationGrantSpec = GrantPolicyBase
+export type RuntimeAuthorizationGrantSpec = GrantPolicyBase
 
-export interface RelayAuthorizationGrantOption {
+export interface RuntimeAuthorizationGrantOption {
   id: string
   summary: string
   detail?: string
-  grantSpec: RelayAuthorizationGrantSpec
+  grantSpec: RuntimeAuthorizationGrantSpec
 }
 
-export interface RelayAuthorizationGrantSummary extends RelayAuthorizationGrantSpec {
+export interface RuntimeAuthorizationGrantSummary extends RuntimeAuthorizationGrantSpec {
   id: UUID
-  /**
-   * D1: replaces the legacy `scope` enum. `subject` is the principal/group the
-   * grant authorizes; `scope` is the optional runtime context the grant is
-   * restricted to (NULL = no restriction).
-   */
-  subject: SubjectRef
-  scope?: SubjectRef
-  retention: RelayAuthorizationGrantRetention
-  status: RelayAuthorizationGrantStatus
+  scope: RuntimeAuthorizationGrantScope
+  retention: RuntimeAuthorizationGrantRetention
+  status: RuntimeAuthorizationGrantStatus
   createdAt: Timestamp
   updatedAt: Timestamp
   consumedAt?: Timestamp
   revokedAt?: Timestamp
 }
 
-export interface RelayAuthorizationGrantView extends RelayAuthorizationGrantSummary {
+export interface RuntimeAuthorizationGrantView extends RuntimeAuthorizationGrantSummary {
   workspaceId: UUID
   deviceId: UUID
-  relayCapabilityId: UUID
+  deviceCapabilityId: UUID
   exposureId: UUID
   conversationId?: UUID
   actorId?: UUID
 }
 
-export interface RelayAuthorizationInteractionSummary {
+export interface RuntimeAuthorizationInteractionSummary {
   requestedToolName: string
-  relayToolStableKey: string
-  requestedAction: RelayAuthorizationRequestedAction
+  deviceToolStableKey: string
+  requestedAction: RuntimeAuthorizationRequestedAction
   reason: string
   deviceId: UUID
   deviceDisplayName: string
-  relayCapabilityId: UUID
+  deviceCapabilityId: UUID
   exposureId: UUID
   exposureDisplayName: string
-  grantOptions: RelayAuthorizationGrantOption[]
-  availablePresets: RelayAuthorizationPreset[]
-  approvedPreset?: RelayAuthorizationPreset
-  approvedGrant?: RelayAuthorizationGrantSummary
-  requestMode: RelayAuthorizationRequestMode
+  grantOptions: RuntimeAuthorizationGrantOption[]
+  availablePresets: RuntimeAuthorizationPreset[]
+  approvedPreset?: RuntimeAuthorizationPreset
+  approvedGrant?: RuntimeAuthorizationGrantSummary
+  requestMode: RuntimeAuthorizationRequestMode
 }
 
 export interface InteractionRequestSummaryBase {
@@ -3615,7 +3742,7 @@ export interface UserInputInteractionRequestSummary extends InteractionRequestSu
   target?: ConversationEntityRef
   userInput: UserInputInteractionSummary
   planApproval?: never
-  relayAuthorization?: never
+  runtimeAuthorization?: never
 }
 
 export interface PlanApprovalInteractionRequestSummary extends InteractionRequestSummaryBase {
@@ -3623,21 +3750,21 @@ export interface PlanApprovalInteractionRequestSummary extends InteractionReques
   target?: ConversationEntityRef
   userInput?: never
   planApproval: PlanApprovalInteractionSummary
-  relayAuthorization?: never
+  runtimeAuthorization?: never
 }
 
-export interface RelayAuthorizationInteractionRequestSummary extends InteractionRequestSummaryBase {
-  kind: "relay_authorization"
+export interface RuntimeAuthorizationInteractionRequestSummary extends InteractionRequestSummaryBase {
+  kind: "runtime_authorization"
   target?: never
   userInput?: never
   planApproval?: never
-  relayAuthorization: RelayAuthorizationInteractionSummary
+  runtimeAuthorization: RuntimeAuthorizationInteractionSummary
 }
 
 export type InteractionRequestSummary =
   | UserInputInteractionRequestSummary
   | PlanApprovalInteractionRequestSummary
-  | RelayAuthorizationInteractionRequestSummary
+  | RuntimeAuthorizationInteractionRequestSummary
 
 export type TaskNoticeStatus = (typeof TASK_NOTICE_STATUSES)[number]
 
@@ -3685,9 +3812,8 @@ export interface ConversationFeedEventPayloadMap {
   memory_saved: {
     actor: ConversationEntityRef
     memoryId: UUID
-    memoryOwner: SubjectRef
-    memoryScope?: SubjectRef
-    memoryNamespaceKey: string
+    memorySpaceType: MemorySpaceType
+    memoryScope?: MemoryScope
     memoryCategory: MemoryCategory
     textDigest?: string
     sourceItemId?: UUID
@@ -3697,9 +3823,8 @@ export interface ConversationFeedEventPayloadMap {
     actor: ConversationEntityRef
     memoryId: UUID
     supersedesMemoryId?: UUID
-    memoryOwner: SubjectRef
-    memoryScope?: SubjectRef
-    memoryNamespaceKey: string
+    memorySpaceType: MemorySpaceType
+    memoryScope?: MemoryScope
     memoryCategory: MemoryCategory
     textDigest?: string
     sourceItemId?: UUID
@@ -4036,9 +4161,9 @@ export function summarizeConversationEvent(
       return `Plan approval requested from ${targetName}: ${title}`
     }
     const deviceName =
-      interaction.relayAuthorization?.deviceDisplayName?.trim() || "relay"
+      interaction.runtimeAuthorization?.deviceDisplayName?.trim() || "device"
     if (interaction.status === "cancelled") {
-      return `Relay authorization request was cancelled for ${deviceName}`
+      return `Runtime authorization request was cancelled for ${deviceName}`
     }
     if (interaction.status === "rejected") {
       const resolverName = interaction.resolvedBy?.name?.trim() || "A user"
@@ -4049,9 +4174,9 @@ export function summarizeConversationEvent(
       return `${resolverName} approved access for ${deviceName}`
     }
     if (interaction.status === "superseded") {
-      return `Relay authorization request was superseded for ${deviceName}`
+      return `Runtime authorization request was superseded for ${deviceName}`
     }
-    return `Relay authorization requested for ${deviceName}`
+    return `Runtime authorization requested for ${deviceName}`
   }
 
   return `[Event: ${eventType}]`
@@ -4374,15 +4499,15 @@ export interface ChatInteractionResolvePlanApprovalPayload {
   note?: string
 }
 
-export interface ChatInteractionResolveRelayAuthorizationApprovePayload {
+export interface ChatInteractionResolveRuntimeAuthorizationApprovePayload {
   answers?: never
   decision: "approve"
-  preset: RelayAuthorizationPreset
+  preset: RuntimeAuthorizationPreset
   selectedGrantOptionId: string
   note?: string
 }
 
-export interface ChatInteractionResolveRelayAuthorizationRejectPayload {
+export interface ChatInteractionResolveRuntimeAuthorizationRejectPayload {
   answers?: never
   decision: "reject"
   preset?: never
@@ -4393,8 +4518,8 @@ export interface ChatInteractionResolveRelayAuthorizationRejectPayload {
 export type ChatInteractionResolvePayload =
   | ChatInteractionResolveUserInputPayload
   | ChatInteractionResolvePlanApprovalPayload
-  | ChatInteractionResolveRelayAuthorizationApprovePayload
-  | ChatInteractionResolveRelayAuthorizationRejectPayload
+  | ChatInteractionResolveRuntimeAuthorizationApprovePayload
+  | ChatInteractionResolveRuntimeAuthorizationRejectPayload
 
 export type ChatInteractionResolveInput =
   ChatInteractionResolveCommandMetadata & ChatInteractionResolvePayload
@@ -4755,8 +4880,7 @@ function isConversationEntityRef(
     (entity.transportAddressId === undefined ||
       typeof entity.transportAddressId === "string") &&
     (entity.transportKind === undefined ||
-      entity.transportKind === "feishu" ||
-      entity.transportKind === "weixin") &&
+      isTransportKind(entity.transportKind)) &&
     (entity.name === undefined || typeof entity.name === "string") &&
     (entity.title === undefined || typeof entity.title === "string") &&
     (entity.role === undefined || typeof entity.role === "string") &&
@@ -4923,7 +5047,7 @@ export function isToolResultOrigin(value: unknown): value is ToolResultOrigin {
   switch (v.kind) {
     case "mcp_remote":
       return typeof v.serverKey === "string"
-    case "mcp_relay":
+    case "mcp_device":
       return (
         typeof v.deviceId === "string" &&
         typeof v.exposureStableKey === "string"
@@ -5331,7 +5455,7 @@ export type CatalogSourceKind =
   | "official"
   | "workspace"
   | "user"
-  | "relay"
+  | "device"
 export type CatalogVisibility = "public" | "workspace" | "private"
 export type CatalogVersionStatus =
   | "draft"
@@ -5342,7 +5466,7 @@ export type CatalogLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
-  | "relay_projection"
+  | "device_projection"
 export type CatalogSyncMode =
   | "notify"
   | "manual_merge"
@@ -5355,21 +5479,7 @@ export type CatalogFileRole =
   | "image"
   | "json"
   | "binary"
-/**
- * D3: legacy string label for the historical 5-value "bind scope" used by
- * per-resource SQL views (`bind_scope`, `access_bind_scope`) and FE display
- * code. Subjects of any other kind (remote_agent, etc.) get their raw
- * subject.kind string from `subjectScopeLabel`. Use `subjectScopeLabel` from
- * `@synapse/shared/access` to convert a ScopedSubjectTarget into this label.
- */
-export type RuntimeBindingScope =
-  | "workspace"
-  | "workspace_member"
-  | "conversation"
-  | "actor"
-  | "actor_in_conversation"
-  | "remote_agent"
-  | "remote_agent_in_conversation"
+export type RuntimeBindingScope = AccessTargetType
 export type PluginReuseScopeV2 =
   | "turn"
   | "session"
@@ -5379,7 +5489,7 @@ export type PluginReuseScopeV2 =
 export type ResourceAccessBindingResourceType =
   | "installed_skill"
   | "plugin_installation"
-  | "relay_capability"
+  | "device_capability"
   | "automation_event_source"
   | "actor"
   | "remote_agent"
@@ -5476,7 +5586,7 @@ export interface PluginRuntimePermissionRecord {
 
 export interface PluginPackageVersionSpecRecord {
   catalogVersionId: string
-  transport: "builtin" | "stdio" | "http" | "relay"
+  transport: "builtin" | "stdio" | "http" | "device"
   entryPoint?: string
   toolManifest: MarketplaceTool[]
   configSchema: Record<string, unknown>
@@ -5605,41 +5715,6 @@ export interface PluginMountRecord {
   status: "active" | "disabled" | "revoked"
   metadata: Record<string, unknown>
   createdByWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface RelayDeviceRecord {
-  id: string
-  workspaceId: string
-  ownerWorkspaceMemberId?: string
-  title: string
-  description?: string
-  deviceType: string
-  platform?: string
-  publicKeyFingerprint: string
-  trustStatus: "pending" | "active" | "revoked" | "blocked"
-  createdAt: string
-  updatedAt: string
-}
-
-export interface RelayExposureRecord {
-  id: string
-  deviceId: string
-  syncSourceId?: string
-  stableKey: string
-  displayName: string
-  transport: "builtin" | "stdio" | "http" | "sse" | "custom"
-  runtimeStatus:
-    | "discovered"
-    | "starting"
-    | "healthy"
-    | "degraded"
-    | "failed"
-    | "quarantined"
-    | "offline"
-  projectedCatalogItemId?: string
-  metadata: Record<string, unknown>
   createdAt: string
   updatedAt: string
 }

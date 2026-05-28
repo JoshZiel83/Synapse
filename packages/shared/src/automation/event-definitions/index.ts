@@ -18,13 +18,13 @@ import {
   integrationEventDefinitions,
 } from "./integrations.js"
 import {
-  relayDeviceOfflineEventDefinition,
-  relayDeviceOnlineEventDefinition,
-  relayLifecycleEventDefinitions,
-} from "./relay.js"
+  deviceOfflineEventDefinition,
+  deviceOnlineEventDefinition,
+  deviceLifecycleEventDefinitions,
+} from "./device.js"
 
 const automationEventDefinitions = [
-  ...relayLifecycleEventDefinitions,
+  ...deviceLifecycleEventDefinitions,
   ...integrationEventDefinitions,
 ] satisfies readonly AutomationEventDefinition[]
 
@@ -90,9 +90,9 @@ export {
   gitlabPipelineEventDefinition,
   gitlabPushEventDefinition,
   integrationEventDefinitions,
-  relayDeviceOfflineEventDefinition,
-  relayDeviceOnlineEventDefinition,
-  relayLifecycleEventDefinitions,
+  deviceOfflineEventDefinition,
+  deviceOnlineEventDefinition,
+  deviceLifecycleEventDefinitions,
 }
 export type {
   AutomationEventDefinition,

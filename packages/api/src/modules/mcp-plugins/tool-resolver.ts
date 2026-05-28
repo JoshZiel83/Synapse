@@ -3,8 +3,6 @@ import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   maskAllowsConversationType,
   resolveNarrowedConversationTypeMask,
-  textBlocks,
-  type RelayHiddenToolBinding,
   type ToolDefinition,
   type ToolResultOrigin,
 } from "@synapse/shared"
@@ -16,13 +14,8 @@ import { sql } from "kysely"
 import { lookupResources } from "../access/evaluator.js"
 import { ACCESS_ACTIONS } from "../access/actions.js"
 import { db } from "../../infrastructure/database/kysely.js"
-import type { AccessBindingRow } from "../access/bindings.js"
 import { loadAccessBindingRowsForResources } from "../access/binding-storage.js"
-import {
-  buildConversationCapabilitySubjects,
-  computeRuntimeScopeSubjectIds,
-  computeRuntimeSubjectIdsForVisibility,
-} from "../access/subject-resolution.js"
+import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import { resolveInstallationConfig } from "./config-resolver.js"
 import {
@@ -32,32 +25,9 @@ import {
 } from "./instance-manager.js"
 import { getMcpVersion } from "./runtime-version.js"
 import { logToolCall } from "./audit.js"
-import {
-  callRelayTool,
-  enqueueRelayToolTask,
-  loadRelayExposureCatalogSnapshot,
-  resolveRelayToolAuthorization,
-} from "./relay-manager.js"
-import {
-  resolveRelayCapabilityConversationTypeMask,
-  resolveRelayDeviceConversationTypeMask,
-  resolveRelayGrantConversationTypeMask,
-} from "./relay-policy.js"
 import { normalizeMcpToolResult } from "./result-normalizer.js"
-import { inferRelaySpecialAuthorizationPlan } from "./relay-special-mcp.js"
-import {
-  createRelayAuthorizationRequest,
-  waitForRelayAuthorizationResolution,
-} from "../relay-authorizations/requests.js"
-import {
-  classifyRelayLocalPermissionDenial,
-  injectRelayAuthorizationToolParameter,
-  normalizeRelayBuiltinAuthorizationKind,
-  parseRelayServerInvokeOptions,
-} from "./relay-invoke-options.js"
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = "__"
-const RELAY_ASYNC_COMMANDLINE_TOOL_NAMES = new Set(["bash"])
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[]
@@ -75,24 +45,12 @@ export interface ResolvedMcpTools {
 interface ResolveParams extends Omit<RuntimeActorContext, "actorId"> {
   conversationId: string
   // Exactly one of actorId / remoteAgentId is set for a given resolver call.
-  // Actors flow through `actor + scope=conversation` (or `actor` alone) grants;
+  // Actors flow through the original conversation_actor_context grant path;
   // remote_agents pick up workspace-shared resources plus an extra
   // conversation-target grant pass (since they have no actor identity and
   // therefore can't be evaluated against actor / actor_in_conversation grants).
   actorId?: string
   remoteAgentId?: string
-}
-
-export interface ResolvedRelayToolTarget {
-  capabilityId: string
-  deviceId: string
-  deviceDisplayName: string
-  exposureId: string
-  exposureStableKey: string
-  exposureDisplayName: string
-  visibleToolName: string
-  relayToolStableKey?: string
-  runtimeSessionId?: string
 }
 
 type VisiblePluginRow = {
@@ -102,7 +60,7 @@ type VisiblePluginRow = {
   catalog_item_id: string
   item_slug: string
   publisher_slug: string
-  transport: "builtin" | "stdio" | "http" | "relay"
+  transport: "builtin" | "stdio" | "http"
   entry_point: string | null
   tool_manifest: unknown
   reuse_scope:
@@ -115,23 +73,10 @@ type VisiblePluginRow = {
   conversation_type_mask_override: number | null
 }
 
-type VisibleRelayCapabilityRow = {
-  capability_id: string
-  exposure_id: string
-  owner_workspace_id: string
-  exposure_stable_key: string
-  exposure_display_name: string
-  exposure_updated_at: string | Date | null
-  device_id: string
-  device_display_name: string
-  device_conversation_type_mask_override: number | null
-  capability_conversation_type_mask_override: number | null
-}
-
 type VisibleAccessBindingRow = {
   id: string
   workspace_id: string
-  resource_type: "plugin_installation" | "relay_capability"
+  resource_type: "plugin_installation"
   resource_id: string
   target_type:
     | "workspace"
@@ -139,13 +84,11 @@ type VisibleAccessBindingRow = {
     | "conversation"
     | "actor"
     | "actor_in_conversation"
-    | "remote_agent"
-    | "remote_agent_in_conversation"
   subject_workspace_id: string | null
   subject_workspace_member_id: string | null
   subject_actor_id: string | null
-  subject_remote_agent_id: string | null
   subject_conversation_id: string | null
+  subject_conversation_actor_context_id: string | null
   conversation_type_mask_override: number | null
   status: "active" | "revoked"
   created_by_workspace_member_id: string | null
@@ -154,115 +97,17 @@ type VisibleAccessBindingRow = {
   created_at: string | Date | null
   revoked_at: string | Date | null
   actor_id: string | null
-  remote_agent_id: string | null
   conversation_id: string | null
-}
-
-type RelayToolRuntimeContext = {
-  capabilityId: string
-  deviceId: string
-  deviceDisplayName: string
-  exposureId: string
-  exposureStableKey: string
-  exposureDisplayName: string
-  visibleToolName: string
-  relayToolStableKey?: string
-  runtimeSessionId: string
-}
-
-const activeRelayToolContexts = new Map<string, RelayToolRuntimeContext>()
-
-function buildRelayToolContextKey(
-  sessionId: string,
-  namespacedToolName: string
-) {
-  return `${sessionId}:${namespacedToolName}`
-}
-
-function setRelayToolRuntimeContext(
-  sessionId: string,
-  namespacedToolName: string,
-  context: RelayToolRuntimeContext
-) {
-  activeRelayToolContexts.set(
-    buildRelayToolContextKey(sessionId, namespacedToolName),
-    context
-  )
-}
-
-function getRelayToolRuntimeContext(
-  sessionId: string,
-  namespacedToolName: string
-) {
-  return activeRelayToolContexts.get(
-    buildRelayToolContextKey(sessionId, namespacedToolName)
-  )
-}
-
-function clearRelayToolRuntimeContexts(sessionId: string) {
-  const prefix = `${sessionId}:`
-  for (const key of activeRelayToolContexts.keys()) {
-    if (key.startsWith(prefix)) {
-      activeRelayToolContexts.delete(key)
-    }
-  }
-}
-
-function buildRelayToolOrigin(
-  context: RelayToolRuntimeContext,
-  namespacedToolName: string
-): ToolResultOrigin {
-  return {
-    kind: "mcp_relay",
-    deviceId: context.deviceId,
-    deviceName: context.deviceDisplayName,
-    exposureId: context.exposureId,
-    exposureStableKey: context.exposureStableKey,
-    exposureName: context.exposureDisplayName,
-    runtimeSessionId: context.runtimeSessionId,
-    visibleToolName: context.visibleToolName,
-    namespacedToolName,
-  }
 }
 
 function buildMcpInstanceOrigin(
   instance: {
     transport?: string
-    relayMetadata?: McpInstance["relayMetadata"]
   },
   pluginSlug: string | undefined,
   pluginDisplayName: string | undefined,
-  relayContext: RelayToolRuntimeContext | undefined,
   namespacedToolName: string
 ): ToolResultOrigin {
-  if (instance.transport === "relay") {
-    // Prefer the runtime context (carries visibleToolName / runtimeSessionId
-    // captured at dispatch time). Fall back to the instance-level
-    // relayMetadata so the FIRST relay call (where runtime context hasn't
-    // been populated yet) and the failure-path origin still get the
-    // correct mcp_relay discriminator with deviceId/exposureStableKey.
-    if (relayContext) {
-      return buildRelayToolOrigin(relayContext, namespacedToolName)
-    }
-    if (instance.relayMetadata) {
-      return {
-        kind: "mcp_relay",
-        deviceId: instance.relayMetadata.deviceId,
-        exposureId: instance.relayMetadata.exposureId,
-        exposureStableKey: instance.relayMetadata.exposureStableKey,
-        exposureName: instance.relayMetadata.exposureDisplayName,
-        namespacedToolName,
-      }
-    }
-    // Last-resort placeholder — should not happen in practice; keeps the
-    // discriminator correct even if relayMetadata isn't populated.
-    return {
-      kind: "mcp_relay",
-      deviceId: "unknown",
-      exposureStableKey: pluginSlug || namespacedToolName,
-      namespacedToolName,
-    }
-  }
   if (instance.transport === "builtin") {
     return {
       kind: "callable_plugin",
@@ -278,56 +123,6 @@ function buildMcpInstanceOrigin(
   }
 }
 
-function buildRelayErrorResult(
-  code: string,
-  message: string,
-  extra?: Record<string, unknown>
-) {
-  return {
-    content: textBlocks(message),
-    isError: true,
-    structuredContent: {
-      code,
-      message,
-      ...(extra || {}),
-    },
-  }
-}
-
-function buildAutoRelayAuthorizationReason(params: {
-  visibleToolName: string
-  denialMessage?: string
-}) {
-  const denialMessage = params.denialMessage?.trim()
-  if (denialMessage) {
-    return `The relay client locally denied ${params.visibleToolName}. ${denialMessage}`
-  }
-  return `The relay client locally denied ${params.visibleToolName}, so Synapse is requesting user authorization for the same action.`
-}
-
-function buildBlockingAuthorizationFailureMessage(status: string) {
-  switch (status) {
-    case "superseded":
-      return "Relay authorization request was superseded by a newer user message."
-    case "rejected":
-      return "Relay authorization request was rejected."
-    case "cancelled":
-      return "Relay authorization request was cancelled."
-    default:
-      return "Relay authorization request did not complete successfully."
-  }
-}
-
-function wantsAsyncRelayCommandlineExecution(
-  toolName: string,
-  input: Record<string, unknown>
-) {
-  return (
-    RELAY_ASYNC_COMMANDLINE_TOOL_NAMES.has(toolName) &&
-    input.execution_mode === "async"
-  )
-}
-
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
@@ -340,6 +135,7 @@ async function buildVisibilitySubjects(params: ResolveParams) {
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     sessionId: params.sessionId,
+    conversationActorContextId: params.conversationActorContextId,
   })
 }
 
@@ -362,7 +158,7 @@ function accessBindingMatchesContext(
   row: VisibleAccessBindingRow,
   params: Pick<
     ResolveParams,
-    "actorId" | "conversationId" | "workspaceMemberId" | "remoteAgentId"
+    "actorId" | "conversationId" | "workspaceMemberId"
   >
 ) {
   switch (row.target_type) {
@@ -386,25 +182,11 @@ function accessBindingMatchesContext(
         row.actor_id === params.actorId &&
         row.conversation_id === params.conversationId
       )
-    case "remote_agent":
-      // P2 fix (post-D4 round 2 review): mirror of the actor case for
-      // remote-agent principals. Without this case the legacy target_type
-      // switch silently dropped remote_agent-target plugin/relay grants.
-      return (
-        params.remoteAgentId !== undefined &&
-        row.remote_agent_id === params.remoteAgentId
-      )
-    case "remote_agent_in_conversation":
-      return (
-        params.remoteAgentId !== undefined &&
-        row.remote_agent_id === params.remoteAgentId &&
-        row.conversation_id === params.conversationId
-      )
   }
 }
 
 async function loadVisibleAccessBindings(params: {
-  resourceType: "plugin_installation" | "relay_capability"
+  resourceType: "plugin_installation"
   resourceIds: string[]
 }) {
   if (params.resourceIds.length === 0) {
@@ -423,86 +205,19 @@ async function loadVisibleAccessBindings(params: {
   })
 
   const map = new Map<string, VisibleAccessBindingRow[]>()
-  for (const rawRow of rows) {
-    const row = rawRow as AccessBindingRow & {
-      subject_kind?: string | null
-      subject_workspace_id_via_join?: string | null
-      subject_workspace_member_id_via_join?: string | null
-      subject_actor_id_via_join?: string | null
-      subject_remote_agent_id_via_join?: string | null
-      subject_conversation_id_via_join?: string | null
-      scope_kind?: string | null
-      scope_conversation_id_via_join?: string | null
-    }
-    // D3: derive the legacy target_type label from subject_kind + scope_kind.
-    // This preserves the visibility filter contract (which keys on the label)
-    // while removing the legacy projection columns from the row reader.
-    //
-    // P2 fix (post-D4 round 2 review): include remote_agent /
-    // remote_agent_in_conversation branches. Previously remote_agent grants
-    // fell through to the `default: workspace` clause, silently matching
-    // any non-actor caller — both a missing match (the original target was
-    // a specific remote_agent) and an over-match (any caller in the
-    // workspace appeared to have the grant).
-    //
-    // P3 fix (post-D4 round 3 review): unknown subject kinds now SKIP the
-    // row instead of being mapped to `workspace`. The earlier fallback
-    // claimed to fail closed but actually widened — `workspace` matches
-    // every caller (see accessBindingMatchesContext). Skipping is the
-    // honest fail-closed behavior; when a new SUBJECT_KIND eventually
-    // lands (e.g. `project`) the visibility filter needs an explicit
-    // branch added rather than silently exposing rows.
-    let target_type: VisibleAccessBindingRow["target_type"] | null
-    if (row.subject_kind === "actor" && row.scope_kind === "conversation") {
-      target_type = "actor_in_conversation"
-    } else if (
-      row.subject_kind === "remote_agent" &&
-      row.scope_kind === "conversation"
-    ) {
-      target_type = "remote_agent_in_conversation"
-    } else {
-      switch (row.subject_kind) {
-        case "workspace":
-          target_type = "workspace"
-          break
-        case "workspace_member":
-          target_type = "workspace_member"
-          break
-        case "conversation":
-          target_type = "conversation"
-          break
-        case "actor":
-          target_type = "actor"
-          break
-        case "remote_agent":
-          target_type = "remote_agent"
-          break
-        default:
-          target_type = null
-      }
-    }
-    if (target_type === null) {
-      // Unknown subject kind — fail closed by dropping the row entirely.
-      continue
-    }
-    const subjectActorId = row.subject_actor_id_via_join ?? null
-    const subjectRemoteAgentId = row.subject_remote_agent_id_via_join ?? null
-    const subjectConversationId =
-      row.scope_conversation_id_via_join ??
-      row.subject_conversation_id_via_join ??
-      null
+  for (const row of rows) {
     const visible: VisibleAccessBindingRow = {
       id: row.id,
       workspace_id: row.workspace_id,
       resource_type: params.resourceType,
       resource_id: row.resource_id,
-      target_type,
-      subject_workspace_id: row.subject_workspace_id_via_join ?? null,
-      subject_workspace_member_id:
-        row.subject_workspace_member_id_via_join ?? null,
-      subject_actor_id: subjectActorId,
-      subject_remote_agent_id: subjectRemoteAgentId,
-      subject_conversation_id: subjectConversationId,
+      target_type: row.target_type,
+      subject_workspace_id: row.subject_workspace_id,
+      subject_workspace_member_id: row.subject_workspace_member_id,
+      subject_actor_id: row.subject_actor_id,
+      subject_conversation_id: row.subject_conversation_id,
+      subject_conversation_actor_context_id:
+        row.subject_conversation_actor_context_id,
       conversation_type_mask_override: row.conversation_type_mask_override,
       status: row.status,
       created_by_workspace_member_id: row.created_by_workspace_member_id,
@@ -510,9 +225,8 @@ async function loadVisibleAccessBindings(params: {
       metadata: {},
       created_at: row.created_at,
       revoked_at: row.revoked_at,
-      actor_id: subjectActorId,
-      remote_agent_id: subjectRemoteAgentId,
-      conversation_id: subjectConversationId,
+      actor_id: row.subject_actor_id,
+      conversation_id: row.subject_conversation_id,
     }
     const entries = map.get(visible.resource_id) || []
     entries.push(visible)
@@ -549,14 +263,11 @@ function resolveReuseOwnerKey(
   }
 }
 
-function manifestToolToDefinition(
-  tool: {
-    name: string
-    description?: string
-    inputSchema?: Record<string, unknown>
-  },
-  exposureMetadata?: Record<string, unknown>
-): ToolDefinition {
+function manifestToolToDefinition(tool: {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}): ToolDefinition {
   const inputSchema = tool.inputSchema as Record<string, unknown> | undefined
   const properties =
     inputSchema &&
@@ -571,18 +282,15 @@ function manifestToolToDefinition(
       ? (inputSchema.required as string[] | undefined) || []
       : []
 
-  return injectRelayAuthorizationToolParameter(
-    {
-      name: tool.name,
-      description: tool.description || "",
-      parameters: {
-        type: "object",
-        properties: properties as ToolDefinition["parameters"]["properties"],
-        required,
-      },
+  return {
+    name: tool.name,
+    description: tool.description || "",
+    parameters: {
+      type: "object",
+      properties: properties as ToolDefinition["parameters"]["properties"],
+      required,
     },
-    exposureMetadata
-  )
+  }
 }
 
 function sanitizeNamespaceSegment(value: string, fallback: string) {
@@ -615,352 +323,19 @@ function buildPluginNamespace(
   return `${publisher}${MCP_TOOL_NAMESPACE_SEPARATOR}${basePluginSlug}_${installationSuffix}`
 }
 
-function buildRelayScopedInstance(params: {
-  baseInstance: McpInstance
-  tools: ToolDefinition[]
-  capabilityId: string
-  deviceId: string
-  deviceDisplayName: string
-  exposureId: string
-  exposureStableKey: string
-  exposureDisplayName: string
-  exposureMetadata: Record<string, unknown>
-  sessionId: string
-  namespace: string
-  bindingMap: Map<
-    string,
-    { binding: RelayHiddenToolBinding; visibleToolName: string }
-  >
-}): McpInstance {
-  return {
-    ...params.baseInstance,
-    tools: params.tools,
-    sanitizeInputForLogging: (_toolName, input) =>
-      parseRelayServerInvokeOptions(input, params.exposureMetadata)
-        .clientToolArgs,
-    execute: async (toolName, input, executionContext) => {
-      const toolBinding = params.bindingMap.get(toolName)
-      if (!toolBinding) {
-        throw new Error(`Relay binding missing for tool ${toolName}`)
-      }
-      const invokeOptions = parseRelayServerInvokeOptions(
-        input,
-        params.exposureMetadata
-      )
-      if (invokeOptions.validationError) {
-        return buildRelayErrorResult(
-          "invalid_request_authorization",
-          invokeOptions.validationError,
-          {
-            parameter: "request_authorization",
-          }
-        )
-      }
-      const clientToolArgs = invokeOptions.clientToolArgs
-      const requestAuthorizationMode =
-        invokeOptions.serverInvokeOptions.requestAuthorization
-      if (
-        requestAuthorizationMode === "blocking" &&
-        wantsAsyncRelayCommandlineExecution(
-          toolBinding.visibleToolName,
-          clientToolArgs
-        )
-      ) {
-        return buildRelayErrorResult(
-          "invalid_request_authorization",
-          '`request_authorization: "blocking"` cannot be combined with `execution_mode: "async"`.',
-          {
-            parameter: "request_authorization",
-            executionMode: clientToolArgs.execution_mode,
-          }
-        )
-      }
-      const runtimeSessionId = params.baseInstance.ensureRuntimeSession
-        ? await params.baseInstance.ensureRuntimeSession()
-        : undefined
-      if (runtimeSessionId) {
-        setRelayToolRuntimeContext(
-          params.sessionId,
-          `${params.namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${toolName}`,
-          {
-            capabilityId: params.capabilityId,
-            deviceId: params.deviceId,
-            deviceDisplayName: params.deviceDisplayName,
-            exposureId: params.exposureId,
-            exposureStableKey: params.exposureStableKey,
-            exposureDisplayName: params.exposureDisplayName,
-            visibleToolName: toolBinding.visibleToolName,
-            relayToolStableKey: toolBinding.binding.stableKey,
-            runtimeSessionId,
-          }
-        )
-      }
-      if (
-        wantsAsyncRelayCommandlineExecution(
-          toolBinding.visibleToolName,
-          clientToolArgs
-        )
-      ) {
-        if (
-          !executionContext?.sessionId ||
-          !executionContext.conversationId ||
-          !executionContext.actorId ||
-          !executionContext.toolCallId ||
-          !runtimeSessionId
-        ) {
-          throw new Error(
-            "Async relay commandline tool calls require a session-backed actor tool call"
-          )
-        }
-
-        const authorizationState = await resolveRelayToolAuthorization({
-          workspaceId: params.baseInstance.workspaceId || "",
-          relayDeviceId: params.deviceId,
-          relayCapabilityId: params.capabilityId,
-          relayExposureId: params.exposureId,
-          conversationId: executionContext.conversationId,
-          actorId: executionContext.actorId,
-          relayToolStableKey: toolBinding.binding.stableKey,
-          relayToolName: toolBinding.visibleToolName,
-          toolArguments: clientToolArgs,
-          runtimeSessionId,
-          exposureMetadata: params.exposureMetadata,
-        })
-
-        const accepted = await enqueueRelayToolTask({
-          workspaceId: params.baseInstance.workspaceId || "",
-          conversationId: executionContext.conversationId,
-          sessionId: executionContext.sessionId,
-          requestedByActorId: executionContext.actorId,
-          requestedByWorkspaceMemberId: executionContext.workspaceMemberId,
-          turnId: executionContext.turnId,
-          sourceToolCallId: executionContext.toolCallId,
-          sourceToolName:
-            executionContext.namespacedToolName || toolBinding.visibleToolName,
-          relayCapabilityId: params.capabilityId,
-          deviceId: params.deviceId,
-          exposureId: params.exposureId,
-          visibleToolName: toolBinding.visibleToolName,
-          binding: toolBinding.binding,
-          args: clientToolArgs,
-          runtimeSessionId,
-          authorization: authorizationState.authorization,
-          deliveryPolicy: "online_only",
-          serverInvokeOptions: {
-            requestAuthorization: requestAuthorizationMode,
-          },
-        })
-
-        return {
-          content: textBlocks(
-            `Accepted async ${toolBinding.visibleToolName} request. The relay will execute it and wake you with the final result.`
-          ),
-          structuredContent: {
-            deferred: true,
-            task: {
-              taskId: accepted.taskId,
-              status: "working",
-              dispatchStatus: "queued",
-              statusMessage: `Queued async ${toolBinding.visibleToolName} on the relay.`,
-            },
-            relayOperationId: accepted.operationId,
-          },
-        }
-      }
-      let rawResult: unknown
-      if (params.baseInstance.executeWithBinding) {
-        rawResult = await params.baseInstance.executeWithBinding(
-          toolName,
-          clientToolArgs,
-          toolBinding.binding,
-          executionContext
-        )
-      } else {
-        rawResult = await params.baseInstance.execute(
-          toolName,
-          clientToolArgs,
-          executionContext
-        )
-      }
-
-      const localDenial =
-        requestAuthorizationMode === "none"
-          ? null
-          : classifyRelayLocalPermissionDenial(rawResult)
-      if (!localDenial) {
-        return rawResult
-      }
-      const authorizationRequestMode =
-        requestAuthorizationMode === "blocking" ? "blocking" : "background"
-
-      if (
-        !executionContext?.conversationId ||
-        !executionContext.sessionId ||
-        !executionContext.actorId ||
-        !runtimeSessionId
-      ) {
-        return buildRelayErrorResult(
-          "relay_authorization_request_failed",
-          "Synapse could not create a relay authorization request because this tool call has no conversation-backed actor context.",
-          {
-            requestMode: authorizationRequestMode,
-            executed: false,
-            originalStructuredContent: localDenial.structuredContent,
-          }
-        )
-      }
-
-      const authorizationPlan = inferRelaySpecialAuthorizationPlan({
-        toolStableKey: toolBinding.binding.stableKey,
-        visibleToolName: toolBinding.visibleToolName,
-        toolInput: clientToolArgs,
-        exposureMetadata: params.exposureMetadata,
-      })
-      if (!authorizationPlan) {
-        return buildRelayErrorResult(
-          "relay_authorization_request_failed",
-          "Synapse could not infer a relay authorization request for this tool call.",
-          {
-            requestMode: authorizationRequestMode,
-            executed: false,
-            originalStructuredContent: localDenial.structuredContent,
-          }
-        )
-      }
-
-      try {
-        const created = await createRelayAuthorizationRequest({
-          source: {
-            workspaceId: params.baseInstance.workspaceId || "",
-            conversationId: executionContext.conversationId,
-            sessionId: executionContext.sessionId,
-            actorId: executionContext.actorId,
-            conversationKind: executionContext.conversationKind,
-            conversationBoundary: executionContext.conversationBoundary,
-            workspaceMemberId: executionContext.workspaceMemberId,
-            turnId: executionContext.turnId,
-            sourceToolCallId: executionContext.toolCallId,
-            sourceToolName:
-              executionContext.toolName ||
-              executionContext.namespacedToolName ||
-              toolName,
-          },
-          relayTarget: {
-            relayCapabilityId: params.capabilityId,
-            relayDeviceId: params.deviceId,
-            relayExposureId: params.exposureId,
-            requestedToolName: toolBinding.visibleToolName,
-            relayToolStableKey: authorizationPlan.toolStableKey,
-            runtimeSessionId,
-            relayDeviceDisplayName: params.deviceDisplayName,
-            relayExposureDisplayName: params.exposureDisplayName,
-          },
-          authorizationPlan,
-          requestMode: authorizationRequestMode,
-          availablePresets:
-            authorizationRequestMode === "blocking"
-              ? ["once", "actor", "conversation", "workspace"]
-              : ["actor", "conversation", "workspace"],
-          reason: buildAutoRelayAuthorizationReason({
-            visibleToolName: toolBinding.visibleToolName,
-            denialMessage: localDenial.message,
-          }),
-          sourceRequestArgs: clientToolArgs,
-        })
-
-        if (authorizationRequestMode === "background") {
-          return buildRelayErrorResult(
-            "relay_authorization_requested",
-            created.reused
-              ? "The relay action was denied by the relay client. A matching authorization request is already pending."
-              : "The relay action was denied by the relay client. Synapse created a background authorization request.",
-            {
-              interactionId: created.interaction.id,
-              requestMode: authorizationRequestMode,
-              relayToolName: toolBinding.visibleToolName,
-              executed: false,
-              originalStructuredContent: localDenial.structuredContent,
-            }
-          )
-        }
-
-        const waited = await waitForRelayAuthorizationResolution({
-          interactionId: created.interaction.id,
-          conversationId: executionContext.conversationId,
-          createdAt: created.interaction.createdAt,
-          onApproved: async () => {
-            const retryRuntimeSessionId = params.baseInstance
-              .ensureRuntimeSession
-              ? await params.baseInstance.ensureRuntimeSession()
-              : runtimeSessionId
-            return callRelayTool({
-              conversationId: executionContext.conversationId,
-              sessionId: executionContext.sessionId,
-              requestedByWorkspaceMemberId: executionContext.workspaceMemberId,
-              requestedByActorId: executionContext.actorId,
-              relayCapabilityId: params.capabilityId,
-              deviceId: params.deviceId,
-              exposureId: params.exposureId,
-              visibleToolName: toolBinding.visibleToolName,
-              binding: toolBinding.binding,
-              args: clientToolArgs,
-              runtimeSessionId: retryRuntimeSessionId || runtimeSessionId,
-              authorization: {
-                retryNonce: created.retryNonce,
-              },
-            })
-          },
-        })
-
-        if (waited.status === "approved") {
-          return waited.approvedValue
-        }
-
-        return buildRelayErrorResult(
-          `relay_authorization_${waited.status}`,
-          buildBlockingAuthorizationFailureMessage(waited.status),
-          {
-            interactionId: created.interaction.id,
-            requestMode: authorizationRequestMode,
-            relayToolName: toolBinding.visibleToolName,
-            executed: false,
-            originalStructuredContent: localDenial.structuredContent,
-          }
-        )
-      } catch (error) {
-        return buildRelayErrorResult(
-          "relay_authorization_request_failed",
-          error instanceof Error
-            ? error.message
-            : "Failed to create a relay authorization request.",
-          {
-            requestMode: authorizationRequestMode,
-            relayToolName: toolBinding.visibleToolName,
-            executed: false,
-            originalStructuredContent: localDenial.structuredContent,
-          }
-        )
-      }
-    },
-  }
-}
-
 async function loadConversationTargetedResourceIds(params: {
-  resourceType: "plugin_installation" | "relay_capability"
+  resourceType: "plugin_installation"
   conversationId: string
 }): Promise<string[]> {
   // Discover grants that target a whole conversation ("any participant in
   // conversation X can use resource Y"). The standard subject machinery only
-  // surfaces these when the caller passes the conversation subject as part of
-  // the runtime scope, which actor flows do automatically. Remote agents have
-  // no actor identity and a different runtime-scope shape, so we have to ask
-  // the bindings table directly. Workspace-scoped grants are still discovered
-  // via the normal lookupResources({type:'workspace'}) path; this helper only
-  // fills the conversation-target gap.
-  const column =
-    params.resourceType === "plugin_installation"
-      ? "plugin_installation_id"
-      : "relay_capability_id"
+  // surfaces these when the caller has a conversation_actor_context subject,
+  // which actors get for free. Remote agents do not have a
+  // conversation_actor_context row, so we have to ask the bindings table
+  // directly. Workspace-scoped grants are still discovered via the normal
+  // lookupResources({type:'workspace'}) path; this helper only fills the
+  // conversation-target gap.
+  const column = "plugin_installation_id"
   const result = await db
     .selectFrom("resource_access_bindings as binding")
     .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
@@ -977,31 +352,6 @@ async function loadConversationTargetedResourceIds(params: {
 
 async function loadVisiblePlugins(params: ResolveParams) {
   const subjects = await buildVisibilitySubjects(params)
-  // PR-fix-round-4: scope-aware visibility so subject=actor + scope=conversation
-  // plugin grants appear in tool listings.
-  //
-  // P2 fix (post-D4 round 2 review): pass remoteAgentId too. Without it,
-  // a remote-agent session evaluating `subject=remote_agent R + scope=conversation C`
-  // grants never sees the conversation scope subject — the helper gates the
-  // conversation subject on active participation, and only checks actor /
-  // workspace_member ids when remoteAgentId is missing.
-  const runtimeScopeSubjectIds = await computeRuntimeScopeSubjectIds(db, {
-    workspaceId: params.workspaceId,
-    workspaceMemberId: params.workspaceMemberId,
-    actorId: params.actorId,
-    remoteAgentId: params.remoteAgentId,
-    conversationId: params.conversationId,
-  })
-  // P1 fix (post-D4): include the conversation subject in runtimeSubjectIds
-  // so `subject=conversation C` plugin grants surface to active participants
-  // (otherwise they were writable but never matched).
-  const runtimeSubjectIds = await computeRuntimeSubjectIdsForVisibility(db, {
-    workspaceId: params.workspaceId,
-    workspaceMemberId: params.workspaceMemberId,
-    actorId: params.actorId,
-    remoteAgentId: params.remoteAgentId,
-    conversationId: params.conversationId,
-  })
   const visibleInstallationIds = new Set<string>()
 
   const lookups = await Promise.all(
@@ -1010,8 +360,6 @@ async function loadVisiblePlugins(params: ResolveParams) {
         resourceType: ACCESS_ACTIONS["plugin_installation.use"].resourceType,
         permission: ACCESS_ACTIONS["plugin_installation.use"].permission,
         subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds,
       })
     )
   )
@@ -1104,174 +452,12 @@ async function loadVisiblePlugins(params: ResolveParams) {
   }) as VisiblePluginRow[]
 }
 
-async function loadVisibleRelayExposures(params: ResolveParams) {
-  const subjects = await buildVisibilitySubjects(params)
-  // P2 fix (post-D4 round 2 review): pass remoteAgentId so a remote-agent
-  // session in conversation C sees its conversation scope subject — without
-  // this, `subject=remote_agent + scope=conversation` relay grants stayed
-  // invisible to remote-agent callers.
-  const runtimeScopeSubjectIds = await computeRuntimeScopeSubjectIds(db, {
-    workspaceId: params.workspaceId,
-    workspaceMemberId: params.workspaceMemberId,
-    actorId: params.actorId,
-    remoteAgentId: params.remoteAgentId,
-    conversationId: params.conversationId,
-  })
-  // P1 fix (post-D4): include conversation subject for active participants.
-  const runtimeSubjectIds = await computeRuntimeSubjectIdsForVisibility(db, {
-    workspaceId: params.workspaceId,
-    workspaceMemberId: params.workspaceMemberId,
-    actorId: params.actorId,
-    remoteAgentId: params.remoteAgentId,
-    conversationId: params.conversationId,
-  })
-  const visibleCapabilityIds = new Set<string>()
-
-  const lookups = await Promise.all(
-    subjects.map((subject) =>
-      lookupResources(db, {
-        resourceType: ACCESS_ACTIONS["relay_capability.use"].resourceType,
-        permission: ACCESS_ACTIONS["relay_capability.use"].permission,
-        subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds,
-      })
-    )
-  )
-
-  for (const ids of lookups) {
-    for (const id of ids) {
-      visibleCapabilityIds.add(id)
-    }
-  }
-
-  // Same conversation-target backfill as plugins (see loadVisiblePlugins).
-  if (params.remoteAgentId && !params.actorId && params.conversationId) {
-    const extra = await loadConversationTargetedResourceIds({
-      resourceType: "relay_capability",
-      conversationId: params.conversationId,
-    })
-    for (const id of extra) visibleCapabilityIds.add(id)
-  }
-
-  if (visibleCapabilityIds.size === 0) {
-    return [] as VisibleRelayCapabilityRow[]
-  }
-
-  const rows = await db
-    .selectFrom("relay_capabilities as capability")
-    .innerJoin(
-      "relay_exposures as exposure",
-      "exposure.id",
-      "capability.exposure_id"
-    )
-    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
-    .select([
-      "capability.id as capability_id",
-      "exposure.id as exposure_id",
-      "device.workspace_id as owner_workspace_id",
-      "exposure.stable_key as exposure_stable_key",
-      "exposure.display_name as exposure_display_name",
-      "exposure.updated_at as exposure_updated_at",
-      "device.id as device_id",
-      "device.title as device_display_name",
-      sql<number | null>`device.conversation_type_mask_override`.as(
-        "device_conversation_type_mask_override"
-      ),
-      sql<number | null>`capability.conversation_type_mask_override`.as(
-        "capability_conversation_type_mask_override"
-      ),
-    ])
-    .where("capability.id", "in", Array.from(visibleCapabilityIds))
-    .where("capability.status", "=", "active")
-    .where("exposure.runtime_status", "=", "healthy")
-    .where(
-      sql<boolean>`EXISTS (
-      SELECT 1
-      FROM relay_device_sessions session_row
-      WHERE session_row.device_id = device.id
-        AND session_row.status = 'active'
-    )`
-    )
-    .orderBy("exposure.updated_at", "desc")
-    .execute()
-
-  const [bindingsByExposureId, workspacePolicyMap] = await Promise.all([
-    loadVisibleAccessBindings({
-      resourceType: ACCESS_ACTIONS["relay_capability.use"].resourceType,
-      resourceIds: rows.map((row) => row.capability_id),
-    }),
-    getWorkspaceCapabilityConversationTypePolicyMap(
-      rows.map((row) => row.owner_workspace_id)
-    ),
-  ])
-
-  return rows.filter((row) => {
-    const workspaceConversationTypeMask =
-      workspacePolicyMap.get(row.owner_workspace_id)?.relay_capability ||
-      DEFAULT_CONVERSATION_TYPE_MASK
-    const deviceConversationTypeMask = resolveRelayDeviceConversationTypeMask(
-      workspaceConversationTypeMask,
-      row.device_conversation_type_mask_override
-    )
-    const instanceConversationTypeMask =
-      resolveRelayCapabilityConversationTypeMask(
-        deviceConversationTypeMask,
-        row.capability_conversation_type_mask_override
-      )
-    const matchingBindings = (
-      bindingsByExposureId.get(row.capability_id) || []
-    ).filter(
-      (binding) =>
-        accessBindingMatchesContext(binding, params) &&
-        isConversationTypeAllowed(
-          resolveRelayGrantConversationTypeMask(
-            instanceConversationTypeMask,
-            binding.conversation_type_mask_override
-          ),
-          params
-        )
-    )
-    return matchingBindings.length > 0
-  }) as VisibleRelayCapabilityRow[]
-}
-
-export async function listVisibleHealthyRelayCommandlineExposureMetadata(
-  params: ResolveParams
-) {
-  const exposures = await loadVisibleRelayExposures(params)
-  const metadata: Record<string, unknown>[] = []
-
-  for (const exposure of exposures) {
-    const relayCatalog = await loadRelayExposureCatalogSnapshot(
-      exposure.device_id,
-      exposure.exposure_id
-    )
-    if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
-      continue
-    }
-    if (
-      normalizeRelayBuiltinAuthorizationKind(
-        relayCatalog.metadata?.builtinKind
-      ) !== "commandline"
-    ) {
-      continue
-    }
-    metadata.push(relayCatalog.metadata || {})
-  }
-
-  return metadata
-}
-
 async function resolveTools(
   params: ResolveParams,
   instances: Map<string, McpInstance>,
   turnOwnerKey: string
 ) {
-  const [visiblePlugins, visibleRelayExposures] = await Promise.all([
-    loadVisiblePlugins(params),
-    loadVisibleRelayExposures(params),
-  ])
+  const visiblePlugins = await loadVisiblePlugins(params)
   const tools: ToolDefinition[] = []
   const duplicateBaseNamespaces = new Set<string>()
   const namespaceCounts = new Map<string, number>()
@@ -1293,88 +479,6 @@ async function resolveTools(
     const namespace = buildPluginNamespace(plugin, duplicateBaseNamespaces)
 
     try {
-      if (plugin.transport === "relay") {
-        const entry = JSON.parse(plugin.entry_point || "{}") as {
-          deviceId?: string
-          exposureId?: string
-        }
-        if (!entry.deviceId || !entry.exposureId) {
-          throw new Error(
-            `Relay plugin ${namespace} is missing relay entry point metadata`
-          )
-        }
-
-        const relayCatalog = await loadRelayExposureCatalogSnapshot(
-          entry.deviceId,
-          entry.exposureId
-        )
-        if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
-          throw new Error(`Relay exposure ${entry.exposureId} is not available`)
-        }
-
-        const bindingMap = new Map<
-          string,
-          { binding: any; visibleToolName: string }
-        >()
-        const relayTools = relayCatalog.tools.map((tool) => {
-          bindingMap.set(tool.visible.name, {
-            binding: tool.binding,
-            visibleToolName: tool.visible.name,
-          })
-          return manifestToolToDefinition(
-            {
-              name: tool.visible.name,
-              description: tool.visible.description,
-              inputSchema: tool.visible.inputSchema,
-            },
-            relayCatalog.metadata
-          )
-        })
-
-        const reuseScope = publicReuseScope(plugin.reuse_scope)
-        const scopeId = resolveReuseOwnerKey(reuseScope, params, turnOwnerKey)
-        const baseRelayInstance = await getOrCreateInstance({
-          pluginId: plugin.catalog_item_id,
-          installationId: plugin.installation_id,
-          pluginSlug: plugin.item_slug,
-          orgSlug: plugin.publisher_slug || "plugin",
-          transport: "relay",
-          entryPoint: plugin.entry_point || "",
-          scope: reuseScope,
-          scopeId,
-          config: {
-            deviceId: entry.deviceId,
-            exposureId: entry.exposureId,
-            exposureStableKey: relayCatalog.exposureStableKey,
-          },
-          workspaceId: plugin.owner_workspace_id,
-        })
-        const relayInstance = buildRelayScopedInstance({
-          baseInstance: baseRelayInstance,
-          tools: relayTools,
-          capabilityId: plugin.installation_id,
-          deviceId: entry.deviceId,
-          deviceDisplayName: relayCatalog.deviceDisplayName,
-          exposureId: entry.exposureId,
-          exposureStableKey: relayCatalog.exposureStableKey,
-          exposureDisplayName: relayCatalog.exposureDisplayName,
-          exposureMetadata: relayCatalog.metadata,
-          sessionId: params.sessionId,
-          namespace,
-          bindingMap,
-        })
-
-        const namespacedTools = relayTools.map((tool) => ({
-          ...tool,
-          name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
-          description: `[${plugin.publisher_slug || "plugin"}/${plugin.item_slug}] ${tool.description}`,
-        }))
-
-        tools.push(...namespacedTools)
-        instances.set(namespace, relayInstance)
-        continue
-      }
-
       const resolved = await resolveInstallationConfig(plugin.installation_id)
       const reuseScope = publicReuseScope(plugin.reuse_scope)
       const runtimeInstance = await getOrCreateInstance({
@@ -1415,90 +519,6 @@ async function resolveTools(
     }
   }
 
-  for (const exposure of visibleRelayExposures) {
-    const relayCatalog = await loadRelayExposureCatalogSnapshot(
-      exposure.device_id,
-      exposure.exposure_id
-    )
-    if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
-      continue
-    }
-
-    const exposureSlug = sanitizeNamespaceSegment(
-      exposure.exposure_stable_key,
-      `exposure_${exposure.exposure_id.slice(0, 8)}`
-    )
-    const builtinKind = normalizeRelayBuiltinAuthorizationKind(
-      relayCatalog.metadata?.builtinKind
-    )
-    const relayScope = builtinKind === "cua" ? "turn" : "conversation"
-    const relayScopeId =
-      relayScope === "turn" ? turnOwnerKey : params.conversationId
-    const namespace = `relay${MCP_TOOL_NAMESPACE_SEPARATOR}${exposureSlug}_${exposure.exposure_id.slice(0, 8)}`
-    const relayTools = relayCatalog.tools.map((tool) =>
-      manifestToolToDefinition(
-        {
-          name: tool.visible.name,
-          description: tool.visible.description,
-          inputSchema: tool.visible.inputSchema,
-        },
-        relayCatalog.metadata
-      )
-    )
-    const bindingMap = new Map<
-      string,
-      { binding: RelayHiddenToolBinding; visibleToolName: string }
-    >()
-    for (const tool of relayCatalog.tools) {
-      bindingMap.set(tool.visible.name, {
-        binding: tool.binding,
-        visibleToolName: tool.visible.name,
-      })
-    }
-    const baseRelayInstance = await getOrCreateInstance({
-      pluginId: exposure.exposure_id,
-      installationId: exposure.capability_id,
-      pluginSlug: exposureSlug,
-      orgSlug: "relay",
-      transport: "relay",
-      entryPoint: JSON.stringify({
-        deviceId: exposure.device_id,
-        exposureId: exposure.exposure_id,
-      }),
-      scope: relayScope,
-      scopeId: relayScopeId,
-      config: {
-        deviceId: exposure.device_id,
-        exposureId: exposure.exposure_id,
-        exposureStableKey: relayCatalog.exposureStableKey,
-      },
-      workspaceId: exposure.owner_workspace_id,
-    })
-    const relayInstance = buildRelayScopedInstance({
-      baseInstance: baseRelayInstance,
-      tools: relayTools,
-      capabilityId: exposure.capability_id,
-      deviceId: exposure.device_id,
-      deviceDisplayName: exposure.device_display_name,
-      exposureId: exposure.exposure_id,
-      exposureStableKey: relayCatalog.exposureStableKey,
-      exposureDisplayName: exposure.exposure_display_name,
-      exposureMetadata: relayCatalog.metadata,
-      sessionId: params.sessionId,
-      namespace,
-      bindingMap,
-    })
-
-    const namespacedTools = relayTools.map((tool) => ({
-      ...tool,
-      name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
-      description: `[relay/${exposure.device_display_name}/${exposure.exposure_display_name}] ${tool.description}`,
-    }))
-
-    tools.push(...namespacedTools)
-    instances.set(namespace, relayInstance)
-  }
-
   return tools
 }
 
@@ -1531,7 +551,6 @@ async function resolveMcpToolsCommon(
   const mcpVersion = await getMcpVersion(params.workspaceId)
   const turnOwnerKey = `session:${params.sessionId}:turn:${randomUUID()}`
   const instances = new Map<string, McpInstance>()
-  clearRelayToolRuntimeContexts(params.sessionId)
   const allTools = await resolveTools(params, instances, turnOwnerKey)
 
   let currentTurnId: string | undefined
@@ -1566,52 +585,27 @@ async function resolveMcpToolsCommon(
     let isError = false
     let errorMessage: string | undefined
 
-    // Compute a SKELETON origin up-front so it's available in the catch
-    // path even if instance.execute throws before runtime context can be
-    // populated. For relay instances this still has kind:"mcp_relay" plus
-    // deviceId/exposureStableKey thanks to instance.relayMetadata (Phase 10
-    // race fix). The success path re-resolves below to pick up the richer
-    // runtimeSessionId/visibleToolName fields once execute has set them.
-    const skeletonOrigin = buildMcpInstanceOrigin(
+    // Compute the origin up-front so it's available in the catch path even
+    // if instance.execute throws. With relay gone every instance is either
+    // builtin (callable_plugin) or stdio/http (mcp_remote).
+    const origin = buildMcpInstanceOrigin(
       instance,
       `${orgSlug}/${pluginSlug}`,
       instance.pluginSlug || pluginSlug,
-      undefined,
       namespacedToolName
     )
 
     try {
       rawOutput = await instance.execute(toolName, input, executionContext)
-      // Post-execute: for relay tools, ensureRuntimeSession has now run and
-      // populated activeRelayToolContexts. Re-resolve to upgrade from the
-      // skeleton mcp_relay (deviceId + exposureStableKey only) to the full
-      // mcp_relay (with runtimeSessionId, visibleToolName, deviceName, etc).
-      const relayContext =
-        instance.transport === "relay"
-          ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)
-          : undefined
-      const fullOrigin = relayContext
-        ? buildMcpInstanceOrigin(
-            instance,
-            `${orgSlug}/${pluginSlug}`,
-            instance.pluginSlug || pluginSlug,
-            relayContext,
-            namespacedToolName
-          )
-        : skeletonOrigin
       return await normalizeMcpToolResult(rawOutput, params.workspaceId, {
-        origin: fullOrigin,
+        origin,
       })
     } catch (error: any) {
       isError = true
       errorMessage = error.message
-      // Attach the SKELETON origin to the error so ai/index.ts can persist
-      // it with the failure. Skeleton still has the correct discriminator
-      // (mcp_relay vs mcp_remote vs callable_plugin), just potentially
-      // missing per-call enrichment.
       if (error && typeof error === "object" && !error.origin) {
         try {
-          error.origin = skeletonOrigin
+          error.origin = origin
         } catch {}
       }
       throw error
@@ -1633,11 +627,8 @@ async function resolveMcpToolsCommon(
         userId: params.userId,
         pluginId: instance.pluginId,
         toolName: namespacedToolName,
-        toolType: instance.transport === "relay" ? "relay" : "mcp_plugin",
-        input:
-          instance.transport === "relay" && instance.sanitizeInputForLogging
-            ? instance.sanitizeInputForLogging(toolName, input)
-            : input,
+        toolType: "mcp_plugin",
+        input,
         output,
         isError,
         errorMessage,
@@ -1652,7 +643,6 @@ async function resolveMcpToolsCommon(
 
   const refresh = async () => {
     const nextVersion = await getMcpVersion(params.workspaceId)
-    clearRelayToolRuntimeContexts(params.sessionId)
     const refreshedTools = await resolveTools(params, instances, turnOwnerKey)
     return {
       tools: refreshedTools,
@@ -1661,7 +651,6 @@ async function resolveMcpToolsCommon(
   }
 
   const shutdown = async () => {
-    clearRelayToolRuntimeContexts(params.sessionId)
     const turnScopedInstances = Array.from(instances.values()).filter(
       (instance) =>
         instance.scope === "turn" && instance.scopeId === turnOwnerKey
@@ -1679,53 +668,4 @@ async function resolveMcpToolsCommon(
     setTurnId,
     shutdown,
   }
-}
-
-export async function resolveRelayTargetForNamespacedTool(
-  params: ResolveParams & { namespacedToolName: string }
-): Promise<ResolvedRelayToolTarget | null> {
-  const activeContext = getRelayToolRuntimeContext(
-    params.sessionId,
-    params.namespacedToolName
-  )
-  if (activeContext) {
-    return { ...activeContext }
-  }
-
-  const visibleExposures = await loadVisibleRelayExposures(params)
-
-  for (const exposure of visibleExposures) {
-    const relayCatalog = await loadRelayExposureCatalogSnapshot(
-      exposure.device_id,
-      exposure.exposure_id
-    )
-    if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
-      continue
-    }
-
-    const exposureSlug = sanitizeNamespaceSegment(
-      exposure.exposure_stable_key,
-      `exposure_${exposure.exposure_id.slice(0, 8)}`
-    )
-    const namespace = `relay${MCP_TOOL_NAMESPACE_SEPARATOR}${exposureSlug}_${exposure.exposure_id.slice(0, 8)}`
-
-    for (const tool of relayCatalog.tools) {
-      const namespacedToolName = `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.visible.name}`
-      if (namespacedToolName !== params.namespacedToolName) {
-        continue
-      }
-      return {
-        capabilityId: exposure.capability_id,
-        deviceId: exposure.device_id,
-        deviceDisplayName: exposure.device_display_name,
-        exposureId: exposure.exposure_id,
-        exposureStableKey: exposure.exposure_stable_key,
-        exposureDisplayName: exposure.exposure_display_name,
-        visibleToolName: tool.visible.name,
-        relayToolStableKey: tool.visible.stableKey,
-      }
-    }
-  }
-
-  return null
 }

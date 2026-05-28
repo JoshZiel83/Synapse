@@ -5,10 +5,8 @@ import type {
   SkillSurfaceItem,
   ToolSurfaceItem,
 } from "@synapse/shared/types"
-import {
-  resolveMcpToolsForActor,
-  type ResolvedMcpTools,
-} from "../mcp-plugins/tool-resolver.js"
+import { type ResolvedMcpTools } from "../mcp-plugins/tool-resolver.js"
+import { projectToolsForPrincipal } from "../capability-projection/service.js"
 import { listVisibleSkills } from "../skills/service.js"
 import { db } from "../../infrastructure/database/kysely.js"
 
@@ -25,8 +23,8 @@ function mapToolSurfaceItem(toolName: string): ToolSurfaceItem {
   return {
     id: toolName,
     name: toolName,
-    source: toolName.startsWith("relay__")
-      ? "relay_capability"
+    source: toolName.startsWith("device__")
+      ? "device_capability"
       : "plugin_installation",
   }
 }
@@ -35,8 +33,7 @@ function mapSkillSurfaceItem(skill: AvailableSkillSummary): SkillSurfaceItem {
   return {
     id: skill.instanceId,
     slug: skill.slug,
-    source:
-      skill.sourceKind === "relay_auto_loaded" ? "auto_activated" : "installed",
+    source: "installed",
   }
 }
 
@@ -70,7 +67,21 @@ export async function resolveActorCapabilitySurface(
 
   let mcpTools = EMPTY_MCP_TOOLS
   try {
-    mcpTools = await resolveMcpToolsForActor(resolved)
+    if (!resolved.actorId) {
+      // Pure-conversation surface: no device tools projected. The legacy
+      // resolver supported this; the new projection requires an actorId.
+      mcpTools = EMPTY_MCP_TOOLS
+    } else {
+      mcpTools = await projectToolsForPrincipal({
+        ...resolved,
+        principal: {
+          kind: "actor",
+          actorId: resolved.actorId,
+          conversationId: resolved.conversationId,
+        },
+        consumer: "chat_runtime",
+      })
+    }
   } catch (error: any) {
     console.error(
       "[capabilities] Failed to resolve MCP tools:",

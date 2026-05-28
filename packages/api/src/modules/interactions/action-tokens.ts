@@ -1,0 +1,147 @@
+/**
+ * interaction_action_tokens (Stage 8 supporting code).
+ *
+ * Short, opaque tokens minted when a runtime-authorization interaction
+ * is projected onto an IM transport that supports interaction_prompt
+ * (today: QQ Inline Keyboard). The token rides in the button's
+ * `action.data` field — QQ's button payload is space-limited so we
+ * can't encode the full ResolveInteractionRequestParams there. On
+ * click, the connector redeems the token to recover the original
+ * payload.
+ *
+ * Crucially, redemption is NOT one-shot: ACK round-trips can fail and
+ * QQ replays the same INTERACTION_CREATE event on retry. The redeem
+ * helper checks the token's own `expires_at` only; idempotence comes
+ * from `resolveInteractionRequest`'s (interaction_id, command_id) dedup
+ * (the connector derives command_id deterministically from
+ * uuidv5(qqEvent.id + actionToken + clickerExternalId), so a replayed
+ * click hits the same (interactionId, commandId) cell and returns the
+ * cached result).
+ */
+
+import type { PoolClient } from "pg"
+import { v4 as uuidv4 } from "uuid"
+import {
+  executeSql,
+  executeSqlOn,
+} from "../../infrastructure/database/kysely.js"
+
+export interface ActionTokenPayload {
+  /** One of the option labels we offered (e.g. "allow_once", "deny"). */
+  decision: string
+  /** Optional preset id (relay/runtime-authorization preset selection). */
+  preset?: string
+  /** Optional grant option id when the user picks among grant_options. */
+  selectedGrantOptionId?: string
+}
+
+export interface ActionTokenRecord {
+  token: string
+  interactionRequestId: string
+  payload: ActionTokenPayload
+  expiresAt: Date
+}
+
+/**
+ * Mint a fresh token. Caller passes a client so the token row commits
+ * atomically with the projection that uses it.
+ *
+ * `interactionExpiresAt` is the interaction_requests.expires_at value
+ * (which may be NULL). The token's expires_at is
+ * min(interaction.expires_at OR now+24h, now+24h) — so the token can
+ * never outlive the underlying interaction.
+ */
+export async function mintActionToken(
+  client: PoolClient,
+  params: {
+    interactionRequestId: string
+    interactionExpiresAt: Date | string | null | undefined
+    payload: ActionTokenPayload
+  }
+): Promise<ActionTokenRecord> {
+  const token = uuidv4()
+  const now = Date.now()
+  const twentyFourHours = now + 24 * 60 * 60 * 1000
+  const interactionExpiresMs = parseTimestamp(params.interactionExpiresAt)
+  const expiresAtMs = Math.min(
+    interactionExpiresMs ?? twentyFourHours,
+    twentyFourHours
+  )
+  const expiresAt = new Date(expiresAtMs)
+  await executeSqlOn(
+    client,
+    `
+      INSERT INTO interaction_action_tokens (
+        token, interaction_request_id, payload, expires_at
+      )
+      VALUES ($1, $2, $3::jsonb, $4)
+    `,
+    [
+      token,
+      params.interactionRequestId,
+      JSON.stringify(params.payload),
+      expiresAt,
+    ]
+  )
+  return {
+    token,
+    interactionRequestId: params.interactionRequestId,
+    payload: params.payload,
+    expiresAt,
+  }
+}
+
+interface ActionTokenRow {
+  token: string
+  interaction_request_id: string
+  payload: unknown
+  expires_at: string | Date
+}
+
+export async function lookupActionToken(
+  token: string
+): Promise<ActionTokenRecord | null> {
+  if (!token || typeof token !== "string") return null
+  const result = await executeSql<ActionTokenRow>(
+    `
+      SELECT token, interaction_request_id, payload, expires_at
+      FROM interaction_action_tokens
+      WHERE token = $1
+      LIMIT 1
+    `,
+    [token]
+  )
+  const row = result.rows[0]
+  if (!row) return null
+  const expiresAt =
+    row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at)
+  if (expiresAt.getTime() < Date.now()) return null
+  return {
+    token: row.token,
+    interactionRequestId: row.interaction_request_id,
+    payload: (row.payload ?? {}) as ActionTokenPayload,
+    expiresAt,
+  }
+}
+
+/**
+ * Best-effort cleanup of expired token rows. The projection worker
+ * triggers this on its sweep tick; we don't bother scheduling a
+ * separate cron because the volume is small.
+ */
+export async function sweepExpiredActionTokens(): Promise<number> {
+  const result = await executeSql(
+    `DELETE FROM interaction_action_tokens WHERE expires_at < NOW()`,
+    []
+  )
+  return Number(result.rowCount ?? 0)
+}
+
+function parseTimestamp(
+  value: Date | string | null | undefined
+): number | null {
+  if (!value) return null
+  if (value instanceof Date) return value.getTime()
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}

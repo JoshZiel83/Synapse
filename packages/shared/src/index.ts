@@ -1,6 +1,19 @@
 export * from "./types/index.js"
-export * from "./types/relay.js"
 export * from "./constants/index.js"
+// Re-export only the bundle-safe matcher helpers (no zod, no node imports).
+// The zod-backed Schema objects stay accessible via `@synapse/shared/schemas`.
+export {
+  filesystemPolicyAllows,
+  commandlinePolicyAllows,
+  cuaPolicyAllows,
+  browserPolicyAllows,
+  normalizePathPrefix,
+  normalizeCommandText,
+  hasCompoundShellOperators,
+  commandPrefixMatches,
+  pathWithinPrefix,
+  normalizeFilesystemPolicy,
+} from "./access/policies/matchers.js"
 export * from "./utils/index.js"
 export * from "./automation/index.js"
 export * from "./access/index.js"

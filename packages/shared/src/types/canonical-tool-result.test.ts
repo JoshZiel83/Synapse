@@ -14,7 +14,7 @@ test("TOOL_RESULT_ORIGIN_KINDS enumerates all five kinds", () => {
   assert.deepEqual([...TOOL_RESULT_ORIGIN_KINDS].sort(), [
     "builtin",
     "callable_plugin",
-    "mcp_relay",
+    "mcp_device",
     "mcp_remote",
     "model_response",
   ])
@@ -25,12 +25,12 @@ test("isToolResultOrigin accepts each valid kind shape", () => {
     { kind: "mcp_remote", serverKey: "github" },
     { kind: "mcp_remote", serverKey: "amap", serverName: "Amap MCP" },
     {
-      kind: "mcp_relay",
+      kind: "mcp_device",
       deviceId: "dev-1",
       exposureStableKey: "synapse.builtin.filesystem.v1",
     },
     {
-      kind: "mcp_relay",
+      kind: "mcp_device",
       deviceId: "dev-1",
       deviceName: "MacBook",
       exposureId: "exp-uuid",
@@ -56,7 +56,7 @@ test("isToolResultOrigin accepts each valid kind shape", () => {
 test("isToolResultOrigin rejects malformed input", () => {
   assert.equal(isToolResultOrigin(null), false)
   assert.equal(isToolResultOrigin(undefined), false)
-  assert.equal(isToolResultOrigin("mcp_relay"), false)
+  assert.equal(isToolResultOrigin("mcp_device"), false)
   assert.equal(isToolResultOrigin(42), false)
   // missing discriminator
   assert.equal(isToolResultOrigin({ serverKey: "github" }), false)
@@ -64,9 +64,9 @@ test("isToolResultOrigin rejects malformed input", () => {
   assert.equal(isToolResultOrigin({ kind: "magic", serverKey: "x" }), false)
   // missing required field per kind
   assert.equal(isToolResultOrigin({ kind: "mcp_remote" }), false)
-  assert.equal(isToolResultOrigin({ kind: "mcp_relay", deviceId: "x" }), false)
+  assert.equal(isToolResultOrigin({ kind: "mcp_device", deviceId: "x" }), false)
   assert.equal(
-    isToolResultOrigin({ kind: "mcp_relay", exposureStableKey: "x" }),
+    isToolResultOrigin({ kind: "mcp_device", exposureStableKey: "x" }),
     false
   )
   assert.equal(isToolResultOrigin({ kind: "callable_plugin" }), false)
@@ -97,7 +97,7 @@ test("canonicalToolResult builds the minimal shape", () => {
 
 test("canonicalToolResult carries all optional fields when set", () => {
   const origin: ToolResultOrigin = {
-    kind: "mcp_relay",
+    kind: "mcp_device",
     deviceId: "dev-1",
     exposureStableKey: "synapse.builtin.filesystem.v1",
   }

@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import type { ConversationMember } from "@/stores/chat-store"
 import ChatAvatar from "./chat-avatar"
 import {
@@ -43,9 +44,13 @@ function ParticipantDetailBody({
   onOpenContact: () => void
   contactHref?: string
 }) {
-  const subtitle = getConversationMemberSubtitle(member)
+  const metadata = useConnectorMetadata()
+  const subtitle = getConversationMemberSubtitle(member, metadata)
   const typeLabel = getConversationMemberTypeLabel(member)
-  const transportLabel = formatTransportKindLabel(member.transportKind)
+  const transportLabel = formatTransportKindLabel(
+    member.transportKind,
+    metadata
+  )
   const actorRole = member.title || member.role || "Actor"
   const remoteAgentRole = member.title || member.role || "Remote agent"
 
@@ -227,10 +232,11 @@ export default function ChatParticipantDetailDialog({
 }: ChatParticipantDetailDialogProps) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const metadata = useConnectorMetadata()
 
   if (!member) return null
 
-  const subtitle = getConversationMemberSubtitle(member)
+  const subtitle = getConversationMemberSubtitle(member, metadata)
   const contactHref = getConversationMemberContactHref(member, contactBasePath)
 
   function handleOpenContact() {

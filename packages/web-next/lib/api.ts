@@ -1,5 +1,12 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
 import type {
+  DeviceCapabilitySummaryView,
+  DeviceDetailView,
+  DevicePairingTicketView,
+  DeviceServiceSummaryView,
+  DeviceSummaryView,
+} from "./device-views"
+import type {
   ActorPackageInstallResult,
   ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
@@ -70,11 +77,9 @@ import type {
   TransportExternalUserSummary,
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
+  DingtalkDeviceFlowStartResponse,
+  DingtalkDeviceFlowPollResponse,
   WorkspaceChiefActorPreference,
-  RelayDashboardView,
-  RelayDeviceDetailView,
-  RelayDeviceSummaryView,
-  RelayPairingSessionView,
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
 } from "@synapse/shared"
@@ -86,29 +91,9 @@ import {
   isChatInteractionResolveConflictResponse,
   type ChatInteractionResolvePayload,
   type FileRecordView,
-  type RelayAuthorizationGrantView,
 } from "@synapse/shared/types"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
-
-/**
- * D3 / PR6 TODO: FE wire shape for `accessTarget` request bodies. The backend
- * controllers normalize this into a ScopedSubjectTarget at the boundary;
- * keeping the legacy {type, *Id} shape here lets existing FE callers stay
- * unchanged until PR6 introduces SubjectPicker+ScopePicker components that
- * emit a ScopedSubjectTarget directly.
- */
-export type AccessTargetInput = {
-  type:
-    | "workspace"
-    | "workspace_member"
-    | "conversation"
-    | "actor"
-    | "actor_in_conversation"
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
-}
 
 export type {
   ActorAccessRequestListResponse,
@@ -355,7 +340,7 @@ class ApiClient {
     data: {
       policies: Partial<
         Record<
-          "plugin_installation" | "installed_skill" | "relay_capability",
+          "plugin_installation" | "installed_skill" | "device_capability",
           number
         >
       >
@@ -379,7 +364,7 @@ class ApiClient {
         | "skill_admin"
         | "plugin_admin"
         | "memory_admin"
-        | "relay_admin"
+        | "device_admin"
         | "conversation_admin"
     }
   ) {
@@ -397,7 +382,7 @@ class ApiClient {
       | "skill_admin"
       | "plugin_admin"
       | "memory_admin"
-      | "relay_admin"
+      | "device_admin"
       | "conversation_admin"
   ) {
     return this.fetch(
@@ -527,7 +512,7 @@ class ApiClient {
         contentBlocks: CanonicalContentBlock[]
         mediaType?: string
       }>
-      accessTarget: AccessTargetInput
+      accessTarget: CapabilityAccessTarget
     }
   ): Promise<{ skill: InstalledSkill }> {
     return this.fetch(`/workspaces/${wsId}/skills/custom`, {
@@ -553,7 +538,7 @@ class ApiClient {
     wsId: string,
     data: {
       marketSkillId: string
-      accessTarget: AccessTargetInput
+      accessTarget: CapabilityAccessTarget
     }
   ): Promise<{ skill: InstalledSkill }> {
     return this.fetch(`/workspaces/${wsId}/skills`, {
@@ -607,7 +592,7 @@ class ApiClient {
     wsId: string,
     installedSkillId: string,
     data: {
-      accessTarget?: AccessTargetInput
+      accessTarget?: CapabilityAccessTarget
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
@@ -756,32 +741,6 @@ class ApiClient {
   deleteMemory(wsId: string, id: string) {
     return this.fetch(`/workspaces/${wsId}/memories/${id}`, {
       method: "DELETE",
-    })
-  }
-  /**
-   * P1 fix (post-D4 review): atomic cross-space move. Replaces the
-   * delete + create the UI used to do, which dropped item-level grants,
-   * indexing state, and the stable memory id. The backend asserts
-   * `delete` on source + `write` on target inside a single transaction.
-   *
-   * P2 (post-D4 round 6 review): response is a discriminated union —
-   * `{ moved: true, id, spaceId }` when the caller cannot read the
-   * destination (e.g. admin moved into a private space they don't own),
-   * otherwise the full Memory record. Callers MUST narrow before
-   * accessing memory-shaped fields.
-   */
-  moveMemory(
-    wsId: string,
-    id: string,
-    target: {
-      owner: { kind: string; [k: string]: unknown }
-      scope?: { kind: string; [k: string]: unknown }
-      namespaceKey?: string
-    }
-  ) {
-    return this.fetch(`/workspaces/${wsId}/memories/${id}/move`, {
-      method: "POST",
-      body: JSON.stringify(target),
     })
   }
 
@@ -1613,6 +1572,44 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
+  createWecomTransportAccount(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/wecom`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateWecomTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/wecom/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+  createQqTransportAccount(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/qq`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateQqTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/qq/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
   startWeixinQrTransportSession(
     wsId: string,
     data: Record<string, unknown>
@@ -1627,6 +1624,41 @@ class ApiClient {
     sessionId: string
   ): Promise<{ session: WeixinQrLoginSessionSummary }> {
     return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`)
+  }
+  startDingtalkDeviceFlow(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<DingtalkDeviceFlowStartResponse> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/start`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+  }
+  pollDingtalkDeviceFlow(
+    wsId: string,
+    sessionId: string
+  ): Promise<DingtalkDeviceFlowPollResponse> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/${sessionId}`
+    )
+  }
+  cancelDingtalkDeviceFlow(wsId: string, sessionId: string): Promise<void> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/${sessionId}`,
+      { method: "DELETE" }
+    )
+  }
+  createDingtalkAccountManual(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/dingtalk/manual`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
   }
   getCurrentUserWeixinBinding(
     wsId: string
@@ -1806,7 +1838,7 @@ class ApiClient {
     wsId: string,
     installId: string,
     data: {
-      accessTarget?: AccessTargetInput
+      accessTarget?: CapabilityAccessTarget
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
@@ -1861,187 +1893,55 @@ class ApiClient {
     )
   }
 
-  // MCP Relays
-  getRelayDashboard(wsId: string): Promise<RelayDashboardView> {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays`)
+  // Devices (v3)
+  listDevices(wsId: string): Promise<{ devices: DeviceSummaryView[] }> {
+    return this.fetch(`/workspaces/${wsId}/devices`)
   }
-  createRelayPairingSession(
-    wsId: string,
-    data: { title?: string }
-  ): Promise<{ pairing: RelayPairingSessionView }> {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/pairing-sessions`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
+  getDevice(wsId: string, deviceId: string): Promise<DeviceDetailView> {
+    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}`)
   }
-  getRelayPairingSession(
-    wsId: string,
-    pairingId: string
-  ): Promise<{ pairing: RelayPairingSessionView }> {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/pairing-sessions/${pairingId}`
-    )
-  }
-  cancelRelayPairingSession(
-    wsId: string,
-    pairingId: string
-  ): Promise<{ pairing: RelayPairingSessionView }> {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/pairing-sessions/${pairingId}/cancel`,
-      { method: "POST", body: "{}" }
-    )
-  }
-  claimRelayPairing(data: {
-    pairingCode: string
-    title?: string
-    description?: string
-    deviceType?: string
-    platform?: string
-    publicKey: string
-    publicKeyFingerprint: string
-  }) {
-    return this.fetch("/mcp/relay/pairing/claim", {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
-  }
-  getRelayDevice(
-    wsId: string,
-    relayId: string
-  ): Promise<RelayDeviceDetailView> {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`)
-  }
-  getRelayExposureAccess(wsId: string, relayId: string, exposureId: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access`
-    )
-  }
-  updateRelayExposure(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    data: {
-      conversationTypeMaskOverride?: number | null
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  grantRelayExposureAccess(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    data: {
-      accessTarget?: AccessTargetInput
-      conversationTypeMaskOverride?: number | null
-      permissions?: string[]
-      reason?: string
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access`,
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  updateRelayExposureAccessGrant(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    bindingId: string,
-    data: {
-      conversationTypeMaskOverride?: number | null
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access/${bindingId}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  revokeRelayExposureAccess(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    bindingId: string
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access/${bindingId}`,
-      {
-        method: "DELETE",
-      }
-    )
-  }
-  listRelayAuthorizations(
-    wsId: string,
-    relayId: string,
-    exposureId: string
-  ): Promise<{ grants: RelayAuthorizationGrantView[] }> {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/relay-authorizations`
-    )
-  }
-  revokeRelayAuthorizationGrant(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    grantId: string
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/relay-authorizations/${grantId}/revoke`,
-      {
-        method: "POST",
-        body: "{}",
-      }
-    )
-  }
-  updateRelayDevice(
-    wsId: string,
-    relayId: string,
-    data: {
-      title?: string
-      description?: string | null
-      deviceType?: string
-      conversationTypeMaskOverride?: number | null
-    }
-  ): Promise<RelayDeviceSummaryView> {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
-  }
-  disconnectRelayDevice(wsId: string, relayId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/disconnect`, {
-      method: "POST",
-      body: "{}",
-    })
-  }
-  updateRelayTrustStatus(
-    wsId: string,
-    relayId: string,
-    trustStatus: "active" | "revoked" | "blocked"
-  ): Promise<{ device: RelayDeviceSummaryView }> {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/trust-status`,
-      {
-        method: "POST",
-        body: JSON.stringify({ trustStatus }),
-      }
-    )
-  }
-  deleteRelayDevice(wsId: string, relayId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, {
+  deleteDevice(wsId: string, deviceId: string): Promise<void> {
+    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}`, {
       method: "DELETE",
     })
+  }
+  startDevicePairingSession(
+    wsId: string,
+    body: {
+      mode: "local_qr" | "cloud_bootstrap" | "service_join"
+      title?: string
+      device_type?: string
+      device_id?: string
+      context?: Record<string, unknown>
+    }
+  ): Promise<DevicePairingTicketView> {
+    return this.fetch(`/workspaces/${wsId}/devices/pairing-sessions`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+  }
+  claimRemoteAgentDaemon(
+    wsId: string,
+    deviceId: string,
+    remoteAgentMachineId: string
+  ): Promise<DeviceServiceSummaryView> {
+    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}/services`, {
+      method: "POST",
+      body: JSON.stringify({
+        service_kind: "remote_agent_daemon",
+        remote_agent_machine_id: remoteAgentMachineId,
+      }),
+    })
+  }
+  detachDeviceService(
+    wsId: string,
+    deviceId: string,
+    serviceId: string
+  ): Promise<void> {
+    return this.fetch(
+      `/workspaces/${wsId}/devices/${deviceId}/services/${serviceId}`,
+      { method: "DELETE" }
+    )
   }
 
   // Automation Event Sources
@@ -2049,7 +1949,7 @@ class ApiClient {
     wsId: string,
     filters?: {
       status?: "active" | "deprecated" | "disabled" | "archived"
-      providerKind?: "relay" | "webhook" | "internal" | "integration"
+      providerKind?: "device" | "webhook" | "internal" | "integration"
       providerRef?: string
       sourceKey?: string
     }
@@ -2067,7 +1967,7 @@ class ApiClient {
   createAutomationEventSource(
     wsId: string,
     data: {
-      providerKind: "relay" | "webhook" | "internal" | "integration"
+      providerKind: "device" | "webhook" | "internal" | "integration"
       providerRef?: string
       integration?: {
         installationId: string

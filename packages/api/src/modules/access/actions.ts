@@ -58,9 +58,9 @@ export const ACCESS_ACTIONS = {
     resourceType: "workspace",
     permission: "manage_memories",
   },
-  "workspace.manage_relays": {
+  "workspace.manage_devices": {
     resourceType: "workspace",
-    permission: "manage_relays",
+    permission: "manage_devices",
   },
   "workspace.manage_models": {
     resourceType: "workspace",
@@ -183,41 +183,29 @@ export const ACCESS_ACTIONS = {
     permission: "delete",
   },
 
-  "relay_device.view": { resourceType: "relay_device", permission: "view" },
-  "relay_device.manage": { resourceType: "relay_device", permission: "manage" },
-  "relay_device.authorize_relay_authorization": {
-    resourceType: "relay_device",
-    permission: "authorize_relay_authorization",
-  },
-  "relay_device.delete": { resourceType: "relay_device", permission: "delete" },
-  "relay_exposure.view": { resourceType: "relay_exposure", permission: "view" },
-  "relay_exposure.edit": { resourceType: "relay_exposure", permission: "edit" },
-  "relay_exposure.delete": {
-    resourceType: "relay_exposure",
-    permission: "delete",
-  },
-  "relay_capability.view": {
-    resourceType: "relay_capability",
+  // v3 device-runtime parallel actions.
+  "device_capability.view": {
+    resourceType: "device_capability",
     permission: "view",
   },
-  "relay_capability.use": {
-    resourceType: "relay_capability",
+  "device_capability.use": {
+    resourceType: "device_capability",
     permission: "use",
   },
-  "relay_capability.request_relay_authorization": {
-    resourceType: "relay_capability",
-    permission: "request_relay_authorization",
+  "device_capability.request_runtime_authorization": {
+    resourceType: "device_capability",
+    permission: "request_runtime_authorization",
   },
-  "relay_capability.edit": {
-    resourceType: "relay_capability",
+  "device_capability.edit": {
+    resourceType: "device_capability",
     permission: "edit",
   },
-  "relay_capability.grant": {
-    resourceType: "relay_capability",
+  "device_capability.grant": {
+    resourceType: "device_capability",
     permission: "grant",
   },
-  "relay_capability.delete": {
-    resourceType: "relay_capability",
+  "device_capability.delete": {
+    resourceType: "device_capability",
     permission: "delete",
   },
 

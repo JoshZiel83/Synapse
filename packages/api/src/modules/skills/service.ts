@@ -3,16 +3,10 @@ import type pg from "pg"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
-  actorRef,
-  conversationRef,
   maskAllowsConversationType,
   normalizeConversationTypeMask,
-  remoteAgentRef,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
-  subjectScopeLabel,
-  workspaceMemberRef,
-  workspaceRef,
   type AvailableSkillSummary,
   type CapabilityAccessTarget,
   type InstalledSkill,
@@ -20,7 +14,6 @@ import {
   type CanonicalContentBlockInput,
   normalizeCanonicalContentBlocks,
   type RuntimeBindingScope,
-  type ScopedSubjectTarget,
   type SkillAttachmentFile,
   type SkillFrontmatter,
   type SkillMarketplaceEntry,
@@ -41,13 +34,12 @@ import {
 } from "../capabilities/conversation-type-policies.js"
 import {
   accessGrantTargetToSubjectRef,
-  accessGrantTargetScopeRef,
   buildResourceAccessBindingRef,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   readAccessBindingTarget,
+  relationForAccessTargetType,
   type AccessBindingRow,
-  type AccessGrantTarget,
 } from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
@@ -64,7 +56,6 @@ import {
 import {
   findAccessSubjectId,
   findAccessSubjectIdOn,
-  upsertAccessSubjectOn,
 } from "../access/subject-registry.js"
 import {
   assertConversationTypeMaskWithinParent,
@@ -78,15 +69,7 @@ import {
   getFileAccessInfo,
   getFileUrlById,
 } from "../files/service.js"
-import {
-  buildConversationCapabilitySubjects,
-  computeRuntimeScopeSubjectIds,
-  computeRuntimeSubjectIdsForVisibility,
-} from "../access/subject-resolution.js"
-import {
-  listRelayAutoLoadedSkills,
-  readRelayAutoLoadedSkill,
-} from "./relay-auto-skills.js"
+import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
 import { compareAvailableSkillDiscoveryOrder } from "./discovery-order.js"
 import {
   SKILL_ENTRY_PATH,
@@ -109,113 +92,7 @@ import {
   type PreparedSkillSnapshot,
 } from "./mirror-import.js"
 
-// PR2/D3: SkillUseScope is the string label used by skill SQL
-// (`bind_scope`) and the controller input. Round 10 review (P2): extended
-// to include `remote_agent` / `remote_agent_in_conversation` so the
-// label round-trip through skillUseScopeFromTarget +
-// scopedTargetFromSkillUseScope is lossless for remote_agent targets —
-// otherwise attachSkillToInstallation would collapse a remote_agent
-// accessTarget down to "workspace" and silently drop the remote-agent
-// identity at bind time.
-type SkillUseScope =
-  | "workspace"
-  | "workspace_member"
-  | "conversation"
-  | "actor"
-  | "actor_in_conversation"
-  | "remote_agent"
-  | "remote_agent_in_conversation"
-
-/**
- * D3: build a ScopedSubjectTarget from the legacy SkillUseScope label +
- * IDs. Used to fold the controller's legacy input into the canonical
- * scoped-subject shape before handing off to access/* helpers.
- */
-function scopedTargetFromSkillUseScope(input: {
-  useScope: SkillUseScope
-  workspaceId: string
-  workspaceMemberId?: string | null
-  actorId?: string | null
-  remoteAgentId?: string | null
-  conversationId?: string | null
-}): ScopedSubjectTarget {
-  switch (input.useScope) {
-    case "workspace":
-      return { subject: workspaceRef(input.workspaceId) }
-    case "workspace_member":
-      if (!input.workspaceMemberId) {
-        throw new SkillError(
-          400,
-          "workspaceMemberId is required for workspace_member scope"
-        )
-      }
-      return { subject: workspaceMemberRef(input.workspaceMemberId) }
-    case "conversation":
-      if (!input.conversationId) {
-        throw new SkillError(
-          400,
-          "conversationId is required for conversation scope"
-        )
-      }
-      return { subject: conversationRef(input.conversationId) }
-    case "actor":
-      if (!input.actorId) {
-        throw new SkillError(400, "actorId is required for actor scope")
-      }
-      return { subject: actorRef(input.actorId) }
-    case "actor_in_conversation":
-      if (!input.actorId || !input.conversationId) {
-        throw new SkillError(
-          400,
-          "actorId and conversationId are required for actor_in_conversation scope"
-        )
-      }
-      return {
-        subject: actorRef(input.actorId),
-        scope: conversationRef(input.conversationId),
-      }
-    case "remote_agent":
-      if (!input.remoteAgentId) {
-        throw new SkillError(
-          400,
-          "remoteAgentId is required for remote_agent scope"
-        )
-      }
-      return { subject: remoteAgentRef(input.remoteAgentId) }
-    case "remote_agent_in_conversation":
-      if (!input.remoteAgentId || !input.conversationId) {
-        throw new SkillError(
-          400,
-          "remoteAgentId and conversationId are required for remote_agent_in_conversation scope"
-        )
-      }
-      return {
-        subject: remoteAgentRef(input.remoteAgentId),
-        scope: conversationRef(input.conversationId),
-      }
-  }
-}
-
-/**
- * D3: collapse a ScopedSubjectTarget back to the legacy SkillUseScope label
- * for display / SQL projection. Subjects of other kinds (remote_agent etc.)
- * fall back to "workspace" since the skill UI can't yet render them.
- */
-function skillUseScopeFromTarget(target: ScopedSubjectTarget): SkillUseScope {
-  const label = subjectScopeLabel(target)
-  switch (label) {
-    case "workspace":
-    case "workspace_member":
-    case "conversation":
-    case "actor":
-    case "actor_in_conversation":
-    case "remote_agent":
-    case "remote_agent_in_conversation":
-      return label
-    default:
-      return "workspace"
-  }
-}
+type SkillUseScope = CapabilityAccessTarget["type"]
 
 type QueryRow = pg.QueryResultRow
 type QueryResultLike<T extends QueryRow> = { rows: T[] }
@@ -239,23 +116,10 @@ type SkillAttachmentInput = {
   mediaType?: string
 }
 
-export type SkillScopeTarget = {
+type SkillScopeTarget = {
   bindScope: RuntimeBindingScope
   useScope: SkillUseScope
   actorId: string | null
-  // Round 10 review (P2): include remoteAgentId so SkillScopeTarget
-  // can faithfully carry a remote_agent / remote_agent_in_conversation
-  // target through the legacy intermediate-shape pipeline (instead of
-  // silently collapsing the remote_agent identity into workspace).
-  remoteAgentId: string | null
-  // Round 11 review (P2): same fix for workspace_member — controller
-  // accepts workspace_member targets, scopedTargetFromSkillUseScope
-  // requires workspaceMemberId, but SkillScopeTarget previously didn't
-  // carry it. ensureSkillBinding would then call
-  // scopedTargetFromSkillUseScope with workspaceMemberId=undefined and
-  // crash on the "workspaceMemberId is required" error — making the
-  // public skill-grant flow broken for workspace_member targets.
-  workspaceMemberId: string | null
   conversationId: string | null
 }
 
@@ -361,15 +225,11 @@ type SkillSnapshotFileRow = {
   updated_at: string
 }
 
-export type SkillAccessRow = AccessBindingRow & {
+type SkillAccessRow = AccessBindingRow & {
   skill_id: string
   bind_scope: RuntimeBindingScope
   conversation_id: string | null
   actor_id: string | null
-  // Round 9 review (P2): include remote_agent_id so dedup paths that
-  // currently key on (actor_id, conversation_id, workspace_member_id)
-  // can also discriminate remote_agent targets.
-  remote_agent_id: string | null
   workspace_member_id: string | null
 }
 
@@ -601,8 +461,6 @@ function assertRequiredSkillFile(
 function normalizeScopeTarget(input: {
   useScope: SkillUseScope
   actorId?: string | null
-  remoteAgentId?: string | null
-  workspaceMemberId?: string | null
   conversationId?: string | null
 }): SkillScopeTarget {
   switch (input.useScope) {
@@ -611,25 +469,6 @@ function normalizeScopeTarget(input: {
         bindScope: "workspace",
         useScope: "workspace",
         actorId: null,
-        remoteAgentId: null,
-        workspaceMemberId: null,
-        conversationId: null,
-      }
-    case "workspace_member":
-      // workspace_member-scoped skill bindings are individual approvals.
-      // Round 11 review (P2): the intermediate SkillScopeTarget now
-      // carries `workspaceMemberId` so the write path (ensureSkillBinding
-      // → scopedTargetFromSkillUseScope) doesn't crash on a legitimate
-      // workspace_member grant. We tolerate `input.workspaceMemberId
-      // == null` here (filter-mode callers may not have it) — the
-      // write-side `scopedTargetFromSkillUseScope` is still strict and
-      // throws when actually building the SubjectRef.
-      return {
-        bindScope: "workspace_member",
-        useScope: "workspace_member",
-        actorId: null,
-        remoteAgentId: null,
-        workspaceMemberId: input.workspaceMemberId ?? null,
         conversationId: null,
       }
     case "conversation":
@@ -643,8 +482,6 @@ function normalizeScopeTarget(input: {
         bindScope: "conversation",
         useScope: "conversation",
         actorId: null,
-        remoteAgentId: null,
-        workspaceMemberId: null,
         conversationId: input.conversationId,
       }
     case "actor":
@@ -655,8 +492,6 @@ function normalizeScopeTarget(input: {
         bindScope: "actor",
         useScope: "actor",
         actorId: input.actorId,
-        remoteAgentId: null,
-        workspaceMemberId: null,
         conversationId: null,
       }
     case "actor_in_conversation":
@@ -670,38 +505,6 @@ function normalizeScopeTarget(input: {
         bindScope: "actor_in_conversation",
         useScope: "actor_in_conversation",
         actorId: input.actorId,
-        remoteAgentId: null,
-        workspaceMemberId: null,
-        conversationId: input.conversationId,
-      }
-    case "remote_agent":
-      if (!input.remoteAgentId) {
-        throw new SkillError(
-          400,
-          "remoteAgentId is required for remote_agent scope"
-        )
-      }
-      return {
-        bindScope: "remote_agent",
-        useScope: "remote_agent",
-        actorId: null,
-        remoteAgentId: input.remoteAgentId,
-        workspaceMemberId: null,
-        conversationId: null,
-      }
-    case "remote_agent_in_conversation":
-      if (!input.remoteAgentId || !input.conversationId) {
-        throw new SkillError(
-          400,
-          "remoteAgentId and conversationId are required for remote_agent_in_conversation scope"
-        )
-      }
-      return {
-        bindScope: "remote_agent_in_conversation",
-        useScope: "remote_agent_in_conversation",
-        actorId: null,
-        remoteAgentId: input.remoteAgentId,
-        workspaceMemberId: null,
         conversationId: input.conversationId,
       }
     default:
@@ -956,14 +759,9 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
     active: 0,
     revoked: 1,
   }
-  // Round 9 review: include remote_agent_in_conversation / remote_agent
-  // alongside the actor variants so the priority order doesn't crash on
-  // a remote_agent grant.
   const scopeOrder: Record<RuntimeBindingScope, number> = {
     actor_in_conversation: 0,
-    remote_agent_in_conversation: 0,
     actor: 1,
-    remote_agent: 1,
     workspace_member: 2,
     conversation: 3,
     workspace: 4,
@@ -990,9 +788,7 @@ function compareVisibleBindingPriority(
   }
   const scopeOrder: Record<RuntimeBindingScope, number> = {
     actor_in_conversation: 0,
-    remote_agent_in_conversation: 0,
     actor: 1,
-    remote_agent: 1,
     workspace_member: 2,
     conversation: 3,
     workspace: 4,
@@ -1017,7 +813,7 @@ function selectInitialSkillGrant(accessRows: SkillAccessRow[]) {
   )[0]
 }
 
-export function matchesScopeTarget(
+function matchesScopeTarget(
   binding: SkillAccessRow,
   filter?: SkillScopeTarget
 ) {
@@ -1027,16 +823,7 @@ export function matchesScopeTarget(
   return (
     binding.bind_scope === filter.bindScope &&
     binding.actor_id === filter.actorId &&
-    binding.conversation_id === filter.conversationId &&
-    // Round 13 review (P3): comparing only (bind_scope, actor_id,
-    // conversation_id) means two grants on the same skill with
-    // different workspace_member targets (A vs B) both match a query
-    // for A and the preferred-binding selection is arbitrary. Same
-    // hazard exists for remote_agent grants — bring both ids into the
-    // discriminator now so a future remote_agent list filter doesn't
-    // repeat the same bug.
-    binding.workspace_member_id === filter.workspaceMemberId &&
-    binding.remote_agent_id === filter.remoteAgentId
+    binding.conversation_id === filter.conversationId
   )
 }
 
@@ -1141,9 +928,9 @@ function buildInstalledSkillPayload(
   files?: SkillAttachmentFile[]
 ): InstalledSkill {
   const chosenBinding = binding
-  const accessTarget: CapabilityAccessTarget = chosenBinding
-    ? skillBindingToAccessTarget(chosenBinding, row.workspace_id)
-    : { subject: workspaceRef(row.workspace_id) }
+  const accessTargetType = chosenBinding
+    ? resolvePublicUseScope(chosenBinding.bind_scope)
+    : ("workspace" as SkillUseScope)
   const sourceDefaultConversationTypeMask =
     resolveInstalledSkillSourceConversationTypeMask(row)
   const effectiveConversationTypeMask =
@@ -1165,7 +952,11 @@ function buildInstalledSkillPayload(
     description: descriptionBlockFromSnapshotRow(row),
     iconUrl: row.icon_file_id ? getFileUrlById(row.icon_file_id) : undefined,
     tags: row.tags || [],
-    accessTarget,
+    accessTarget: {
+      type: accessTargetType,
+      actorId: chosenBinding?.actor_id || undefined,
+      conversationId: chosenBinding?.conversation_id || undefined,
+    },
     isEnabled: Boolean(row.is_active),
     sourceDefaultConversationTypeMask,
     workspaceConversationTypeMask,
@@ -1194,41 +985,6 @@ function buildInstalledSkillPayload(
   }
 }
 
-/**
- * Round 10 review (P2): collapse the legacy label switch into a direct
- * call to readAccessBindingTarget. The old switch fell back to
- * `workspace` for any unrecognized `bind_scope` — including `remote_agent`
- * and `remote_agent_in_conversation` (round 9 widened RuntimeBindingScope
- * to admit those labels, but this reverse mapper was a separate copy of
- * the switch that wasn't updated). The mapper feeds into
- * `validateConversationScopedAccessTarget` and
- * `assertGrantConversationTypeOverrideAllowed` from
- * updateInstalledSkill / updateInstalledSkillAccessGrant — so a
- * remote_agent + scope=conversation grant being updated would silently
- * decode as workspace, skipping the conversation-scoped policy check
- * and the active-participant check.
- *
- * The row at runtime carries the bindingRowSelectFor `subject_kind` +
- * `subject_*_via_join` + `scope_kind` + `scope_*_via_join` projection
- * that readAccessBindingTarget needs (loadAccessBindingsBySkillIds runs
- * the full SELECT). SkillAccessRow's type doesn't expose those fields,
- * hence the `as any` cast.
- */
-function skillBindingToAccessTarget(
-  binding: SkillAccessRow,
-  _fallbackWorkspaceId: string
-): CapabilityAccessTarget {
-  // Round 11 review (P3): no fail-open fallback. The earlier version
-  // caught decode failures and returned `{ subject: workspaceRef(...) }`
-  // — but the callers (updateInstalledSkillAccessGrant /
-  // updateInstalledSkill) feed the result into permission gates, so a
-  // silent workspace fallback would widen access on malformed rows. If
-  // the projection is missing the via_join fields readAccessBindingTarget
-  // expects, that's a load-path bug; propagate it instead of laundering
-  // it into a workspace grant.
-  return readAccessBindingTarget(binding as any)
-}
-
 function buildAvailableSkillPayload(
   row: VisibleSkillRow
 ): AvailableSkillSummary {
@@ -1240,38 +996,12 @@ function buildAvailableSkillPayload(
     name: row.name,
     description: row.description,
     version: row.source_version_value || `local-${row.current_version}`,
-    accessTarget: visibleRowToAccessTarget(row),
+    accessTarget: {
+      type: resolvePublicUseScope(row.access_bind_scope),
+      actorId: row.actor_id || undefined,
+      conversationId: row.conversation_id || undefined,
+    },
     sourceKind: "installed",
-  }
-}
-
-function visibleRowToAccessTarget(
-  row: VisibleSkillRow
-): CapabilityAccessTarget {
-  switch (row.access_bind_scope) {
-    case "workspace":
-      return { subject: workspaceRef(row.workspace_id) }
-    case "workspace_member":
-      return row.workspace_member_id
-        ? { subject: workspaceMemberRef(row.workspace_member_id) }
-        : { subject: workspaceRef(row.workspace_id) }
-    case "actor":
-      return row.actor_id
-        ? { subject: actorRef(row.actor_id) }
-        : { subject: workspaceRef(row.workspace_id) }
-    case "conversation":
-      return row.conversation_id
-        ? { subject: conversationRef(row.conversation_id) }
-        : { subject: workspaceRef(row.workspace_id) }
-    case "actor_in_conversation":
-      return row.actor_id && row.conversation_id
-        ? {
-            subject: actorRef(row.actor_id),
-            scope: conversationRef(row.conversation_id),
-          }
-        : { subject: workspaceRef(row.workspace_id) }
-    default:
-      return { subject: workspaceRef(row.workspace_id) }
   }
 }
 
@@ -1773,58 +1503,18 @@ async function loadInstalledSkillRows(params: {
   return result.rows
 }
 
-// D3: legacy `legacyCapabilityAccessTargetOrThrow` / `legacyAccessGrantTargetOrThrow`
-// helpers removed — all CapabilityAccessTarget values are now ScopedSubjectTarget.
-
-export function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
-  const target = readAccessBindingTarget(row as any)
-  const label = subjectScopeLabel(target)
-  // Round 9 review (P2): include remote_agent / remote_agent_in_conversation
-  // in the label switch so those grants don't silently collapse to a
-  // "workspace" label. The dedup paths in skills/service.ts and
-  // mcp-plugins/service.ts compare grants by this string; without
-  // remote_agent here, a second create of the same remote_agent target
-  // would miss the existing row and crash on the DB unique constraint.
-  let bindScope: RuntimeBindingScope
-  switch (label) {
-    case "workspace":
-    case "workspace_member":
-    case "conversation":
-    case "actor":
-    case "actor_in_conversation":
-    case "remote_agent":
-    case "remote_agent_in_conversation":
-      bindScope = label
-      break
-    default:
-      bindScope = "workspace"
-  }
-  const actorId =
-    target.subject.kind === "actor"
-      ? (target.subject as { actorId: string }).actorId
-      : null
-  const remoteAgentId =
-    target.subject.kind === "remote_agent"
-      ? (target.subject as { remoteAgentId: string }).remoteAgentId
-      : null
-  const conversationId =
-    target.scope?.kind === "conversation"
-      ? (target.scope as { conversationId: string }).conversationId
-      : target.subject.kind === "conversation"
-        ? (target.subject as { conversationId: string }).conversationId
-        : null
-  const workspaceMemberId =
-    target.subject.kind === "workspace_member"
-      ? (target.subject as { memberId: string }).memberId
-      : null
+function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
+  const target = readAccessBindingTarget(row)
   return {
     ...row,
     skill_id: row.resource_id,
-    bind_scope: bindScope,
-    conversation_id: conversationId,
-    actor_id: actorId,
-    remote_agent_id: remoteAgentId,
-    workspace_member_id: workspaceMemberId,
+    bind_scope: target.targetType,
+    conversation_id: target.subjectConversationId,
+    actor_id: target.subjectActorId,
+    workspace_member_id:
+      target.targetType === "workspace_member"
+        ? target.subjectWorkspaceMemberId
+        : null,
   }
 }
 
@@ -1933,7 +1623,6 @@ async function chooseBindingMap(
   filters?: {
     accessTargetType?: SkillUseScope
     actorId?: string
-    workspaceMemberId?: string
     conversationId?: string
   }
 ) {
@@ -1942,7 +1631,6 @@ async function chooseBindingMap(
     ? normalizeScopeTarget({
         useScope: filters.accessTargetType,
         actorId: filters.actorId,
-        workspaceMemberId: filters.workspaceMemberId,
         conversationId: filters.conversationId,
       })
     : undefined
@@ -1968,33 +1656,24 @@ async function findSkillIdsByBindingFilter(params: {
   workspaceId: string
   accessTargetType?: SkillUseScope
   actorId?: string
-  workspaceMemberId?: string
   conversationId?: string
 }) {
-  if (
-    !params.accessTargetType &&
-    !params.actorId &&
-    !params.workspaceMemberId &&
-    !params.conversationId
-  ) {
+  if (!params.accessTargetType && !params.actorId && !params.conversationId) {
     return null
   }
 
   const target = params.accessTargetType
     ? await resolveAccessGrantTarget({
         workspaceId: params.workspaceId,
-        target: scopedTargetFromSkillUseScope({
-          useScope: params.accessTargetType,
-          workspaceId: params.workspaceId,
+        target: {
+          type: params.accessTargetType,
           actorId: params.actorId,
-          workspaceMemberId: params.workspaceMemberId,
           conversationId: params.conversationId,
-        }),
+        },
       })
     : null
 
   let subjectId: string | null | undefined = undefined
-  let scopeSubjectId: string | null | undefined = undefined
   if (target) {
     // P1b contract: resolve target → SubjectRef → access_subjects.id, then
     // filter bindings by subject_id. Returns no rows when the subject
@@ -2004,38 +1683,14 @@ async function findSkillIdsByBindingFilter(params: {
     if (!subjectId) {
       return []
     }
-    // P2 fix (post-D4 round 7 review): also resolve the scope subject so
-    // the listing reflects the exact (subject, scope) the caller asked
-    // about. Without this filter, asking for actor A in conversation C1
-    // returned bindings for actor A in any scope (including C2 or
-    // unscoped) — silently widening the listing.
-    const scopeRef = accessGrantTargetScopeRef(target)
-    if (scopeRef) {
-      const resolvedScopeId = await findAccessSubjectId(db, scopeRef)
-      if (!resolvedScopeId) {
-        return []
-      }
-      scopeSubjectId = resolvedScopeId
-    } else {
-      scopeSubjectId = null
-    }
   }
 
   return listResourceIdsForWorkspaceByBindingFilter(db, {
     workspaceId: params.workspaceId,
     resourceType: "installed_skill",
     subjectId: subjectId ?? null,
-    scopeSubjectId,
     actorId: subjectId ? null : (params.actorId ?? null),
     conversationId: subjectId ? null : (params.conversationId ?? null),
-    // Round 13 review (P2): without this, callers that pass
-    // workspaceMemberId alone (no accessTargetType) bypassed the subject
-    // resolution branch above AND found no matching legacy filter
-    // condition, so the storage helper returned every active binding in
-    // the workspace. Downsink the legacy id to storage so it filters on
-    // subj.workspace_member_id, matching the actorId/conversationId
-    // legacy pattern.
-    workspaceMemberId: subjectId ? null : (params.workspaceMemberId ?? null),
   })
 }
 
@@ -2070,36 +1725,14 @@ async function ensureSkillBinding(
 ) {
   const grantTarget = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
-    target: scopedTargetFromSkillUseScope({
-      useScope: input.target.useScope,
-      workspaceId: input.workspaceId,
+    target: {
+      type: input.target.useScope,
       actorId: input.target.actorId || undefined,
-      remoteAgentId: input.target.remoteAgentId || undefined,
-      workspaceMemberId: input.target.workspaceMemberId || undefined,
       conversationId: input.target.conversationId || undefined,
-    }),
+    },
   })
   const subjectRef = accessGrantTargetToSubjectRef(grantTarget)
-  const scopeRef = accessGrantTargetScopeRef(grantTarget)
   const subjectId = await findAccessSubjectIdOn(client, subjectRef)
-  // P2 fix (post-D4 round 7 review): two skill bindings differing only in
-  // scope (e.g. actor A + scope=conv C1 vs actor A + scope=conv C2)
-  // must be treated as distinct rows. Resolve the scope subject id too so
-  // findActiveBindingIdByResourceAndSubject matches the right pair.
-  //
-  // P2 fix (post-D4 round 8 review): use upsert (not find) for the scope
-  // subject. If we used `findAccessSubjectIdOn` here and the conversation
-  // hadn't been registered in access_subjects yet, the lookup returns
-  // null — and the dedup query downstream matches `scope_subject_id IS
-  // NOT DISTINCT FROM NULL`, i.e. UNSCOPED bindings. Net: an install of
-  // (actor A + scope=conv C) would silently collapse onto an existing
-  // (actor A, unscoped) binding instead of creating a distinct scoped
-  // row. Upserting access_subjects is benign — it's a lookup table; the
-  // row gets created either way when the binding insert reaches the
-  // trigger that requires a real scope_subject_id.
-  const scopeSubjectId = scopeRef
-    ? await upsertAccessSubjectOn(client, scopeRef)
-    : null
 
   const existingBindingId = subjectId
     ? await findActiveBindingIdByResourceAndSubject(client, {
@@ -2107,7 +1740,6 @@ async function ensureSkillBinding(
         resourceType: "installed_skill",
         resourceId: input.skillId,
         subjectId,
-        scopeSubjectId,
       })
     : null
 
@@ -2806,36 +2438,10 @@ export async function createWorkspaceSkill(input: {
         input.workspaceId
       )
     : null
-  // D3: input.accessTarget is now a ScopedSubjectTarget; collapse to the
-  // legacy SkillUseScope label for downstream SkillScopeTarget bookkeeping.
-  // Round 10 review (P2): also extract remoteAgentId so SkillScopeTarget
-  // doesn't drop the remote_agent identity when the target subject is
-  // a remote agent.
-  // Round 11 review (P2): same for workspace_member — without this the
-  // workspace_member skill grant path would crash in ensureSkillBinding.
   const target = normalizeScopeTarget({
-    useScope: skillUseScopeFromTarget(input.accessTarget),
-    actorId:
-      input.accessTarget.subject.kind === "actor"
-        ? (input.accessTarget.subject as { actorId: string }).actorId
-        : null,
-    remoteAgentId:
-      input.accessTarget.subject.kind === "remote_agent"
-        ? (input.accessTarget.subject as { remoteAgentId: string })
-            .remoteAgentId
-        : null,
-    workspaceMemberId:
-      input.accessTarget.subject.kind === "workspace_member"
-        ? (input.accessTarget.subject as { memberId: string }).memberId
-        : null,
-    conversationId:
-      input.accessTarget.scope?.kind === "conversation"
-        ? (input.accessTarget.scope as { conversationId: string })
-            .conversationId
-        : input.accessTarget.subject.kind === "conversation"
-          ? (input.accessTarget.subject as { conversationId: string })
-              .conversationId
-          : null,
+    useScope: input.accessTarget.type,
+    actorId: input.accessTarget.actorId,
+    conversationId: input.accessTarget.conversationId,
   })
 
   const result = await transaction(async (client) => {
@@ -2914,13 +2520,6 @@ export async function listInstalledSkills(
   filters?: {
     accessTargetType?: SkillUseScope
     actorId?: string
-    // Round 12 review (P3): workspace_member filter requires the id so
-    // the underlying scopedTargetFromSkillUseScope("workspace_member")
-    // call can build a SubjectRef. Previously the filter mode accepted
-    // accessTargetType=workspace_member from the controller but the
-    // service had no way to receive the id, so the filter crashed at
-    // "workspaceMemberId is required for workspace_member scope".
-    workspaceMemberId?: string
     conversationId?: string
     sourceSkillId?: string
   }
@@ -2929,7 +2528,6 @@ export async function listInstalledSkills(
     workspaceId,
     accessTargetType: filters?.accessTargetType,
     actorId: filters?.actorId,
-    workspaceMemberId: filters?.workspaceMemberId,
     conversationId: filters?.conversationId,
   })
   if (filteredSkillIds && filteredSkillIds.length === 0) {
@@ -2948,7 +2546,6 @@ export async function listInstalledSkills(
     chooseBindingMap(skillIds, {
       accessTargetType: filters?.accessTargetType,
       actorId: filters?.actorId,
-      workspaceMemberId: filters?.workspaceMemberId,
       conversationId: filters?.conversationId,
     }),
     loadSkillSnapshotFilesMap(rows.map((row) => row.current_snapshot_id)),
@@ -3056,13 +2653,19 @@ export async function grantInstalledSkillAccess(input: {
     )
 
   const accessRows = await listSkillAccessRows(input.installedSkillId)
-  const initialGrant = selectInitialSkillGrant(accessRows)
   const accessTargetInput =
     input.accessTarget ||
-    (initialGrant
-      ? skillBindingToAccessTarget(initialGrant, input.workspaceId)
+    (selectInitialSkillGrant(accessRows)
+      ? {
+          type: resolvePublicUseScope(
+            selectInitialSkillGrant(accessRows)!.bind_scope
+          ),
+          actorId: selectInitialSkillGrant(accessRows)!.actor_id || undefined,
+          conversationId:
+            selectInitialSkillGrant(accessRows)!.conversation_id || undefined,
+        }
       : ({
-          subject: workspaceRef(input.workspaceId),
+          type: "workspace",
         } satisfies CapabilityAccessTarget))
 
   const accessTarget = await resolveAccessGrantTarget({
@@ -3075,7 +2678,7 @@ export async function grantInstalledSkillAccess(input: {
   )
   const effectiveConversationTypeMask =
     assertGrantConversationTypeOverrideAllowed({
-      target: accessTarget,
+      targetType: accessTarget.targetType,
       parentConversationTypeMask: instanceConversationTypeMask,
       conversationTypeMaskOverride: input.conversationTypeMaskOverride,
       buildError: (message) => new SkillError(400, message),
@@ -3084,7 +2687,9 @@ export async function grantInstalledSkillAccess(input: {
     })
   await validateConversationScopedAccessTarget({
     db,
-    target: accessTarget,
+    targetType: accessTarget.targetType,
+    conversationId: accessTarget.subjectConversationId,
+    actorId: accessTarget.subjectActorId,
     effectiveConversationTypeMask,
     buildError: (message) => new SkillError(400, message),
   })
@@ -3093,38 +2698,13 @@ export async function grantInstalledSkillAccess(input: {
   // different members both look like {workspace_member, null, null} and the
   // second grant is incorrectly treated as already-existing — silently
   // dropping the new member's binding.
-  //
-  // Round 9 review (P2): include remote_agent_id for the same reason. Two
-  // remote_agent grants for different remote agents both have
-  // bind_scope="remote_agent" and were silently deduped against each
-  // other before this fix.
-  const accessTargetLabel = subjectScopeLabel(accessTarget)
-  const accessTargetActorId =
-    accessTarget.subject.kind === "actor"
-      ? (accessTarget.subject as { actorId: string }).actorId
-      : null
-  const accessTargetRemoteAgentId =
-    accessTarget.subject.kind === "remote_agent"
-      ? (accessTarget.subject as { remoteAgentId: string }).remoteAgentId
-      : null
-  const accessTargetConversationId =
-    accessTarget.scope?.kind === "conversation"
-      ? (accessTarget.scope as { conversationId: string }).conversationId
-      : accessTarget.subject.kind === "conversation"
-        ? (accessTarget.subject as { conversationId: string }).conversationId
-        : null
-  const accessTargetWorkspaceMemberId =
-    accessTarget.subject.kind === "workspace_member"
-      ? (accessTarget.subject as { memberId: string }).memberId
-      : null
   const existing = accessRows.find(
     (row) =>
       row.status === "active" &&
-      row.bind_scope === accessTargetLabel &&
-      row.actor_id === accessTargetActorId &&
-      row.remote_agent_id === accessTargetRemoteAgentId &&
-      row.conversation_id === accessTargetConversationId &&
-      row.workspace_member_id === accessTargetWorkspaceMemberId
+      row.target_type === accessTarget.targetType &&
+      row.actor_id === accessTarget.subjectActorId &&
+      row.conversation_id === accessTarget.subjectConversationId &&
+      row.workspace_member_id === accessTarget.subjectWorkspaceMemberId
   )
   if (existing) {
     return mapSkillAccessRowToGrant(existing, {
@@ -3186,13 +2766,9 @@ export async function updateInstalledSkillAccessGrant(input: {
     workspaceConversationTypeMask,
     skillRow.conversation_type_mask_override ?? null
   )
-  const accessRowTarget = skillBindingToAccessTarget(
-    accessRow,
-    input.workspaceId
-  )
   const effectiveConversationTypeMask =
     assertGrantConversationTypeOverrideAllowed({
-      target: accessRowTarget,
+      targetType: accessRow.target_type,
       parentConversationTypeMask: instanceConversationTypeMask,
       conversationTypeMaskOverride: input.conversationTypeMaskOverride,
       buildError: (message) => new SkillError(400, message),
@@ -3201,7 +2777,9 @@ export async function updateInstalledSkillAccessGrant(input: {
     })
   await validateConversationScopedAccessTarget({
     db,
-    target: accessRowTarget,
+    targetType: accessRow.target_type,
+    conversationId: accessRow.conversation_id,
+    actorId: accessRow.actor_id,
     effectiveConversationTypeMask,
     buildError: (message) => new SkillError(400, message),
   })
@@ -3253,28 +2831,9 @@ export async function installMarketplaceSkill(input: {
   installedByWorkspaceMemberId?: string
 }) {
   const target = normalizeScopeTarget({
-    useScope: skillUseScopeFromTarget(input.accessTarget),
-    actorId:
-      input.accessTarget.subject.kind === "actor"
-        ? (input.accessTarget.subject as { actorId: string }).actorId
-        : null,
-    remoteAgentId:
-      input.accessTarget.subject.kind === "remote_agent"
-        ? (input.accessTarget.subject as { remoteAgentId: string })
-            .remoteAgentId
-        : null,
-    workspaceMemberId:
-      input.accessTarget.subject.kind === "workspace_member"
-        ? (input.accessTarget.subject as { memberId: string }).memberId
-        : null,
-    conversationId:
-      input.accessTarget.scope?.kind === "conversation"
-        ? (input.accessTarget.scope as { conversationId: string })
-            .conversationId
-        : input.accessTarget.subject.kind === "conversation"
-          ? (input.accessTarget.subject as { conversationId: string })
-              .conversationId
-          : null,
+    useScope: input.accessTarget.type,
+    actorId: input.accessTarget.actorId,
+    conversationId: input.accessTarget.conversationId,
   })
 
   const marketplaceSkill = await getMarketplaceRowById(input.marketSkillId)
@@ -3437,7 +2996,9 @@ export async function updateInstalledSkill(input: {
     for (const accessRow of accessRows) {
       await validateConversationScopedAccessTarget({
         db,
-        target: skillBindingToAccessTarget(accessRow, input.workspaceId),
+        targetType: accessRow.target_type,
+        conversationId: accessRow.conversation_id,
+        actorId: accessRow.actor_id,
         effectiveConversationTypeMask: nextInstanceConversationTypeMask,
         buildError: (message) => new SkillError(400, message),
       })
@@ -3730,29 +3291,8 @@ function visibleRowToAccessRow(
   row: VisibleSkillRow,
   workspaceId: string
 ): SkillAccessRow {
-  const bindScope = row.access_bind_scope
-  // Map the scope label back to a SkillAccessRow shape — workspace_member
-  // scope is treated as workspace for visibility grouping in the FE.
-  let relation: AccessBindingRow["relation"]
-  switch (bindScope) {
-    case "workspace":
-      relation = "use_workspace"
-      break
-    case "workspace_member":
-      relation = "use_workspace_member"
-      break
-    case "conversation":
-      relation = "use_conversation"
-      break
-    case "actor":
-      relation = "use_actor"
-      break
-    case "actor_in_conversation":
-      relation = "use_actor_in_conversation"
-      break
-    default:
-      relation = "use_scoped"
-  }
+  const publicScope = resolvePublicUseScope(row.access_bind_scope)
+  const relation = relationForAccessTargetType(publicScope)
 
   return {
     id: row.access_binding_id,
@@ -3762,9 +3302,15 @@ function visibleRowToAccessRow(
       resourceId: row.skill_id,
     }),
     resource_id: row.skill_id,
+    target_type: publicScope,
     relation,
     subject_id: null,
-    scope_subject_id: null,
+    subject_workspace_id: publicScope === "workspace" ? workspaceId : null,
+    subject_workspace_member_id: null,
+    subject_actor_id: publicScope === "actor" ? row.actor_id : null,
+    subject_conversation_id:
+      publicScope === "conversation" ? row.conversation_id : null,
+    subject_conversation_actor_context_id: null,
     conversation_type_mask_override: null,
     status: "active",
     source: "manual",
@@ -3790,37 +3336,8 @@ export async function listVisibleSkills(input: {
   conversationBoundary?: "internal" | "external"
 }) {
   const subjects = await buildVisibilitySubjects(input)
-  // PR-fix-round-4: compute the scope subject set for this conversation
-  // context once and pass it through to every lookupResources call so
-  // scoped grants (subject=actor + scope=conversation) show up in the
-  // skill list. Without this scoped grants were silently filtered out by
-  // listGrantedResourceIds's default "scope IS NULL only" branch.
-  const runtimeScopeSubjectIds = await computeRuntimeScopeSubjectIds(db, {
-    workspaceId: input.workspaceId,
-    workspaceMemberId: input.workspaceMemberId,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-  })
-  // P1 fix (post-D4): subject_ids the principal can claim, including the
-  // conversation subject when an active participant. Without this,
-  // `subject=conversation C` bindings on skills are written + UI-visible
-  // but the evaluator never surfaces them to participants of C.
-  const runtimeSubjectIds = await computeRuntimeSubjectIdsForVisibility(db, {
-    workspaceId: input.workspaceId,
-    workspaceMemberId: input.workspaceMemberId,
-    actorId: input.actorId,
-    conversationId: input.conversationId,
-  })
-  const relayAutoLoadedSkills = await listRelayAutoLoadedSkills({
-    workspaceId: input.workspaceId,
-    actorId: input.actorId,
-    sessionId: input.sessionId,
-    conversationId: input.conversationId,
-    conversationKind: input.conversationKind,
-    conversationBoundary: input.conversationBoundary,
-  })
   if (subjects.length === 0) {
-    return relayAutoLoadedSkills
+    return []
   }
 
   const visibleSkillIds = new Set<string>()
@@ -3830,8 +3347,6 @@ export async function listVisibleSkills(input: {
         resourceType: ACCESS_ACTIONS["installed_skill.use"].resourceType,
         permission: ACCESS_ACTIONS["installed_skill.use"].permission,
         subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds,
       })
     )
   )
@@ -3954,11 +3469,6 @@ export async function listVisibleSkills(input: {
   for (const skill of installedSkills) {
     combined.set(skill.slug.toLowerCase(), skill)
   }
-  for (const skill of relayAutoLoadedSkills) {
-    if (!combined.has(skill.slug.toLowerCase())) {
-      combined.set(skill.slug.toLowerCase(), skill)
-    }
-  }
 
   return Array.from(combined.values()).sort(compareAvailableSkillDiscoveryOrder)
 }
@@ -3993,38 +3503,8 @@ export async function readVisibleSkill(input: {
     throw new SkillError(404, `Visible skill "${input.skillName}" not found`)
   }
 
-  if (match.sourceKind === "relay_auto_loaded") {
-    try {
-      const relayAutoLoaded = await readRelayAutoLoadedSkill({
-        skillName: input.skillName,
-        actorId: input.actorId,
-        conversationId: input.conversationId,
-        assetPath: input.assetPath,
-        skill: match,
-      })
-      if (!relayAutoLoaded) {
-        throw new SkillError(
-          404,
-          `Visible skill "${input.skillName}" not found`
-        )
-      }
-      return relayAutoLoaded
-    } catch (error) {
-      if (error instanceof SkillError) {
-        throw error
-      }
-      if (error instanceof Error) {
-        if (error.message.startsWith("Invalid skill file path: ")) {
-          throw new SkillError(400, error.message)
-        }
-        throw new SkillError(
-          404,
-          `Skill attachment "${input.assetPath || SKILL_ENTRY_PATH}" not found`
-        )
-      }
-      throw error
-    }
-  }
+  // Device-runtime v3: the relay_auto_loaded source has been removed alongside
+  // the relay subsystem (PR #20). Any match must now be an installed skill.
 
   const installedSkill = await loadInstalledSkillById(match.instanceId)
   if (!installedSkill) {
