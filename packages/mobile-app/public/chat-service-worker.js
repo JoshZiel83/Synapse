@@ -675,7 +675,13 @@
     REMOTE_AGENT_MACHINE_LIFECYCLE_STATE.ONLINE,
     REMOTE_AGENT_MACHINE_LIFECYCLE_STATE.OFFLINE
   ];
-  var TRANSPORT_KINDS = ["feishu", "weixin", "wecom", "qq"];
+  var TRANSPORT_KINDS = [
+    "feishu",
+    "weixin",
+    "wecom",
+    "dingtalk",
+    "qq"
+  ];
   var RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
     ONCE: "once",
     ACTOR: "actor",
