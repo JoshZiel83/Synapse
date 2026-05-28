@@ -49,7 +49,10 @@ import {
   orderAccountRecoveryActions,
   planAccountRecoveryActions,
 } from "./account-recovery-planner.js"
-import { reEnableAutoDisabledBindings } from "./recovery.js"
+import {
+  recoverSkippedProjectionsForRecoveryEvent,
+  reEnableAutoDisabledBindings,
+} from "./recovery.js"
 
 // ───────────────────────── Assertions ─────────────────────────
 
@@ -460,6 +463,12 @@ export async function createTransportAccount(params: {
     inboundActorMode,
     inboundActorId: params.inboundActorId,
   })
+  // Per-transport config normalization — gate AT the service layer
+  // (rather than only in transport-specific controllers) so the
+  // generic /im/accounts route can't bypass it. Throws on invalid
+  // input; the API controller catches and maps to 400.
+  // (shared-prep version above already normalizes config — keep the
+  // single call; the QQ-side duplicate was redundant.)
 
   const row = await db
     .insertInto("transport_accounts")
@@ -641,6 +650,7 @@ export async function updateTransportAccount(params: {
     await executeAccountRecoveryActions({
       tx,
       workspaceId: params.workspaceId,
+      accountId: params.accountId,
       actions,
     })
     return nextSummary
@@ -664,6 +674,15 @@ export async function updateTransportAccount(params: {
 async function executeAccountRecoveryActions(params: {
   tx: DatabaseTransaction
   workspaceId: string
+  /**
+   * The account whose update triggered planning. We need its id so the
+   * `recoverSkippedInteractionProjections` dispatch can target the
+   * correct `transport_account_id` in
+   * `interaction_transport_projections` recovery — the connector hook
+   * is account-scoped and doesn't carry the id through the action
+   * data shape.
+   */
+  accountId: string
   actions: Array<
     | { type: "reEnableAutoDisabledBindings"; reason: string }
     | {
@@ -686,12 +705,15 @@ async function executeAccountRecoveryActions(params: {
         break
       }
       case "recoverSkippedInteractionProjections": {
-        // No-op on `dev` — `interaction_transport_projections` does
-        // not exist in the dev schema. Wired up to a real helper
-        // when the QQ merge-prep lands its schema + recovery
-        // implementation. The placeholder dispatch is kept so
-        // `accounts.ts` stays closed-enum today and the QQ branch
-        // can simply replace the body.
+        // Re-arm skipped `interaction_transport_projections` rows
+        // matching this account's id + the connector-supplied event
+        // kind. Same tx so the recovery commits with the account
+        // UPDATE; a crash between the two would leave projections
+        // stranded.
+        await recoverSkippedProjectionsForRecoveryEvent(params.tx, {
+          kind: action.eventKind,
+          transportAccountId: params.accountId,
+        })
         break
       }
       default: {

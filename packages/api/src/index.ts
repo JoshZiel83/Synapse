@@ -66,6 +66,14 @@ import {
 } from "./workers/automation-scheduler.js"
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js"
 import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js"
+import {
+  startInteractionProjectionWorker,
+  stopInteractionProjectionWorker,
+} from "./workers/interaction-projection.js"
+import {
+  startTransportOutboxSweeper,
+  stopTransportOutboxSweeper,
+} from "./workers/outbox-sweeper.js"
 import { installActorStatusHooks } from "./modules/im/integration/actor-status-hooks.js"
 import { startMemoryIndexingWorker } from "./workers/memory-indexing.js"
 import { startFileParsingWorker } from "./workers/file-parsing.js"
@@ -295,6 +303,8 @@ async function main() {
   startAutomationExecutionWorker()
   startSessionThinkingWorker()
   startImTransportDeliveryWorker()
+  startTransportOutboxSweeper()
+  startInteractionProjectionWorker()
   installActorStatusHooks()
   startMemoryIndexingWorker()
   startFileParsingWorker()
@@ -360,6 +370,23 @@ async function main() {
         3000
       ).catch((err) => {
         app.log.error({ err }, "Transport runtime shutdown timed out")
+      })
+      await waitWithTimeout(
+        "outbox sweeper shutdown",
+        stopTransportOutboxSweeper(),
+        3000
+      ).catch((err) => {
+        app.log.error({ err }, "Outbox sweeper shutdown timed out")
+      })
+      await waitWithTimeout(
+        "interaction projection worker shutdown",
+        stopInteractionProjectionWorker(),
+        3000
+      ).catch((err) => {
+        app.log.error(
+          { err },
+          "Interaction projection worker shutdown timed out"
+        )
       })
       await waitWithTimeout(
         "worker shutdown",

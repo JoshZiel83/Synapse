@@ -45,10 +45,12 @@ export interface MessageCapabilities {
   supportsVideo: boolean
   /**
    * Inline interaction prompts (buttons / inline keyboard /
-   * runtime-authorization prompt projection). Connectors that opt in
-   * receive `interaction_prompt` canonical parts; others see them
-   * degrade away. The `interaction-projection` worker uses this flag
-   * + `getInteractionProjectionReadiness?()` as the dispatch gate
+   * runtime-authorization prompt projection). For QQ this is Inline
+   * Keyboard + INTERACTION_CREATE. Connectors that opt in receive
+   * `interaction_prompt` canonical parts; others see them degrade
+   * away (rewritten to the part's `fallbackText`). The
+   * `interaction-projection` worker uses this flag plus the optional
+   * `getInteractionProjectionReadiness?()` hook as the dispatch gate
    * (replaces the per-kind worker hard-code).
    */
   supportsInteractionPrompt: boolean
@@ -123,6 +125,25 @@ function degradePart(
           original: { fileRef: part.fileRef },
         },
       ]
+    case "voice":
+      if (caps.supportsVoice) return [part]
+      return [
+        {
+          type: "system_marker",
+          marker: "voice_placeholder",
+          label: part.transcript ? `[语音 ${part.transcript}]` : undefined,
+          original: { fileRef: part.fileRef, durationMs: part.durationMs },
+        },
+      ]
+    case "video":
+      if (caps.supportsVideo) return [part]
+      return [
+        {
+          type: "system_marker",
+          marker: "video_placeholder",
+          original: { fileRef: part.fileRef, durationMs: part.durationMs },
+        },
+      ]
     case "file":
       if (caps.supportsFile) return [part]
       return [
@@ -141,6 +162,16 @@ function degradePart(
     case "reaction":
       if (caps.canReact) return [part]
       return [] // dropped silently
+    case "interaction_prompt":
+      if (caps.supportsInteractionPrompt) return [part]
+      return [
+        {
+          type: "text",
+          text: part.title
+            ? `${part.title}\n${part.fallbackText}`
+            : part.fallbackText,
+        },
+      ]
     case "system_marker":
       return [part]
   }

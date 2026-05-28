@@ -17,9 +17,9 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
  * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
  * `bootstrap.test.ts` enforces the length invariant.
  */
-export const CURRENT_SCHEMA_VERSION = "2026-05-28-im-shared-prep-dingtalk"
+export const CURRENT_SCHEMA_VERSION = "2026-05-28-im-shared-prep-all"
 export const CURRENT_SCHEMA_DESCRIPTION =
-  "IM connector shared prep + DingTalk Stream connector v1. Shared prep: TransportConnectorCapability displayName/iconAssetPath/showsBaseUrlConfig, MessageCapabilities voice/video/interactionPrompt fields, polymorphic validateConfig/getBindingDefaults/planAccountRecoveryActions/getInteractionProjectionReadiness hooks, transactional updateTransportAccount + recovery executor, single connectors/register-all entrypoint. Adds 'dingtalk' to transport_accounts_transport_kind / transport_addresses_transport_kind / transport_message_links_transport_kind enums."
+  "IM connector shared prep + WeCom v1 + DingTalk Stream v1 + QQ Bot v1. Shared prep: TransportConnectorCapability displayName/iconAssetPath/showsBaseUrlConfig, MessageCapabilities voice/video/interactionPrompt fields, polymorphic validateConfig/getBindingDefaults/planAccountRecoveryActions/getInteractionProjectionReadiness hooks, transactional updateTransportAccount + recovery executor, single connectors/register-all entrypoint. Adds 'dingtalk' + 'qq' to transport_accounts/transport_addresses/transport_message_links transport_kind enums. QQ-only: new interaction_action_tokens + interaction_transport_projections tables for QQ inline-keyboard projection; new conversation_transport_bindings(account, conversation) index for recovery lookups."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

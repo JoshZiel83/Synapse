@@ -103,6 +103,23 @@ export const IM_TRANSPORT_DELIVERY_JOB_DEFAULTS = {
   removeOnFail: { age: 86_400, count: 1_000 },
 } as const
 
+/**
+ * Single source of truth for the BullMQ jobId of an IM transport
+ * delivery attempt. Both the initial enqueue
+ * (`enqueueTransportDeliveryJobs`) and the outbox sweeper's
+ * `getJob(...)` dedup lookup MUST use this exact function — if they
+ * drift apart the sweeper would fail to recognize the original job
+ * and produce a duplicate enqueue, breaking BullMQ's jobId-based
+ * dedup contract.
+ *
+ * The format `im-transport-delivery-<linkId>` is part of the
+ * persisted Redis key; do not change it without a coordinated
+ * migration plan for in-flight links.
+ */
+export function canonicalTransportDeliveryJobId(linkId: string): string {
+  return `im-transport-delivery-${linkId}`
+}
+
 export async function enqueueTransportDeliveryJobs(linkIds: string[]) {
   const uniqueLinkIds = Array.from(
     new Set(linkIds.map((linkId) => linkId.trim()).filter(Boolean))
@@ -113,7 +130,7 @@ export async function enqueueTransportDeliveryJobs(linkIds: string[]) {
         "deliver",
         { linkId },
         {
-          jobId: `im-transport-delivery-${linkId}`,
+          jobId: canonicalTransportDeliveryJobId(linkId),
           ...IM_TRANSPORT_DELIVERY_JOB_DEFAULTS,
         }
       )

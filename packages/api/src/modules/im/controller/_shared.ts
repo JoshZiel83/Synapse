@@ -346,6 +346,53 @@ export const updateWecomAccountSchema = z
   .superRefine(validateTransportAccountOwnerUpdate)
   .superRefine(validateTransportAccountInboundActorUpdate)
 
+/**
+ * QQ Bot account schemas. `configuredUrlDomains` is server-side normalized
+ * by the connector (readQqAccountConfig). We accept any string list here
+ * — the connector lowercases, strips scheme/path/port, and rejects
+ * wildcards / IP literals. UI hint should mirror that contract.
+ */
+export const qqAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
+    appId: z.string().trim().min(1).max(255),
+    clientSecret: z.string().trim().min(1).max(255),
+    /**
+     * Optional botSecret — used for Ed25519 webhook signing if QQ console
+     * exposes it separately from clientSecret. Falls back to clientSecret
+     * when absent (see getEd25519Seed in credentials.ts).
+     */
+    botSecret: z.string().trim().max(255).optional(),
+    webhookInboundConfirmed: z.boolean().optional(),
+    allowProactiveBestEffort: z.boolean().optional(),
+    configuredUrlDomains: z.array(z.string().min(1)).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...transportAccountOwnerCreateShape,
+    ...transportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreate)
+  .superRefine(validateTransportAccountInboundActorCreate)
+
+export const updateQqAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
+    appId: z.string().trim().min(1).max(255).optional(),
+    clientSecret: z.string().trim().min(1).max(255).optional(),
+    botSecret: z.string().trim().max(255).optional(),
+    webhookInboundConfirmed: z.boolean().optional(),
+    allowProactiveBestEffort: z.boolean().optional(),
+    configuredUrlDomains: z.array(z.string().min(1)).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...transportAccountOwnerUpdateShape,
+    ...transportAccountInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdate)
+  .superRefine(validateTransportAccountInboundActorUpdate)
+
 export const transportSessionSettingsSchema = z
   .object({
     outboundEnabled: z.boolean().optional(),

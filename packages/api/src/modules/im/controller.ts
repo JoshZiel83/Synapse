@@ -7,9 +7,11 @@
  * Per-transport routes that diverge from the generic shape live in:
  *   - controller/feishu.ts (POST/PUT /im/accounts/feishu)
  *   - controller/weixin.ts (binding lifecycle + QR-login flows)
+ *   - controller/qq.ts    (POST/PUT /im/accounts/qq)
  */
 
 import type { FastifyInstance } from "fastify"
+import { z } from "zod"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import {
@@ -32,6 +34,7 @@ import {
 } from "./controller/_shared.js"
 import imFeishuController from "./controller/feishu.js"
 import imWecomController from "./controller/wecom.js"
+import imQqController from "./controller/qq.js"
 import imWeixinController from "./controller/weixin.js"
 import imDingtalkController from "./controller/dingtalk.js"
 
@@ -45,6 +48,7 @@ export default async function imController(app: FastifyInstance) {
   await imWecomController(app)
   await imWeixinController(app)
   await imDingtalkController(app)
+  await imQqController(app)
 
   app.get<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/connectors",
@@ -186,22 +190,41 @@ export default async function imController(app: FastifyInstance) {
 
       const { workspaceId } = request.params
       const body = accountSchema.parse(request.body)
-      const account = await createTransportAccount({
-        workspaceId,
-        transportKind: body.transportKind,
-        accountKey: body.accountKey,
-        displayName: body.displayName,
-        ownerScope: body.ownerScope,
-        ownerWorkspaceMemberId: body.ownerWorkspaceMemberId ?? null,
-        connectionMode: body.connectionMode,
-        status: body.status,
-        inboundActorMode: body.inboundActorMode,
-        inboundActorId:
-          body.inboundActorId === null ? null : body.inboundActorId,
-        credentials: body.credentials,
-        config: body.config,
-        metadata: body.metadata,
-      })
+      // Catch the service-layer per-transport config validator's
+      // ZodError so a wildcard / IP in `config.configuredUrlDomains`
+      // (QQ-specific gate, currently the only transport with one)
+      // surfaces as 400 instead of Fastify's default 500.
+      let account
+      try {
+        account = await createTransportAccount({
+          workspaceId,
+          transportKind: body.transportKind,
+          accountKey: body.accountKey,
+          displayName: body.displayName,
+          ownerScope: body.ownerScope,
+          ownerWorkspaceMemberId: body.ownerWorkspaceMemberId ?? null,
+          connectionMode: body.connectionMode,
+          status: body.status,
+          inboundActorMode: body.inboundActorMode,
+          inboundActorId:
+            body.inboundActorId === null ? null : body.inboundActorId,
+          credentials: body.credentials,
+          config: body.config,
+          metadata: body.metadata,
+        })
+      } catch (err) {
+        if (err instanceof z.ZodError) {
+          return reply.status(400).send({
+            error: "invalid_account_config",
+            issues: err.issues.map((i) => ({
+              path: i.path,
+              code: i.code,
+              message: i.message,
+            })),
+          })
+        }
+        throw err
+      }
       await refreshTransportRuntimeState()
       return reply.status(201).send({ account })
     }
@@ -223,21 +246,36 @@ export default async function imController(app: FastifyInstance) {
 
       const { workspaceId, accountId } = request.params
       const body = updateAccountSchema.parse(request.body)
-      const account = await updateTransportAccount({
-        workspaceId,
-        accountId,
-        displayName: body.displayName,
-        ownerScope: body.ownerScope,
-        ownerWorkspaceMemberId: body.ownerWorkspaceMemberId,
-        connectionMode: body.connectionMode,
-        status: body.status,
-        inboundActorMode: body.inboundActorMode,
-        inboundActorId:
-          body.inboundActorId === null ? null : body.inboundActorId,
-        credentials: body.credentials,
-        config: body.config,
-        metadata: body.metadata,
-      })
+      let account
+      try {
+        account = await updateTransportAccount({
+          workspaceId,
+          accountId,
+          displayName: body.displayName,
+          ownerScope: body.ownerScope,
+          ownerWorkspaceMemberId: body.ownerWorkspaceMemberId,
+          connectionMode: body.connectionMode,
+          status: body.status,
+          inboundActorMode: body.inboundActorMode,
+          inboundActorId:
+            body.inboundActorId === null ? null : body.inboundActorId,
+          credentials: body.credentials,
+          config: body.config,
+          metadata: body.metadata,
+        })
+      } catch (err) {
+        if (err instanceof z.ZodError) {
+          return reply.status(400).send({
+            error: "invalid_account_config",
+            issues: err.issues.map((i) => ({
+              path: i.path,
+              code: i.code,
+              message: i.message,
+            })),
+          })
+        }
+        throw err
+      }
       await refreshTransportRuntimeState()
       return reply.send({ account })
     }

@@ -39,7 +39,7 @@ import { getConversationTransportBinding } from "../service.js"
  * `metadata.delivery.*` keys an in-flight `sendMessage` patched
  * before it crashed (and vice versa).
  */
-function deepMergePlainObjects(
+export function deepMergeJsonObjects(
   target: Record<string, unknown>,
   patch: Record<string, unknown>
 ): Record<string, unknown> {
@@ -54,7 +54,7 @@ function deepMergePlainObjects(
       typeof value === "object" &&
       !Array.isArray(value)
     ) {
-      out[key] = deepMergePlainObjects(
+      out[key] = deepMergeJsonObjects(
         existing as Record<string, unknown>,
         value as Record<string, unknown>
       )
@@ -189,7 +189,7 @@ export async function updateTransportMessageLinkStatus(params: {
       .forUpdate()
       .executeTakeFirst()
     const current = parseJsonObject(existing?.metadata)
-    const merged = deepMergePlainObjects(current, extraMetadata)
+    const merged = deepMergeJsonObjects(current, extraMetadata)
     const row = await tx
       .updateTable("transport_message_links")
       .set({
@@ -243,7 +243,7 @@ export async function patchTransportMessageLinkMetadata(params: {
       .forUpdate()
       .executeTakeFirst()
     const current = parseJsonObject(existing?.metadata)
-    const merged = deepMergePlainObjects(current, params.patch)
+    const merged = deepMergeJsonObjects(current, params.patch)
     await tx
       .updateTable("transport_message_links")
       .set({
@@ -348,4 +348,77 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
     ),
     itemMetadata: parseJsonObject(row.item_metadata),
   }
+}
+
+/**
+ * Drop a top-level key from `transport_message_links.metadata` (jsonb
+ * `-` operator). Used by recovery flips that need to clear stale
+ * markers like `skippedReason` without rewriting the rest of the
+ * metadata object. Accepts a Kysely transaction so callers can keep
+ * the delete in the same commit as the related UPDATE.
+ */
+export async function removeTransportMessageLinkMetadataKey(
+  tx: DatabaseTransaction,
+  linkId: string,
+  key: string
+): Promise<void> {
+  await tx
+    .updateTable("transport_message_links")
+    .set({
+      metadata:
+        sql`metadata - ${key}` as unknown as TableInsert<"transport_message_links">["metadata"],
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", linkId)
+    .execute()
+}
+
+/**
+ * Persist a fully-formed `transport_message_links` row directly.
+ * Used by the interaction-projection worker to insert a link
+ * already keyed to a freshly-minted action token before enqueueing
+ * delivery.
+ */
+export async function persistOutboundLinkRowRaw(params: {
+  workspaceId: string
+  conversationId: string
+  itemId: string
+  transportAccountId: string
+  transportEndpointId: string
+  transportKind: TransportKind
+  metadata?: Record<string, unknown>
+}): Promise<{ id: string }> {
+  const row = await db
+    .insertInto("transport_message_links")
+    .values({
+      id: uuidv4(),
+      workspace_id: params.workspaceId,
+      conversation_id: params.conversationId,
+      item_id: params.itemId,
+      transport_account_id: params.transportAccountId,
+      transport_endpoint_id: params.transportEndpointId,
+      transport_kind: params.transportKind,
+      direction: "outbound",
+      delivery_status: "pending",
+      external_message_id: null,
+      external_reply_to_id: null,
+      external_thread_id: null,
+      metadata: (params.metadata ||
+        {}) as TableInsert<"transport_message_links">["metadata"],
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return { id: row.id }
+}
+
+/**
+ * Enqueue a freshly-created link for outbound delivery — the
+ * interaction-projection worker writes the link row, then calls this
+ * to push the job onto BullMQ with the standard
+ * `IM_TRANSPORT_DELIVERY_JOB_DEFAULTS` (attempts + backoff).
+ */
+export async function enqueueOutboundDelivery(linkId: string): Promise<void> {
+  await enqueueTransportDeliveryJobs([linkId])
 }

@@ -125,6 +125,32 @@ function encodePart(part: CanonicalPart): EncodedContentBlock | null {
         category: "image",
       }
     }
+    case "voice": {
+      const fileRef = part.fileRef
+      if (!fileRef.fileId || !fileRef.url) return null
+      return {
+        type: "file_ref",
+        fileId: fileRef.fileId,
+        url: fileRef.url,
+        mimeType: fileRef.mime || "audio/*",
+        originalName: fileRef.name || "voice",
+        sizeBytes: fileRef.sizeBytes || 0,
+        category: "audio",
+      }
+    }
+    case "video": {
+      const fileRef = part.fileRef
+      if (!fileRef.fileId || !fileRef.url) return null
+      return {
+        type: "file_ref",
+        fileId: fileRef.fileId,
+        url: fileRef.url,
+        mimeType: fileRef.mime || "video/*",
+        originalName: fileRef.name || "video",
+        sizeBytes: fileRef.sizeBytes || 0,
+        category: "video",
+      }
+    }
     case "file": {
       const fileRef = part.fileRef
       if (!fileRef.fileId || !fileRef.url) return null
@@ -141,6 +167,7 @@ function encodePart(part: CanonicalPart): EncodedContentBlock | null {
     case "card":
     case "quote":
     case "reaction":
+    case "interaction_prompt":
     case "system_marker":
       // Rich/control parts have no CanonicalContentBlock counterpart.
       // They're preserved in transportMetadata.canonicalParts only.
@@ -230,6 +257,30 @@ function decodeBlock(block: EncodedContentBlock): CanonicalPart | null {
       if (block.category === "image") {
         return {
           type: "image",
+          fileRef: {
+            fileId: block.fileId,
+            url: block.url,
+            mime: block.mimeType,
+            name: block.originalName,
+            sizeBytes: block.sizeBytes,
+          },
+        }
+      }
+      if (block.category === "audio") {
+        return {
+          type: "voice",
+          fileRef: {
+            fileId: block.fileId,
+            url: block.url,
+            mime: block.mimeType,
+            name: block.originalName,
+            sizeBytes: block.sizeBytes,
+          },
+        }
+      }
+      if (block.category === "video") {
+        return {
+          type: "video",
           fileRef: {
             fileId: block.fileId,
             url: block.url,

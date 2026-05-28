@@ -400,6 +400,7 @@
     GENERIC_MODEL_RESPONSE_MEDIA_INGEST: "generic_model_response_media_ingest",
     FEISHU_DOCS_DOWNLOAD_MEDIA: "feishu_docs_download_media",
     FEISHU_DRIVE_DOWNLOAD_FILE: "feishu_drive_download_file",
+    QQ_INBOUND_MEDIA_INGEST: "qq_inbound_media_ingest",
     SKILL_MIRROR_IMPORT: "skill_mirror_import",
     GENERATED_USER_AVATAR: "generated_user_avatar",
     GENERATED_OFFICIAL_ACTOR_AVATAR: "generated_official_actor_avatar",
@@ -429,7 +430,8 @@
   ];
   var EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.FEISHU_DOCS_DOWNLOAD_MEDIA,
-    FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE
+    FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE,
+    FILE_ORIGIN_SYSTEMS.QQ_INBOUND_MEDIA_INGEST
   ];
   var PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT
@@ -673,12 +675,7 @@
     REMOTE_AGENT_MACHINE_LIFECYCLE_STATE.ONLINE,
     REMOTE_AGENT_MACHINE_LIFECYCLE_STATE.OFFLINE
   ];
-  var TRANSPORT_KINDS = [
-    "feishu",
-    "weixin",
-    "wecom",
-    "dingtalk"
-  ];
+  var TRANSPORT_KINDS = ["feishu", "weixin", "wecom", "qq"];
   var RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
     ONCE: "once",
     ACTOR: "actor",
