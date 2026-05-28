@@ -31,6 +31,27 @@ export interface MessageCapabilities {
   supportsReply: boolean
   supportsImage: boolean
   supportsFile: boolean
+  /**
+   * Voice messages (audio_silk / audio_mp3 parts). False on every
+   * platform that doesn't currently implement audio render/upload —
+   * leaving this true would let voice parts reach `sendMessage` and
+   * silently fail. Enable per-connector only when actual upload path
+   * lands.
+   */
+  supportsVoice: boolean
+  /**
+   * Short-video messages. Same conservative default as `supportsVoice`.
+   */
+  supportsVideo: boolean
+  /**
+   * Inline interaction prompts (buttons / inline keyboard /
+   * runtime-authorization prompt projection). Connectors that opt in
+   * receive `interaction_prompt` canonical parts; others see them
+   * degrade away. The `interaction-projection` worker uses this flag
+   * + `getInteractionProjectionReadiness?()` as the dispatch gate
+   * (replaces the per-kind worker hard-code).
+   */
+  supportsInteractionPrompt: boolean
   maxTextBytes: number
   /**
    * How to pick the recipient address for a mention sent to a direct (1:1)

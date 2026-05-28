@@ -10,6 +10,8 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
  */
 export const WECOM_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "wecom",
+  displayName: "WeCom",
+  iconAssetPath: "/icon/wecom.svg",
   supportedConnectionModes: [],
   supportedEndpointTypes: [],
   supportsDirectMessages: false,
@@ -27,6 +29,9 @@ export const WECOM_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsReply: false,
   supportsImage: false,
   supportsFile: false,
+  supportsVoice: false,
+  supportsVideo: false,
+  supportsInteractionPrompt: false,
   maxTextBytes: 0,
   directMentionPolicy: "attached_only",
 }

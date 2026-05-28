@@ -6,9 +6,11 @@ import {
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
+  describeTransportKind,
   INTERACTION_INPUT_QUESTION_TYPES,
   isGroupConversationKind,
   isThreadConversationKind,
+  isTransportKind,
   normalizeActorDocs,
   resolveThreadSemantics,
   SEND_TO_INTENTS,
@@ -53,6 +55,7 @@ import {
 import { db } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
 import { getSession, updateSessionCollaboration } from "../session/service.js"
+import { getTransportConnectorCapability } from "../im/connectors/index.js"
 import {
   buildSessionPlanDraftState,
   requireSessionPlanDraftState,
@@ -435,13 +438,14 @@ function buildSendToCandidates(
 
     if (participant.user_id) {
       const name = participant.user_name || "User"
-      const transportKind =
-        participant.transport_kind === "feishu" ||
-        participant.transport_kind === "weixin"
-          ? participant.transport_kind
-          : undefined
+      const transportKind = isTransportKind(participant.transport_kind)
+        ? participant.transport_kind
+        : undefined
       const transportLabel = transportKind
-        ? `, reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
+        ? `, reachable via ${
+            getTransportConnectorCapability(transportKind)?.displayName ??
+            describeTransportKind(transportKind)
+          }`
         : ""
       candidates.push({
         participantType: "workspace_member",
