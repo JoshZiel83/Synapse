@@ -5,9 +5,11 @@
  *     endpoints that work for every transport_kind
  *
  * Per-transport routes that diverge from the generic shape live in:
- *   - controller/feishu.ts (POST/PUT /im/accounts/feishu)
- *   - controller/weixin.ts (binding lifecycle + QR-login flows)
- *   - controller/qq.ts    (POST/PUT /im/accounts/qq)
+ *   - controller/feishu.ts   (POST/PUT /im/accounts/feishu)
+ *   - controller/weixin.ts   (binding lifecycle + QR-login flows)
+ *   - controller/wecom.ts    (POST/PUT /im/accounts/wecom)
+ *   - controller/dingtalk.ts (POST/PUT /im/accounts/dingtalk + Device Flow)
+ *   - controller/qq.ts       (POST/PUT /im/accounts/qq)
  */
 
 import type { FastifyInstance } from "fastify"
