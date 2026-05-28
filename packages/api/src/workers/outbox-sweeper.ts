@@ -50,6 +50,7 @@ import { redis } from "../infrastructure/redis/index.js"
 import { parseJsonObject } from "../modules/im/service/_helpers.js"
 import { patchTransportMessageLinkMetadata } from "../modules/im/service.js"
 import {
+  canonicalTransportDeliveryJobId,
   IM_TRANSPORT_DELIVERY_JOB_DEFAULTS,
   imTransportDeliveryQueue,
 } from "./queues.js"
@@ -65,8 +66,6 @@ const SKIPPED_RECOVERABLE_INTERVAL = "24 hours"
 export const SWEEPER_BUDGET_PER_LINK = 10
 export const SWEEPER_BUDGET_PER_10MIN = 3
 export const SWEEPER_BUDGET_MAX_AGE_HOURS = 24
-
-const QUEUE_NAME_PREFIX = "im-transport-delivery"
 
 const RETRYABLE_LAST_ERROR_CODES: ReadonlySet<string> = new Set([
   // QQ retryable business codes (see openclaw-qqbot src/api.ts +
@@ -171,16 +170,19 @@ async function enqueueOnce(
 }
 
 /**
- * Deterministic BullMQ jobId for a given link. `enqueueOrRetryTransportDeliveryLink`
- * uses this so the same link can't be enqueued twice while a prior job
- * is still in flight; the BullMQ queue does its own jobId dedup +
- * we explicitly check `queue.getJob(baseJobId)` for the
- * waiting/active/etc states. Exposed so the test can assert the
- * jobId-as-dedup-key contract without reaching into BullMQ internals.
+ * Re-export of the canonical BullMQ jobId producer that lives in
+ * `queues.ts`. This module historically defined its own
+ * `canonicalJobId` and the initial-enqueue path in `queues.ts` hand-
+ * rolled the same string — if they ever drifted, BullMQ's jobId
+ * dedup would break (sweeper wouldn't recognize the in-flight job
+ * and would produce a duplicate enqueue). Now both call sites and
+ * the sweeper's `queue.getJob(...)` lookup use the same function.
+ *
+ * Kept as a re-export rather than a fresh definition so existing
+ * call sites (and the sweeper test) don't have to re-import from
+ * `./queues.js` directly.
  */
-export function canonicalJobId(linkId: string): string {
-  return `${QUEUE_NAME_PREFIX}-${linkId}`
-}
+export const canonicalJobId = canonicalTransportDeliveryJobId
 
 /**
  * Read the current "enqueue retry count" off a link's metadata.

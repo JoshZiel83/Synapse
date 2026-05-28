@@ -37,6 +37,12 @@ import {
   SWEEPER_BUDGET_PER_LINK,
   SWEEPER_BUDGET_MAX_AGE_HOURS,
 } from "./outbox-sweeper.js"
+// `canonicalTransportDeliveryJobId` is the producer the initial
+// enqueue path (`enqueueTransportDeliveryJobs` in queues.ts) uses
+// for the BullMQ jobId. The sweeper's `canonicalJobId` MUST be the
+// same function — see review #8 for the regression class this
+// guards against.
+import { canonicalTransportDeliveryJobId } from "./queues.js"
 
 // ─── namespace migration: enqueue retry count ───
 
@@ -239,13 +245,29 @@ test("canonicalJobId: differs per link id", () => {
   assert.notEqual(canonicalJobId("abc"), canonicalJobId("def"))
 })
 
-test("canonicalJobId: prefixed (so unrelated queue names can coexist)", () => {
-  // No need to lock the exact prefix string — the contract is
-  // "namespaced enough that a raw linkId collision with another
-  // queue's job id is impossible". A non-trivial prefix length is
-  // the proxy.
-  assert.ok(
-    canonicalJobId("abc").length > "abc".length,
-    `expected canonical id to be prefixed; got ${canonicalJobId("abc")}`
-  )
+test("canonicalJobId === canonicalTransportDeliveryJobId — same producer for enqueue + sweeper lookup", () => {
+  // Critical regression guard for review #8: if `queues.ts`'s
+  // initial-enqueue path and the sweeper's `getJob(...)` lookup ever
+  // produced different strings for the same linkId, BullMQ's jobId
+  // dedup would silently break — the sweeper would think no job
+  // existed for the link and produce a duplicate enqueue. Asserting
+  // both are the same function (and produce byte-identical output)
+  // is the strongest contract we can pin in a unit test.
+  assert.equal(canonicalJobId, canonicalTransportDeliveryJobId)
+  for (const linkId of ["abc", "00000000-0000-0000-0000-000000000001", "x"]) {
+    assert.equal(
+      canonicalJobId(linkId),
+      canonicalTransportDeliveryJobId(linkId),
+      `jobId producers diverged for linkId=${linkId}`
+    )
+  }
+})
+
+test("canonicalJobId: format matches the persisted Redis key shape", () => {
+  // Hard-pin the format because the BullMQ keyspace is persisted to
+  // Redis — changing it without a coordinated rollout would orphan
+  // every in-flight job in production. If you intentionally change
+  // the format, you also have to plan a migration; this test fails
+  // loudly so the decision is explicit.
+  assert.equal(canonicalJobId("link-123"), "im-transport-delivery-link-123")
 })
