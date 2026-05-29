@@ -120,6 +120,7 @@ export interface AccessTargetInput {
     | "conversation"
     | "actor_in_conversation"
     | "remote_agent"
+    | "remote_agent_in_conversation"
   workspaceId?: string
   actorId?: string
   conversationId?: string
@@ -131,14 +132,20 @@ export interface AccessTargetInput {
  * `(subjectId, scopeSubjectId?)`. Scope is populated only for
  * `actor_in_conversation` (a wire compatibility label that the new D3
  * model expresses as `actor` + `scope=conversation`).
+ *
+ * Tests may inject a Kysely handle (e.g. the ephemeral DB returned by
+ * `withTestDb`) so the underlying `upsertAccessSubject` writes against
+ * the test connection rather than the production pool.
  */
 export async function resolveScopedSubjectTarget(
-  input: AccessTargetInput
+  input: AccessTargetInput,
+  options?: { db?: typeof db }
 ): Promise<{ subjectId: string; scopeSubjectId?: string }> {
+  const dbHandle = options?.db ?? db
   switch (input.kind) {
     case "workspace": {
       if (!input.workspaceId) throw new Error("workspaceId required")
-      const subjectId = await upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId: input.workspaceId,
       })
@@ -146,7 +153,7 @@ export async function resolveScopedSubjectTarget(
     }
     case "actor": {
       if (!input.actorId) throw new Error("actorId required")
-      const subjectId = await upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: input.actorId,
       })
@@ -154,7 +161,7 @@ export async function resolveScopedSubjectTarget(
     }
     case "conversation": {
       if (!input.conversationId) throw new Error("conversationId required")
-      const subjectId = await upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: input.conversationId,
       })
@@ -166,11 +173,11 @@ export async function resolveScopedSubjectTarget(
         throw new Error(
           "actorId and conversationId required for actor_in_conversation target"
         )
-      const subjectId = await upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: input.actorId,
       })
-      const scopeSubjectId = await upsertAccessSubject(db, {
+      const scopeSubjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: input.conversationId,
       })
@@ -179,11 +186,32 @@ export async function resolveScopedSubjectTarget(
     case "remote_agent": {
       if (!input.remoteAgentId)
         throw new Error("remoteAgentId required for remote_agent target")
-      const subjectId = await upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.REMOTE_AGENT,
         remoteAgentId: input.remoteAgentId,
       })
       return { subjectId }
+    }
+    case "remote_agent_in_conversation": {
+      // Mirror of `actor_in_conversation`: remote_agent subject narrowed
+      // to a conversation scope. The wire layer admits this combination
+      // (ScopedSubjectTargetWireSchema's superRefine whitelist) and the
+      // trigger `tg_runtime_authorization_grant_validate` accepts
+      // `(remote_agent, conversation)` for grants; bindings flow through
+      // the same `tg_rab_validate` trigger.
+      if (!input.remoteAgentId || !input.conversationId)
+        throw new Error(
+          "remoteAgentId and conversationId required for remote_agent_in_conversation target"
+        )
+      const subjectId = await upsertAccessSubject(dbHandle, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: input.remoteAgentId,
+      })
+      const scopeSubjectId = await upsertAccessSubject(dbHandle, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: input.conversationId,
+      })
+      return { subjectId, scopeSubjectId }
     }
   }
 }

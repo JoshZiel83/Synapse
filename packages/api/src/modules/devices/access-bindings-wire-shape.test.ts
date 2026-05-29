@@ -14,11 +14,21 @@
 //       legacy-client back-compat).
 //   (c) The wire schema's `superRefine` whitelist still rejects scoped
 //       combinations outside `(actor|remote_agent, conversation)`.
+//   (d) Batch 19: the server-side mapper actually translates every
+//       wire-accepted combination into a real service-layer flat target.
+//       Previously `(remote_agent, conversation)` parsed at the schema
+//       layer but threw at the mapper, so the route still 400'd.
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import type { Kysely } from "kysely"
 import { SetActiveDeviceCapabilitiesInputSchema } from "@synapse/device-protocol"
-import { setActiveBodySchema } from "./access-bindings.js"
+import {
+  setActiveBodySchema,
+  wireTargetToInternalAccessTarget,
+} from "./access-bindings.js"
+import { resolveScopedSubjectTarget } from "../capability-projection/device-capabilities.js"
+import { withTestDb } from "../../test/helpers/db.js"
 
 const wsId = "00000000-0000-0000-0000-000000000001"
 const actorId = "00000000-0000-0000-0000-000000000002"
@@ -146,3 +156,153 @@ test("Batch 18: POST body rejects scoped combinations outside (actor|remote_agen
   }
   assert.equal(setActiveBodySchema.safeParse(convScopeConvBody).success, false)
 })
+
+// (d) — every wire-accepted shape MUST translate to a real flat target.
+// Pre-Batch-19 the wire schema admitted `(remote_agent, conversation)` but
+// the mapper threw, so the route 400'd on a valid SDK body. These tests
+// pin the contract: every shape that survives the wire-schema parse also
+// survives `wireTargetToInternalAccessTarget`.
+
+test("Batch 19: wireTargetToInternalAccessTarget — unscoped shapes", () => {
+  assert.deepEqual(
+    wireTargetToInternalAccessTarget({
+      subject: { kind: "workspace", workspaceId: wsId },
+    }),
+    { kind: "workspace", workspaceId: wsId }
+  )
+  assert.deepEqual(
+    wireTargetToInternalAccessTarget({
+      subject: { kind: "actor", actorId },
+    }),
+    { kind: "actor", actorId }
+  )
+  assert.deepEqual(
+    wireTargetToInternalAccessTarget({
+      subject: { kind: "conversation", conversationId: convId },
+    }),
+    { kind: "conversation", conversationId: convId }
+  )
+  assert.deepEqual(
+    wireTargetToInternalAccessTarget({
+      subject: { kind: "remote_agent", remoteAgentId },
+    }),
+    { kind: "remote_agent", remoteAgentId }
+  )
+})
+
+test("Batch 19: wireTargetToInternalAccessTarget — actor + scope=conversation", () => {
+  assert.deepEqual(
+    wireTargetToInternalAccessTarget({
+      subject: { kind: "actor", actorId },
+      scope: { kind: "conversation", conversationId: convId },
+    }),
+    {
+      kind: "actor_in_conversation",
+      actorId,
+      conversationId: convId,
+    }
+  )
+})
+
+test("Batch 19: wireTargetToInternalAccessTarget — remote_agent + scope=conversation translates (no longer throws)", () => {
+  // Pre-Batch-19 this threw inside the mapper, surfacing as a route 400
+  // even though the wire schema admitted the shape. Lock the fix: the
+  // mapper now returns a `remote_agent_in_conversation` flat target.
+  assert.deepEqual(
+    wireTargetToInternalAccessTarget({
+      subject: { kind: "remote_agent", remoteAgentId },
+      scope: { kind: "conversation", conversationId: convId },
+    }),
+    {
+      kind: "remote_agent_in_conversation",
+      remoteAgentId,
+      conversationId: convId,
+    }
+  )
+})
+
+// (e) — resolver round-trip for the new shape. Pre-Batch-19 the
+// `remote_agent_in_conversation` kind didn't exist in the AccessTargetInput
+// union, so even if a caller had constructed it by hand, the
+// resolveScopedSubjectTarget switch had no branch for it. Lock the new
+// branch via a real DB round-trip: insert remote_agent + conversation
+// fixtures, ask the resolver, assert both subject_id + scope_subject_id
+// are populated and FK-valid.
+test(
+  "Batch 19: resolveScopedSubjectTarget(remote_agent_in_conversation) returns (subjectId, scopeSubjectId)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db: Kysely<any>) => {
+      const rid = () => Math.random().toString(36).slice(2, 10)
+      const user = await db
+        .insertInto("users")
+        .values({
+          email: `${rid()}@batch19`,
+          name: "u",
+          password_hash: "x",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const ws = await db
+        .insertInto("workspaces")
+        .values({
+          owner_id: user.id as string,
+          slug: `ws-${rid()}`,
+          name: "ws",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const agent = await db
+        .insertInto("remote_agents")
+        .values({
+          workspace_id: ws.id as string,
+          name: `ra-${rid()}`,
+          title: "ra",
+          runtime_kind: "claude_code",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const conv = await db
+        .insertInto("conversations")
+        .values({
+          kind: "group",
+          boundary: "internal",
+          internal_workspace_id: ws.id as string,
+          title: "c",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const resolved = await resolveScopedSubjectTarget(
+        {
+          kind: "remote_agent_in_conversation",
+          remoteAgentId: agent.id as string,
+          conversationId: conv.id as string,
+        },
+        { db }
+      )
+      assert.ok(
+        resolved.subjectId,
+        "resolver returned no subjectId for remote_agent_in_conversation"
+      )
+      assert.ok(
+        resolved.scopeSubjectId,
+        "resolver returned no scopeSubjectId — the scope-narrowed branch is missing"
+      )
+      // Sanity-check the subjects are the right kinds.
+      const subjectRow = await db
+        .selectFrom("access_subjects")
+        .select(["kind", "remote_agent_id"])
+        .where("id", "=", resolved.subjectId)
+        .executeTakeFirstOrThrow()
+      assert.equal(subjectRow.kind, "remote_agent")
+      assert.equal(subjectRow.remote_agent_id, agent.id)
+      const scopeRow = await db
+        .selectFrom("access_subjects")
+        .select(["kind", "conversation_id"])
+        .where("id", "=", resolved.scopeSubjectId as string)
+        .executeTakeFirstOrThrow()
+      assert.equal(scopeRow.kind, "conversation")
+      assert.equal(scopeRow.conversation_id, conv.id)
+    })
+  }
+)

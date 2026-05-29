@@ -51,12 +51,20 @@ export const setActiveBodySchema = z.object({
  * actor/remote_agent + conversation), so we only need to handle those
  * shapes here. Anything else is unreachable.
  */
-function wireTargetToInternalAccessTarget(
+// Exported for regression tests that pin the wire→internal mapping —
+// without this lock, the wire schema could keep accepting a shape that
+// then throws at the mapper (which is what happened pre-Batch-19 with
+// `(remote_agent, conversation)`).
+export function wireTargetToInternalAccessTarget(
   target: DeviceCapabilityAccessTarget
 ): AccessTargetInput {
   const { subject, scope } = target
   if (scope) {
-    // Only actor+conversation and remote_agent+conversation reach here.
+    // The wire whitelist (ScopedSubjectTargetWireSchema.superRefine) only
+    // admits (actor, conversation) and (remote_agent, conversation). Both
+    // map to dedicated internal `*_in_conversation` flat-shape variants so
+    // the service layer can carry the scope through without adding a
+    // separate scope field to AccessTargetInput.
     if (subject.kind === "actor" && scope.kind === "conversation") {
       return {
         kind: "actor_in_conversation",
@@ -64,12 +72,16 @@ function wireTargetToInternalAccessTarget(
         conversationId: scope.conversationId,
       }
     }
-    // remote_agent + conversation has no internal flat-shape variant; the
-    // current service layer doesn't write `subject=remote_agent +
-    // scope=conversation` device bindings yet. The wire schema would have
-    // accepted it; the service layer raises a 400 with a clear reason.
+    if (subject.kind === "remote_agent" && scope.kind === "conversation") {
+      return {
+        kind: "remote_agent_in_conversation",
+        remoteAgentId: subject.remoteAgentId,
+        conversationId: scope.conversationId,
+      }
+    }
+    // Unreachable — wire schema rejected everything else upstream.
     throw new Error(
-      `wireTargetToInternalAccessTarget: ${subject.kind} + ${scope.kind} is accepted at the wire layer but not yet implemented in the service layer`
+      `wireTargetToInternalAccessTarget: unsupported (${subject.kind}, ${scope.kind}) escaped the wire whitelist`
     )
   }
   switch (subject.kind) {
@@ -147,9 +159,13 @@ function listQueryToInternalAccessTarget(
         conversationId: q.scope_conversation_id,
       }
     }
-    // remote_agent + conversation — service layer doesn't write this combo
-    // yet (see wireTargetToInternalAccessTarget). Return null to surface a
-    // 400 with a clear reason instead of mapping to an unsupported shape.
+    if (q.subject_kind === "remote_agent" && q.subject_remote_agent_id) {
+      return {
+        kind: "remote_agent_in_conversation",
+        remoteAgentId: q.subject_remote_agent_id,
+        conversationId: q.scope_conversation_id,
+      }
+    }
     return null
   }
   switch (q.subject_kind) {
@@ -262,6 +278,36 @@ async function assertTargetInWorkspace(
         return {
           ok: false,
           reason: "remote_agent not found in this workspace",
+        }
+      }
+      return { ok: true }
+    }
+    case "remote_agent_in_conversation": {
+      if (!target.remoteAgentId || !target.conversationId)
+        return {
+          ok: false,
+          reason: "remoteAgentId and conversationId required",
+        }
+      const agent = await db
+        .selectFrom("remote_agents")
+        .select("workspace_id")
+        .where("id", "=", target.remoteAgentId)
+        .executeTakeFirst()
+      const conversation = await db
+        .selectFrom("conversations")
+        .select("internal_workspace_id")
+        .where("id", "=", target.conversationId)
+        .executeTakeFirst()
+      if (!agent || agent.workspace_id !== workspaceId) {
+        return {
+          ok: false,
+          reason: "remote_agent not found in this workspace",
+        }
+      }
+      if (!conversation || conversation.internal_workspace_id !== workspaceId) {
+        return {
+          ok: false,
+          reason: "conversation not found in this workspace",
         }
       }
       return { ok: true }
