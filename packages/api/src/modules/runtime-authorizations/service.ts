@@ -1021,6 +1021,47 @@ export function specificityRank(
 }
 
 // ============================================================================
+// toRuntimeAuthorizationGrantWireSpec — single canonical adapter from the API
+// camelCase RuntimeAuthorizationGrantRecord (extends SharedRuntimeAuthorizationGrantSpec)
+// to the snake_case device-protocol wire spec carried in envelope.grant_specs.
+// Required: dispatch (capability-projection) + auto-retry must NOT inline the
+// camelCase→snake_case mapping; both call this helper so the wire shape stays
+// in one place. Adding a new capability branch happens once here.
+// ============================================================================
+
+export function toRuntimeAuthorizationGrantWireSpec(
+  record: RuntimeAuthorizationGrantRecord
+): import("@synapse/device-protocol").RuntimeAuthorizationGrantSpec {
+  return {
+    capability: record.capability,
+    filesystem: record.filesystem
+      ? {
+          access: record.filesystem.access,
+          path_prefixes: record.filesystem.pathPrefixes ?? [],
+        }
+      : undefined,
+    cua: record.cua ? { access: record.cua.access } : undefined,
+    browser: record.browser
+      ? {
+          action: record.browser.action,
+          scope_type: record.browser.scopeType,
+          origin: record.browser.origin,
+          host: record.browser.host,
+          registrable_domain: record.browser.registrableDomain,
+        }
+      : undefined,
+    commandline: record.commandline
+      ? {
+          executor: record.commandline.executor,
+          command_match_type: record.commandline.commandMatchType,
+          command_text: record.commandline.commandText,
+          working_directory: record.commandline.workingDirectory,
+        }
+      : undefined,
+  }
+}
+
+// ============================================================================
 // selectAndClaimRuntimeAuthorizationGrant — canonical helper. Used by
 // dispatch (capability-projection), auto-retry, and conformance tests. Does
 // the full list → match → prepare → atomic claim flow in a single Kysely
@@ -1427,59 +1468,21 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
   return { valid, corrupt }
 }
 
-/**
- * @deprecated Use `selectAndClaimRuntimeAuthorizationGrant` for dispatch flows.
- * This helper is kept for compatibility with capability-projection's existing
- * list-then-consume flow during the merge-prep stabilization phase. It returns
- * raw RuntimeAuthorizationGrantRecord entries without claim semantics.
- */
-export async function listActiveRuntimeAuthorizationGrantsForExposure(
-  deviceCapabilityId: string,
-  queryable?: Queryable
-): Promise<RuntimeAuthorizationGrantRecord[]> {
-  const statement = db
-    .selectFrom("runtime_authorization_grants as g")
-    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "g.scope_subject_id"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
-    .where("g.device_capability_id", "=", deviceCapabilityId)
-    .where("g.status", "=", "active")
-    .orderBy("g.created_at", "desc")
-  const rows = isQueryExecutor(queryable)
-    ? (await executeCompiledQuery<any>(queryable, statement)).rows
-    : await statement.execute()
-  const records: RuntimeAuthorizationGrantRecord[] = []
-  for (const row of rows as any[]) {
-    let candidate: RuntimeAuthorizationGrantCandidate
-    try {
-      candidate = rowToCandidate(row)
-    } catch {
-      continue
-    }
-    if (!candidate.policyValidationResult.ok) continue
-    records.push(
-      mapRuntimeAuthorizationGrantCandidate(
-        candidate,
-        candidate.policyValidationResult.parsed
-      )
-    )
-  }
-  return records
-}
+// subject-scope-refactor: listActiveRuntimeAuthorizationGrantsForExposure
+// DROPPED. The legacy "list every active grant for this capability, then
+// filter in TS" path was the root cause of two P0 security bugs (cross-actor
+// grant leakage + concurrent reuse of consume_once grants). The canonical
+// helper selectAndClaimRuntimeAuthorizationGrant does SQL-side filtering
+// by (subject, scope) and atomic claim in a single transaction. There is
+// no longer a public "list grants" API on the dispatch path — dashboards
+// use listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard, which
+// emits {valid, corrupt} for surfacing instead.
 
-/**
- * @deprecated The full SubjectRef discriminator API is preferred. Kept as a
- * shim so capability-projection's existing call-sites (preset-style filtering)
- * continue to type-check during the merge-prep stabilization phase.
- */
-export const RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
-  ONCE: "once",
-  ACTOR: "actor",
-  CONVERSATION: "conversation",
-  REMOTE_AGENT: "remote_agent",
-  WORKSPACE: "workspace",
-} as const
+// subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPE shim DROPPED.
+// Callers were migrated off it during the canonical-helper cutover; envelope
+// grant_scope values are derived strings via subjectScopeLabel({subject,
+// scope?}) and retention is a separate ("consume_once" | "until_revoked")
+// field. If you find yourself needing this constant, you almost certainly
+// want either (a) `subject.kind === SUBJECT_KIND.X` to branch on subject
+// shape, or (b) `grant.retention === "consume_once"` to gate once-only
+// behavior — never the old preset-style enum.

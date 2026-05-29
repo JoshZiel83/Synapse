@@ -4,6 +4,7 @@ import {
   INTERACTION_REQUEST_KIND,
   SUBJECT_KIND,
   textBlocks,
+  type SubjectRef,
 } from "@synapse/shared"
 import {
   isGroupConversationKind,
@@ -310,7 +311,11 @@ export interface CreateRuntimeAuthorizationInteractionParams {
  * The previous version of this helper short-circuited on
  * `kind=runtime_authorization && !taskId` alone, which would mask
  * task-governance bugs on the actor path. Narrowed here to also
- * require principalRemoteAgentId.
+ * require the principal kind is `remote_agent` (the only legitimate
+ * case where a runtime_authorization interaction can lack a task —
+ * bridged remote agents don't open chat-session tasks). Keyed on
+ * SUBJECT_KIND so the gate moves with the subject registry rather
+ * than the legacy `principal_remote_agent_id` column.
  *
  * Pure function — exported so regression tests can pin the contract
  * without spinning up the full resolveInteractionRequest transaction.
@@ -318,12 +323,12 @@ export interface CreateRuntimeAuthorizationInteractionParams {
 export function runtimeAuthorizationApprovalSkipsTaskCompletion(input: {
   kind: InteractionRequestKind
   taskId?: string | null
-  principalRemoteAgentId?: string | null
+  principalSubjectKind?: string | null
 }): boolean {
   return (
     input.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     !input.taskId &&
-    !!input.principalRemoteAgentId
+    input.principalSubjectKind === SUBJECT_KIND.REMOTE_AGENT
   )
 }
 
@@ -1732,8 +1737,10 @@ async function maybeAutoRetryAfterApproval(args: {
   interaction: InteractionRequestSummary
   sourceRequestArgs?: Record<string, unknown>
   sourceRetryNonce?: string
+  sourceTaskId?: string
   createdGrant?: RuntimeAuthorizationGrantRecord
-  requesterActorId?: string
+  lockedPrincipalSubject?: SubjectRef
+  lockedPrincipalScopeSubjectId?: string
   resolverWorkspaceMemberId?: string
 }) {
   if (
@@ -1746,28 +1753,48 @@ async function maybeAutoRetryAfterApproval(args: {
   if (!args.createdGrant) return null
   if (!args.sourceRetryNonce) return null
   if (!args.sourceRequestArgs) return null
-  // Resolve the actor's subject id so the audit row points back to the
-  // subject-scope-refactor: principalSubjectId is non-null at audit time
-  // (chk_device_operations_principal CHECK tightened to require it for all 4
-  // kinds; BeginOperationInput.principalSubjectId TS type is `string`). When
-  // we can't resolve the requesterActorId to an access_subjects row, we
-  // refuse to auto-retry rather than fabricate a null audit row.
-  let principalSubjectId: string | null = null
-  if (args.requesterActorId) {
-    const { upsertAccessSubject } =
-      await import("../access/subject-registry.js")
-    principalSubjectId = await upsertAccessSubject(db, {
-      kind: SUBJECT_KIND.ACTOR,
-      actorId: args.requesterActorId,
-    }).catch(() => null)
-  }
-  if (!principalSubjectId) {
-    // Skip auto-retry rather than throw — the approval itself already
-    // succeeded; auto-retry is best-effort (dev behavior preserved).
+  if (!args.sourceTaskId) return null
+  if (!args.lockedPrincipalSubject) return null
+
+  // subject-scope-refactor: rebuild the principal runtime subject set
+  // post-commit (Kysely form — pg transaction is closed). buildRuntime
+  // PrincipalContext applies the same active-participant guard the
+  // transaction-time rebuild used. If the actor lost participation between
+  // approval commit and now, activeConversationSubjectId will be undefined
+  // — selectAndClaimRuntimeAuthorizationGrant then refuses to claim any
+  // scoped grant and the auto-retry skips (best-effort semantics, not an
+  // approval failure since the grant is already in the DB).
+  const { buildRuntimePrincipalContext } =
+    await import("../access/subject-resolution.js")
+  const { deriveOperationPrincipalAudit } =
+    await import("../devices/operations.js")
+  let ctx
+  try {
+    ctx = await buildRuntimePrincipalContext(db, {
+      principal: args.lockedPrincipalSubject,
+      workspaceId: args.interaction.workspaceId,
+      conversationId: args.interaction.conversationId ?? null,
+    })
+  } catch {
     return null
   }
-  // The visible tool name (== device-side stable_key) is what the
-  // dispatcher uses as params.name when calling /mcp tools/call.
+  // Post-commit scope mismatch: same equality rule as the transaction-time
+  // gate. Mismatch here is "best-effort skip" rather than throw — the
+  // approval already committed; we just don't auto-retry.
+  if (
+    (args.lockedPrincipalScopeSubjectId ?? null) !==
+    (ctx.activeConversationSubjectId ?? null)
+  ) {
+    return null
+  }
+
+  let audit
+  try {
+    audit = deriveOperationPrincipalAudit(ctx)
+  } catch {
+    return null
+  }
+
   const visibleToolName =
     runtimeAuth.deviceToolStableKey || runtimeAuth.requestedToolName
   const retry = await autoDispatchRuntimeAuthorizationRetry({
@@ -1775,12 +1802,15 @@ async function maybeAutoRetryAfterApproval(args: {
     visibleToolName,
     sourceRequestArgs: args.sourceRequestArgs,
     sourceRetryNonce: args.sourceRetryNonce,
+    sourceTaskId: args.sourceTaskId,
     approvedGrant: args.createdGrant,
+    runtimeSubjectIds: ctx.runtimeSubjectIds,
+    runtimeScopeSubjectIds: ctx.runtimeScopeSubjectIds,
     audit: {
       workspaceId: args.interaction.workspaceId,
       conversationId: args.interaction.conversationId,
-      principalKind: "actor",
-      principalSubjectId,
+      principalKind: audit.principalKind,
+      principalSubjectId: audit.principalSubjectId,
       initiatedBySessionId: null,
       initiatedByWorkspaceMemberId: args.resolverWorkspaceMemberId ?? null,
     },
@@ -3343,6 +3373,7 @@ export async function resolveInteractionRequest(
     let nextStatus: InteractionRequestStatus
     let resolutionPayload: Record<string, unknown>
     let createdGrant: RuntimeAuthorizationGrantRecord | undefined
+    let lockedPrincipalSubjectForReturn: SubjectRef | undefined
 
     if (locked.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
       const promptPayload = parseJsonObject(locked.prompt_payload)
@@ -3546,13 +3577,17 @@ export async function resolveInteractionRequest(
         // subject-scope-refactor: presetToOwnerScope translates the wire
         // preset + locked request context into the new (subject, scope?,
         // retention) triple that createRuntimeAuthorizationGrant accepts.
-        // The principal subject is reconstructed from the locked row via
-        // loadAccessSubject; for unscoped workspace/conversation presets the
-        // subject is derived from the preset itself, not the principal.
+        // The principal subject is reconstructed from the locked row, then
+        // a FULL RuntimePrincipalContext is rebuilt via the pg-form helper
+        // `buildRuntimePrincipalContextOn(client, ...)` so the same Decision-8
+        // / active-participant invariants that govern dispatch also govern
+        // grant creation at approval time.
         const { presetToOwnerScope, UnsupportedGrantTargetError } =
           await import("../runtime-authorizations/service.js")
         const { loadAccessSubject } =
           await import("../access/subject-registry.js")
+        const { buildRuntimePrincipalContextOn } =
+          await import("../access/subject-resolution.js")
         const lockedPrincipalSubject = await loadAccessSubject(
           db,
           locked.principal_subject_id
@@ -3562,26 +3597,36 @@ export async function resolveInteractionRequest(
             `interaction ${locked.id}: principal subject ${locked.principal_subject_id} not found`
           )
         }
-        // Construct a minimal RuntimePrincipalContext sufficient for
-        // presetToOwnerScope. We populate principalSubjectId from locked,
-        // runtimeConversationId from locked.conversation_id, and the
-        // activeConversationSubjectId from locked.principal_scope_subject_id
-        // (set at request creation time when principal was an active
-        // participant).
-        const minimalCtx = {
+        lockedPrincipalSubjectForReturn = lockedPrincipalSubject
+        // Rebuild RuntimePrincipalContext inside the SAME pg transaction
+        // so subject upserts / participant checks see consistent state and
+        // the result reflects current participation (an actor who left the
+        // conversation between request and approval gets `activeConversation
+        // SubjectId === undefined` here, even if the locked row froze one).
+        const rebuiltCtx = await buildRuntimePrincipalContextOn(client, {
           principal: lockedPrincipalSubject,
-          principalSubjectId: locked.principal_subject_id,
-          runtimeSubjectIds: [locked.principal_subject_id],
-          runtimeScopeSubjectIds: locked.principal_scope_subject_id
-            ? [locked.principal_scope_subject_id]
-            : [],
-          runtimeConversationId: locked.conversation_id ?? undefined,
-          activeConversationSubjectId:
-            locked.principal_scope_subject_id ?? undefined,
+          workspaceId: locked.workspace_id,
+          conversationId: locked.conversation_id ?? null,
+        })
+        // ScopeRebuildMismatchError — explicit equality check between the
+        // locked principal_scope_subject_id (frozen at request time) and the
+        // rebuilt active conversation scope. Three cases must all match:
+        //  (a) locked = null AND rebuilt = undefined  → unscoped, OK
+        //  (b) locked = X    AND rebuilt = X          → same scope, OK
+        //  (c) locked = X    AND rebuilt = Y or null  → DRIFT, reject
+        // Without this gate, an actor that lost their conversation
+        // participation between request and approval could still mint a
+        // `actor + scope=conversation` grant via the locked snapshot.
+        const lockedScopeId = locked.principal_scope_subject_id ?? null
+        const rebuiltScopeId = rebuiltCtx.activeConversationSubjectId ?? null
+        if (lockedScopeId !== rebuiltScopeId) {
+          throw new Error(
+            `ScopeRebuildMismatchError: interaction ${locked.id} locked principal_scope_subject_id=${lockedScopeId ?? "NULL"} but rebuilt activeConversationSubjectId=${rebuiltScopeId ?? "NULL"} — principal scope drifted between request and approval`
+          )
         }
         const presetTriple = presetToOwnerScope(
           params.preset || "once",
-          minimalCtx,
+          rebuiltCtx,
           locked.workspace_id
         )
         createdGrant = await createRuntimeAuthorizationGrant(
@@ -3670,9 +3715,22 @@ export async function resolveInteractionRequest(
           ? (locked.source_request_args as Record<string, unknown>)
           : undefined,
       lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
-      lockedRequesterActorId: locked.requester_actor_id ?? undefined,
-      lockedPrincipalRemoteAgentId:
-        locked.principal_remote_agent_id ?? undefined,
+      lockedSourceTaskId: locked.task_id ?? undefined,
+      // subject-scope-refactor: skip-task gate is now keyed on
+      // principal_subj.kind (resolved via JOIN at SELECT time), not the
+      // dropped principal_remote_agent_id column. principal_subject_kind
+      // is the legitimate signal; principal_remote_agent_id is kept on
+      // the row type only as a derived alias for dashboard consumers.
+      lockedPrincipalSubjectKind: locked.principal_subject_kind ?? undefined,
+      // subject-scope-refactor: forward the locked principal triple so the
+      // post-commit auto-retry can re-build the RuntimePrincipalContext via
+      // buildRuntimePrincipalContext (Kysely-form, since the pg transaction
+      // is closed by the time we get there) and pass runtimeSubjectIds /
+      // runtimeScopeSubjectIds to selectAndClaimRuntimeAuthorizationGrant.
+      lockedPrincipalSubjectId: locked.principal_subject_id,
+      lockedPrincipalScopeSubjectId:
+        locked.principal_scope_subject_id ?? undefined,
+      lockedPrincipalSubject: lockedPrincipalSubjectForReturn,
     }
   })
 
@@ -3709,7 +3767,7 @@ export async function resolveInteractionRequest(
     runtimeAuthorizationApprovalSkipsTaskCompletion({
       kind: interaction.kind,
       taskId: interaction.taskId,
-      principalRemoteAgentId: result.lockedPrincipalRemoteAgentId,
+      principalSubjectKind: result.lockedPrincipalSubjectKind,
     })
   ) {
     return {
@@ -3759,8 +3817,10 @@ export async function resolveInteractionRequest(
       interaction,
       sourceRequestArgs: result.lockedSourceRequestArgs,
       sourceRetryNonce: result.lockedSourceRetryNonce,
+      sourceTaskId: result.lockedSourceTaskId,
       createdGrant: result.createdGrant,
-      requesterActorId: result.lockedRequesterActorId,
+      lockedPrincipalSubject: result.lockedPrincipalSubject,
+      lockedPrincipalScopeSubjectId: result.lockedPrincipalScopeSubjectId,
       resolverWorkspaceMemberId: params.resolverWorkspaceMemberId,
     })
     await completeToolCallTask(

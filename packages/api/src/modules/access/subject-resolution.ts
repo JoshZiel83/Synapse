@@ -1,7 +1,10 @@
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import type { PermissionSubject } from "./evaluator.js"
-import { upsertAccessSubject } from "./subject-registry.js"
+import {
+  upsertAccessSubject,
+  upsertAccessSubjectOn,
+} from "./subject-registry.js"
 
 function dedupeSubjects(subjects: PermissionSubject[]) {
   const seen = new Set<string>()
@@ -342,6 +345,167 @@ export async function buildRuntimePrincipalContext(
     runtimeScopeSubjectIds: Array.from(new Set(runtimeScopeSubjectIds)),
     runtimeConversationId: params.conversationId ?? undefined,
     activeConversationSubjectId,
+  }
+}
+
+/**
+ * subject-scope-refactor: pg-form dual of `buildRuntimePrincipalContext`.
+ *
+ * Mirrors the Kysely builder exactly (same security invariants — actor /
+ * remote_agent principals do NOT auto-collect the creator's workspace_member
+ * subject; conversation principals do NOT collect the workspace subject;
+ * platform-wide kinds (user/external/system) are accepted as the principal
+ * but skip the workspace mint). The only differences are wire-level:
+ *
+ *  - takes a pg `Queryable` (the same connection / transaction the caller
+ *    has open) rather than the global Kysely `db`, so the workspace-bound
+ *    + active-participant guards see uncommitted writes from the surrounding
+ *    transaction (critical for approval flows that just upserted the
+ *    interaction row in the same client).
+ *  - calls `upsertAccessSubjectOn(client, ...)` (pg-form upsert) so the
+ *    subject rows it mints are visible to the same transaction.
+ *  - uses raw SQL for the membership / participant lookups so we don't
+ *    open a parallel Kysely connection.
+ *
+ * Decision 8 (conversation principals don't inherit workspace) is preserved
+ * via the shared `isPrincipalWorkspaceBound` helper.
+ */
+export async function buildRuntimePrincipalContextOn(
+  client: import("../../infrastructure/events/index.js").Queryable,
+  params: {
+    principal: SubjectRef
+    workspaceId: string
+    conversationId?: string | null
+    delegatedWorkspaceMemberId?: string | null
+  }
+): Promise<RuntimePrincipalContext> {
+  await assertPrincipalBelongsToWorkspaceOn(
+    client,
+    params.principal,
+    params.workspaceId
+  )
+
+  const principalSubjectId = await upsertAccessSubjectOn(
+    client,
+    params.principal
+  )
+  const runtimeSubjectIds: string[] = [principalSubjectId]
+  const runtimeScopeSubjectIds: string[] = []
+
+  if (isPrincipalWorkspaceBound(params.principal)) {
+    const workspaceSubjectId = await upsertAccessSubjectOn(client, {
+      kind: SUBJECT_KIND.WORKSPACE,
+      workspaceId: params.workspaceId,
+    })
+    runtimeSubjectIds.push(workspaceSubjectId)
+    runtimeScopeSubjectIds.push(workspaceSubjectId)
+  }
+
+  let activeConversationSubjectId: string | undefined
+  if (params.conversationId) {
+    const activeRow = await client.query(
+      `SELECT id FROM conversation_participants
+         WHERE conversation_id = $1 AND subject_id = $2 AND state = 'active'
+         LIMIT 1`,
+      [params.conversationId, principalSubjectId]
+    )
+    if (activeRow.rows.length > 0) {
+      const convSubjectId = await upsertAccessSubjectOn(client, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: params.conversationId,
+      })
+      runtimeSubjectIds.push(convSubjectId)
+      runtimeScopeSubjectIds.push(convSubjectId)
+      activeConversationSubjectId = convSubjectId
+    }
+  }
+
+  if (params.delegatedWorkspaceMemberId) {
+    const memberRow = await client.query(
+      `SELECT workspace_id FROM workspace_members WHERE id = $1 LIMIT 1`,
+      [params.delegatedWorkspaceMemberId]
+    )
+    if (memberRow.rows.length === 0) {
+      throw new Error(
+        `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} not found`
+      )
+    }
+    if (memberRow.rows[0].workspace_id !== params.workspaceId) {
+      throw new Error(
+        `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} belongs to workspace ${memberRow.rows[0].workspace_id}, not ${params.workspaceId}`
+      )
+    }
+    const memberSubjectId = await upsertAccessSubjectOn(client, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      memberId: params.delegatedWorkspaceMemberId,
+    })
+    runtimeSubjectIds.push(memberSubjectId)
+  }
+
+  return {
+    principal: params.principal,
+    principalSubjectId,
+    runtimeSubjectIds: Array.from(new Set(runtimeSubjectIds)),
+    runtimeScopeSubjectIds: Array.from(new Set(runtimeScopeSubjectIds)),
+    runtimeConversationId: params.conversationId ?? undefined,
+    activeConversationSubjectId,
+  }
+}
+
+async function assertPrincipalBelongsToWorkspaceOn(
+  client: import("../../infrastructure/events/index.js").Queryable,
+  principal: SubjectRef,
+  workspaceId: string
+): Promise<void> {
+  switch (principal.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      if (principal.workspaceId !== workspaceId) {
+        throw new Error(
+          `principal workspace ${principal.workspaceId} does not match runtime workspace ${workspaceId}`
+        )
+      }
+      return
+    case SUBJECT_KIND.WORKSPACE_MEMBER: {
+      const row = await client.query(
+        `SELECT workspace_id FROM workspace_members WHERE id = $1 LIMIT 1`,
+        [principal.memberId]
+      )
+      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+        throw new Error(
+          `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.ACTOR: {
+      const row = await client.query(
+        `SELECT workspace_id FROM actors WHERE id = $1 LIMIT 1`,
+        [principal.actorId]
+      )
+      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+        throw new Error(
+          `actor ${principal.actorId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.REMOTE_AGENT: {
+      const row = await client.query(
+        `SELECT workspace_id FROM remote_agents WHERE id = $1 LIMIT 1`,
+        [principal.remoteAgentId]
+      )
+      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+        throw new Error(
+          `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.CONVERSATION:
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.SYSTEM:
+      return
   }
 }
 
