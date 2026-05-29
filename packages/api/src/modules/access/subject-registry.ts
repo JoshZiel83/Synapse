@@ -554,3 +554,19 @@ function whereClauseFor(ref: SubjectRef): {
       return { condition: "TRUE", values: [] }
   }
 }
+
+/**
+ * subject-scope-refactor: Kysely-transaction variant of upsertAccessSubject.
+ * Accepts DatabaseTransaction so callers in atomic claim / approval paths
+ * commit the subject upsert + grant insert in the same transaction. Since
+ * `Transaction<Database>` is assignable to `Kysely<Database>` structurally,
+ * this just delegates — kept as a named export to make intent explicit at
+ * call sites and to mirror the `upsertAccessSubjectOn(client: QueryExecutor)`
+ * pg-form helper.
+ */
+export async function upsertAccessSubjectOnTrx(
+  trx: import("../../infrastructure/database/kysely.js").DatabaseTransaction,
+  ref: SubjectRef
+): Promise<string> {
+  return upsertAccessSubject(trx as unknown as KyselyDb, ref)
+}

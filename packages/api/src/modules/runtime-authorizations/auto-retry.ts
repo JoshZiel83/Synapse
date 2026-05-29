@@ -105,12 +105,15 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   /** Audit context — required to thread device_operations + attempts so
    * the dashboard still sees the auto-retry dispatch in its audit trail.
    * Without these the dispatch happens "outside" the audit log and any
-   * downstream investigation has no operation row to anchor on. */
+   * downstream investigation has no operation row to anchor on.
+   * subject-scope-refactor: principalSubjectId is NOT NULL (paired with
+   * tightened chk_device_operations_principal CHECK requiring it for all
+   * 4 kinds). Callers MUST source from `deriveOperationPrincipalAudit(ctx)`. */
   audit: {
     workspaceId: string
     conversationId: string | null
     principalKind: OperationPrincipalKind
-    principalSubjectId: string | null
+    principalSubjectId: string
     initiatedBySessionId: string | null
     initiatedByWorkspaceMemberId: string | null
   }
@@ -181,7 +184,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
       task_mode: "sync" as const,
       runtime_authorization: {
         grant_ids: [args.approvedGrant.id],
-        grant_scope: args.approvedGrant.scope,
+        grant_scope: args.approvedGrant.scopeLabel,
         grant_specs: [spec],
         retry_nonce: args.sourceRetryNonce,
       },
@@ -252,10 +255,13 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
     /* operation-complete logging is best-effort */
   })
 
-  // Consume `once` grants we used on success — without this, the auto-retry
-  // path would leave them active so a subsequent dispatch by the planner
-  // would reuse a single-shot grant.
-  if (dispatchResult.ok && args.approvedGrant.scope === "once") {
+  // subject-scope-refactor: consume_once grants are now claimed BEFORE the
+  // envelope is sent (via selectAndClaimRuntimeAuthorizationGrant in Batch 5+8
+  // wiring). This best-effort post-success consume is kept ONLY as a safety
+  // net for callers that didn't go through the canonical claim path —
+  // consumeRuntimeAuthorizationGrant returns bool (no-op if already consumed,
+  // skip-locked semantics so no contention).
+  if (dispatchResult.ok && args.approvedGrant.retention === "consume_once") {
     await consumeRuntimeAuthorizationGrant(args.approvedGrant.id).catch(
       () => undefined
     )
