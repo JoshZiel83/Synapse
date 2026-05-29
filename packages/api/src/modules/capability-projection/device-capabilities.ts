@@ -129,9 +129,13 @@ export interface AccessTargetInput {
 
 /**
  * Resolve an AccessTarget DTO into an access_subjects row id pair:
- * `(subjectId, scopeSubjectId?)`. Scope is populated only for
- * `actor_in_conversation` (a wire compatibility label that the new D3
- * model expresses as `actor` + `scope=conversation`).
+ * `(subjectId, scopeSubjectId?)`. Scope is populated for the two
+ * `*_in_conversation` flat-shape variants — `actor_in_conversation`
+ * and `remote_agent_in_conversation` — which are the internal
+ * representations of the wire-layer `(subject=actor|remote_agent,
+ * scope=conversation)` combinations whitelisted by
+ * `ScopedSubjectTargetWireSchema.superRefine`. All other variants
+ * return `scopeSubjectId === undefined`.
  *
  * Tests may inject a Kysely handle (e.g. the ephemeral DB returned by
  * `withTestDb`) so the underlying `upsertAccessSubject` writes against
