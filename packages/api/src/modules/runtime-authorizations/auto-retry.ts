@@ -41,6 +41,33 @@ export interface AutoRetryDispatchResult {
 }
 
 /**
+ * Compute the cua_focus_scope_id to stamp into an auto-retry envelope. The
+ * device cua builtin keys per-Agent focus state on this string and fails
+ * closed when an envelope arrives without it (see
+ * device-runtime/src/builtins/cua.ts), so a CUA approval whose retry omits
+ * the field would always dispatch a doomed envelope and surface as a stale
+ * "approved" notice in the UI.
+ *
+ * Auto-retry only has `initiatedBySessionId` from the audit context, not the
+ * full DevicePrincipal — so we use the same `session:<id>` primary key
+ * deriveCuaFocusScopeId would have produced for the original projection
+ * dispatch. The principal-derived fallback table is intentionally NOT
+ * reproduced here: when sessionId is missing we return undefined and let
+ * the device-side fail-closed check fire, rather than silently bucketing the
+ * call under a default focus key (which could let concurrent Agents stomp
+ * on each other's CUA focus). Non-cua grants always return undefined so
+ * non-cua tool envelopes stay byte-identical to v2.
+ */
+export function cuaFocusScopeForAutoRetry(args: {
+  capability: string
+  initiatedBySessionId: string | null
+}): string | undefined {
+  if (args.capability !== "cua") return undefined
+  if (!args.initiatedBySessionId) return undefined
+  return `session:${args.initiatedBySessionId}`
+}
+
+/**
  * Look up the device tool runtime target (service id, tool revision, etc.)
  * for a freshly approved runtime authorization. Returns null when any piece
  * is missing — caller must fall back to the static approval notice in that
@@ -200,6 +227,20 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
       | { ok: false; failure: PrepareFailure }
     > => {
       try {
+        // For CUA tools: stamp cua_focus_scope_id with the same
+        // `session:<id>` value the projection dispatcher would have computed
+        // for the original request. The device cua builtin fails closed on
+        // cua envelopes that omit this field (see
+        // device-runtime/src/builtins/cua.ts), so without injection the
+        // user-approved auto-retry would always dispatch a doomed envelope
+        // and surface as a stale "approved" notice.
+        //
+        // Derivation lives in cuaFocusScopeForAutoRetry so it's directly
+        // testable — see auto-retry.test.ts.
+        const cuaFocusScopeId = cuaFocusScopeForAutoRetry({
+          capability: args.approvedGrant.capability,
+          initiatedBySessionId: args.audit.initiatedBySessionId,
+        })
         const envelope = signEnvelopeForDispatch({
           operation_id: randomUUID(),
           attempt_id: randomUUID(),
@@ -216,6 +257,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
             grant_specs: [toRuntimeAuthorizationGrantWireSpec(grant)],
             retry_nonce: args.sourceRetryNonce,
           },
+          ...(cuaFocusScopeId ? { cua_focus_scope_id: cuaFocusScopeId } : {}),
           issued_at: new Date().toISOString(),
           expires_at: new Date(Date.now() + 60_000).toISOString(),
         })

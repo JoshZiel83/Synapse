@@ -1,18 +1,34 @@
 // synapse-device-cua-helper — Go sidecar binary that exposes CUA primitives
-// (display enumeration, screenshot, mouse click, text typing) to the
-// TypeScript device runtime via JSON-RPC over stdio. Per docs/device-runtime-v3.md
-// §5.2 / §10.4 the runtime supervises this binary as a child process.
+// (display enumeration, screenshot, mouse click, text typing, per-window
+// equivalents) to the TypeScript device runtime via JSON-RPC over stdio.
+// Per docs/device-runtime-v3.md §5.2 / §10.4 the runtime supervises this
+// binary as a child process.
 //
-// Protocol: JSON-RPC 2.0, newline-delimited, over stdin/stdout. Methods:
-//   hello              -> { version, capability, displays_supported }
-//   list_displays      -> { displays: [{ index, width, height, scale, is_main }] }
-//   capture_display    -> { png_base64, width, height }
-//   click              -> { ok: true }
-//   type_text          -> { ok: true, typed_chars }
-//   shutdown           -> { ok: true }; helper exits 0
+// Protocol: JSON-RPC 2.0, newline-delimited, over stdin/stdout. Every request
+// carries an optional `session_id` (the server-signed cua_focus_scope_id;
+// "default" for loopback smoke tests) that keys per-Agent CUA focus state in
+// the focusStore. Methods:
 //
-// Errors return JSON-RPC -32000 ("CUA error") with a string `data` payload
-// pinpointing the DeskAct call that failed.
+//   Legacy (kept for backwards compatibility):
+//     hello              -> capability advertisement
+//     list_displays      -> { displays: [...] }
+//     capture_display    -> { png_base64, width, height }
+//     click              -> { ok: true }       (focus-aware in v3)
+//     type_text          -> { ok: true, ... }  (focus-aware in v3)
+//     shutdown           -> { ok: true }; helper exits 0
+//
+//   Focus-aware (new):
+//     list_windows       -> { windows: [...] }
+//     set_focus          -> { coordinate_space, generation, target, ... }
+//     get_focus          -> { coordinate_space, generation, target, ... }
+//     capture_view       -> { png_base64, width, height, coordinate_space,
+//                              generation, target, backend_used, partial, ... }
+//
+// Errors return JSON-RPC numeric codes; the structured `data` block carries
+// `synapse_code` (mapped by TS cua.ts to SynapseError.code), `cua_error`
+// (machine-readable enum), and per-call diagnostic fields (backend_used,
+// fallback_reason, etc.). See decision 3/6 in
+// ~/.claude/plans/synapse-device-runtime-cua-eager-conway.md.
 
 package main
 
@@ -21,18 +37,29 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/png"
 	"io"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 
+	deskact "github.com/PekingSpades/DeskAct"
 	"github.com/PekingSpades/DeskAct/display"
 	"github.com/PekingSpades/DeskAct/keyboard"
 	"github.com/PekingSpades/DeskAct/mouse"
 )
 
-const version = "0.1.0-device-runtime-v3"
+const version = "0.2.0-cua-session-focus"
+
+// store is process-global because the helper is single-tenant per device
+// runtime. Bouncing the binary resets focus state (acceptable: runtime
+// reconnection rebuilds it via cua_set_focus anyway).
+var store = newFocusStore()
+
+// ─── JSON-RPC framing ──────────────────────────────────────────────────────
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -60,15 +87,130 @@ func writeResponse(w io.Writer, id interface{}, result interface{}, err *rpcErro
 	fmt.Fprintln(w, string(data))
 }
 
-func cuaError(msg string, cause error) *rpcError {
-	data := msg
-	if cause != nil {
-		data = msg + ": " + cause.Error()
+// JSON-RPC error code constants. -32602 is "Invalid params" (well-formed but
+// semantically wrong); -32000 is implementation-defined "server error".
+const (
+	codeInvalidParams = -32602
+	codeServerError   = -32000
+)
+
+// makeError builds an rpcError with a structured `data` block. cuaError is
+// a stable string enum the device-runtime TS layer can branch on, and
+// synapseCode is the canonical SynapseError code TS should surface
+// (constrained to DEVICE_MCP_ERROR_CODES on the TS side).
+func makeError(
+	rpcCode int,
+	message string,
+	cuaError string,
+	synapseCode string,
+	extra map[string]interface{},
+) *rpcError {
+	data := map[string]interface{}{
+		"cua_error":    cuaError,
+		"synapse_code": synapseCode,
 	}
-	return &rpcError{Code: -32000, Message: "CUA error", Data: data}
+	for k, v := range extra {
+		data[k] = v
+	}
+	return &rpcError{Code: rpcCode, Message: message, Data: data}
 }
 
-// ─── method handlers ────────────────────────────────────────────────────────
+// wrapDeskActError translates a raw deskact error into a structured rpcError,
+// preferring sentinel-specific codes when possible. DeskAct wraps sentinels
+// with fmt.Errorf("%w: ...") on every platform (see screenshot/
+// capture_window_darwin.go:125 etc.), so we MUST use errors.Is — a direct
+// equality check would miss every wrapped error and silently downgrade them
+// to operation_failed / runtime_constraint.
+func wrapDeskActError(op string, err error, extra map[string]interface{}) *rpcError {
+	if err == nil {
+		return nil
+	}
+	cuaErr := "operation_failed"
+	synapseCode := "runtime_constraint"
+	switch {
+	case errors.Is(err, deskact.ErrCaptureUnsupported):
+		cuaErr = "unsupported"
+		synapseCode = "runtime_constraint"
+	case errors.Is(err, deskact.ErrCaptureWindowNotFound):
+		cuaErr = "window_not_found"
+		synapseCode = "invalid_request"
+	case errors.Is(err, deskact.ErrCapturePermissionDenied):
+		cuaErr = "permission_denied"
+		synapseCode = "permission_denied"
+	case errors.Is(err, deskact.ErrCaptureFailed):
+		cuaErr = "capture_failed"
+		synapseCode = "runtime_constraint"
+	}
+	if extra == nil {
+		extra = map[string]interface{}{}
+	}
+	extra["op"] = op
+	extra["error_text"] = err.Error()
+	return makeError(codeServerError, op+" failed: "+err.Error(), cuaErr, synapseCode, extra)
+}
+
+// ─── session_id extraction ─────────────────────────────────────────────────
+
+// sessionIDFromParams pulls the optional `session_id` field out of any
+// params object. JSON tag-driven decode keeps the rest of the params handler
+// shape intact — we just need to peek at one field.
+type sessionEnvelope struct {
+	SessionID string `json:"session_id"`
+}
+
+func sessionIDFromParams(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return defaultSessionID
+	}
+	var env sessionEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return defaultSessionID
+	}
+	if env.SessionID == "" {
+		return defaultSessionID
+	}
+	return env.SessionID
+}
+
+// ─── window_id parsing ────────────────────────────────────────────────────
+
+func parseWindowID(s string) (uint64, error) {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return 0, fmt.Errorf("window_id is empty")
+	}
+	if strings.HasPrefix(t, "0x") || strings.HasPrefix(t, "0X") {
+		return strconv.ParseUint(t[2:], 16, 64)
+	}
+	return strconv.ParseUint(t, 10, 64)
+}
+
+func formatWindowIDHex(id uint64) string {
+	return fmt.Sprintf("0x%x", id)
+}
+
+// ─── per-platform forced backend ──────────────────────────────────────────
+
+// windowCaptureBackend returns the backend whose output coordinate system
+// matches ClickWithWindow / UnicodeTypeWithWindow on the current platform.
+// Forcing this disables DeskAct's silent fallback (decision 4) so the
+// runtime can be sure the screenshot we hand the model uses the same
+// coordinate space as subsequent inputs.
+func windowCaptureBackend() deskact.CaptureBackend {
+	switch runtime.GOOS {
+	case "windows":
+		return deskact.CaptureBackendPrintWindow
+	case "darwin":
+		return deskact.CaptureBackendCGWindowList
+	case "linux":
+		return deskact.CaptureBackendXComposite
+	default:
+		// Unknown OS: fall back to default and let DeskAct error if it can't.
+		return ""
+	}
+}
+
+// ─── legacy handlers (kept) ────────────────────────────────────────────────
 
 type listDisplaysResult struct {
 	Displays []displayInfo `json:"displays"`
@@ -83,7 +225,8 @@ type displayInfo struct {
 	IsMain bool    `json:"is_main"`
 }
 
-func handleListDisplays() (interface{}, *rpcError) {
+func handleListDisplays(raw json.RawMessage) (interface{}, *rpcError) {
+	store.touch(sessionIDFromParams(raw))
 	all := display.AllDisplays(display.DefaultDisplayOptions())
 	out := make([]displayInfo, 0, len(all))
 	for _, d := range all {
@@ -100,7 +243,8 @@ func handleListDisplays() (interface{}, *rpcError) {
 }
 
 type captureDisplayParams struct {
-	Index int `json:"index"`
+	Index     int    `json:"index"`
+	SessionID string `json:"session_id"`
 }
 
 type captureDisplayResult struct {
@@ -113,22 +257,31 @@ func handleCaptureDisplay(raw json.RawMessage) (interface{}, *rpcError) {
 	params := captureDisplayParams{Index: 0}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, cuaError("invalid capture_display params", err)
+			return nil, makeError(
+				codeInvalidParams,
+				"invalid capture_display params: "+err.Error(),
+				"invalid_params", "invalid_request", nil,
+			)
 		}
 	}
+	store.touch(params.SessionID)
 	d := display.DisplayAt(params.Index, display.DefaultDisplayOptions())
 	if d == nil {
-		return nil, cuaError(
-			fmt.Sprintf("display index %d not found", params.Index), nil,
+		return nil, makeError(
+			codeInvalidParams,
+			fmt.Sprintf("display index %d not found", params.Index),
+			"display_not_found", "invalid_request",
+			map[string]interface{}{"requested_index": params.Index},
 		)
 	}
 	img, err := d.CaptureRect(0, 0, d.Width(), d.Height(), display.DefaultCaptureOptions())
 	if err != nil {
-		return nil, cuaError("CaptureRect failed", err)
+		return nil, wrapDeskActError("CaptureRect", err, nil)
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
-		return nil, cuaError("PNG encode failed", err)
+		return nil, makeError(codeServerError, "PNG encode failed: "+err.Error(),
+			"png_encode_failed", "runtime_constraint", nil)
 	}
 	return captureDisplayResult{
 		PNGBase64: base64.StdEncoding.EncodeToString(buf.Bytes()),
@@ -138,64 +291,590 @@ func handleCaptureDisplay(raw json.RawMessage) (interface{}, *rpcError) {
 }
 
 type clickParams struct {
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
-	Button string `json:"button"`
-	Double bool   `json:"double"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	Button    string `json:"button"`
+	Double    bool   `json:"double"`
+	SessionID string `json:"session_id"`
+}
+
+func resolveButton(name string) (mouse.MouseButton, *rpcError) {
+	switch strings.ToLower(name) {
+	case "", "left":
+		return mouse.MouseButtonLeft, nil
+	case "right":
+		return mouse.MouseButtonRight, nil
+	case "middle":
+		return mouse.MouseButtonCenter, nil
+	}
+	return mouse.MouseButtonLeft, makeError(
+		codeInvalidParams,
+		fmt.Sprintf("unsupported mouse button %q", name),
+		"invalid_button", "invalid_request",
+		map[string]interface{}{"requested_button": name},
+	)
 }
 
 func handleClick(raw json.RawMessage) (interface{}, *rpcError) {
 	var params clickParams
 	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, cuaError("invalid click params", err)
-	}
-	btn := mouse.MouseButtonLeft
-	switch strings.ToLower(params.Button) {
-	case "", "left":
-		btn = mouse.MouseButtonLeft
-	case "right":
-		btn = mouse.MouseButtonRight
-	case "middle":
-		btn = mouse.MouseButtonCenter
-	default:
-		return nil, cuaError(
-			fmt.Sprintf("unsupported mouse button %q", params.Button), nil,
+		return nil, makeError(
+			codeInvalidParams,
+			"invalid click params: "+err.Error(),
+			"invalid_params", "invalid_request", nil,
 		)
 	}
-	if err := mouse.MoveClick(params.X, params.Y, btn, params.Double, mouse.DefaultMouseSettings()); err != nil {
-		return nil, cuaError("MoveClick failed", err)
+	btn, berr := resolveButton(params.Button)
+	if berr != nil {
+		return nil, berr
 	}
-	return map[string]bool{"ok": true}, nil
+	f := store.get(params.SessionID)
+	switch f.Target {
+	case focusTargetWindow:
+		// Window-pixel coordinates → directed background injection. PID was
+		// resolved server-side via ListWindows in set_focus (decision 3) so
+		// we never trust an outside-supplied PID at the input point.
+		//
+		// DeskAct exposes ClickWithWindow but no DoubleClickWithWindow, and
+		// MouseSettings has no double-click interval. Emulate double-click
+		// by issuing two back-to-back clicks (matches what the display path
+		// gets from MoveClick's `double` arg). On the first failure we
+		// abort and report the count.
+		target := mouse.WindowTarget{WindowID: f.WindowID, PID: f.PID}
+		clicks := 1
+		if params.Double {
+			clicks = 2
+		}
+		for i := 0; i < clicks; i++ {
+			if err := mouse.ClickWithWindow(target, params.X, params.Y, btn, mouse.DefaultMouseSettings()); err != nil {
+				return nil, wrapDeskActError("ClickWithWindow", err, map[string]interface{}{
+					"window_id":     strconv.FormatUint(f.WindowID, 10),
+					"window_id_hex": formatWindowIDHex(f.WindowID),
+					"pid":           f.PID,
+					"clicks_done":   i,
+					"clicks_total":  clicks,
+				})
+			}
+		}
+	default:
+		// Display-pixel coordinates → translate to absolute then global click.
+		d := display.DisplayAt(f.DisplayIndex, display.DefaultDisplayOptions())
+		if d == nil {
+			return nil, makeError(
+				codeServerError,
+				fmt.Sprintf("focused display index %d disappeared", f.DisplayIndex),
+				"display_not_found", "runtime_constraint",
+				map[string]interface{}{"requested_index": f.DisplayIndex},
+			)
+		}
+		ax, ay := d.ToAbsolute(params.X, params.Y)
+		if err := mouse.MoveClick(ax, ay, btn, params.Double, mouse.DefaultMouseSettings()); err != nil {
+			return nil, wrapDeskActError("MoveClick", err, map[string]interface{}{
+				"display_index": f.DisplayIndex,
+			})
+		}
+	}
+	return map[string]interface{}{
+		"ok":               true,
+		"coordinate_space": string(f.CoordinateSpace),
+		"generation":       f.Generation,
+	}, nil
 }
 
 type typeTextParams struct {
-	Text string `json:"text"`
-	// PID 0 means "do not target a specific process" (DeskAct uses 0 as
-	// no-PID sentinel on the platforms that look at this argument).
-	PID int `json:"pid"`
+	Text      string `json:"text"`
+	PID       int    `json:"pid"`
+	SessionID string `json:"session_id"`
 }
 
 type typeTextResult struct {
-	OK         bool `json:"ok"`
-	TypedChars int  `json:"typed_chars"`
+	OK              bool   `json:"ok"`
+	TypedChars      int    `json:"typed_chars"`
+	CoordinateSpace string `json:"coordinate_space"`
+	Generation      int64  `json:"generation"`
 }
 
 func handleTypeText(raw json.RawMessage) (interface{}, *rpcError) {
 	var params typeTextParams
 	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, cuaError("invalid type_text params", err)
+		return nil, makeError(
+			codeInvalidParams,
+			"invalid type_text params: "+err.Error(),
+			"invalid_params", "invalid_request", nil,
+		)
 	}
+	f := store.get(params.SessionID)
 	if params.Text == "" {
-		return typeTextResult{OK: true, TypedChars: 0}, nil
+		return typeTextResult{OK: true, TypedChars: 0, CoordinateSpace: string(f.CoordinateSpace), Generation: f.Generation}, nil
 	}
-	// keyboard.Type does not return an error; failures surface via DeskAct
-	// internal logs. We still report success here since the caller can verify
-	// via a follow-up screenshot.
-	keyboard.Type(params.Text, params.PID, keyboard.DefaultKeyboardSettings())
-	return typeTextResult{OK: true, TypedChars: len([]rune(params.Text))}, nil
+	runes := []rune(params.Text)
+	switch f.Target {
+	case focusTargetWindow:
+		// UnicodeTypeWithWindow accepts one rune per call (DeskAct contract).
+		// First failure aborts the loop and surfaces the diagnostic — partial
+		// progress is reflected in typed_chars.
+		typed := 0
+		for _, r := range runes {
+			if err := keyboard.UnicodeTypeWithWindow(r, f.WindowID, int(f.PID)); err != nil {
+				return nil, wrapDeskActError("UnicodeTypeWithWindow", err, map[string]interface{}{
+					"window_id":     strconv.FormatUint(f.WindowID, 10),
+					"window_id_hex": formatWindowIDHex(f.WindowID),
+					"pid":           f.PID,
+					"typed_chars":   typed,
+				})
+			}
+			typed++
+		}
+		return typeTextResult{OK: true, TypedChars: typed, CoordinateSpace: string(f.CoordinateSpace), Generation: f.Generation}, nil
+	default:
+		// Display focus uses the global keyboard path with an optional PID
+		// hint (preserving legacy semantics). keyboard.Type does not return
+		// an error; the caller verifies via a follow-up screenshot.
+		keyboard.Type(params.Text, params.PID, keyboard.DefaultKeyboardSettings())
+		return typeTextResult{OK: true, TypedChars: len(runes), CoordinateSpace: string(f.CoordinateSpace), Generation: f.Generation}, nil
+	}
+}
+
+// ─── focus-aware handlers (new) ────────────────────────────────────────────
+
+type windowRect struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+func toWindowRect(r deskact.Rect) windowRect {
+	return windowRect{X: r.X, Y: r.Y, Width: r.W, Height: r.H}
+}
+
+type displayRegionDTO struct {
+	DisplayIndex int        `json:"display_index"`
+	DisplayID    int        `json:"display_id"`
+	PhysicalRect windowRect `json:"physical_rect"`
+}
+
+func toDisplayRegions(in []deskact.WindowDisplayRegion) []displayRegionDTO {
+	out := make([]displayRegionDTO, 0, len(in))
+	for _, r := range in {
+		out = append(out, displayRegionDTO{
+			DisplayIndex: r.DisplayIndex,
+			DisplayID:    r.DisplayID,
+			PhysicalRect: toWindowRect(r.PhysicalRect),
+		})
+	}
+	return out
+}
+
+type windowDTO struct {
+	WindowID       string             `json:"window_id"`
+	WindowIDHex    string             `json:"window_id_hex"`
+	PID            int                `json:"pid"`
+	Title          string             `json:"title"`
+	Bounds         windowRect         `json:"bounds"`
+	IsVisible      bool               `json:"is_visible"`
+	IsMinimized    bool               `json:"is_minimized"`
+	DisplayRegions []displayRegionDTO `json:"display_regions"`
+	Platform       string             `json:"platform,omitempty"`
+}
+
+func toWindowDTO(info deskact.WindowInfo) windowDTO {
+	out := windowDTO{
+		WindowID:       strconv.FormatUint(info.ID, 10),
+		WindowIDHex:    formatWindowIDHex(info.ID),
+		PID:            info.PID,
+		Title:          info.Title,
+		Bounds:         toWindowRect(info.Bounds),
+		IsVisible:      info.IsVisible,
+		IsMinimized:    info.IsMinimized,
+		DisplayRegions: toDisplayRegions(info.DisplayRegions),
+	}
+	if p := info.GetPlatformInfo(); p != nil {
+		out.Platform = p.Platform()
+	}
+	return out
+}
+
+type listWindowsResult struct {
+	Windows []windowDTO `json:"windows"`
+}
+
+type listWindowsParams struct {
+	SessionID string `json:"session_id"`
+}
+
+func handleListWindows(raw json.RawMessage) (interface{}, *rpcError) {
+	var params listWindowsParams
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &params)
+	}
+	store.touch(params.SessionID)
+	wins, err := deskact.ListWindows(deskact.DefaultWindowOptions())
+	if err != nil {
+		return nil, wrapDeskActError("ListWindows", err, nil)
+	}
+	out := make([]windowDTO, 0, len(wins))
+	for _, w := range wins {
+		out = append(out, toWindowDTO(w))
+	}
+	return listWindowsResult{Windows: out}, nil
+}
+
+type setFocusParams struct {
+	Target       string `json:"target"`
+	Mode         string `json:"mode"`
+	DisplayIndex *int   `json:"display_index"`
+	WindowID     string `json:"window_id"`
+	SessionID    string `json:"session_id"`
+}
+
+type focusDTO struct {
+	Target          string      `json:"target"`
+	Mode            string      `json:"mode,omitempty"`
+	CoordinateSpace string      `json:"coordinate_space"`
+	Generation      int64       `json:"generation"`
+	Display         *displayDTO `json:"display,omitempty"`
+	Window          *windowDTO  `json:"window,omitempty"`
+}
+
+type displayDTO struct {
+	Index  int     `json:"index"`
+	ID     int     `json:"id"`
+	Width  int     `json:"width"`
+	Height int     `json:"height"`
+	Scale  float64 `json:"scale"`
+	IsMain bool    `json:"is_main"`
+}
+
+// refreshWindowInfo looks up the current state of the focused window. Returns
+// the fresh WindowInfo + true when ListWindows succeeds and the window is
+// still present; nil + false otherwise (closed, ListWindows failed,
+// unsupported platform, etc.). Callers fall back to the stored focusStore
+// snapshot when we can't refresh.
+//
+// Doing this on every get_focus / capture_view keeps is_visible /
+// is_minimized / bounds / title from going stale after the user moves,
+// resizes, minimizes, or closes the window between set_focus and the next
+// operation. The store-snapshot fields are only the snapshot at set_focus
+// time and would otherwise silently mislead the model.
+func refreshWindowInfo(windowID uint64) (deskact.WindowInfo, bool) {
+	wins, err := deskact.ListWindows(deskact.DefaultWindowOptions())
+	if err != nil {
+		return deskact.WindowInfo{}, false
+	}
+	for i := range wins {
+		if wins[i].ID == windowID {
+			return wins[i], true
+		}
+	}
+	return deskact.WindowInfo{}, false
+}
+
+// windowDTOForFocus builds a windowDTO for the currently-focused window,
+// preferring fresh data from ListWindows over the focusStore snapshot.
+// On refresh miss we emit the snapshot with `is_visible=false` (best-effort
+// hint that the window is no longer enumerable) so the model knows it
+// cannot rely on bounds / title being current.
+func windowDTOForFocus(f sessionFocus) *windowDTO {
+	if info, ok := refreshWindowInfo(f.WindowID); ok {
+		dto := toWindowDTO(info)
+		return &dto
+	}
+	return &windowDTO{
+		WindowID:    strconv.FormatUint(f.WindowID, 10),
+		WindowIDHex: formatWindowIDHex(f.WindowID),
+		PID:         int(f.PID),
+		Title:       f.Title,
+		Bounds:      toWindowRect(f.Bounds),
+		// Stored snapshot may include display_regions; replay those so
+		// multi-display callers still see something.
+		DisplayRegions: toDisplayRegions(f.DisplayRegions),
+		// IsVisible / IsMinimized intentionally left at their Go zero
+		// values (false). A stale-snapshot reader interprets
+		// `is_visible:false` as "we could not confirm this window is
+		// still enumerable" — true after we successfully refresh.
+	}
+}
+
+func focusToDTO(f sessionFocus) focusDTO {
+	out := focusDTO{
+		Target:          string(f.Target),
+		Mode:            string(f.Mode),
+		CoordinateSpace: string(f.CoordinateSpace),
+		Generation:      f.Generation,
+	}
+	switch f.Target {
+	case focusTargetDisplay:
+		d := display.DisplayAt(f.DisplayIndex, display.DefaultDisplayOptions())
+		if d != nil {
+			out.Display = &displayDTO{
+				Index:  d.Index(),
+				ID:     d.ID(),
+				Width:  d.Width(),
+				Height: d.Height(),
+				Scale:  d.Scale(),
+				IsMain: d.IsMain(),
+			}
+		} else {
+			// Best-effort: surface the stored index so the caller can debug a
+			// display that vanished between set_focus and get_focus.
+			out.Display = &displayDTO{Index: f.DisplayIndex, ID: f.DisplayID}
+		}
+	case focusTargetWindow:
+		out.Window = windowDTOForFocus(f)
+	}
+	return out
+}
+
+func handleSetFocus(raw json.RawMessage) (interface{}, *rpcError) {
+	var params setFocusParams
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return nil, makeError(
+			codeInvalidParams,
+			"invalid set_focus params: "+err.Error(),
+			"invalid_params", "invalid_request", nil,
+		)
+	}
+	sessionID := normalizeSessionID(params.SessionID)
+	switch params.Target {
+	case string(focusTargetDisplay):
+		// Default to display 0 when omitted; otherwise validate before touching
+		// the store so a bogus index doesn't bump generation / overwrite state.
+		idx := 0
+		if params.DisplayIndex != nil {
+			idx = *params.DisplayIndex
+		}
+		d := display.DisplayAt(idx, display.DefaultDisplayOptions())
+		if d == nil {
+			return nil, makeError(
+				codeInvalidParams,
+				fmt.Sprintf("display index %d not found", idx),
+				"display_not_found", "invalid_request",
+				map[string]interface{}{"requested_index": idx},
+			)
+		}
+		f := store.setDisplay(sessionID, idx, d.ID())
+		return focusToDTO(f), nil
+	case string(focusTargetWindow):
+		// Phase 1 only supports background mode. Default to background when
+		// caller omits it; reject anything else so foreground arrives loudly
+		// when Phase 2 ships.
+		mode := params.Mode
+		if mode == "" {
+			mode = string(focusModeBackground)
+		}
+		if mode != string(focusModeBackground) {
+			return nil, makeError(
+				codeInvalidParams,
+				fmt.Sprintf("unsupported window focus mode %q (Phase 1 only supports 'background')", mode),
+				"unsupported_mode", "invalid_request",
+				map[string]interface{}{"requested_mode": mode},
+			)
+		}
+		if params.WindowID == "" {
+			return nil, makeError(
+				codeInvalidParams,
+				"window_id is required when target='window'",
+				"invalid_params", "invalid_request", nil,
+			)
+		}
+		wid, perr := parseWindowID(params.WindowID)
+		if perr != nil {
+			return nil, makeError(
+				codeInvalidParams,
+				"invalid window_id: "+perr.Error(),
+				"invalid_params", "invalid_request",
+				map[string]interface{}{"requested_window_id": params.WindowID},
+			)
+		}
+		wins, err := deskact.ListWindows(deskact.DefaultWindowOptions())
+		if err != nil {
+			return nil, wrapDeskActError("ListWindows", err, nil)
+		}
+		var match *deskact.WindowInfo
+		for i := range wins {
+			if wins[i].ID == wid {
+				match = &wins[i]
+				break
+			}
+		}
+		if match == nil {
+			return nil, makeError(
+				codeInvalidParams,
+				fmt.Sprintf("window %s not found", params.WindowID),
+				"window_not_found", "invalid_request",
+				map[string]interface{}{
+					"requested_window_id":     params.WindowID,
+					"requested_window_id_hex": formatWindowIDHex(wid),
+				},
+			)
+		}
+		f := store.setWindow(sessionID, *match)
+		dto := focusToDTO(f)
+		// focusToDTO doesn't have full WindowInfo (title etc was already
+		// stored), but we kept those fields — DTO covers them. Override with
+		// freshly-listed data for is_visible / is_minimized which the store
+		// doesn't carry.
+		w := toWindowDTO(*match)
+		dto.Window = &w
+		return dto, nil
+	default:
+		return nil, makeError(
+			codeInvalidParams,
+			fmt.Sprintf("unknown target %q (expected 'display' or 'window')", params.Target),
+			"invalid_target", "invalid_request",
+			map[string]interface{}{"requested_target": params.Target},
+		)
+	}
+}
+
+type getFocusParams struct {
+	SessionID string `json:"session_id"`
+}
+
+func handleGetFocus(raw json.RawMessage) (interface{}, *rpcError) {
+	var params getFocusParams
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &params)
+	}
+	f := store.get(params.SessionID)
+	return focusToDTO(f), nil
+}
+
+type captureViewResult struct {
+	PNGBase64       string `json:"png_base64"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
+	CoordinateSpace string `json:"coordinate_space"`
+	Generation      int64  `json:"generation"`
+	Target          string `json:"target"`
+	// Display / Window mirror focusToDTO so the model can confirm "this PNG
+	// belongs to display N / window <id> at generation G" without a
+	// follow-up cua_get_focus. Especially important when window bounds
+	// move/resize or in multi-display setups where coordinate_space alone
+	// is ambiguous.
+	Display        *displayDTO `json:"display,omitempty"`
+	Window         *windowDTO  `json:"window,omitempty"`
+	BackendUsed    string      `json:"backend_used,omitempty"`
+	Partial        bool        `json:"partial,omitempty"`
+	CaptureError   string      `json:"capture_error,omitempty"`
+	FallbackReason string      `json:"fallback_reason,omitempty"`
+}
+
+type captureViewParams struct {
+	SessionID string `json:"session_id"`
+}
+
+func handleCaptureView(raw json.RawMessage) (interface{}, *rpcError) {
+	var params captureViewParams
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &params)
+	}
+	f := store.get(params.SessionID)
+	switch f.Target {
+	case focusTargetWindow:
+		backend := windowCaptureBackend()
+		res := deskact.CaptureWindowEx(deskact.CaptureWindowRequest{
+			WindowID: f.WindowID,
+			PID:      f.PID,
+			Options: deskact.CaptureOptions{
+				Backend: backend,
+			},
+		})
+		if res.Image == nil {
+			// Hard failure — no image to deliver. Surface backend/fallback
+			// for diagnosis (decision 4 / 6).
+			extra := map[string]interface{}{
+				"window_id":         strconv.FormatUint(f.WindowID, 10),
+				"window_id_hex":     formatWindowIDHex(f.WindowID),
+				"pid":               f.PID,
+				"requested_backend": string(backend),
+				"backend_used":      string(res.BackendUsed),
+			}
+			if res.FallbackReason != "" {
+				extra["fallback_reason"] = res.FallbackReason
+			}
+			if res.Err != nil {
+				return nil, wrapDeskActError("CaptureWindowEx", res.Err, extra)
+			}
+			return nil, makeError(
+				codeServerError,
+				"capture_view returned no image",
+				"capture_failed", "runtime_constraint", extra,
+			)
+		}
+		// Image present — may be partial; still deliver so the model has
+		// something to work with, but flag it.
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, res.Image); err != nil {
+			return nil, makeError(codeServerError, "PNG encode failed: "+err.Error(),
+				"png_encode_failed", "runtime_constraint", nil)
+		}
+		bounds := res.Image.Bounds()
+		// Reuse focusToDTO so display/window metadata stays in lockstep with
+		// what cua_get_focus reports. The DTO already pulls fresh DisplayAt
+		// info on the display branch and constructs the WindowDTO from the
+		// stored focus on the window branch.
+		focusDto := focusToDTO(f)
+		out := captureViewResult{
+			PNGBase64:       base64.StdEncoding.EncodeToString(buf.Bytes()),
+			Width:           bounds.Dx(),
+			Height:          bounds.Dy(),
+			CoordinateSpace: string(f.CoordinateSpace),
+			Generation:      f.Generation,
+			Target:          string(f.Target),
+			Display:         focusDto.Display,
+			Window:          focusDto.Window,
+			BackendUsed:     string(res.BackendUsed),
+			Partial:         res.Partial,
+			FallbackReason:  res.FallbackReason,
+		}
+		if res.Err != nil {
+			out.CaptureError = res.Err.Error()
+		}
+		return out, nil
+	default:
+		d := display.DisplayAt(f.DisplayIndex, display.DefaultDisplayOptions())
+		if d == nil {
+			return nil, makeError(
+				codeServerError,
+				fmt.Sprintf("focused display index %d disappeared", f.DisplayIndex),
+				"display_not_found", "runtime_constraint",
+				map[string]interface{}{"requested_index": f.DisplayIndex},
+			)
+		}
+		img, err := d.CaptureRect(0, 0, d.Width(), d.Height(), display.DefaultCaptureOptions())
+		if err != nil {
+			return nil, wrapDeskActError("CaptureRect", err, map[string]interface{}{
+				"display_index": f.DisplayIndex,
+			})
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			return nil, makeError(codeServerError, "PNG encode failed: "+err.Error(),
+				"png_encode_failed", "runtime_constraint", nil)
+		}
+		focusDto := focusToDTO(f)
+		return captureViewResult{
+			PNGBase64:       base64.StdEncoding.EncodeToString(buf.Bytes()),
+			Width:           d.Width(),
+			Height:          d.Height(),
+			CoordinateSpace: string(f.CoordinateSpace),
+			Generation:      f.Generation,
+			Target:          string(f.Target),
+			Display:         focusDto.Display,
+			Window:          focusDto.Window,
+		}, nil
+	}
 }
 
 // ─── dispatcher ─────────────────────────────────────────────────────────────
+
+var advertisedMethods = []string{
+	"list_displays", "capture_display", "click", "type_text",
+	"list_windows", "set_focus", "get_focus", "capture_view",
+	"shutdown",
+}
 
 func handle(line []byte, w io.Writer) {
 	var req rpcRequest
@@ -209,12 +888,11 @@ func handle(line []byte, w io.Writer) {
 			"version":            version,
 			"capability":         "cua",
 			"displays_supported": true,
-			"methods": []string{
-				"list_displays", "capture_display", "click", "type_text", "shutdown",
-			},
+			"focus_supported":    true,
+			"methods":            advertisedMethods,
 		}, nil)
 	case "list_displays":
-		result, err := handleListDisplays()
+		result, err := handleListDisplays(req.Params)
 		writeResponse(w, req.ID, result, err)
 	case "capture_display":
 		result, err := handleCaptureDisplay(req.Params)
@@ -224,6 +902,18 @@ func handle(line []byte, w io.Writer) {
 		writeResponse(w, req.ID, result, err)
 	case "type_text":
 		result, err := handleTypeText(req.Params)
+		writeResponse(w, req.ID, result, err)
+	case "list_windows":
+		result, err := handleListWindows(req.Params)
+		writeResponse(w, req.ID, result, err)
+	case "set_focus":
+		result, err := handleSetFocus(req.Params)
+		writeResponse(w, req.ID, result, err)
+	case "get_focus":
+		result, err := handleGetFocus(req.Params)
+		writeResponse(w, req.ID, result, err)
+	case "capture_view":
+		result, err := handleCaptureView(req.Params)
 		writeResponse(w, req.ID, result, err)
 	case "shutdown":
 		writeResponse(w, req.ID, map[string]interface{}{"ok": true}, nil)

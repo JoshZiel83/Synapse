@@ -232,6 +232,12 @@ export const OperationEnvelopeSchema = z.object({
       retry_nonce: z.string().optional(),
     })
     .optional(),
+  // CUA focus-scope id. Server-signed, opaque string keyed by Agent run-session
+  // (or principal-derived fallback). Optional at the schema level because
+  // non-cua tool dispatches don't compute it; the cua builtin fails closed
+  // when an envelope is present but this field is absent. See
+  // capability-projection/cua-scope.ts for the derivation rule.
+  cua_focus_scope_id: z.string().optional(),
   issued_at: z.string(),
   expires_at: z.string(),
   signature_kid: z.string(),

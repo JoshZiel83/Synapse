@@ -357,6 +357,13 @@ export async function createRuntimeAuthorizationRequest(
       grantOptions: params.authorizationPlan.grantOptions,
       availablePresets: params.availablePresets,
       requestMode: params.requestMode,
+      // Per-session dedupe: matches the value the create path writes to
+      // interaction_runtime_authorization_requests.source_runtime_session_id
+      // and bakes into the dedupe key. Without this match two Agent
+      // sessions issuing the same CUA call would reuse one another's
+      // pending interaction, and the post-approval auto-retry would stamp
+      // the wrong cua_focus_scope_id into the dispatched envelope.
+      runtimeSessionId: params.runtimeTarget.runtimeSessionId,
     })
 
     if (existing) {

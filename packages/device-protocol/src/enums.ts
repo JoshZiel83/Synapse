@@ -256,3 +256,12 @@ export const SERVER_FACADE_ERROR_CODES = [
   "runtime_authorization_requested",
 ] as const
 export type ServerFacadeErrorCode = (typeof SERVER_FACADE_ERROR_CODES)[number]
+
+// CUA tool names that require runtime_authorization access='write' on the
+// device side. Shared between `device-runtime/src/builtins/cua.ts` and
+// `api/src/modules/capability-projection/service.ts` so the projection layer's
+// "this tool needs write grants" check and the device's enforcement check stay
+// in lockstep. Phase 1 set_focus is read-only (background-only mode); foreground
+// will join this list when Phase 2 lands cua_window_op.
+export const CUA_WRITE_TOOLS = ["cua_click", "cua_type_text"] as const
+export type CuaWriteTool = (typeof CUA_WRITE_TOOLS)[number]
