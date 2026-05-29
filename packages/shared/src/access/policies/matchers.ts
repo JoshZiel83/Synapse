@@ -170,14 +170,12 @@ export function browserPolicyAllows(
         policy.origin && args.origin && policy.origin === args.origin
       )
     case "host":
-      return Boolean(
-        policy.host && args.host && policy.host === args.host
-      )
+      return Boolean(policy.host && args.host && policy.host === args.host)
     case "domain":
       return Boolean(
         policy.registrableDomain &&
-          args.registrableDomain &&
-          policy.registrableDomain === args.registrableDomain
+        args.registrableDomain &&
+        policy.registrableDomain === args.registrableDomain
       )
     default:
       return false

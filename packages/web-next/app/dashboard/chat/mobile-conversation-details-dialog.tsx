@@ -10,6 +10,7 @@ import type {
   ConversationSummary,
 } from "@/stores/chat-store"
 import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
+import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import {
   getConversationMemberContactHref,
   getConversationMemberSubtitle,
@@ -66,6 +67,7 @@ export default function MobileConversationDetailsDialog({
     conversation.participants.map((participant) => participant.name).join(", ")
   const memberSummary = summarizeMemberCounts(conversation)
   const orderedMembers = orderMembers(conversation.members)
+  const connectorMetadata = useConnectorMetadata()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -125,7 +127,10 @@ export default function MobileConversationDetailsDialog({
                     member,
                     contactBasePath
                   )
-                  const subtitle = getConversationMemberSubtitle(member)
+                  const subtitle = getConversationMemberSubtitle(
+                    member,
+                    connectorMetadata
+                  )
                   const canOpen = Boolean(onMemberClick || href)
                   return (
                     <button

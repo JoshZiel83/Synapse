@@ -7,9 +7,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-05-26-device-runtime-v3-merge-into-dev"
-const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 cutover merged into dev: full device_* surface (devices, device_services, device_capabilities, device_exposures, device_tools, device_tool_revisions, device_catalog_revisions, device_control_plane_sessions, device_operations, device_operation_attempts, runtime_authorization_grants, interaction_runtime_authorization_requests with principal_remote_agent_id + principal_conversation_actor_context_id, tunnel_path_token); drop legacy relay_* tables/enums; combined with dev's drop of the legacy sessions.channel_type discriminator (every actor session is now conversation-scoped)"
+/**
+ * `schema_migrations.version` is `VARCHAR(64)` (see
+ * `ensureSchemaMigrationsTable` below). Keep the slug short — long
+ * names that drift past 64 chars cause `INSERT INTO schema_migrations`
+ * to error on a fresh bootstrap (`value too long for type
+ * character varying(64)`). Multi-feature releases should bump this to
+ * a single short slug; put narrative detail in
+ * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
+ * `bootstrap.test.ts` enforces the length invariant.
+ */
+export const CURRENT_SCHEMA_VERSION = "2026-05-29-subject-scope-refactor"
+export const CURRENT_SCHEMA_DESCRIPTION =
+  "subject-scope-refactor merge into device-runtime-v3: runtime_authorization_grants drops scope enum + conversation_actor_context_id; adds scope_subject_id + four-dimension dispatch index + tg_runtime_authorization_grant_validate trigger with subject/scope whitelist (actor|remote_agent + conversation only). interaction_runtime_authorization_requests drops principal_remote_agent_id + principal_conversation_actor_context_id; adds principal_subject_id NOT NULL + principal_scope_subject_id (ON DELETE RESTRICT). resource_access_bindings adds scope_subject_id + partial index + tg_rab_validate trigger. access_subjects drops conversation_actor_context_id column + 'conversation_actor_context' subject_kind value. device_operations_principal_kind drops 'actor_in_conversation'; CHECK tightened to require principal_subject_id for all 4 kinds; FK to access_subjects changes ON DELETE SET NULL → RESTRICT. New SQL helpers: is_workspace_bound_subject_kind, is_scope_eligible_subject, is_memory_owner_subject_kind, access_subject_workspace_id, device_*_workspace_id. memory_spaces/memory_access_grants schema lands in Batch 11."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

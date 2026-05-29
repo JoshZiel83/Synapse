@@ -6,6 +6,10 @@
  * the registered connector instance. The legacy connectors/feishu.ts and
  * connectors/weixin.ts shells that exported standalone capability constants
  * are gone.
+ *
+ * `assert*` helpers throw `statusCode/code`-annotated errors so the
+ * global Fastify error handler maps them to clean 400s. Bare
+ * `throw new Error(...)` would surface as 500.
  */
 
 import type {
@@ -32,13 +36,23 @@ export function assertSupportedConnectionMode(
 ): void {
   const capability = getTransportConnectorCapability(transportKind)
   if (!capability) {
-    throw new Error(
-      `No connector registered for transport_kind=${transportKind}`
+    throw Object.assign(
+      new Error(`No connector registered for transport_kind=${transportKind}`),
+      {
+        statusCode: 400 as const,
+        code: "transport_kind_unsupported" as const,
+      }
     )
   }
   if (!capability.supportedConnectionModes.includes(connectionMode)) {
-    throw new Error(
-      `${transportKind} does not support connection mode ${connectionMode}`
+    throw Object.assign(
+      new Error(
+        `${transportKind} does not support connection mode ${connectionMode}`
+      ),
+      {
+        statusCode: 400 as const,
+        code: "transport_connection_mode_unsupported" as const,
+      }
     )
   }
 }
@@ -49,13 +63,23 @@ export function assertSupportedEndpointType(
 ): void {
   const capability = getTransportConnectorCapability(transportKind)
   if (!capability) {
-    throw new Error(
-      `No connector registered for transport_kind=${transportKind}`
+    throw Object.assign(
+      new Error(`No connector registered for transport_kind=${transportKind}`),
+      {
+        statusCode: 400 as const,
+        code: "transport_kind_unsupported" as const,
+      }
     )
   }
   if (!capability.supportedEndpointTypes.includes(endpointType)) {
-    throw new Error(
-      `${transportKind} does not support endpoint type ${endpointType}`
+    throw Object.assign(
+      new Error(
+        `${transportKind} does not support endpoint type ${endpointType}`
+      ),
+      {
+        statusCode: 400 as const,
+        code: "transport_endpoint_type_unsupported" as const,
+      }
     )
   }
 }

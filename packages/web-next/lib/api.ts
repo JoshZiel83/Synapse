@@ -77,6 +77,8 @@ import type {
   TransportExternalUserSummary,
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
+  DingtalkDeviceFlowStartResponse,
+  DingtalkDeviceFlowPollResponse,
   WorkspaceChiefActorPreference,
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
@@ -739,6 +741,12 @@ class ApiClient {
   deleteMemory(wsId: string, id: string) {
     return this.fetch(`/workspaces/${wsId}/memories/${id}`, {
       method: "DELETE",
+    })
+  }
+  moveMemory(wsId: string, id: string, data: any) {
+    return this.fetch(`/workspaces/${wsId}/memories/${id}/move`, {
+      method: "POST",
+      body: JSON.stringify(data),
     })
   }
 
@@ -1570,6 +1578,44 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
+  createWecomTransportAccount(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/wecom`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateWecomTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/wecom/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+  createQqTransportAccount(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/qq`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateQqTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/qq/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
   startWeixinQrTransportSession(
     wsId: string,
     data: Record<string, unknown>
@@ -1584,6 +1630,41 @@ class ApiClient {
     sessionId: string
   ): Promise<{ session: WeixinQrLoginSessionSummary }> {
     return this.fetch(`/workspaces/${wsId}/im/accounts/weixin/qr/${sessionId}`)
+  }
+  startDingtalkDeviceFlow(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<DingtalkDeviceFlowStartResponse> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/start`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    )
+  }
+  pollDingtalkDeviceFlow(
+    wsId: string,
+    sessionId: string
+  ): Promise<DingtalkDeviceFlowPollResponse> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/${sessionId}`
+    )
+  }
+  cancelDingtalkDeviceFlow(wsId: string, sessionId: string): Promise<void> {
+    return this.fetch(
+      `/workspaces/${wsId}/im/accounts/dingtalk/device-registration/${sessionId}`,
+      { method: "DELETE" }
+    )
+  }
+  createDingtalkAccountManual(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/dingtalk/manual`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
   }
   getCurrentUserWeixinBinding(
     wsId: string

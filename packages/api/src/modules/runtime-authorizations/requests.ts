@@ -29,24 +29,30 @@ export interface RuntimeAuthorizationRequestSource {
   conversationId: string
   sessionId: string
   /**
-   * Required for actor / actor_in_conversation principals. For
-   * remote_agent principals leave undefined and set `remoteAgentId`
-   * instead — the requester is then resolved as the bridged
-   * remote_agent participant of the conversation, not a chat actor.
+   * subject-scope-refactor: principal subject_id (NOT NULL on
+   * interaction_runtime_authorization_requests). Caller resolves the
+   * triggering principal to an access_subjects row via
+   * upsertAccessSubject(actor / remote_agent / conversation) and passes the
+   * id here. This is the new canonical principal channel; the legacy
+   * actorId / remoteAgentId / conversationActorContextId fields below are
+   * retained for transitional caller compatibility (consumed only as
+   * resolution hints, not persisted into the new column).
+   */
+  principalSubjectId: string
+  /**
+   * Optional principal scope subject id (set when the triggering principal
+   * was an active conversation participant).
+   */
+  principalScopeSubjectId?: string | null
+  /**
+   * @deprecated subject-scope-refactor: resolved into principalSubjectId
+   * upstream. Kept as a hint for inbound resolver glue (e.g. to identify
+   * the bridged remote_agent participant of the conversation).
    */
   actorId?: string
-  /**
-   * Required for remote_agent principals. Populates
-   * interaction_runtime_authorization_requests.principal_remote_agent_id
-   * so the eventual grant can be subject-scoped to the remote agent.
-   */
+  /** @deprecated see actorId */
   remoteAgentId?: string
-  /**
-   * Required for actor_in_conversation principals. Populates
-   * interaction_runtime_authorization_requests.principal_conversation_actor_context_id
-   * so the eventual grant can be subject-scoped to the per-conversation
-   * actor context.
-   */
+  /** @deprecated see actorId */
   conversationActorContextId?: string
   sourceToolName: string
   conversationKind?: "private" | "group" | "virtual"
@@ -81,6 +87,47 @@ export interface CreateRuntimeAuthorizationRequestParams {
   reason: string
   sourceRequestArgs: Record<string, unknown>
   retryNonce?: string
+}
+
+/**
+ * Pick the retry_nonce to surface to the caller. When the interaction was
+ * reused from the dedupe lookup (either the outer background-mode dedupe in
+ * createRuntimeAuthorizationRequest or the inner request-key dedupe in
+ * createRuntimeAuthorizationInteractionRequest) we MUST return the
+ * persisted nonce on the row — that's the only value the post-approval
+ * grant will be created with, and the only value the device's grant
+ * matcher will accept on retry. Surfacing a freshly-generated nonce in the
+ * reused branch would hand the model a token no grant ever validates and
+ * the once-grant would silently expire unused. Falls back to the fresh
+ * nonce only when the row truly lacks one (legacy data, defense in depth).
+ */
+export function pickPersistedRetryNonce(
+  interaction: InteractionRequestSummary,
+  freshNonce: string
+): string {
+  if (
+    interaction.kind === "runtime_authorization" &&
+    interaction.runtimeAuthorization?.sourceRetryNonce
+  ) {
+    return interaction.runtimeAuthorization.sourceRetryNonce
+  }
+  return freshNonce
+}
+
+/**
+ * Detect whether the createRuntimeAuthorizationInteractionRequest inner
+ * dedupe (taskId or requestKey match) returned a pre-existing row. The
+ * outer caller passes `reused: false` until it can prove otherwise — this
+ * helper proves it by checking whether the row's persisted retry_nonce
+ * matches the one the caller just generated.
+ */
+export function didInnerDedupeReuseRow(
+  interaction: InteractionRequestSummary,
+  freshNonce: string
+): boolean {
+  if (interaction.kind !== "runtime_authorization") return false
+  const persisted = interaction.runtimeAuthorization?.sourceRetryNonce
+  return Boolean(persisted && persisted !== freshNonce)
 }
 
 export interface RuntimeAuthorizationRequestResult {
@@ -320,7 +367,14 @@ export async function createRuntimeAuthorizationRequest(
         availableAuthorizers,
         requesterParticipantId: requesterMember.id,
         reused: true,
-        retryNonce,
+        // CRITICAL: return the EXISTING row's persisted retry_nonce, not
+        // the freshly-generated `retryNonce` above. The post-approval grant
+        // is created with the old row's source_retry_nonce so the grant
+        // matcher will only ever honor that value — surfacing a new nonce
+        // to the caller would hand the model a token no grant will accept,
+        // and the once-grant would silently expire unused. The helper falls
+        // back to the freshly-generated nonce for legacy rows without one.
+        retryNonce: pickPersistedRetryNonce(existing, retryNonce),
       }
     }
   }
@@ -384,19 +438,63 @@ export async function createRuntimeAuthorizationRequest(
       requestMode: params.requestMode,
       sourceRetryNonce: retryNonce,
       sourceRequestArgs: params.sourceRequestArgs,
+      principalSubjectId: params.source.principalSubjectId,
+      principalScopeSubjectId: params.source.principalScopeSubjectId,
       principalRemoteAgentId: params.source.remoteAgentId,
       principalConversationActorContextId:
         params.source.conversationActorContextId,
     })
 
+    // Detect inner dedupe — see createRuntimeAuthorizationInteractionRequest
+    // (interactions/service.ts). When that fires we got back an existing
+    // interaction whose row carries the original source_retry_nonce, not the
+    // one we just generated above. Same bug class as the outer background
+    // dedupe: surfacing our fresh nonce here would hand the model a token no
+    // future grant can accept. This also fires for the concurrent INSERT
+    // race — when our INSERT lost to ON CONFLICT DO NOTHING, the inner
+    // request re-resolves the conflict winner, whose row carries the OTHER
+    // caller's nonce.
+    const reusedByInnerDedupe = didInnerDedupeReuseRow(interaction, retryNonce)
+
+    // Orphan-task cleanup. If inner dedupe fired, our freshly-created
+    // tool_call_task has no interaction pointing at it (the existing
+    // interaction is either taskless or bound to a different,
+    // already-existing task). Approval completion only touches the
+    // interaction's bound task — our orphan would stay `input_required`
+    // forever, AND the caller would receive an `authorization_task_id`
+    // pointing at a task that the approval flow will never complete.
+    // Cancel the orphan and return `task: null` so projection surfaces no
+    // misleading task id. The original interaction's bound task (if any) is
+    // what the user will see in the dashboard, and its existing state is
+    // preserved.
+    let effectiveTask: ToolCallTaskRecord | null = task
+    if (reusedByInnerDedupe && task) {
+      try {
+        await cancelToolCallTask(task.id, {
+          summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} merged into an existing pending request — this task is no longer needed.`,
+          finalResultPayload: {
+            content: textBlocks(
+              `Runtime authorization request merged with an existing pending request for the same target. The original request handles approval; this duplicate was cancelled.`
+            ),
+            isError: false,
+          },
+        })
+      } catch {
+        // Best-effort: leaving the task in input_required is bad but
+        // failing the whole dispatch is worse. Audit will still show the
+        // orphan; a follow-up sweeper or operator action can resolve it.
+      }
+      effectiveTask = null
+    }
+
     return {
       interaction,
-      task,
+      task: effectiveTask,
       availableAuthorizerCount: availableAuthorizers.length,
       availableAuthorizers,
       requesterParticipantId: requesterMember.id,
-      reused: false,
-      retryNonce,
+      reused: reusedByInnerDedupe,
+      retryNonce: pickPersistedRetryNonce(interaction, retryNonce),
     }
   } catch (error) {
     if (task) {

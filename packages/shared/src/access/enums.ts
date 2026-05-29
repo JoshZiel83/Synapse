@@ -12,7 +12,6 @@ export const SUBJECT_KIND = {
   ACTOR: "actor",
   REMOTE_AGENT: "remote_agent",
   CONVERSATION: "conversation",
-  CONVERSATION_ACTOR_CONTEXT: "conversation_actor_context",
   USER: "user",
   EXTERNAL: "external",
   SYSTEM: "system",
@@ -24,7 +23,6 @@ export const SUBJECT_KINDS = [
   SUBJECT_KIND.ACTOR,
   SUBJECT_KIND.REMOTE_AGENT,
   SUBJECT_KIND.CONVERSATION,
-  SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
   SUBJECT_KIND.USER,
   SUBJECT_KIND.EXTERNAL,
   SUBJECT_KIND.SYSTEM,
@@ -49,7 +47,6 @@ export const ACCESS_RESOURCE_TYPE = {
   DEVICE: "device",
   DEVICE_EXPOSURE: "device_exposure",
   DEVICE_CAPABILITY: "device_capability",
-  CONVERSATION_ACTOR_CONTEXT: "conversation_actor_context",
   CONVERSATION: "conversation",
   MEMORY_SPACE: "memory_space",
   MEMORY_ITEM: "memory_item",
@@ -70,7 +67,6 @@ export const ACCESS_RESOURCE_TYPES = [
   ACCESS_RESOURCE_TYPE.DEVICE,
   ACCESS_RESOURCE_TYPE.DEVICE_EXPOSURE,
   ACCESS_RESOURCE_TYPE.DEVICE_CAPABILITY,
-  ACCESS_RESOURCE_TYPE.CONVERSATION_ACTOR_CONTEXT,
   ACCESS_RESOURCE_TYPE.CONVERSATION,
   ACCESS_RESOURCE_TYPE.MEMORY_SPACE,
   ACCESS_RESOURCE_TYPE.MEMORY_ITEM,
@@ -139,3 +135,45 @@ export const ACCESS_BINDING_SOURCES = [
 ] as const
 
 export type AccessBindingSource = (typeof ACCESS_BINDING_SOURCES)[number]
+
+/**
+ * subject-scope-refactor: memory_access_grants table permissions. Grants can
+ * be scoped to a memory_space or a single memory_item; the same permission
+ * tuple applies to both. Used by memory module access-grant-storage and by
+ * evaluator's hasMemoryItemPermission / hasMemorySpacePermission to honor
+ * explicit grants on top of legacy space_type-based decision tree.
+ */
+export const MEMORY_PERMISSION = {
+  READ: "read",
+  RECALL: "recall",
+  WRITE: "write",
+  EDIT: "edit",
+  DELETE: "delete",
+  MANAGE: "manage",
+} as const
+
+export const MEMORY_PERMISSIONS = [
+  MEMORY_PERMISSION.READ,
+  MEMORY_PERMISSION.RECALL,
+  MEMORY_PERMISSION.WRITE,
+  MEMORY_PERMISSION.EDIT,
+  MEMORY_PERMISSION.DELETE,
+  MEMORY_PERMISSION.MANAGE,
+] as const
+
+export type MemoryPermission = (typeof MEMORY_PERMISSIONS)[number]
+
+export const MEMORY_ACCESS_GRANT_STATUS = {
+  ACTIVE: "active",
+  REVOKED: "revoked",
+  SUPERSEDED: "superseded",
+} as const
+
+export const MEMORY_ACCESS_GRANT_STATUSES = [
+  MEMORY_ACCESS_GRANT_STATUS.ACTIVE,
+  MEMORY_ACCESS_GRANT_STATUS.REVOKED,
+  MEMORY_ACCESS_GRANT_STATUS.SUPERSEDED,
+] as const
+
+export type MemoryAccessGrantStatus =
+  (typeof MEMORY_ACCESS_GRANT_STATUSES)[number]

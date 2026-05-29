@@ -99,23 +99,6 @@ export const ACCESS_ACTIONS = {
   "remote_agent.grant": { resourceType: "remote_agent", permission: "grant" },
   "remote_agent.delete": { resourceType: "remote_agent", permission: "delete" },
 
-  "actor_in_conversation.memory_read": {
-    resourceType: "conversation_actor_context",
-    permission: "memory_read",
-  },
-  "actor_in_conversation.memory_edit": {
-    resourceType: "conversation_actor_context",
-    permission: "memory_edit",
-  },
-  "actor_in_conversation.memory_retarget": {
-    resourceType: "conversation_actor_context",
-    permission: "memory_retarget",
-  },
-  "actor_in_conversation.memory_delete": {
-    resourceType: "conversation_actor_context",
-    permission: "memory_delete",
-  },
-
   "conversation.view": { resourceType: "conversation", permission: "view" },
   "conversation.send": { resourceType: "conversation", permission: "send" },
   "conversation.moderate": {
@@ -150,9 +133,16 @@ export const ACCESS_ACTIONS = {
 
   "memory.read": { resourceType: "memory_item", permission: "read" },
   "memory.recall": { resourceType: "memory_item", permission: "recall" },
+  "memory.write": { resourceType: "memory_item", permission: "write" },
   "memory.edit": { resourceType: "memory_item", permission: "edit" },
-  "memory.retarget": { resourceType: "memory_item", permission: "retarget" },
   "memory.delete": { resourceType: "memory_item", permission: "delete" },
+
+  "memory_space.read": { resourceType: "memory_space", permission: "read" },
+  "memory_space.recall": { resourceType: "memory_space", permission: "recall" },
+  "memory_space.write": { resourceType: "memory_space", permission: "write" },
+  "memory_space.edit": { resourceType: "memory_space", permission: "edit" },
+  "memory_space.delete": { resourceType: "memory_space", permission: "delete" },
+  "memory_space.manage": { resourceType: "memory_space", permission: "manage" },
 
   "plugin_installation.view": {
     resourceType: "plugin_installation",

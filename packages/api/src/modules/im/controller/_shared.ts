@@ -16,6 +16,7 @@ import {
   TRANSPORT_KINDS,
 } from "@synapse/shared/constants"
 import { requireRequestAction } from "../../access/guards.js"
+import { WECOM_BASE_WS_URL_MAX_BYTES } from "../connectors/wecom/credentials.js"
 import { refreshTransportRuntimeManager } from "../runtime.js"
 
 export const transportAccountOwnerCreateShape = {
@@ -263,6 +264,128 @@ export const updateFeishuAccountSchema = z
     appSecret: z.string().trim().min(1).max(255).optional(),
     verificationToken: z.string().trim().max(255).optional(),
     encryptKey: z.string().trim().max(255).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...transportAccountOwnerUpdateShape,
+    ...transportAccountInboundActorUpdateShape,
+  })
+  .superRefine(validateTransportAccountOwnerUpdate)
+  .superRefine(validateTransportAccountInboundActorUpdate)
+
+// WeCom (Enterprise WeChat) v1 — smart-bot long-connection only. baseWsUrl
+// is a deployment-level override that lands in transport_accounts.config,
+// kept separate from credentials so it doesn't go through validateCredentials
+// (which only sees credentials, per TransportConnector contract).
+//
+// Both schemas are `.strict()`: Zod's default `strip` would silently drop
+// unknown keys (e.g. `accountKey` on update — `updateTransportAccount`
+// doesn't accept it), returning a 200 that misled clients into thinking
+// the value persisted. Strict mode rejects unknown keys at the API
+// boundary so callers get a clear 400 instead of a silent no-op.
+//
+// `baseWsUrl` is refined to `wss://` (preferred) or `ws://` (for private
+// dev gateways) — bare `.url()` would let `http://` / `ftp://` etc.
+// through to the SDK, which would fail in a confusing way at connect time.
+const WECOM_WS_URL_PATTERN = /^wss?:\/\//i
+const wecomBaseWsUrlSchema = z
+  .string()
+  .trim()
+  .url()
+  // Use UTF-8 byte length, not `.max(N)`'s code-unit count, so the
+  // route-level and connector-level checks accept exactly the same set
+  // of inputs. Otherwise a 118-char URL with non-ASCII path segments
+  // (~318 bytes) would pass the route schema and then be rejected by
+  // the service-level connector validator — inconsistent error surfaces.
+  .refine(
+    (value) => Buffer.byteLength(value, "utf8") <= WECOM_BASE_WS_URL_MAX_BYTES,
+    {
+      message: `baseWsUrl must be at most ${WECOM_BASE_WS_URL_MAX_BYTES} bytes (UTF-8)`,
+    }
+  )
+  .refine((value) => WECOM_WS_URL_PATTERN.test(value), {
+    message: "baseWsUrl must use the wss:// (or ws:// for dev) scheme",
+  })
+
+export const wecomAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.literal("long_connection").default("long_connection"),
+    botId: z.string().trim().min(1).max(255),
+    secret: z.string().trim().min(1).max(255),
+    baseWsUrl: wecomBaseWsUrlSchema.optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...transportAccountOwnerCreateShape,
+    ...transportAccountInboundActorCreateShape,
+  })
+  .strict()
+  .superRefine(validateTransportAccountOwnerCreate)
+  .superRefine(validateTransportAccountInboundActorCreate)
+
+export const updateWecomAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    // `accountKey` intentionally omitted from the update shape: the
+    // shared `updateTransportAccount` service does not currently update
+    // `account_key`, so accepting it here would silently no-op. With
+    // `.strict()` below, sending `accountKey` now returns a 400 instead
+    // of a misleading 200.
+    connectionMode: z.literal("long_connection").optional(),
+    botId: z.string().trim().min(1).max(255).optional(),
+    secret: z.string().trim().min(1).max(255).optional(),
+    // `null` explicitly clears a previously-saved baseWsUrl (the
+    // controller translates that to a `config: {}` write so service
+    // doesn't keep the old value). An absent field leaves the existing
+    // config untouched. A string value is validated by the same
+    // wecomBaseWsUrlSchema as the create path.
+    baseWsUrl: wecomBaseWsUrlSchema.nullable().optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...transportAccountOwnerUpdateShape,
+    ...transportAccountInboundActorUpdateShape,
+  })
+  .strict()
+  .superRefine(validateTransportAccountOwnerUpdate)
+  .superRefine(validateTransportAccountInboundActorUpdate)
+
+/**
+ * QQ Bot account schemas. `configuredUrlDomains` is server-side normalized
+ * by the connector (readQqAccountConfig). We accept any string list here
+ * — the connector lowercases, strips scheme/path/port, and rejects
+ * wildcards / IP literals. UI hint should mirror that contract.
+ */
+export const qqAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
+    appId: z.string().trim().min(1).max(255),
+    clientSecret: z.string().trim().min(1).max(255),
+    /**
+     * Optional botSecret — used for Ed25519 webhook signing if QQ console
+     * exposes it separately from clientSecret. Falls back to clientSecret
+     * when absent (see getEd25519Seed in credentials.ts).
+     */
+    botSecret: z.string().trim().max(255).optional(),
+    webhookInboundConfirmed: z.boolean().optional(),
+    allowProactiveBestEffort: z.boolean().optional(),
+    configuredUrlDomains: z.array(z.string().min(1)).optional(),
+    status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
+    ...transportAccountOwnerCreateShape,
+    ...transportAccountInboundActorCreateShape,
+  })
+  .superRefine(validateTransportAccountOwnerCreate)
+  .superRefine(validateTransportAccountInboundActorCreate)
+
+export const updateQqAccountSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(255).optional(),
+    accountKey: z.string().trim().min(1).max(120).optional(),
+    connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
+    appId: z.string().trim().min(1).max(255).optional(),
+    clientSecret: z.string().trim().min(1).max(255).optional(),
+    botSecret: z.string().trim().max(255).optional(),
+    webhookInboundConfirmed: z.boolean().optional(),
+    allowProactiveBestEffort: z.boolean().optional(),
+    configuredUrlDomains: z.array(z.string().min(1)).optional(),
     status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
     ...transportAccountOwnerUpdateShape,
     ...transportAccountInboundActorUpdateShape,

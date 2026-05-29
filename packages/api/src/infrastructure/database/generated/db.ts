@@ -133,7 +133,7 @@ export type DeviceOperationAttemptsStatus = "abandoned" | "acknowledged" | "fail
 
 export type DeviceOperationAttemptsTransport = "control_plane_task" | "mcp_http";
 
-export type DeviceOperationsPrincipalKind = "actor" | "actor_in_conversation" | "conversation" | "remote_agent" | "workspace_member";
+export type DeviceOperationsPrincipalKind = "actor" | "conversation" | "remote_agent" | "workspace_member";
 
 export type DeviceOperationsStatus = "awaiting_authorization" | "cancelled" | "created" | "dispatched" | "expired" | "failed" | "output_streaming" | "received" | "started" | "succeeded";
 
@@ -211,7 +211,9 @@ export type MemoryItemsState = "active" | "archived" | "superseded";
 
 export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
 
-export type MemorySpacesSpaceType = "actor_private" | "conversation_shared" | "participant_private" | "user_private" | "workspace_shared";
+// subject-scope-refactor: MemorySpacesSpaceType dropped at cutover; memory_spaces now keyed by (owner_subject_id, scope_subject_id?, namespace_key).
+export type MemoryPermission = "delete" | "edit" | "manage" | "read" | "recall" | "write";
+export type MemoryAccessGrantsStatus = "active" | "revoked" | "superseded";
 
 export type ModelGroupGrantsStatus = "active" | "revoked";
 
@@ -283,7 +285,7 @@ export type ResourceAccessBindingsStatus = "active" | "revoked";
 
 export type RuntimeAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
-export type RuntimeAuthorizationGrantsScope = "actor" | "actor_in_conversation" | "conversation" | "once" | "remote_agent" | "workspace";
+// subject-scope-refactor: RuntimeAuthorizationGrantsScope dropped at cutover; scope is now expressed via subject_id + scope_subject_id.
 
 export type RuntimeAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
 
@@ -315,7 +317,7 @@ export type SkillMirrorSourcesSyncStatus = "error" | "pending" | "synced";
 
 export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
-export type SubjectKind = "actor" | "conversation" | "conversation_actor_context" | "external" | "remote_agent" | "system" | "user" | "workspace" | "workspace_member";
+export type SubjectKind = "actor" | "conversation" | "external" | "remote_agent" | "system" | "user" | "workspace" | "workspace_member";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -347,11 +349,11 @@ export type TransportAccountsOwnerScope = "workspace" | "workspace_member";
 
 export type TransportAccountsStatus = "active" | "disabled" | "error";
 
-export type TransportAccountsTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportAccountsTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
 
 export type TransportAddressesAddressType = "bot" | "system" | "user";
 
-export type TransportAddressesTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportAddressesTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
 
 export type TransportEndpointsEndpointType = "direct" | "group";
 
@@ -359,7 +361,7 @@ export type TransportMessageLinksDeliveryStatus = "failed" | "pending" | "sent" 
 
 export type TransportMessageLinksDirection = "inbound" | "outbound";
 
-export type TransportMessageLinksTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportMessageLinksTransportKind = "dingtalk" | "feishu" | "qq" | "wecom" | "weixin";
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 
@@ -371,7 +373,6 @@ export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
 export interface AccessSubjects {
   actor_id: string | null;
-  conversation_actor_context_id: string | null;
   conversation_id: string | null;
   created_at: Generated<Timestamp>;
   external_identity_key: string | null;
@@ -1095,7 +1096,7 @@ export interface DeviceOperations {
   input_payload: Generated<Json>;
   operation_timeout_ms: number | null;
   principal_kind: DeviceOperationsPrincipalKind;
-  principal_subject_id: string | null;
+  principal_subject_id: string;
   requires_replan: Generated<boolean>;
   result_hash: string | null;
   runtime_session_id: string | null;
@@ -1358,6 +1359,14 @@ export interface InstalledSkills {
   workspace_id: string;
 }
 
+export interface InteractionActionTokens {
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  interaction_request_id: string;
+  payload: Json;
+  token: Generated<string>;
+}
+
 export interface InteractionPlanApprovalRequests {
   interaction_id: string;
   plan_payload: Generated<Json>;
@@ -1406,8 +1415,8 @@ export interface InteractionRuntimeAuthorizationRequests {
   device_tool_stable_key: string;
   grant_options: Generated<Json>;
   interaction_id: string;
-  principal_conversation_actor_context_id: string | null;
-  principal_remote_agent_id: string | null;
+  principal_scope_subject_id: string | null;
+  principal_subject_id: string;
   reason: Generated<string>;
   request_mode: RuntimeAuthorizationRequestMode;
   requested_action: Generated<Json>;
@@ -1416,6 +1425,20 @@ export interface InteractionRuntimeAuthorizationRequests {
   source_request_args: Generated<Json>;
   source_retry_nonce: string | null;
   source_runtime_session_id: string | null;
+}
+
+export interface InteractionTransportProjections {
+  attempts: Generated<number>;
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  id: Generated<string>;
+  interaction_request_id: string;
+  next_attempt_at: Generated<Timestamp>;
+  status: Generated<string>;
+  transport_message_link_id: string | null;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
 }
 
 export interface InteractionUserInputRequests {
@@ -1520,14 +1543,30 @@ export interface MemoryRecallRuns {
 }
 
 export interface MemorySpaces {
-  anchor_actor_id: string | null;
-  anchor_conversation_actor_context_id: string | null;
-  anchor_conversation_id: string | null;
-  anchor_workspace_member_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Timestamp>;
   id: Generated<string>;
-  space_type: MemorySpacesSpaceType;
-  updated_at: Generated<Timestamp | null>;
+  namespace_key: Generated<string>;
+  owner_subject_id: string;
+  scope_subject_id: string | null;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
+}
+
+export interface MemoryAccessGrants {
+  created_at: Generated<Timestamp>;
+  created_by_workspace_member_id: string | null;
+  id: Generated<string>;
+  memory_item_id: string | null;
+  memory_space_id: string;
+  permissions: MemoryPermission[];
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source: string | null;
+  source_interaction_id: string | null;
+  status: Generated<MemoryAccessGrantsStatus>;
+  subject_id: string;
+  superseded_at: Timestamp | null;
+  updated_at: Generated<Timestamp>;
   workspace_id: string;
 }
 
@@ -1926,6 +1965,7 @@ export interface ResourceAccessBindings {
   remote_agent_id: string | null;
   resource_type: ResourceAccessBindingResourceType;
   revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
   source: Generated<ResourceAccessBindingsSource>;
   status: Generated<ResourceAccessBindingsStatus>;
   subject_id: string;
@@ -1934,7 +1974,6 @@ export interface ResourceAccessBindings {
 
 export interface RuntimeAuthorizationGrants {
   consumed_at: Timestamp | null;
-  conversation_actor_context_id: string | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
   device_capability_id: string;
@@ -1944,14 +1983,14 @@ export interface RuntimeAuthorizationGrants {
   policy: Generated<Json>;
   retention: RuntimeAuthorizationGrantsRetention;
   revoked_at: Timestamp | null;
-  scope: RuntimeAuthorizationGrantsScope;
+  scope_subject_id: string | null;
   source_interaction_id: string | null;
   source_request_args: Generated<Json>;
   source_retry_nonce: string | null;
   source_runtime_session_id: string | null;
   source_task_id: string | null;
   status: Generated<RuntimeAuthorizationGrantsStatus>;
-  subject_id: string | null;
+  subject_id: string;
   superseded_at: Timestamp | null;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -2515,12 +2554,15 @@ export interface DB {
   file_parse_runs: FileParseRuns;
   files: Files;
   installed_skills: InstalledSkills;
+  interaction_action_tokens: InteractionActionTokens;
   interaction_plan_approval_requests: InteractionPlanApprovalRequests;
   interaction_requests: InteractionRequests;
   interaction_response_commands: InteractionResponseCommands;
   interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
+  interaction_transport_projections: InteractionTransportProjections;
   interaction_user_input_requests: InteractionUserInputRequests;
   memory_embedding_cache: MemoryEmbeddingCache;
+  memory_access_grants: MemoryAccessGrants;
   memory_item_chunks: MemoryItemChunks;
   memory_item_parts: MemoryItemParts;
   memory_items: MemoryItems;

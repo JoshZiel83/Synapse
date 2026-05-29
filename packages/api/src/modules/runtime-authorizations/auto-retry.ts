@@ -20,16 +20,16 @@ import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
 import {
-  beginDeviceOperation,
   completeDeviceOperation,
-  RevisionDriftError,
   type OperationPrincipalKind,
 } from "../devices/operations.js"
 import {
-  consumeRuntimeAuthorizationGrant,
+  selectAndClaimRuntimeAuthorizationGrant,
+  toRuntimeAuthorizationGrantWireSpec,
+  type PrepareFailure,
+  type PreparedDispatch,
   type RuntimeAuthorizationGrantRecord,
 } from "./service.js"
-import type { RuntimeAuthorizationGrantSpec } from "@synapse/device-protocol"
 
 export interface AutoRetryDispatchResult {
   ok: boolean
@@ -101,16 +101,23 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   visibleToolName: string
   sourceRequestArgs: Record<string, unknown>
   sourceRetryNonce: string
+  sourceTaskId: string
   approvedGrant: RuntimeAuthorizationGrantRecord
-  /** Audit context — required to thread device_operations + attempts so
-   * the dashboard still sees the auto-retry dispatch in its audit trail.
-   * Without these the dispatch happens "outside" the audit log and any
-   * downstream investigation has no operation row to anchor on. */
+  /**
+   * subject-scope-refactor: the principal-side runtime subject set built
+   * from the post-commit RuntimePrincipalContext. Passed verbatim to
+   * selectAndClaimRuntimeAuthorizationGrant so the same SQL-side subject +
+   * scope filtering that protects normal dispatch also protects auto-retry
+   * (e.g. an actor who left the conversation between approval and retry
+   * must NOT be able to claim a `actor + scope=conversation` grant).
+   */
+  runtimeSubjectIds: string[]
+  runtimeScopeSubjectIds: string[]
   audit: {
     workspaceId: string
     conversationId: string | null
     principalKind: OperationPrincipalKind
-    principalSubjectId: string | null
+    principalSubjectId: string
     initiatedBySessionId: string | null
     initiatedByWorkspaceMemberId: string | null
   }
@@ -133,12 +140,15 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   const inputHash =
     "sha256:" + createHash("sha256").update(inputCanonical).digest("hex")
 
-  // Translate the approved GrantRecord (camelCase) into the wire-shape
-  // GrantSpec the envelope expects. We carry exactly ONE grant_spec — the
-  // grant the user just approved — so the device-side matcher has the
-  // narrowest possible authorization to apply.
-  const spec: RuntimeAuthorizationGrantSpec = {
+  // Build the requested action mirror of the approved grant so the canonical
+  // helper's matcher still validates "this grant covers this action". The
+  // approved grant already passed the action match (otherwise the approval
+  // wouldn't have been issued), so this is defensive coverage rather than a
+  // gate, but it keeps the canonical helper invariants honest.
+  const requestedAction = {
     capability: args.approvedGrant.capability,
+    summary: `Auto-retry approved grant ${args.approvedGrant.id}`,
+    detail: undefined,
     filesystem: args.approvedGrant.filesystem
       ? {
           access: args.approvedGrant.filesystem.access,
@@ -165,81 +175,113 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
           working_directory: args.approvedGrant.commandline.workingDirectory,
         }
       : undefined,
-  }
+  } as const
 
-  let envelope
-  try {
-    envelope = signEnvelopeForDispatch({
-      operation_id: randomUUID(),
-      attempt_id: randomUUID(),
-      device_runtime_session_id: randomUUID(),
-      device_capability_id: args.deviceCapabilityId,
-      device_exposure_id: target.deviceExposureId,
-      device_tool_id: target.deviceToolId,
-      device_tool_revision_id: target.deviceToolRevisionId,
-      input_hash: inputHash,
-      task_mode: "sync" as const,
-      runtime_authorization: {
-        grant_ids: [args.approvedGrant.id],
-        grant_scope: args.approvedGrant.scope,
-        grant_specs: [spec],
-        retry_nonce: args.sourceRetryNonce,
-      },
-      issued_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
-    })
-  } catch (err) {
-    return {
-      ok: false,
-      errorCode: "runtime_constraint",
-      errorMessage: `auto-retry envelope signing failed: ${(err as Error).message}`,
-    }
-  }
-
-  // Open a device_operations + first device_operation_attempts row pair
-  // BEFORE dispatch so the auto-retry shows up in the same audit trail the
-  // normal projection executor produces. Without this the user-approved
-  // re-dispatch has no operation row, and dashboards / downstream events
-  // can't tie the resulting side-effect back to the interaction.
-  let operationId: string
-  let attemptId: string
-  try {
-    const begin = await beginDeviceOperation({
-      workspaceId: args.audit.workspaceId,
-      conversationId: args.audit.conversationId,
-      envelope,
-      args: args.sourceRequestArgs,
-      toolName: args.visibleToolName,
-      deviceId: target.deviceId,
-      deviceServiceId: target.deviceServiceId,
-      tunnelInternalUrl:
-        getDeviceTunnelRegistry().resolve(target.deviceServiceId)
-          ?.internalUrl ?? null,
-      principalKind: args.audit.principalKind,
-      principalSubjectId: args.audit.principalSubjectId,
-      initiatedByWorkspaceMemberId: args.audit.initiatedByWorkspaceMemberId,
-      initiatedBySessionId: args.audit.initiatedBySessionId,
-    })
-    operationId = begin.operationId
-    attemptId = begin.attemptId
-  } catch (err) {
-    if (err instanceof RevisionDriftError) {
-      return {
-        ok: false,
-        errorCode: "tool_definition_changed",
-        errorMessage: err.message,
+  const claim = await selectAndClaimRuntimeAuthorizationGrant({
+    workspaceId: args.audit.workspaceId,
+    deviceId: target.deviceId,
+    deviceCapabilityId: args.deviceCapabilityId,
+    deviceExposureId: target.deviceExposureId,
+    runtimeSubjectIds: args.runtimeSubjectIds,
+    runtimeScopeSubjectIds: args.runtimeScopeSubjectIds,
+    retryNonce: args.sourceRetryNonce,
+    sourceTaskId: args.sourceTaskId,
+    requestedAction:
+      requestedAction as unknown as import("@synapse/shared").RuntimeAuthorizationRequestedAction,
+    preferredGrantId: args.approvedGrant.id,
+    prepareGrant: async (
+      grant: RuntimeAuthorizationGrantRecord
+    ): Promise<
+      | { ok: true; prepared: PreparedDispatch }
+      | { ok: false; failure: PrepareFailure }
+    > => {
+      try {
+        const envelope = signEnvelopeForDispatch({
+          operation_id: randomUUID(),
+          attempt_id: randomUUID(),
+          device_runtime_session_id: randomUUID(),
+          device_capability_id: args.deviceCapabilityId,
+          device_exposure_id: target.deviceExposureId,
+          device_tool_id: target.deviceToolId,
+          device_tool_revision_id: target.deviceToolRevisionId,
+          input_hash: inputHash,
+          task_mode: "sync" as const,
+          runtime_authorization: {
+            grant_ids: [grant.id],
+            grant_scope: grant.scopeLabel,
+            grant_specs: [toRuntimeAuthorizationGrantWireSpec(grant)],
+            retry_nonce: args.sourceRetryNonce,
+          },
+          issued_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        })
+        return {
+          ok: true,
+          prepared: {
+            envelope,
+            toolId: target.deviceToolId,
+            toolRevisionId: target.deviceToolRevisionId,
+            beginInput: {
+              workspaceId: args.audit.workspaceId,
+              conversationId: args.audit.conversationId,
+              envelope,
+              args: args.sourceRequestArgs,
+              toolName: args.visibleToolName,
+              deviceId: target.deviceId,
+              deviceServiceId: target.deviceServiceId,
+              tunnelInternalUrl:
+                getDeviceTunnelRegistry().resolve(target.deviceServiceId)
+                  ?.internalUrl ?? null,
+              principalKind: args.audit.principalKind,
+              principalSubjectId: args.audit.principalSubjectId,
+              initiatedByWorkspaceMemberId:
+                args.audit.initiatedByWorkspaceMemberId,
+              initiatedBySessionId: args.audit.initiatedBySessionId,
+            },
+          },
+        }
+      } catch (err) {
+        return { ok: false, failure: { kind: "signing_failed", cause: err } }
       }
-    }
+    },
+  })
+
+  if (claim.kind === "no_match") {
     return {
       ok: false,
       errorCode: "runtime_constraint",
-      errorMessage: `device_operations insert failed: ${(err as Error).message}`,
+      errorMessage: "approved grant no longer matches the requested action",
     }
   }
+  if (claim.kind === "race_lost") {
+    return {
+      ok: false,
+      errorCode: "runtime_constraint",
+      errorMessage: `auto-retry race lost (${claim.reason})`,
+    }
+  }
+  if (claim.kind === "lock_timeout") {
+    return {
+      ok: false,
+      errorCode: "runtime_constraint",
+      errorMessage: "catalog lock_timeout during auto-retry",
+    }
+  }
+  if (claim.kind === "denied") {
+    return {
+      ok: false,
+      errorCode: "runtime_constraint",
+      errorMessage: claim.reason,
+    }
+  }
+
+  const { prepared, operation } = claim
+  const operationId = operation.operationId
+  const attemptId = operation.attemptId
 
   const dispatchResult = await dispatchSyncTool({
     deviceServiceId: target.deviceServiceId,
-    envelope,
+    envelope: prepared.envelope,
     args: args.sourceRequestArgs,
     toolName: args.visibleToolName,
   })
@@ -251,15 +293,6 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   }).catch(() => {
     /* operation-complete logging is best-effort */
   })
-
-  // Consume `once` grants we used on success — without this, the auto-retry
-  // path would leave them active so a subsequent dispatch by the planner
-  // would reuse a single-shot grant.
-  if (dispatchResult.ok && args.approvedGrant.scope === "once") {
-    await consumeRuntimeAuthorizationGrant(args.approvedGrant.id).catch(
-      () => undefined
-    )
-  }
 
   if (!dispatchResult.ok) {
     return {

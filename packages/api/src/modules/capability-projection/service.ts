@@ -17,8 +17,11 @@ import type {
   ConversationBoundary,
   CanonicalContentBlock,
 } from "@synapse/shared/types"
-import { SUBJECT_KIND, textBlock } from "@synapse/shared"
-import { RUNTIME_AUTHORIZATION_GRANT_SCOPE } from "@synapse/shared/constants"
+import { SUBJECT_KIND, textBlock, type SubjectRef } from "@synapse/shared"
+import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
+// subject-scope-refactor: Renamed alias to disambiguate from the API-side
+// SharedRuntimeAuthorizationGrantSpec; envelope payloads use the snake_case
+// wire spec.
 import type { McpExecutionContext } from "../mcp-plugins/instance-manager.js"
 import {
   resolveMcpToolsForActor,
@@ -26,17 +29,18 @@ import {
   type ResolvedMcpTools,
 } from "../mcp-plugins/tool-resolver.js"
 import { db } from "../../infrastructure/database/kysely.js"
-import { upsertAccessSubject } from "../access/subject-registry.js"
+import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { ensureConversationActorContext } from "../session/service.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
-import type { RuntimeAuthorizationGrantSpec } from "@synapse/device-protocol"
 import { createHash } from "node:crypto"
 import {
-  listActiveRuntimeAuthorizationGrantsForExposure,
-  consumeRuntimeAuthorizationGrant,
-  runtimeAuthorizationGrantMatches,
+  selectAndClaimRuntimeAuthorizationGrant,
+  toRuntimeAuthorizationGrantWireSpec,
+  type RuntimeAuthorizationGrantRecord,
+  type PreparedDispatch,
+  type PrepareFailure,
 } from "../runtime-authorizations/service.js"
 import { createRuntimeAuthorizationRequest } from "../runtime-authorizations/requests.js"
 import type { RuntimeAuthorizationRequestedAction } from "@synapse/shared"
@@ -61,25 +65,35 @@ import {
  * Discriminated union of principals that capability projection evaluates
  * tools for. See docs/device-runtime-v3.md §10.3.
  *
- * - `actor` with optional conversationId — chat runtime acting on behalf of
- *   an actor. When conversationId is provided, projection ALSO reads
- *   conversation-scoped bindings (the 1:1 device-picker output).
- * - `actor_in_conversation` — group-chat actor, anchored to a specific
- *   conversation_actor_context.
- * - `conversation` — transcript-side jobs with no actor in play.
+ * - `actor` with optional conversationId — chat runtime acting on behalf
+ *   of an actor. When conversationId is provided AND the actor is an
+ *   active participant of that conversation, projection ALSO reads
+ *   conversation-scoped bindings (the 1:1 device-picker output) plus
+ *   `subject=actor + scope=conversation` grants (the group-chat picker
+ *   output). The active-participant guard is enforced by the canonical
+ *   `buildRuntimePrincipalContext`; without it, a non-member actor's
+ *   `conversationId` would silently pull in unrelated grants.
+ * - `conversation` — transcript-side jobs with no actor in play. Per
+ *   Decision 8, this principal does NOT inherit the workspace subject:
+ *   `subject=workspace` device grants stay invisible to bridged
+ *   conversation participants (IM bridges, virtual chats).
  * - `remote_agent` — reverse MCP caller bridged into a conversation.
- * - `workspace_member` — dashboard introspection; never used for executable
- *   dispatch.
+ *   Same active-participant guard as `actor`.
+ * - `workspace_member` — dashboard introspection; never used for
+ *   executable dispatch.
+ *
+ * subject-scope-refactor: the legacy `actor_in_conversation` discriminator
+ * is dropped. Its semantics ("this actor, narrowed to this conversation")
+ * are now expressed as `actor` principal + `RuntimePrincipalContext.
+ * activeConversationSubjectId`, with the conversation subject also pushed
+ * into `runtimeScopeSubjectIds` so `(subject=actor, scope=conversation)`
+ * grants match SQL-side rather than requiring an extra principal-kind
+ * branch in every dispatcher. The legacy `conversation_actor_context`
+ * subject kind is gone with the discriminator.
  */
 export type DevicePrincipal =
   | { kind: "actor"; actorId: string; conversationId?: string }
   | { kind: "conversation"; conversationId: string }
-  | {
-      kind: "actor_in_conversation"
-      conversationActorContextId: string
-      actorId: string
-      conversationId: string
-    }
   | { kind: "remote_agent"; remoteAgentId: string; conversationId: string }
   | {
       kind: "workspace_member"
@@ -140,7 +154,6 @@ async function projectLegacyTools(
   const { principal } = input
   switch (principal.kind) {
     case "actor":
-    case "actor_in_conversation":
     case "conversation": {
       // chat-runtime / dashboard delegate to the actor resolver. For
       // `conversation` (no actor in play) we pass an empty actor identity;
@@ -211,109 +224,123 @@ function namespaceDeviceToolName(row: DeviceCapabilityToolRow): string {
 }
 
 /**
- * Resolved subject ids for a principal. `workspaceSubjectId` is always
- * populated (every caller can see workspace-scoped bindings). The
- * principal-specific subject id (actor / conversation / context /
- * remote_agent) is the one used for audit + grant filtering — never use
- * `workspaceSubjectId` as the "principal" identity or the audit row will
- * mis-attribute the operation to the workspace bucket.
+ * Resolved subject ids for a principal. Mirrors
+ * `RuntimePrincipalContext` from access/subject-resolution.ts — this is a
+ * thin adapter that derives the canonical context once and surfaces the
+ * fields capability-projection actually uses (allIds, scopeSubjectIds,
+ * principalSubjectId, activeConversationSubjectId).
+ *
+ * Critical: the *canonical* builder enforces three rules this projection
+ * MUST inherit (delegating here is the only way to keep them in sync):
+ *   1. Decision 8 — pure-conversation principals do NOT inherit the
+ *      workspace subject (otherwise `subject=workspace` device grants
+ *      leak to bridged conversation participants).
+ *   2. Active-participant guard — `actor`/`remote_agent` get the
+ *      conversation subject in BOTH `allIds` and `scopeSubjectIds` ONLY
+ *      when they are an active participant. Without this, a non-member
+ *      actor can claim `subject=conversation` device bindings.
+ *   3. Cross-workspace guard — `actor`/`remote_agent` must belong to the
+ *      named workspace, else workspace-level grants leak across
+ *      workspaces.
+ *
+ * Earlier merge-prep versions had a local helper that violated #1 and #2
+ * (unconditionally pushed workspace + conversation subjects into allIds
+ * irrespective of active participation), and skipped #3 entirely.
  */
 export interface ResolvedPrincipalSubjects {
-  workspaceSubjectId: string
   principalSubjectId: string | null
-  actorSubjectId?: string
-  conversationSubjectId?: string
-  contextSubjectId?: string
-  remoteAgentSubjectId?: string
   /** Every subject id that participates in binding visibility checks. */
   allIds: string[]
+  /**
+   * subject-scope-refactor: scope_subject_id values that may pin a binding /
+   * grant. For `actor` + active conversation, this contains the conversation
+   * subject. Empty when no active conversation scope applies. Wire this
+   * through `loadDeviceCapabilityToolsForSubjects.runtimeScopeSubjectIds`
+   * and `selectAndClaimRuntimeAuthorizationGrant.runtimeScopeSubjectIds`
+   * so scoped grants are accepted only inside the matching scope.
+   */
+  scopeSubjectIds: string[]
+  /**
+   * Convenience: the single active conversation scope subject id (if any).
+   * Mirrors RuntimePrincipalContext.activeConversationSubjectId.
+   */
+  activeConversationSubjectId?: string
 }
 
-async function principalSubjectIds(
-  input: ProjectToolsInput
-): Promise<ResolvedPrincipalSubjects> {
-  const workspaceSubjectId = await upsertAccessSubject(db, {
-    kind: SUBJECT_KIND.WORKSPACE,
-    workspaceId: input.workspaceId,
-  })
-  const out: ResolvedPrincipalSubjects = {
-    workspaceSubjectId,
-    principalSubjectId: null,
-    allIds: [workspaceSubjectId],
-  }
-  const principal = input.principal
+function devicePrincipalToSubjectRef(
+  principal: DevicePrincipal
+): SubjectRef | null {
   switch (principal.kind) {
-    case "actor": {
-      out.actorSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: principal.actorId,
-      })
-      out.allIds.push(out.actorSubjectId)
-      out.principalSubjectId = out.actorSubjectId
-      if (principal.conversationId) {
-        out.conversationSubjectId = await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.CONVERSATION,
-          conversationId: principal.conversationId,
-        })
-        out.allIds.push(out.conversationSubjectId)
-      }
-      break
-    }
-    case "actor_in_conversation": {
-      out.actorSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: principal.actorId,
-      })
-      out.conversationSubjectId = await upsertAccessSubject(db, {
+    case "actor":
+      return { kind: SUBJECT_KIND.ACTOR, actorId: principal.actorId }
+    case "conversation":
+      return {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: principal.conversationId,
-      })
-      out.allIds.push(out.actorSubjectId, out.conversationSubjectId)
-      try {
-        const ctx = await ensureConversationActorContext({
-          actorId: principal.actorId,
-          conversationId: principal.conversationId,
-        })
-        out.contextSubjectId = await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-          contextId: ctx.conversationActorContextId,
-        })
-        out.allIds.push(out.contextSubjectId)
-        out.principalSubjectId = out.contextSubjectId
-      } catch {
-        // context resolution failed — fall back to actor subject so audit
-        // still attributes correctly; planner just won't see context grants.
-        out.principalSubjectId = out.actorSubjectId
       }
-      break
-    }
-    case "conversation": {
-      out.conversationSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: principal.conversationId,
-      })
-      out.allIds.push(out.conversationSubjectId)
-      out.principalSubjectId = out.conversationSubjectId
-      break
-    }
-    case "remote_agent": {
-      out.remoteAgentSubjectId = await upsertAccessSubject(db, {
+    case "remote_agent":
+      return {
         kind: SUBJECT_KIND.REMOTE_AGENT,
         remoteAgentId: principal.remoteAgentId,
-      })
-      out.conversationSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: principal.conversationId,
-      })
-      out.allIds.push(out.remoteAgentSubjectId, out.conversationSubjectId)
-      out.principalSubjectId = out.remoteAgentSubjectId
-      break
-    }
+      }
     case "workspace_member":
-      // Already gated by the projectToolsForPrincipal switch above.
-      break
+      // Filtered out by projectDeviceTools (dashboard introspection path
+      // doesn't dispatch).
+      return null
   }
-  return out
+}
+
+/**
+ * Resolve `ProjectToolsInput` into the subject set capability-projection
+ * dispatches against. Exported for direct regression testing — the bug
+ * patterns this helper has hit during the subject-scope-refactor merge
+ * (Decision 8 violations, active-participant guard skips, cross-workspace
+ * leakage) all live INSIDE this function, so tests must call it directly
+ * rather than asserting against the canonical builder it delegates to.
+ *
+ * Tests may pass an injected Kysely instance (e.g. the ephemeral DB
+ * returned by `withTestDb`) so the underlying
+ * `buildRuntimePrincipalContext` runs against the test connection rather
+ * than the production pool.
+ */
+export async function principalSubjectIds(
+  input: ProjectToolsInput,
+  options?: { db?: typeof db }
+): Promise<ResolvedPrincipalSubjects> {
+  const dbHandle = options?.db ?? db
+  const subjectRef = devicePrincipalToSubjectRef(input.principal)
+  if (!subjectRef) {
+    return {
+      principalSubjectId: null,
+      allIds: [],
+      scopeSubjectIds: [],
+    }
+  }
+  // Resolve which conversation to consider for the active-participant
+  // guard. `actor` principals get `principal.conversationId ??
+  // input.conversationId` so callers that pass the conversation at the
+  // input level (mirroring projectLegacyTools / requestAuthorizationOrDeny)
+  // still activate the scope guard. `remote_agent` / `conversation` carry
+  // a mandatory conversationId on the principal itself.
+  const conversationId =
+    input.principal.kind === "conversation"
+      ? input.principal.conversationId
+      : input.principal.kind === "actor"
+        ? (input.principal.conversationId ?? input.conversationId)
+        : input.principal.kind === "remote_agent"
+          ? input.principal.conversationId
+          : undefined
+  const ctx = await buildRuntimePrincipalContext(dbHandle, {
+    principal: subjectRef,
+    workspaceId: input.workspaceId,
+    conversationId: conversationId ?? null,
+  })
+  return {
+    principalSubjectId: ctx.principalSubjectId,
+    allIds: ctx.runtimeSubjectIds,
+    scopeSubjectIds: ctx.runtimeScopeSubjectIds,
+    activeConversationSubjectId: ctx.activeConversationSubjectId,
+  }
 }
 
 async function projectDeviceTools(
@@ -326,9 +353,9 @@ async function projectDeviceTools(
       tools: [],
       handlers: new Map(),
       subjects: {
-        workspaceSubjectId: "",
         principalSubjectId: null,
         allIds: [],
+        scopeSubjectIds: [],
       },
     }
   }
@@ -336,6 +363,7 @@ async function projectDeviceTools(
   const rows = await loadDeviceCapabilityToolsForSubjects({
     workspaceId: input.workspaceId,
     subjectIds: subjects.allIds,
+    runtimeScopeSubjectIds: subjects.scopeSubjectIds,
   })
 
   // Conversation-type-mask filter: every device capability row gets
@@ -425,351 +453,149 @@ function unionWithDevice(
     // Strip the planner-injected retry-nonce hint before everything that
     // operates on tool args, so the device never sees it and the input_hash
     // is computed over the user-facing schema.
-    const sanitizedInput: Record<string, unknown> = { ...input }
-    delete sanitizedInput["__synapse_retry_nonce"]
+    const sanitizedInput: Record<string, unknown> = stripPlannerNonce(input)
     // canonicalized arguments — the device verifier rejects envelopes whose
     // input_hash doesn't match the actual `arguments` it received.
     const inputCanonical = canonicalizeEnvelopePayload(sanitizedInput)
     const inputHash =
       "sha256:" + createHash("sha256").update(inputCanonical).digest("hex")
 
-    // Look up runtime_authorization_grants that apply to this capability so
-    // the device-side bash/cua enforcement has matching grant_specs to
-    // consult. Without this, the device runtime would reject every call.
-    // Pull active grants for this capability and filter strictly to ones the
-    // current principal actually owns: scope IN (workspace, once) → applies
-    // to everyone; otherwise grant.subject_id MUST be in the principal's
-    // subject set. Without this filter, every actor in the workspace
-    // inherits every other actor's actor/conversation grants on the same
-    // capability — a critical security hole.
-    let grantSpecs: RuntimeAuthorizationGrantSpec[] = []
-    const grantIds: string[] = []
-    let onceGrantIdsForConsume: string[] = []
-    let grantScope:
-      | "once"
-      | "actor"
-      | "conversation"
-      | "actor_in_conversation"
-      | "remote_agent"
-      | "workspace" = "workspace"
-    // The planner injects __synapse_retry_nonce into the tool args when
-    // re-issuing a call after a user approved an authorization request.
-    // The projection extracts it, uses it for the filter + envelope, and
-    // strips it from the args the device sees so it doesn't pollute the
-    // tool's schema.
+    // subject-scope-refactor: dispatch goes through the canonical helper
+    // selectAndClaimRuntimeAuthorizationGrant — it does (a) SQL-side filtering
+    // by subject + scope (no more "list everything and filter in TS",
+    // no more cross-actor leakage), (b) bounded retry for `consume_once` race,
+    // (c) atomic claim in the same Kysely transaction that opens the
+    // device_operations row (no more "dispatch first, consume later" window),
+    // (d) prepareGrant signs the envelope BEFORE the claim so signing failures
+    // don't burn a grant. The legacy list-then-filter path
+    // (listActiveRuntimeAuthorizationGrantsForExposure + manual TS filter +
+    // post-dispatch consume) is gone.
     const envelopeRetryNonce =
       typeof input["__synapse_retry_nonce"] === "string"
         ? (input["__synapse_retry_nonce"] as string)
         : undefined
-    try {
-      const allGrants = await listActiveRuntimeAuthorizationGrantsForExposure(
-        row.device_capability_id
-      )
-      const subjectSet = new Set(device.subjects.allIds)
-      // Retry-nonce gating: `once` grants are NOT global — they must be
-      // matched explicitly by an envelope-side retry_nonce that equals the
-      // grant's source_retry_nonce. Without this, a `once` grant created
-      // for one tool call would silently leak into every subsequent
-      // dispatch of the same capability.
-      //
-      // The planner injects __synapse_retry_nonce into the tool args when
-      // re-issuing a call after a user approved an authorization request.
-      // The projection extracts it, uses it for the filter + envelope, and
-      // strips it from the args the device sees so it doesn't pollute the
-      // tool's schema.
-      const subjectScoped = allGrants.filter((g) => {
-        if (g.scope === RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE) return true
-        if (g.scope === RUNTIME_AUTHORIZATION_GRANT_SCOPE.ONCE) {
-          return !!(
-            envelopeRetryNonce &&
-            g.sourceRetryNonce &&
-            g.sourceRetryNonce === envelopeRetryNonce
-          )
-        }
-        // actor / conversation / actor_in_conversation / remote_agent: must
-        // be subject-bound. A grant with no subject_id at a non-workspace
-        // scope is malformed; conservatively drop it.
-        if (!g.subjectId) return false
-        return subjectSet.has(g.subjectId)
-      })
-      // Second pass: per-call action coverage. A grant that's scoped to the
-      // principal but doesn't COVER the specific filesystem path / browser
-      // origin / commandline command must not satisfy this dispatch. Build
-      // the requestedAction up-front (same shape used by the authorization
-      // request flow below) so server and UI agree on what's being asked.
-      const requestedActionForCheck = buildRequestedAction({
-        capability: row.builtin_kind,
-        toolName,
-        visibleToolName: row.visible_tool_name,
-        args: sanitizedInput,
-      })
-      const applicable = subjectScoped.filter((g) =>
-        runtimeAuthorizationGrantMatches(g, requestedActionForCheck)
-      )
-      for (const grant of applicable) {
-        const spec: RuntimeAuthorizationGrantSpec = {
-          capability: grant.capability,
-          // Translate camelCase shared GrantPolicy fields into the snake_case
-          // wire shape the envelope schema requires.
-          filesystem: grant.filesystem
-            ? {
-                access: grant.filesystem.access,
-                path_prefixes: grant.filesystem.pathPrefixes ?? [],
-              }
-            : undefined,
-          cua: grant.cua ? { access: grant.cua.access } : undefined,
-          browser: grant.browser
-            ? {
-                action: grant.browser.action,
-                scope_type: grant.browser.scopeType,
-                origin: grant.browser.origin,
-                host: grant.browser.host,
-                registrable_domain: grant.browser.registrableDomain,
-              }
-            : undefined,
-          commandline: grant.commandline
-            ? {
-                executor: grant.commandline.executor,
-                command_match_type: grant.commandline.commandMatchType,
-                command_text: grant.commandline.commandText,
-                working_directory: grant.commandline.workingDirectory,
-              }
-            : undefined,
-        }
-        grantSpecs.push(spec)
-        grantIds.push(grant.id)
-        if (grant.scope === "once") {
-          onceGrantIdsForConsume.push(grant.id)
-        }
-      }
-      if (applicable.length > 0) {
-        grantScope = applicable[0]!.scope
-      }
-    } catch (err) {
-      return mcpErrorBlock(
-        `grant lookup failed for capability ${row.device_capability_id}: ${(err as Error).message}`
-      )
-    }
+    const requestedAction = buildRequestedAction({
+      capability: row.builtin_kind,
+      toolName,
+      visibleToolName: row.visible_tool_name,
+      args: sanitizedInput,
+    })
 
-    // Hard gate: if no grants apply, refuse to dispatch. Without this check
-    // the server would ship an envelope with empty grant_specs and the
-    // device-side filesystem / browser / cua-read builtins would silently
-    // allow the call (since their authz check is "no policies present? skip
-    // gating"). The planner / UI is expected to call
-    // createRuntimeAuthorizationRequest separately and re-issue once the
-    // user resolves.
-    if (grantSpecs.length === 0) {
-      // Auto-fire an interaction_runtime_authorization_requests row so the
-      // dashboard shows the prompt and the user can approve. Supported
-      // principal kinds:
-      //  - actor              → grant subject = actor
-      //  - actor_in_conversation → grant subject = conversation_actor_context
-      //  - remote_agent       → grant subject = remote_agent; no
-      //                          tool_call_task is created (the bridged
-      //                          agent retries the call itself rather than
-      //                          waking a chat session)
-      const supportsAuthRequest =
-        projectInput.principal.kind === "actor" ||
-        projectInput.principal.kind === "actor_in_conversation" ||
-        projectInput.principal.kind === "remote_agent"
-      if (!supportsAuthRequest) {
-        return mcpErrorBlock(
-          `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal`
-        )
-      }
-      const principal = projectInput.principal as
-        | { kind: "actor"; actorId: string; conversationId?: string }
-        | {
-            kind: "actor_in_conversation"
-            actorId: string
-            conversationId: string
-            conversationActorContextId: string
-          }
-        | {
-            kind: "remote_agent"
-            remoteAgentId: string
-            conversationId: string
-          }
-      const conversationId =
-        ("conversationId" in principal
-          ? principal.conversationId
-          : undefined) ?? projectInput.conversationId
-      if (!conversationId) {
-        return mcpErrorBlock(
-          `permission_denied: cannot create authorization request without a conversation context`
-        )
-      }
-      try {
-        const result = await createRuntimeAuthorizationRequest({
-          source: {
-            workspaceId: projectInput.workspaceId,
-            conversationId,
-            sessionId: projectInput.sessionId ?? "",
-            actorId:
-              principal.kind === "remote_agent" ? undefined : principal.actorId,
-            remoteAgentId:
-              principal.kind === "remote_agent"
-                ? principal.remoteAgentId
-                : undefined,
-            conversationActorContextId:
-              principal.kind === "actor_in_conversation"
-                ? principal.conversationActorContextId
-                : undefined,
-            sourceToolName: toolName,
-            conversationKind: projectInput.conversationKind,
-            conversationBoundary: projectInput.conversationBoundary,
-            workspaceMemberId: projectInput.workspaceMemberId,
-          },
-          runtimeTarget: {
-            deviceCapabilityId: row.device_capability_id,
-            deviceId: row.device_id,
-            deviceExposureId: row.device_exposure_id,
-            requestedToolName: toolName,
-            deviceToolStableKey: row.visible_tool_name,
-            runtimeSessionId: "",
-            deviceDisplayName: row.device_name,
-          },
-          authorizationPlan: (() => {
-            const requestedAction = buildRequestedAction({
-              capability: row.builtin_kind,
-              toolName,
-              visibleToolName: row.visible_tool_name,
-              args: sanitizedInput,
+    let claim
+    try {
+      claim = await selectAndClaimRuntimeAuthorizationGrant({
+        workspaceId: projectInput.workspaceId,
+        deviceId: row.device_id,
+        deviceCapabilityId: row.device_capability_id,
+        deviceExposureId: row.device_exposure_id,
+        runtimeSubjectIds: device.subjects.allIds,
+        runtimeScopeSubjectIds: device.subjects.scopeSubjectIds,
+        retryNonce: envelopeRetryNonce,
+        requestedAction,
+        prepareGrant: async (
+          grant: RuntimeAuthorizationGrantRecord
+        ): Promise<
+          | { ok: true; prepared: PreparedDispatch }
+          | { ok: false; failure: PrepareFailure }
+        > => {
+          try {
+            const envelope = signEnvelopeForDispatch({
+              operation_id: randomUUID(),
+              attempt_id: randomUUID(),
+              device_runtime_session_id: randomUUID(),
+              device_capability_id: row.device_capability_id,
+              device_exposure_id: row.device_exposure_id,
+              device_tool_id: row.device_tool_id,
+              device_tool_revision_id: row.device_tool_revision_id,
+              input_hash: inputHash,
+              task_mode: "sync" as const,
+              runtime_authorization: {
+                grant_ids: [grant.id],
+                grant_scope: grant.scopeLabel,
+                grant_specs: [toRuntimeAuthorizationGrantWireSpec(grant)],
+                retry_nonce: envelopeRetryNonce,
+              },
+              issued_at: new Date().toISOString(),
+              expires_at: new Date(Date.now() + 60_000).toISOString(),
             })
             return {
-              requestedAction,
-              // Surface at least one default grantOption so the UI has
-              // something the user can approve. The default mirrors the
-              // requested action verbatim — UI may render more granular
-              // options on top.
-              grantOptions: [
-                {
-                  id: "default",
-                  summary: requestedAction.summary,
-                  detail: requestedAction.detail,
-                  grantSpec: {
-                    capability: requestedAction.capability,
-                    // Strip the request-only `scopeIsPushdown` flag — it's
-                    // never persisted on a grant policy (request-side only).
-                    filesystem: requestedAction.filesystem
-                      ? {
-                          access: requestedAction.filesystem.access,
-                          pathPrefixes: requestedAction.filesystem.pathPrefixes,
-                        }
-                      : undefined,
-                    cua: requestedAction.cua,
-                    browser: requestedAction.browser,
-                    commandline: requestedAction.commandline,
-                  },
+              ok: true,
+              prepared: {
+                envelope,
+                toolId: row.device_tool_id,
+                toolRevisionId: row.device_tool_revision_id,
+                beginInput: {
+                  workspaceId: projectInput.workspaceId,
+                  conversationId: projectInput.conversationId ?? null,
+                  envelope,
+                  args: sanitizedInput,
+                  toolName: row.visible_tool_name,
+                  deviceId: row.device_id,
+                  deviceServiceId: row.device_service_id,
+                  tunnelInternalUrl:
+                    getDeviceTunnelRegistry().resolve(row.device_service_id)
+                      ?.internalUrl ?? null,
+                  principalKind: principalKindFor(projectInput.principal),
+                  principalSubjectId: device.subjects.principalSubjectId ?? "",
+                  initiatedByWorkspaceMemberId:
+                    projectInput.workspaceMemberId ?? null,
+                  initiatedBySessionId: projectInput.sessionId ?? null,
                 },
-              ],
+              },
             }
-          })(),
-          requestMode: "background",
-          // Surface principal-appropriate scope presets so the approver
-          // can write a grant narrowed to the principal that triggered
-          // the dispatch. The list always includes the universally-safe
-          // once / conversation / workspace presets.
-          availablePresets:
-            principal.kind === "remote_agent"
-              ? ["once", "remote_agent", "conversation", "workspace"]
-              : principal.kind === "actor_in_conversation"
-                ? [
-                    "once",
-                    "actor",
-                    "actor_in_conversation",
-                    "conversation",
-                    "workspace",
-                  ]
-                : ["once", "actor", "conversation", "workspace"],
-          reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
-          sourceRequestArgs: input,
-        })
-        return {
-          content: [
-            textBlock(
-              `runtime_authorization_requested: created interaction ${result.interaction.id}. Approve the request to retry with retry_nonce=${result.retryNonce}.`
-            ) as CanonicalContentBlock,
-          ],
-          isError: true,
-          metadata: {
-            synapse_error: {
-              code: "runtime_authorization_requested",
-              message: "user approval required",
-              authorization_task_id: result.task?.id,
-              retry_nonce: result.retryNonce,
-            },
-          },
-        }
-      } catch (err) {
-        return mcpErrorBlock(
-          `authorization request failed: ${(err as Error).message}`
-        )
-      }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            if (/SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY/i.test(message)) {
+              return {
+                ok: false,
+                failure: { kind: "operator_config_missing", cause: err },
+              }
+            }
+            return {
+              ok: false,
+              failure: { kind: "signing_failed", cause: err },
+            }
+          }
+        },
+      })
+    } catch (err) {
+      return mcpErrorBlock(
+        `grant claim failed for capability ${row.device_capability_id}: ${(err as Error).message}`
+      )
     }
 
-    let envelope
-    try {
-      envelope = signEnvelopeForDispatch({
-        operation_id: randomUUID(),
-        attempt_id: randomUUID(),
-        device_runtime_session_id: randomUUID(),
-        device_capability_id: row.device_capability_id,
-        device_exposure_id: row.device_exposure_id,
-        device_tool_id: row.device_tool_id,
-        device_tool_revision_id: row.device_tool_revision_id,
-        input_hash: inputHash,
-        task_mode: "sync" as const,
-        runtime_authorization: {
-          grant_ids: grantIds,
-          grant_scope: grantScope,
-          grant_specs: grantSpecs,
-          retry_nonce: envelopeRetryNonce,
-        },
-        issued_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + 60_000).toISOString(),
+    if (claim.kind === "no_match") {
+      return await requestAuthorizationOrDeny({
+        projectInput,
+        row,
+        toolName,
+        input,
+        sanitizedInput,
+        requestedAction,
+        principalSubjectId: device.subjects.principalSubjectId ?? "",
+        principalScopeSubjectId: device.subjects.activeConversationSubjectId,
       })
-    } catch (err) {
+    }
+    if (claim.kind === "race_lost") {
       return mcpErrorBlock(
-        `envelope signing failed (operator must set SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY): ${(err as Error).message}`
+        `runtime_constraint: grant race lost (${claim.reason}); please retry`
       )
     }
-    // Open a device_operations + first device_operation_attempts row pair
-    // BEFORE dispatch so the audit trail captures partial failures (e.g.
-    // tunnel unreachable). Also performs the revision-drift check: if the
-    // device re-synced its catalog between projection and this call, the
-    // envelope's tool_revision_id is stale and we must signal replan.
-    let operationId: string
-    let attemptId: string
-    try {
-      const begin = await beginDeviceOperation({
-        workspaceId: projectInput.workspaceId,
-        conversationId: projectInput.conversationId ?? null,
-        envelope,
-        args: sanitizedInput,
-        toolName: row.visible_tool_name,
-        deviceId: row.device_id,
-        deviceServiceId: row.device_service_id,
-        tunnelInternalUrl:
-          getDeviceTunnelRegistry().resolve(row.device_service_id)
-            ?.internalUrl ?? null,
-        principalKind: principalKindFor(projectInput.principal),
-        principalSubjectId: device.subjects.principalSubjectId,
-        initiatedByWorkspaceMemberId: projectInput.workspaceMemberId ?? null,
-        initiatedBySessionId: projectInput.sessionId ?? null,
-      })
-      operationId = begin.operationId
-      attemptId = begin.attemptId
-    } catch (err) {
-      if (err instanceof RevisionDriftError) {
-        return mcpErrorBlock(
-          `tool definition changed since planning: ${err.message}`
-        )
-      }
+    if (claim.kind === "lock_timeout") {
       return mcpErrorBlock(
-        `device_operations insert failed: ${(err as Error).message}`
+        `runtime_constraint: catalog lock timeout; please retry`
       )
     }
+    if (claim.kind === "denied") {
+      return mcpErrorBlock(
+        `runtime_constraint: ${claim.reason}${claim.grantId ? ` (grant ${claim.grantId})` : ""}`
+      )
+    }
+
+    const { prepared, operation } = claim
+    const operationId = operation.operationId
+    const attemptId = operation.attemptId
+    const envelope = prepared.envelope
 
     // dispatchSyncTool resolves the tunnel endpoint by deviceServiceId, which
     // is the device_services row id (what the runtime registered its tunnel
@@ -790,17 +616,11 @@ function unionWithDevice(
       /* operation-complete logging is best-effort; the dispatch result is
        * already in hand and shouldn't be hidden behind audit-write errors */
     })
-    // Consume `once` grants we used on success — without this, the same
-    // once grant could be reused indefinitely after the first dispatch.
-    // Failure path leaves them active so the planner can retry with the
-    // same retry_nonce.
-    if (result.ok && onceGrantIdsForConsume.length > 0) {
-      await Promise.all(
-        onceGrantIdsForConsume.map((id) =>
-          consumeRuntimeAuthorizationGrant(id).catch(() => undefined)
-        )
-      )
-    }
+    // subject-scope-refactor: `consume_once` grants are now claimed atomically
+    // inside selectAndClaimRuntimeAuthorizationGrant's transaction (before
+    // the network dispatch). The legacy "best-effort consume on success" path
+    // is gone — by the time dispatchSyncTool returns, the grant is already
+    // marked consumed and no second window for concurrent reuse exists.
     if (!result.ok) {
       return mcpErrorBlock(
         `device dispatch failed (${result.error?.code}): ${result.error?.message}`
@@ -861,10 +681,212 @@ function mcpErrorBlock(message: string): NormalizedMcpToolResult {
   }
 }
 
+/**
+ * subject-scope-refactor: extracted from the dispatch path so the canonical
+ * helper (selectAndClaimRuntimeAuthorizationGrant) can return `no_match` and
+ * let the caller decide whether to escalate to a user-facing approval
+ * request. Mirrors the pre-cutover inline behavior — only the call site
+ * moved.
+ */
+/**
+ * Pure function — derives the full `createRuntimeAuthorizationRequest`
+ * params object from the dispatch-time inputs.
+ *
+ * Exported for direct regression testing. Two contracts this helper
+ * locks (both load-bearing for the cutover):
+ *
+ *   - `source.principalScopeSubjectId` MUST equal the caller-supplied
+ *     `principalScopeSubjectId` (the active conversation scope subject
+ *     when the principal is an active participant). If this drops to
+ *     undefined / null, the locked column lands NULL while the approval
+ *     flow rebuilds the same context and sees a non-NULL scope — the
+ *     ScopeRebuildMismatchError gate then blocks every legitimate
+ *     approval.
+ *
+ *   - `sourceRequestArgs` MUST equal the caller-supplied
+ *     `sanitizedInput`, NOT the raw `input`. The dispatcher strips
+ *     `__synapse_retry_nonce` from the args via `stripPlannerNonce`
+ *     before computing input_hash; persisting the raw input would
+ *     leak the stale planner-side nonce into the device-visible args
+ *     and break the hash check on auto-retry.
+ *
+ * The unit test exercises this helper with `input ≠ sanitizedInput` and
+ * a non-null scope, then asserts both fields round-trip correctly.
+ */
+export function buildRuntimeAuthorizationRequestParams(args: {
+  projectInput: ProjectToolsInput
+  row: DeviceCapabilityToolRow
+  toolName: string
+  /** The post-`stripPlannerNonce` payload — this is what the device sees and what input_hash is computed over. */
+  sanitizedInput: Record<string, unknown>
+  requestedAction: ReturnType<typeof buildRequestedAction>
+  principalSubjectId: string
+  /** Required-or-null: the active conversation scope subject id from RuntimePrincipalContext.activeConversationSubjectId. */
+  principalScopeSubjectId?: string
+  conversationId: string
+}): Parameters<typeof createRuntimeAuthorizationRequest>[0] {
+  const { projectInput, row, toolName, requestedAction } = args
+  const principal = projectInput.principal as
+    | { kind: "actor"; actorId: string; conversationId?: string }
+    | {
+        kind: "remote_agent"
+        remoteAgentId: string
+        conversationId: string
+      }
+  return {
+    source: {
+      workspaceId: projectInput.workspaceId,
+      conversationId: args.conversationId,
+      sessionId: projectInput.sessionId ?? "",
+      principalSubjectId: args.principalSubjectId,
+      principalScopeSubjectId: args.principalScopeSubjectId ?? null,
+      actorId:
+        principal.kind === "remote_agent" ? undefined : principal.actorId,
+      remoteAgentId:
+        principal.kind === "remote_agent" ? principal.remoteAgentId : undefined,
+      sourceToolName: toolName,
+      conversationKind: projectInput.conversationKind,
+      conversationBoundary: projectInput.conversationBoundary,
+      workspaceMemberId: projectInput.workspaceMemberId,
+    },
+    runtimeTarget: {
+      deviceCapabilityId: row.device_capability_id,
+      deviceId: row.device_id,
+      deviceExposureId: row.device_exposure_id,
+      requestedToolName: toolName,
+      deviceToolStableKey: row.visible_tool_name,
+      runtimeSessionId: "",
+      deviceDisplayName: row.device_name,
+    },
+    authorizationPlan: {
+      requestedAction,
+      grantOptions: [
+        {
+          id: "default",
+          summary: requestedAction.summary,
+          detail: requestedAction.detail,
+          grantSpec: {
+            capability: requestedAction.capability,
+            filesystem: requestedAction.filesystem,
+            cua: requestedAction.cua,
+            browser: requestedAction.browser,
+            commandline: requestedAction.commandline,
+          },
+        },
+      ],
+    },
+    requestMode: "background",
+    availablePresets:
+      principal.kind === "remote_agent"
+        ? ["once", "remote_agent", "conversation", "workspace"]
+        : ["once", "actor", "conversation", "workspace"],
+    reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
+    sourceRequestArgs: args.sanitizedInput,
+  }
+}
+
+/**
+ * Pure helper — strips the planner-side retry nonce key from a tool's
+ * input args. Used at exactly two places in the dispatch path: the
+ * envelope's input_hash computation, and the persisted sourceRequestArgs
+ * payload. Exported so tests can pin the contract independently.
+ *
+ * The bug pattern this guards against: the dispatcher accidentally
+ * forwards `input` (raw, with nonce) instead of `sanitizedInput`
+ * (stripped). The nonce then leaks into the device-visible args and
+ * input_hash mismatches on auto-retry.
+ */
+export function stripPlannerNonce(
+  input: Record<string, unknown>
+): Record<string, unknown> {
+  const out = { ...input }
+  delete out["__synapse_retry_nonce"]
+  return out
+}
+
+async function requestAuthorizationOrDeny(args: {
+  projectInput: ProjectToolsInput
+  row: DeviceCapabilityToolRow
+  toolName: string
+  input: Record<string, unknown>
+  sanitizedInput: Record<string, unknown>
+  requestedAction: ReturnType<typeof buildRequestedAction>
+  principalSubjectId: string
+  /**
+   * subject-scope-refactor: when the principal is an active participant of
+   * the conversation, propagate the conversation subject_id as the locked
+   * scope. The approval flow rebuilds the principal's runtime context in
+   * the same pg transaction and compares the rebuilt active scope against
+   * this locked value — if we omit it here, the approval gate sees
+   * `locked = NULL` vs `rebuilt = <conversation subject>` and throws
+   * ScopeRebuildMismatchError, blocking every legitimate actor/remote_agent
+   * approval in the common case.
+   */
+  principalScopeSubjectId?: string
+}): Promise<NormalizedMcpToolResult> {
+  const { projectInput, row, toolName } = args
+  const supportsAuthRequest =
+    projectInput.principal.kind === "actor" ||
+    projectInput.principal.kind === "remote_agent"
+  if (!supportsAuthRequest) {
+    return mcpErrorBlock(
+      `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal`
+    )
+  }
+  const principal = projectInput.principal as
+    | { kind: "actor"; actorId: string; conversationId?: string }
+    | {
+        kind: "remote_agent"
+        remoteAgentId: string
+        conversationId: string
+      }
+  const conversationId =
+    ("conversationId" in principal ? principal.conversationId : undefined) ??
+    projectInput.conversationId
+  if (!conversationId) {
+    return mcpErrorBlock(
+      `permission_denied: cannot create authorization request without a conversation context`
+    )
+  }
+  try {
+    const result = await createRuntimeAuthorizationRequest(
+      buildRuntimeAuthorizationRequestParams({
+        projectInput,
+        row,
+        toolName,
+        sanitizedInput: args.sanitizedInput,
+        requestedAction: args.requestedAction,
+        principalSubjectId: args.principalSubjectId,
+        principalScopeSubjectId: args.principalScopeSubjectId,
+        conversationId,
+      })
+    )
+    return {
+      content: [
+        textBlock(
+          `runtime_authorization_requested: created interaction ${result.interaction.id}. Approve the request to retry with retry_nonce=${result.retryNonce}.`
+        ) as CanonicalContentBlock,
+      ],
+      isError: true,
+      metadata: {
+        synapse_error: {
+          code: "runtime_authorization_requested",
+          message: "user approval required",
+          authorization_task_id: result.task?.id,
+          retry_nonce: result.retryNonce,
+        },
+      },
+    }
+  } catch (err) {
+    return mcpErrorBlock(
+      `authorization request failed: ${(err as Error).message}`
+    )
+  }
+}
+
 function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
   switch (principal.kind) {
     case "actor":
-    case "actor_in_conversation":
     case "conversation":
     case "remote_agent":
     case "workspace_member":
@@ -1043,3 +1065,17 @@ export type {
   McpExecutionContext,
   ResolvedMcpTools,
 }
+
+/**
+ * subject-scope-refactor: helper used in the deprecated capability-projection
+ * filter path (kept as merge-prep stabilization). Compares a grant's subject
+ * against the principal's resolved subject ids by kind+identity. The full
+ * canonical-helper dispatch (selectAndClaimRuntimeAuthorizationGrant) uses
+ * subject_id IN runtimeSubjectIds at the SQL level — that's the strictly
+ * correct path; this helper exists only to keep the legacy filter compiling.
+ *
+ * @deprecated REMOVED — dispatch now routes through
+ * selectAndClaimRuntimeAuthorizationGrant. The previous implementation only
+ * checked "principal has SOME actor subject" without comparing the specific
+ * actor_id, which let actor A reuse actor B's grants. Do NOT reintroduce.
+ */

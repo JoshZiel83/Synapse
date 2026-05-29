@@ -52,6 +52,7 @@ import {
   saveTransportEmojiReactions,
 } from "../service.js"
 import { tryGetConnector } from "../connectors/registry.js"
+import { unwrapTypingAdapterResult } from "../connectors/types.js"
 import {
   createStatusClaimClient,
   type ClaimRedisLike,
@@ -522,18 +523,30 @@ async function ensureControllersForSession(input: {
     },
   })
 
-  // Typing adapter — separate controller, separate lifecycle. Adapter is
-  // null on platforms without typing capability (e.g. Feishu).
-  const typingAdapter = connector.createTypingAdapter({
+  // Typing adapter — separate controller, separate lifecycle. Adapter
+  // is null on platforms without typing capability (e.g. Feishu).
+  // Connectors that need controller config overrides (e.g. QQ
+  // input_notify wants 50s heartbeat) return `{ adapter, config }`;
+  // unwrap to keep both shapes working.
+  const typingAdapterResult = connector.createTypingAdapter({
     account,
     endpointRef: {
       endpointType: link.endpointType,
       externalId: link.endpointExternalId,
       metadata: {},
     },
+    // The current claim is anchored on the last inbound message that
+    // produced this turn; some platforms (QQ C2C `input_notify`) need
+    // the inbound msg_id to construct a valid typing request.
+    lastInboundMessageRef: {
+      externalMessageId,
+      endpointExternalId: link.endpointExternalId,
+    },
   })
+  const typingUnwrapped = unwrapTypingAdapterResult(typingAdapterResult)
   const typingController = createTypingController({
-    adapter: typingAdapter,
+    adapter: typingUnwrapped?.adapter ?? null,
+    config: typingUnwrapped?.config,
     onError: (err) => {
       console.error(
         `[im:status] typing adapter error for session=${input.sessionId}:`,

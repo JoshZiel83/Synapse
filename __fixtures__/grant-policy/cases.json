@@ -1,0 +1,166 @@
+{
+  "valid": [
+    {
+      "name": "filesystem read access with single path prefix",
+      "spec": {
+        "capability": "filesystem",
+        "filesystem": {
+          "access": "read",
+          "path_prefixes": ["/home/user/project"]
+        }
+      }
+    },
+    {
+      "name": "filesystem write access with multiple prefixes",
+      "spec": {
+        "capability": "filesystem",
+        "filesystem": {
+          "access": "write",
+          "path_prefixes": ["/tmp", "/var/log"]
+        }
+      }
+    },
+    {
+      "name": "browser read by host scope",
+      "spec": {
+        "capability": "browser",
+        "browser": {
+          "action": "read",
+          "scope_type": "host",
+          "host": "example.com"
+        }
+      }
+    },
+    {
+      "name": "commandline bash exact match",
+      "spec": {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "command_match_type": "exact",
+          "command_text": "ls -la"
+        }
+      }
+    },
+    {
+      "name": "cua write",
+      "spec": {
+        "capability": "cua",
+        "cua": { "access": "write" }
+      }
+    }
+  ],
+  "parse_error": [
+    {
+      "name": "missing capability",
+      "spec": { "filesystem": { "access": "read", "path_prefixes": [] } },
+      "expectedFailureKind": "parse_error"
+    },
+    {
+      "name": "capability not in enum",
+      "spec": {
+        "capability": "telnet",
+        "filesystem": { "access": "read", "path_prefixes": [] }
+      },
+      "expectedFailureKind": "parse_error"
+    },
+    {
+      "name": "top-level not an object",
+      "spec": "filesystem-read",
+      "expectedFailureKind": "parse_error"
+    },
+    {
+      "name": "capability wrong type (number)",
+      "spec": {
+        "capability": 42,
+        "filesystem": { "access": "read", "path_prefixes": [] }
+      },
+      "expectedFailureKind": "parse_error"
+    }
+  ],
+  "missing_branch_payload": [
+    {
+      "name": "filesystem capability without filesystem branch",
+      "spec": { "capability": "filesystem" },
+      "expectedFailureKind": "missing_branch_payload",
+      "expectedCapability": "filesystem"
+    },
+    {
+      "name": "browser capability without browser branch",
+      "spec": { "capability": "browser" },
+      "expectedFailureKind": "missing_branch_payload",
+      "expectedCapability": "browser"
+    },
+    {
+      "name": "commandline capability without commandline branch",
+      "spec": { "capability": "commandline" },
+      "expectedFailureKind": "missing_branch_payload",
+      "expectedCapability": "commandline"
+    },
+    {
+      "name": "cua capability without cua branch",
+      "spec": { "capability": "cua" },
+      "expectedFailureKind": "missing_branch_payload",
+      "expectedCapability": "cua"
+    },
+    {
+      "name": "filesystem capability with explicit null branch",
+      "spec": { "capability": "filesystem", "filesystem": null },
+      "expectedFailureKind": "missing_branch_payload",
+      "expectedCapability": "filesystem"
+    },
+    {
+      "name": "filesystem capability with browser branch instead",
+      "spec": {
+        "capability": "filesystem",
+        "browser": { "action": "read", "scope_type": "host", "host": "x.com" }
+      },
+      "expectedFailureKind": "missing_branch_payload",
+      "expectedCapability": "filesystem"
+    }
+  ],
+  "schema_mismatch": [
+    {
+      "name": "filesystem branch missing required path_prefixes",
+      "spec": {
+        "capability": "filesystem",
+        "filesystem": { "access": "read" }
+      },
+      "expectedFailureKind": "schema_mismatch",
+      "expectedCapability": "filesystem"
+    },
+    {
+      "name": "filesystem branch invalid access value",
+      "spec": {
+        "capability": "filesystem",
+        "filesystem": { "access": "purge", "path_prefixes": [] }
+      },
+      "expectedFailureKind": "schema_mismatch",
+      "expectedCapability": "filesystem"
+    },
+    {
+      "name": "browser branch invalid scope_type",
+      "spec": {
+        "capability": "browser",
+        "browser": { "action": "read", "scope_type": "globe", "host": "x.com" }
+      },
+      "expectedFailureKind": "schema_mismatch",
+      "expectedCapability": "browser"
+    },
+    {
+      "name": "commandline branch invalid executor",
+      "spec": {
+        "capability": "commandline",
+        "commandline": { "executor": "zsh", "command_match_type": "exact" }
+      },
+      "expectedFailureKind": "schema_mismatch",
+      "expectedCapability": "commandline"
+    },
+    {
+      "name": "cua branch invalid access",
+      "spec": { "capability": "cua", "cua": { "access": "purge" } },
+      "expectedFailureKind": "schema_mismatch",
+      "expectedCapability": "cua"
+    }
+  ]
+}

@@ -73,8 +73,6 @@ import {
   RUNTIME_AUTHORIZATION_CUA_ACCESSES,
   RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_PRESETS,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
@@ -114,6 +112,7 @@ import type {
   CommandlinePolicy as CommandlinePolicyBase,
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
+import type { SubjectRef, ScopedSubjectTarget } from "../access/subject.js"
 
 // ============ Common ============
 export type UUID = string
@@ -496,14 +495,11 @@ export interface MemoryEntry {
   id: UUID
   workspaceId: UUID
   spaceId: UUID
-  spaceType: MemorySpaceType
-  ownerScope: MemoryScope
-  actorId?: UUID
-  conversationId?: UUID
-  workspaceMemberId?: UUID
-  ownerActorId?: UUID
-  ownerConversationId?: UUID
-  ownerWorkspaceMemberId?: UUID
+  // D4: memory_spaces is now (owner_subject_id, scope_subject_id?, namespace_key).
+  // The wire shape exposes owner / scope as SubjectRefs and the literal namespace key.
+  owner: SubjectRef
+  scope?: SubjectRef
+  namespaceKey: string
   category: MemoryCategory
   state: MemoryItemState
   status: MemoryStatus
@@ -526,9 +522,9 @@ export interface MemoryEntry {
   indexError?: string
   createdAt: Timestamp
   updatedAt: Timestamp
-  actorName?: string
-  conversationTitle?: string
-  workspaceMemberName?: string
+  /** Display-friendly labels derived from owner / scope subject joins. */
+  ownerLabel?: string
+  scopeLabel?: string
 }
 
 export type Memory = MemoryEntry
@@ -2498,19 +2494,15 @@ export interface AttachmentTarget {
   workspaceMemberId?: string
 }
 
-export interface AccessTarget {
-  type: AccessTargetType
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
-}
-
-export interface CapabilityAccessTarget {
-  type: CapabilityAccessTargetType
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
-}
+// subject-scope-refactor D3: AccessTarget / CapabilityAccessTarget collapsed to
+// the unified ScopedSubjectTarget = {subject: SubjectRef; scope?: SubjectRef}.
+// AccessTargetType / CapabilityAccessTargetType remain as legacy display label
+// types for UI selectors only (see ACCESS_TARGET_TYPES /
+// CAPABILITY_ACCESS_TARGET_TYPES in constants/enums.ts). Payload type aliases
+// re-export the wide model; device-side wire windows continue to use the narrow
+// DeviceCapabilityAccessTarget from @synapse/device-protocol.
+export type AccessTarget = ScopedSubjectTarget
+export type CapabilityAccessTarget = ScopedSubjectTarget
 
 export interface PluginAuthValueSource {
   source: "config" | "env" | "literal" | "derived"
@@ -3175,6 +3167,40 @@ export type ConversationParticipantType =
   (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
 
 export type TransportKind = (typeof TRANSPORT_KINDS)[number]
+
+/**
+ * Runtime guard for `TransportKind`. Use instead of hard-coding
+ * `value === "feishu" || value === "weixin"` chains in dispatch sites —
+ * those drift out of sync when new transports land.
+ */
+export function isTransportKind(value: unknown): value is TransportKind {
+  return (
+    typeof value === "string" &&
+    (TRANSPORT_KINDS as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * Static fallback label for a `TransportKind`. Intentionally NOT
+ * exhaustiveness-checked: adding a new transport must not require
+ * editing this file. The authoritative display name is on
+ * `TransportConnectorCapability.displayName`; this helper only fires
+ * when the metadata provider hasn't mounted yet (client) or no
+ * connector is registered (server-side prose).
+ */
+export function describeTransportKind(kind: TransportKind): string {
+  switch (kind) {
+    case "feishu":
+      return "Feishu"
+    case "weixin":
+      return "WeChat"
+    case "wecom":
+      return "WeCom"
+    default:
+      return String(kind)
+  }
+}
+
 export type TransportConnectionMode =
   (typeof TRANSPORT_CONNECTION_MODES)[number]
 export type TransportEndpointType = (typeof TRANSPORT_ENDPOINT_TYPES)[number]
@@ -3222,6 +3248,25 @@ export interface TransportConnectorCapability {
   supportedEndpointTypes: TransportEndpointType[]
   supportsDirectMessages: boolean
   supportsGroupMessages: boolean
+  /**
+   * User-facing label exposed via the connectors metadata API. Frontend
+   * components use this as the authoritative display name; the static
+   * `describeTransportKind` is only a fallback.
+   */
+  displayName: string
+  /**
+   * Public asset path for this connector's icon (served from
+   * `web-next/public`). Centralized so frontend doesn't hard-code
+   * `/icon/${kind}.svg` and per-kind UI variants don't drift apart.
+   */
+  iconAssetPath: string
+  /**
+   * UI feature flag: render the connector-specific base-URL config
+   * panel. Currently only Weixin v1 sets this true (gateway base URL).
+   * Replaces the previous `transportKind === "weixin"` hard-coded gate
+   * in the dashboard.
+   */
+  showsBaseUrlConfig?: boolean
 }
 
 export type TransportAccountOwnerScope =
@@ -3324,6 +3369,77 @@ export interface CurrentUserWeixinBindingSummary {
   externalUser?: TransportExternalUserSummary
   pendingAutoLinkWorkspaceMemberId?: UUID
   pendingAutoLinkWorkspaceMemberName?: string
+}
+
+// ============ DingTalk Device Flow registration types ============
+
+/**
+ * Public-facing status enum for DingTalk Device Flow registration sessions.
+ * Lowercase to match Weixin QR session conventions. Provider raw uppercase
+ * states (WAITING/SUCCESS/FAIL/EXPIRED/UNKNOWN) are mapped at controller
+ * boundary; UNKNOWN -> "fail" with a descriptive message.
+ */
+export type DingtalkDeviceFlowStatus =
+  | "waiting"
+  | "success"
+  | "fail"
+  | "expired"
+
+/**
+ * Summary of a DingTalk Device Flow registration session.
+ *
+ * Contract:
+ * - Returned by both POST /device-registration/start (wrapped in success
+ *   variant of `DingtalkDeviceFlowStartResponse`) and GET /device-registration/
+ *   :sessionId (wrapped in `DingtalkDeviceFlowPollResponse`).
+ * - `transportAccount` is filled when status === "success" so the UI can
+ *   render the newly connected account without a separate accounts reload
+ *   (mirrors Weixin `qr-login.ts:280` precedent).
+ * - The provider's `deviceCode` is intentionally NOT exposed here; it stays
+ *   in the Redis store on the API side.
+ */
+export interface DingtalkDeviceFlowSessionSummary {
+  sessionId: string
+  workspaceId: UUID
+  status: DingtalkDeviceFlowStatus
+  message?: string
+  verificationUriComplete: string
+  verificationUri?: string
+  userCode?: string
+  expiresInSeconds: number
+  intervalSeconds: number
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  expiresAt: Timestamp
+  transportAccount?: TransportAccountSummary
+}
+
+/**
+ * Response shape for POST /im/accounts/dingtalk/device-registration/start.
+ *
+ * Explicit discriminated union — success branch *must* carry
+ * `providerStartFailed: false` so callers can use the discriminant directly
+ * (`response.providerStartFailed`) without resorting to `in` checks.
+ *
+ * Provider business errors (errcode != 0, source disabled, etc.) and
+ * transient network/5xx failures during init/begin both surface here with
+ * `providerStartFailed: true`; the route NEVER returns a 5xx in that case,
+ * letting the UI handle the failure uniformly via the union type instead of
+ * splitting between ApiError catches and union narrowing.
+ */
+export type DingtalkDeviceFlowStartResponse =
+  | { providerStartFailed: false; session: DingtalkDeviceFlowSessionSummary }
+  | { providerStartFailed: true; error: string }
+
+/**
+ * Response shape for GET /im/accounts/dingtalk/device-registration/:sessionId.
+ *
+ * All session states (waiting / success / fail / expired) wrap the summary
+ * in `{ session }` — clients always read `response.session.status`. Mirrors
+ * the Weixin QR `{ session }` envelope (controller/weixin.ts:258).
+ */
+export interface DingtalkDeviceFlowPollResponse {
+  session: DingtalkDeviceFlowSessionSummary
 }
 
 export interface TransportExternalUserSessionRef {
@@ -3494,8 +3610,10 @@ export interface DeviceAccessDenialDescriptor {
   resolution: DeviceAccessDenialResolution
 }
 
-export type RuntimeAuthorizationGrantScope =
-  (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number]
+// subject-scope-refactor: RuntimeAuthorizationGrantScope type dropped at cutover.
+// Scope is expressed via grant.subject + grant.scope SubjectRef pair, and the
+// wire-stable `grant_scope` envelope field carries a derived label string via
+// `subjectScopeLabel(target)` (see packages/shared/src/access/subject.ts).
 
 export type RuntimeAuthorizationGrantRetention =
   (typeof RUNTIME_AUTHORIZATION_GRANT_RETENTIONS)[number]
@@ -3561,21 +3679,30 @@ export interface RuntimeAuthorizationRequestedAction {
   }
 }
 
-// P4: now derived from the Zod GrantPolicySchema (see
-// packages/shared/src/access/policies). Hand-written extension types below
-// (Summary/View) compose on top so they keep their extra identity fields.
-export type RuntimeAuthorizationGrantSpec = GrantPolicyBase
+// subject-scope-refactor: SharedRuntimeAuthorizationGrantSpec (camelCase) is the
+// API-side policy payload type. Wire-side snake_case spec is
+// `RuntimeAuthorizationGrantWireSpec` in @synapse/device-protocol; API code
+// MUST import the explicit alias rather than the deprecated bare
+// `RuntimeAuthorizationGrantSpec` (which once doubled as both).
+// P4: derived from the Zod GrantPolicySchema (see packages/shared/src/access/policies).
+export type SharedRuntimeAuthorizationGrantSpec = GrantPolicyBase
+/** @deprecated Use SharedRuntimeAuthorizationGrantSpec (camelCase, API side) or
+ * RuntimeAuthorizationGrantWireSpec (snake_case, wire side from
+ * @synapse/device-protocol) to disambiguate. */
+export type RuntimeAuthorizationGrantSpec = SharedRuntimeAuthorizationGrantSpec
 
 export interface RuntimeAuthorizationGrantOption {
   id: string
   summary: string
   detail?: string
-  grantSpec: RuntimeAuthorizationGrantSpec
+  grantSpec: SharedRuntimeAuthorizationGrantSpec
 }
 
-export interface RuntimeAuthorizationGrantSummary extends RuntimeAuthorizationGrantSpec {
+export interface RuntimeAuthorizationGrantSummary extends SharedRuntimeAuthorizationGrantSpec {
   id: UUID
-  scope: RuntimeAuthorizationGrantScope
+  subject: SubjectRef
+  scope?: SubjectRef
+  scopeLabel: string
   retention: RuntimeAuthorizationGrantRetention
   status: RuntimeAuthorizationGrantStatus
   createdAt: Timestamp
@@ -3589,8 +3716,6 @@ export interface RuntimeAuthorizationGrantView extends RuntimeAuthorizationGrant
   deviceId: UUID
   deviceCapabilityId: UUID
   exposureId: UUID
-  conversationId?: UUID
-  actorId?: UUID
 }
 
 export interface RuntimeAuthorizationInteractionSummary {
@@ -3608,6 +3733,16 @@ export interface RuntimeAuthorizationInteractionSummary {
   approvedPreset?: RuntimeAuthorizationPreset
   approvedGrant?: RuntimeAuthorizationGrantSummary
   requestMode: RuntimeAuthorizationRequestMode
+  /**
+   * The retry_nonce baked into the row when the request was first created.
+   * The post-approval grant carries the SAME value as source_retry_nonce —
+   * surfacing it here lets the dedupe-reuse path return the persisted nonce
+   * to its caller instead of a freshly-generated one that no grant will
+   * ever match. See runtime-authorizations/requests.ts background-mode
+   * dedupe branch. Optional because historical rows may not have one and
+   * non-runtime-authorization summaries don't materialize this field.
+   */
+  sourceRetryNonce?: string
 }
 
 export interface InteractionRequestSummaryBase {
@@ -3704,8 +3839,9 @@ export interface ConversationFeedEventPayloadMap {
   memory_saved: {
     actor: ConversationEntityRef
     memoryId: UUID
-    memorySpaceType: MemorySpaceType
-    memoryScope?: MemoryScope
+    memoryOwner: SubjectRef
+    memoryScope?: SubjectRef
+    memoryNamespaceKey: string
     memoryCategory: MemoryCategory
     textDigest?: string
     sourceItemId?: UUID
@@ -3715,8 +3851,9 @@ export interface ConversationFeedEventPayloadMap {
     actor: ConversationEntityRef
     memoryId: UUID
     supersedesMemoryId?: UUID
-    memorySpaceType: MemorySpaceType
-    memoryScope?: MemoryScope
+    memoryOwner: SubjectRef
+    memoryScope?: SubjectRef
+    memoryNamespaceKey: string
     memoryCategory: MemoryCategory
     textDigest?: string
     sourceItemId?: UUID
@@ -4772,8 +4909,7 @@ function isConversationEntityRef(
     (entity.transportAddressId === undefined ||
       typeof entity.transportAddressId === "string") &&
     (entity.transportKind === undefined ||
-      entity.transportKind === "feishu" ||
-      entity.transportKind === "weixin") &&
+      isTransportKind(entity.transportKind)) &&
     (entity.name === undefined || typeof entity.name === "string") &&
     (entity.title === undefined || typeof entity.title === "string") &&
     (entity.role === undefined || typeof entity.role === "string") &&

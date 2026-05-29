@@ -261,7 +261,7 @@ export function registerActionToolPlugins(): void {
           spaceType: {
             type: "string",
             description:
-              "Memory visibility. participant_private = private to you inside the current conversation and best for narrow local context; conversation_shared = shared with everyone in this conversation; actor_private = follows you across conversations and is best for stable user facts or long-lived working agreements.",
+              "Memory visibility preset (translated server-side to owner/scope subject pair). participant_private = owner=actor + scope=conversation (private to you inside the current conversation); conversation_shared = owner=conversation (shared with everyone in this conversation); actor_private = owner=actor (follows you across conversations).",
             enum: [
               "participant_private",
               "conversation_shared",

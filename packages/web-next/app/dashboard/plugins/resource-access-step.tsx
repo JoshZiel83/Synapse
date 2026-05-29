@@ -3,9 +3,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type {
   CapabilityAccessTarget,
-  CapabilityAccessTargetType,
   ConversationTypeKey,
 } from "@synapse/shared/types"
+type AccessTargetInput = CapabilityAccessTarget
+
+// D3 / PR6 TODO: PluginGrantScope mirrors the historical 5-value label union;
+// the UI still emits this shape from its selectors. PR6 will switch to a
+// SubjectPicker + ScopePicker that emit ScopedSubjectTarget directly.
+type PluginGrantScopeLegacy =
+  | "workspace"
+  | "workspace_member"
+  | "conversation"
+  | "actor"
+  | "actor_in_conversation"
 import {
   MODEL_GROUP_GRANT_SCOPE,
   CONVERSATION_PARTICIPANT_TYPE,
@@ -64,7 +74,7 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
 import type { ConversationCatalogEntry } from "@synapse/shared"
 
-type PluginGrantScope = CapabilityAccessTargetType
+type PluginGrantScope = PluginGrantScopeLegacy
 
 const allowedGrantScopes: PluginGrantScope[] = [
   "workspace",
@@ -164,7 +174,7 @@ type AccessAdapter = {
     workspaceId: string,
     resourceId: string,
     payload: {
-      accessTarget?: CapabilityAccessTarget
+      accessTarget?: AccessTargetInput
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
     }
@@ -371,43 +381,91 @@ function getScopeLabel(scope: PluginGrantScope) {
   }
 }
 
+/**
+ * D3: derive the legacy 5-value label from a ScopedSubjectTarget for display.
+ * Subjects of other kinds (remote_agent, etc.) fall back to "workspace" until
+ * PR6 widens the UI to render them.
+ */
+function legacyTargetTypeOf(
+  target: ResourceAccessGrant["target"]
+): PluginGrantScopeLegacy {
+  if (!target) return "workspace"
+  if (
+    target.subject.kind === "actor" &&
+    target.scope?.kind === "conversation"
+  ) {
+    return "actor_in_conversation"
+  }
+  switch (target.subject.kind) {
+    case "workspace":
+      return "workspace"
+    case "workspace_member":
+      return "workspace_member"
+    case "conversation":
+      return "conversation"
+    case "actor":
+      return "actor"
+    default:
+      return "workspace"
+  }
+}
+
+/**
+ * D3: pull the actorId / conversationId / workspaceMemberId from a
+ * ScopedSubjectTarget for the legacy reader paths below.
+ */
+function targetActorId(target: ResourceAccessGrant["target"]): string | null {
+  if (!target) return null
+  return target.subject.kind === "actor"
+    ? (target.subject as { actorId: string }).actorId
+    : null
+}
+function targetConversationId(
+  target: ResourceAccessGrant["target"]
+): string | null {
+  if (!target) return null
+  if (target.scope?.kind === "conversation") {
+    return (target.scope as { conversationId: string }).conversationId
+  }
+  if (target.subject.kind === "conversation") {
+    return (target.subject as { conversationId: string }).conversationId
+  }
+  return null
+}
+
 function formatGrantTarget(
   grant: ResourceAccessGrant,
   actorsById: Map<string, string>,
   conversationsById: Map<string, string>
 ) {
   const target = grant.target
-  switch (target?.type) {
+  if (!target) return "Entire workspace"
+  const label = legacyTargetTypeOf(target)
+  const actorId = targetActorId(target)
+  const conversationId = targetConversationId(target)
+  switch (label) {
     case "workspace":
       return "Entire workspace"
     case "conversation":
       return (
-        (target.conversationId
-          ? conversationsById.get(target.conversationId)
-          : null) ||
-        (target.conversationId
-          ? `Conversation ${String(target.conversationId).slice(0, 8)}`
+        (conversationId ? conversationsById.get(conversationId) : null) ||
+        (conversationId
+          ? `Conversation ${String(conversationId).slice(0, 8)}`
           : "Selected conversation")
       )
     case "actor":
       return (
-        (target.actorId ? actorsById.get(target.actorId) : null) ||
-        (target.actorId
-          ? `Actor ${String(target.actorId).slice(0, 8)}`
-          : "Selected actor")
+        (actorId ? actorsById.get(actorId) : null) ||
+        (actorId ? `Actor ${String(actorId).slice(0, 8)}` : "Selected actor")
       )
     case "actor_in_conversation": {
       const actorName =
-        (target.actorId ? actorsById.get(target.actorId) : null) ||
-        (target.actorId
-          ? `Actor ${String(target.actorId).slice(0, 8)}`
-          : "Selected actor")
+        (actorId ? actorsById.get(actorId) : null) ||
+        (actorId ? `Actor ${String(actorId).slice(0, 8)}` : "Selected actor")
       const conversationName =
-        (target.conversationId
-          ? conversationsById.get(target.conversationId)
-          : null) ||
-        (target.conversationId
-          ? `Conversation ${String(target.conversationId).slice(0, 8)}`
+        (conversationId ? conversationsById.get(conversationId) : null) ||
+        (conversationId
+          ? `Conversation ${String(conversationId).slice(0, 8)}`
           : "Selected conversation")
       return `${actorName} in ${conversationName}`
     }
@@ -914,11 +972,9 @@ export default function ResourceAccessStep({
   const hasConversationScopedGrants = useMemo(
     () =>
       grants.some((grant) => {
-        const targetType = grant.target?.type
-        return (
-          targetType === "conversation" ||
-          targetType === "actor_in_conversation"
-        )
+        const target = grant.target
+        if (!target) return false
+        return Boolean(targetConversationId(target))
       }),
     [grants]
   )
@@ -1277,22 +1333,16 @@ export default function ResourceAccessStep({
 
     for (const grant of grants) {
       const target = grant.target
-      if (
-        target?.type !== "conversation" &&
-        target?.type !== "actor_in_conversation"
-      ) {
-        continue
-      }
+      if (!target) continue
+      const conversationId = targetConversationId(target)
+      // Only validate grants that are actually anchored to a conversation
+      // (subject=conversation or scope=conversation).
+      if (!conversationId) continue
 
-      if (!target.conversationId) {
-        invalidTargets.push("Unknown conversation target")
-        continue
-      }
-
-      const catalogEntry = catalogMap.get(target.conversationId)
+      const catalogEntry = catalogMap.get(conversationId)
       if (!catalogEntry) {
         invalidTargets.push(
-          `Conversation ${String(target.conversationId).slice(0, 8)}`
+          `Conversation ${String(conversationId).slice(0, 8)}`
         )
         continue
       }
@@ -1366,24 +1416,42 @@ export default function ResourceAccessStep({
     setSaving(true)
     setSubmitError(null)
     try {
+      const accessTarget: AccessTargetInput = (() => {
+        switch (grantScope) {
+          case "workspace":
+            return { subject: { kind: "workspace", workspaceId } }
+          case "workspace_member":
+            return {
+              subject: {
+                kind: "workspace_member",
+                memberId: actorId ?? "",
+              },
+            }
+          case "conversation":
+            return {
+              subject: {
+                kind: "conversation",
+                conversationId: conversationId ?? "",
+              },
+            }
+          case "actor":
+            return { subject: { kind: "actor", actorId: actorId ?? "" } }
+          case "actor_in_conversation":
+            return {
+              subject: { kind: "actor", actorId: actorId ?? "" },
+              scope: {
+                kind: "conversation",
+                conversationId: conversationId ?? "",
+              },
+            }
+        }
+      })()
       const payload: {
-        accessTarget?: CapabilityAccessTarget
+        accessTarget?: AccessTargetInput
         conversationTypeMaskOverride?: number | null
         permissions?: string[]
       } = {
-        accessTarget: {
-          type: grantScope,
-          actorId:
-            grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR ||
-            grantScope === "actor_in_conversation"
-              ? actorId
-              : undefined,
-          conversationId:
-            grantScope === "conversation" ||
-            grantScope === "actor_in_conversation"
-              ? conversationId
-              : undefined,
-        },
+        accessTarget,
         permissions: summary?.requiredPermissions?.length
           ? summary.requiredPermissions
           : ["use"],
@@ -1500,7 +1568,7 @@ export default function ResourceAccessStep({
 
   const openGrantConversationTypeDialog = (grant: ResourceAccessGrant) => {
     if (
-      !supportsGrantConversationTypeOverride(grant.target?.type || "workspace")
+      !supportsGrantConversationTypeOverride(legacyTargetTypeOf(grant.target))
     ) {
       return
     }
@@ -1952,7 +2020,7 @@ export default function ResourceAccessStep({
                 grants.map((grant) => (
                   <TableRow key={grant.id}>
                     <TableCell className="px-6 font-medium">
-                      {getScopeLabel(grant.target?.type || "workspace")}
+                      {getScopeLabel(legacyTargetTypeOf(grant.target))}
                     </TableCell>
                     <TableCell className="max-w-0">
                       <div className="truncate">
@@ -1965,7 +2033,7 @@ export default function ResourceAccessStep({
                     </TableCell>
                     <TableCell className="max-w-0">
                       {supportsGrantConversationTypeOverride(
-                        grant.target?.type || "workspace"
+                        legacyTargetTypeOf(grant.target)
                       ) ? (
                         <div className="space-y-1">
                           <div className="truncate">
@@ -1987,14 +2055,15 @@ export default function ResourceAccessStep({
                       ) : (
                         <div className="space-y-1">
                           <div className="truncate">
-                            {grant.target?.conversationId &&
-                            conversationsById.get(grant.target.conversationId)
-                              ? formatConversationTypeLabel(
-                                  conversationsById.get(
-                                    grant.target.conversationId
-                                  )?.conversationTypeKey || null
-                                )
-                              : "Selected conversation"}
+                            {(() => {
+                              const cid = targetConversationId(grant.target)
+                              return cid && conversationsById.get(cid)
+                                ? formatConversationTypeLabel(
+                                    conversationsById.get(cid)
+                                      ?.conversationTypeKey || null
+                                  )
+                                : "Selected conversation"
+                            })()}
                           </div>
                           <div className="text-xs text-muted-foreground">
                             Fixed by the selected conversation
@@ -2009,7 +2078,7 @@ export default function ResourceAccessStep({
                       <div className="flex justify-end gap-2">
                         {canManageGrantConversationTypes &&
                         supportsGrantConversationTypeOverride(
-                          grant.target?.type || "workspace"
+                          legacyTargetTypeOf(grant.target)
                         ) ? (
                           <Button
                             variant="ghost"
@@ -2292,7 +2361,7 @@ export default function ResourceAccessStep({
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {editingGrant
-                  ? getScopeLabel(editingGrant.target?.type || "workspace")
+                  ? getScopeLabel(legacyTargetTypeOf(editingGrant.target))
                   : "Grant"}
               </div>
             </div>

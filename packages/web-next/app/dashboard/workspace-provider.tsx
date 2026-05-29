@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react"
 import { api } from "@/lib/api"
+import { ConnectorMetadataProvider } from "@/lib/im-connector-metadata"
 
 interface WorkspaceInfo {
   id: string
@@ -136,7 +137,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         loading,
       }}
     >
-      {children}
+      {/* Connector metadata is workspace-scoped (capability flags
+          may differ later). Wrap inside the WorkspaceProvider so
+          `workspaceId` is in scope. */}
+      <ConnectorMetadataProvider workspaceId={workspaceId}>
+        {children}
+      </ConnectorMetadataProvider>
     </WorkspaceContext.Provider>
   )
 }

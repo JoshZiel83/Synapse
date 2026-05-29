@@ -1,7 +1,10 @@
-import { SUBJECT_KIND } from "@synapse/shared"
+import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import type { PermissionSubject } from "./evaluator.js"
-import { upsertAccessSubject } from "./subject-registry.js"
+import {
+  upsertAccessSubject,
+  upsertAccessSubjectOn,
+} from "./subject-registry.js"
 
 function dedupeSubjects(subjects: PermissionSubject[]) {
   const seen = new Set<string>()
@@ -17,47 +20,6 @@ function dedupeSubjects(subjects: PermissionSubject[]) {
   }
 
   return deduped
-}
-
-async function loadConversationActorContextById(
-  db: KyselyDb,
-  contextId: string
-) {
-  return db
-    .selectFrom("conversation_actor_contexts")
-    .select(["id", "actor_id", "conversation_id", "session_id"])
-    .where("id", "=", contextId)
-    .limit(1)
-    .executeTakeFirst()
-}
-
-// P0/P6: previously delegated to session/service.ts helpers which fall back to
-// the global pool when no queryable is passed. Inline the queries so subject
-// resolution honors the injected `db` (test-container DB, transaction client).
-async function loadConversationActorContextByPair(
-  db: KyselyDb,
-  conversationId: string,
-  actorId: string
-) {
-  return db
-    .selectFrom("conversation_actor_contexts")
-    .select(["id", "actor_id", "conversation_id", "session_id"])
-    .where("conversation_id", "=", conversationId)
-    .where("actor_id", "=", actorId)
-    .limit(1)
-    .executeTakeFirst()
-}
-
-async function loadConversationActorContextBySessionId(
-  db: KyselyDb,
-  sessionId: string
-) {
-  return db
-    .selectFrom("conversation_actor_contexts")
-    .select(["id", "actor_id", "conversation_id", "session_id"])
-    .where("session_id", "=", sessionId)
-    .limit(1)
-    .executeTakeFirst()
 }
 
 export async function isActorActiveConversationParticipant(
@@ -103,6 +65,705 @@ export async function isRemoteAgentActiveConversationParticipant(
   return Boolean(row)
 }
 
+/**
+ * PR2: generic active-participant check, replacing the kind-specific
+ * `isActorActiveConversationParticipant` / `isRemoteAgentActiveConversationParticipant`
+ * helpers. Works for any participant kind backed by `conversation_participants.subject_id`
+ * — actor / remote_agent / workspace_member / external / system. Used by:
+ *   - `buildRuntimePrincipalContext` (PR2) to decide whether to add the
+ *     conversation subject_id to `runtimeScopeSubjectIds`.
+ *   - `hasConversationPermission` (PR3) to evaluate `subject=conversation`
+ *     grants without re-implementing the membership check per principal kind.
+ */
+export async function isSubjectActiveConversationParticipant(
+  db: KyselyDb,
+  conversationId: string,
+  subjectId: string
+): Promise<boolean> {
+  const row = await db
+    .selectFrom("conversation_participants")
+    .select("id")
+    .where("conversation_id", "=", conversationId)
+    .where("subject_id", "=", subjectId)
+    .where("state", "=", "active")
+    .limit(1)
+    .executeTakeFirst()
+  return Boolean(row)
+}
+
+/**
+ * PR2: structured runtime principal context expressed in subject_id terms.
+ *
+ * `runtimeSubjectIds` is the set of access_subjects.id values that, treated
+ * as a grant subject, the principal can claim under right now. It always
+ * contains the principal's own subject_id, the current workspace subject_id,
+ * the conversation subject_id (if the principal is an active participant),
+ * and — *only* if the caller explicitly passes `delegatedWorkspaceMemberId`
+ * AND the row belongs to the current workspace — the workspace_member
+ * subject_id.
+ *
+ * Critical security property: `runtimeSubjectIds` MUST NOT auto-include the
+ * `actors.created_by_workspace_member_id` / `remote_agents.created_by_workspace_member_id`
+ * — that would let an actor inherit its creator's `subject=workspace_member`
+ * grants (including user_private memory). Delegation is an explicit-act-on-behalf
+ * contract, surfaced via `delegatedWorkspaceMemberId`.
+ *
+ * `runtimeScopeSubjectIds` is the subset used as the right-hand side of a
+ * `scope_subject_id` match: the current workspace subject_id, plus the
+ * conversation subject_id when the principal is an active participant.
+ */
+export type RuntimePrincipalContext = {
+  principal: SubjectRef
+  /**
+   * subject-scope-refactor: explicit principal subject_id field. Equals
+   * `upsertAccessSubject(db, principal)` — i.e. the access_subjects row that
+   * corresponds to the SubjectRef passed in. Always set (every principal is
+   * upsertable into access_subjects). Consumers MUST read this field instead
+   * of indexing `runtimeSubjectIds[0]`, which is incidental implementation
+   * order and not a public contract.
+   */
+  principalSubjectId: string
+  runtimeSubjectIds: string[]
+  runtimeScopeSubjectIds: string[]
+  runtimeConversationId?: string
+  /**
+   * subject-scope-refactor: set when the principal subject was positively
+   * verified as an active participant of `params.conversationId` (via
+   * `isSubjectActiveConversationParticipant`). The value is the
+   * access_subjects.id of the conversation subject row (NOT the business
+   * `conversation_id`). Used by `presetToOwnerScope` as an active-scope guard
+   * — pure functions can decide "is this dispatch in an active conversation
+   * scope?" without a DB call. NOT limited to actor/remote_agent: any
+   * workspace-bound principal that passes the active-participant gate gets
+   * this populated; `presetToOwnerScope` separately limits scope attachment
+   * to actor/remote_agent only (per wire schema whitelist).
+   */
+  activeConversationSubjectId?: string
+}
+
+/**
+ * PR5 fix: principal-belongs-to-workspace guard for buildRuntimePrincipalContext.
+ *
+ * For workspace-bound principals (actor / remote_agent / workspace_member),
+ * the named principal MUST be in the named workspace before we mint runtime
+ * subject_ids in its name — otherwise a caller could ask for runtime
+ * context against any workspace and get back a set that legitimately
+ * matches `subject=workspace W` grants in W.
+ *
+ * `workspace` principals are accepted iff the principal IS the workspace.
+ * `user` / `external` / `system` principals are platform-wide and have no
+ * single workspace to validate against — we accept them here and rely on
+ * the per-resource permission helpers to refuse them as appropriate.
+ */
+async function assertPrincipalBelongsToWorkspace(
+  db: KyselyDb,
+  principal: SubjectRef,
+  workspaceId: string
+): Promise<void> {
+  switch (principal.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      if (principal.workspaceId !== workspaceId) {
+        throw new Error(
+          `principal workspace ${principal.workspaceId} does not match runtime workspace ${workspaceId}`
+        )
+      }
+      return
+    case SUBJECT_KIND.WORKSPACE_MEMBER: {
+      const row = await db
+        .selectFrom("workspace_members")
+        .select(["id", "workspace_id"])
+        .where("id", "=", principal.memberId)
+        .limit(1)
+        .executeTakeFirst()
+      if (!row || row.workspace_id !== workspaceId) {
+        throw new Error(
+          `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.ACTOR: {
+      const row = await db
+        .selectFrom("actors")
+        .select(["id", "workspace_id"])
+        .where("id", "=", principal.actorId)
+        .limit(1)
+        .executeTakeFirst()
+      if (!row || row.workspace_id !== workspaceId) {
+        throw new Error(
+          `actor ${principal.actorId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.REMOTE_AGENT: {
+      const row = await db
+        .selectFrom("remote_agents")
+        .select(["id", "workspace_id"])
+        .where("id", "=", principal.remoteAgentId)
+        .limit(1)
+        .executeTakeFirst()
+      if (!row || row.workspace_id !== workspaceId) {
+        throw new Error(
+          `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.CONVERSATION:
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.SYSTEM:
+      // No single-workspace identity; accept and let per-resource helpers
+      // refuse if appropriate.
+      return
+  }
+}
+
+/**
+ * PR-fix-round-2: which principal kinds are validated to belong to the
+ * runtime workspace by `assertPrincipalBelongsToWorkspace`. Only these
+ * earn the workspace subject_id in `runtimeSubjectIds` /
+ * `runtimeScopeSubjectIds`. Platform-wide kinds (user/external/system)
+ * and conversation principals are accepted as the principal itself but
+ * MUST NOT auto-collect workspace subject — otherwise a user principal
+ * could mint runtime context against any workspace and silently match
+ * `subject=workspace W` grants.
+ */
+function isPrincipalWorkspaceBound(principal: SubjectRef): boolean {
+  switch (principal.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return true
+    case SUBJECT_KIND.CONVERSATION:
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.SYSTEM:
+      return false
+  }
+}
+
+export async function buildRuntimePrincipalContext(
+  db: KyselyDb,
+  params: {
+    principal: SubjectRef
+    workspaceId: string
+    conversationId?: string | null
+    /**
+     * Explicit delegation: "this request acts on behalf of the named
+     * workspace_member". Builder validates that the member exists AND belongs
+     * to `workspaceId`; throws otherwise. Callers MUST set this only when
+     * they are confident the delegation matches the authenticated user.
+     */
+    delegatedWorkspaceMemberId?: string | null
+  }
+): Promise<RuntimePrincipalContext> {
+  const runtimeSubjectIds: string[] = []
+  const runtimeScopeSubjectIds: string[] = []
+
+  // PR5 fix: verify the principal actually belongs to the named workspace
+  // before minting workspace subject_ids in their name. Without this check,
+  // a caller could ask the builder for context against any workspace and
+  // get back a runtime set that legitimately matches `subject=workspace W`
+  // grants in W — an authorization-expansion bug if the builder is ever
+  // wired to request-path code.
+  //
+  // PR-fix-round-2: assertPrincipalBelongsToWorkspace verifies the
+  // principal is in the workspace for workspace-bound kinds, but it
+  // intentionally accepts user/external/system/conversation (no single
+  // workspace identity). To prevent THOSE platform-wide principals from
+  // automatically picking up `subject=workspace W` grants, we only mint
+  // the workspace subject for principals that were positively verified
+  // as belonging to the workspace.
+  await assertPrincipalBelongsToWorkspace(
+    db,
+    params.principal,
+    params.workspaceId
+  )
+
+  const principalSubjectId = await upsertAccessSubject(db, params.principal)
+  runtimeSubjectIds.push(principalSubjectId)
+
+  const principalIsWorkspaceBound = isPrincipalWorkspaceBound(params.principal)
+  if (principalIsWorkspaceBound) {
+    const workspaceSubjectId = await upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.WORKSPACE,
+      workspaceId: params.workspaceId,
+    })
+    runtimeSubjectIds.push(workspaceSubjectId)
+    runtimeScopeSubjectIds.push(workspaceSubjectId)
+  }
+
+  let activeConversationSubjectId: string | undefined
+  if (params.conversationId) {
+    const isActive = await isSubjectActiveConversationParticipant(
+      db,
+      params.conversationId,
+      principalSubjectId
+    )
+    if (isActive) {
+      const convSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: params.conversationId,
+      })
+      runtimeSubjectIds.push(convSubjectId)
+      runtimeScopeSubjectIds.push(convSubjectId)
+      activeConversationSubjectId = convSubjectId
+    }
+  }
+
+  if (params.delegatedWorkspaceMemberId) {
+    const member = await db
+      .selectFrom("workspace_members")
+      .select(["id", "workspace_id"])
+      .where("id", "=", params.delegatedWorkspaceMemberId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!member) {
+      throw new Error(
+        `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} not found`
+      )
+    }
+    if (member.workspace_id !== params.workspaceId) {
+      throw new Error(
+        `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} belongs to workspace ${member.workspace_id}, not ${params.workspaceId}`
+      )
+    }
+    const memberSubjectId = await upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      memberId: params.delegatedWorkspaceMemberId,
+    })
+    runtimeSubjectIds.push(memberSubjectId)
+  }
+
+  return {
+    principal: params.principal,
+    principalSubjectId,
+    runtimeSubjectIds: Array.from(new Set(runtimeSubjectIds)),
+    runtimeScopeSubjectIds: Array.from(new Set(runtimeScopeSubjectIds)),
+    runtimeConversationId: params.conversationId ?? undefined,
+    activeConversationSubjectId,
+  }
+}
+
+/**
+ * subject-scope-refactor: pg-form dual of `buildRuntimePrincipalContext`.
+ *
+ * Mirrors the Kysely builder exactly (same security invariants — actor /
+ * remote_agent principals do NOT auto-collect the creator's workspace_member
+ * subject; conversation principals do NOT collect the workspace subject;
+ * platform-wide kinds (user/external/system) are accepted as the principal
+ * but skip the workspace mint). The only differences are wire-level:
+ *
+ *  - takes a pg `Queryable` (the same connection / transaction the caller
+ *    has open) rather than the global Kysely `db`, so the workspace-bound
+ *    + active-participant guards see uncommitted writes from the surrounding
+ *    transaction (critical for approval flows that just upserted the
+ *    interaction row in the same client).
+ *  - calls `upsertAccessSubjectOn(client, ...)` (pg-form upsert) so the
+ *    subject rows it mints are visible to the same transaction.
+ *  - uses raw SQL for the membership / participant lookups so we don't
+ *    open a parallel Kysely connection.
+ *
+ * Decision 8 (conversation principals don't inherit workspace) is preserved
+ * via the shared `isPrincipalWorkspaceBound` helper.
+ */
+export async function buildRuntimePrincipalContextOn(
+  client: import("../../infrastructure/events/index.js").Queryable,
+  params: {
+    principal: SubjectRef
+    workspaceId: string
+    conversationId?: string | null
+    delegatedWorkspaceMemberId?: string | null
+  }
+): Promise<RuntimePrincipalContext> {
+  await assertPrincipalBelongsToWorkspaceOn(
+    client,
+    params.principal,
+    params.workspaceId
+  )
+
+  const principalSubjectId = await upsertAccessSubjectOn(
+    client,
+    params.principal
+  )
+  const runtimeSubjectIds: string[] = [principalSubjectId]
+  const runtimeScopeSubjectIds: string[] = []
+
+  if (isPrincipalWorkspaceBound(params.principal)) {
+    const workspaceSubjectId = await upsertAccessSubjectOn(client, {
+      kind: SUBJECT_KIND.WORKSPACE,
+      workspaceId: params.workspaceId,
+    })
+    runtimeSubjectIds.push(workspaceSubjectId)
+    runtimeScopeSubjectIds.push(workspaceSubjectId)
+  }
+
+  let activeConversationSubjectId: string | undefined
+  if (params.conversationId) {
+    const activeRow = await client.query(
+      `SELECT id FROM conversation_participants
+         WHERE conversation_id = $1 AND subject_id = $2 AND state = 'active'
+         LIMIT 1`,
+      [params.conversationId, principalSubjectId]
+    )
+    if (activeRow.rows.length > 0) {
+      const convSubjectId = await upsertAccessSubjectOn(client, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: params.conversationId,
+      })
+      runtimeSubjectIds.push(convSubjectId)
+      runtimeScopeSubjectIds.push(convSubjectId)
+      activeConversationSubjectId = convSubjectId
+    }
+  }
+
+  if (params.delegatedWorkspaceMemberId) {
+    const memberRow = await client.query(
+      `SELECT workspace_id FROM workspace_members WHERE id = $1 LIMIT 1`,
+      [params.delegatedWorkspaceMemberId]
+    )
+    if (memberRow.rows.length === 0) {
+      throw new Error(
+        `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} not found`
+      )
+    }
+    if (memberRow.rows[0].workspace_id !== params.workspaceId) {
+      throw new Error(
+        `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} belongs to workspace ${memberRow.rows[0].workspace_id}, not ${params.workspaceId}`
+      )
+    }
+    const memberSubjectId = await upsertAccessSubjectOn(client, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      memberId: params.delegatedWorkspaceMemberId,
+    })
+    runtimeSubjectIds.push(memberSubjectId)
+  }
+
+  return {
+    principal: params.principal,
+    principalSubjectId,
+    runtimeSubjectIds: Array.from(new Set(runtimeSubjectIds)),
+    runtimeScopeSubjectIds: Array.from(new Set(runtimeScopeSubjectIds)),
+    runtimeConversationId: params.conversationId ?? undefined,
+    activeConversationSubjectId,
+  }
+}
+
+async function assertPrincipalBelongsToWorkspaceOn(
+  client: import("../../infrastructure/events/index.js").Queryable,
+  principal: SubjectRef,
+  workspaceId: string
+): Promise<void> {
+  switch (principal.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      if (principal.workspaceId !== workspaceId) {
+        throw new Error(
+          `principal workspace ${principal.workspaceId} does not match runtime workspace ${workspaceId}`
+        )
+      }
+      return
+    case SUBJECT_KIND.WORKSPACE_MEMBER: {
+      const row = await client.query(
+        `SELECT workspace_id FROM workspace_members WHERE id = $1 LIMIT 1`,
+        [principal.memberId]
+      )
+      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+        throw new Error(
+          `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.ACTOR: {
+      const row = await client.query(
+        `SELECT workspace_id FROM actors WHERE id = $1 LIMIT 1`,
+        [principal.actorId]
+      )
+      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+        throw new Error(
+          `actor ${principal.actorId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.REMOTE_AGENT: {
+      const row = await client.query(
+        `SELECT workspace_id FROM remote_agents WHERE id = $1 LIMIT 1`,
+        [principal.remoteAgentId]
+      )
+      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+        throw new Error(
+          `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.CONVERSATION:
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.SYSTEM:
+      return
+  }
+}
+
+/**
+ * PR-fix-round-4: companion to `buildConversationCapabilitySubjects`.
+ * Returns the access_subjects.id set used as the right-hand side of a
+ * scope_subject_id match — i.e. which subjects represent the runtime
+ * group context the principal is currently inside. Used by skill /
+ * plugin / relay visibility listings to pass `runtimeScopeSubjectIds`
+ * to `lookupResources` and `listGrantedResourceIds` so a scoped grant
+ * (subject=actor + scope=conversation) is actually visible in tool /
+ * skill / plugin enumeration.
+ *
+ * The function mirrors the gating in `buildConversationCapabilitySubjects`:
+ * the conversation subject is included only when the principal
+ * (actor / remote_agent / workspace_member) is an active participant of
+ * the named conversation. The workspace subject is always included
+ * when a workspaceId is supplied.
+ */
+/**
+ * Post-D4 P2 fix: shared workspace-membership validator for the visibility
+ * helpers below. Mirrors the `assertPrincipalBelongsToWorkspace` checks used
+ * by `buildRuntimePrincipalContext` — without this guard the visibility
+ * helpers would mint the workspace subject from `params.workspaceId`
+ * unconditionally, so a caller passing an actor/member/remote_agent in
+ * workspace W1 plus `workspaceId = W2` would silently get back a runtime
+ * set that matches `subject=workspace W2` grants. The helpers refuse
+ * inconsistent inputs by throwing.
+ */
+async function assertVisibilityPrincipalsBelongToWorkspace(
+  db: KyselyDb,
+  params: {
+    workspaceId: string
+    workspaceMemberId?: string | null
+    actorId?: string | null
+    remoteAgentId?: string | null
+  }
+): Promise<void> {
+  if (params.workspaceMemberId) {
+    const row = await db
+      .selectFrom("workspace_members")
+      .select(["id", "workspace_id"])
+      .where("id", "=", params.workspaceMemberId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!row || row.workspace_id !== params.workspaceId) {
+      throw new Error(
+        `workspace_member ${params.workspaceMemberId} does not belong to workspace ${params.workspaceId}`
+      )
+    }
+  }
+  if (params.actorId) {
+    const row = await db
+      .selectFrom("actors")
+      .select(["id", "workspace_id"])
+      .where("id", "=", params.actorId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!row || row.workspace_id !== params.workspaceId) {
+      throw new Error(
+        `actor ${params.actorId} does not belong to workspace ${params.workspaceId}`
+      )
+    }
+  }
+  if (params.remoteAgentId) {
+    const row = await db
+      .selectFrom("remote_agents")
+      .select(["id", "workspace_id"])
+      .where("id", "=", params.remoteAgentId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!row || row.workspace_id !== params.workspaceId) {
+      throw new Error(
+        `remote_agent ${params.remoteAgentId} does not belong to workspace ${params.workspaceId}`
+      )
+    }
+  }
+}
+
+export async function computeRuntimeScopeSubjectIds(
+  db: KyselyDb,
+  params: {
+    workspaceId: string
+    workspaceMemberId?: string | null
+    actorId?: string | null
+    remoteAgentId?: string | null
+    conversationId?: string | null
+  }
+): Promise<string[]> {
+  await assertVisibilityPrincipalsBelongToWorkspace(db, params)
+  const scopeIds: string[] = []
+  const workspaceSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: params.workspaceId,
+  })
+  scopeIds.push(workspaceSubjectId)
+
+  if (params.conversationId) {
+    let anyActive = false
+    if (params.actorId) {
+      const actorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: params.actorId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          actorSubjectId
+        ))
+    }
+    if (!anyActive && params.remoteAgentId) {
+      const remoteAgentSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: params.remoteAgentId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          remoteAgentSubjectId
+        ))
+    }
+    if (!anyActive && params.workspaceMemberId) {
+      const memberSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: params.workspaceMemberId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          memberSubjectId
+        ))
+    }
+    if (anyActive) {
+      const convSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: params.conversationId,
+      })
+      scopeIds.push(convSubjectId)
+    }
+  }
+
+  return Array.from(new Set(scopeIds))
+}
+
+/**
+ * P1 fix (post-D4): subject_ids the principal can *claim* under right now —
+ * principal own subject + workspace + any group subjects (conversation when
+ * active participant). Passed as `runtimeSubjectIds` to the RAB visibility
+ * layer so `subject=conversation C` bindings surface for active participants
+ * (otherwise they'd be writable but never match).
+ *
+ * Mirrors `buildRuntimePrincipalContext.runtimeSubjectIds` but takes the
+ * legacy (workspaceMemberId / actorId / remoteAgentId / conversationId)
+ * fields directly so the visibility callers don't have to assemble a
+ * principal SubjectRef first.
+ */
+export async function computeRuntimeSubjectIdsForVisibility(
+  db: KyselyDb,
+  params: {
+    workspaceId: string
+    workspaceMemberId?: string | null
+    actorId?: string | null
+    remoteAgentId?: string | null
+    conversationId?: string | null
+  }
+): Promise<string[]> {
+  await assertVisibilityPrincipalsBelongToWorkspace(db, params)
+  const ids: string[] = []
+  const workspaceSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: params.workspaceId,
+  })
+  ids.push(workspaceSubjectId)
+
+  if (params.workspaceMemberId) {
+    ids.push(
+      await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: params.workspaceMemberId,
+      })
+    )
+  }
+  if (params.actorId) {
+    ids.push(
+      await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: params.actorId,
+      })
+    )
+  }
+  if (params.remoteAgentId) {
+    ids.push(
+      await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: params.remoteAgentId,
+      })
+    )
+  }
+
+  if (params.conversationId) {
+    let anyActive = false
+    if (params.actorId) {
+      const actorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: params.actorId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          actorSubjectId
+        ))
+    }
+    if (!anyActive && params.remoteAgentId) {
+      const remoteAgentSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: params.remoteAgentId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          remoteAgentSubjectId
+        ))
+    }
+    if (!anyActive && params.workspaceMemberId) {
+      const memberSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: params.workspaceMemberId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          memberSubjectId
+        ))
+    }
+    if (anyActive) {
+      const convSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: params.conversationId,
+      })
+      ids.push(convSubjectId)
+    }
+  }
+
+  return Array.from(new Set(ids))
+}
+
 export async function buildConversationCapabilitySubjects(
   db: KyselyDb,
   params: {
@@ -112,7 +773,6 @@ export async function buildConversationCapabilitySubjects(
     remoteAgentId?: string | null
     conversationId?: string | null
     sessionId?: string | null
-    conversationActorContextId?: string | null
   }
 ) {
   if (params.actorId && params.conversationId) {
@@ -168,58 +828,14 @@ export async function buildConversationCapabilitySubjects(
     })
   }
 
-  let contextId = params.conversationActorContextId?.trim() || null
-  let context:
-    | {
-        id: string
-        actor_id: string
-        conversation_id: string
-        session_id: string | null
-      }
-    | undefined
-
-  if (contextId) {
-    context =
-      (await loadConversationActorContextById(db, contextId)) || undefined
-  }
-
-  if (!context && params.actorId && params.conversationId) {
-    context =
-      (await loadConversationActorContextByPair(
-        db,
-        params.conversationId,
-        params.actorId
-      )) || undefined
-  }
-
-  // The session→context fallback only makes sense for the actor path:
-  // conversation_actor_context.session_id is a UUID column and the row only
-  // exists for human actors. Remote agents have no actor identity and no
-  // matching context row, so calling this lookup with the synthetic cache key
-  // we use for reverse-MCP sessions ("remote_agent_mcp:…") would crash the
-  // SQL driver and silently mask plugin/relay tool resolution. Gating on
-  // actorId keeps the actor flow unchanged while making the remote-agent
-  // flow correct-by-construction.
-  if (!context && params.actorId && params.sessionId) {
-    context =
-      (await loadConversationActorContextBySessionId(db, params.sessionId)) ||
-      undefined
-  }
-
-  if (
-    context &&
-    (!params.actorId || context.actor_id === params.actorId) &&
-    (!params.conversationId ||
-      context.conversation_id === params.conversationId) &&
-    (await isActorActiveConversationParticipant(
-      db,
-      context.conversation_id,
-      context.actor_id
-    ))
-  ) {
+  // PR4 fix: previously omitted, so `remote_agent + scope=conversation`
+  // (and even plain `remote_agent`) bindings never showed up in the
+  // expander. listResourceGrantRows in evaluator.ts now has a matching
+  // remote_agent branch.
+  if (params.remoteAgentId) {
     subjects.push({
-      type: "conversation_actor_context",
-      id: context.id,
+      type: "remote_agent",
+      id: params.remoteAgentId,
     })
   }
 

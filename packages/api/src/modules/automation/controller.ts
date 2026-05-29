@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify"
 import { validateAutomationRuleCreatePayload } from "@synapse/shared/automation"
 import {
-  ACCESS_TARGET_TYPES,
   AUTOMATION_COMPLETION_STATUSES,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
@@ -14,6 +13,13 @@ import {
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
 } from "@synapse/shared/constants"
+import {
+  actorRef,
+  conversationRef,
+  workspaceMemberRef,
+  workspaceRef,
+  type CapabilityAccessTarget,
+} from "@synapse/shared"
 import { z } from "zod"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
@@ -107,7 +113,13 @@ const updateAutomationSchema = z.object({
 const conversationTypeMaskSchema = z.number().int().min(1).max(31)
 const accessTargetSchema = z
   .object({
-    type: z.enum(ACCESS_TARGET_TYPES),
+    type: z.enum([
+      "workspace",
+      "workspace_member",
+      "conversation",
+      "actor",
+      "actor_in_conversation",
+    ]),
     conversationId: z.string().uuid().optional(),
     actorId: z.string().uuid().optional(),
     workspaceMemberId: z.string().uuid().optional(),
@@ -149,6 +161,27 @@ const accessGrantSchema = z.object({
     .optional(),
   reason: z.string().trim().min(1).max(500).optional(),
 })
+
+function inputToCapabilityAccessTarget(
+  workspaceId: string,
+  input: z.infer<typeof accessTargetSchema>
+): CapabilityAccessTarget {
+  switch (input.type) {
+    case "workspace":
+      return { subject: workspaceRef(workspaceId) }
+    case "workspace_member":
+      return { subject: workspaceMemberRef(input.workspaceMemberId!) }
+    case "actor":
+      return { subject: actorRef(input.actorId!) }
+    case "conversation":
+      return { subject: conversationRef(input.conversationId!) }
+    case "actor_in_conversation":
+      return {
+        subject: actorRef(input.actorId!),
+        scope: conversationRef(input.conversationId!),
+      }
+  }
+}
 const accessGrantUpdateSchema = z.object({
   conversationTypeMaskOverride: conversationTypeMaskSchema
     .nullable()
@@ -402,7 +435,9 @@ export default async function automationController(app: FastifyInstance) {
       const grant = await grantAutomationEventSourceAccess({
         workspaceId,
         eventSourceId,
-        accessTarget: body.accessTarget,
+        accessTarget: body.accessTarget
+          ? inputToCapabilityAccessTarget(workspaceId, body.accessTarget)
+          : undefined,
         conversationTypeMaskOverride: body.conversationTypeMaskOverride,
         grantedByWorkspaceMemberId: workspaceMemberId,
         reason: body.reason,

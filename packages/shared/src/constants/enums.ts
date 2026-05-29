@@ -218,6 +218,7 @@ export const FILE_ORIGIN_SYSTEMS = {
   GENERIC_MODEL_RESPONSE_MEDIA_INGEST: "generic_model_response_media_ingest",
   FEISHU_DOCS_DOWNLOAD_MEDIA: "feishu_docs_download_media",
   FEISHU_DRIVE_DOWNLOAD_FILE: "feishu_drive_download_file",
+  QQ_INBOUND_MEDIA_INGEST: "qq_inbound_media_ingest",
   SKILL_MIRROR_IMPORT: "skill_mirror_import",
   GENERATED_USER_AVATAR: "generated_user_avatar",
   GENERATED_OFFICIAL_ACTOR_AVATAR: "generated_official_actor_avatar",
@@ -248,6 +249,7 @@ export const MODEL_OUTPUT_FILE_ORIGIN_SYSTEMS = [
 export const EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS = [
   FILE_ORIGIN_SYSTEMS.FEISHU_DOCS_DOWNLOAD_MEDIA,
   FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE,
+  FILE_ORIGIN_SYSTEMS.QQ_INBOUND_MEDIA_INGEST,
 ] as const
 export const PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS = [
   FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT,
@@ -424,12 +426,19 @@ export const ATTACHMENT_TARGET_TYPES = [
   "actor",
   "workspace_member",
 ] as const
+// subject-scope-refactor: legacy UI label set. The actual D3 payload type
+// (ScopedSubjectTarget) is {subject: SubjectRef, scope?: SubjectRef}; these
+// string labels are kept for UI selector display only (skills / mcp-plugins
+// rendering, web-next dropdowns). subjectScopeLabel emits the same union for
+// derived labels. New code should consume SubjectRef shapes directly.
 export const ACCESS_TARGET_TYPES = [
   "workspace",
   "workspace_member",
   "conversation",
   "actor",
   "actor_in_conversation",
+  "remote_agent",
+  "remote_agent_in_conversation",
 ] as const
 export const CAPABILITY_ACCESS_TARGET_TYPES = [
   "workspace",
@@ -437,6 +446,8 @@ export const CAPABILITY_ACCESS_TARGET_TYPES = [
   "conversation",
   "actor",
   "actor_in_conversation",
+  "remote_agent",
+  "remote_agent_in_conversation",
 ] as const
 export const REUSE_SCOPES = [
   "turn",
@@ -705,7 +716,13 @@ export const TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES = [
   "specified_actor",
 ] as const
 
-export const TRANSPORT_KINDS = ["feishu", "weixin", "wecom"] as const
+export const TRANSPORT_KINDS = [
+  "feishu",
+  "weixin",
+  "wecom",
+  "dingtalk",
+  "qq",
+] as const
 export const TRANSPORT_CONNECTION_MODES = [
   "webhook",
   "long_connection",
@@ -753,29 +770,20 @@ export const TASK_NOTICE_STATUSES = [
 // constants. All consumers were migrated to the RUNTIME_* / DEVICE_* names; the
 // relay_* tables and the Go relay binaries were deleted at the same time.
 
+// subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPE / RUNTIME_AUTHORIZATION_GRANT_SCOPES
+// constants dropped at cutover. Scope is now expressed via subject_id +
+// scope_subject_id on runtime_authorization_grants; the wire-stable
+// `grant_scope` envelope field carries a derived label string via
+// `subjectScopeLabel(target)` (see packages/shared/src/access/subject.ts).
+// 'actor_in_conversation' removed from RUNTIME_AUTHORIZATION_PRESETS; UI
+// renders it via subjectScopeLabel from (subject=actor, scope=conversation).
+
 export const RUNTIME_AUTHORIZATION_PRESETS = [
   "once",
   "actor",
-  "actor_in_conversation",
   "conversation",
   "remote_agent",
   "workspace",
-] as const
-export const RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
-  ONCE: "once",
-  ACTOR: "actor",
-  CONVERSATION: "conversation",
-  ACTOR_IN_CONVERSATION: "actor_in_conversation",
-  REMOTE_AGENT: "remote_agent",
-  WORKSPACE: "workspace",
-} as const
-export const RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ONCE,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.CONVERSATION,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR_IN_CONVERSATION,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.REMOTE_AGENT,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE,
 ] as const
 export const RUNTIME_AUTHORIZATION_GRANT_RETENTIONS = [
   "consume_once",

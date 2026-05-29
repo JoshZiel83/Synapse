@@ -1,6 +1,13 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { SUBJECT_KIND } from "@synapse/shared"
+import {
+  SUBJECT_KIND,
+  actorRef,
+  conversationRef,
+  remoteAgentRef,
+  workspaceMemberRef,
+  workspaceRef,
+} from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "./subject-registry.js"
 import {
@@ -13,15 +20,31 @@ import {
 type AnyDb = import("kysely").Kysely<any>
 
 test("targetSupportsConversationTypeOverride accepts workspace + actor only", () => {
-  assert.equal(targetSupportsConversationTypeOverride("workspace"), true)
-  assert.equal(targetSupportsConversationTypeOverride("actor"), true)
   assert.equal(
-    targetSupportsConversationTypeOverride("workspace_member"),
+    targetSupportsConversationTypeOverride({ subject: workspaceRef("ws-1") }),
+    true
+  )
+  assert.equal(
+    targetSupportsConversationTypeOverride({ subject: actorRef("a-1") }),
+    true
+  )
+  assert.equal(
+    targetSupportsConversationTypeOverride({
+      subject: workspaceMemberRef("m-1"),
+    }),
     false
   )
-  assert.equal(targetSupportsConversationTypeOverride("conversation"), false)
   assert.equal(
-    targetSupportsConversationTypeOverride("actor_in_conversation"),
+    targetSupportsConversationTypeOverride({
+      subject: conversationRef("c-1"),
+    }),
+    false
+  )
+  assert.equal(
+    targetSupportsConversationTypeOverride({
+      subject: actorRef("a-1"),
+      scope: conversationRef("c-1"),
+    }),
     false
   )
 })
@@ -73,7 +96,7 @@ test("assertConversationTypeMaskWithinParent throws when narrowing yields an inv
 test("assertGrantConversationTypeOverrideAllowed rejects an override on a conversation-scoped target", () => {
   assert.throws(() =>
     assertGrantConversationTypeOverrideAllowed({
-      targetType: "conversation",
+      target: { subject: conversationRef("c-1") },
       parentConversationTypeMask: 0b11111,
       conversationTypeMaskOverride: 0b00001,
       buildError: (m) => new Error(m),
@@ -84,7 +107,7 @@ test("assertGrantConversationTypeOverrideAllowed rejects an override on a conver
 
 test("assertGrantConversationTypeOverrideAllowed allows overrides on workspace + actor scopes", () => {
   const ws = assertGrantConversationTypeOverrideAllowed({
-    targetType: "workspace",
+    target: { subject: workspaceRef("ws-1") },
     parentConversationTypeMask: 0b11111,
     conversationTypeMaskOverride: 0b00111,
     buildError: (m) => new Error(m),
@@ -92,7 +115,7 @@ test("assertGrantConversationTypeOverrideAllowed allows overrides on workspace +
   })
   assert.equal(ws, 0b00111)
   const actor = assertGrantConversationTypeOverrideAllowed({
-    targetType: "actor",
+    target: { subject: actorRef("a-1") },
     parentConversationTypeMask: 0b11111,
     conversationTypeMaskOverride: null,
     buildError: (m) => new Error(m),
@@ -108,29 +131,11 @@ test(
     await withTestDb(async (db) => {
       const result = await validateConversationScopedAccessTarget({
         db,
-        targetType: "workspace",
+        target: { subject: workspaceRef("ws-1") },
         effectiveConversationTypeMask: 0b11111,
         buildError: (m) => new Error(m),
       })
       assert.equal(result, null)
-    })
-  }
-)
-
-test(
-  "validateConversationScopedAccessTarget throws when conversationId is missing",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      await assert.rejects(
-        validateConversationScopedAccessTarget({
-          db,
-          targetType: "conversation",
-          effectiveConversationTypeMask: 0b11111,
-          buildError: (m) => new Error(m),
-        }),
-        /conversationId is required/
-      )
     })
   }
 )
@@ -145,8 +150,7 @@ test(
       const conversationId = await insertConversation(db, workspaceId)
       const result = await validateConversationScopedAccessTarget({
         db,
-        targetType: "conversation",
-        conversationId,
+        target: { subject: conversationRef(conversationId) },
         effectiveConversationTypeMask: 0b11111,
         buildError: (m) => new Error(m),
       })
@@ -168,8 +172,7 @@ test(
       await assert.rejects(
         validateConversationScopedAccessTarget({
           db,
-          targetType: "conversation",
-          conversationId,
+          target: { subject: conversationRef(conversationId) },
           effectiveConversationTypeMask: 0b10000,
           buildError: (m) => new Error(m),
         }),
@@ -180,7 +183,7 @@ test(
 )
 
 test(
-  "validateConversationScopedAccessTarget(actor_in_conversation) requires actorId AND active participant",
+  "validateConversationScopedAccessTarget(actor + scope=conversation) requires an active participant",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -192,20 +195,10 @@ test(
       await assert.rejects(
         validateConversationScopedAccessTarget({
           db,
-          targetType: "actor_in_conversation",
-          conversationId,
-          effectiveConversationTypeMask: 0b11111,
-          buildError: (m) => new Error(m),
-        }),
-        /actorId is required/
-      )
-
-      await assert.rejects(
-        validateConversationScopedAccessTarget({
-          db,
-          targetType: "actor_in_conversation",
-          conversationId,
-          actorId,
+          target: {
+            subject: actorRef(actorId),
+            scope: conversationRef(conversationId),
+          },
           effectiveConversationTypeMask: 0b11111,
           buildError: (m) => new Error(m),
         }),
@@ -227,9 +220,126 @@ test(
         .execute()
       const ok = await validateConversationScopedAccessTarget({
         db,
-        targetType: "actor_in_conversation",
-        conversationId,
-        actorId,
+        target: {
+          subject: actorRef(actorId),
+          scope: conversationRef(conversationId),
+        },
+        effectiveConversationTypeMask: 0b11111,
+        buildError: (m) => new Error(m),
+      })
+      assert.ok(ok)
+    })
+  }
+)
+
+test(
+  "validateConversationScopedAccessTarget(remote_agent + scope=conversation) requires an active participant — round-8 P2",
+  { timeout: 5 * 60_000 },
+  async () => {
+    // Round-8 P2 regression: validator used to only know about actor +
+    // scope=conversation. The runtime visibility path matches
+    // remote_agent_in_conversation (tool-resolver) so creation must
+    // validate it too — otherwise a remote_agent + scope=conv grant
+    // could be written for a remote agent that isn't in the
+    // conversation.
+    await withTestDb(async (db) => {
+      const ownerId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, ownerId)
+      const conversationId = await insertConversation(db, workspaceId)
+      const remoteAgentId = await insertRemoteAgent(db, workspaceId)
+
+      // No participant row yet → must reject.
+      await assert.rejects(
+        validateConversationScopedAccessTarget({
+          db,
+          target: {
+            subject: remoteAgentRef(remoteAgentId),
+            scope: conversationRef(conversationId),
+          },
+          effectiveConversationTypeMask: 0b11111,
+          buildError: (m) => new Error(m),
+        }),
+        /active participant/
+      )
+
+      // Add the participant row → must accept.
+      const remoteAgentSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId,
+      })
+      await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conversationId,
+          participant_type: "remote_agent",
+          subject_id: remoteAgentSubjectId,
+          state: "active",
+        })
+        .execute()
+      const ok = await validateConversationScopedAccessTarget({
+        db,
+        target: {
+          subject: remoteAgentRef(remoteAgentId),
+          scope: conversationRef(conversationId),
+        },
+        effectiveConversationTypeMask: 0b11111,
+        buildError: (m) => new Error(m),
+      })
+      assert.ok(ok)
+    })
+  }
+)
+
+test(
+  "validateConversationScopedAccessTarget(workspace_member + scope=conversation) requires an active participant — round-9 P2",
+  { timeout: 5 * 60_000 },
+  async () => {
+    // Round-9 review (P2): conversation_participants supports
+    // workspace_member, and runtime evaluator-scope tests already exercise
+    // workspace_member + scope=conv grants. The validator therefore must
+    // also gate on active membership for member targets — otherwise a
+    // controller could write "member M in conversation C" for a member
+    // who isn't actually in C.
+    await withTestDb(async (db) => {
+      const ownerId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, ownerId)
+      const conversationId = await insertConversation(db, workspaceId)
+      const memberId = await insertWorkspaceMember(db, workspaceId)
+
+      // No participant row yet → must reject.
+      await assert.rejects(
+        validateConversationScopedAccessTarget({
+          db,
+          target: {
+            subject: workspaceMemberRef(memberId),
+            scope: conversationRef(conversationId),
+          },
+          effectiveConversationTypeMask: 0b11111,
+          buildError: (m) => new Error(m),
+        }),
+        /active participant/
+      )
+
+      // Add the participant row → must accept.
+      const memberSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId,
+      })
+      await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conversationId,
+          participant_type: "workspace_member",
+          subject_id: memberSubjectId,
+          state: "active",
+        })
+        .execute()
+      const ok = await validateConversationScopedAccessTarget({
+        db,
+        target: {
+          subject: workspaceMemberRef(memberId),
+          scope: conversationRef(conversationId),
+        },
         effectiveConversationTypeMask: 0b11111,
         buildError: (m) => new Error(m),
       })
@@ -291,6 +401,40 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
       title: "test",
       current_version: 1,
     })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function insertRemoteAgent(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const row = await db
+    .insertInto("remote_agents")
+    .values({
+      workspace_id: workspaceId,
+      name: `agent-${Math.random().toString(36).slice(2, 10)}`,
+      title: "test remote agent",
+      runtime_kind: "claude_code",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function insertWorkspaceMember(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const userId = await insertUser(db)
+  const row = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: workspaceId,
+      user_id: userId,
+      trust_level: "member",
+    } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string

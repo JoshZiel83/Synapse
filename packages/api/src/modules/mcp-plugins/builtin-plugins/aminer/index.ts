@@ -228,7 +228,6 @@ export const aminerSeed: BuiltinOrgSeed = {
       },
       authorization: {
         requiredPermissions: ["network:outbound"],
-        defaultAccessTargetType: "workspace",
         reason:
           "AMiner Open Platform requires outbound network access to call AMiner academic data APIs.",
       },

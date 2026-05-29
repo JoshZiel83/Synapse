@@ -296,7 +296,6 @@ export const zAiSeed: BuiltinOrgSeed = {
       iconAssetPath: "assets/icons/z_ai.svg",
       authorization: {
         requiredPermissions: ["network:outbound", "files:read", "files:write"],
-        defaultAccessTargetType: "workspace",
         reason:
           "ZhipuAI toolkit needs outbound network access and file read/write access to process FileRefs and store generated artifacts.",
       },

@@ -3,6 +3,7 @@ import cors from "@fastify/cors"
 import cookie from "@fastify/cookie"
 import websocket from "@fastify/websocket"
 import multipart from "@fastify/multipart"
+import { ZodError } from "zod"
 import { config } from "./config/index.js"
 import {
   assertRequiredSchema,
@@ -65,6 +66,14 @@ import {
 } from "./workers/automation-scheduler.js"
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js"
 import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js"
+import {
+  startInteractionProjectionWorker,
+  stopInteractionProjectionWorker,
+} from "./workers/interaction-projection.js"
+import {
+  startTransportOutboxSweeper,
+  stopTransportOutboxSweeper,
+} from "./workers/outbox-sweeper.js"
 import { installActorStatusHooks } from "./modules/im/integration/actor-status-hooks.js"
 import { startMemoryIndexingWorker } from "./workers/memory-indexing.js"
 import { startFileParsingWorker } from "./workers/file-parsing.js"
@@ -126,6 +135,24 @@ async function main() {
       return reply.status(400).send({
         error: "Invalid request",
         code: "invalid_request",
+      })
+    }
+
+    // Centralized ZodError → 400. Without this, per-transport
+    // controllers (Feishu, Weixin, WeCom, QQ, DingTalk, …) each have
+    // to wrap their `schema.parse()` in try/catch or the failure
+    // becomes a 500. Stable `code: "invalid_request"` lets clients
+    // discriminate validation errors from other 4xx codes; existing
+    // WeCom integration tests already rely on this constant.
+    if (error instanceof ZodError) {
+      return reply.status(400).send({
+        error: "validation failed",
+        code: "invalid_request",
+        issues: error.issues.map((issue) => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        })),
       })
     }
 
@@ -276,6 +303,8 @@ async function main() {
   startAutomationExecutionWorker()
   startSessionThinkingWorker()
   startImTransportDeliveryWorker()
+  startTransportOutboxSweeper()
+  startInteractionProjectionWorker()
   installActorStatusHooks()
   startMemoryIndexingWorker()
   startFileParsingWorker()
@@ -341,6 +370,23 @@ async function main() {
         3000
       ).catch((err) => {
         app.log.error({ err }, "Transport runtime shutdown timed out")
+      })
+      await waitWithTimeout(
+        "outbox sweeper shutdown",
+        stopTransportOutboxSweeper(),
+        3000
+      ).catch((err) => {
+        app.log.error({ err }, "Outbox sweeper shutdown timed out")
+      })
+      await waitWithTimeout(
+        "interaction projection worker shutdown",
+        stopInteractionProjectionWorker(),
+        3000
+      ).catch((err) => {
+        app.log.error(
+          { err },
+          "Interaction projection worker shutdown timed out"
+        )
       })
       await waitWithTimeout(
         "worker shutdown",

@@ -43,6 +43,11 @@ export default async function imPublicController(app: FastifyInstance) {
         account,
         headers: request.headers as Record<string, unknown>,
         body: request.body,
+        // Plumb the raw request bytes so connectors that verify a
+        // signature over the original payload (QQ Ed25519, future
+        // platforms) can do so. Re-encoding `request.body` would
+        // change whitespace / key order and break signatures.
+        rawBody: (request as unknown as { rawBody?: string }).rawBody,
         emitInbound: async (envelope) => {
           await ingestInboundEnvelope({ account, envelope })
         },
@@ -66,6 +71,9 @@ export default async function imPublicController(app: FastifyInstance) {
         accountId: request.params.accountId,
         headers: request.headers as Record<string, unknown>,
         body: request.body,
+        // Same rawBody plumbing as the generic route — required for
+        // any connector signature path that needs the original bytes.
+        rawBody: (request as unknown as { rawBody?: string }).rawBody,
       })
       return reply.status(result.statusCode).send(result.body)
     }

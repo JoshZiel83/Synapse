@@ -3,6 +3,8 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
 
 export const FEISHU_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "feishu",
+  displayName: "Feishu",
+  iconAssetPath: "/icon/feishu.svg",
   supportedConnectionModes: ["webhook", "long_connection"],
   supportedEndpointTypes: ["direct", "group"],
   supportsDirectMessages: true,
@@ -24,6 +26,11 @@ export const FEISHU_MESSAGE_CAPABILITIES: MessageCapabilities = {
   // to text placeholders.
   supportsImage: true,
   supportsFile: true,
+  // V1: no audio/video upload implementation; interaction projection
+  // not yet wired up for Feishu cards.
+  supportsVoice: false,
+  supportsVideo: false,
+  supportsInteractionPrompt: false,
   maxTextBytes: 30_000,
   // Feishu bot can only @ users it has previously seen in the conversation;
   // resolve mentions against the attached-address set even in 1:1 chats.
