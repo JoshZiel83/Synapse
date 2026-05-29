@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "programs": {
+    "git": {
+      "version": "0.0.0",
+      "platforms": {
+        "linux-x64": {
+          "sha256": "f0d07958df7476bbb44edd4cd851153726b67bd83530573b7e3fd6d44b702d71",
+          "download": {
+            "url": "fixture://fake-git",
+            "license": "MIT",
+            "trustedSource": "fixture-test"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 0,
+          "executable": "bin/fake-git",
+          "binDir": "bin",
+          "requiredFiles": ["bin/fake-git"],
+          "env": {
+            "FAKE_GIT_ROOT": "{rootDir}"
+          }
+        }
+      }
+    }
+  }
+}

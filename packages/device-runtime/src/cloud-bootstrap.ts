@@ -34,6 +34,7 @@ export async function bootstrapCloudDevice(
       client_version: opts.clientVersion,
       host_provider: "e2b",
       platform: process.platform,
+      arch: process.arch,
     }),
   })
   if (!res.ok) {

@@ -104,12 +104,45 @@ export const RuntimeBrowserPolicySchema = z.object({
   registrable_domain: z.string().optional(),
 })
 
-export const RuntimeCommandlinePolicySchema = z.object({
-  executor: z.literal("bash"),
+// Commandline policy on the wire (snake_case). Mirrors the equivalent
+// shared schema (packages/shared/src/access/policies/commandline.ts —
+// WireCommandlinePolicySchema) but is duplicated here to preserve
+// device-protocol's package-independence (no @synapse/shared dep so we
+// don't invert the dependency graph). A parity test in
+// packages/api/src/modules/capability-projection/commandline-parity.test.ts
+// asserts both copies accept/reject identical sample inputs so a field
+// drift fails CI.
+
+const ShellWireSchema = z.object({
+  executor: z.enum(["bash", "powershell"]),
   command_match_type: z.enum(["exact", "prefix", "tool"]),
   command_text: z.string().optional(),
   working_directory: z.string().optional(),
+  allow_bundled_toolchain: z.boolean().optional(),
+  allowed_env: z.array(z.string()).optional(),
 })
+
+const ExecFileWireSchema = z.object({
+  executor: z.literal("exec_file"),
+  command_match_type: z.enum([
+    "argv_exact",
+    "argv_prefix",
+    "argv_exact_preapproved",
+  ]),
+  program: z.string(),
+  argv_prefix: z.array(z.string()).optional(),
+  working_directory: z.string().optional(),
+  allow_bundled_toolchain: z.boolean().optional(),
+  allowed_env: z.array(z.string()).optional(),
+})
+
+export const RuntimeCommandlinePolicySchema = z.discriminatedUnion("executor", [
+  ShellWireSchema,
+  ExecFileWireSchema,
+])
+export type RuntimeCommandlinePolicy = z.infer<
+  typeof RuntimeCommandlinePolicySchema
+>
 
 export const RuntimeCuaPolicySchema = z.object({
   access: z.enum(["read", "write"]),

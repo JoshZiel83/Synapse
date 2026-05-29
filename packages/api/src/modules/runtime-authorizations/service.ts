@@ -16,6 +16,7 @@ import {
   conversationRef,
   type SubjectRef,
 } from "@synapse/shared"
+import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
 import type {
   RuntimeAuthorizationGrantRetention,
   RuntimeAuthorizationGrantStatus,
@@ -541,17 +542,34 @@ function normalizeGrantSpecForInsert(
         }
       : undefined,
     commandline: grantSpec.commandline
-      ? {
-          executor: grantSpec.commandline.executor,
-          commandMatchType: grantSpec.commandline.commandMatchType,
-          commandText:
-            normalizeCommandText(grantSpec.commandline.commandText) ||
-            undefined,
-          workingDirectory:
-            normalizePathPrefix(grantSpec.commandline.workingDirectory) ||
-            undefined,
-        }
+      ? normalizeCommandlineGrantSpec(grantSpec.commandline)
       : undefined,
+  }
+}
+
+function normalizeCommandlineGrantSpec(
+  grant: SharedRuntimeAuthorizationGrantSpec["commandline"]
+): SharedRuntimeAuthorizationGrantSpec["commandline"] {
+  if (!grant) return undefined
+  if (grant.executor === "exec_file") {
+    return {
+      executor: "exec_file",
+      commandMatchType: grant.commandMatchType,
+      program: grant.program,
+      argvPrefix: grant.argvPrefix,
+      workingDirectory:
+        normalizePathPrefix(grant.workingDirectory) || undefined,
+      allowBundledToolchain: grant.allowBundledToolchain,
+      allowedEnv: grant.allowedEnv,
+    }
+  }
+  return {
+    executor: grant.executor,
+    commandMatchType: grant.commandMatchType,
+    commandText: normalizeCommandText(grant.commandText) || undefined,
+    workingDirectory: normalizePathPrefix(grant.workingDirectory) || undefined,
+    allowBundledToolchain: grant.allowBundledToolchain,
+    allowedEnv: grant.allowedEnv,
   }
 }
 
@@ -904,25 +922,65 @@ export function browserPolicyMatches(
 
 export function commandlinePolicyMatches(
   grant: SharedRuntimeAuthorizationGrantSpec,
-  action: RuntimeAuthorizationRequestedAction
+  action: RuntimeAuthorizationRequestedAction,
+  opts: { platform?: "win32" | "linux" | "darwin" } = {}
 ) {
   const granted = grant.commandline
   const requested = action.commandline
   if (!granted || !requested) return false
   if (granted.executor !== requested.executor) return false
+
+  // exec_file branch: program + argv comparison via the canonical shared
+  // matcher. Server and device read the same fields. Also threads
+  // requiresBundled so an old non-bundled grant doesn't mask a dispatch
+  // where the API just decided this call needs bundled fallback
+  // (Windows / missing-toolchain story).
+  if (granted.executor === "exec_file" && requested.executor === "exec_file") {
+    return Boolean(
+      sharedCommandlinePolicyAllows(
+        {
+          executor: "exec_file",
+          commandMatchType: granted.commandMatchType,
+          program: granted.program,
+          argvPrefix: granted.argvPrefix,
+          workingDirectory: granted.workingDirectory,
+          allowBundledToolchain: granted.allowBundledToolchain,
+          allowedEnv: granted.allowedEnv,
+        },
+        {
+          kind: "exec_file",
+          program: requested.program,
+          argv: requested.argvPrefix ?? [],
+          workingDirectory: requested.workingDirectory,
+          platform: opts.platform,
+          requiresBundled: requested.allowBundledToolchain === true,
+        }
+      )
+    )
+  }
+  if (granted.executor === "exec_file" || requested.executor === "exec_file") {
+    return false
+  }
   const requestedText = sharedNormalizeCommandText(requested.commandText)
   if (!requestedText) return false
-  return sharedCommandlinePolicyAllows(
-    {
-      executor: granted.executor,
-      commandMatchType: granted.commandMatchType,
-      commandText: granted.commandText,
-      workingDirectory: granted.workingDirectory,
-    },
-    {
-      command: requestedText,
-      workingDirectory: requested.workingDirectory,
-    }
+  return Boolean(
+    sharedCommandlinePolicyAllows(
+      {
+        executor: granted.executor,
+        commandMatchType: granted.commandMatchType,
+        commandText: granted.commandText,
+        workingDirectory: granted.workingDirectory,
+        allowBundledToolchain: granted.allowBundledToolchain,
+        allowedEnv: granted.allowedEnv,
+      },
+      {
+        kind: "shell",
+        executor: granted.executor,
+        command: requestedText,
+        workingDirectory: requested.workingDirectory,
+        platform: opts.platform,
+      }
+    )
   )
 }
 
@@ -978,7 +1036,8 @@ export function runtimeAuthorizationGrantMatchesTriState(
 // hydrated the record (i.e., policy validation passed).
 export function runtimeAuthorizationGrantMatches(
   grant: RuntimeAuthorizationGrantRecord,
-  requestedAction: RuntimeAuthorizationRequestedAction
+  requestedAction: RuntimeAuthorizationRequestedAction,
+  opts: { platform?: "win32" | "linux" | "darwin" } = {}
 ): boolean {
   if (grant.capability !== requestedAction.capability) {
     return false
@@ -998,7 +1057,7 @@ export function runtimeAuthorizationGrantMatches(
     case "browser":
       return browserPolicyMatches(grant, requestedAction)
     case "commandline":
-      return commandlinePolicyMatches(grant, requestedAction)
+      return commandlinePolicyMatches(grant, requestedAction, opts)
     default:
       return false
   }
@@ -1062,12 +1121,7 @@ export function toRuntimeAuthorizationGrantWireSpec(
         }
       : undefined,
     commandline: record.commandline
-      ? {
-          executor: record.commandline.executor,
-          command_match_type: record.commandline.commandMatchType,
-          command_text: record.commandline.commandText,
-          working_directory: record.commandline.workingDirectory,
-        }
+      ? serializeCommandlinePolicyToWire(record.commandline)
       : undefined,
   }
 }

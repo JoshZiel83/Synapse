@@ -15,6 +15,7 @@
 
 import { randomUUID, createHash } from "node:crypto"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
+import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
 import { db } from "../../infrastructure/database/kysely.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
@@ -168,12 +169,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
         }
       : undefined,
     commandline: args.approvedGrant.commandline
-      ? {
-          executor: args.approvedGrant.commandline.executor,
-          command_match_type: args.approvedGrant.commandline.commandMatchType,
-          command_text: args.approvedGrant.commandline.commandText,
-          working_directory: args.approvedGrant.commandline.workingDirectory,
-        }
+      ? serializeCommandlinePolicyToWire(args.approvedGrant.commandline)
       : undefined,
   } as const
 

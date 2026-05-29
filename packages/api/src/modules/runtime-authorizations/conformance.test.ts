@@ -65,9 +65,19 @@ type CommandlineFixture = {
       commandMatchType: string
       commandText?: string
       workingDirectory?: string
+      program?: string
+      argvPrefix?: string[]
+      allowBundledToolchain?: boolean
+      allowedEnv?: string[]
     }
   }>
-  request: { executor: string; commandText: string; workingDirectory: string }
+  request: {
+    executor: string
+    commandText?: string
+    workingDirectory?: string
+    program?: string
+    argvPrefix?: string[]
+  }
   expected: boolean
 }
 
@@ -173,10 +183,32 @@ test("conformance: commandline matcher", async (t) => {
   const fixtures = readFixtures<CommandlineFixture>("commandline.json")
   for (const fixture of fixtures) {
     await t.test(fixture.description, () => {
-      const action = {
-        capability: "commandline" as const,
-        commandline: fixture.request,
-      }
+      const reqIsExecFile = fixture.request.executor === "exec_file"
+      const action = reqIsExecFile
+        ? {
+            capability: "commandline" as const,
+            toolName: "exec_file",
+            summary: "",
+            commandline: {
+              executor: "exec_file" as const,
+              commandMatchType: "argv_exact" as const,
+              program: fixture.request.program ?? "",
+              argvPrefix: fixture.request.argvPrefix ?? [],
+              workingDirectory: fixture.request.workingDirectory,
+            },
+          }
+        : {
+            capability: "commandline" as const,
+            toolName: "bash",
+            summary: "",
+            commandline: {
+              executor:
+                (fixture.request.executor as "bash" | "powershell") ?? "bash",
+              commandMatchType: "exact" as const,
+              commandText: fixture.request.commandText ?? "",
+              workingDirectory: fixture.request.workingDirectory ?? "",
+            },
+          }
       let anyMatched = false
       for (const policy of fixture.policies) {
         if (policy.capability !== "commandline") continue

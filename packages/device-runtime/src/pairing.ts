@@ -93,6 +93,15 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
       service_kind: "device_runtime",
       client_version: opts.clientVersion,
       title: opts.title,
+      // Report platform + arch up-front so the API knows the
+      // device's platformKey from pairing onwards. Without this the
+      // `devices` row is created with platform=NULL/arch=NULL and the
+      // bundle-eligibility gate (isBundleAvailableForPlatform) falls
+      // back to the conservative-permissive branch, defeating the
+      // Windows-no-bundled-fallback guard. cloud-bootstrap already
+      // does this; this brings local_qr to parity.
+      platform: process.platform,
+      arch: process.arch,
     }
   )
 

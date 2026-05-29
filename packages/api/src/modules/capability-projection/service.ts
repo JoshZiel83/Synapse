@@ -45,6 +45,13 @@ import {
 import { createRuntimeAuthorizationRequest } from "../runtime-authorizations/requests.js"
 import type { RuntimeAuthorizationRequestedAction } from "@synapse/shared"
 import {
+  isBareCommandName,
+  isBundleAvailableForPlatform,
+  isBundleEligibleProgram,
+  normalizeDevicePlatform,
+} from "@synapse/shared"
+import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
+import {
   beginDeviceOperation,
   completeDeviceOperation,
   RevisionDriftError,
@@ -449,6 +456,14 @@ function unionWithDevice(
     if (!row) {
       return mcpErrorBlock(`device tool ${toolName} not found in projection`)
     }
+    // Normalize device platform ONCE per dispatch so both the
+    // grant-coverage try block AND the authorization-request try block
+    // read the same value. Each try has its own lexical scope, so
+    // declaring this inside one of them would make it invisible to the
+    // other. Both fields hoisted together since they're always used as
+    // a pair.
+    const devicePlatform = normalizeDevicePlatform(row.device_platform)
+    const deviceArch = row.device_arch
     // Build the unsigned payload first so we can compute input_hash from the
     // Strip the planner-injected retry-nonce hint before everything that
     // operates on tool args, so the device never sees it and the input_hash
@@ -474,12 +489,43 @@ function unionWithDevice(
       typeof input["__synapse_retry_nonce"] === "string"
         ? (input["__synapse_retry_nonce"] as string)
         : undefined
-    const requestedAction = buildRequestedAction({
-      capability: row.builtin_kind,
-      toolName,
-      visibleToolName: row.visible_tool_name,
-      args: sanitizedInput,
-    })
+    let requestedAction
+    try {
+      requestedAction = buildRequestedAction({
+        capability: row.builtin_kind,
+        toolName,
+        visibleToolName: row.visible_tool_name,
+        args: sanitizedInput,
+        devicePlatform,
+        deviceArch,
+      })
+    } catch (err) {
+      if (err instanceof InvalidExecFileArgsError) {
+        return synapseErrorBlock({
+          code: err.synapseCode,
+          message: err.message,
+          details: err.details,
+        })
+      }
+      throw err
+    }
+    // Short-circuit Windows + commandline + working_directory at projection
+    // time. The matcher would reject any such grant anyway (commandline v1
+    // has no Windows path normalization), but returning a structured
+    // permission_denied here prevents the dispatch flow from ALSO generating
+    // an authorization request that's guaranteed to be denied — saves the
+    // user a wasted approval click.
+    if (
+      devicePlatform === "win32" &&
+      requestedAction.commandline?.workingDirectory
+    ) {
+      return synapseErrorBlock({
+        code: "permission_denied",
+        message:
+          "Windows commandline policy v1 does not support working_directory",
+        details: { reason: "windows_workdir_unsupported" },
+      })
+    }
 
     let claim
     try {
@@ -760,20 +806,11 @@ export function buildRuntimeAuthorizationRequestParams(args: {
     },
     authorizationPlan: {
       requestedAction,
-      grantOptions: [
-        {
-          id: "default",
-          summary: requestedAction.summary,
-          detail: requestedAction.detail,
-          grantSpec: {
-            capability: requestedAction.capability,
-            filesystem: requestedAction.filesystem,
-            cua: requestedAction.cua,
-            browser: requestedAction.browser,
-            commandline: requestedAction.commandline,
-          },
-        },
-      ],
+      // Default option mirrors requestedAction verbatim; for exec_file with
+      // >= 2 argv we also surface an argv_prefix alternative so the user can
+      // authorize a broader pattern (e.g. all `git log ...`) without
+      // re-prompting. See buildGrantOptions.
+      grantOptions: buildGrantOptions(requestedAction),
     },
     requestMode: "background",
     availablePresets:
@@ -884,6 +921,51 @@ async function requestAuthorizationOrDeny(args: {
   }
 }
 
+/**
+ * Structured Synapse error wrapped as a NormalizedMcpToolResult. Carries
+ * the typed `code` (+ optional `details`) in metadata.synapse_error so the
+ * front end can render specific UX (e.g. "this device doesn't support
+ * Windows working_directory") instead of just a plain text message.
+ *
+ * Use this for any case where the failure has a known structured code
+ * (invalid_request, permission_denied, runtime_constraint, etc).
+ * mcpErrorBlock above stays for the unstructured "internal projection
+ * failure" path that should never be hit in a happy day.
+ */
+function synapseErrorBlock(error: {
+  code: string
+  message: string
+  details?: Record<string, unknown>
+}): NormalizedMcpToolResult {
+  return {
+    content: [textBlock(error.message) as CanonicalContentBlock],
+    isError: true,
+    metadata: {
+      synapse_error: {
+        code: error.code,
+        message: error.message,
+        ...(error.details ? { details: error.details } : {}),
+      },
+    },
+  }
+}
+
+/**
+ * Raised by buildRequestedAction when an exec_file tool call carries
+ * malformed args (program not a bare command name, args not string[]).
+ * Caught by the dispatch path's broad try/catch (see L548 / L697) and
+ * surfaced as a structured invalid_request tool result.
+ */
+class InvalidExecFileArgsError extends Error {
+  readonly synapseCode = "invalid_request"
+  readonly details: Record<string, unknown>
+  constructor(message: string, details: Record<string, unknown> = {}) {
+    super(message)
+    this.name = "InvalidExecFileArgsError"
+    this.details = details
+  }
+}
+
 function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
   switch (principal.kind) {
     case "actor":
@@ -917,6 +999,19 @@ export function buildRequestedAction(args: {
    *  "cua_click"). Used to distinguish read vs write at the tool level. */
   visibleToolName?: string
   args: Record<string, unknown>
+  /**
+   * Normalized device platform (from normalizeDevicePlatform(devices.
+   * platform)). Used together with `isBundleAvailableForPlatform` to
+   * decide whether to set `allowBundledToolchain: true` on an exec_file
+   * grant — Windows devices with no win32 manifest entry should NOT get
+   * a bundled-fallback grant they can't actually use, so the consent UI
+   * doesn't mislead the user into approving an unrunnable invocation.
+   */
+  devicePlatform?: "win32" | "linux" | "darwin"
+  /** Raw devices.arch ("x64", "arm64", ...). Required to gate the
+   *  bundled-fallback grant strictly — the runtime manifest matches on
+   *  `<platform>-<arch>` exactly. NULL/undefined → no bundled grant. */
+  deviceArch?: string | null
 }): RuntimeAuthorizationRequestedAction {
   const summary = `Tool ${args.toolName} requires authorization`
   const detail = `args: ${JSON.stringify(args.args).slice(0, 200)}`
@@ -995,21 +1090,89 @@ export function buildRequestedAction(args: {
       }
     }
     case "commandline": {
-      const command =
-        typeof args.args["command"] === "string"
-          ? (args.args["command"] as string)
-          : ""
       const workingDirectory =
         typeof args.args["working_directory"] === "string"
           ? (args.args["working_directory"] as string)
           : undefined
+      if (tool === "exec_file") {
+        const program = args.args["program"]
+        if (typeof program !== "string" || program.length === 0) {
+          throw new InvalidExecFileArgsError(
+            "exec_file: program (non-empty string) is required"
+          )
+        }
+        if (!isBareCommandName(program)) {
+          throw new InvalidExecFileArgsError(
+            "exec_file: program must be a bare command name (no /, \\, .., absolute path, ~)",
+            { reason: "program_must_be_bare" }
+          )
+        }
+        const rawArgv = args.args["args"]
+        let argv: string[] = []
+        if (rawArgv !== undefined) {
+          if (
+            !Array.isArray(rawArgv) ||
+            rawArgv.some((v) => typeof v !== "string")
+          ) {
+            throw new InvalidExecFileArgsError(
+              "exec_file: args must be string[] if provided"
+            )
+          }
+          argv = rawArgv as string[]
+        }
+        // Bundle eligibility list is shared with the device-runtime
+        // commandline builtin via @synapse/shared/access/policies/
+        // commandline-normalize.ts — never hardcode the list here, or
+        // the API will claim a program is bundle-fallback-able when the
+        // device runtime can't actually deliver it (the original
+        // "approved but unrunnable" bug).
+        //
+        // Also gate by exact device platformKey (platform + arch): a
+        // Windows or linux-arm-only device with no matching manifest
+        // entry must NOT receive an allowBundledToolchain=true grant —
+        // the matcher would otherwise approve a call that fails at
+        // execution time with "no manifest entry for platformKey". The
+        // gate is strict — NULL platform or NULL arch → false (devices
+        // that pre-date pairing-platform-reporting fall here and don't
+        // get bundled grants until they re-pair).
+        const isBundleEligible =
+          isBundleEligibleProgram(program) &&
+          isBundleAvailableForPlatform(
+            program,
+            args.devicePlatform,
+            args.deviceArch ?? null
+          )
+        return {
+          capability: "commandline",
+          toolName: args.toolName,
+          summary,
+          detail,
+          commandline: {
+            executor: "exec_file",
+            // Default approval is strict argv_exact. The runtime-
+            // authorizations grant-options layer surfaces an
+            // alternate argv_prefix option when argv.length >= 2.
+            commandMatchType: "argv_exact",
+            program,
+            argvPrefix: argv,
+            workingDirectory,
+            allowBundledToolchain: isBundleEligible,
+          },
+        }
+      }
+      const command =
+        typeof args.args["command"] === "string"
+          ? (args.args["command"] as string)
+          : ""
+      const executor: "bash" | "powershell" =
+        tool === "powershell" ? "powershell" : "bash"
       return {
         capability: "commandline",
         toolName: args.toolName,
         summary,
         detail,
         commandline: {
-          executor: "bash",
+          executor,
           // exact match: the requested action carries the full command so
           // the matcher can verify a grant of (exact, command) covers it.
           // The UI can offer the user a "tool" or "prefix" grant on top.
@@ -1056,6 +1219,70 @@ function safeOrigin(url: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * Produce the grant options for an authorization request. Default is
+ * always the exact / narrow form (matches setattr §8). For exec_file we
+ * surface an additional argv_prefix alternative when there are >= 2 args
+ * so the user can authorize the leading verb pattern (e.g. all `git log
+ * ...`). Empty / single-arg invocations get only the default option
+ * because an empty argvPrefix would authorize any args (matcher fails
+ * closed on that, so the option would be useless).
+ */
+function buildGrantOptions(
+  requestedAction: RuntimeAuthorizationRequestedAction
+): {
+  id: string
+  summary: string
+  detail?: string
+  grantSpec: {
+    capability: typeof requestedAction.capability
+    filesystem?: typeof requestedAction.filesystem
+    cua?: typeof requestedAction.cua
+    browser?: typeof requestedAction.browser
+    commandline?: typeof requestedAction.commandline
+  }
+}[] {
+  const baseOption = {
+    id: "default",
+    summary: requestedAction.summary,
+    detail: requestedAction.detail,
+    grantSpec: {
+      capability: requestedAction.capability,
+      filesystem: requestedAction.filesystem,
+      cua: requestedAction.cua,
+      browser: requestedAction.browser,
+      commandline: requestedAction.commandline,
+    },
+  }
+  const options = [baseOption]
+  const cmd = requestedAction.commandline
+  if (
+    cmd &&
+    cmd.executor === "exec_file" &&
+    Array.isArray(cmd.argvPrefix) &&
+    cmd.argvPrefix.length >= 2
+  ) {
+    const prefixArgv = cmd.argvPrefix.slice(0, cmd.argvPrefix.length - 1)
+    options.push({
+      id: "argv_prefix",
+      summary: `Allow ${cmd.program} ${prefixArgv.join(" ")} ...`,
+      detail: requestedAction.detail,
+      grantSpec: {
+        capability: requestedAction.capability,
+        filesystem: requestedAction.filesystem,
+        cua: requestedAction.cua,
+        browser: requestedAction.browser,
+        commandline: {
+          ...cmd,
+          commandMatchType: "argv_prefix",
+          argvPrefix: prefixArgv,
+        },
+      },
+    })
+  }
+  return options
 }
 
 /** Re-export shared executor/dispatch shapes so callers depend on this module only. */

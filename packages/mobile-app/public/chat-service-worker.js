@@ -1092,6 +1092,39 @@
     // 60 minutes
   };
 
+  // ../shared/dist/access/policies/commandline-normalize.js
+  var BUNDLE_ELIGIBLE_PROGRAMS = [
+    "python",
+    "node",
+    "git"
+  ];
+  var BUNDLE_PROGRAM_PLATFORM_KEYS = {
+    python: ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
+    node: ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
+    // git-for-windows ships only Windows portable binaries (MinGit x64 +
+    // arm64). Linux/Darwin git is intentionally absent — see the
+    // BUNDLE_ELIGIBLE_PROGRAMS comment above for the follow-up plan.
+    git: ["win32-x64", "win32-arm64"]
+  };
+  for (const program of BUNDLE_ELIGIBLE_PROGRAMS) {
+    const keys = BUNDLE_PROGRAM_PLATFORM_KEYS[program];
+    if (!keys || keys.length === 0) {
+      throw new Error(`BUNDLE_ELIGIBLE_PROGRAMS lists "${program}" but BUNDLE_PROGRAM_PLATFORM_KEYS has no non-empty entry. Add the program's platformKeys (matching packages/device-runtime/bundles/manifest.json) or remove it from BUNDLE_ELIGIBLE_PROGRAMS so the API stops proposing allowBundledToolchain.`);
+    }
+  }
+  var BUNDLE_PROGRAM_PLATFORMS = (() => {
+    const out = {};
+    for (const [program, keys] of Object.entries(BUNDLE_PROGRAM_PLATFORM_KEYS)) {
+      const set = /* @__PURE__ */ new Set();
+      for (const key of keys) {
+        const platform = key.split("-")[0];
+        set.add(platform);
+      }
+      out[program] = Array.from(set);
+    }
+    return out;
+  })();
+
   // ../shared/dist/utils/index.js
   var GROUP_CONVERSATION_KIND = CONVERSATION_KIND.GROUP;
   var PRIVATE_CONVERSATION_KIND = CONVERSATION_KIND.PRIVATE;
