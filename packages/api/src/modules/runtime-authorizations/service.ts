@@ -848,6 +848,17 @@ export function filesystemPolicyMatches(
   const granted = grant.filesystem
   const requested = action.filesystem
   if (!granted || !requested) return false
+  // Scoped-pushdown tools (fs_search / fs_history_list / fs_index_task_status):
+  // the projection set `scopeIsPushdown` because the tool itself doesn't
+  // take a path argument and the device-side handler operates over the
+  // caller's existing read prefixes. Match on access alone here; the
+  // device-runtime still enforces the actual scope at dispatch time.
+  if (requested.scopeIsPushdown === true) {
+    if (granted.pathPrefixes.length === 0) return false
+    // write covers read; an existing write grant satisfies a read pushdown.
+    if (requested.access === "write" && granted.access !== "write") return false
+    return true
+  }
   if (
     granted.pathPrefixes.length === 0 ||
     requested.pathPrefixes.length === 0

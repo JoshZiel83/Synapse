@@ -908,7 +908,9 @@ function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
  *   - cua_capture_display / cua_list_displays: access='read'.
  *   - filesystem list_dir: access='read'.
  */
-function buildRequestedAction(args: {
+// Exported for tests; not part of the module's stable surface (no consumers
+// outside this file at runtime).
+export function buildRequestedAction(args: {
   capability: "filesystem" | "commandline" | "browser" | "cua" | null
   toolName: string
   /** The unnamespaced tool name as the device exposes it (e.g. "bash",
@@ -921,10 +923,63 @@ function buildRequestedAction(args: {
   const tool = (args.visibleToolName ?? args.toolName).toLowerCase()
   switch (args.capability) {
     case "filesystem": {
-      const path =
-        typeof args.args["path"] === "string"
-          ? (args.args["path"] as string)
-          : "/"
+      // v3.1 — per-tool action/path projection.
+      // Old code returned `access:"read"` + `pathPrefixes:["/"]` for every
+      // filesystem tool. That's wrong on two axes:
+      //   1. Writers (fs_write/fs_edit/fs_delete/fs_history_restore) need a
+      //      `write` grant; treating them as read produced a request that the
+      //      device runtime then denied — silent dead-loop for the operator.
+      //   2. Subtree-scoped tools (fs_index_status/fs_index_rebuild) live
+      //      under `args.subtree`, not `args.path`. Asking for "/" forced the
+      //      caller to widen their grant or fall through to no match.
+      //   3. Pushdown tools (fs_search, fs_history_list-without-path,
+      //      fs_index_task_status) operate over the caller's *existing*
+      //      read prefixes — they have no scope of their own. Requesting
+      //      "/" would force a scoped (/repo) user to widen; the matcher
+      //      flags such requests with `scopeIsPushdown:true` so any
+      //      compatible read grant satisfies them.
+      const writeTools = new Set([
+        "fs_write",
+        "fs_edit",
+        "fs_delete",
+        "fs_history_restore",
+      ])
+      // Tools that take their scope from `subtree` (index status/rebuild).
+      const subtreeTools = new Set(["fs_index_status", "fs_index_rebuild"])
+      // Tools that have no path/subtree of their own and run over the
+      // caller's existing read grants. The runtime evaluates them against
+      // envelope.runtime_authorization.grant_specs read prefixes; the
+      // projection's pathPrefixes is purely a request hint for the
+      // first-time-grant UX (the matcher ignores it via scopeIsPushdown).
+      //
+      // fs_history_list belongs here ONLY when args.path is absent —
+      // with a path it acts like a normal read tool. See
+      // handleHistoryList in filesystem.ts.
+      // fs_index_task_status has no path/subtree at all (just task_id).
+      const noScopeReadTools = new Set(["fs_search", "fs_index_task_status"])
+      const isPushdownHistoryList =
+        tool === "fs_history_list" && typeof args.args["path"] !== "string"
+      const isPushdown = noScopeReadTools.has(tool) || isPushdownHistoryList
+      const access: "read" | "write" = writeTools.has(tool) ? "write" : "read"
+      let pathPrefix: string
+      if (isPushdown) {
+        // "/"" is the only honest answer when there's no scoping info;
+        // first-time callers without any fs grant still need an
+        // approveable request, and "/" is what UI can render.
+        pathPrefix = "/"
+      } else if (subtreeTools.has(tool)) {
+        const sub =
+          typeof args.args["subtree"] === "string"
+            ? (args.args["subtree"] as string)
+            : "/"
+        pathPrefix = sub
+      } else {
+        const path =
+          typeof args.args["path"] === "string"
+            ? (args.args["path"] as string)
+            : "/"
+        pathPrefix = path
+      }
       // VFS paths are virtual-absolute (rooted at "/"); normalizePathPrefix
       // on both sides will canonicalize them.
       return {
@@ -932,7 +987,11 @@ function buildRequestedAction(args: {
         toolName: args.toolName,
         summary,
         detail,
-        filesystem: { access: "read", pathPrefixes: [path] },
+        filesystem: {
+          access,
+          pathPrefixes: [pathPrefix],
+          ...(isPushdown ? { scopeIsPushdown: true } : {}),
+        },
       }
     }
     case "commandline": {

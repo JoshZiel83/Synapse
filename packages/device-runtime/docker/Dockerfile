@@ -15,12 +15,13 @@ LABEL org.opencontainers.image.description="Synapse Device Runtime — cloud san
 
 ENV NODE_ENV=production
 
-# Headless browser + frpc.
+# Headless browser + frpc + ripgrep (for live fs_search).
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        chromium \
        ca-certificates \
        curl \
+       ripgrep \
   && rm -rf /var/lib/apt/lists/*
 
 # Install frpc (matches frps version in docker-compose.yml).
@@ -42,6 +43,14 @@ COPY packages/device-runtime/dist ./packages/device-runtime/dist
 COPY packages/device-protocol/package.json ./packages/device-protocol/package.json
 COPY packages/device-protocol/dist ./packages/device-protocol/dist
 COPY package.json package-lock.json ./
+
+# fs-helper Rust sidecar. Build with `npm run build:fs-helper` (or
+# `(cd sidecars/fs-helper && cargo build --release)`) before `docker build`.
+# Tools requiring the helper (history/indexed search/extract) silently
+# degrade when the binary is absent; live ripgrep search keeps working on
+# its own.
+COPY sidecars/fs-helper/target/release/synapse-device-fs-helper \
+     /opt/synapse-device/sidecars/fs-helper/synapse-device-fs-helper
 
 RUN npm install --omit=dev --no-audit --no-fund --workspaces=false \
   && ln -sf /opt/synapse-device/packages/device-runtime/dist/bin.js /usr/local/bin/synapse-device \

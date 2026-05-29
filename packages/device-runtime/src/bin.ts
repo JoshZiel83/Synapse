@@ -59,24 +59,52 @@ function getFlag(flags: Map<string, string>, name: string, fallback?: string) {
  *      `synapse-device` JS bundle.
  */
 function autoDiscoverCuaHelperPath(): string | undefined {
+  return autoDiscoverSidecarPath("cua", "synapse-device-cua-helper")
+}
+
+function autoDiscoverFsHelperPath(): string | undefined {
+  return autoDiscoverSidecarPath("fs-helper", "synapse-device-fs-helper", [
+    join("target", "release", "synapse-device-fs-helper"),
+    "synapse-device-fs-helper",
+  ])
+}
+
+function autoDiscoverSidecarPath(
+  sidecarDir: string,
+  binName: string,
+  extraSuffixes: string[] = [binName]
+): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url))
-  const candidates = [
-    resolve(
-      here,
-      "..",
-      "..",
-      "..",
-      "sidecars",
-      "cua",
-      "synapse-device-cua-helper"
-    ),
-    resolve(here, "..", "..", "sidecars", "cua", "synapse-device-cua-helper"),
-    join(here, "synapse-device-cua-helper"),
+  const roots = [
+    resolve(here, "..", "..", "..", "sidecars", sidecarDir),
+    resolve(here, "..", "..", "sidecars", sidecarDir),
+    here,
   ]
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
+  for (const root of roots) {
+    for (const suffix of extraSuffixes) {
+      const candidate = join(root, suffix)
+      if (existsSync(candidate)) return candidate
+    }
   }
+  // Plain binName alongside the JS bundle.
+  const flat = join(here, binName)
+  if (existsSync(flat)) return flat
   return undefined
+}
+
+function isOn(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback
+  return value === "on" || value === "true" || value === "1"
+}
+
+function isOff(value: string | undefined): boolean {
+  return value === "off" || value === "false" || value === "0"
+}
+
+function parseIntEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback
+  const n = Number.parseInt(value, 10)
+  return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
 /**
@@ -131,9 +159,167 @@ async function main() {
       return
     }
     case "run": {
+      // ─── Filesystem builtin config (full v3 surface) ───
+      const fsRoot = getFlag(args.flags, "fs-root")
+      const fsHelperPath =
+        getFlag(args.flags, "fs-helper") ??
+        process.env.SYNAPSE_DEVICE_FS_HELPER_PATH ??
+        autoDiscoverFsHelperPath()
+      const brokerDir = getFlag(args.flags, "broker-dir")
+      const fsWorkDir =
+        getFlag(args.flags, "fs-work-dir") ??
+        process.env.SYNAPSE_DEVICE_FS_WORK_DIR ??
+        // Default: <dirname(broker file)>/fs. The broker always has a file
+        // path even when --broker-dir wasn't passed (createFileBackedBroker
+        // picks the OS-conventional location), so this default works in
+        // every deployment without requiring extra flags.
+        join(dirname(broker.brokerFilePath), "fs")
+      const fsTika =
+        getFlag(args.flags, "fs-tika-endpoint") ??
+        process.env.SYNAPSE_DEVICE_FS_TIKA_ENDPOINT
+      const fsEnableWrite = isOn(
+        getFlag(args.flags, "fs-enable-write") ??
+          process.env.SYNAPSE_DEVICE_FS_ENABLE_WRITE,
+        false
+      )
+      const fsEnableDelete = isOn(
+        getFlag(args.flags, "fs-enable-delete") ??
+          process.env.SYNAPSE_DEVICE_FS_ENABLE_DELETE,
+        false
+      )
+      const fsDisableRead = isOn(
+        getFlag(args.flags, "fs-disable-read") ??
+          process.env.SYNAPSE_DEVICE_FS_DISABLE_READ,
+        false
+      )
+      const fsDisableHistory = isOn(
+        getFlag(args.flags, "fs-disable-history") ??
+          process.env.SYNAPSE_DEVICE_FS_DISABLE_HISTORY,
+        false
+      )
+      const fsAllowUnversioned = isOn(
+        getFlag(args.flags, "fs-allow-unversioned-write") ??
+          process.env.SYNAPSE_DEVICE_FS_ALLOW_UNVERSIONED_WRITE,
+        false
+      )
+      const fsDisableLiveSearch = isOn(
+        getFlag(args.flags, "fs-disable-live-search") ??
+          process.env.SYNAPSE_DEVICE_FS_DISABLE_LIVE_SEARCH,
+        false
+      )
+      const fsDisableIndex = isOn(
+        getFlag(args.flags, "fs-disable-index") ??
+          process.env.SYNAPSE_DEVICE_FS_DISABLE_INDEX,
+        false
+      )
+      const fsIndexIgnore =
+        getFlag(args.flags, "fs-index-ignore") ??
+        process.env.SYNAPSE_DEVICE_FS_INDEX_IGNORE
+      const fsMaxReadMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-read-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_READ_MB,
+        10
+      )
+      const fsMaxWriteMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-write-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_WRITE_MB,
+        50
+      )
+      const fsMaxEditMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-edit-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_EDIT_MB,
+        50
+      )
+      const fsMaxHashMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-hash-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_HASH_MB,
+        fsMaxReadMb
+      )
+      const fsMaxExtractMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-extract-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_EXTRACT_MB,
+        50
+      )
+      const fsMaxSnapshotMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-snapshot-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_SNAPSHOT_MB,
+        500
+      )
+      const fsMaxHistoryList = parseIntEnv(
+        getFlag(args.flags, "fs-max-history-list") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_HISTORY_LIST,
+        200
+      )
+      const fsMaxSearchLimit = parseIntEnv(
+        getFlag(args.flags, "fs-max-search-limit") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_SEARCH_LIMIT,
+        200
+      )
+      const fsMaxOffset = parseIntEnv(
+        getFlag(args.flags, "fs-max-offset") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_OFFSET,
+        10_000
+      )
+      const fsMaxDiffSourceMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-diff-source-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_DIFF_SOURCE_MB,
+        5
+      )
+      const fsMaxDiffOutputMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-diff-output-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_DIFF_OUTPUT_MB,
+        1
+      )
+      const fsMaxHistoryGb = parseIntEnv(
+        getFlag(args.flags, "fs-max-history-gb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_HISTORY_GB,
+        5
+      )
+      const fsMaxVersionsPerPath = parseIntEnv(
+        getFlag(args.flags, "fs-max-versions-per-path") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_VERSIONS_PER_PATH,
+        100
+      )
+      const fsKeepRecentVersions = parseIntEnv(
+        getFlag(args.flags, "fs-keep-recent-versions") ??
+          process.env.SYNAPSE_DEVICE_FS_KEEP_RECENT_VERSIONS,
+        5
+      )
+      const fsHelperRpcTimeoutMs = parseIntEnv(
+        getFlag(args.flags, "fs-helper-rpc-timeout-ms") ??
+          process.env.SYNAPSE_DEVICE_FS_HELPER_RPC_TIMEOUT_MS,
+        30_000
+      )
       const providers: CatalogProvider[] = [
         createFilesystemBuiltin({
-          rootPath: getFlag(args.flags, "fs-root"),
+          rootPath: fsRoot,
+          helperPath: fsHelperPath,
+          helperWorkDir: fsWorkDir,
+          tikaEndpoint: fsTika,
+          enableRead: !fsDisableRead,
+          enableWrite: fsEnableWrite,
+          enableDelete: fsEnableDelete,
+          enableHistory: !fsDisableHistory,
+          enableLiveSearch: !fsDisableLiveSearch,
+          enableIndex: !fsDisableIndex,
+          enableRichText: Boolean(fsTika),
+          allowUnversionedWrite: fsAllowUnversioned,
+          maxReadBytes: fsMaxReadMb * 1024 * 1024,
+          maxWriteBytes: fsMaxWriteMb * 1024 * 1024,
+          maxEditFileBytes: fsMaxEditMb * 1024 * 1024,
+          maxHashBytes: fsMaxHashMb * 1024 * 1024,
+          maxExtractBytes: fsMaxExtractMb * 1024 * 1024,
+          maxSnapshotBytes: fsMaxSnapshotMb * 1024 * 1024,
+          maxHistoryListLimit: fsMaxHistoryList,
+          maxSearchLimit: fsMaxSearchLimit,
+          maxOffset: fsMaxOffset,
+          maxDiffSourceBytes: fsMaxDiffSourceMb * 1024 * 1024,
+          maxDiffOutputBytes: fsMaxDiffOutputMb * 1024 * 1024,
+          maxHistoryBytes: fsMaxHistoryGb * 1024 * 1024 * 1024,
+          maxVersionsPerPath: fsMaxVersionsPerPath,
+          keepRecentVersionsPerPath: fsKeepRecentVersions,
+          helperRpcTimeoutMs: fsHelperRpcTimeoutMs,
+          indexIgnore: fsIndexIgnore,
         }),
         createCommandlineBuiltin(),
       ]
