@@ -286,9 +286,24 @@ function devicePrincipalToSubjectRef(
   }
 }
 
-async function principalSubjectIds(
-  input: ProjectToolsInput
+/**
+ * Resolve `ProjectToolsInput` into the subject set capability-projection
+ * dispatches against. Exported for direct regression testing — the bug
+ * patterns this helper has hit during the subject-scope-refactor merge
+ * (Decision 8 violations, active-participant guard skips, cross-workspace
+ * leakage) all live INSIDE this function, so tests must call it directly
+ * rather than asserting against the canonical builder it delegates to.
+ *
+ * Tests may pass an injected Kysely instance (e.g. the ephemeral DB
+ * returned by `withTestDb`) so the underlying
+ * `buildRuntimePrincipalContext` runs against the test connection rather
+ * than the production pool.
+ */
+export async function principalSubjectIds(
+  input: ProjectToolsInput,
+  options?: { db?: typeof db }
 ): Promise<ResolvedPrincipalSubjects> {
+  const dbHandle = options?.db ?? db
   const subjectRef = devicePrincipalToSubjectRef(input.principal)
   if (!subjectRef) {
     return {
@@ -311,7 +326,7 @@ async function principalSubjectIds(
         : input.principal.kind === "remote_agent"
           ? input.principal.conversationId
           : undefined
-  const ctx = await buildRuntimePrincipalContext(db, {
+  const ctx = await buildRuntimePrincipalContext(dbHandle, {
     principal: subjectRef,
     workspaceId: input.workspaceId,
     conversationId: conversationId ?? null,
@@ -434,8 +449,7 @@ function unionWithDevice(
     // Strip the planner-injected retry-nonce hint before everything that
     // operates on tool args, so the device never sees it and the input_hash
     // is computed over the user-facing schema.
-    const sanitizedInput: Record<string, unknown> = { ...input }
-    delete sanitizedInput["__synapse_retry_nonce"]
+    const sanitizedInput: Record<string, unknown> = stripPlannerNonce(input)
     // canonicalized arguments — the device verifier rejects envelopes whose
     // input_hash doesn't match the actual `arguments` it received.
     const inputCanonical = canonicalizeEnvelopePayload(sanitizedInput)
@@ -670,6 +684,122 @@ function mcpErrorBlock(message: string): NormalizedMcpToolResult {
  * request. Mirrors the pre-cutover inline behavior — only the call site
  * moved.
  */
+/**
+ * Pure function — derives the full `createRuntimeAuthorizationRequest`
+ * params object from the dispatch-time inputs.
+ *
+ * Exported for direct regression testing. Two contracts this helper
+ * locks (both load-bearing for the cutover):
+ *
+ *   - `source.principalScopeSubjectId` MUST equal the caller-supplied
+ *     `principalScopeSubjectId` (the active conversation scope subject
+ *     when the principal is an active participant). If this drops to
+ *     undefined / null, the locked column lands NULL while the approval
+ *     flow rebuilds the same context and sees a non-NULL scope — the
+ *     ScopeRebuildMismatchError gate then blocks every legitimate
+ *     approval.
+ *
+ *   - `sourceRequestArgs` MUST equal the caller-supplied
+ *     `sanitizedInput`, NOT the raw `input`. The dispatcher strips
+ *     `__synapse_retry_nonce` from the args via `stripPlannerNonce`
+ *     before computing input_hash; persisting the raw input would
+ *     leak the stale planner-side nonce into the device-visible args
+ *     and break the hash check on auto-retry.
+ *
+ * The unit test exercises this helper with `input ≠ sanitizedInput` and
+ * a non-null scope, then asserts both fields round-trip correctly.
+ */
+export function buildRuntimeAuthorizationRequestParams(args: {
+  projectInput: ProjectToolsInput
+  row: DeviceCapabilityToolRow
+  toolName: string
+  /** The post-`stripPlannerNonce` payload — this is what the device sees and what input_hash is computed over. */
+  sanitizedInput: Record<string, unknown>
+  requestedAction: ReturnType<typeof buildRequestedAction>
+  principalSubjectId: string
+  /** Required-or-null: the active conversation scope subject id from RuntimePrincipalContext.activeConversationSubjectId. */
+  principalScopeSubjectId?: string
+  conversationId: string
+}): Parameters<typeof createRuntimeAuthorizationRequest>[0] {
+  const { projectInput, row, toolName, requestedAction } = args
+  const principal = projectInput.principal as
+    | { kind: "actor"; actorId: string; conversationId?: string }
+    | {
+        kind: "remote_agent"
+        remoteAgentId: string
+        conversationId: string
+      }
+  return {
+    source: {
+      workspaceId: projectInput.workspaceId,
+      conversationId: args.conversationId,
+      sessionId: projectInput.sessionId ?? "",
+      principalSubjectId: args.principalSubjectId,
+      principalScopeSubjectId: args.principalScopeSubjectId ?? null,
+      actorId:
+        principal.kind === "remote_agent" ? undefined : principal.actorId,
+      remoteAgentId:
+        principal.kind === "remote_agent" ? principal.remoteAgentId : undefined,
+      sourceToolName: toolName,
+      conversationKind: projectInput.conversationKind,
+      conversationBoundary: projectInput.conversationBoundary,
+      workspaceMemberId: projectInput.workspaceMemberId,
+    },
+    runtimeTarget: {
+      deviceCapabilityId: row.device_capability_id,
+      deviceId: row.device_id,
+      deviceExposureId: row.device_exposure_id,
+      requestedToolName: toolName,
+      deviceToolStableKey: row.visible_tool_name,
+      runtimeSessionId: "",
+      deviceDisplayName: row.device_name,
+    },
+    authorizationPlan: {
+      requestedAction,
+      grantOptions: [
+        {
+          id: "default",
+          summary: requestedAction.summary,
+          detail: requestedAction.detail,
+          grantSpec: {
+            capability: requestedAction.capability,
+            filesystem: requestedAction.filesystem,
+            cua: requestedAction.cua,
+            browser: requestedAction.browser,
+            commandline: requestedAction.commandline,
+          },
+        },
+      ],
+    },
+    requestMode: "background",
+    availablePresets:
+      principal.kind === "remote_agent"
+        ? ["once", "remote_agent", "conversation", "workspace"]
+        : ["once", "actor", "conversation", "workspace"],
+    reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
+    sourceRequestArgs: args.sanitizedInput,
+  }
+}
+
+/**
+ * Pure helper — strips the planner-side retry nonce key from a tool's
+ * input args. Used at exactly two places in the dispatch path: the
+ * envelope's input_hash computation, and the persisted sourceRequestArgs
+ * payload. Exported so tests can pin the contract independently.
+ *
+ * The bug pattern this guards against: the dispatcher accidentally
+ * forwards `input` (raw, with nonce) instead of `sanitizedInput`
+ * (stripped). The nonce then leaks into the device-visible args and
+ * input_hash mismatches on auto-retry.
+ */
+export function stripPlannerNonce(
+  input: Record<string, unknown>
+): Record<string, unknown> {
+  const out = { ...input }
+  delete out["__synapse_retry_nonce"]
+  return out
+}
+
 async function requestAuthorizationOrDeny(args: {
   projectInput: ProjectToolsInput
   row: DeviceCapabilityToolRow
@@ -690,7 +820,7 @@ async function requestAuthorizationOrDeny(args: {
    */
   principalScopeSubjectId?: string
 }): Promise<NormalizedMcpToolResult> {
-  const { projectInput, row, toolName, requestedAction } = args
+  const { projectInput, row, toolName } = args
   const supportsAuthRequest =
     projectInput.principal.kind === "actor" ||
     projectInput.principal.kind === "remote_agent"
@@ -715,63 +845,18 @@ async function requestAuthorizationOrDeny(args: {
     )
   }
   try {
-    const result = await createRuntimeAuthorizationRequest({
-      source: {
-        workspaceId: projectInput.workspaceId,
-        conversationId,
-        sessionId: projectInput.sessionId ?? "",
+    const result = await createRuntimeAuthorizationRequest(
+      buildRuntimeAuthorizationRequestParams({
+        projectInput,
+        row,
+        toolName,
+        sanitizedInput: args.sanitizedInput,
+        requestedAction: args.requestedAction,
         principalSubjectId: args.principalSubjectId,
-        principalScopeSubjectId: args.principalScopeSubjectId ?? null,
-        actorId:
-          principal.kind === "remote_agent" ? undefined : principal.actorId,
-        remoteAgentId:
-          principal.kind === "remote_agent"
-            ? principal.remoteAgentId
-            : undefined,
-        sourceToolName: toolName,
-        conversationKind: projectInput.conversationKind,
-        conversationBoundary: projectInput.conversationBoundary,
-        workspaceMemberId: projectInput.workspaceMemberId,
-      },
-      runtimeTarget: {
-        deviceCapabilityId: row.device_capability_id,
-        deviceId: row.device_id,
-        deviceExposureId: row.device_exposure_id,
-        requestedToolName: toolName,
-        deviceToolStableKey: row.visible_tool_name,
-        runtimeSessionId: "",
-        deviceDisplayName: row.device_name,
-      },
-      authorizationPlan: {
-        requestedAction,
-        grantOptions: [
-          {
-            id: "default",
-            summary: requestedAction.summary,
-            detail: requestedAction.detail,
-            grantSpec: {
-              capability: requestedAction.capability,
-              filesystem: requestedAction.filesystem,
-              cua: requestedAction.cua,
-              browser: requestedAction.browser,
-              commandline: requestedAction.commandline,
-            },
-          },
-        ],
-      },
-      requestMode: "background",
-      availablePresets:
-        principal.kind === "remote_agent"
-          ? ["once", "remote_agent", "conversation", "workspace"]
-          : ["once", "actor", "conversation", "workspace"],
-      reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
-      // subject-scope-refactor: persist the device-cleaned args (no
-      // __synapse_retry_nonce). auto-retry computes input_hash over this
-      // payload and forwards it verbatim; persisting the raw `input` would
-      // leak the stale planner-side nonce into the device-visible args and
-      // mismatch the hash the device computes on receive.
-      sourceRequestArgs: args.sanitizedInput,
-    })
+        principalScopeSubjectId: args.principalScopeSubjectId,
+        conversationId,
+      })
+    )
     return {
       content: [
         textBlock(
