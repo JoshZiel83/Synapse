@@ -80,6 +80,7 @@ export interface ConsumeBootstrapInput {
   clientVersion?: string
   hostProvider?: string
   platform?: string
+  arch?: string
 }
 
 export interface ConsumeBootstrapResult {
@@ -194,6 +195,7 @@ export async function consumeCloudBootstrap(
         host_provider: hostProvider,
         device_type: "cloud_sandbox",
         platform: input.platform ?? "linux",
+        arch: input.arch ?? "x64",
         public_key: input.devicePubkey,
         public_key_fingerprint: pubkeyFingerprint,
         trust_status: "trusted",

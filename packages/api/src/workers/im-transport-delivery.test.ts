@@ -4,6 +4,7 @@ import {
   processImTransportDeliveryJob,
   type ImTransportDeliveryDeps,
 } from "./im-transport-delivery.js"
+import { PermanentTransportError } from "../modules/im/connectors/types.js"
 
 /**
  * Worker-handler tests using the dep-injection seam introduced when the
@@ -29,6 +30,7 @@ function baseDeps(overrides: Partial<Deps> = {}): Deps {
     loadRecipientAddress: FAIL("loadRecipientAddress"),
     resolveMentions: FAIL("resolveMentions"),
     updateStatus: FAIL("updateStatus"),
+    patchLinkMetadata: FAIL("patchLinkMetadata"),
     getBinding: FAIL("getBinding"),
     getItem: FAIL("getItem"),
     decode: FAIL("decode"),
@@ -184,6 +186,18 @@ test("account status != active → updateStatus skipped/account_disabled", async
   const deps = baseDeps({
     loadLink: async () =>
       outboundLink({ account: { id: "acc-1", status: "disabled" } }),
+    // Binding-changed check now runs before the account-status
+    // short-circuit (so a legitimate binding switch from a disabled
+    // old account → active new account can be detected). Provide a
+    // matching binding so the new check passes silently and the test
+    // exercises the account_disabled path it was originally written
+    // for.
+    getBinding: async () =>
+      ({
+        account: { id: "acc-1", status: "active" },
+        endpoint: { id: "ep-1" },
+        outboundEnabled: true,
+      }) as any,
     updateStatus: async (params) => {
       calls.push(params as any)
       return null
@@ -192,6 +206,34 @@ test("account status != active → updateStatus skipped/account_disabled", async
   const result = await processImTransportDeliveryJob({ linkId: "x" }, deps)
   assert.deepEqual(result, { success: true, reason: "account disabled" })
   assert.deepEqual(calls[0].metadata, { skippedReason: "account_disabled" })
+})
+
+test("binding moved to a different (account, endpoint) → updateStatus skipped/binding_changed BEFORE account-status check", async () => {
+  // Regression test for the binding-changed reorder. Before the fix,
+  // a link whose stale account was disabled would short-circuit to
+  // account_disabled even when the current binding had legitimately
+  // moved onto a fresh active account — recovery code that looks for
+  // `binding_changed` skipReason never saw the link.
+  const calls: Array<Record<string, unknown>> = []
+  const deps = baseDeps({
+    loadLink: async () =>
+      outboundLink({ account: { id: "acc-1", status: "disabled" } }),
+    getBinding: async () =>
+      ({
+        // current binding points at a NEW account/endpoint — id
+        // mismatch with the link's snapshot.
+        account: { id: "acc-2", status: "active" },
+        endpoint: { id: "ep-2" },
+        outboundEnabled: true,
+      }) as any,
+    updateStatus: async (params) => {
+      calls.push(params as any)
+      return null
+    },
+  })
+  const result = await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  assert.deepEqual(result, { success: true, reason: "binding changed" })
+  assert.deepEqual(calls[0].metadata, { skippedReason: "binding_changed" })
 })
 
 // ─── binding checks ───
@@ -832,3 +874,208 @@ test(
     assert.equal(parts[4].type, "text")
   }
 )
+
+// ─── OutboundSendInput contract: 4 new fields + ambiguous delivery ───
+//
+// shared prep added `transportMessageLinkId`, `linkMetadata`,
+// `attemptNumber`, `patchLinkMetadata` to OutboundSendInput, and
+// `deliveryAmbiguous` to OutboundSendResult. The worker is responsible
+// for constructing these from the loaded link + the BullMQ job. These
+// tests pin the contract: connector receives the right values, the
+// patch helper writes to the right link, ambiguous result marks `sent`
+// without an external id, and missing id without ambiguity raises a
+// PermanentTransportError (caught + re-thrown as BullMQ
+// UnrecoverableError).
+
+test("sendMessage receives transportMessageLinkId / linkMetadata / patchLinkMetadata / attemptNumber from worker", async () => {
+  const captured: Partial<{
+    transportMessageLinkId: string
+    linkMetadata: Record<string, unknown>
+    attemptNumber: number
+  }> = {}
+  const patchCalls: Array<{ linkId: string; patch: Record<string, unknown> }> =
+    []
+  const link = outboundLink({ metadata: { qq: { msg_seq: 7 } } })
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    loadLink: async () => link,
+    findExternalMessageIdForItem: async () => null,
+    updateStatus: async () => null,
+    patchLinkMetadata: async (params) => {
+      patchCalls.push(params)
+    },
+    getConnector: () =>
+      ({
+        messageCapabilities: { directMentionPolicy: "attached_only" },
+        sendMessage: async (input: any) => {
+          captured.transportMessageLinkId = input.transportMessageLinkId
+          captured.linkMetadata = input.linkMetadata
+          captured.attemptNumber = input.attemptNumber
+          // Exercise the patch callback the connector receives — the
+          // worker wires it to deps.patchLinkMetadata with the same
+          // link.id.
+          await input.patchLinkMetadata({ qq: { msg_seq: 8 } })
+          return { externalMessageId: "qq_42" }
+        },
+      }) as any,
+  })
+  await processImTransportDeliveryJob({ linkId: link.id }, deps, 3)
+  assert.equal(
+    captured.transportMessageLinkId,
+    link.id,
+    "transportMessageLinkId must be the link's id"
+  )
+  assert.deepEqual(
+    captured.linkMetadata,
+    { qq: { msg_seq: 7 } },
+    "linkMetadata must be the loaded link.metadata snapshot"
+  )
+  assert.equal(
+    captured.attemptNumber,
+    3,
+    "attemptNumber must come from BullMQ job.attemptsMade"
+  )
+  assert.deepEqual(patchCalls, [
+    { linkId: link.id, patch: { qq: { msg_seq: 8 } } },
+  ])
+})
+
+test("attemptNumber defaults to 0 when worker invoked without a job (test convenience)", async () => {
+  let seen: number | undefined
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    findExternalMessageIdForItem: async () => null,
+    updateStatus: async () => null,
+    patchLinkMetadata: async () => {},
+    getConnector: () =>
+      ({
+        messageCapabilities: { directMentionPolicy: "attached_only" },
+        sendMessage: async (input: any) => {
+          seen = input.attemptNumber
+          return { externalMessageId: "x" }
+        },
+      }) as any,
+  })
+  await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  assert.equal(seen, 0)
+})
+
+test("linkMetadata defaults to {} when DB row had no metadata", async () => {
+  let seen: Record<string, unknown> | undefined
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    loadLink: async () =>
+      outboundLink({
+        metadata: undefined as unknown as Record<string, unknown>,
+      }),
+    findExternalMessageIdForItem: async () => null,
+    updateStatus: async () => null,
+    patchLinkMetadata: async () => {},
+    getConnector: () =>
+      ({
+        messageCapabilities: { directMentionPolicy: "attached_only" },
+        sendMessage: async (input: any) => {
+          seen = input.linkMetadata
+          return { externalMessageId: "x" }
+        },
+      }) as any,
+  })
+  await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  assert.deepEqual(seen, {})
+})
+
+test("deliveryAmbiguous: true marks link sent with metadata.delivery.ambiguous and no external id", async () => {
+  const updateCalls: any[] = []
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    findExternalMessageIdForItem: async () => null,
+    patchLinkMetadata: async () => {},
+    updateStatus: async (params) => {
+      updateCalls.push(params)
+      return null
+    },
+    getConnector: () =>
+      ({
+        messageCapabilities: { directMentionPolicy: "attached_only" },
+        sendMessage: async () => ({ deliveryAmbiguous: true }),
+      }) as any,
+  })
+  const result = await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  assert.deepEqual(result, { success: true })
+  assert.equal(updateCalls.length, 1)
+  assert.equal(updateCalls[0].status, "sent")
+  assert.equal(
+    updateCalls[0].externalMessageId,
+    undefined,
+    "no externalMessageId field — worker leaves the column NULL"
+  )
+  assert.deepEqual(updateCalls[0].metadata, { delivery: { ambiguous: true } })
+})
+
+test("missing externalMessageId without deliveryAmbiguous raises PermanentTransportError (no retry)", async () => {
+  const updateCalls: any[] = []
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    findExternalMessageIdForItem: async () => null,
+    patchLinkMetadata: async () => {},
+    updateStatus: async (params) => {
+      updateCalls.push(params)
+      return null
+    },
+    getConnector: () =>
+      ({
+        transportKind: "qq",
+        messageCapabilities: { directMentionPolicy: "attached_only" },
+        // Bug shape: connector returns nothing → worker must NOT
+        // silently mark sent (regression guard for the original
+        // PermanentTransportError throw path).
+        sendMessage: async () => ({}) as any,
+      }) as any,
+  })
+  await assert.rejects(
+    processImTransportDeliveryJob({ linkId: "x" }, deps),
+    (err: unknown) => {
+      assert.ok(err instanceof Error)
+      assert.match((err as Error).message, /missing|externalMessageId|no/i)
+      return true
+    }
+  )
+  // The worker still records the failure so the link metadata carries
+  // a lastError; the throw is what stops retries (UnrecoverableError
+  // wraps PermanentTransportError in the BullMQ wrapper).
+  assert.equal(updateCalls.length, 1)
+  assert.equal(updateCalls[0].status, "failed")
+})
+
+test("connector throws PermanentTransportError → worker re-throws (BullMQ UnrecoverableError) and marks failed", async () => {
+  const updateCalls: any[] = []
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    findExternalMessageIdForItem: async () => null,
+    patchLinkMetadata: async () => {},
+    updateStatus: async (params) => {
+      updateCalls.push(params)
+      return null
+    },
+    getConnector: () =>
+      ({
+        messageCapabilities: { directMentionPolicy: "attached_only" },
+        sendMessage: async () => {
+          throw new PermanentTransportError("qq: bot banned", {
+            code: "qq_bot_banned",
+          })
+        },
+      }) as any,
+  })
+  await assert.rejects(
+    processImTransportDeliveryJob({ linkId: "x" }, deps),
+    (err: unknown) => {
+      assert.ok(err instanceof Error)
+      assert.match((err as Error).message, /qq: bot banned/)
+      return true
+    }
+  )
+  assert.equal(updateCalls.length, 1)
+  assert.equal(updateCalls[0].status, "failed")
+  assert.match(String(updateCalls[0].error), /qq: bot banned/)
+})

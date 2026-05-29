@@ -240,38 +240,11 @@ test(
   }
 )
 
-test(
-  "upsertAccessSubject for a conversation_actor_context resolves the owning workspace from the joined conversation",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const userId = await insertUser(db, "owner@example.test")
-      const workspaceId = await insertWorkspace(db, userId)
-      const actorId = await insertActor(db, workspaceId)
-      const conversationId = await insertConversation(db, { workspaceId })
-      const contextRow = await db
-        .insertInto("conversation_actor_contexts")
-        .values({
-          conversation_id: conversationId,
-          actor_id: actorId,
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const id = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: contextRow.id as string,
-      })
-      const row = await db
-        .selectFrom("access_subjects")
-        .select(["kind", "workspace_id", "conversation_actor_context_id"])
-        .where("id", "=", id)
-        .executeTakeFirstOrThrow()
-      assert.equal(row.kind, "conversation_actor_context")
-      assert.equal(row.workspace_id, workspaceId)
-      assert.equal(row.conversation_actor_context_id, contextRow.id)
-    })
-  }
-)
+// D2: the previous "upsertAccessSubject for a conversation_actor_context"
+// test is gone — the subject kind was dropped from both the TS union and
+// the SQL ENUM, so there is no code path that resolves an owning workspace
+// from a joined CAC row. The `conversation_actor_contexts` table itself
+// stays (session/runtime state), but never participates in access_subjects.
 
 test(
   "upsertAccessSubject for user and external kinds leaves workspace_id null",
@@ -367,22 +340,8 @@ test(
   }
 )
 
-test(
-  "upsertAccessSubject throws for a missing conversation_actor_context FK",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      await assert.rejects(
-        () =>
-          upsertAccessSubject(db, {
-            kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-            contextId: "00000000-0000-0000-0000-000000000000",
-          }),
-        /conversation_actor_contexts\(/
-      )
-    })
-  }
-)
+// D2: "missing conversation_actor_context FK" test removed — the kind is
+// gone from the TS union and SQL ENUM, so this codepath no longer exists.
 
 test(
   "loadAccessSubject returns null for a non-existent subject id",
@@ -429,11 +388,6 @@ test(
       const actorId = await insertActor(db, workspaceId)
       const remoteAgentId = await insertRemoteAgent(db, workspaceId)
       const conversationId = await insertConversation(db, { workspaceId })
-      const contextRow = await db
-        .insertInto("conversation_actor_contexts")
-        .values({ conversation_id: conversationId, actor_id: actorId })
-        .returning("id")
-        .executeTakeFirstOrThrow()
 
       const wsId = await upsertAccessSubjectOn(client, {
         kind: SUBJECT_KIND.WORKSPACE,
@@ -455,10 +409,6 @@ test(
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId,
       })
-      const cacId = await upsertAccessSubjectOn(client, {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: contextRow.id as string,
-      })
       const userSubjId = await upsertAccessSubjectOn(client, {
         kind: SUBJECT_KIND.USER,
         userId,
@@ -477,12 +427,11 @@ test(
         actId,
         raId,
         convoId,
-        cacId,
         userSubjId,
         extId,
         sysId,
       ])
-      assert.equal(ids.size, 9)
+      assert.equal(ids.size, 8)
     })
   }
 )
@@ -523,14 +472,6 @@ test(
             conversationId: "00000000-0000-0000-0000-000000000000",
           }),
         /conversations\(/
-      )
-      await assert.rejects(
-        () =>
-          upsertAccessSubjectOn(client, {
-            kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-            contextId: "00000000-0000-0000-0000-000000000000",
-          }),
-        /conversation_actor_contexts\(/
       )
     })
   }

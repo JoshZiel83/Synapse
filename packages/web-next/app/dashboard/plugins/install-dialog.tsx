@@ -1203,7 +1203,9 @@ export default function InstallDialog({
             workspaceId,
             installation.id,
             {
-              accessTarget: { type: "workspace" },
+              accessTarget: {
+                subject: { kind: "workspace", workspaceId },
+              },
               permissions: installation.authorization?.requiredPermissions ||
                 installation.revision?.authorization?.requiredPermissions || [
                   "use",

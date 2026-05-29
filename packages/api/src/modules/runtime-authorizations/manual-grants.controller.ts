@@ -22,6 +22,7 @@ import {
   BrowserGrantPolicyError,
   GrantPolicySchema,
 } from "@synapse/shared/access/policies"
+import { workspaceRef } from "@synapse/shared"
 import {
   BROWSER_EXPOSURE_TOOLS,
   BROWSER_TOOL_MAP,
@@ -204,14 +205,17 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
 
       try {
         const grant = await createRuntimeAuthorizationGrant({
-          // Preset fixed to "workspace" — MVP doesn't expose subject-bound
-          // grants through this manual path (see file header).
-          preset: "workspace",
+          // subject-scope-refactor: MVP manual path only writes workspace-
+          // scoped grants (see file header). The legacy preset="workspace"
+          // maps to subject=workspace + retention=until_revoked + the parsed
+          // policy. No scope (workspace grants are unscoped).
           workspaceId: pathWorkspaceId,
           deviceId: row.device_id,
           deviceCapabilityId: parsed.data.device_capability_id,
           deviceExposureId: row.exposure_id,
-          grantSpec: policy,
+          subject: workspaceRef(pathWorkspaceId),
+          retention: "until_revoked",
+          policy,
           createdByWorkspaceMemberId: session?.workspaceMemberId ?? undefined,
         })
         reply.status(201).send({ grant })

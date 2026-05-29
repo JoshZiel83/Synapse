@@ -35,12 +35,31 @@ export interface DeviceCapabilityToolRow {
    */
   exposure_stable_key: string
   exposure_metadata: Record<string, unknown> | null
+  /**
+   * Raw devices.platform string ("win32", "darwin", "linux", or other).
+   * Caller (capability-projection dispatch) passes this through
+   * normalizeDevicePlatform before forwarding to the commandline matcher,
+   * which uses it to apply Windows-specific guards (cwd unsupported in v1).
+   */
+  device_platform: string | null
+  /** Raw devices.arch string (e.g. "x64", "arm64"). Combined with
+   *  platform forms the bundles manifest's platformKey. */
+  device_arch: string | null
 }
 
 export interface LoadDeviceToolsParams {
   workspaceId: string
   /** subject_ids whose bindings should count. */
   subjectIds: string[]
+  /**
+   * subject-scope-refactor: the set of scope subject_ids that may pin a
+   * binding. A RAB row with `scope_subject_id = NULL` applies whenever the
+   * subject matches; a row with non-NULL scope only applies when the scope
+   * subject_id is present in this set. Without this filter,
+   * `actor + scope=conversation` bindings leak to the same actor's other
+   * conversations.
+   */
+  runtimeScopeSubjectIds: string[]
 }
 
 export async function loadDeviceCapabilityToolsForSubjects(
@@ -51,7 +70,7 @@ export async function loadDeviceCapabilityToolsForSubjects(
   // the same capability (e.g. workspace-scope + actor-scope both grant the
   // bash tool — without distinctOn the projection surfaces it twice and the
   // planner sees duplicate names).
-  const rows = await db
+  let query = db
     .selectFrom("device_capabilities as dc")
     .innerJoin("resource_access_bindings as rab", (join) =>
       join
@@ -91,6 +110,18 @@ export async function loadDeviceCapabilityToolsForSubjects(
       "dtr.input_schema as input_schema",
       "dc.conversation_type_mask_override as capability_conversation_type_mask_override",
       "d.conversation_type_mask_override as device_conversation_type_mask_override",
+      // Commit 8: surface device.platform so the commandline matcher can
+      // apply Windows-specific guards (cwd unsupported in v1) at projection
+      // time instead of relying solely on device-side bottom-of-stack
+      // rejection. normalizeDevicePlatform turns the raw DB string into
+      // "win32" | "linux" | "darwin" | undefined.
+      "d.platform as device_platform",
+      // Surface arch alongside platform so isBundleAvailableForPlatform can
+      // exact-match against the runtime manifest's platformKey
+      // (`<platform>-<arch>`). Without arch the API would have to assume
+      // the device's arch matches an entry, which previously caused
+      // "approved-but-unrunnable" for arm-only or x64-only manifests.
+      "d.arch as device_arch",
     ])
     .where("dc.workspace_id", "=", params.workspaceId)
     .where("dc.status", "=", "active")
@@ -98,8 +129,18 @@ export async function loadDeviceCapabilityToolsForSubjects(
     .where("dcr.status", "=", "active")
     .where("dx.runtime_status", "in", ["healthy", "degraded"])
     .where("rab.subject_id", "in", params.subjectIds)
-    .orderBy("dt.id")
-    .execute()
+  if (params.runtimeScopeSubjectIds.length > 0) {
+    query = query.where((eb) =>
+      eb.or([
+        eb("rab.scope_subject_id", "is", null),
+        eb("rab.scope_subject_id", "in", params.runtimeScopeSubjectIds),
+      ])
+    )
+  } else {
+    // No scope context — only unscoped bindings apply.
+    query = query.where("rab.scope_subject_id", "is", null)
+  }
+  const rows = await query.orderBy("dt.id").execute()
   return rows as unknown as DeviceCapabilityToolRow[]
 }
 
@@ -110,6 +151,7 @@ export interface AccessTargetInput {
     | "conversation"
     | "actor_in_conversation"
     | "remote_agent"
+    | "remote_agent_in_conversation"
   workspaceId?: string
   actorId?: string
   conversationId?: string
@@ -117,59 +159,108 @@ export interface AccessTargetInput {
 }
 
 /**
- * Resolve an AccessTarget DTO into an access_subjects row id by calling
- * upsertAccessSubject. The trx-aware ensureConversationActorContext flow
- * lives in access-target-resolver.ts; PR #8 wires that for group chat. This
- * helper is the SDK→subject_id bridge used by setActiveDeviceCapabilities.
+ * Resolve an AccessTarget DTO into an access_subjects row id pair:
+ * `(subjectId, scopeSubjectId?)`. Scope is populated for the two
+ * `*_in_conversation` flat-shape variants — `actor_in_conversation`
+ * and `remote_agent_in_conversation` — which are the internal
+ * representations of the wire-layer `(subject=actor|remote_agent,
+ * scope=conversation)` combinations whitelisted by
+ * `ScopedSubjectTargetWireSchema.superRefine`. All other variants
+ * return `scopeSubjectId === undefined`.
+ *
+ * Tests may inject a Kysely handle (e.g. the ephemeral DB returned by
+ * `withTestDb`) so the underlying `upsertAccessSubject` writes against
+ * the test connection rather than the production pool.
  */
-export async function resolveAccessTargetSubjectId(
-  input: AccessTargetInput
-): Promise<string> {
+export async function resolveScopedSubjectTarget(
+  input: AccessTargetInput,
+  options?: { db?: typeof db }
+): Promise<{ subjectId: string; scopeSubjectId?: string }> {
+  const dbHandle = options?.db ?? db
   switch (input.kind) {
     case "workspace": {
       if (!input.workspaceId) throw new Error("workspaceId required")
-      return upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId: input.workspaceId,
       })
+      return { subjectId }
     }
     case "actor": {
       if (!input.actorId) throw new Error("actorId required")
-      return upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: input.actorId,
       })
+      return { subjectId }
     }
     case "conversation": {
       if (!input.conversationId) throw new Error("conversationId required")
-      return upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: input.conversationId,
       })
+      return { subjectId }
     }
     case "actor_in_conversation": {
+      // D3: collapse into actor subject + conversation scope. No CAC subject.
       if (!input.actorId || !input.conversationId)
         throw new Error(
           "actorId and conversationId required for actor_in_conversation target"
         )
-      const context = await ensureConversationActorContext({
+      const subjectId = await upsertAccessSubject(dbHandle, {
+        kind: SUBJECT_KIND.ACTOR,
         actorId: input.actorId,
+      })
+      const scopeSubjectId = await upsertAccessSubject(dbHandle, {
+        kind: SUBJECT_KIND.CONVERSATION,
         conversationId: input.conversationId,
       })
-      return upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: context.conversationActorContextId,
-      })
+      return { subjectId, scopeSubjectId }
     }
     case "remote_agent": {
       if (!input.remoteAgentId)
         throw new Error("remoteAgentId required for remote_agent target")
-      return upsertAccessSubject(db, {
+      const subjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.REMOTE_AGENT,
         remoteAgentId: input.remoteAgentId,
       })
+      return { subjectId }
+    }
+    case "remote_agent_in_conversation": {
+      // Mirror of `actor_in_conversation`: remote_agent subject narrowed
+      // to a conversation scope. The wire layer admits this combination
+      // (ScopedSubjectTargetWireSchema's superRefine whitelist) and the
+      // trigger `tg_runtime_authorization_grant_validate` accepts
+      // `(remote_agent, conversation)` for grants; bindings flow through
+      // the same `tg_rab_validate` trigger.
+      if (!input.remoteAgentId || !input.conversationId)
+        throw new Error(
+          "remoteAgentId and conversationId required for remote_agent_in_conversation target"
+        )
+      const subjectId = await upsertAccessSubject(dbHandle, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: input.remoteAgentId,
+      })
+      const scopeSubjectId = await upsertAccessSubject(dbHandle, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: input.conversationId,
+      })
+      return { subjectId, scopeSubjectId }
     }
   }
+}
+
+/**
+ * @deprecated Use `resolveScopedSubjectTarget` so callers can write
+ * `scope_subject_id` properly. Returning just the subject_id silently drops
+ * the scope dimension.
+ */
+export async function resolveAccessTargetSubjectId(
+  input: AccessTargetInput
+): Promise<string> {
+  const resolved = await resolveScopedSubjectTarget(input)
+  return resolved.subjectId
 }
 
 export interface SetActiveDeviceCapabilitiesParams {
@@ -183,11 +274,14 @@ export interface SetActiveDeviceCapabilitiesParams {
 export async function setActiveDeviceCapabilitiesForTarget(
   params: SetActiveDeviceCapabilitiesParams
 ): Promise<void> {
-  const subjectId = await resolveAccessTargetSubjectId(params.target)
+  const { subjectId, scopeSubjectId } = await resolveScopedSubjectTarget(
+    params.target
+  )
   await db.transaction().execute(async (trx) => {
-    // Revoke existing active bindings for this (subject, workspace) that are
-    // device_capability-typed.
-    await trx
+    // Tuple-precise revoke: a binding under `actor + scope=conversation A` must
+    // not be torn down by an unrelated `actor + scope=conversation B` write,
+    // and an unscoped binding must not be torn down by any scoped write.
+    let revoke = trx
       .updateTable("resource_access_bindings")
       .set({
         status: "revoked",
@@ -197,7 +291,12 @@ export async function setActiveDeviceCapabilitiesForTarget(
       .where("workspace_id", "=", params.workspaceId)
       .where("resource_type", "=", "device_capability")
       .where("status", "=", "active")
-      .execute()
+    if (scopeSubjectId) {
+      revoke = revoke.where("scope_subject_id", "=", scopeSubjectId)
+    } else {
+      revoke = revoke.where("scope_subject_id", "is", null)
+    }
+    await revoke.execute()
 
     if (params.deviceCapabilityIds.length === 0) return
 
@@ -206,6 +305,7 @@ export async function setActiveDeviceCapabilitiesForTarget(
       resource_type: "device_capability",
       device_capability_id: capabilityId,
       subject_id: subjectId,
+      scope_subject_id: scopeSubjectId ?? null,
       status: "active",
       source: "manual",
       created_by_workspace_member_id: params.createdByWorkspaceMemberId ?? null,
@@ -223,15 +323,22 @@ export async function listActiveDeviceCapabilitiesForTarget(params: {
   workspaceId: string
   target: AccessTargetInput
 }): Promise<string[]> {
-  const subjectId = await resolveAccessTargetSubjectId(params.target)
-  const rows = await db
+  const { subjectId, scopeSubjectId } = await resolveScopedSubjectTarget(
+    params.target
+  )
+  let query = db
     .selectFrom("resource_access_bindings")
     .select("device_capability_id")
     .where("workspace_id", "=", params.workspaceId)
     .where("resource_type", "=", "device_capability")
     .where("subject_id", "=", subjectId)
     .where("status", "=", "active")
-    .execute()
+  if (scopeSubjectId) {
+    query = query.where("scope_subject_id", "=", scopeSubjectId)
+  } else {
+    query = query.where("scope_subject_id", "is", null)
+  }
+  const rows = await query.execute()
   return rows
     .map((r) => r.device_capability_id as string | null)
     .filter((v): v is string => v !== null)

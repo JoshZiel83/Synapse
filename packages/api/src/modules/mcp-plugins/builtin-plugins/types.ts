@@ -1,7 +1,4 @@
-import type {
-  CapabilityAccessTargetType,
-  ConversationTypeMask,
-} from "@synapse/shared/types"
+import type { ConversationTypeMask } from "@synapse/shared/types"
 import type {
   AttachmentTargetType,
   PluginAuthBindingDefinition,
@@ -43,7 +40,6 @@ export interface BuiltinPluginSeed {
   authBindings?: PluginAuthBindingDefinition[]
   authorization?: {
     requiredPermissions?: string[]
-    defaultAccessTargetType?: CapabilityAccessTargetType
     reason?: string
   }
 }

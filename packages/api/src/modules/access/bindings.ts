@@ -1,5 +1,12 @@
 import type { AccessGrant, CapabilityAccessTarget } from "@synapse/shared/types"
-import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+import {
+  SUBJECT_KIND,
+  isScopeEligibleSubject,
+  remoteAgentRef,
+  subjectScopeLabel,
+  type ScopedSubjectTarget,
+  type SubjectRef,
+} from "@synapse/shared"
 import type { AccessResourceType } from "./evaluator.js"
 
 export type AccessBindableResourceType = Extract<
@@ -20,35 +27,22 @@ export type ResourceAccessBindingStorageRow = {
   remote_agent_id: string | null
 }
 
-export type AccessBindingTargetType =
-  | "workspace"
-  | "workspace_member"
-  | "conversation"
-  | "actor"
-  | "actor_in_conversation"
-
 export type AccessBindingRelation =
   | "use_workspace"
   | "use_workspace_member"
   | "use_conversation"
   | "use_actor"
   | "use_actor_in_conversation"
+  | "use_remote_agent"
+  | "use_scoped"
 
 export type AccessBindingRow = ResourceAccessBindingStorageRow & {
   id: string
   workspace_id: string
   resource_id: string
-  target_type: AccessBindingTargetType
   relation: AccessBindingRelation
-  // P1b: new canonical reference. Nullable transitionally — non-null after the
-  // double-write rollout is fully deployed. The legacy subject_*_id columns
-  // are still authoritative for reads until P7 contracts them away.
   subject_id: string | null
-  subject_workspace_id: string | null
-  subject_workspace_member_id: string | null
-  subject_actor_id: string | null
-  subject_conversation_id: string | null
-  subject_conversation_actor_context_id: string | null
+  scope_subject_id: string | null
   conversation_type_mask_override: number | null
   status: "active" | "revoked"
   source: "manual" | "default_open" | "approval" | "system"
@@ -128,283 +122,299 @@ export function buildResourceAccessBindingRef(input: {
   }
 }
 
-export function relationForAccessTargetType(
-  targetType: AccessBindingTargetType
+/**
+ * D3: derive the AccessBindingRelation from a decoded ScopedSubjectTarget.
+ * Only used for display / legacy SQL-view parity — callers that need precise
+ * routing should branch on `target.subject.kind` and `target.scope?.kind`.
+ */
+export function relationForAccessGrantTarget(
+  target: AccessGrantTarget
 ): AccessBindingRelation {
-  switch (targetType) {
-    case "workspace":
+  if (
+    target.subject.kind === SUBJECT_KIND.ACTOR &&
+    target.scope?.kind === SUBJECT_KIND.CONVERSATION
+  ) {
+    return "use_actor_in_conversation"
+  }
+  switch (target.subject.kind) {
+    case SUBJECT_KIND.WORKSPACE:
       return "use_workspace"
-    case "workspace_member":
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
       return "use_workspace_member"
-    case "conversation":
+    case SUBJECT_KIND.CONVERSATION:
       return "use_conversation"
-    case "actor":
+    case SUBJECT_KIND.ACTOR:
       return "use_actor"
-    case "actor_in_conversation":
-      return "use_actor_in_conversation"
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return "use_remote_agent"
     default:
-      throw new Error(
-        `Unsupported access binding target type: ${String(targetType)}`
-      )
+      return "use_scoped"
   }
 }
 
 export function normalizeAccessBindingRow<
   T extends ResourceAccessBindingStorageRow & {
-    target_type: AccessBindingTargetType
+    subject_id?: string | null
+    scope_subject_id?: string | null
+    subject_kind?: string | null
+    subject_workspace_id_via_join?: string | null
+    subject_workspace_member_id_via_join?: string | null
+    subject_actor_id_via_join?: string | null
+    subject_remote_agent_id_via_join?: string | null
+    subject_conversation_id_via_join?: string | null
+    scope_kind?: string | null
+    scope_workspace_id_via_join?: string | null
+    scope_conversation_id_via_join?: string | null
   },
 >(row: T): T & { resource_id: string; relation: AccessBindingRelation } {
+  // D3: derive a relation string from subject_kind + scope_kind (legacy
+  // bookkeeping for the SQL views that still expose `relation`).
+  let relation: AccessBindingRelation
+  if (
+    row.subject_kind === SUBJECT_KIND.ACTOR &&
+    row.scope_kind === SUBJECT_KIND.CONVERSATION
+  ) {
+    relation = "use_actor_in_conversation"
+  } else {
+    switch (row.subject_kind) {
+      case SUBJECT_KIND.WORKSPACE:
+        relation = "use_workspace"
+        break
+      case SUBJECT_KIND.WORKSPACE_MEMBER:
+        relation = "use_workspace_member"
+        break
+      case SUBJECT_KIND.CONVERSATION:
+        relation = "use_conversation"
+        break
+      case SUBJECT_KIND.ACTOR:
+        relation = "use_actor"
+        break
+      case SUBJECT_KIND.REMOTE_AGENT:
+        relation = "use_remote_agent"
+        break
+      default:
+        relation = "use_scoped"
+    }
+  }
   return {
     ...row,
     resource_id: readAccessBindingResourceId(row),
-    relation: relationForAccessTargetType(row.target_type),
+    relation,
   }
 }
 
-export type AccessGrantTarget =
-  | {
-      targetType: "workspace"
-      subjectWorkspaceId: string
-      subjectWorkspaceMemberId: null
-      subjectActorId: null
-      subjectConversationId: null
-      subjectConversationActorContextId: null
-    }
-  | {
-      targetType: "workspace_member"
-      subjectWorkspaceId: null
-      subjectWorkspaceMemberId: string
-      subjectActorId: null
-      subjectConversationId: null
-      subjectConversationActorContextId: null
-    }
-  | {
-      targetType: "conversation"
-      subjectWorkspaceId: null
-      subjectWorkspaceMemberId: null
-      subjectActorId: null
-      subjectConversationId: string
-      subjectConversationActorContextId: null
-    }
-  | {
-      targetType: "actor"
-      subjectWorkspaceId: null
-      subjectWorkspaceMemberId: null
-      subjectActorId: string
-      subjectConversationId: null
-      subjectConversationActorContextId: null
-    }
-  | {
-      targetType: "actor_in_conversation"
-      subjectWorkspaceId: null
-      subjectWorkspaceMemberId: null
-      subjectActorId: string
-      subjectConversationId: string
-      subjectConversationActorContextId: string
-    }
+/**
+ * D3: AccessGrantTarget is now the single `ScopedSubjectTarget` shape.
+ * Consumers read `target.subject.kind` and `target.scope?.kind` directly;
+ * there is no `targetType` / legacy `type` field any more.
+ */
+export type AccessGrantTarget = ScopedSubjectTarget
 
 /**
- * P1b bridge: translate an application-layer AccessGrantTarget into the
- * canonical SubjectRef used by access_subjects. Pass the resulting ref to
- * `upsertAccessSubject` (from subject-registry.ts) to obtain a subject_id.
+ * D3: an AccessGrantTarget IS a SubjectRef-bearing object — extracting the
+ * principal SubjectRef is a field read.
  */
 export function accessGrantTargetToSubjectRef(
   target: AccessGrantTarget
 ): SubjectRef {
-  switch (target.targetType) {
+  return target.subject
+}
+
+/**
+ * Extract the optional scope SubjectRef from a ScopedSubjectTarget. Validates
+ * the scope kind so writers fail fast at the resolver boundary rather than at
+ * the DB trigger.
+ */
+export function accessGrantTargetScopeRef(
+  target: AccessGrantTarget
+): SubjectRef | undefined {
+  if (!target.scope) return undefined
+  if (!isScopeEligibleSubject(target.scope)) {
+    throw new Error(
+      `scope_subject_id must be workspace | conversation, got ${target.scope.kind}`
+    )
+  }
+  return target.scope
+}
+
+export function readAccessBindingTarget(row: {
+  subject_kind?: string | null
+  subject_workspace_id_via_join?: string | null
+  subject_workspace_member_id_via_join?: string | null
+  subject_actor_id_via_join?: string | null
+  subject_remote_agent_id_via_join?: string | null
+  subject_conversation_id_via_join?: string | null
+  scope_kind?: string | null
+  scope_workspace_id_via_join?: string | null
+  scope_conversation_id_via_join?: string | null
+}): AccessGrantTarget {
+  const subject = subjectRefFromRow(row)
+  const scope = scopeSubjectRefFromRow(row)
+  return scope ? { subject, scope } : { subject }
+}
+
+function subjectRefFromRow(row: {
+  subject_kind?: string | null
+  subject_workspace_id_via_join?: string | null
+  subject_workspace_member_id_via_join?: string | null
+  subject_actor_id_via_join?: string | null
+  subject_remote_agent_id_via_join?: string | null
+  subject_conversation_id_via_join?: string | null
+}): SubjectRef {
+  switch (row.subject_kind) {
     case "workspace":
+      if (!row.subject_workspace_id_via_join)
+        throw new Error("workspace subject missing workspace_id")
       return {
         kind: SUBJECT_KIND.WORKSPACE,
-        workspaceId: target.subjectWorkspaceId,
+        workspaceId: row.subject_workspace_id_via_join,
       }
     case "workspace_member":
+      if (!row.subject_workspace_member_id_via_join)
+        throw new Error("workspace_member subject missing workspace_member_id")
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: target.subjectWorkspaceMemberId,
+        memberId: row.subject_workspace_member_id_via_join,
       }
+    case "actor":
+      if (!row.subject_actor_id_via_join)
+        throw new Error("actor subject missing actor_id")
+      return {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: row.subject_actor_id_via_join,
+      }
+    case "remote_agent":
+      if (!row.subject_remote_agent_id_via_join)
+        throw new Error("remote_agent subject missing remote_agent_id")
+      return remoteAgentRef(row.subject_remote_agent_id_via_join)
     case "conversation":
+      if (!row.subject_conversation_id_via_join)
+        throw new Error("conversation subject missing conversation_id")
       return {
         kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: target.subjectConversationId,
-      }
-    case "actor":
-      return { kind: SUBJECT_KIND.ACTOR, actorId: target.subjectActorId }
-    case "actor_in_conversation":
-      return {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: target.subjectConversationActorContextId,
-      }
-  }
-}
-
-function requireResolvedSubjectId(
-  value: string | null,
-  fieldName: string,
-  targetType: AccessBindingTargetType
-) {
-  if (value) {
-    return value
-  }
-  throw new Error(
-    `${fieldName} is required for resolved ${targetType} access bindings`
-  )
-}
-
-export function readAccessBindingTarget(
-  row: Pick<
-    AccessBindingRow,
-    | "target_type"
-    | "subject_workspace_id"
-    | "subject_workspace_member_id"
-    | "subject_actor_id"
-    | "subject_conversation_id"
-    | "subject_conversation_actor_context_id"
-    | "conversation_type_mask_override"
-  >
-): AccessGrantTarget {
-  switch (row.target_type) {
-    case "workspace":
-      return {
-        targetType: "workspace",
-        subjectWorkspaceId: requireResolvedSubjectId(
-          row.subject_workspace_id,
-          "subject_workspace_id",
-          row.target_type
-        ),
-        subjectWorkspaceMemberId: null,
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-      }
-    case "workspace_member":
-      return {
-        targetType: "workspace_member",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: requireResolvedSubjectId(
-          row.subject_workspace_member_id,
-          "subject_workspace_member_id",
-          row.target_type
-        ),
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-      }
-    case "conversation":
-      return {
-        targetType: "conversation",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: null,
-        subjectConversationId: requireResolvedSubjectId(
-          row.subject_conversation_id,
-          "subject_conversation_id",
-          row.target_type
-        ),
-        subjectConversationActorContextId: null,
-      }
-    case "actor":
-      return {
-        targetType: "actor",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: requireResolvedSubjectId(
-          row.subject_actor_id,
-          "subject_actor_id",
-          row.target_type
-        ),
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-      }
-    case "actor_in_conversation":
-      return {
-        targetType: "actor_in_conversation",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: requireResolvedSubjectId(
-          row.subject_actor_id,
-          "subject_actor_id",
-          row.target_type
-        ),
-        subjectConversationId: requireResolvedSubjectId(
-          row.subject_conversation_id,
-          "subject_conversation_id",
-          row.target_type
-        ),
-        subjectConversationActorContextId: requireResolvedSubjectId(
-          row.subject_conversation_actor_context_id,
-          "subject_conversation_actor_context_id",
-          row.target_type
-        ),
+        conversationId: row.subject_conversation_id_via_join,
       }
     default:
       throw new Error(
-        `Unsupported stored access target type: ${String(row.target_type)}`
+        `Unsupported subject_kind for scoped-subject decode: ${String(row.subject_kind)}`
+      )
+  }
+}
+
+function scopeSubjectRefFromRow(row: {
+  scope_kind?: string | null
+  scope_workspace_id_via_join?: string | null
+  scope_conversation_id_via_join?: string | null
+}): SubjectRef | undefined {
+  if (!row.scope_kind) return undefined
+  switch (row.scope_kind) {
+    case "workspace":
+      if (!row.scope_workspace_id_via_join)
+        throw new Error("scope workspace subject missing workspace_id")
+      return {
+        kind: SUBJECT_KIND.WORKSPACE,
+        workspaceId: row.scope_workspace_id_via_join,
+      }
+    case "conversation":
+      if (!row.scope_conversation_id_via_join)
+        throw new Error("scope conversation subject missing conversation_id")
+      return {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: row.scope_conversation_id_via_join,
+      }
+    default:
+      throw new Error(
+        `Unsupported scope subject kind: ${String(row.scope_kind)}`
       )
   }
 }
 
 export function accessBindingHasTarget(
-  row: Pick<
-    AccessBindingRow,
-    | "target_type"
-    | "subject_workspace_id"
-    | "subject_workspace_member_id"
-    | "subject_actor_id"
-    | "subject_conversation_id"
-    | "subject_conversation_actor_context_id"
-  >,
+  row: Pick<AccessBindingRow, "subject_id" | "scope_subject_id"> & {
+    subject_kind?: string | null
+    subject_workspace_id_via_join?: string | null
+    subject_workspace_member_id_via_join?: string | null
+    subject_actor_id_via_join?: string | null
+    subject_remote_agent_id_via_join?: string | null
+    subject_conversation_id_via_join?: string | null
+    scope_kind?: string | null
+    scope_workspace_id_via_join?: string | null
+    scope_conversation_id_via_join?: string | null
+  },
   target: AccessGrantTarget
 ) {
-  switch (target.targetType) {
-    case "workspace":
+  let rowTarget: AccessGrantTarget
+  try {
+    rowTarget = readAccessBindingTarget(row)
+  } catch {
+    return false
+  }
+  return (
+    subjectRefEqual(rowTarget.subject, target.subject) &&
+    ((rowTarget.scope == null && target.scope == null) ||
+      (rowTarget.scope != null &&
+        target.scope != null &&
+        subjectRefEqual(rowTarget.scope, target.scope)))
+  )
+}
+
+function subjectRefEqual(a: SubjectRef, b: SubjectRef): boolean {
+  if (a.kind !== b.kind) return false
+  switch (a.kind) {
+    case SUBJECT_KIND.WORKSPACE:
       return (
-        row.target_type === "workspace" &&
-        (row.subject_workspace_id || null) === target.subjectWorkspaceId
+        a.workspaceId ===
+        (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.WORKSPACE }>)
+          .workspaceId
       )
-    case "workspace_member":
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
       return (
-        row.target_type === "workspace_member" &&
-        (row.subject_workspace_member_id || null) ===
-          target.subjectWorkspaceMemberId
+        a.memberId ===
+        (
+          b as Extract<
+            SubjectRef,
+            { kind: typeof SUBJECT_KIND.WORKSPACE_MEMBER }
+          >
+        ).memberId
       )
-    case "conversation":
+    case SUBJECT_KIND.ACTOR:
       return (
-        row.target_type === "conversation" &&
-        (row.subject_conversation_id || null) === target.subjectConversationId
+        a.actorId ===
+        (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.ACTOR }>).actorId
       )
-    case "actor":
+    case SUBJECT_KIND.REMOTE_AGENT:
       return (
-        row.target_type === "actor" &&
-        (row.subject_actor_id || null) === target.subjectActorId
+        a.remoteAgentId ===
+        (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.REMOTE_AGENT }>)
+          .remoteAgentId
       )
-    case "actor_in_conversation":
+    case SUBJECT_KIND.CONVERSATION:
       return (
-        row.target_type === "actor_in_conversation" &&
-        (row.subject_conversation_actor_context_id || null) ===
-          target.subjectConversationActorContextId
+        a.conversationId ===
+        (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.CONVERSATION }>)
+          .conversationId
       )
-    default:
-      return false
+    case SUBJECT_KIND.USER:
+      return (
+        a.userId ===
+        (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.USER }>).userId
+      )
+    case SUBJECT_KIND.EXTERNAL:
+      return (
+        a.externalIdentityKey ===
+        (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.EXTERNAL }>)
+          .externalIdentityKey
+      )
+    case SUBJECT_KIND.SYSTEM:
+      return true
   }
 }
 
 /**
- * Shared matcher used by callers that have a decoded
- * `CapabilityAccessTarget` (as returned by `mapAccessBindingToGrant`) and need
- * to check whether it covers the current (workspace, conversation, actor,
- * workspace_member) context.
- *
- * Workspace-scoped targets are implicit — the grant is bound to the workspace
- * row holding it. Pass `grantOwnerWorkspaceId` (the workspace the grant lives
- * in) plus `contextWorkspaceId` (the runtime context's workspace) to disambiguate.
- *
- * Returns true when the grant's target shape matches the runtime context for
- * its target type:
- *   - workspace                : context workspace == grant's owning workspace
- *   - workspace_member         : workspace_member-id matches
- *   - conversation             : conversation-id matches
- *   - actor                    : actor-id matches
- *   - actor_in_conversation    : actor-id AND conversation-id both match
+ * D3: matcher used by callers that have a decoded `CapabilityAccessTarget`
+ * (always `{subject, scope?}`) and need to check whether it covers the current
+ * runtime (workspace, conversation, actor, workspace_member, remote_agent)
+ * context.
  */
 export function capabilityTargetMatchesContext(
   target: CapabilityAccessTarget,
@@ -414,29 +424,65 @@ export function capabilityTargetMatchesContext(
     actorId?: string | null
     conversationId?: string | null
     workspaceMemberId?: string | null
+    remoteAgentId?: string | null
   }
 ): boolean {
-  switch (target.type) {
-    case "workspace":
+  if (!subjectInContext(target.subject, context)) return false
+  if (!target.scope) return true
+  return scopeInContext(target.scope, context)
+}
+
+function subjectInContext(
+  subject: SubjectRef,
+  context: {
+    grantOwnerWorkspaceId: string
+    contextWorkspaceId: string
+    actorId?: string | null
+    conversationId?: string | null
+    workspaceMemberId?: string | null
+    remoteAgentId?: string | null
+  }
+): boolean {
+  switch (subject.kind) {
+    case SUBJECT_KIND.WORKSPACE:
       return context.contextWorkspaceId === context.grantOwnerWorkspaceId
-    case "workspace_member":
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
       return (
         !!context.workspaceMemberId &&
-        target.workspaceMemberId === context.workspaceMemberId
+        subject.memberId === context.workspaceMemberId
       )
-    case "conversation":
+    case SUBJECT_KIND.ACTOR:
+      return !!context.actorId && subject.actorId === context.actorId
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return (
+        !!context.remoteAgentId &&
+        subject.remoteAgentId === context.remoteAgentId
+      )
+    case SUBJECT_KIND.CONVERSATION:
       return (
         !!context.conversationId &&
-        target.conversationId === context.conversationId
+        subject.conversationId === context.conversationId
       )
-    case "actor":
-      return !!context.actorId && target.actorId === context.actorId
-    case "actor_in_conversation":
+    default:
+      return false
+  }
+}
+
+function scopeInContext(
+  scope: SubjectRef,
+  context: {
+    contextWorkspaceId: string
+    grantOwnerWorkspaceId: string
+    conversationId?: string | null
+  }
+): boolean {
+  switch (scope.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      return scope.workspaceId === context.contextWorkspaceId
+    case SUBJECT_KIND.CONVERSATION:
       return (
-        !!context.actorId &&
         !!context.conversationId &&
-        target.actorId === context.actorId &&
-        target.conversationId === context.conversationId
+        scope.conversationId === context.conversationId
       )
     default:
       return false
@@ -444,45 +490,26 @@ export function capabilityTargetMatchesContext(
 }
 
 export function mapAccessBindingToGrant(
-  row: AccessBindingRow,
+  row: AccessBindingRow & {
+    subject_kind?: string | null
+    subject_workspace_id_via_join?: string | null
+    subject_workspace_member_id_via_join?: string | null
+    subject_actor_id_via_join?: string | null
+    subject_remote_agent_id_via_join?: string | null
+    subject_conversation_id_via_join?: string | null
+    scope_kind?: string | null
+    scope_workspace_id_via_join?: string | null
+    scope_conversation_id_via_join?: string | null
+  },
   fallbackReason?: string,
   options?: {
     effectiveConversationTypeMask?: number
   }
 ): AccessGrant {
   const target = readAccessBindingTarget(row)
-  let capabilityTarget: CapabilityAccessTarget
-
-  switch (target.targetType) {
-    case "workspace":
-      capabilityTarget = { type: "workspace" }
-      break
-    case "workspace_member":
-      capabilityTarget = {
-        type: "workspace_member",
-        workspaceMemberId: target.subjectWorkspaceMemberId || undefined,
-      }
-      break
-    case "conversation":
-      capabilityTarget = {
-        type: "conversation",
-        conversationId: target.subjectConversationId || undefined,
-      }
-      break
-    case "actor":
-      capabilityTarget = {
-        type: "actor",
-        actorId: target.subjectActorId || undefined,
-      }
-      break
-    case "actor_in_conversation":
-      capabilityTarget = {
-        type: "actor_in_conversation",
-        actorId: target.subjectActorId || undefined,
-        conversationId: target.subjectConversationId || undefined,
-      }
-      break
-  }
+  const capabilityTarget: CapabilityAccessTarget = target.scope
+    ? { subject: target.subject, scope: target.scope }
+    : { subject: target.subject }
 
   return {
     id: row.id,
@@ -498,3 +525,6 @@ export function mapAccessBindingToGrant(
     revokedAt: row.revoked_at || undefined,
   }
 }
+
+// Re-export the helper for callers that want the legacy display label.
+export { subjectScopeLabel }

@@ -61,20 +61,19 @@ CREATE TYPE subject_kind AS ENUM (
   'actor',
   'remote_agent',
   'conversation',
-  'conversation_actor_context',
   'user',
   'external',
   'system'
 );
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
-CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
+CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin', 'wecom', 'dingtalk', 'qq');
 CREATE TYPE transport_accounts_owner_scope AS ENUM ('workspace', 'workspace_member');
 CREATE TYPE transport_accounts_inbound_actor_mode AS ENUM ('none', 'specified_actor', 'follow_owner_chief_actor');
 CREATE TYPE transport_accounts_connection_mode AS ENUM ('webhook', 'long_connection');
 CREATE TYPE transport_accounts_status AS ENUM ('active', 'disabled', 'error');
 CREATE TYPE transport_endpoints_endpoint_type AS ENUM ('direct', 'group');
 CREATE TYPE conversation_transport_bindings_inbound_actor_mode AS ENUM ('inherit_account', 'none', 'specified_actor');
-CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
+CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin', 'wecom', 'dingtalk', 'qq');
 CREATE TYPE transport_addresses_address_type AS ENUM ('user', 'bot', 'system');
 CREATE TYPE conversation_items_scope AS ENUM ('shared', 'private');
 CREATE TYPE conversation_items_surface AS ENUM ('visible', 'internal');
@@ -84,7 +83,7 @@ CREATE TYPE conversation_items_event_timeline_policy AS ENUM ('none', 'all_membe
 CREATE TYPE conversation_items_event_context_policy AS ENUM ('none', 'shared', 'actor_private', 'targeted_members');
 CREATE TYPE conversation_item_parts_part_type AS ENUM ('text', 'file_ref', 'json');
 CREATE TYPE conversation_item_targets_target_kind AS ENUM ('to', 'cc', 'visible');
-CREATE TYPE transport_message_links_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
+CREATE TYPE transport_message_links_transport_kind AS ENUM ('feishu', 'weixin', 'wecom', 'dingtalk', 'qq');
 CREATE TYPE transport_message_links_direction AS ENUM ('inbound', 'outbound');
 CREATE TYPE transport_message_links_delivery_status AS ENUM ('pending', 'sent', 'failed', 'skipped');
 CREATE TYPE turns_status AS ENUM ('running', 'completed', 'failed', 'cancelled');
@@ -119,7 +118,11 @@ CREATE TYPE automation_webhook_endpoints_status AS ENUM ('active', 'disabled', '
 CREATE TYPE automation_occurrences_source_kind AS ENUM ('clock', 'device', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_executions_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
 CREATE TYPE automation_execution_targets_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
-CREATE TYPE memory_spaces_space_type AS ENUM ('workspace_shared', 'conversation_shared', 'actor_private', 'participant_private', 'user_private');
+-- subject-scope-refactor D4: memory_spaces_space_type enum dropped at cutover.
+-- Replaced by (owner_subject_id, scope_subject_id?, namespace_key) triple.
+-- See `CREATE TABLE memory_spaces` further down for the new shape.
+CREATE TYPE memory_permission AS ENUM ('read','recall','write','edit','delete','manage');
+CREATE TYPE memory_access_grants_status AS ENUM ('active','revoked','superseded');
 CREATE TYPE memory_items_category AS ENUM ('fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary');
 CREATE TYPE memory_items_state AS ENUM ('active', 'superseded', 'archived');
 CREATE TYPE memory_items_index_status AS ENUM ('lexical_ready', 'ready', 'failed');
@@ -155,7 +158,10 @@ CREATE TYPE plugin_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'fol
 CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'runtime_authorization');
 CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved', 'rejected', 'cancelled', 'expired', 'superseded');
 CREATE TYPE runtime_authorization_request_mode AS ENUM ('background', 'blocking');
-CREATE TYPE runtime_authorization_grants_scope AS ENUM ('once', 'actor', 'conversation', 'actor_in_conversation', 'remote_agent', 'workspace');
+-- Runtime authorization grant scope enum dropped at subject-scope-refactor cutover.
+-- Scope is now expressed by `runtime_authorization_grants.subject_id + scope_subject_id`
+-- (two FK columns into access_subjects). UI/auto-retry derive the display label via
+-- `subjectScopeLabel(target)` in packages/shared/src/access/subject.ts.
 CREATE TYPE runtime_authorization_grants_retention AS ENUM ('consume_once', 'until_revoked');
 CREATE TYPE runtime_authorization_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
 
@@ -192,7 +198,7 @@ CREATE TYPE device_operations_status AS ENUM (
   'output_streaming', 'succeeded', 'failed', 'cancelled', 'expired'
 );
 CREATE TYPE device_operations_principal_kind AS ENUM (
-  'actor', 'conversation', 'actor_in_conversation', 'remote_agent', 'workspace_member'
+  'actor', 'conversation', 'remote_agent', 'workspace_member'
 );
 CREATE TYPE device_operation_attempts_transport AS ENUM ('mcp_http', 'control_plane_task');
 CREATE TYPE device_operation_attempts_status AS ENUM (
@@ -1408,7 +1414,6 @@ CREATE TABLE access_subjects (
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   external_identity_key VARCHAR(255),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1416,19 +1421,21 @@ CREATE TABLE access_subjects (
   -- (workspace, workspace_member, actor, remote_agent). It is denormalized from
   -- the underlying table by `upsertAccessSubject` via a SELECT lookup so that
   -- workspace-scoped queries on access_subjects can filter without a JOIN.
-  -- For conversation / conversation_actor_context it is best-effort (external
-  -- conversations have no owning workspace). `user` / `external` / `system`
-  -- are platform-wide subjects and intentionally have no workspace.
+  -- For conversation it is best-effort (external conversations have no owning
+  -- workspace). `user` / `external` / `system` are platform-wide subjects and
+  -- intentionally have no workspace. The `conversation_actor_context` subject
+  -- kind was dropped at the subject-scope-refactor cutover (D2): the semantics
+  -- it carried — "actor X in conversation Y" — are now expressed as
+  -- (subject=actor, scope=conversation) at the binding/grant layer.
   CONSTRAINT chk_access_subjects_payload CHECK (
-    (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'actor' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'remote_agent' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'conversation' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'conversation_actor_context' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NOT NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'user' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NOT NULL AND external_identity_key IS NULL) OR
-    (kind = 'external' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NOT NULL) OR
-    (kind = 'system' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL)
+    (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'actor' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'remote_agent' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'conversation' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'user' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NOT NULL AND external_identity_key IS NULL) OR
+    (kind = 'external' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NOT NULL) OR
+    (kind = 'system' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL)
   )
 );
 
@@ -1444,8 +1451,6 @@ CREATE UNIQUE INDEX uq_access_subjects_remote_agent
   ON access_subjects(remote_agent_id) WHERE kind = 'remote_agent';
 CREATE UNIQUE INDEX uq_access_subjects_conversation
   ON access_subjects(conversation_id) WHERE kind = 'conversation';
-CREATE UNIQUE INDEX uq_access_subjects_conversation_actor_context
-  ON access_subjects(conversation_actor_context_id) WHERE kind = 'conversation_actor_context';
 CREATE UNIQUE INDEX uq_access_subjects_user
   ON access_subjects(user_id) WHERE kind = 'user';
 CREATE UNIQUE INDEX uq_access_subjects_external
@@ -2510,60 +2515,32 @@ CREATE INDEX idx_session_wakeups_automation_occurrence
   WHERE automation_occurrence_id IS NOT NULL;
 
 -- ============ Memory Runtime ============
+-- subject-scope-refactor D4: memory_spaces rewrite. Replaces the legacy
+-- `space_type + 5 anchor_*_id` shape with `(owner_subject_id, scope_subject_id?,
+-- namespace_key)`. Owner kinds are restricted via the
+-- tg_memory_space_validate trigger to {workspace_member, actor, remote_agent,
+-- workspace, conversation} — user/external/system can never own a space.
+-- Scope (when present) must be workspace|conversation per is_scope_eligible_subject.
 CREATE TABLE memory_spaces (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  space_type memory_spaces_space_type NOT NULL,
-  anchor_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  anchor_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  anchor_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
-  anchor_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (space_type = 'workspace_shared'
-      AND anchor_conversation_id IS NULL
-      AND anchor_actor_id IS NULL
-      AND anchor_conversation_actor_context_id IS NULL
-      AND anchor_workspace_member_id IS NULL) OR
-    (space_type = 'conversation_shared'
-      AND anchor_conversation_id IS NOT NULL
-      AND anchor_actor_id IS NULL
-      AND anchor_conversation_actor_context_id IS NULL
-      AND anchor_workspace_member_id IS NULL) OR
-    (space_type = 'actor_private'
-      AND anchor_conversation_id IS NULL
-      AND anchor_actor_id IS NOT NULL
-      AND anchor_conversation_actor_context_id IS NULL
-      AND anchor_workspace_member_id IS NULL) OR
-    (space_type = 'participant_private'
-      AND anchor_conversation_id IS NULL
-      AND anchor_actor_id IS NULL
-      AND anchor_conversation_actor_context_id IS NOT NULL
-      AND anchor_workspace_member_id IS NULL) OR
-    (space_type = 'user_private'
-      AND anchor_conversation_id IS NULL
-      AND anchor_actor_id IS NULL
-      AND anchor_conversation_actor_context_id IS NULL
-      AND anchor_workspace_member_id IS NOT NULL)
-  )
+  owner_subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE CASCADE,
+  scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE,
+  namespace_key VARCHAR(255) NOT NULL DEFAULT 'default',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX idx_memory_spaces_workspace_shared
-  ON memory_spaces(workspace_id, space_type)
-  WHERE space_type = 'workspace_shared';
-CREATE UNIQUE INDEX idx_memory_spaces_conversation
-  ON memory_spaces(workspace_id, space_type, anchor_conversation_id)
-  WHERE anchor_conversation_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_memory_spaces_actor
-  ON memory_spaces(workspace_id, space_type, anchor_actor_id)
-  WHERE anchor_actor_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_memory_spaces_participant
-  ON memory_spaces(workspace_id, space_type, anchor_conversation_actor_context_id)
-  WHERE anchor_conversation_actor_context_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_memory_spaces_workspace_member
-  ON memory_spaces(workspace_id, space_type, anchor_workspace_member_id)
-  WHERE anchor_workspace_member_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_memory_spaces_scoped
+  ON memory_spaces(workspace_id, owner_subject_id, scope_subject_id, namespace_key)
+  WHERE scope_subject_id IS NOT NULL;
+
+CREATE UNIQUE INDEX uq_memory_spaces_unscoped
+  ON memory_spaces(workspace_id, owner_subject_id, namespace_key)
+  WHERE scope_subject_id IS NULL;
+
+CREATE INDEX idx_memory_spaces_owner ON memory_spaces(owner_subject_id);
+CREATE INDEX idx_memory_spaces_workspace ON memory_spaces(workspace_id);
 
 CREATE TABLE memory_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3086,6 +3063,13 @@ CREATE TABLE resource_access_bindings (
   -- access_subjects via subject_id and project equivalent fields when needed
   -- (see access/binding-storage.ts `accessSubjectRowToGrantTarget`).
   subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE CASCADE,
+  -- subject-scope-refactor: optional scope tightens visibility to a particular
+  -- runtime context (workspace or conversation). NULL = unscoped (legacy
+  -- behavior). Immediate FK so the tg_rab_validate trigger can read
+  -- access_subjects synchronously; callers must `upsertAccessSubjectOnTrx`
+  -- (Kysely transaction) or `upsertAccessSubjectOn` (pg QueryExecutor) BEFORE
+  -- inserting a binding row with a non-null scope_subject_id.
+  scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE,
   conversation_type_mask_override INT
     CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   status resource_access_bindings_status NOT NULL DEFAULT 'active',
@@ -3113,7 +3097,8 @@ CREATE UNIQUE INDEX uq_resource_access_bindings_active
     COALESCE(automation_event_source_id::text, ''),
     COALESCE(actor_id::text, ''),
     COALESCE(remote_agent_id::text, ''),
-    subject_id
+    subject_id,
+    COALESCE(scope_subject_id::text, '')
   )
   WHERE status = 'active';
 CREATE INDEX idx_resource_access_bindings_workspace
@@ -3138,6 +3123,13 @@ CREATE INDEX idx_resource_access_bindings_remote_agent
   WHERE remote_agent_id IS NOT NULL;
 CREATE INDEX idx_resource_access_bindings_subject_id
   ON resource_access_bindings(subject_id, status, created_at DESC);
+-- subject-scope-refactor: partial index supports scope-aware visibility queries
+-- in capability-projection that filter by `(scope_subject_id IS NULL OR
+-- scope_subject_id = ANY($runtimeScopeSubjectIds))`. Prevents degradation when
+-- the table grows.
+CREATE INDEX idx_resource_access_bindings_scope_subject_id
+  ON resource_access_bindings(scope_subject_id)
+  WHERE scope_subject_id IS NOT NULL;
 
 CREATE TABLE interaction_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3203,24 +3195,106 @@ CREATE TABLE interaction_runtime_authorization_requests (
   source_runtime_session_id TEXT,
   source_retry_nonce TEXT,
   source_request_args JSONB NOT NULL DEFAULT '{}',
-  -- Optional principal-disambiguation fields. When the dispatch that
-  -- triggered this auth request came from a remote_agent or
-  -- actor_in_conversation principal, the projection persists the
-  -- principal-specific ids here so the eventual grant can be subject-
-  -- scoped to remote_agent / conversation_actor_context (not just
-  -- actor/conversation, which the parent interaction_requests row
-  -- carries via requester_participant_id). Both nullable; actor-only
-  -- principals leave them unset. Named `principal_*` to avoid collision
-  -- with the existing `requester_remote_agent_id` field projected from
-  -- access_subjects on the parent interaction_requests row.
-  principal_remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
-  principal_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
+  -- subject-scope-refactor: principal columns normalized to (subject_id,
+  -- scope_subject_id) — both reference access_subjects via deferred FK
+  -- (added at the post-access_subjects ALTER section). principal_subject_id is
+  -- NOT NULL because every dispatch that creates a runtime authorization
+  -- request has a known principal subject. principal_scope_subject_id is
+  -- nullable and only populated when the principal is actor/remote_agent and
+  -- the conversation is an active participant (corresponds to
+  -- RuntimePrincipalContext.activeConversationSubjectId at request creation
+  -- time). ON DELETE RESTRICT so durable audit/request records can't lose
+  -- their principal when a subject is deleted.
+  principal_subject_id UUID NOT NULL,              -- FK added at bottom
+  principal_scope_subject_id UUID,                 -- FK added at bottom
   requested_action JSONB NOT NULL DEFAULT '{}',
   grant_options JSONB NOT NULL DEFAULT '[]',
   available_presets JSONB NOT NULL DEFAULT '[]',
   resolution_payload JSONB NOT NULL DEFAULT '{}',
   dedupe_key TEXT NOT NULL
 );
+
+-- ────────────────────────────────────────────────────────────────────
+-- interaction_action_tokens (G5)
+--
+-- Short, opaque tokens minted by `interactions/action-tokens.ts` when a
+-- runtime-authorization interaction is projected onto an IM transport
+-- that supports interaction_prompt (e.g. QQ Inline Keyboard). The token
+-- lives in the button's `action.data` field; on click, the connector's
+-- INTERACTION_CREATE handler redeems it to recover the full
+-- ResolveInteractionRequestParams payload (decision, baseRevision,
+-- preset, selectedGrantOptionId, …) without having to encode all of
+-- those in the limited button_data string.
+--
+-- The redeem path is intentionally NOT one-shot: ACK round-trips can
+-- fail, and QQ replays the same INTERACTION_CREATE event on retry. The
+-- redeem helper only checks the token's own `expires_at`; idempotence
+-- comes from `resolveInteractionRequest`'s (interaction_id, command_id)
+-- dedup, with command_id deterministically derived from
+-- uuidv5(qqEvent.id + actionToken + clickerExternalId).
+-- ────────────────────────────────────────────────────────────────────
+CREATE TABLE interaction_action_tokens (
+  token UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  interaction_request_id UUID NOT NULL REFERENCES interaction_requests(id) ON DELETE CASCADE,
+  payload JSONB NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_interaction_action_tokens_interaction
+  ON interaction_action_tokens(interaction_request_id);
+CREATE INDEX idx_interaction_action_tokens_expires
+  ON interaction_action_tokens(expires_at);
+
+-- ────────────────────────────────────────────────────────────────────
+-- interaction_transport_projections (G5)
+--
+-- Durable "this interaction needs to be (re)projected onto an IM
+-- transport" state. Inserted from the core RUNTIME_AUTHORIZATION
+-- creation tx so projection cannot be lost on crash. Consumed by the
+-- interaction-projection worker which performs:
+--    binding resolve → mint tokens → create conversation item →
+--    persist link → enqueue delivery
+-- inside a SAVEPOINT so partial failure cleans up.
+--
+-- Status lifecycle:
+--   pending → projected (everything ok; link queued)
+--   pending → skipped   (no binding / not QQ in v1 / outbound disabled /
+--                        webhook_inbound_unavailable / etc.)
+--   pending → failed    (sweeper budget exhausted, or 5 retries)
+--
+-- `ON CONFLICT (interaction_request_id) DO UPDATE … WHERE status='skipped'
+--  AND error IN ('no_binding','outbound_disabled','webhook_inbound_unavailable')`
+-- in the creation path lets existing-interaction reuse trigger a re-project
+-- after the user fixes the binding.
+-- ────────────────────────────────────────────────────────────────────
+CREATE TABLE interaction_transport_projections (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  interaction_request_id UUID NOT NULL UNIQUE REFERENCES interaction_requests(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'projected', 'skipped', 'failed')),
+  transport_message_link_id UUID REFERENCES transport_message_links(id) ON DELETE SET NULL,
+  error TEXT,
+  attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_interaction_transport_projections_pending
+  ON interaction_transport_projections(next_attempt_at)
+  WHERE status = 'pending';
+CREATE INDEX idx_interaction_transport_projections_skipped_recovery
+  ON interaction_transport_projections(workspace_id, conversation_id, error)
+  WHERE status = 'skipped';
+CREATE INDEX idx_interaction_transport_projections_link
+  ON interaction_transport_projections(transport_message_link_id)
+  WHERE transport_message_link_id IS NOT NULL;
+
+-- Help the account/binding recovery helpers find bindings to flip when a
+-- QQ account's webhookInboundConfirmed/connectionMode/status changes.
+CREATE INDEX idx_conversation_transport_bindings_account
+  ON conversation_transport_bindings(transport_account_id, conversation_id);
 
 CREATE TABLE interaction_response_commands (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3380,25 +3454,31 @@ ALTER TABLE remote_agent_runs ADD CONSTRAINT fk_remote_agent_runs_interaction
   ON DELETE SET NULL;
 
 -- Runtime authorization grants (renamed from relay_authorization_grants in
--- PR #20). Device-only; legacy relay_* columns are gone.
+-- PR #20; subject-scope-refactor: scope enum + conversation_actor_context_id
+-- column dropped in favor of subject_id + scope_subject_id pair).
 CREATE TABLE runtime_authorization_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   device_id UUID NOT NULL,                         -- FK added at bottom
   device_capability_id UUID NOT NULL,              -- FK added at bottom
   device_exposure_id UUID NOT NULL,                -- FK added at bottom
-  -- conversation_actor_context_id is set when scope='actor_in_conversation'.
-  -- All other scopes leave it NULL. FK added at bottom.
-  conversation_actor_context_id UUID,
-  -- P1b: actor_id + conversation_id polymorphic columns collapsed into a
-  -- single subject_id FK into access_subjects (nullable because `once` and
-  -- `workspace` scopes don't bind to a sub-workspace subject). Deferred FK
-  -- applied below in the post-access_subjects ALTER section.
-  subject_id UUID,
+  -- subject-scope-refactor: grant subject is unconditional now (NOT NULL).
+  -- Deferred FK applied below in the post-access_subjects ALTER section.
+  -- Wire-level "scope" labels (once / actor / conversation /
+  -- actor_in_conversation / remote_agent / workspace) are derived from
+  -- (subject_kind, scope_subject_id, retention) via
+  -- `subjectScopeLabel` + `presetToOwnerScope` in the runtime-authorizations
+  -- service. The legacy `scope` enum column was dropped.
+  subject_id UUID NOT NULL,
+  -- Optional scope tightens visibility to a particular runtime context.
+  -- Currently only (subject.kind ∈ {actor, remote_agent}, scope.kind=conversation)
+  -- is supported; the tg_runtime_authorization_grant_validate trigger enforces
+  -- the whitelist. Immediate FK so the trigger reads access_subjects
+  -- synchronously; callers must upsert subject + scope BEFORE inserting.
+  scope_subject_id UUID,                           -- FK added at bottom
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
   source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
-  scope runtime_authorization_grants_scope NOT NULL,
   retention runtime_authorization_grants_retention NOT NULL,
   status runtime_authorization_grants_status NOT NULL DEFAULT 'active',
   policy JSONB NOT NULL DEFAULT '{}',
@@ -3409,13 +3489,7 @@ CREATE TABLE runtime_authorization_grants (
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  -- actor_in_conversation scope ⇔ conversation_actor_context_id populated.
-  CONSTRAINT chk_runtime_authorization_grants_scope_context CHECK (
-    (scope = 'actor_in_conversation' AND conversation_actor_context_id IS NOT NULL)
-    OR
-    (scope <> 'actor_in_conversation' AND conversation_actor_context_id IS NULL)
-  )
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_interaction_requests_conversation
@@ -3438,15 +3512,39 @@ CREATE INDEX idx_interaction_runtime_authorization_requests_dedupe
 CREATE INDEX idx_interaction_response_commands_interaction
   ON interaction_response_commands(interaction_id, created_at DESC);
 CREATE INDEX idx_runtime_authorization_grants_capability
-  ON runtime_authorization_grants(device_capability_id, status, scope, created_at DESC);
+  ON runtime_authorization_grants(device_capability_id, status, created_at DESC);
 CREATE INDEX idx_runtime_authorization_grants_subject
-  ON runtime_authorization_grants(subject_id, device_capability_id, status, created_at DESC)
-  WHERE subject_id IS NOT NULL;
--- P1b: deferred FK from runtime_authorization_grants.subject_id (NULLABLE —
--- `once` and `workspace` scopes don't bind a sub-workspace subject).
+  ON runtime_authorization_grants(subject_id, scope_subject_id, status, created_at DESC);
+-- subject-scope-refactor: four-dimension dispatch composite index for
+-- selectAndClaimRuntimeAuthorizationGrant's canonical SELECT (workspace + device
+-- + capability + exposure + subject + scope + status). Without this the
+-- planner falls back to per-capability scan in concurrent dispatch.
+CREATE INDEX idx_runtime_authorization_grants_dispatch
+  ON runtime_authorization_grants(
+    device_id, device_capability_id, device_exposure_id,
+    subject_id, scope_subject_id, status
+  );
+-- subject-scope-refactor: subject_id is now NOT NULL; deferred FK still added
+-- post-access_subjects so the cross-reference works even if the tables are
+-- created out of order at bootstrap.
 ALTER TABLE runtime_authorization_grants
   ADD CONSTRAINT fk_runtime_authorization_grants_subject
   FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+ALTER TABLE runtime_authorization_grants
+  ADD CONSTRAINT fk_runtime_authorization_grants_scope_subject
+  FOREIGN KEY (scope_subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+-- subject-scope-refactor: principal_subject_id / principal_scope_subject_id
+-- FKs on interaction_runtime_authorization_requests. ON DELETE RESTRICT keeps
+-- durable audit/request rows from losing their principal when a subject is
+-- deleted (admins must explicitly archive/delete the request first).
+ALTER TABLE interaction_runtime_authorization_requests
+  ADD CONSTRAINT fk_interaction_runtime_authorization_requests_principal_subject
+  FOREIGN KEY (principal_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
+ALTER TABLE interaction_runtime_authorization_requests
+  ADD CONSTRAINT fk_interaction_runtime_authorization_requests_principal_scope_subject
+  FOREIGN KEY (principal_scope_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
+CREATE INDEX idx_interaction_runtime_authorization_requests_principal_subject
+  ON interaction_runtime_authorization_requests(principal_subject_id);
 
 -- ============ Device Runtime v3 (devices subsystem) ============
 -- See docs/device-runtime-v3.md §6. Device tables now own all runtime
@@ -3462,6 +3560,7 @@ CREATE TABLE devices (
   host_provider TEXT,                        -- e2b, modal, k8s, ... NULL for local
   device_type devices_device_type NOT NULL DEFAULT 'desktop_computer',
   platform VARCHAR(40),                       -- darwin, linux, win32
+  arch VARCHAR(32),                            -- x64, arm64, ... (process.arch). Combined with platform forms the platformKey the device-runtime bundles manifest keys on.
   public_key TEXT NOT NULL,
   public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
   trust_status devices_trust_status NOT NULL DEFAULT 'pending',
@@ -3724,9 +3823,13 @@ CREATE TABLE device_operations (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
   task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
-  -- Principal: the entity the call runs on behalf of (matches DevicePrincipal).
+  -- Principal: the entity the call runs on behalf of (matches RuntimePrincipalContext).
   principal_kind device_operations_principal_kind NOT NULL,
-  principal_subject_id UUID REFERENCES access_subjects(id) ON DELETE SET NULL,
+  -- subject-scope-refactor: ON DELETE RESTRICT so the chk_device_operations_principal
+  -- CHECK below (NOT NULL for all 4 kinds) cannot be violated by a subject
+  -- deletion silently setting the column to NULL. Admins must archive/delete
+  -- the device_operations row before the subject can be deleted.
+  principal_subject_id UUID REFERENCES access_subjects(id) ON DELETE RESTRICT,
   -- Initiator: orthogonal to principal — the human who triggered the call,
   -- always recorded when applicable (e.g. workspace member triggered an actor
   -- turn that called a device tool: principal_kind='actor',
@@ -3755,14 +3858,18 @@ CREATE TABLE device_operations (
   completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  -- principal_subject_id is required for non-once dispatches; the trigger
-  -- enforces kind correspondence against access_subjects.kind. See
-  -- docs/device-runtime-v3.md §6 Notes.
+  -- subject-scope-refactor: principal_subject_id is REQUIRED for all 4 allowed
+  -- principal_kinds (no workspace_member exception). principal_kind ↔
+  -- access_subjects.kind consistency + workspace consistency is an app-only
+  -- invariant enforced by deriveOperationPrincipalAudit at dispatch boundary;
+  -- DB only enforces non-null (cross-table CHECK in PG requires deferrable
+  -- constraint trigger, which is not cost-effective here). Regression tests
+  -- lock that raw-SQL inserts of inconsistent (kind, subject) combos remain
+  -- possible (known limitation) and that the dispatch path itself produces
+  -- 100% consistent rows. See docs/device-runtime-v3.md §6 Notes.
   CONSTRAINT chk_device_operations_principal CHECK (
-    (principal_kind IN ('actor', 'conversation', 'actor_in_conversation', 'remote_agent')
-       AND principal_subject_id IS NOT NULL)
-    OR
-    (principal_kind = 'workspace_member')
+    principal_kind IN ('actor', 'conversation', 'remote_agent', 'workspace_member')
+    AND principal_subject_id IS NOT NULL
   )
 );
 CREATE INDEX idx_device_operations_device_status
@@ -3824,9 +3931,10 @@ ALTER TABLE runtime_authorization_grants
 ALTER TABLE runtime_authorization_grants
   ADD CONSTRAINT fk_runtime_authorization_grants_device_exposure
   FOREIGN KEY (device_exposure_id) REFERENCES device_exposures(id) ON DELETE CASCADE;
-ALTER TABLE runtime_authorization_grants
-  ADD CONSTRAINT fk_runtime_authorization_grants_conversation_actor_context
-  FOREIGN KEY (conversation_actor_context_id) REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE;
+-- subject-scope-refactor: runtime_authorization_grants.conversation_actor_context_id
+-- column and FK dropped. The "actor_in_conversation" scope semantics is now
+-- expressed by (subject_id → actor subject, scope_subject_id → conversation
+-- subject) and enforced by tg_runtime_authorization_grant_validate.
 ALTER TABLE interaction_runtime_authorization_requests
   ADD CONSTRAINT fk_interaction_runtime_auth_requests_device
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE;
@@ -3857,3 +3965,402 @@ CREATE TABLE IF NOT EXISTS chat_push_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
   ON chat_push_tokens(workspace_member_id);
+
+-- ============================================================================
+-- subject-scope-refactor: subject + scope SQL helpers and validation triggers
+-- ============================================================================
+-- These helpers + triggers enforce the (subject, scope?) two-tuple model that
+-- replaced the polymorphic (kind + N nullable FK + scope enum) shape on
+-- resource_access_bindings, runtime_authorization_grants, and (Batch 11)
+-- memory_spaces / memory_access_grants. All triggers are immediate (not
+-- deferred) — callers MUST `upsertAccessSubjectOnTrx(trx, ...)` (Kysely) or
+-- `upsertAccessSubjectOn(qx, ...)` (pg QueryExecutor) BEFORE inserting any row
+-- with subject_id / scope_subject_id, so the trigger can read access_subjects
+-- synchronously.
+-- ============================================================================
+
+-- Predicate: subject kinds that can legitimately anchor a workspace-bound
+-- authorization row (resource_access_bindings, runtime_authorization_grants,
+-- memory_access_grants). Excludes user / external / system — those are
+-- platform-wide subjects and cannot own workspace-bound grants.
+CREATE OR REPLACE FUNCTION is_workspace_bound_subject_kind(p_subject_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_kind subject_kind;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN FALSE; END IF;
+  SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
+  IF v_kind IS NULL THEN RETURN FALSE; END IF;
+  RETURN v_kind IN ('workspace', 'workspace_member', 'actor', 'remote_agent', 'conversation');
+END;
+$$;
+
+-- Predicate: subject kinds eligible to be a scope (i.e., a runtime context).
+-- Only workspace and conversation are valid scopes.
+CREATE OR REPLACE FUNCTION is_scope_eligible_subject(p_subject_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_kind subject_kind;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN TRUE; END IF;  -- NULL scope is always valid (means "unscoped")
+  SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
+  IF v_kind IS NULL THEN RETURN FALSE; END IF;
+  RETURN v_kind IN ('workspace', 'conversation');
+END;
+$$;
+
+-- Predicate: subject kinds allowed as memory_spaces.owner_subject_id (stricter
+-- than workspace-bound — excludes platform-wide kinds AND any future kind that
+-- doesn't have a stable "owner-of-memory" semantics).
+CREATE OR REPLACE FUNCTION is_memory_owner_subject_kind(p_subject_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_kind subject_kind;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN FALSE; END IF;
+  SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
+  IF v_kind IS NULL THEN RETURN FALSE; END IF;
+  RETURN v_kind IN ('workspace', 'workspace_member', 'actor', 'remote_agent', 'conversation');
+END;
+$$;
+
+-- Helper: resolve the workspace_id of an access_subjects row. NULL for
+-- platform-wide subjects (user / external / system) or unknown subject_id.
+CREATE OR REPLACE FUNCTION access_subject_workspace_id(p_subject_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_workspace_id UUID;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN NULL; END IF;
+  SELECT workspace_id INTO v_workspace_id FROM access_subjects WHERE id = p_subject_id;
+  RETURN v_workspace_id;
+END;
+$$;
+
+-- Helper: workspace_id of a device_capability row.
+CREATE OR REPLACE FUNCTION device_capability_workspace_id(p_capability_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_workspace_id UUID;
+BEGIN
+  IF p_capability_id IS NULL THEN RETURN NULL; END IF;
+  SELECT dc.workspace_id INTO v_workspace_id
+    FROM device_capabilities dc
+    WHERE dc.id = p_capability_id;
+  RETURN v_workspace_id;
+END;
+$$;
+
+-- Helper: workspace_id of a device row.
+CREATE OR REPLACE FUNCTION device_workspace_id(p_device_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_workspace_id UUID;
+BEGIN
+  IF p_device_id IS NULL THEN RETURN NULL; END IF;
+  SELECT workspace_id INTO v_workspace_id FROM devices WHERE id = p_device_id;
+  RETURN v_workspace_id;
+END;
+$$;
+
+-- Helper: workspace_id of a device_exposure row.
+CREATE OR REPLACE FUNCTION device_exposure_workspace_id(p_exposure_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_workspace_id UUID;
+BEGIN
+  IF p_exposure_id IS NULL THEN RETURN NULL; END IF;
+  SELECT d.workspace_id INTO v_workspace_id
+    FROM device_exposures de
+    JOIN devices d ON d.id = de.device_id
+    WHERE de.id = p_exposure_id;
+  RETURN v_workspace_id;
+END;
+$$;
+
+-- ============================================================================
+-- tg_rab_validate: resource_access_bindings subject + scope + resource workspace consistency
+-- ============================================================================
+CREATE OR REPLACE FUNCTION validate_resource_access_binding_subject_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_subject_ws UUID;
+  v_scope_ws UUID;
+  v_resource_ws UUID;
+BEGIN
+  -- subject kind must be workspace-bound
+  IF NOT is_workspace_bound_subject_kind(NEW.subject_id) THEN
+    RAISE EXCEPTION 'resource_access_bindings.subject_id % refers to a kind that is not workspace-bound', NEW.subject_id;
+  END IF;
+  -- scope (if set) must be scope-eligible (workspace or conversation)
+  IF NEW.scope_subject_id IS NOT NULL AND NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'resource_access_bindings.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+  -- subject workspace must match binding workspace
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'resource_access_bindings.subject_id % workspace % does not match binding workspace %', NEW.subject_id, v_subject_ws, NEW.workspace_id;
+  END IF;
+  -- scope (if set) workspace must match binding workspace
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'resource_access_bindings.scope_subject_id % workspace % does not match binding workspace %', NEW.scope_subject_id, v_scope_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+  -- resource workspace must match binding workspace (per resource_type CASE)
+  v_resource_ws := CASE NEW.resource_type
+    WHEN 'installed_skill'         THEN (SELECT workspace_id FROM installed_skills         WHERE id = NEW.installed_skill_id)
+    WHEN 'plugin_installation'     THEN (SELECT workspace_id FROM plugin_installations     WHERE id = NEW.plugin_installation_id)
+    WHEN 'device_capability'       THEN device_capability_workspace_id(NEW.device_capability_id)
+    WHEN 'automation_event_source' THEN (SELECT workspace_id FROM automation_event_sources WHERE id = NEW.automation_event_source_id)
+    WHEN 'actor'                   THEN (SELECT workspace_id FROM actors                   WHERE id = NEW.actor_id)
+    WHEN 'remote_agent'            THEN (SELECT workspace_id FROM remote_agents            WHERE id = NEW.remote_agent_id)
+  END;
+  IF v_resource_ws IS NULL OR v_resource_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'resource_access_bindings resource_type=% missing or workspace mismatch (% vs %)', NEW.resource_type, v_resource_ws, NEW.workspace_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_rab_validate
+  BEFORE INSERT OR UPDATE ON resource_access_bindings
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_resource_access_binding_subject_scope();
+
+-- ============================================================================
+-- tg_runtime_authorization_grant_validate: subject + scope + device/capability/
+-- exposure workspace consistency + subject/scope combination whitelist
+-- ============================================================================
+-- Mirrors the service-layer `assertSupportedRuntimeGrantTarget` so raw SQL
+-- inserts cannot bypass the whitelist:
+--   - unscoped (scope_subject_id IS NULL): subject.kind must be one of
+--     workspace / workspace_member / actor / remote_agent / conversation.
+--   - scoped: only (actor + conversation) and (remote_agent + conversation)
+--     are allowed.
+-- All other combinations (e.g. workspace_member + conversation,
+-- actor + workspace, conversation + conversation) RAISE EXCEPTION.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION validate_runtime_authorization_grant()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_subject_kind subject_kind;
+  v_scope_kind subject_kind;
+  v_subject_ws UUID;
+  v_scope_ws UUID;
+  v_device_ws UUID;
+  v_capability_ws UUID;
+  v_exposure_ws UUID;
+BEGIN
+  -- Look up subject and scope kinds
+  SELECT kind INTO v_subject_kind FROM access_subjects WHERE id = NEW.subject_id;
+  IF v_subject_kind IS NULL THEN
+    RAISE EXCEPTION 'runtime_authorization_grants.subject_id % does not exist in access_subjects', NEW.subject_id;
+  END IF;
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    SELECT kind INTO v_scope_kind FROM access_subjects WHERE id = NEW.scope_subject_id;
+    IF v_scope_kind IS NULL THEN
+      RAISE EXCEPTION 'runtime_authorization_grants.scope_subject_id % does not exist in access_subjects', NEW.scope_subject_id;
+    END IF;
+  END IF;
+
+  -- Whitelist: subject + scope combinations
+  IF NEW.scope_subject_id IS NULL THEN
+    IF v_subject_kind NOT IN ('workspace', 'workspace_member', 'actor', 'remote_agent', 'conversation') THEN
+      RAISE EXCEPTION 'runtime_authorization_grants: unscoped grant subject.kind=% is not allowed (only workspace/workspace_member/actor/remote_agent/conversation)', v_subject_kind;
+    END IF;
+  ELSE
+    -- scoped: only actor/remote_agent + conversation
+    IF NOT (
+      (v_subject_kind = 'actor' AND v_scope_kind = 'conversation')
+      OR (v_subject_kind = 'remote_agent' AND v_scope_kind = 'conversation')
+    ) THEN
+      RAISE EXCEPTION 'runtime_authorization_grants: scoped grant (subject.kind=%, scope.kind=%) is not in whitelist (only actor+conversation, remote_agent+conversation)', v_subject_kind, v_scope_kind;
+    END IF;
+  END IF;
+
+  -- subject workspace consistency
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'runtime_authorization_grants.subject_id % workspace % does not match grant workspace %', NEW.subject_id, v_subject_ws, NEW.workspace_id;
+  END IF;
+  -- scope workspace consistency (if set)
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'runtime_authorization_grants.scope_subject_id % workspace % does not match grant workspace %', NEW.scope_subject_id, v_scope_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+  -- device + capability + exposure workspace consistency
+  v_device_ws := device_workspace_id(NEW.device_id);
+  IF v_device_ws IS NULL OR v_device_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'runtime_authorization_grants.device_id % workspace % does not match grant workspace %', NEW.device_id, v_device_ws, NEW.workspace_id;
+  END IF;
+  v_capability_ws := device_capability_workspace_id(NEW.device_capability_id);
+  IF v_capability_ws IS NULL OR v_capability_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'runtime_authorization_grants.device_capability_id % workspace % does not match grant workspace %', NEW.device_capability_id, v_capability_ws, NEW.workspace_id;
+  END IF;
+  v_exposure_ws := device_exposure_workspace_id(NEW.device_exposure_id);
+  IF v_exposure_ws IS NULL OR v_exposure_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'runtime_authorization_grants.device_exposure_id % workspace % does not match grant workspace %', NEW.device_exposure_id, v_exposure_ws, NEW.workspace_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_runtime_authorization_grant_validate
+  BEFORE INSERT OR UPDATE ON runtime_authorization_grants
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_runtime_authorization_grant();
+
+-- ============================================================================
+-- subject-scope-refactor: memory_access_grants + memory_spaces validation
+-- triggers. memory_spaces table itself was rewritten in place above (owner +
+-- optional scope + namespace_key); validation lands here after access_subjects
+-- helpers were defined.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION validate_memory_space_subject_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_owner_ws UUID;
+  v_scope_ws UUID;
+BEGIN
+  IF NOT is_memory_owner_subject_kind(NEW.owner_subject_id) THEN
+    RAISE EXCEPTION 'memory_spaces.owner_subject_id % must reference a subject of kind workspace_member|actor|remote_agent|workspace|conversation', NEW.owner_subject_id;
+  END IF;
+  IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'memory_spaces.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+  v_owner_ws := access_subject_workspace_id(NEW.owner_subject_id);
+  IF v_owner_ws IS NULL OR v_owner_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'memory_spaces.owner_subject_id % workspace % does not match space workspace %', NEW.owner_subject_id, v_owner_ws, NEW.workspace_id;
+  END IF;
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'memory_spaces.scope_subject_id % workspace % does not match space workspace %', NEW.scope_subject_id, v_scope_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_memory_space_validate
+  BEFORE INSERT OR UPDATE ON memory_spaces
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_memory_space_subject_scope();
+
+CREATE TABLE memory_access_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  memory_space_id UUID NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+  memory_item_id UUID REFERENCES memory_items(id) ON DELETE CASCADE,
+  subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE CASCADE,
+  scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE,
+  permissions memory_permission[] NOT NULL
+    CHECK (cardinality(permissions) > 0 AND array_position(permissions, NULL) IS NULL),
+  status memory_access_grants_status NOT NULL DEFAULT 'active',
+  source TEXT,
+  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
+  revoked_at TIMESTAMPTZ,
+  superseded_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_memory_access_grants_active
+  ON memory_access_grants(
+    memory_space_id,
+    COALESCE(memory_item_id::text, ''),
+    subject_id,
+    COALESCE(scope_subject_id::text, '')
+  )
+  WHERE status = 'active';
+CREATE INDEX idx_memory_access_grants_space
+  ON memory_access_grants(memory_space_id, status, created_at DESC);
+CREATE INDEX idx_memory_access_grants_subject
+  ON memory_access_grants(subject_id, status, created_at DESC);
+CREATE INDEX idx_memory_access_grants_item
+  ON memory_access_grants(memory_item_id)
+  WHERE memory_item_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION validate_memory_access_grant()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_subject_kind subject_kind;
+  v_subject_ws   UUID;
+  v_scope_ws     UUID;
+  v_space_ws     UUID;
+  v_item_space   UUID;
+  v_item_ws      UUID;
+BEGIN
+  IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'memory_access_grants.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+  SELECT kind INTO v_subject_kind FROM access_subjects WHERE id = NEW.subject_id;
+  IF v_subject_kind IS NULL THEN
+    RAISE EXCEPTION 'memory_access_grants.subject_id % not found', NEW.subject_id;
+  END IF;
+  IF v_subject_kind NOT IN ('workspace_member','actor','remote_agent','workspace','conversation') THEN
+    RAISE EXCEPTION 'memory_access_grants.subject_id % refers to kind % which is not allowed (must be workspace_member|actor|remote_agent|workspace|conversation)', NEW.subject_id, v_subject_kind;
+  END IF;
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'memory_access_grants.subject_id % workspace mismatch (% vs %)', NEW.subject_id, v_subject_ws, NEW.workspace_id;
+  END IF;
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'memory_access_grants.scope_subject_id % workspace mismatch', NEW.scope_subject_id;
+    END IF;
+  END IF;
+  SELECT workspace_id INTO v_space_ws FROM memory_spaces WHERE id = NEW.memory_space_id;
+  IF v_space_ws IS NULL OR v_space_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'memory_access_grants.memory_space_id % missing or workspace mismatch (% vs %)', NEW.memory_space_id, v_space_ws, NEW.workspace_id;
+  END IF;
+  IF NEW.memory_item_id IS NOT NULL THEN
+    SELECT memory_space_id, workspace_id INTO v_item_space, v_item_ws
+      FROM memory_items WHERE id = NEW.memory_item_id;
+    IF v_item_space IS NULL THEN
+      RAISE EXCEPTION 'memory_access_grants.memory_item_id % not found', NEW.memory_item_id;
+    END IF;
+    IF v_item_space IS DISTINCT FROM NEW.memory_space_id THEN
+      RAISE EXCEPTION 'memory_access_grants.memory_item_id % does not belong to memory_space %', NEW.memory_item_id, NEW.memory_space_id;
+    END IF;
+    IF v_item_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'memory_access_grants.memory_item_id % workspace mismatch', NEW.memory_item_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_memory_grant_validate
+  BEFORE INSERT OR UPDATE ON memory_access_grants
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_memory_access_grant();

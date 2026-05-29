@@ -21,50 +21,30 @@ import { createCuaBuiltin } from "./builtins/cua.js"
 import { createBrowserBuiltin } from "./builtins/browser.js"
 import { createChromeDevtoolsMcpBuiltin } from "./builtins/chrome-devtools-mcp.js"
 import { createFrpTunnelAdapter } from "./tunnel/frp.js"
+import {
+  defaultPrestageDirs,
+  installBundles,
+  summarizeInstallReport,
+} from "./bundles/install.js"
+import {
+  defaultManifestPath,
+  defaultPackageRoot,
+  defaultToolchainDir,
+  loadManifestFromPath,
+} from "./bundles/manifest-loader.js"
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { CatalogProvider } from "./types.js"
+import type { TerminalPlatform } from "./terminal/types.js"
 
-interface CliArgs {
-  cmd: string
-  /** Single-value flags. Last write wins for duplicates of non-repeatable flags. */
-  flags: Map<string, string>
-  /** Repeatable flags (currently --browser-mcp-arg). */
-  repeatableFlags: Map<string, string[]>
-}
-
-/**
- * Flags that may be supplied multiple times and should be collected as an array.
- * Anything not in this set defaults to single-value semantics with last-write-wins.
- */
-const REPEATABLE_FLAGS = new Set(["browser-mcp-arg"])
-
-function parseArgs(argv: string[]): CliArgs {
-  const cmd = argv[0] ?? "run"
-  const flags = new Map<string, string>()
-  const repeatableFlags = new Map<string, string[]>()
-  for (let i = 1; i < argv.length; i++) {
-    const tok = argv[i]
-    if (tok.startsWith("--")) {
-      const eq = tok.indexOf("=")
-      const name = eq > 0 ? tok.slice(2, eq) : tok.slice(2)
-      const value = eq > 0 ? tok.slice(eq + 1) : (argv[++i] ?? "")
-      if (REPEATABLE_FLAGS.has(name)) {
-        const arr = repeatableFlags.get(name) ?? []
-        arr.push(value)
-        repeatableFlags.set(name, arr)
-      } else {
-        flags.set(name, value)
-      }
-    }
-  }
-  return { cmd, flags, repeatableFlags }
-}
-
-function getFlag(flags: Map<string, string>, name: string, fallback?: string) {
-  return flags.get(name) ?? fallback
-}
+// Argv parsing + getFlag live in cli-args.ts so unit tests can
+// exercise the parsing rules without triggering bin.ts's top-level
+// `main()` call.
+import type { CliArgs } from "./cli-args.js"
+import { parseArgs, getFlag } from "./cli-args.js"
+export { parseArgs, getFlag } from "./cli-args.js"
+export type { CliArgs } from "./cli-args.js"
 
 function getBoolFlag(
   flags: Map<string, string>,
@@ -86,24 +66,52 @@ function getBoolFlag(
  *      `synapse-device` JS bundle.
  */
 function autoDiscoverCuaHelperPath(): string | undefined {
+  return autoDiscoverSidecarPath("cua", "synapse-device-cua-helper")
+}
+
+function autoDiscoverFsHelperPath(): string | undefined {
+  return autoDiscoverSidecarPath("fs-helper", "synapse-device-fs-helper", [
+    join("target", "release", "synapse-device-fs-helper"),
+    "synapse-device-fs-helper",
+  ])
+}
+
+function autoDiscoverSidecarPath(
+  sidecarDir: string,
+  binName: string,
+  extraSuffixes: string[] = [binName]
+): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url))
-  const candidates = [
-    resolve(
-      here,
-      "..",
-      "..",
-      "..",
-      "sidecars",
-      "cua",
-      "synapse-device-cua-helper"
-    ),
-    resolve(here, "..", "..", "sidecars", "cua", "synapse-device-cua-helper"),
-    join(here, "synapse-device-cua-helper"),
+  const roots = [
+    resolve(here, "..", "..", "..", "sidecars", sidecarDir),
+    resolve(here, "..", "..", "sidecars", sidecarDir),
+    here,
   ]
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
+  for (const root of roots) {
+    for (const suffix of extraSuffixes) {
+      const candidate = join(root, suffix)
+      if (existsSync(candidate)) return candidate
+    }
   }
+  // Plain binName alongside the JS bundle.
+  const flat = join(here, binName)
+  if (existsSync(flat)) return flat
   return undefined
+}
+
+function isOn(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback
+  return value === "on" || value === "true" || value === "1"
+}
+
+function isOff(value: string | undefined): boolean {
+  return value === "off" || value === "false" || value === "0"
+}
+
+function parseIntEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback
+  const n = Number.parseInt(value, 10)
+  return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
 /**
@@ -158,11 +166,209 @@ async function main() {
       return
     }
     case "run": {
+      // ─── Filesystem builtin config (full v3 surface) ───
+      const fsRoot = getFlag(args.flags, "fs-root")
+      const fsHelperPath =
+        getFlag(args.flags, "fs-helper") ??
+        process.env.SYNAPSE_DEVICE_FS_HELPER_PATH ??
+        autoDiscoverFsHelperPath()
+      const brokerDir = getFlag(args.flags, "broker-dir")
+      const fsWorkDir =
+        getFlag(args.flags, "fs-work-dir") ??
+        process.env.SYNAPSE_DEVICE_FS_WORK_DIR ??
+        // Default: <dirname(broker file)>/fs. The broker always has a file
+        // path even when --broker-dir wasn't passed (createFileBackedBroker
+        // picks the OS-conventional location), so this default works in
+        // every deployment without requiring extra flags.
+        join(dirname(broker.brokerFilePath), "fs")
+      const fsTika =
+        getFlag(args.flags, "fs-tika-endpoint") ??
+        process.env.SYNAPSE_DEVICE_FS_TIKA_ENDPOINT
+      const fsEnableWrite = isOn(
+        getFlag(args.flags, "fs-enable-write") ??
+          process.env.SYNAPSE_DEVICE_FS_ENABLE_WRITE,
+        false
+      )
+      const fsEnableDelete = isOn(
+        getFlag(args.flags, "fs-enable-delete") ??
+          process.env.SYNAPSE_DEVICE_FS_ENABLE_DELETE,
+        false
+      )
+      const fsDisableRead = isOn(
+        getFlag(args.flags, "fs-disable-read") ??
+          process.env.SYNAPSE_DEVICE_FS_DISABLE_READ,
+        false
+      )
+      const fsDisableHistory = isOn(
+        getFlag(args.flags, "fs-disable-history") ??
+          process.env.SYNAPSE_DEVICE_FS_DISABLE_HISTORY,
+        false
+      )
+      const fsAllowUnversioned = isOn(
+        getFlag(args.flags, "fs-allow-unversioned-write") ??
+          process.env.SYNAPSE_DEVICE_FS_ALLOW_UNVERSIONED_WRITE,
+        false
+      )
+      const fsDisableLiveSearch = isOn(
+        getFlag(args.flags, "fs-disable-live-search") ??
+          process.env.SYNAPSE_DEVICE_FS_DISABLE_LIVE_SEARCH,
+        false
+      )
+      const fsDisableIndex = isOn(
+        getFlag(args.flags, "fs-disable-index") ??
+          process.env.SYNAPSE_DEVICE_FS_DISABLE_INDEX,
+        false
+      )
+      const fsIndexIgnore =
+        getFlag(args.flags, "fs-index-ignore") ??
+        process.env.SYNAPSE_DEVICE_FS_INDEX_IGNORE
+      const fsMaxReadMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-read-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_READ_MB,
+        10
+      )
+      const fsMaxWriteMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-write-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_WRITE_MB,
+        50
+      )
+      const fsMaxEditMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-edit-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_EDIT_MB,
+        50
+      )
+      const fsMaxHashMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-hash-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_HASH_MB,
+        fsMaxReadMb
+      )
+      const fsMaxExtractMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-extract-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_EXTRACT_MB,
+        50
+      )
+      const fsMaxSnapshotMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-snapshot-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_SNAPSHOT_MB,
+        500
+      )
+      const fsMaxHistoryList = parseIntEnv(
+        getFlag(args.flags, "fs-max-history-list") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_HISTORY_LIST,
+        200
+      )
+      const fsMaxSearchLimit = parseIntEnv(
+        getFlag(args.flags, "fs-max-search-limit") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_SEARCH_LIMIT,
+        200
+      )
+      const fsMaxOffset = parseIntEnv(
+        getFlag(args.flags, "fs-max-offset") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_OFFSET,
+        10_000
+      )
+      const fsMaxDiffSourceMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-diff-source-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_DIFF_SOURCE_MB,
+        5
+      )
+      const fsMaxDiffOutputMb = parseIntEnv(
+        getFlag(args.flags, "fs-max-diff-output-mb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_DIFF_OUTPUT_MB,
+        1
+      )
+      const fsMaxHistoryGb = parseIntEnv(
+        getFlag(args.flags, "fs-max-history-gb") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_HISTORY_GB,
+        5
+      )
+      const fsMaxVersionsPerPath = parseIntEnv(
+        getFlag(args.flags, "fs-max-versions-per-path") ??
+          process.env.SYNAPSE_DEVICE_FS_MAX_VERSIONS_PER_PATH,
+        100
+      )
+      const fsKeepRecentVersions = parseIntEnv(
+        getFlag(args.flags, "fs-keep-recent-versions") ??
+          process.env.SYNAPSE_DEVICE_FS_KEEP_RECENT_VERSIONS,
+        5
+      )
+      const fsHelperRpcTimeoutMs = parseIntEnv(
+        getFlag(args.flags, "fs-helper-rpc-timeout-ms") ??
+          process.env.SYNAPSE_DEVICE_FS_HELPER_RPC_TIMEOUT_MS,
+        30_000
+      )
+      // Shared environment snapshot + toolchain manager so every builtin
+      // looks at the same probed PATH and toolchain dir. install-bundles
+      // and run use the SAME --bundled-toolchain-dir / --toolchain-manifest
+      // defaults; ToolchainManager.resolve hits whatever install-bundles
+      // populated earlier.
+      const { detectTerminalEnvironment } = await import(
+        "./terminal/environment.js"
+      )
+      const { createToolchainManager } = await import(
+        "./terminal/toolchain-manager.js"
+      )
+      const { defaultPathResolver } = await import("./terminal/environment.js")
+      const environment = await detectTerminalEnvironment()
+      const manifestPath =
+        getFlag(args.flags, "toolchain-manifest") ??
+        process.env.SYNAPSE_DEVICE_TOOLCHAIN_MANIFEST ??
+        defaultManifestPath()
+      const toolchainDir =
+        getFlag(args.flags, "bundled-toolchain-dir") ??
+        process.env.SYNAPSE_DEVICE_TOOLCHAIN_DIR ??
+        defaultToolchainDir()
+      const toolchainManager = existsSync(manifestPath)
+        ? createToolchainManager({
+            manifestPath,
+            toolchainDir,
+            environment,
+            pathResolver: defaultPathResolver,
+            // Wire sidecar prestage dirs (and operator env override +
+            // package-root archives) so a first-run resolve on this
+            // device hits committed/staged archives BEFORE attempting
+            // any HTTPS fetch. Without this, the run path skips the
+            // sidecars and silently degrades to network — defeating the
+            // whole point of the optionalDependencies sidecar
+            // architecture. Install-bundles already passes the same
+            // dirs; symmetry between the two entry points means the
+            // operator gets identical behavior whether they pre-stage
+            // via install-bundles or just start `synapse-device run`.
+            prestageDirs: defaultPrestageDirs(defaultPackageRoot()),
+          })
+        : undefined
       const providers: CatalogProvider[] = [
         createFilesystemBuiltin({
-          rootPath: getFlag(args.flags, "fs-root"),
+          rootPath: fsRoot,
+          helperPath: fsHelperPath,
+          helperWorkDir: fsWorkDir,
+          tikaEndpoint: fsTika,
+          enableRead: !fsDisableRead,
+          enableWrite: fsEnableWrite,
+          enableDelete: fsEnableDelete,
+          enableHistory: !fsDisableHistory,
+          enableLiveSearch: !fsDisableLiveSearch,
+          enableIndex: !fsDisableIndex,
+          enableRichText: Boolean(fsTika),
+          allowUnversionedWrite: fsAllowUnversioned,
+          maxReadBytes: fsMaxReadMb * 1024 * 1024,
+          maxWriteBytes: fsMaxWriteMb * 1024 * 1024,
+          maxEditFileBytes: fsMaxEditMb * 1024 * 1024,
+          maxHashBytes: fsMaxHashMb * 1024 * 1024,
+          maxExtractBytes: fsMaxExtractMb * 1024 * 1024,
+          maxSnapshotBytes: fsMaxSnapshotMb * 1024 * 1024,
+          maxHistoryListLimit: fsMaxHistoryList,
+          maxSearchLimit: fsMaxSearchLimit,
+          maxOffset: fsMaxOffset,
+          maxDiffSourceBytes: fsMaxDiffSourceMb * 1024 * 1024,
+          maxDiffOutputBytes: fsMaxDiffOutputMb * 1024 * 1024,
+          maxHistoryBytes: fsMaxHistoryGb * 1024 * 1024 * 1024,
+          maxVersionsPerPath: fsMaxVersionsPerPath,
+          keepRecentVersionsPerPath: fsKeepRecentVersions,
+          helperRpcTimeoutMs: fsHelperRpcTimeoutMs,
+          indexIgnore: fsIndexIgnore,
         }),
-        createCommandlineBuiltin(),
+        createCommandlineBuiltin({ environment, toolchainManager }),
       ]
       const cuaHelperPath =
         getFlag(args.flags, "cua-helper") ??
@@ -405,11 +611,110 @@ async function main() {
       process.exit(2)
       return
     }
+    case "install-bundles": {
+      // Eager download + extract for every program in the manifest. Shares
+      // --bundled-toolchain-dir / --toolchain-manifest with `run` so the
+      // same on-disk layout is read by the runtime.
+      const platformRaw = getFlag(args.flags, "platform") ?? "auto"
+      const parsed = parsePlatformAndArch(platformRaw)
+      if (!parsed) {
+        console.error(
+          `synapse-device install-bundles: unsupported --platform ${platformRaw} (use auto | linux-x64 | linux-arm64 | darwin-x64 | darwin-arm64 | win32-x64)`
+        )
+        process.exit(2)
+      }
+      const archOverride = getFlag(args.flags, "arch")
+      const manifestPath =
+        getFlag(args.flags, "toolchain-manifest") ??
+        process.env.SYNAPSE_DEVICE_TOOLCHAIN_MANIFEST ??
+        defaultManifestPath()
+      const toolchainDir =
+        getFlag(args.flags, "bundled-toolchain-dir") ??
+        process.env.SYNAPSE_DEVICE_TOOLCHAIN_DIR ??
+        defaultToolchainDir()
+      const manifest = loadManifestFromPath(manifestPath)
+      const skipExisting = getFlag(args.flags, "force") !== "true"
+      const strict = getFlag(args.flags, "strict") === "true"
+      const requirePrestaged =
+        getFlag(args.flags, "require-prestaged") === "true"
+      const prestageDirsRaw = getFlag(args.flags, "prestage-dir")
+      const prestageDirs: string[] = []
+      if (prestageDirsRaw) {
+        for (const seg of prestageDirsRaw.split(",")) {
+          const t = seg.trim()
+          if (t.length > 0) prestageDirs.push(t)
+        }
+      }
+      // Always merge defaults (env var + package-root bundles/archives)
+      // after explicit flags so operators can extend, not replace, the
+      // standard lookup order.
+      prestageDirs.push(...defaultPrestageDirs(defaultPackageRoot()))
+      const report = await installBundles({
+        manifest,
+        toolchainDir,
+        platform: parsed.platform,
+        arch: archOverride ?? parsed.arch,
+        skipExisting,
+        prestageDirs,
+        requirePrestaged,
+        logger: (m) => console.log(m),
+      })
+      console.log(JSON.stringify(report, null, 2))
+      const summary = summarizeInstallReport(report)
+      // Exit 1 if anything FAILED, or nothing usable on disk after the
+      // run (no installs AND no "already installed" cache hits — e.g.
+      // `--platform=win32-x64` against the current manifest produces
+      // four skipped + zero installed, which the operator should NOT
+      // misread as "toolchain ready"). --strict additionally fails if
+      // ANY entry was unhealthy-skipped (incomplete platform matrix
+      // for the target — useful for CI).
+      if (
+        summary.failedCount > 0 ||
+        !summary.anyUsable ||
+        (strict && summary.unhealthySkippedCount > 0)
+      ) {
+        console.error(
+          `install-bundles: not all programs usable on ${parsed.platform}-${archOverride ?? parsed.arch} ` +
+            `(installed=${summary.installedCount} healthy_skipped=${summary.healthySkippedCount} ` +
+            `unhealthy_skipped=${summary.unhealthySkippedCount} failed=${summary.failedCount})`
+        )
+        process.exit(1)
+      }
+      return
+    }
     default: {
       console.error(`unknown command: ${args.cmd}`)
       process.exit(2)
     }
   }
+}
+
+function mapHostPlatform(platform: NodeJS.Platform): string {
+  if (platform === "win32") return "win32-" + process.arch
+  if (platform === "darwin") return "darwin-" + process.arch
+  return "linux-" + process.arch
+}
+
+/**
+ * Parse a `--platform=...` argument into `{platform, arch}`. Accepts:
+ *   - "auto" / "" / undefined → host platform + host arch
+ *   - "linux" / "darwin" / "win32" → that platform + host arch
+ *   - "linux-x64" / "darwin-arm64" / "win32-x64" → platform + explicit arch
+ */
+function parsePlatformAndArch(
+  value: string
+): { platform: TerminalPlatform; arch: string } | null {
+  const v =
+    value === "auto" || value === "" ? mapHostPlatform(process.platform) : value
+  let platform: TerminalPlatform | null = null
+  if (v.startsWith("win32")) platform = "win32"
+  else if (v.startsWith("darwin")) platform = "darwin"
+  else if (v.startsWith("linux")) platform = "linux"
+  if (!platform) return null
+  const dashIdx = v.indexOf("-")
+  const arch = dashIdx >= 0 ? v.slice(dashIdx + 1) : process.arch
+  if (!arch) return null
+  return { platform, arch }
 }
 
 main().catch((err) => {

@@ -84,11 +84,13 @@ type VisibleAccessBindingRow = {
     | "conversation"
     | "actor"
     | "actor_in_conversation"
+    | "remote_agent"
+    | "remote_agent_in_conversation"
   subject_workspace_id: string | null
   subject_workspace_member_id: string | null
   subject_actor_id: string | null
+  subject_remote_agent_id: string | null
   subject_conversation_id: string | null
-  subject_conversation_actor_context_id: string | null
   conversation_type_mask_override: number | null
   status: "active" | "revoked"
   created_by_workspace_member_id: string | null
@@ -97,6 +99,7 @@ type VisibleAccessBindingRow = {
   created_at: string | Date | null
   revoked_at: string | Date | null
   actor_id: string | null
+  remote_agent_id: string | null
   conversation_id: string | null
 }
 
@@ -135,7 +138,6 @@ async function buildVisibilitySubjects(params: ResolveParams) {
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     sessionId: params.sessionId,
-    conversationActorContextId: params.conversationActorContextId,
   })
 }
 
@@ -158,7 +160,7 @@ function accessBindingMatchesContext(
   row: VisibleAccessBindingRow,
   params: Pick<
     ResolveParams,
-    "actorId" | "conversationId" | "workspaceMemberId"
+    "actorId" | "conversationId" | "workspaceMemberId" | "remoteAgentId"
   >
 ) {
   switch (row.target_type) {
@@ -172,14 +174,22 @@ function accessBindingMatchesContext(
     case "conversation":
       return row.conversation_id === params.conversationId
     case "actor":
-      // Remote-agent flow has no actorId; actor / actor_in_conversation grants
-      // are inapplicable to a non-actor subject and must never match (even
-      // accidentally, e.g. if both sides were undefined).
       return params.actorId !== undefined && row.actor_id === params.actorId
     case "actor_in_conversation":
       return (
         params.actorId !== undefined &&
         row.actor_id === params.actorId &&
+        row.conversation_id === params.conversationId
+      )
+    case "remote_agent":
+      return (
+        params.remoteAgentId !== undefined &&
+        row.remote_agent_id === params.remoteAgentId
+      )
+    case "remote_agent_in_conversation":
+      return (
+        params.remoteAgentId !== undefined &&
+        row.remote_agent_id === params.remoteAgentId &&
         row.conversation_id === params.conversationId
       )
   }
@@ -205,19 +215,68 @@ async function loadVisibleAccessBindings(params: {
   })
 
   const map = new Map<string, VisibleAccessBindingRow[]>()
-  for (const row of rows) {
+  for (const rawRow of rows) {
+    const row = rawRow as typeof rawRow & {
+      subject_kind?: string | null
+      subject_workspace_id_via_join?: string | null
+      subject_workspace_member_id_via_join?: string | null
+      subject_actor_id_via_join?: string | null
+      subject_remote_agent_id_via_join?: string | null
+      subject_conversation_id_via_join?: string | null
+      scope_kind?: string | null
+      scope_conversation_id_via_join?: string | null
+    }
+    let target_type: VisibleAccessBindingRow["target_type"] | null
+    if (row.subject_kind === "actor" && row.scope_kind === "conversation") {
+      target_type = "actor_in_conversation"
+    } else if (
+      row.subject_kind === "remote_agent" &&
+      row.scope_kind === "conversation"
+    ) {
+      target_type = "remote_agent_in_conversation"
+    } else {
+      switch (row.subject_kind) {
+        case "workspace":
+          target_type = "workspace"
+          break
+        case "workspace_member":
+          target_type = "workspace_member"
+          break
+        case "conversation":
+          target_type = "conversation"
+          break
+        case "actor":
+          target_type = "actor"
+          break
+        case "remote_agent":
+          target_type = "remote_agent"
+          break
+        default:
+          target_type = null
+      }
+    }
+    if (target_type === null) {
+      // Unknown subject kind — fail closed by dropping the row entirely.
+      continue
+    }
+    const subjectActorId = row.subject_actor_id_via_join ?? null
+    const subjectRemoteAgentId = row.subject_remote_agent_id_via_join ?? null
+    const subjectConversationId =
+      row.scope_conversation_id_via_join ??
+      row.subject_conversation_id_via_join ??
+      null
     const visible: VisibleAccessBindingRow = {
       id: row.id,
       workspace_id: row.workspace_id,
       resource_type: params.resourceType,
       resource_id: row.resource_id,
-      target_type: row.target_type,
-      subject_workspace_id: row.subject_workspace_id,
-      subject_workspace_member_id: row.subject_workspace_member_id,
-      subject_actor_id: row.subject_actor_id,
-      subject_conversation_id: row.subject_conversation_id,
-      subject_conversation_actor_context_id:
-        row.subject_conversation_actor_context_id,
+      target_type,
+      subject_workspace_id: row.subject_workspace_id_via_join ?? null,
+      subject_workspace_member_id:
+        row.subject_workspace_member_id_via_join ?? null,
+      subject_actor_id: subjectActorId,
+      subject_remote_agent_id: subjectRemoteAgentId,
+      subject_conversation_id: subjectConversationId,
       conversation_type_mask_override: row.conversation_type_mask_override,
       status: row.status,
       created_by_workspace_member_id: row.created_by_workspace_member_id,
@@ -225,8 +284,9 @@ async function loadVisibleAccessBindings(params: {
       metadata: {},
       created_at: row.created_at,
       revoked_at: row.revoked_at,
-      actor_id: row.subject_actor_id,
-      conversation_id: row.subject_conversation_id,
+      actor_id: subjectActorId,
+      remote_agent_id: subjectRemoteAgentId,
+      conversation_id: subjectConversationId,
     }
     const entries = map.get(visible.resource_id) || []
     entries.push(visible)

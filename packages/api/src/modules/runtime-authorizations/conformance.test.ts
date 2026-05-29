@@ -68,9 +68,19 @@ type CommandlineFixture = {
       commandMatchType: string
       commandText?: string
       workingDirectory?: string
+      program?: string
+      argvPrefix?: string[]
+      allowBundledToolchain?: boolean
+      allowedEnv?: string[]
     }
   }>
-  request: { executor: string; commandText: string; workingDirectory: string }
+  request: {
+    executor: string
+    commandText?: string
+    workingDirectory?: string
+    program?: string
+    argvPrefix?: string[]
+  }
   expected: boolean
 }
 
@@ -176,10 +186,32 @@ test("conformance: commandline matcher", async (t) => {
   const fixtures = readFixtures<CommandlineFixture>("commandline.json")
   for (const fixture of fixtures) {
     await t.test(fixture.description, () => {
-      const action = {
-        capability: "commandline" as const,
-        commandline: fixture.request,
-      }
+      const reqIsExecFile = fixture.request.executor === "exec_file"
+      const action = reqIsExecFile
+        ? {
+            capability: "commandline" as const,
+            toolName: "exec_file",
+            summary: "",
+            commandline: {
+              executor: "exec_file" as const,
+              commandMatchType: "argv_exact" as const,
+              program: fixture.request.program ?? "",
+              argvPrefix: fixture.request.argvPrefix ?? [],
+              workingDirectory: fixture.request.workingDirectory,
+            },
+          }
+        : {
+            capability: "commandline" as const,
+            toolName: "bash",
+            summary: "",
+            commandline: {
+              executor:
+                (fixture.request.executor as "bash" | "powershell") ?? "bash",
+              commandMatchType: "exact" as const,
+              commandText: fixture.request.commandText ?? "",
+              workingDirectory: fixture.request.workingDirectory ?? "",
+            },
+          }
       let anyMatched = false
       for (const policy of fixture.policies) {
         if (policy.capability !== "commandline") continue
@@ -195,4 +227,70 @@ test("conformance: commandline matcher", async (t) => {
       assert.equal(anyMatched, fixture.expected)
     })
   }
+})
+
+// ─── scopeIsPushdown (post-review round 11) ─────────────────────────────────
+
+test("filesystemPolicyMatches: scopeIsPushdown matches any read grant regardless of path", async () => {
+  const grant = {
+    capability: "filesystem" as const,
+    filesystem: { access: "read" as const, pathPrefixes: ["/repo"] },
+  }
+  const action = {
+    capability: "filesystem" as const,
+    filesystem: {
+      access: "read" as const,
+      pathPrefixes: ["/"], // would normally NOT match /repo grant
+      scopeIsPushdown: true,
+    },
+  }
+  assert.equal(filesystemPolicyMatches(grant as any, action as any), true)
+})
+
+test("filesystemPolicyMatches: scopeIsPushdown still requires non-empty grant prefixes", async () => {
+  const grant = {
+    capability: "filesystem" as const,
+    filesystem: { access: "read" as const, pathPrefixes: [] },
+  }
+  const action = {
+    capability: "filesystem" as const,
+    filesystem: {
+      access: "read" as const,
+      pathPrefixes: ["/"],
+      scopeIsPushdown: true,
+    },
+  }
+  assert.equal(filesystemPolicyMatches(grant as any, action as any), false)
+})
+
+test("filesystemPolicyMatches: scopeIsPushdown + write request needs write grant (no escalation)", async () => {
+  const grant = {
+    capability: "filesystem" as const,
+    filesystem: { access: "read" as const, pathPrefixes: ["/repo"] },
+  }
+  const action = {
+    capability: "filesystem" as const,
+    filesystem: {
+      access: "write" as const,
+      pathPrefixes: ["/"],
+      scopeIsPushdown: true,
+    },
+  }
+  assert.equal(filesystemPolicyMatches(grant as any, action as any), false)
+})
+
+test("filesystemPolicyMatches: scopeIsPushdown + write grant covers read request", async () => {
+  const grant = {
+    capability: "filesystem" as const,
+    filesystem: { access: "write" as const, pathPrefixes: ["/repo"] },
+  }
+  const action = {
+    capability: "filesystem" as const,
+    filesystem: {
+      access: "read" as const,
+      pathPrefixes: ["/"],
+      scopeIsPushdown: true,
+    },
+  }
+  assert.equal(filesystemPolicyMatches(grant as any, action as any), true)
 })

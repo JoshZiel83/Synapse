@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "programs": {
+    "node": {
+      "version": "22.11.0",
+      "platforms": {
+        "linux-x64": {
+          "sha256": "4f862bab52039835efbe613b532238b6e4dde98d139a34e6923193e073438b13",
+          "download": {
+            "url": "https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.gz",
+            "license": "MIT"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 1,
+          "executable": "bin/node",
+          "binDir": "bin",
+          "requiredFiles": ["bin/node"],
+          "env": {}
+        },
+        "darwin-arm64": {
+          "_TODO": "Pick a current node-v<VER>-darwin-arm64.tar.gz from https://nodejs.org/dist; fill sha256 from the SHASUMS256.txt file in the same directory.",
+          "sha256": "<fill>",
+          "download": {
+            "url": "https://nodejs.org/dist/v22.11.0/node-v22.11.0-darwin-arm64.tar.gz",
+            "license": "MIT"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 1,
+          "executable": "bin/node",
+          "binDir": "bin",
+          "requiredFiles": ["bin/node"],
+          "env": {}
+        },
+        "win32-x64": {
+          "_TODO": "Node official Windows zips are .zip not .tar.gz; v1 install-bundles only supports tar.gz. Either add zip support to the bundle pipeline or rebuild the Windows asset as tar.gz before populating.",
+          "sha256": "<fill>",
+          "download": {
+            "url": "TODO",
+            "license": "MIT"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 1,
+          "executable": "bin/node.exe",
+          "binDir": "bin",
+          "requiredFiles": ["bin/node.exe"],
+          "env": {}
+        }
+      }
+    },
+    "python": {
+      "_TODO": "Pick a current CPython 3.12.x install_only build from astral-sh/python-build-standalone; fill the URL DATE_TAG + patch number + sha256 from the release's SHA256SUMS file. License: PSF-2.0.",
+      "version": "3.12.x",
+      "platforms": {
+        "linux-x64": {
+          "sha256": "<fill from python-build-standalone release SHA256SUMS>",
+          "download": {
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/<DATE_TAG>/cpython-3.12.<patch>+<DATE_TAG>-x86_64-unknown-linux-gnu-install_only.tar.gz",
+            "license": "PSF-2.0"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 0,
+          "executable": "python/bin/python3",
+          "binDir": "python/bin",
+          "requiredFiles": ["python/bin/python3", "python/lib"],
+          "env": {
+            "PYTHONHOME": "{rootDir}/python"
+          }
+        }
+      }
+    },
+    "git": {
+      "_TODO": "Build the Synapse git asset via bundles/build-scripts/git-linux-x64.sh, publish to a Synapse-controlled release/CDN, then fill version + URL + sha256 here. Do NOT point at jpillora/installer or any other third-party portable-git distribution.",
+      "version": "<git version from build script>",
+      "platforms": {
+        "linux-x64": {
+          "sha256": "<fill from local build output of git-linux-x64.sh>",
+          "download": {
+            "url": "<Synapse release URL>",
+            "license": "GPL-2.0"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 0,
+          "executable": "bin/git",
+          "binDir": "bin",
+          "requiredFiles": [
+            "bin/git",
+            "libexec/git-core/git-remote-https",
+            "share/git-core/templates"
+          ],
+          "env": {
+            "GIT_EXEC_PATH": "{rootDir}/libexec/git-core",
+            "GIT_TEMPLATE_DIR": "{rootDir}/share/git-core/templates"
+          }
+        }
+      }
+    }
+  }
+}

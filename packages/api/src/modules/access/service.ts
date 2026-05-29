@@ -75,6 +75,14 @@ export async function authorizeAction(
     subject: AccessSubject
     action: AccessAction
     resourceId: string
+    /**
+     * Post-D4 P2 fix: same `runtimeSubjectIds` / `runtimeScopeSubjectIds`
+     * plumbing as authorizePermission, so callers using the action-named
+     * shortcut still benefit from group-subject grant visibility
+     * (`subject=conversation C`) and memory_access_grants overlay.
+     */
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   const spec = getAccessActionSpec(params.action)
@@ -83,6 +91,8 @@ export async function authorizeAction(
     resourceId: params.resourceId,
     permission: spec.permission,
     subject: params.subject,
+    runtimeSubjectIds: params.runtimeSubjectIds,
+    runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
   })
 }
 
@@ -93,6 +103,12 @@ export async function authorizePermission(
     resourceType: AccessResourceType
     resourceId: string
     permission: string
+    /**
+     * PR5 fix: when provided, the evaluator's memory_access_grants overlay
+     * is consulted. Pass these through from `buildRuntimePrincipalContext`.
+     */
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   return checkPermission(db, {
@@ -100,6 +116,8 @@ export async function authorizePermission(
     resourceId: params.resourceId,
     permission: params.permission,
     subject: params.subject,
+    runtimeSubjectIds: params.runtimeSubjectIds,
+    runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
   })
 }
 
@@ -109,6 +127,19 @@ export async function listAuthorizedResourceIds(
     subject: AccessSubject
     action: AccessAction
     limit?: number
+    /**
+     * PR-fix-round-3: scope-aware listing. Without it, `lookupResources`
+     * falls back to "scope IS NULL only" which hides scoped grants from
+     * tool/skill/plugin enumeration even though checkPermission would
+     * accept them. Pass through from buildRuntimePrincipalContext.
+     */
+    runtimeScopeSubjectIds?: readonly string[]
+    /**
+     * Post-D4 P2 fix: also thread runtimeSubjectIds so `subject=conversation C`
+     * RAB grants surface in tool/skill/plugin enumeration the same way
+     * they do in checkPermission.
+     */
+    runtimeSubjectIds?: readonly string[]
   }
 ) {
   const spec = getAccessActionSpec(params.action)
@@ -117,6 +148,8 @@ export async function listAuthorizedResourceIds(
     permission: spec.permission,
     subject: params.subject,
     limit: params.limit,
+    runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+    runtimeSubjectIds: params.runtimeSubjectIds,
   })
 }
 
@@ -127,6 +160,14 @@ export async function filterAuthorizedPermissionResourceIds(
     resourceType: AccessResourceType
     permission: string
     resourceIds: string[]
+    /**
+     * PR5 fix: propagate runtime context so the memory_access_grants
+     * overlay (and the scope-aware RAB filter) sees the same subject set
+     * the controller built via buildRuntimePrincipalContext. Without these
+     * the explicit grants land in the DB but never affect read paths.
+     */
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   const uniqueIds = Array.from(new Set(params.resourceIds.filter(Boolean)))
@@ -138,6 +179,8 @@ export async function filterAuthorizedPermissionResourceIds(
         resourceType: params.resourceType,
         resourceId,
         permission: params.permission,
+        runtimeSubjectIds: params.runtimeSubjectIds,
+        runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
       }),
     }))
   )

@@ -26,11 +26,69 @@ import {
   RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
   SERVER_FACADE_ERROR_CODES,
 } from "./enums.js"
+
+// ───────────────────────────── subject + scope (wire) ────────────────────────
+// subject-scope-refactor: SubjectRefWireSchema is a deliberately narrow wire
+// schema for device-capability-binding flows. Allowed kinds (4):
+//   workspace / actor / remote_agent / conversation.
+// Explicitly REJECTED: workspace_member (current device access-binding routes
+// have no member-target path and admitting it would expand the surface), plus
+// user / external / system (platform-wide subjects cannot anchor a workspace-
+// bound device-capability binding). The wider `SubjectRef` in shared/access
+// still admits workspace_member etc for non-device flows (skills, memory,
+// evaluator) — those are out of scope here.
+
+export const SubjectRefWireSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("workspace"), workspaceId: z.string().uuid() }),
+  z.object({ kind: z.literal("actor"), actorId: z.string().uuid() }),
+  z.object({
+    kind: z.literal("remote_agent"),
+    remoteAgentId: z.string().uuid(),
+  }),
+  z.object({
+    kind: z.literal("conversation"),
+    conversationId: z.string().uuid(),
+  }),
+])
+export type SubjectRefWire = z.infer<typeof SubjectRefWireSchema>
+
+// subject-scope-refactor: ScopedSubjectTargetWireSchema applies a strict
+// combination whitelist via superRefine. Only three shapes are allowed:
+//   (a) scope == null + any of the 4 SubjectRefWireSchema kinds;
+//   (b) (subject.kind=actor, scope.kind=conversation);
+//   (c) (subject.kind=remote_agent, scope.kind=conversation).
+// All other combinations RAISE Zod issue. Future scope kinds require
+// synchronized updates to subjectScopeLabel, UI copy, specificityRank, the
+// tg_runtime_authorization_grant_validate trigger, and full test coverage.
+
+export const ScopedSubjectTargetWireSchema = z
+  .object({
+    subject: SubjectRefWireSchema,
+    scope: SubjectRefWireSchema.optional(),
+  })
+  .superRefine((target, ctx) => {
+    if (!target.scope) {
+      return // any subject kind is fine when unscoped
+    }
+    const allowed =
+      (target.subject.kind === "actor" ||
+        target.subject.kind === "remote_agent") &&
+      target.scope.kind === "conversation"
+    if (!allowed) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `scoped target (subject.kind=${target.subject.kind}, scope.kind=${target.scope.kind}) is not in whitelist (only actor+conversation, remote_agent+conversation)`,
+        path: ["scope"],
+      })
+    }
+  })
+export type DeviceCapabilityAccessTarget = z.infer<
+  typeof ScopedSubjectTargetWireSchema
+>
 
 // ───────────────────────────── runtime authorization ─────────────────────────
 
@@ -54,25 +112,97 @@ export const RuntimeBrowserPolicySchema = z.object({
     .optional(),
 })
 
-export const RuntimeCommandlinePolicySchema = z.object({
-  executor: z.literal("bash"),
+// Commandline policy on the wire (snake_case). Mirrors the equivalent
+// shared schema (packages/shared/src/access/policies/commandline.ts —
+// WireCommandlinePolicySchema) but is duplicated here to preserve
+// device-protocol's package-independence (no @synapse/shared dep so we
+// don't invert the dependency graph). A parity test in
+// packages/api/src/modules/capability-projection/commandline-parity.test.ts
+// asserts both copies accept/reject identical sample inputs so a field
+// drift fails CI.
+
+const ShellWireSchema = z.object({
+  executor: z.enum(["bash", "powershell"]),
   command_match_type: z.enum(["exact", "prefix", "tool"]),
   command_text: z.string().optional(),
   working_directory: z.string().optional(),
+  allow_bundled_toolchain: z.boolean().optional(),
+  allowed_env: z.array(z.string()).optional(),
 })
+
+const ExecFileWireSchema = z.object({
+  executor: z.literal("exec_file"),
+  command_match_type: z.enum([
+    "argv_exact",
+    "argv_prefix",
+    "argv_exact_preapproved",
+  ]),
+  program: z.string(),
+  argv_prefix: z.array(z.string()).optional(),
+  working_directory: z.string().optional(),
+  allow_bundled_toolchain: z.boolean().optional(),
+  allowed_env: z.array(z.string()).optional(),
+})
+
+export const RuntimeCommandlinePolicySchema = z.discriminatedUnion("executor", [
+  ShellWireSchema,
+  ExecFileWireSchema,
+])
+export type RuntimeCommandlinePolicy = z.infer<
+  typeof RuntimeCommandlinePolicySchema
+>
 
 export const RuntimeCuaPolicySchema = z.object({
   access: z.enum(["read", "write"]),
 })
 
-export const RuntimeAuthorizationGrantSpecSchema = z.object({
-  capability: z.enum(RUNTIME_AUTHORIZATION_CAPABILITIES),
-  filesystem: RuntimeFilesystemPolicySchema.optional(),
-  browser: RuntimeBrowserPolicySchema.optional(),
-  commandline: RuntimeCommandlinePolicySchema.optional(),
-  cua: RuntimeCuaPolicySchema.optional(),
-})
+// subject-scope-refactor: RuntimeAuthorizationGrantSpecSchema gains a
+// branch-specific superRefine: for each `capability`, the corresponding
+// per-capability payload MUST be present and valid. Without this, a corrupt
+// grant `{capability:"filesystem"}` missing `filesystem` would pass schema and
+// later be silently treated as no_match by the runtime matcher, defeating the
+// `grant_data_corrupt` denial path. Matched against package-neutral fixtures
+// under repo-root `__fixtures__/grant-policy/` (parallel API-side validator
+// `validateGrantPolicyForCapability` in packages/shared/src/access/policies/
+// grant.ts uses camelCase keys; this snake_case version is wire-equivalent).
+export const RuntimeAuthorizationGrantSpecSchema = z
+  .object({
+    capability: z.enum(RUNTIME_AUTHORIZATION_CAPABILITIES),
+    filesystem: RuntimeFilesystemPolicySchema.optional(),
+    browser: RuntimeBrowserPolicySchema.optional(),
+    commandline: RuntimeCommandlinePolicySchema.optional(),
+    cua: RuntimeCuaPolicySchema.optional(),
+  })
+  .superRefine((spec, ctx) => {
+    const branch =
+      spec.capability === "filesystem"
+        ? spec.filesystem
+        : spec.capability === "browser"
+          ? spec.browser
+          : spec.capability === "commandline"
+            ? spec.commandline
+            : spec.capability === "cua"
+              ? spec.cua
+              : undefined
+    if (!branch) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `grant spec missing required branch payload "${spec.capability}"`,
+        path: [spec.capability],
+      })
+    }
+  })
+/** @deprecated camelCase API-side spec; wire (snake_case) consumers should use
+ * RuntimeAuthorizationGrantWireSpec. API-side camelCase consumers should
+ * import SharedRuntimeAuthorizationGrantSpec from @synapse/shared. */
 export type RuntimeAuthorizationGrantSpec = z.infer<
+  typeof RuntimeAuthorizationGrantSpecSchema
+>
+// subject-scope-refactor: wire-side snake_case alias. API code MUST disambiguate
+// (Shared* for camelCase, *WireSpec for snake_case). Bare
+// `RuntimeAuthorizationGrantSpec` is forbidden in packages/api/src (residue
+// scan in plan Batch 12).
+export type RuntimeAuthorizationGrantWireSpec = z.infer<
   typeof RuntimeAuthorizationGrantSpecSchema
 >
 
@@ -97,7 +227,7 @@ export const OperationEnvelopeSchema = z.object({
   runtime_authorization: z
     .object({
       grant_ids: z.array(z.string()),
-      grant_scope: z.enum(RUNTIME_AUTHORIZATION_GRANT_SCOPES),
+      grant_scope: z.string().min(1).max(64),
       grant_specs: z.array(RuntimeAuthorizationGrantSpecSchema),
       retry_nonce: z.string().optional(),
     })
@@ -246,25 +376,14 @@ export const ClaimDaemonInputSchema = z.object({
 })
 export type ClaimDaemonInput = z.infer<typeof ClaimDaemonInputSchema>
 
+// subject-scope-refactor: SetActiveDeviceCapabilitiesInputSchema.target now
+// reuses ScopedSubjectTargetWireSchema — a strict whitelist that rejects
+// `workspace_member` subjects and any scoped combination outside
+// `actor+conversation` / `remote_agent+conversation`. wire field
+// `device_capability_ids` is unchanged (SDK + server protocol stability).
 export const SetActiveDeviceCapabilitiesInputSchema = z.object({
   workspaceId: z.string().uuid(),
-  target: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("workspace"), workspaceId: z.string().uuid() }),
-    z.object({ kind: z.literal("actor"), actorId: z.string().uuid() }),
-    z.object({
-      kind: z.literal("conversation"),
-      conversationId: z.string().uuid(),
-    }),
-    z.object({
-      kind: z.literal("actor_in_conversation"),
-      actorId: z.string().uuid(),
-      conversationId: z.string().uuid(),
-    }),
-    z.object({
-      kind: z.literal("remote_agent"),
-      remoteAgentId: z.string().uuid(),
-    }),
-  ]),
+  target: ScopedSubjectTargetWireSchema,
   device_capability_ids: z.array(z.string().uuid()),
 })
 export type SetActiveDeviceCapabilitiesInput = z.infer<
@@ -382,7 +501,6 @@ export {
   HOST_KINDS,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
   SERVER_FACADE_ERROR_CODES,

@@ -74,7 +74,11 @@ export async function resolveActorCapabilitySurface(
     } else {
       mcpTools = await projectToolsForPrincipal({
         ...resolved,
-        principal: { kind: "actor", actorId: resolved.actorId, conversationId: resolved.conversationId },
+        principal: {
+          kind: "actor",
+          actorId: resolved.actorId,
+          conversationId: resolved.conversationId,
+        },
         consumer: "chat_runtime",
       })
     }

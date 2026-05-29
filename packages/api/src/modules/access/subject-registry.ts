@@ -33,7 +33,6 @@ function subjectColumns(ref: SubjectRef): {
   actor_id: string | null
   remote_agent_id: string | null
   conversation_id: string | null
-  conversation_actor_context_id: string | null
   user_id: string | null
   external_identity_key: string | null
 } {
@@ -43,7 +42,6 @@ function subjectColumns(ref: SubjectRef): {
     actor_id: null,
     remote_agent_id: null,
     conversation_id: null,
-    conversation_actor_context_id: null,
     user_id: null,
     external_identity_key: null,
   }
@@ -71,12 +69,6 @@ function subjectColumns(ref: SubjectRef): {
         ...base,
         kind: "conversation",
         conversation_id: ref.conversationId,
-      }
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return {
-        ...base,
-        kind: "conversation_actor_context",
-        conversation_actor_context_id: ref.contextId,
       }
     case SUBJECT_KIND.USER:
       return { ...base, kind: "user", user_id: ref.userId }
@@ -144,33 +136,36 @@ async function resolveOwningWorkspaceId(
     }
     case SUBJECT_KIND.CONVERSATION: {
       // Conversations are either internal (workspace-scoped via
-      // internal_workspace_id) or external (no workspace). External
-      // conversations are platform-wide subjects.
+      // internal_workspace_id) or external (cross-workspace).
+      //
+      // P2 fix (post-D4): for external conversations we derive a "rooted"
+      // workspace from the creator's workspace_members row so the conversation
+      // subject's workspace_id matches what evaluator.loadConversationRow
+      // surfaces (COALESCE(internal_workspace_id, creator_member.workspace_id)).
+      // Without this alignment the memory_spaces trigger rejects external
+      // conversations as memory owner/scope even though the evaluator would
+      // have allowed the access.
       const row = await db
-        .selectFrom("conversations")
-        .select("internal_workspace_id")
-        .where("id", "=", ref.conversationId)
+        .selectFrom("conversations as c")
+        .leftJoin(
+          "workspace_members as creator_member",
+          "creator_member.id",
+          "c.created_by_workspace_member_id"
+        )
+        .select(
+          sql<string | null>`COALESCE(
+            c.internal_workspace_id,
+            creator_member.workspace_id
+          )`.as("workspace_id")
+        )
+        .where("c.id", "=", ref.conversationId)
         .executeTakeFirst()
       if (!row) {
         throw new Error(
           `upsertAccessSubject: conversations(${ref.conversationId}) not found`
         )
       }
-      return row.internal_workspace_id
-    }
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT: {
-      const row = await db
-        .selectFrom("conversation_actor_contexts as cac")
-        .innerJoin("conversations as c", "c.id", "cac.conversation_id")
-        .select("c.internal_workspace_id")
-        .where("cac.id", "=", ref.contextId)
-        .executeTakeFirst()
-      if (!row) {
-        throw new Error(
-          `upsertAccessSubject: conversation_actor_contexts(${ref.contextId}) not found`
-        )
-      }
-      return row.internal_workspace_id
+      return row.workspace_id
     }
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
@@ -199,11 +194,6 @@ export function rowToSubjectRef(row: AccessSubjectRow): SubjectRef {
       return {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: row.conversation_id!,
-      }
-    case "conversation_actor_context":
-      return {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: row.conversation_actor_context_id!,
       }
     case "user":
       return { kind: SUBJECT_KIND.USER, userId: row.user_id! }
@@ -251,9 +241,6 @@ export async function upsertAccessSubject(
       break
     case SUBJECT_KIND.CONVERSATION:
       lookup = lookup.where("conversation_id", "=", ref.conversationId)
-      break
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      lookup = lookup.where("conversation_actor_context_id", "=", ref.contextId)
       break
     case SUBJECT_KIND.USER:
       lookup = lookup.where("user_id", "=", ref.userId)
@@ -312,6 +299,27 @@ export async function loadAccessSubject(
   return row ? rowToSubjectRef(row) : null
 }
 
+/**
+ * subject-scope-refactor: pg-form variant of loadAccessSubject. Reads the
+ * access_subjects row over the supplied transactional client so the result
+ * reflects writes made earlier in the same transaction (and approval-time
+ * reads stay on a single connection, matching the "all approval consistency
+ * checks happen on the same pg client" plan).
+ */
+export async function loadAccessSubjectOn(
+  client: import("../../infrastructure/events/index.js").Queryable,
+  subjectId: string
+): Promise<SubjectRef | null> {
+  const result = await client.query(
+    `SELECT id, kind, workspace_id, workspace_member_id, actor_id, remote_agent_id,
+            conversation_id, user_id, external_identity_key
+       FROM access_subjects WHERE id = $1 LIMIT 1`,
+    [subjectId]
+  )
+  if (result.rows.length === 0) return null
+  return rowToSubjectRef(result.rows[0] as AccessSubjectRow)
+}
+
 export async function loadAccessSubjectMany(
   db: KyselyDb,
   subjectIds: readonly string[]
@@ -361,9 +369,6 @@ export async function findAccessSubjectId(
       break
     case SUBJECT_KIND.CONVERSATION:
       lookup = lookup.where("conversation_id", "=", ref.conversationId)
-      break
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      lookup = lookup.where("conversation_actor_context_id", "=", ref.contextId)
       break
     case SUBJECT_KIND.USER:
       lookup = lookup.where("user_id", "=", ref.userId)
@@ -429,10 +434,10 @@ export async function upsertAccessSubjectOn(
     client,
     `INSERT INTO access_subjects (
        kind, workspace_id, workspace_member_id, actor_id,
-       remote_agent_id, conversation_id, conversation_actor_context_id,
+       remote_agent_id, conversation_id,
        user_id, external_identity_key
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT DO NOTHING
      RETURNING id`,
     [
@@ -442,7 +447,6 @@ export async function upsertAccessSubjectOn(
       columns.actor_id,
       columns.remote_agent_id,
       columns.conversation_id,
-      columns.conversation_actor_context_id,
       columns.user_id,
       columns.external_identity_key,
     ]
@@ -507,9 +511,15 @@ async function resolveOwningWorkspaceIdOn(
       return r.rows[0].workspace_id
     }
     case SUBJECT_KIND.CONVERSATION: {
-      const r = await executeSqlOn<{ internal_workspace_id: string | null }>(
+      // P2 fix (post-D4): same COALESCE rule as upsertAccessSubject — root
+      // external conversations on the creator's workspace so memory triggers
+      // align with evaluator.loadConversationRow.
+      const r = await executeSqlOn<{ workspace_id: string | null }>(
         client,
-        `SELECT internal_workspace_id FROM conversations WHERE id = $1`,
+        `SELECT COALESCE(c.internal_workspace_id, cm.workspace_id) AS workspace_id
+           FROM conversations c
+           LEFT JOIN workspace_members cm ON cm.id = c.created_by_workspace_member_id
+          WHERE c.id = $1`,
         [ref.conversationId]
       )
       if (!r.rows[0]) {
@@ -517,23 +527,7 @@ async function resolveOwningWorkspaceIdOn(
           `upsertAccessSubjectOn: conversations(${ref.conversationId}) not found`
         )
       }
-      return r.rows[0].internal_workspace_id
-    }
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT: {
-      const r = await executeSqlOn<{ internal_workspace_id: string | null }>(
-        client,
-        `SELECT c.internal_workspace_id
-         FROM conversation_actor_contexts cac
-         JOIN conversations c ON c.id = cac.conversation_id
-         WHERE cac.id = $1`,
-        [ref.contextId]
-      )
-      if (!r.rows[0]) {
-        throw new Error(
-          `upsertAccessSubjectOn: conversation_actor_contexts(${ref.contextId}) not found`
-        )
-      }
-      return r.rows[0].internal_workspace_id
+      return r.rows[0].workspace_id
     }
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
@@ -570,11 +564,6 @@ function whereClauseFor(ref: SubjectRef): {
         condition: "conversation_id = $2",
         values: [ref.conversationId],
       }
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return {
-        condition: "conversation_actor_context_id = $2",
-        values: [ref.contextId],
-      }
     case SUBJECT_KIND.USER:
       return { condition: "user_id = $2", values: [ref.userId] }
     case SUBJECT_KIND.EXTERNAL:
@@ -585,4 +574,20 @@ function whereClauseFor(ref: SubjectRef): {
     case SUBJECT_KIND.SYSTEM:
       return { condition: "TRUE", values: [] }
   }
+}
+
+/**
+ * subject-scope-refactor: Kysely-transaction variant of upsertAccessSubject.
+ * Accepts DatabaseTransaction so callers in atomic claim / approval paths
+ * commit the subject upsert + grant insert in the same transaction. Since
+ * `Transaction<Database>` is assignable to `Kysely<Database>` structurally,
+ * this just delegates — kept as a named export to make intent explicit at
+ * call sites and to mirror the `upsertAccessSubjectOn(client: QueryExecutor)`
+ * pg-form helper.
+ */
+export async function upsertAccessSubjectOnTrx(
+  trx: import("../../infrastructure/database/kysely.js").DatabaseTransaction,
+  ref: SubjectRef
+): Promise<string> {
+  return upsertAccessSubject(trx as unknown as KyselyDb, ref)
 }

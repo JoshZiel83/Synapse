@@ -2,10 +2,13 @@ import { emitEvent } from "../../infrastructure/events/index.js"
 import type {
   ActorAction,
   ConversationFeedEventPayloadMap,
+  SubjectRef,
   UUID,
 } from "@synapse/shared"
+import { SUBJECT_KIND } from "@synapse/shared"
 import { query } from "../../infrastructure/database/index.js"
-import { createMemory } from "../memory/service.js"
+import { createMemory, presetToOwnerScope } from "../memory/service.js"
+import type { MemoryPreset } from "../memory/service.js"
 import {
   createGeneratedActorPixelArtAvatarFile,
   type PixelArtAvatarOptionsInput,
@@ -21,7 +24,7 @@ import {
   listConversationParticipants,
 } from "../chat/service.js"
 
-const ACTOR_MEMORY_SPACE_TYPES = new Set([
+const ACTOR_MEMORY_PRESETS = new Set<MemoryPreset>([
   "participant_private",
   "conversation_shared",
   "actor_private",
@@ -181,44 +184,50 @@ async function handleCreateMemory(
 ): Promise<void> {
   const metadata = action.metadata ?? {}
   const session = context.sessionId ? await getSession(context.sessionId) : null
-  const requestedSpaceType =
+  const requestedPreset =
     typeof metadata.spaceType === "string"
       ? metadata.spaceType
       : typeof metadata.scope === "string"
         ? metadata.scope
         : "participant_private"
-  const normalizedRequestedSpaceType =
-    requestedSpaceType === "actor_in_conversation"
+  const normalizedPreset =
+    requestedPreset === "actor_in_conversation"
       ? "participant_private"
-      : requestedSpaceType === "conversation"
+      : requestedPreset === "conversation"
         ? "conversation_shared"
-        : requestedSpaceType === "actor_global"
+        : requestedPreset === "actor_global"
           ? "actor_private"
-          : requestedSpaceType
-  const effectiveSpaceType = !ACTOR_MEMORY_SPACE_TYPES.has(
-    normalizedRequestedSpaceType
+          : requestedPreset
+  const effectivePreset: MemoryPreset = !ACTOR_MEMORY_PRESETS.has(
+    normalizedPreset as MemoryPreset
   )
     ? "participant_private"
     : !session?.conversation_id &&
-        (normalizedRequestedSpaceType === "participant_private" ||
-          normalizedRequestedSpaceType === "conversation_shared")
+        (normalizedPreset === "participant_private" ||
+          normalizedPreset === "conversation_shared")
       ? "actor_private"
-      : normalizedRequestedSpaceType
+      : (normalizedPreset as MemoryPreset)
+
   const conversationId =
-    effectiveSpaceType === "participant_private" ||
-    effectiveSpaceType === "conversation_shared"
+    effectivePreset === "participant_private" ||
+    effectivePreset === "conversation_shared"
       ? session?.conversation_id
       : undefined
 
-  const memory = await createMemory(workspaceId, {
-    spaceType: effectiveSpaceType as any,
-    actorId:
-      effectiveSpaceType === "participant_private" ||
-      effectiveSpaceType === "actor_private"
-        ? actorId
-        : undefined,
+  const ownerScope = presetToOwnerScope(effectivePreset, {
+    workspaceId,
+    actorId,
     conversationId,
-    workspaceMemberId: undefined,
+  })
+  if (!ownerScope) {
+    throw new Error(
+      `orchestrator.handleCreateMemory: unable to derive owner/scope for preset=${effectivePreset}`
+    )
+  }
+
+  const memory = await createMemory(workspaceId, {
+    owner: ownerScope.owner,
+    scope: ownerScope.scope,
     category: ((metadata.category as string | undefined) ?? "fact") as any,
     importance: (metadata.importance as number | undefined) ?? 0.5,
     confidence: (metadata.confidence as number | undefined) ?? 0.8,
@@ -255,8 +264,9 @@ async function handleCreateMemory(
         actorId,
       },
       memoryId: memory.id,
-      memorySpaceType: memory.spaceType,
-      memoryScope: memory.ownerScope,
+      memoryOwner: memory.owner,
+      memoryScope: memory.scope,
+      memoryNamespaceKey: memory.namespaceKey,
       memoryCategory: memory.category,
       textDigest: memory.textDigest,
       sourceItemId: memory.sourceItemId,
@@ -269,7 +279,9 @@ async function handleCreateMemory(
         : "memory_saved",
       actorId,
       memoryId: memory.id,
-      memorySpaceType: memory.spaceType,
+      memoryOwnerKind: memory.owner.kind,
+      memoryScopeKind: memory.scope?.kind,
+      memoryNamespaceKey: memory.namespaceKey,
       memoryCategory: memory.category,
       textDigest: memory.textDigest,
     },

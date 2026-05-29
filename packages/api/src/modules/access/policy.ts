@@ -1,12 +1,9 @@
 /**
  * Conversation-type policy enforcement helpers for access grants.
  *
- * P0/P1b: this file (formerly `conversation-type-validation.ts`) is the
- * canonical entry point access guards/grant-issuance flows use to check that
- * a target conversation matches the policy mask. It accepts an injected
- * `db: KyselyDb` so tests can run against a per-test database, and avoids
- * importing chat/service (which would drag in the global pool through
- * `listConversationParticipants`) — the participant check is inlined here.
+ * D3: refactored to accept ScopedSubjectTarget (`{ subject, scope? }`) directly
+ * instead of the legacy string `CapabilityAccessTargetType`. Callers branch on
+ * `target.subject.kind` + `target.scope?.kind` for routing.
  */
 
 import {
@@ -18,7 +15,7 @@ import {
   SUBJECT_KIND,
   type ConversationTypeKey,
 } from "@synapse/shared"
-import type { CapabilityAccessTargetType } from "@synapse/shared/types"
+import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubject } from "./subject-registry.js"
 
@@ -33,19 +30,25 @@ function formatConversationTypeKey(value: ConversationTypeKey) {
   return value.replaceAll("_", " ")
 }
 
+/**
+ * D3: a target carries an optional `conversation_type_mask_override` only when
+ * its principal is workspace-wide (workspace) or actor-wide (actor) and not
+ * already scoped to a single conversation. Scoped targets (conversation
+ * subject, or actor + scope=conversation) inherit the parent mask verbatim.
+ */
 export function targetSupportsConversationTypeOverride(
-  targetType: CapabilityAccessTargetType
+  target: CapabilityAccessTarget
 ) {
-  // Only workspace + actor targets carry a custom conversation-type policy
-  // mask; conversation/workspace_member/actor_in_conversation targets are
-  // pinned to the parent.
-  switch (targetType) {
-    case "workspace":
-    case "actor":
+  if (target.scope?.kind === SUBJECT_KIND.CONVERSATION) {
+    // e.g. actor + scope=conversation — pinned to the scope's conversation.
+    return false
+  }
+  switch (target.subject.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
       return true
-    case "workspace_member":
-    case "conversation":
-    case "actor_in_conversation":
+    default:
       return false
   }
 }
@@ -77,13 +80,13 @@ export function assertConversationTypeMaskWithinParent(params: {
 }
 
 export function assertGrantConversationTypeOverrideAllowed(params: {
-  targetType: CapabilityAccessTargetType
+  target: CapabilityAccessTarget
   parentConversationTypeMask: number
   conversationTypeMaskOverride: number | null | undefined
   buildError: (message: string) => Error
   invalidMaskMessage: string
 }) {
-  if (!targetSupportsConversationTypeOverride(params.targetType)) {
+  if (!targetSupportsConversationTypeOverride(params.target)) {
     if (
       params.conversationTypeMaskOverride !== null &&
       params.conversationTypeMaskOverride !== undefined
@@ -128,23 +131,38 @@ async function loadConversationTargetRecord(
   }
 }
 
-async function isActorActiveParticipantInConversation(
+/**
+ * Post-D4 round 8 review (P2): generic "is this subject an active
+ * participant in the conversation?" matching the runtime visibility
+ * layer's view. The earlier helper special-cased actors; the policy
+ * validator missed remote_agent + scope=conversation grants, which the
+ * runtime path already matches (see loadVisibleAccessBindings
+ * remote_agent_in_conversation branch). Same SQL shape, parametrized
+ * over participant_type + subject_id.
+ *
+ * Round 9 review extension: also accepts `workspace_member` — the
+ * conversation_participants enum supports it (workspace_member / actor
+ * / remote_agent / external / system), evaluator-scope.test.ts already
+ * exercises workspace_member + scope=conversation, so the creation
+ * path must validate it too. Without this branch a controller could
+ * write a "member M in conversation C" grant for a member who isn't in
+ * C, then runtime would interpret it under the active-participant
+ * model — silent semantic mismatch.
+ */
+async function isSubjectActiveParticipantInConversation(
   db: KyselyDb,
-  conversationId: string,
-  actorId: string
+  params: {
+    conversationId: string
+    participantType: "actor" | "remote_agent" | "workspace_member"
+    subjectId: string
+  }
 ): Promise<boolean> {
-  // P0 DI / P1b: lookup the actor subject id, then filter conversation_participants
-  // by subject_id (the polymorphic actor_id column was dropped).
-  const actorSubjectId = await upsertAccessSubject(db, {
-    kind: SUBJECT_KIND.ACTOR,
-    actorId,
-  })
   const row = await db
     .selectFrom("conversation_participants")
     .select("id")
-    .where("conversation_id", "=", conversationId)
-    .where("participant_type", "=", "actor")
-    .where("subject_id", "=", actorSubjectId)
+    .where("conversation_id", "=", params.conversationId)
+    .where("participant_type", "=", params.participantType)
+    .where("subject_id", "=", params.subjectId)
     .where("state", "=", "active")
     .limit(1)
     .executeTakeFirst()
@@ -153,20 +171,68 @@ async function isActorActiveParticipantInConversation(
 
 export async function validateConversationScopedAccessTarget(params: {
   db: KyselyDb
-  targetType: CapabilityAccessTargetType
-  conversationId?: string | null
-  actorId?: string | null
+  target: CapabilityAccessTarget
   effectiveConversationTypeMask: number
   buildError: (message: string) => Error
 }) {
-  if (
-    params.targetType !== "conversation" &&
-    params.targetType !== "actor_in_conversation"
-  ) {
+  // Determine which conversation the target is anchored to (if any).
+  // Post-D4 round 8 review (P2): handle ALL scope=conversation shapes
+  // (subject=conversation, actor + scope=conversation, AND
+  // remote_agent + scope=conversation). The runtime visibility layer
+  // already matches remote_agent_in_conversation grants (see
+  // loadVisibleAccessBindings in tool-resolver.ts) so the creation path
+  // must validate them too, otherwise a remote_agent + scope=conv grant
+  // could be written without checking conversation type policy or
+  // remote-agent participation.
+  let conversationId: string | null = null
+  let activeParticipantCheck: {
+    participantType: "actor" | "remote_agent" | "workspace_member"
+    principalId: string
+    principalKind: "actor" | "remote_agent" | "workspace_member"
+  } | null = null
+  if (params.target.subject.kind === SUBJECT_KIND.CONVERSATION) {
+    conversationId = (params.target.subject as { conversationId: string })
+      .conversationId
+  } else if (params.target.scope?.kind === SUBJECT_KIND.CONVERSATION) {
+    conversationId = (params.target.scope as { conversationId: string })
+      .conversationId
+    if (params.target.subject.kind === SUBJECT_KIND.ACTOR) {
+      activeParticipantCheck = {
+        participantType: "actor",
+        principalId: (params.target.subject as { actorId: string }).actorId,
+        principalKind: "actor",
+      }
+    } else if (params.target.subject.kind === SUBJECT_KIND.REMOTE_AGENT) {
+      activeParticipantCheck = {
+        participantType: "remote_agent",
+        principalId: (params.target.subject as { remoteAgentId: string })
+          .remoteAgentId,
+        principalKind: "remote_agent",
+      }
+    } else if (params.target.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER) {
+      // Round 9 review extension: workspace_member IS a valid
+      // conversation_participants kind — runtime supports
+      // workspace_member + scope=conv grants (see evaluator-scope tests).
+      // Treat them the same as actor/remote_agent here so creation can't
+      // write a "member M in conversation C" grant for a member who
+      // isn't actually in C.
+      activeParticipantCheck = {
+        participantType: "workspace_member",
+        principalId: (params.target.subject as { memberId: string }).memberId,
+        principalKind: "workspace_member",
+      }
+    }
+    // For subject=workspace + scope=conversation: workspace can never
+    // be a conversation_participants row (it's a group, not a participant)
+    // so we only validate that the conversation exists and matches the
+    // conversation-type policy. The runtime layer narrows visibility to
+    // callers actually inside conversation C separately.
+  } else {
+    // Not a conversation-scoped target — nothing to validate.
     return null
   }
 
-  if (!params.conversationId) {
+  if (!conversationId) {
     throw params.buildError(
       "conversationId is required for conversation-scoped access targets."
     )
@@ -174,7 +240,7 @@ export async function validateConversationScopedAccessTarget(params: {
 
   const conversation = await loadConversationTargetRecord(
     params.db,
-    params.conversationId
+    conversationId
   )
   if (!conversation) {
     throw params.buildError("Selected conversation was not found.")
@@ -194,24 +260,46 @@ export async function validateConversationScopedAccessTarget(params: {
     )
   }
 
-  if (params.targetType !== "actor_in_conversation") {
+  if (!activeParticipantCheck) {
     return conversation
   }
 
-  if (!params.actorId) {
-    throw params.buildError(
-      "actorId is required for actor_in_conversation access targets."
-    )
+  let principalRef
+  switch (activeParticipantCheck.principalKind) {
+    case "actor":
+      principalRef = {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: activeParticipantCheck.principalId,
+      } as const
+      break
+    case "remote_agent":
+      principalRef = {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: activeParticipantCheck.principalId,
+      } as const
+      break
+    case "workspace_member":
+      principalRef = {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: activeParticipantCheck.principalId,
+      } as const
+      break
   }
-
-  const hasActiveActor = await isActorActiveParticipantInConversation(
-    params.db,
-    params.conversationId,
-    params.actorId
-  )
-  if (!hasActiveActor) {
+  const principalSubjectId = await upsertAccessSubject(params.db, principalRef)
+  const hasActive = await isSubjectActiveParticipantInConversation(params.db, {
+    conversationId,
+    participantType: activeParticipantCheck.participantType,
+    subjectId: principalSubjectId,
+  })
+  if (!hasActive) {
+    const label =
+      activeParticipantCheck.principalKind === "actor"
+        ? "actor"
+        : activeParticipantCheck.principalKind === "remote_agent"
+          ? "remote agent"
+          : "workspace member"
     throw params.buildError(
-      "Selected actor must already be an active participant in the selected conversation."
+      `Selected ${label} must already be an active participant in the selected conversation.`
     )
   }
 

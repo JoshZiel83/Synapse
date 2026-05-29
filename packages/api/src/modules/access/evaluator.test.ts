@@ -766,59 +766,11 @@ test(
   }
 )
 
-test(
-  "checkPermission(conversation_actor_context.memory_read) is true for the actor that owns the context and false otherwise",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const userId = await insertUser(db)
-      const workspaceId = await insertWorkspace(db, userId)
-      const actorId = await insertActor(db, workspaceId)
-      const otherActor = await insertActor(db, workspaceId)
-      const conversationId = await insertConversation(db, { workspaceId })
-      await addActorParticipant(db, conversationId, actorId)
-      const contextRow = await db
-        .insertInto("conversation_actor_contexts")
-        .values({ conversation_id: conversationId, actor_id: actorId })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-
-      const ok = await checkPermission(db, {
-        resourceType: "conversation_actor_context",
-        resourceId: contextRow.id as string,
-        permission: "memory_read",
-        subject: { type: "actor", id: actorId },
-      })
-      assert.equal(ok, true)
-      const denied = await checkPermission(db, {
-        resourceType: "conversation_actor_context",
-        resourceId: contextRow.id as string,
-        permission: "memory_read",
-        subject: { type: "actor", id: otherActor },
-      })
-      assert.equal(denied, false)
-    })
-  }
-)
-
-test(
-  "checkPermission(conversation_actor_context.*) returns false for non-existent context",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const userId = await insertUser(db)
-      const workspaceId = await insertWorkspace(db, userId)
-      const memberId = await insertWorkspaceMember(db, workspaceId, userId)
-      const allowed = await checkPermission(db, {
-        resourceType: "conversation_actor_context",
-        resourceId: "00000000-0000-0000-0000-000000000000",
-        permission: "memory_read",
-        subject: { type: "workspace_member", id: memberId },
-      })
-      assert.equal(allowed, false)
-    })
-  }
-)
+// subject-scope-refactor merge: conversation_actor_context resource_type
+// was dropped (replaced by (subject, scope?) two-tuple). The two former
+// tests for `checkPermission(conversation_actor_context.memory_read)` and
+// `checkPermission(conversation_actor_context.*)` are intentionally
+// deleted — the resource type and permissions no longer exist.
 
 test(
   "checkPermission(memory_item.read) for a workspace_shared memory uses the workspace permission check",
@@ -827,11 +779,16 @@ test(
     await withTestDb(async (db) => {
       const { workspaceId, ownerMemberId, guestMemberId } =
         await seedOwnerMemberAndGuest(db)
+      const workspaceSubjectId = await upsertAccessSubject(db, {
+        kind: "workspace",
+        workspaceId,
+      } as any)
       const spaceRow = await db
         .insertInto("memory_spaces")
         .values({
           workspace_id: workspaceId,
-          space_type: "workspace_shared",
+          owner_subject_id: workspaceSubjectId,
+          namespace_key: "default",
         })
         .returning("id")
         .executeTakeFirstOrThrow()

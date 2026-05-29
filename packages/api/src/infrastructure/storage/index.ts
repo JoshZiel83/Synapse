@@ -437,3 +437,162 @@ export async function downloadAndSave(
     originalName: downloaded.originalName,
   };
 }
+
+/**
+ * Strict, signature-explicit variant of `downloadToBuffer`:
+ *  - `maxBytes` is required (no accidental unbounded reads)
+ *  - validates initial URL host against `allowedHosts` if provided
+ *  - manually follows redirects (max 5 hops) and re-validates every hop
+ *    against `allowedHosts` — relevant for CDNs that redirect to short-
+ *    lived signed URLs on a different host
+ *  - pre-checks `Content-Length` against `maxBytes` before reading
+ *  - streams the body, aborts as soon as the accumulated size would
+ *    exceed `maxBytes`
+ *
+ * Used by the QQ connector for inbound media ingest, where attachment
+ * URLs are short-lived CDN links that could legitimately point anywhere
+ * under the QQ media domain but should never exceed UPLOAD_SIZE_LIMITS.
+ */
+export interface DownloadToBufferWithLimitOpts {
+  url: string;
+  /** Hard cap on body size in bytes. Required to prevent OOM. */
+  maxBytes: number;
+  originalName?: string;
+  /**
+   * Lowercased host whitelist. When provided, both the initial URL and
+   * every redirect target's host must appear in this list. Subdomains
+   * are NOT auto-allowed — list each explicitly. Empty array means
+   * "no restriction" (use sparingly).
+   */
+  allowedHosts?: string[];
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 60_000;
+const MAX_REDIRECTS = 5;
+
+export async function downloadToBufferWithLimit(
+  opts: DownloadToBufferWithLimitOpts,
+): Promise<{ buffer: Buffer; mimeType: string; sizeBytes: number; originalName: string }> {
+  const { url, maxBytes, allowedHosts, timeoutMs, signal } = opts;
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    throw new Error('downloadToBufferWithLimit: maxBytes must be > 0');
+  }
+
+  const checkHost = (target: string) => {
+    if (!allowedHosts || allowedHosts.length === 0) return;
+    let host: string;
+    try {
+      host = new URL(target).hostname.toLowerCase();
+    } catch {
+      throw new Error(`downloadToBufferWithLimit: invalid URL: ${target}`);
+    }
+    if (!allowedHosts.includes(host)) {
+      throw new Error(
+        `downloadToBufferWithLimit: host ${host} not in allowedHosts`,
+      );
+    }
+  };
+
+  const controller = new AbortController();
+  const linkedSignal = signal;
+  const linkAbort = () => controller.abort();
+  if (linkedSignal) {
+    if (linkedSignal.aborted) controller.abort();
+    else linkedSignal.addEventListener('abort', linkAbort, { once: true });
+  }
+  const timer = setTimeout(
+    () => controller.abort(),
+    timeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS,
+  );
+
+  let currentUrl = url;
+  let res: Response | undefined;
+
+  try {
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+      checkHost(currentUrl);
+      res = await fetch(currentUrl, {
+        signal: controller.signal,
+        redirect: 'manual',
+      });
+      // Manual redirect handling: only follow if explicit Location header
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        if (!location) {
+          throw new Error(
+            `downloadToBufferWithLimit: redirect without Location header (status ${res.status})`,
+          );
+        }
+        if (hop === MAX_REDIRECTS) {
+          throw new Error(
+            `downloadToBufferWithLimit: too many redirects (>${MAX_REDIRECTS})`,
+          );
+        }
+        currentUrl = new URL(location, currentUrl).toString();
+        // Drain body so the connection can be reused
+        await res.arrayBuffer().catch(() => undefined);
+        continue;
+      }
+      break;
+    }
+
+    if (!res || !res.ok) {
+      throw new Error(
+        `downloadToBufferWithLimit: failed to download: ${res?.status} ${res?.statusText}`,
+      );
+    }
+
+    // Content-Length precheck — abort early if server declared > maxBytes
+    const contentLength = res.headers.get('content-length');
+    if (contentLength) {
+      const declared = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        controller.abort();
+        throw new Error(
+          `downloadToBufferWithLimit: declared size ${declared} > maxBytes ${maxBytes}`,
+        );
+      }
+    }
+
+    const contentType = res.headers.get('content-type');
+
+    let originalName = opts.originalName;
+    if (!originalName) {
+      const urlPath = new URL(currentUrl).pathname;
+      originalName = path.basename(urlPath) || 'download';
+    }
+
+    if (!res.body) {
+      throw new Error('downloadToBufferWithLimit: response has no body');
+    }
+
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.length;
+      if (total > maxBytes) {
+        controller.abort();
+        reader.cancel().catch(() => undefined);
+        throw new Error(
+          `downloadToBufferWithLimit: body exceeded maxBytes ${maxBytes}`,
+        );
+      }
+      chunks.push(value);
+    }
+
+    const buffer = Buffer.concat(chunks.map((c) => Buffer.from(c)));
+    const mimeType = await resolveBufferMimeType(buffer, contentType);
+    return { buffer, mimeType, sizeBytes: buffer.length, originalName };
+  } finally {
+    clearTimeout(timer);
+    if (linkedSignal) {
+      linkedSignal.removeEventListener('abort', linkAbort);
+    }
+  }
+}

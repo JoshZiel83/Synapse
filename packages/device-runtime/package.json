@@ -17,6 +17,15 @@
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=23"
   },
+  "files": [
+    "dist",
+    "bundles/manifest.json",
+    "bundles/manifest.production.template.json",
+    "bundles/README.md",
+    "bundles/build-scripts",
+    "bundles/__fixtures__",
+    "bundles/archives"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -27,15 +36,25 @@
     "@synapse/device-protocol": "*",
     "@synapse/shared": "*",
     "semver": "^7.6.3",
+    "tar": "^7.5.0",
+    "trash": "^9.0.0",
+    "unzipper": "^0.12.3",
     "ws": "^8.18.0",
     "zod": "^3.23.0"
   },
   "optionalDependencies": {
-    "chrome-devtools-mcp": "0.7.0"
+    "chrome-devtools-mcp": "0.7.0",
+    "@synapse/device-runtime-bundles-linux-x64": "0.1.0",
+    "@synapse/device-runtime-bundles-linux-arm64": "0.1.0",
+    "@synapse/device-runtime-bundles-darwin-x64": "0.1.0",
+    "@synapse/device-runtime-bundles-darwin-arm64": "0.1.0",
+    "@synapse/device-runtime-bundles-win32-x64": "0.1.0",
+    "@synapse/device-runtime-bundles-win32-arm64": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",
     "@types/semver": "^7.5.8",
+    "@types/unzipper": "^0.10.10",
     "@types/ws": "^8.5.13",
     "tsx": "^4.20.0",
     "typescript": "^5.4.0"

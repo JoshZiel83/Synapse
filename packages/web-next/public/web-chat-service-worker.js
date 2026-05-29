@@ -626,6 +626,7 @@
     GENERIC_MODEL_RESPONSE_MEDIA_INGEST: "generic_model_response_media_ingest",
     FEISHU_DOCS_DOWNLOAD_MEDIA: "feishu_docs_download_media",
     FEISHU_DRIVE_DOWNLOAD_FILE: "feishu_drive_download_file",
+    QQ_INBOUND_MEDIA_INGEST: "qq_inbound_media_ingest",
     SKILL_MIRROR_IMPORT: "skill_mirror_import",
     GENERATED_USER_AVATAR: "generated_user_avatar",
     GENERATED_OFFICIAL_ACTOR_AVATAR: "generated_official_actor_avatar",
@@ -655,7 +656,8 @@
   ];
   var EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.FEISHU_DOCS_DOWNLOAD_MEDIA,
-    FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE
+    FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE,
+    FILE_ORIGIN_SYSTEMS.QQ_INBOUND_MEDIA_INGEST
   ];
   var PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT
@@ -899,21 +901,12 @@
     REMOTE_AGENT_MACHINE_LIFECYCLE_STATE.ONLINE,
     REMOTE_AGENT_MACHINE_LIFECYCLE_STATE.OFFLINE
   ];
-  var RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
-    ONCE: "once",
-    ACTOR: "actor",
-    CONVERSATION: "conversation",
-    ACTOR_IN_CONVERSATION: "actor_in_conversation",
-    REMOTE_AGENT: "remote_agent",
-    WORKSPACE: "workspace"
-  };
-  var RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
-    RUNTIME_AUTHORIZATION_GRANT_SCOPE.ONCE,
-    RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR,
-    RUNTIME_AUTHORIZATION_GRANT_SCOPE.CONVERSATION,
-    RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR_IN_CONVERSATION,
-    RUNTIME_AUTHORIZATION_GRANT_SCOPE.REMOTE_AGENT,
-    RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE
+  var TRANSPORT_KINDS = [
+    "feishu",
+    "weixin",
+    "wecom",
+    "dingtalk",
+    "qq"
   ];
 
   // ../shared/dist/types/index.js
@@ -1032,6 +1025,9 @@
     }
   ];
   var ACTOR_DOC_TEMPLATE_MAP = Object.fromEntries(ACTOR_DOC_TEMPLATES.map((template) => [template.key, template]));
+  function isTransportKind(value) {
+    return typeof value === "string" && TRANSPORT_KINDS.includes(value);
+  }
   function getRandomUUIDFactory() {
     const cryptoRef = globalThis;
     if (typeof cryptoRef.crypto?.randomUUID === "function") {
@@ -1088,7 +1084,7 @@
     if (!value || typeof value !== "object")
       return false;
     const entity = value;
-    return typeof entity.participantType === "string" && entity.participantType.trim().length > 0 && (entity.participantId === void 0 || typeof entity.participantId === "string") && (entity.workspaceMemberId === void 0 || typeof entity.workspaceMemberId === "string") && (entity.actorId === void 0 || typeof entity.actorId === "string") && (entity.userId === void 0 || typeof entity.userId === "string") && (entity.externalUserKey === void 0 || typeof entity.externalUserKey === "string") && (entity.transportAddressId === void 0 || typeof entity.transportAddressId === "string") && (entity.transportKind === void 0 || entity.transportKind === "feishu" || entity.transportKind === "weixin") && (entity.name === void 0 || typeof entity.name === "string") && (entity.title === void 0 || typeof entity.title === "string") && (entity.role === void 0 || typeof entity.role === "string") && (entity.avatarUrl === void 0 || typeof entity.avatarUrl === "string") && (entity.avatarEmoji === void 0 || typeof entity.avatarEmoji === "string");
+    return typeof entity.participantType === "string" && entity.participantType.trim().length > 0 && (entity.participantId === void 0 || typeof entity.participantId === "string") && (entity.workspaceMemberId === void 0 || typeof entity.workspaceMemberId === "string") && (entity.actorId === void 0 || typeof entity.actorId === "string") && (entity.userId === void 0 || typeof entity.userId === "string") && (entity.externalUserKey === void 0 || typeof entity.externalUserKey === "string") && (entity.transportAddressId === void 0 || typeof entity.transportAddressId === "string") && (entity.transportKind === void 0 || isTransportKind(entity.transportKind)) && (entity.name === void 0 || typeof entity.name === "string") && (entity.title === void 0 || typeof entity.title === "string") && (entity.role === void 0 || typeof entity.role === "string") && (entity.avatarUrl === void 0 || typeof entity.avatarUrl === "string") && (entity.avatarEmoji === void 0 || typeof entity.avatarEmoji === "string");
   }
   function normalizeCanonicalContentBlocks(blocks) {
     const normalized = [];
@@ -1321,6 +1317,39 @@
     workspace: 60 * 60 * 1e3
     // 60 minutes
   };
+
+  // ../shared/dist/access/policies/commandline-normalize.js
+  var BUNDLE_ELIGIBLE_PROGRAMS = [
+    "python",
+    "node",
+    "git"
+  ];
+  var BUNDLE_PROGRAM_PLATFORM_KEYS = {
+    python: ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
+    node: ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
+    // git-for-windows ships only Windows portable binaries (MinGit x64 +
+    // arm64). Linux/Darwin git is intentionally absent — see the
+    // BUNDLE_ELIGIBLE_PROGRAMS comment above for the follow-up plan.
+    git: ["win32-x64", "win32-arm64"]
+  };
+  for (const program of BUNDLE_ELIGIBLE_PROGRAMS) {
+    const keys = BUNDLE_PROGRAM_PLATFORM_KEYS[program];
+    if (!keys || keys.length === 0) {
+      throw new Error(`BUNDLE_ELIGIBLE_PROGRAMS lists "${program}" but BUNDLE_PROGRAM_PLATFORM_KEYS has no non-empty entry. Add the program's platformKeys (matching packages/device-runtime/bundles/manifest.json) or remove it from BUNDLE_ELIGIBLE_PROGRAMS so the API stops proposing allowBundledToolchain.`);
+    }
+  }
+  var BUNDLE_PROGRAM_PLATFORMS = (() => {
+    const out = {};
+    for (const [program, keys] of Object.entries(BUNDLE_PROGRAM_PLATFORM_KEYS)) {
+      const set = /* @__PURE__ */ new Set();
+      for (const key of keys) {
+        const platform = key.split("-")[0];
+        set.add(platform);
+      }
+      out[program] = Array.from(set);
+    }
+    return out;
+  })();
 
   // ../shared/dist/utils/index.js
   var GROUP_CONVERSATION_KIND = CONVERSATION_KIND.GROUP;
@@ -1764,7 +1793,6 @@
     ACTOR: "actor",
     REMOTE_AGENT: "remote_agent",
     CONVERSATION: "conversation",
-    CONVERSATION_ACTOR_CONTEXT: "conversation_actor_context",
     USER: "user",
     EXTERNAL: "external",
     SYSTEM: "system"
@@ -1775,7 +1803,6 @@
     SUBJECT_KIND.ACTOR,
     SUBJECT_KIND.REMOTE_AGENT,
     SUBJECT_KIND.CONVERSATION,
-    SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
     SUBJECT_KIND.USER,
     SUBJECT_KIND.EXTERNAL,
     SUBJECT_KIND.SYSTEM
@@ -1793,7 +1820,6 @@
     DEVICE: "device",
     DEVICE_EXPOSURE: "device_exposure",
     DEVICE_CAPABILITY: "device_capability",
-    CONVERSATION_ACTOR_CONTEXT: "conversation_actor_context",
     CONVERSATION: "conversation",
     MEMORY_SPACE: "memory_space",
     MEMORY_ITEM: "memory_item",
@@ -1813,7 +1839,6 @@
     ACCESS_RESOURCE_TYPE.DEVICE,
     ACCESS_RESOURCE_TYPE.DEVICE_EXPOSURE,
     ACCESS_RESOURCE_TYPE.DEVICE_CAPABILITY,
-    ACCESS_RESOURCE_TYPE.CONVERSATION_ACTOR_CONTEXT,
     ACCESS_RESOURCE_TYPE.CONVERSATION,
     ACCESS_RESOURCE_TYPE.MEMORY_SPACE,
     ACCESS_RESOURCE_TYPE.MEMORY_ITEM,
@@ -1855,6 +1880,32 @@
     ACCESS_BINDING_SOURCE.DEFAULT_OPEN,
     ACCESS_BINDING_SOURCE.APPROVAL,
     ACCESS_BINDING_SOURCE.SYSTEM
+  ];
+  var MEMORY_PERMISSION = {
+    READ: "read",
+    RECALL: "recall",
+    WRITE: "write",
+    EDIT: "edit",
+    DELETE: "delete",
+    MANAGE: "manage"
+  };
+  var MEMORY_PERMISSIONS = [
+    MEMORY_PERMISSION.READ,
+    MEMORY_PERMISSION.RECALL,
+    MEMORY_PERMISSION.WRITE,
+    MEMORY_PERMISSION.EDIT,
+    MEMORY_PERMISSION.DELETE,
+    MEMORY_PERMISSION.MANAGE
+  ];
+  var MEMORY_ACCESS_GRANT_STATUS = {
+    ACTIVE: "active",
+    REVOKED: "revoked",
+    SUPERSEDED: "superseded"
+  };
+  var MEMORY_ACCESS_GRANT_STATUSES = [
+    MEMORY_ACCESS_GRANT_STATUS.ACTIVE,
+    MEMORY_ACCESS_GRANT_STATUS.REVOKED,
+    MEMORY_ACCESS_GRANT_STATUS.SUPERSEDED
   ];
 
   // ../shared/dist/access/subject.js

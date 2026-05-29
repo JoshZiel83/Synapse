@@ -4,6 +4,7 @@ import {
   INTERACTION_REQUEST_KIND,
   SUBJECT_KIND,
   textBlocks,
+  type SubjectRef,
 } from "@synapse/shared"
 import {
   isGroupConversationKind,
@@ -28,7 +29,7 @@ import type {
   PlanApprovalDecision,
   PlanChecklistStep,
   RuntimeAuthorizationGrantOption,
-  RuntimeAuthorizationGrantSpec,
+  SharedRuntimeAuthorizationGrantSpec,
   RuntimeAuthorizationInteractionSummary,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
@@ -73,6 +74,7 @@ import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
 } from "../session/collaboration-state.js"
+import { upsertInteractionTransportProjection } from "./transport-projections.js"
 
 type RawInteractionRow = {
   id: string
@@ -95,8 +97,20 @@ type RawInteractionRow = {
   source_request_args: unknown
   source_runtime_session_id: string | null
   source_retry_nonce: string | null
+  // subject-scope-refactor: principal_remote_agent_id +
+  // principal_conversation_actor_context_id dropped from
+  // interaction_runtime_authorization_requests. Replaced by
+  // principal_subject_id (NOT NULL) + principal_scope_subject_id (nullable),
+  // both FK to access_subjects with ON DELETE RESTRICT (durable audit).
+  principal_subject_id: string
+  principal_scope_subject_id: string | null
+  // Retained on the type for transitional caller compatibility — the SELECT
+  // projections below alias these via access_subjects JOIN so existing
+  // consumers (e.g. dashboard rendering, runtime auth request matching) can
+  // continue to address familiar field names during the merge-prep window.
   principal_remote_agent_id: string | null
   principal_conversation_actor_context_id: string | null
+  principal_subject_kind: string | null
   resolution_payload: unknown
   resolved_at: string | Date | null
   expires_at: string | Date | null
@@ -261,16 +275,24 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   sourceRequestArgs?: Record<string, unknown>
   expiresAt?: string
   /**
-   * Set when the triggering dispatch was a remote_agent principal.
-   * Lands on interaction_runtime_authorization_requests.principal_remote_agent_id
-   * so the approval flow can build a remote_agent-scoped grant.
+   * subject-scope-refactor: principalSubjectId (NOT NULL) — the
+   * access_subjects row for the principal that triggered the dispatch.
+   * Caller resolves via upsertAccessSubject(actor/remote_agent/conversation)
+   * before invoking this function.
+   */
+  principalSubjectId: string
+  /**
+   * Optional principal scope subject id (the conversation subject when the
+   * triggering principal was an active participant); null otherwise.
+   */
+  principalScopeSubjectId?: string | null
+  /**
+   * @deprecated kept for transitional callers; not written to the DB.
+   * The approval flow now uses principalSubjectId + presetToOwnerScope.
    */
   principalRemoteAgentId?: string
   /**
-   * Set when the triggering dispatch was an actor_in_conversation
-   * principal. Lands on
-   * interaction_runtime_authorization_requests.principal_conversation_actor_context_id
-   * so the approval flow can build an actor_in_conversation-scoped grant.
+   * @deprecated kept for transitional callers; not written to the DB.
    */
   principalConversationActorContextId?: string
 }
@@ -289,7 +311,11 @@ export interface CreateRuntimeAuthorizationInteractionParams {
  * The previous version of this helper short-circuited on
  * `kind=runtime_authorization && !taskId` alone, which would mask
  * task-governance bugs on the actor path. Narrowed here to also
- * require principalRemoteAgentId.
+ * require the principal kind is `remote_agent` (the only legitimate
+ * case where a runtime_authorization interaction can lack a task —
+ * bridged remote agents don't open chat-session tasks). Keyed on
+ * SUBJECT_KIND so the gate moves with the subject registry rather
+ * than the legacy `principal_remote_agent_id` column.
  *
  * Pure function — exported so regression tests can pin the contract
  * without spinning up the full resolveInteractionRequest transaction.
@@ -297,12 +323,12 @@ export interface CreateRuntimeAuthorizationInteractionParams {
 export function runtimeAuthorizationApprovalSkipsTaskCompletion(input: {
   kind: InteractionRequestKind
   taskId?: string | null
-  principalRemoteAgentId?: string | null
+  principalSubjectKind?: string | null
 }): boolean {
   return (
     input.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     !input.taskId &&
-    !!input.principalRemoteAgentId
+    input.principalSubjectKind === SUBJECT_KIND.REMOTE_AGENT
   )
 }
 
@@ -1121,6 +1147,11 @@ function buildInteractionSummary(
               `Interaction ${row.id} runtime_authorization.requestMode is invalid`
             )
           })(),
+    // Surface the persisted retry_nonce so the dedupe-reuse path in
+    // runtime-authorizations/requests.ts can return the row's actual nonce
+    // (the one that will match source_retry_nonce on the eventual grant)
+    // instead of the freshly-generated nonce that no grant will ever match.
+    sourceRetryNonce: row.source_retry_nonce ?? undefined,
   }
 
   return {
@@ -1147,8 +1178,11 @@ async function getInteractionRowById(
             auth.source_request_args AS source_request_args,
             auth.source_runtime_session_id AS source_runtime_session_id,
             auth.source_retry_nonce AS source_retry_nonce,
-            auth.principal_remote_agent_id AS principal_remote_agent_id,
-            auth.principal_conversation_actor_context_id AS principal_conversation_actor_context_id,
+            auth.principal_subject_id AS principal_subject_id,
+            auth.principal_scope_subject_id AS principal_scope_subject_id,
+            principal_subj.kind AS principal_subject_kind,
+            principal_subj.remote_agent_id AS principal_remote_agent_id,
+            NULL::uuid AS principal_conversation_actor_context_id,
             COALESCE(
               user_input.resolution_payload,
               plan.resolution_payload,
@@ -1202,6 +1236,8 @@ async function getInteractionRowById(
        ON plan.interaction_id = ir.id
      LEFT JOIN interaction_runtime_authorization_requests auth
        ON auth.interaction_id = ir.id
+     LEFT JOIN access_subjects principal_subj
+       ON principal_subj.id = auth.principal_subject_id
      LEFT JOIN conversation_participants requester
        ON requester.id = ir.requester_participant_id
      LEFT JOIN access_subjects requester_subj
@@ -1319,8 +1355,11 @@ async function getInteractionRowByIdForUpdate(
             auth.source_request_args AS source_request_args,
             auth.source_runtime_session_id AS source_runtime_session_id,
             auth.source_retry_nonce AS source_retry_nonce,
-            auth.principal_remote_agent_id AS principal_remote_agent_id,
-            auth.principal_conversation_actor_context_id AS principal_conversation_actor_context_id,
+            auth.principal_subject_id AS principal_subject_id,
+            auth.principal_scope_subject_id AS principal_scope_subject_id,
+            principal_subj.kind AS principal_subject_kind,
+            principal_subj.remote_agent_id AS principal_remote_agent_id,
+            NULL::uuid AS principal_conversation_actor_context_id,
             COALESCE(
               user_input.resolution_payload,
               plan.resolution_payload,
@@ -1374,6 +1413,8 @@ async function getInteractionRowByIdForUpdate(
        ON plan.interaction_id = ir.id
      LEFT JOIN interaction_runtime_authorization_requests auth
        ON auth.interaction_id = ir.id
+     LEFT JOIN access_subjects principal_subj
+       ON principal_subj.id = auth.principal_subject_id
      LEFT JOIN conversation_participants requester
        ON requester.id = ir.requester_participant_id
      LEFT JOIN access_subjects requester_subj
@@ -1701,8 +1742,10 @@ async function maybeAutoRetryAfterApproval(args: {
   interaction: InteractionRequestSummary
   sourceRequestArgs?: Record<string, unknown>
   sourceRetryNonce?: string
+  sourceTaskId?: string
   createdGrant?: RuntimeAuthorizationGrantRecord
-  requesterActorId?: string
+  lockedPrincipalSubject?: SubjectRef
+  lockedPrincipalScopeSubjectId?: string
   resolverWorkspaceMemberId?: string
 }) {
   if (
@@ -1715,21 +1758,48 @@ async function maybeAutoRetryAfterApproval(args: {
   if (!args.createdGrant) return null
   if (!args.sourceRetryNonce) return null
   if (!args.sourceRequestArgs) return null
-  // Resolve the actor's subject id so the audit row points back to the
-  // principal who originally triggered the dispatch (NOT the approver —
-  // they're recorded separately on the grant). Drops to null if we can't
-  // resolve; the operation row still records principalKind='actor'.
-  let principalSubjectId: string | null = null
-  if (args.requesterActorId) {
-    const { upsertAccessSubject } =
-      await import("../access/subject-registry.js")
-    principalSubjectId = await upsertAccessSubject(db, {
-      kind: SUBJECT_KIND.ACTOR,
-      actorId: args.requesterActorId,
-    }).catch(() => null)
+  if (!args.sourceTaskId) return null
+  if (!args.lockedPrincipalSubject) return null
+
+  // subject-scope-refactor: rebuild the principal runtime subject set
+  // post-commit (Kysely form — pg transaction is closed). buildRuntime
+  // PrincipalContext applies the same active-participant guard the
+  // transaction-time rebuild used. If the actor lost participation between
+  // approval commit and now, activeConversationSubjectId will be undefined
+  // — selectAndClaimRuntimeAuthorizationGrant then refuses to claim any
+  // scoped grant and the auto-retry skips (best-effort semantics, not an
+  // approval failure since the grant is already in the DB).
+  const { buildRuntimePrincipalContext } =
+    await import("../access/subject-resolution.js")
+  const { deriveOperationPrincipalAudit } =
+    await import("../devices/operations.js")
+  let ctx
+  try {
+    ctx = await buildRuntimePrincipalContext(db, {
+      principal: args.lockedPrincipalSubject,
+      workspaceId: args.interaction.workspaceId,
+      conversationId: args.interaction.conversationId ?? null,
+    })
+  } catch {
+    return null
   }
-  // The visible tool name (== device-side stable_key) is what the
-  // dispatcher uses as params.name when calling /mcp tools/call.
+  // Post-commit scope mismatch: same equality rule as the transaction-time
+  // gate. Mismatch here is "best-effort skip" rather than throw — the
+  // approval already committed; we just don't auto-retry.
+  if (
+    (args.lockedPrincipalScopeSubjectId ?? null) !==
+    (ctx.activeConversationSubjectId ?? null)
+  ) {
+    return null
+  }
+
+  let audit
+  try {
+    audit = deriveOperationPrincipalAudit(ctx)
+  } catch {
+    return null
+  }
+
   const visibleToolName =
     runtimeAuth.deviceToolStableKey || runtimeAuth.requestedToolName
   const retry = await autoDispatchRuntimeAuthorizationRetry({
@@ -1737,12 +1807,15 @@ async function maybeAutoRetryAfterApproval(args: {
     visibleToolName,
     sourceRequestArgs: args.sourceRequestArgs,
     sourceRetryNonce: args.sourceRetryNonce,
+    sourceTaskId: args.sourceTaskId,
     approvedGrant: args.createdGrant,
+    runtimeSubjectIds: ctx.runtimeSubjectIds,
+    runtimeScopeSubjectIds: ctx.runtimeScopeSubjectIds,
     audit: {
       workspaceId: args.interaction.workspaceId,
       conversationId: args.interaction.conversationId,
-      principalKind: "actor",
-      principalSubjectId,
+      principalKind: audit.principalKind,
+      principalSubjectId: audit.principalSubjectId,
       initiatedBySessionId: null,
       initiatedByWorkspaceMemberId: args.resolverWorkspaceMemberId ?? null,
     },
@@ -1829,8 +1902,28 @@ async function insertInteractionRequest(
     targetParticipantId?: string
     expiresAt?: string
   }
-) {
+): Promise<string | null> {
   const interactionId = uuidv4()
+  // ON CONFLICT DO NOTHING on the pending-request unique index
+  // (idx_interaction_requests_pending_request_key, schema.sql).
+  //
+  // Without this, two concurrent callers racing on the same dedupe key
+  // would both pass the pre-INSERT lookup, one would succeed, the other
+  // would crash on the unique-constraint violation, abort its enclosing
+  // transaction, and the caller would surface "authorization request
+  // failed" — instead of treating the call as deduped against the
+  // winner. ON CONFLICT keeps the transaction alive so the caller can
+  // re-query for the winner via findPendingInteractionIdByRequestKey and
+  // fall through to its existing dedupe-reuse path (including the
+  // orphan-task cleanup downstream).
+  //
+  // The partial unique index (WHERE status='pending') means ON CONFLICT
+  // must specify the same predicate or the planner can't match it. We
+  // use the column list + predicate form.
+  //
+  // Returns the new id on a fresh insert, or null when the row already
+  // existed at insert time. Callers MUST handle null by re-querying for
+  // the conflict winner — see the create*InteractionRequest functions.
   const created = await executeCompiledSql<{ id: string }>(
     client,
     sql<{ id: string }>`
@@ -1860,13 +1953,40 @@ async function insertInteractionRequest(
         ${params.targetParticipantId || null},
         ${params.expiresAt || null}
       )
+      ON CONFLICT (workspace_id, request_key)
+        WHERE status = 'pending'
+        DO NOTHING
       RETURNING id
     `.compile(db)
   )
-  if (!created.rows[0]?.id) {
-    throw new Error("Failed to create interaction request")
+  return created.rows[0]?.id ?? null
+}
+
+/**
+ * Resolve the existing-pending-interaction id that won an INSERT race
+ * against `insertInteractionRequest` (which returned null on conflict).
+ * Centralized here so every caller does the same lookup the same way —
+ * critical for the dedupe contract: the row we return must be exactly
+ * the one the conflicting unique index pinned.
+ */
+async function resolveInsertConflictWinner(
+  client: Queryable,
+  params: { workspaceId: string; requestKey: string; taskId?: string }
+): Promise<string | null> {
+  // Prefer the task-keyed lookup when available — for plan_approval /
+  // runtime_authorization the request_key is derived from the task so
+  // both lookups would return the same row, but staying consistent with
+  // the pre-INSERT lookup ordering avoids surprising any cross-callsite
+  // assumption.
+  if (params.taskId) {
+    const byTask = await findInteractionIdByTaskId(params.taskId, client)
+    if (byTask) return byTask
   }
-  return created.rows[0]!.id
+  return findPendingInteractionIdByRequestKey(
+    params.workspaceId,
+    params.requestKey,
+    client
+  )
 }
 
 async function findInteractionIdByTaskId(
@@ -1965,13 +2085,21 @@ async function insertRuntimeAuthorizationInteractionDetails(
     availablePresets: RuntimeAuthorizationPreset[]
     dedupeKey: string
     /** When the triggering dispatch was a remote_agent principal, the
-     * remote_agent.id; otherwise null. The approval flow uses it to
-     * create a `remote_agent`-scoped grant. */
+    /** subject-scope-refactor: principal subject_id (NOT NULL on
+     * interaction_runtime_authorization_requests). Caller resolves the
+     * triggering principal (actor / remote_agent / conversation) to an
+     * access_subjects row via upsertAccessSubjectOn(client, ...) and passes
+     * the id here. */
+    principalSubjectId: string
+    /** subject-scope-refactor: optional principal scope subject_id (the
+     * conversation subject when the triggering principal was active in a
+     * conversation; null otherwise). */
+    principalScopeSubjectId?: string | null
+    /** @deprecated retained for transitional caller compatibility; not
+     * written to the DB. */
     principalRemoteAgentId?: string
-    /** When the triggering dispatch was an actor_in_conversation
-     * principal, the conversation_actor_contexts.id; otherwise null. The
-     * approval flow uses it to create an `actor_in_conversation`-scoped
-     * grant. */
+    /** @deprecated retained for transitional caller compatibility; not
+     * written to the DB. */
     principalConversationActorContextId?: string
   }
 ) {
@@ -1991,9 +2119,8 @@ async function insertRuntimeAuthorizationInteractionDetails(
       source_request_args: jsonbValue(
         params.sourceRequestArgs
       ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["source_request_args"],
-      principal_remote_agent_id: params.principalRemoteAgentId || null,
-      principal_conversation_actor_context_id:
-        params.principalConversationActorContextId || null,
+      principal_subject_id: params.principalSubjectId,
+      principal_scope_subject_id: params.principalScopeSubjectId || null,
       requested_action: jsonbValue(
         params.requestedAction
       ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["requested_action"],
@@ -2148,6 +2275,26 @@ export async function createUserInputInteractionRequest(
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race won by another caller — re-resolve and
+      // return the conflict winner instead of crashing on the unique
+      // index. Same outcome as the pre-INSERT dedupe-hit path.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+        taskId: params.taskId,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error("Failed to load conflict-winning interaction request")
+      }
+      return winner
+    }
 
     await insertUserInputInteractionDetails(client, {
       interactionId,
@@ -2225,6 +2372,26 @@ export async function createRemoteAgentUserInputInteractionRequest(
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race — re-resolve and return the conflict
+      // winner. See createUserInputInteractionRequest for the rationale.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error(
+          "Failed to load conflict-winning remote-agent interaction request"
+        )
+      }
+      return winner
+    }
 
     await insertUserInputInteractionDetails(client, {
       interactionId,
@@ -2306,6 +2473,27 @@ export async function createPlanApprovalInteractionRequest(
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race — re-resolve and return the conflict
+      // winner. See createUserInputInteractionRequest for the rationale.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+        taskId: params.taskId,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error(
+          "Failed to load conflict-winning plan approval interaction request"
+        )
+      }
+      return winner
+    }
 
     await insertPlanApprovalInteractionDetails(client, {
       interactionId,
@@ -2401,6 +2589,26 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race — re-resolve and return the conflict
+      // winner. See createUserInputInteractionRequest for the rationale.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error(
+          "Failed to load conflict-winning remote-agent plan approval interaction request"
+        )
+      }
+      return winner
+    }
 
     await insertPlanApprovalInteractionDetails(client, {
       interactionId,
@@ -2524,6 +2732,17 @@ export async function createRuntimeAuthorizationInteractionRequest(
         client
       )
       if (existing) {
+        // Re-arm the transport projection so the projection worker
+        // re-tries delivery even though we returned an existing
+        // interaction. Only re-arms rows that were skipped for
+        // recoverable reasons (binding gone, outbound disabled,
+        // webhook not yet confirmed); skipped='not_supported_in_v1'
+        // requires a binding_created_or_replaced recovery event.
+        await upsertInteractionTransportProjection(client, {
+          interactionRequestId: existingInteractionId,
+          workspaceId: params.workspaceId,
+          conversationId: params.conversationId,
+        })
         return existing
       }
     }
@@ -2537,6 +2756,30 @@ export async function createRuntimeAuthorizationInteractionRequest(
       requestKey,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race — re-resolve and return the conflict
+      // winner. The outer createRuntimeAuthorizationRequest detects this
+      // as a row-reuse via didInnerDedupeReuseRow (the winner's row
+      // carries the OTHER caller's source_retry_nonce, not ours) and
+      // cancels the orphan tool_call_task it created upstream.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+        taskId: params.taskId,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error(
+          "Failed to load conflict-winning runtime authorization interaction request"
+        )
+      }
+      return winner
+    }
 
     await insertRuntimeAuthorizationInteractionDetails(client, {
       interactionId,
@@ -2550,6 +2793,8 @@ export async function createRuntimeAuthorizationInteractionRequest(
       sourceRuntimeSessionId: params.runtimeSessionId,
       sourceRetryNonce: params.sourceRetryNonce,
       sourceRequestArgs: params.sourceRequestArgs || {},
+      principalSubjectId: params.principalSubjectId,
+      principalScopeSubjectId: params.principalScopeSubjectId,
       principalRemoteAgentId: params.principalRemoteAgentId,
       principalConversationActorContextId:
         params.principalConversationActorContextId,
@@ -2587,6 +2832,17 @@ export async function createRuntimeAuthorizationInteractionRequest(
     }
     await syncInteractionEventPayload(interaction, client)
     await appendInteractionUpdatedSyncEvent(client, interaction)
+
+    // G5: enqueue durable projection so the interaction can be rendered
+    // onto any supporting IM transport (v1: QQ only). The worker
+    // consumes this asynchronously; the dashboard / API caller doesn't
+    // wait on transport delivery.
+    await upsertInteractionTransportProjection(client, {
+      interactionRequestId: interactionId,
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+    })
+
     return interaction
   })
 }
@@ -3274,6 +3530,7 @@ export async function resolveInteractionRequest(
     let nextStatus: InteractionRequestStatus
     let resolutionPayload: Record<string, unknown>
     let createdGrant: RuntimeAuthorizationGrantRecord | undefined
+    let lockedPrincipalSubjectForReturn: SubjectRef | undefined
 
     if (locked.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
       const promptPayload = parseJsonObject(locked.prompt_payload)
@@ -3474,21 +3731,73 @@ export async function resolveInteractionRequest(
           )
         }
 
+        // subject-scope-refactor: presetToOwnerScope translates the wire
+        // preset + locked request context into the new (subject, scope?,
+        // retention) triple that createRuntimeAuthorizationGrant accepts.
+        // The principal subject is reconstructed from the locked row, then
+        // a FULL RuntimePrincipalContext is rebuilt via the pg-form helper
+        // `buildRuntimePrincipalContextOn(client, ...)` so the same Decision-8
+        // / active-participant invariants that govern dispatch also govern
+        // grant creation at approval time.
+        const { presetToOwnerScope, UnsupportedGrantTargetError } =
+          await import("../runtime-authorizations/service.js")
+        const { loadAccessSubjectOn } =
+          await import("../access/subject-registry.js")
+        const { buildRuntimePrincipalContextOn } =
+          await import("../access/subject-resolution.js")
+        const lockedPrincipalSubject = await loadAccessSubjectOn(
+          client,
+          locked.principal_subject_id
+        )
+        if (!lockedPrincipalSubject) {
+          throw new Error(
+            `interaction ${locked.id}: principal subject ${locked.principal_subject_id} not found`
+          )
+        }
+        lockedPrincipalSubjectForReturn = lockedPrincipalSubject
+        // Rebuild RuntimePrincipalContext inside the SAME pg transaction
+        // so subject upserts / participant checks see consistent state and
+        // the result reflects current participation (an actor who left the
+        // conversation between request and approval gets `activeConversation
+        // SubjectId === undefined` here, even if the locked row froze one).
+        const rebuiltCtx = await buildRuntimePrincipalContextOn(client, {
+          principal: lockedPrincipalSubject,
+          workspaceId: locked.workspace_id,
+          conversationId: locked.conversation_id ?? null,
+        })
+        // ScopeRebuildMismatchError — explicit equality check between the
+        // locked principal_scope_subject_id (frozen at request time) and the
+        // rebuilt active conversation scope. Three cases must all match:
+        //  (a) locked = null AND rebuilt = undefined  → unscoped, OK
+        //  (b) locked = X    AND rebuilt = X          → same scope, OK
+        //  (c) locked = X    AND rebuilt = Y or null  → DRIFT, reject
+        // Without this gate, an actor that lost their conversation
+        // participation between request and approval could still mint a
+        // `actor + scope=conversation` grant via the locked snapshot.
+        const lockedScopeId = locked.principal_scope_subject_id ?? null
+        const rebuiltScopeId = rebuiltCtx.activeConversationSubjectId ?? null
+        if (lockedScopeId !== rebuiltScopeId) {
+          throw new Error(
+            `ScopeRebuildMismatchError: interaction ${locked.id} locked principal_scope_subject_id=${lockedScopeId ?? "NULL"} but rebuilt activeConversationSubjectId=${rebuiltScopeId ?? "NULL"} — principal scope drifted between request and approval`
+          )
+        }
+        const presetTriple = presetToOwnerScope(
+          params.preset || "once",
+          rebuiltCtx,
+          locked.workspace_id
+        )
         createdGrant = await createRuntimeAuthorizationGrant(
           {
             workspaceId: locked.workspace_id,
             deviceId: locked.device_id || "",
             deviceCapabilityId: locked.device_capability_id || "",
             deviceExposureId: locked.device_exposure_id || "",
-            conversationId: locked.conversation_id,
-            actorId: locked.requester_actor_id || undefined,
-            remoteAgentId: locked.principal_remote_agent_id || undefined,
-            conversationActorContextId:
-              locked.principal_conversation_actor_context_id || undefined,
+            subject: presetTriple.subject,
+            scope: presetTriple.scope,
+            retention: presetTriple.retention,
             createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
             sourceInteractionId: locked.id,
             sourceTaskId: locked.task_id || undefined,
-            preset: params.preset || "once",
             sourceRetryNonce: locked.source_retry_nonce || undefined,
             sourceRuntimeSessionId:
               locked.source_runtime_session_id || undefined,
@@ -3497,7 +3806,7 @@ export async function resolveInteractionRequest(
               typeof locked.source_request_args === "object"
                 ? (locked.source_request_args as Record<string, unknown>)
                 : {},
-            grantSpec: selectedOption.grantSpec,
+            policy: selectedOption.grantSpec,
           },
           client
         )
@@ -3563,9 +3872,22 @@ export async function resolveInteractionRequest(
           ? (locked.source_request_args as Record<string, unknown>)
           : undefined,
       lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
-      lockedRequesterActorId: locked.requester_actor_id ?? undefined,
-      lockedPrincipalRemoteAgentId:
-        locked.principal_remote_agent_id ?? undefined,
+      lockedSourceTaskId: locked.task_id ?? undefined,
+      // subject-scope-refactor: skip-task gate is now keyed on
+      // principal_subj.kind (resolved via JOIN at SELECT time), not the
+      // dropped principal_remote_agent_id column. principal_subject_kind
+      // is the legitimate signal; principal_remote_agent_id is kept on
+      // the row type only as a derived alias for dashboard consumers.
+      lockedPrincipalSubjectKind: locked.principal_subject_kind ?? undefined,
+      // subject-scope-refactor: forward the locked principal triple so the
+      // post-commit auto-retry can re-build the RuntimePrincipalContext via
+      // buildRuntimePrincipalContext (Kysely-form, since the pg transaction
+      // is closed by the time we get there) and pass runtimeSubjectIds /
+      // runtimeScopeSubjectIds to selectAndClaimRuntimeAuthorizationGrant.
+      lockedPrincipalSubjectId: locked.principal_subject_id,
+      lockedPrincipalScopeSubjectId:
+        locked.principal_scope_subject_id ?? undefined,
+      lockedPrincipalSubject: lockedPrincipalSubjectForReturn,
     }
   })
 
@@ -3602,7 +3924,7 @@ export async function resolveInteractionRequest(
     runtimeAuthorizationApprovalSkipsTaskCompletion({
       kind: interaction.kind,
       taskId: interaction.taskId,
-      principalRemoteAgentId: result.lockedPrincipalRemoteAgentId,
+      principalSubjectKind: result.lockedPrincipalSubjectKind,
     })
   ) {
     return {
@@ -3652,8 +3974,10 @@ export async function resolveInteractionRequest(
       interaction,
       sourceRequestArgs: result.lockedSourceRequestArgs,
       sourceRetryNonce: result.lockedSourceRetryNonce,
+      sourceTaskId: result.lockedSourceTaskId,
       createdGrant: result.createdGrant,
-      requesterActorId: result.lockedRequesterActorId,
+      lockedPrincipalSubject: result.lockedPrincipalSubject,
+      lockedPrincipalScopeSubjectId: result.lockedPrincipalScopeSubjectId,
       resolverWorkspaceMemberId: params.resolverWorkspaceMemberId,
     })
     await completeToolCallTask(

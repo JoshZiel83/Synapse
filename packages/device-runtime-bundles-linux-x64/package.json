@@ -1,0 +1,17 @@
+{
+  "name": "@synapse/device-runtime-bundles-linux-x64",
+  "version": "0.1.0",
+  "description": "Pre-staged Synapse device toolchain archives for linux-x64. Companion sidecar to @synapse/device-runtime.",
+  "publishConfig": {
+    "os": [
+      "linux"
+    ],
+    "cpu": [
+      "x64"
+    ]
+  },
+  "files": [
+    "bundles",
+    "README.md"
+  ]
+}

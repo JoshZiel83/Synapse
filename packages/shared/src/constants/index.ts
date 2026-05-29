@@ -60,3 +60,4 @@ export const A2A_DEFAULT_RATE_LIMIT = 60
 
 export * from "./model-providers.js"
 export * from "./enums.js"
+export * from "./uuid-namespaces.js"

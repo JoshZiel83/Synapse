@@ -29,10 +29,6 @@ export type SubjectRef =
       readonly kind: typeof SUBJECT_KIND.CONVERSATION
       readonly conversationId: string
     }
-  | {
-      readonly kind: typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
-      readonly contextId: string
-    }
   | { readonly kind: typeof SUBJECT_KIND.USER; readonly userId: string }
   | {
       readonly kind: typeof SUBJECT_KIND.EXTERNAL
@@ -41,9 +37,13 @@ export type SubjectRef =
   | { readonly kind: typeof SUBJECT_KIND.SYSTEM }
 
 /**
- * Workspace-scoped subjects only — the variants that can hold an explicit
- * binding on `resource_access_bindings`. Maps 1:1 to ACCESS_TARGET_TYPES values
- * (with `actor_in_conversation` represented by the conversation_actor_context kind).
+ * Workspace-scoped subjects only — the variants that can be referenced from
+ * authorization rows. Maps 1:1 to ACCESS_TARGET_TYPES values plus the
+ * `remote_agent` kind which (as of PR2 of the subject-scope refactor) travels
+ * exclusively through the new `ScopedSubjectTarget` variant of AccessGrantTarget
+ * — it is intentionally NOT in `ACCESS_TARGET_TYPES` / `CAPABILITY_ACCESS_TARGET_TYPES`
+ * so the legacy projection layer in `bindings.ts` does not have to grow another
+ * column.
  */
 export type AccessTargetRef = Extract<
   SubjectRef,
@@ -53,7 +53,7 @@ export type AccessTargetRef = Extract<
       | typeof SUBJECT_KIND.WORKSPACE_MEMBER
       | typeof SUBJECT_KIND.CONVERSATION
       | typeof SUBJECT_KIND.ACTOR
-      | typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
+      | typeof SUBJECT_KIND.REMOTE_AGENT
   }
 >
 
@@ -69,7 +69,6 @@ export type AccessPrincipalRef = Extract<
       | typeof SUBJECT_KIND.WORKSPACE_MEMBER
       | typeof SUBJECT_KIND.ACTOR
       | typeof SUBJECT_KIND.WORKSPACE
-      | typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
   }
 >
 
@@ -105,15 +104,6 @@ export function isConversationSubject(
   return ref.kind === SUBJECT_KIND.CONVERSATION
 }
 
-export function isConversationActorContextSubject(
-  ref: SubjectRef
-): ref is Extract<
-  SubjectRef,
-  { kind: typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT }
-> {
-  return ref.kind === SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
-}
-
 export function isUserSubject(
   ref: SubjectRef
 ): ref is Extract<SubjectRef, { kind: typeof SUBJECT_KIND.USER }> {
@@ -126,7 +116,7 @@ export function isAccessTargetRef(ref: SubjectRef): ref is AccessTargetRef {
     ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
     ref.kind === SUBJECT_KIND.CONVERSATION ||
     ref.kind === SUBJECT_KIND.ACTOR ||
-    ref.kind === SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
+    ref.kind === SUBJECT_KIND.REMOTE_AGENT
   )
 }
 
@@ -146,9 +136,6 @@ export function remoteAgentRef(remoteAgentId: string): SubjectRef {
 }
 export function conversationRef(conversationId: string): SubjectRef {
   return { kind: SUBJECT_KIND.CONVERSATION, conversationId }
-}
-export function conversationActorContextRef(contextId: string): SubjectRef {
-  return { kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT, contextId }
 }
 export function userRef(userId: string): SubjectRef {
   return { kind: SUBJECT_KIND.USER, userId }
@@ -196,16 +183,6 @@ export function subjectsEqual(a: SubjectRef, b: SubjectRef): boolean {
         (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.CONVERSATION }>)
           .conversationId
       )
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return (
-        a.contextId ===
-        (
-          b as Extract<
-            SubjectRef,
-            { kind: typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT }
-          >
-        ).contextId
-      )
     case SUBJECT_KIND.USER:
       return (
         a.userId ===
@@ -238,8 +215,6 @@ export function subjectKey(ref: SubjectRef): string {
       return `remote_agent:${ref.remoteAgentId}`
     case SUBJECT_KIND.CONVERSATION:
       return `conversation:${ref.conversationId}`
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return `conversation_actor_context:${ref.contextId}`
     case SUBJECT_KIND.USER:
       return `user:${ref.userId}`
     case SUBJECT_KIND.EXTERNAL:
@@ -265,8 +240,6 @@ export function parseSubjectKey(key: string): SubjectRef | null {
       return remoteAgentRef(payload)
     case SUBJECT_KIND.CONVERSATION:
       return conversationRef(payload)
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return conversationActorContextRef(payload)
     case SUBJECT_KIND.USER:
       return userRef(payload)
     case SUBJECT_KIND.EXTERNAL:
@@ -288,4 +261,127 @@ export function dedupeSubjects(refs: readonly SubjectRef[]): SubjectRef[] {
     out.push(ref)
   }
   return out
+}
+
+// ---------- Scope eligibility (PR1 additive) ----------
+
+/**
+ * A subject is eligible to act as a `scope_subject_id` if it represents a
+ * group-shaped entity that an authorization can be limited to. Mirrors the
+ * `is_scope_eligible_subject` SQL helper used by the schema triggers.
+ *
+ * Currently: workspace | conversation. `project` will join once the projects
+ * table lands.
+ */
+export function isScopeEligibleSubject(ref: SubjectRef): boolean {
+  return (
+    ref.kind === SUBJECT_KIND.WORKSPACE ||
+    ref.kind === SUBJECT_KIND.CONVERSATION
+  )
+}
+
+/**
+ * The kinds legitimate as subjects of a workspace-bound authorization row
+ * (resource_access_bindings / runtime_authorization_grants / memory_access_grants).
+ * Excludes user / external / system — those are platform-wide subjects that
+ * cannot anchor a workspace-bound grant.
+ */
+export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
+  return (
+    ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
+    ref.kind === SUBJECT_KIND.ACTOR ||
+    ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
+    ref.kind === SUBJECT_KIND.WORKSPACE ||
+    ref.kind === SUBJECT_KIND.CONVERSATION
+  )
+}
+
+/**
+ * Allowed `memory_spaces.owner_subject_id` kinds.
+ *
+ * Scope note: this iteration of the memory model is **workspace-bound only**.
+ * `user`, `external`, and `system` are intentionally NOT memory owners — they
+ * would require a separate platform-memory storage path (nullable
+ * `memory_items.workspace_id`, cross-workspace recall, cross-tenant indexing
+ * pipeline) that lives outside this refactor's scope. If platform user memory
+ * or per-project memory becomes a goal in a later phase, that needs its own
+ * schema design (likely a sibling `platform_memory_spaces` table, not lifting
+ * this restriction in place).
+ *
+ * The "actor's memory inside a single conversation" pattern is modeled as
+ * `owner = actor + scope = conversation`, not as a `user` owner.
+ */
+export function isMemoryOwnerSubjectKind(ref: SubjectRef): boolean {
+  return (
+    ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
+    ref.kind === SUBJECT_KIND.ACTOR ||
+    ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
+    ref.kind === SUBJECT_KIND.WORKSPACE ||
+    ref.kind === SUBJECT_KIND.CONVERSATION
+  )
+}
+
+// ---------- Scoped target types (PR1 additive — not replacing legacy yet) ----------
+
+/**
+ * New target shape used by `resource_access_bindings.subject_id +
+ * scope_subject_id`. PR2 promotes this to be a variant of the exported
+ * `AccessTarget` / `CapabilityAccessTarget` unions; PR7 collapses to this
+ * variant only.
+ */
+export type ScopedSubjectTarget = {
+  readonly subject: SubjectRef
+  readonly scope?: SubjectRef
+}
+
+export type ScopedCapabilityAccessTarget = ScopedSubjectTarget
+
+/**
+ * D3: derive the legacy display/SQL label from a `ScopedSubjectTarget`. The
+ * label is the historical string used by the per-resource SQL views
+ * (`bind_scope`, `access_bind_scope`) and by FE badge/description maps; we
+ * keep it for back-compat indexing/display only, never for storage decisions.
+ *
+ * Mapping:
+ *   - actor + scope=conversation         → "actor_in_conversation"
+ *   - remote_agent + scope=conversation  → "remote_agent_in_conversation"
+ *   - workspace / workspace_member / actor / conversation / remote_agent →
+ *     mirrors the subject.kind value
+ *   - anything else (user, external, system, scope-only) falls back to
+ *     the raw subject.kind for diagnostic use; UI maps should default-case.
+ *
+ * Round 9 review extension: previously only the actor-side composite was
+ * emitted; remote_agent + scope=conversation defaulted to "remote_agent",
+ * which (when the RuntimeBindingScope union didn't include "remote_agent"
+ * at all — round 9 fixed that too) made some service-layer dedup paths
+ * compare the new grant's label against a label set that didn't contain
+ * the right value, miss the existing row, and crash on the DB unique
+ * constraint when inserting the duplicate.
+ */
+export function subjectScopeLabel(target: ScopedSubjectTarget): string {
+  if (
+    target.subject.kind === SUBJECT_KIND.ACTOR &&
+    target.scope?.kind === SUBJECT_KIND.CONVERSATION
+  ) {
+    return "actor_in_conversation"
+  }
+  if (
+    target.subject.kind === SUBJECT_KIND.REMOTE_AGENT &&
+    target.scope?.kind === SUBJECT_KIND.CONVERSATION
+  ) {
+    return "remote_agent_in_conversation"
+  }
+  return target.subject.kind
+}
+
+// ---------- Memory space reference (PR1 additive) ----------
+
+/**
+ * A memory_spaces row keyed by (owner, scope?, namespace_key). PR5 introduces
+ * the table with this shape; this type is the SDK-facing reference.
+ */
+export type MemorySpaceRef = {
+  readonly owner: SubjectRef
+  readonly scope?: SubjectRef
+  readonly namespaceKey: string
 }

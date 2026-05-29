@@ -48,7 +48,6 @@ import {
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_REQUEST_STATUSES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
@@ -83,14 +82,12 @@ import type {
   MemoryItemsIndexStatus,
   MemoryItemsState,
   MemoryRecallRunsRecallType,
-  MemorySpacesSpaceType,
   ModelGroupsRoutingStrategy,
   PlatformAccessBindingsAccessKey,
   PluginAuthSessionsStatus,
   PluginConnectionsOwnerScope,
   PluginConnectionsStatus,
   RuntimeAuthorizationGrantsRetention,
-  RuntimeAuthorizationGrantsScope,
   RuntimeAuthorizationGrantsStatus,
   RuntimeAuthorizationRequestMode,
   RelationshipApprovalMode,
@@ -156,9 +153,11 @@ type _ActorRoleMatchesDb = Assert<IsEqual<ActorRole, ActorsRole>>
 type _ActorDocVisibilityMatchesDb = Assert<
   IsEqual<ActorDocVisibility, ActorVersionDocsVisibility>
 >
-type _MemorySpaceTypeListMatchesDb = Assert<
-  IsEqual<(typeof MEMORY_SPACE_TYPES)[number], MemorySpacesSpaceType>
->
+// subject-scope-refactor: MemorySpacesSpaceType DB enum dropped at cutover;
+// memory_spaces now keyed by (owner_subject_id, scope_subject_id?, namespace_key).
+// MEMORY_SPACE_TYPES tuple remains in shared as a pure UI taxonomy / legacy
+// label set with no DB-side counterpart to assert equality against.
+// type _MemorySpaceTypeListMatchesDb removed.
 // Note: the Postgres `relationship_target_type` enum was dropped along with
 // its column users by the P1b polymorphic-FK collapse (all subject FKs now go
 // through `access_subjects.subject_id`). `CONTACT_TARGET_TYPES` is a pure
@@ -226,9 +225,7 @@ type _AutomationEventSourceStatusMatchesDb = Assert<
     AutomationEventSourcesStatus
   >
 >
-type _MemorySpaceTypeMatchesDb = Assert<
-  IsEqual<MemorySpaceType, MemorySpacesSpaceType>
->
+// type _MemorySpaceTypeMatchesDb removed (see comment above).
 type _MemoryCategoryMatchesDb = Assert<
   IsEqual<MemoryCategory, MemoryItemsCategory>
 >
@@ -369,12 +366,9 @@ type _RelationshipRequestStatusMatchesDb = Assert<
     RelationshipRequestStatus
   >
 >
-type _RuntimeAuthorizationGrantScopeMatchesDb = Assert<
-  IsEqual<
-    (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number],
-    RuntimeAuthorizationGrantsScope
-  >
->
+// subject-scope-refactor: RuntimeAuthorizationGrantsScope DB enum dropped at cutover.
+// scope is now expressed via runtime_authorization_grants.subject_id + scope_subject_id.
+// type _RuntimeAuthorizationGrantScopeMatchesDb deleted with the enum.
 type _RuntimeAuthorizationGrantStatusMatchesDb = Assert<
   IsEqual<
     (typeof RUNTIME_AUTHORIZATION_GRANT_STATUSES)[number],

@@ -111,9 +111,7 @@ export async function persistCatalogSync(
       .where("id", "=", input.deviceId)
       .executeTakeFirst()
     if (!device) {
-      throw new Error(
-        `persistCatalogSync: device ${input.deviceId} not found`
-      )
+      throw new Error(`persistCatalogSync: device ${input.deviceId} not found`)
     }
 
     let newRevisionCount = 0
@@ -138,11 +136,12 @@ export async function persistCatalogSync(
         schemaHash: exposureSchemaHash(exposure),
       })
       if (isNew) newRevisionCount += 1
-      const { writtenRevisions, seenToolIds, assignedTools } = await upsertTools(trx, {
-        exposureId,
-        catalogRevisionId: revisionId,
-        tools: exposure.tools,
-      })
+      const { writtenRevisions, seenToolIds, assignedTools } =
+        await upsertTools(trx, {
+          exposureId,
+          catalogRevisionId: revisionId,
+          tools: exposure.tools,
+        })
       toolRevisionCount += writtenRevisions
       seenToolIdsByExposure.set(exposureId, seenToolIds)
       assignedIds[exposure.stable_key] = {

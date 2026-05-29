@@ -141,7 +141,6 @@ export const githubSeed: BuiltinOrgSeed = {
       },
       authorization: {
         requiredPermissions: ["network:outbound"],
-        defaultAccessTargetType: "workspace",
         reason:
           "GitHub official MCP and GitHub webhook management require outbound network access.",
       },

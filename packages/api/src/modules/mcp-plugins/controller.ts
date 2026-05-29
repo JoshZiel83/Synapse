@@ -2,9 +2,15 @@ import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
 import {
   ATTACHMENT_TARGET_TYPES,
-  CAPABILITY_ACCESS_TARGET_TYPES,
   REUSE_SCOPES,
 } from "@synapse/shared/constants"
+import {
+  actorRef,
+  conversationRef,
+  workspaceMemberRef,
+  workspaceRef,
+  type CapabilityAccessTarget,
+} from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -37,7 +43,13 @@ import {
 import { getEventLogs, getToolCallLogs } from "./audit.js"
 
 const attachmentTargetTypeSchema = z.enum(ATTACHMENT_TARGET_TYPES)
-const accessTargetTypeSchema = z.enum(CAPABILITY_ACCESS_TARGET_TYPES)
+const accessTargetTypeSchema = z.enum([
+  "workspace",
+  "workspace_member",
+  "conversation",
+  "actor",
+  "actor_in_conversation",
+])
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
 const conversationTypeMaskSchema = z.number().int().min(1).max(31)
 const attachmentTargetSchema = z.object({
@@ -89,6 +101,51 @@ const accessGrantSchema = z.object({
     .optional(),
   reason: z.string().trim().min(1).optional(),
 })
+
+function inputToCapabilityAccessTarget(
+  workspaceId: string,
+  input: z.infer<typeof accessTargetSchema>
+): CapabilityAccessTarget {
+  switch (input.type) {
+    case "workspace":
+      return { subject: workspaceRef(workspaceId) }
+    case "workspace_member":
+      if (!input.workspaceMemberId) {
+        throw new McpPluginError(
+          400,
+          "workspaceMemberId is required for workspace_member access target"
+        )
+      }
+      return { subject: workspaceMemberRef(input.workspaceMemberId) }
+    case "actor":
+      if (!input.actorId) {
+        throw new McpPluginError(
+          400,
+          "actorId is required for actor access target"
+        )
+      }
+      return { subject: actorRef(input.actorId) }
+    case "conversation":
+      if (!input.conversationId) {
+        throw new McpPluginError(
+          400,
+          "conversationId is required for conversation access target"
+        )
+      }
+      return { subject: conversationRef(input.conversationId) }
+    case "actor_in_conversation":
+      if (!input.actorId || !input.conversationId) {
+        throw new McpPluginError(
+          400,
+          "actorId and conversationId are required for actor_in_conversation access target"
+        )
+      }
+      return {
+        subject: actorRef(input.actorId),
+        scope: conversationRef(input.conversationId),
+      }
+  }
+}
 
 const accessGrantUpdateSchema = z.object({
   conversationTypeMaskOverride: conversationTypeMaskSchema
@@ -596,7 +653,9 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         const grant = await grantPluginInstallationAccess({
           workspaceId,
           installationId: installId,
-          accessTarget: body.accessTarget,
+          accessTarget: body.accessTarget
+            ? inputToCapabilityAccessTarget(workspaceId, body.accessTarget)
+            : undefined,
           conversationTypeMaskOverride: body.conversationTypeMaskOverride,
           reason: body.reason,
           grantedByWorkspaceMemberId: (request as any).workspaceMember!.id,

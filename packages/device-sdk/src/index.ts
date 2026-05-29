@@ -18,6 +18,7 @@ import {
   type ConsumePairingResult,
   type CreateCloudDeviceInput,
   type CreateCloudDeviceResult,
+  type DeviceCapabilityAccessTarget,
   type DeviceDetail,
   type DeviceServiceSummary,
   type DeviceSummary,
@@ -27,34 +28,20 @@ import {
 } from "@synapse/device-protocol"
 
 /**
- * AccessTarget — DTO at the SDK boundary describing who a grant attaches to.
- * Server resolves to an access_subjects row via upsertAccessSubject; SDK
- * callers never construct conversation_actor_context UUIDs themselves.
+ * AccessTarget — re-export of the narrow wire type
+ * `DeviceCapabilityAccessTarget` from @synapse/device-protocol. SDK callers
+ * see the device-specific shape (no workspace_member, no scope=workspace etc.;
+ * see ScopedSubjectTargetWireSchema superRefine in
+ * packages/device-protocol/src/schemas.ts).
  */
-export type AccessTarget =
-  | { kind: "workspace"; workspaceId: string }
-  | { kind: "actor"; actorId: string }
-  | { kind: "conversation"; conversationId: string }
-  | {
-      kind: "actor_in_conversation"
-      actorId: string
-      conversationId: string
-    }
-  | { kind: "remote_agent"; remoteAgentId: string }
+export type AccessTarget = DeviceCapabilityAccessTarget
 
-/** DevicePrincipal — server-internal type, but useful in SDK consumers that
- * call projection-style debug endpoints (future PR). */
-export type DevicePrincipal =
-  | { kind: "actor"; actorId: string; conversationId?: string }
-  | { kind: "conversation"; conversationId: string }
-  | {
-      kind: "actor_in_conversation"
-      conversationActorContextId: string
-      actorId: string
-      conversationId: string
-    }
-  | { kind: "remote_agent"; remoteAgentId: string; conversationId: string }
-  | { kind: "workspace_member"; workspaceId: string; workspaceMemberId: string }
+// subject-scope-refactor: DevicePrincipal SDK-local type removed at cutover.
+// The server-internal `DevicePrincipal` union was renamed/collapsed: the
+// scoped-actor case ('actor_in_conversation') is now expressed as
+// (principal.kind='actor', activeConversationSubjectId set) inside
+// RuntimePrincipalContext. SDK consumers that need to identify a principal at
+// the API boundary should use the underlying SubjectRef from @synapse/shared.
 
 export interface DeviceSdkOptions {
   baseUrl: string

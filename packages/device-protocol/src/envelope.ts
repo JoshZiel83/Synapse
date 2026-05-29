@@ -19,10 +19,7 @@ export function canonicalizeEnvelopePayload(value: unknown): string {
   const keys = Object.keys(obj).sort()
   return `{${keys
     .filter((k) => obj[k] !== undefined)
-    .map(
-      (k) =>
-        `${JSON.stringify(k)}:${canonicalizeEnvelopePayload(obj[k])}`
-    )
+    .map((k) => `${JSON.stringify(k)}:${canonicalizeEnvelopePayload(obj[k])}`)
     .join(",")}}`
 }
 

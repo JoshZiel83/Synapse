@@ -98,6 +98,11 @@ export default async function imFeishuController(
       const account = await updateTransportAccount({
         workspaceId,
         accountId,
+        // Per-transport route guard — assertExpectedTransportKind in
+        // updateTransportAccount throws 404 `transport_account_kind_mismatch`
+        // when the row's kind doesn't match. Prevents the Feishu route
+        // from silently mutating a Weixin / WeCom account by id reuse.
+        expectedTransportKind: "feishu",
         displayName: body.displayName,
         ownerScope: body.ownerScope,
         ownerWorkspaceMemberId: body.ownerWorkspaceMemberId,

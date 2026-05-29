@@ -28,11 +28,13 @@ import {
 import {
   buildMemoryFolders,
   buildMemoryOwnerPayloadFromPreset,
+  buildMemoryMovePayloadFromPreset,
   describeFolderVisibility,
   getFolderSegments,
   getFolderIdForOwner,
   normalizeActorOption,
   normalizeGroupOption,
+  projectMemory,
   summarizeMemory,
   type Memory,
   type MemoryFolderNode,
@@ -172,7 +174,10 @@ export default function MemoryBrowser() {
       ])
 
       setMemories(
-        Array.isArray(memoryData) ? memoryData : memoryData?.memories || []
+        (Array.isArray(memoryData)
+          ? memoryData
+          : memoryData?.memories || []
+        ).map(projectMemory)
       )
       setActors(
         (Array.isArray(actorData) ? actorData : []).map(normalizeActorOption)
@@ -351,18 +356,41 @@ export default function MemoryBrowser() {
     if (!workspaceId || !movingMemory?.id || !folder.createPreset) return
 
     try {
-      const result = await api.updateMemory(
+      // P1 fix (post-D4 review): atomic backend move replaces the previous
+      // delete + create. Preserves the stable id, item-level grants,
+      // indexing state, and source_*_id relations — and rolls back as one
+      // unit if the target write check fails (no data loss window).
+      const payload = buildMemoryMovePayloadFromPreset(
+        folder.createPreset,
+        effectiveCurrentWorkspaceMemberId,
+        workspaceId
+      )
+      if (!payload) {
+        toast.error("Target folder is missing required context")
+        return
+      }
+      const result = (await api.moveMemory(
         workspaceId,
         movingMemory.id,
-        buildMemoryOwnerPayloadFromPreset(
-          folder.createPreset,
-          effectiveCurrentWorkspaceMemberId
+        payload
+      )) as any
+      // P2 fix (post-D4 round 6 review): the backend returns a thin
+      // {id, spaceId, moved: true} body when the caller can't read the
+      // destination (e.g. admin moved into a private space they don't
+      // own). projectMemory would throw on the missing owner field, so
+      // detect the thin shape explicitly and drop the row from the
+      // local list — the principal can no longer see it.
+      if (result?.moved === true && !result?.owner) {
+        setMemories((current) =>
+          current.filter((memory) => memory.id !== movingMemory.id)
         )
-      )
-      const savedMemory = (result?.memory || result) as Memory
+        toast.success("Memory moved (out of view)")
+        return
+      }
+      const savedMemory = projectMemory((result?.memory || result) as any)
       setMemories((current) =>
         current.map((memory) =>
-          memory.id === savedMemory.id ? savedMemory : memory
+          memory.id === movingMemory.id ? savedMemory : memory
         )
       )
       toast.success("Memory path updated")
@@ -388,10 +416,10 @@ export default function MemoryBrowser() {
           file
         )) as UploadedFile
         const result = await api.createMemory(workspaceId, {
-          spaceType: pendingFileCreate.preset.spaceType,
-          actorId: pendingFileCreate.preset.actorId,
-          conversationId: pendingFileCreate.preset.conversationId,
-          workspaceMemberId: pendingFileCreate.preset.workspaceMemberId,
+          preset: pendingFileCreate.preset.spaceType,
+          presetActorId: pendingFileCreate.preset.actorId,
+          presetConversationId: pendingFileCreate.preset.conversationId,
+          presetWorkspaceMemberId: pendingFileCreate.preset.workspaceMemberId,
           category: "artifact",
           state: "active",
           importance: 0.75,
@@ -399,9 +427,9 @@ export default function MemoryBrowser() {
           tags: [],
           textDigest: file.name,
           contentBlocks: [fileRecordToBlock(uploaded)],
-        })
+        } as any)
 
-        createdMemories.push((result?.memory || result) as Memory)
+        createdMemories.push(projectMemory((result?.memory || result) as any))
       }
 
       await loadData()

@@ -118,12 +118,57 @@ export function filesystemPolicyAllows(
   )
 }
 
-export interface CommandlinePolicyShape {
-  executor: "bash"
+export interface CommandlineShellPolicyShape {
+  executor: "bash" | "powershell"
   commandMatchType: "exact" | "prefix" | "tool"
   commandText?: string
   workingDirectory?: string
+  allowBundledToolchain?: boolean
+  allowedEnv?: string[]
 }
+
+export interface CommandlineExecFilePolicyShape {
+  executor: "exec_file"
+  commandMatchType: "argv_exact" | "argv_prefix" | "argv_exact_preapproved"
+  program: string
+  argvPrefix?: string[]
+  workingDirectory?: string
+  allowBundledToolchain?: boolean
+  allowedEnv?: string[]
+}
+
+export type CommandlinePolicyShape =
+  | CommandlineShellPolicyShape
+  | CommandlineExecFilePolicyShape
+
+export type NormalizedCommandlinePolicy = CommandlinePolicyShape
+
+export type CommandlineMatchRequest =
+  | {
+      kind: "shell"
+      executor: "bash" | "powershell"
+      command: string
+      workingDirectory?: string
+      platform?: "win32" | "linux" | "darwin"
+    }
+  | {
+      kind: "exec_file"
+      program: string
+      argv: readonly string[]
+      workingDirectory?: string
+      platform?: "win32" | "linux" | "darwin"
+      /**
+       * The caller's stated need for bundled fallback (i.e. the API set
+       * `allowBundledToolchain: true` on the requested action). A grant
+       * only COVERS this request if its own `allowBundledToolchain` is
+       * also true. Without this check, an older `allowBundledToolchain=
+       * undefined/false` grant would silently mask a new bundled-required
+       * dispatch, the API would skip the new authorization request, and
+       * the device would reject the call at execution time — the
+       * "approved-but-unrunnable" hole the user called out.
+       */
+      requiresBundled?: boolean
+    }
 
 export interface CuaPolicyShape {
   access: "read" | "write"
@@ -206,46 +251,173 @@ export function browserPolicyAllows(
   }
 }
 
+// ─────────────────────────── argv exec_file helpers ─────────────────────────
+
+import { normalizeProgramName } from "./commandline-normalize.js"
+
+/**
+ * Maintainer-curated allow-list of side-effect-free invocations. The label
+ * "preapproved" instead of "readonly" is deliberate: these commands MAY
+ * still read repo config or environment, so we make no security claim
+ * beyond "they're high-volume, low-risk, and worth a one-click approval".
+ * Git intentionally absent — repo config / external diff / fsmonitor are
+ * effectively executable surfaces.
+ */
+const ARGV_EXACT_PREAPPROVED: ReadonlyArray<{
+  program: string
+  argvEquals: readonly string[]
+}> = [
+  { program: "node", argvEquals: ["--version"] },
+  { program: "node", argvEquals: ["-v"] },
+  { program: "python", argvEquals: ["--version"] },
+]
+
+function argvEqualsExact(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+function argvHasPrefix(
+  prefix: readonly string[],
+  argv: readonly string[]
+): boolean {
+  if (prefix.length === 0) return false
+  if (prefix.length > argv.length) return false
+  for (let i = 0; i < prefix.length; i++)
+    if (prefix[i] !== argv[i]) return false
+  return true
+}
+
+function workingDirCheckPasses(
+  policyDir: string | undefined,
+  callDir: string | undefined
+): boolean {
+  if (!policyDir) return true
+  const normalizedPolicyDir = normalizePathPrefix(policyDir)
+  if (!normalizedPolicyDir) return false
+  const normalizedCallDir = normalizePathPrefix(callDir)
+  if (!normalizedCallDir) return false
+  return pathWithinPrefix(normalizedCallDir, normalizedPolicyDir)
+}
+
 /**
  * Authoritative commandline authorization decision. Mirrors the server
- * matcher so device-side enforcement can't drift. Resolves the working
- * directory before checking containment and rejects compound shell
- * operators (`a && b`) under prefix matches.
+ * matcher so device-side enforcement can't drift. Returns the NORMALIZED
+ * policy on match (so device callers can read allowBundledToolchain /
+ * allowedEnv directly) or null on miss. Caller (device builtin / server
+ * projection) wraps null into a structured permission_denied.
  */
 export function commandlinePolicyAllows(
   policy: CommandlinePolicyShape,
-  args: {
-    command: string
-    workingDirectory?: string
-  }
-): boolean {
-  if (policy.executor !== "bash") return false
-  const command = normalizeCommandText(args.command)
-  if (!command) return false
-  if (policy.workingDirectory) {
-    const normalizedPolicyDir = normalizePathPrefix(policy.workingDirectory)
-    if (!normalizedPolicyDir) return false
-    const normalizedCallDir = normalizePathPrefix(args.workingDirectory)
-    if (!normalizedCallDir) return false
-    if (!pathWithinPrefix(normalizedCallDir, normalizedPolicyDir)) return false
-  }
-  const grantedText = normalizeCommandText(policy.commandText)
-  switch (policy.commandMatchType) {
-    case "exact":
-      return Boolean(grantedText && grantedText === command)
-    case "prefix":
-      if (!grantedText) return false
-      // Server matcher rejects compound shell operators in prefix grants
-      // to prevent `ls -la && cat /etc/passwd` from sneaking past an
-      // `ls` prefix policy. Device-side must do the same.
-      if (hasCompoundShellOperators(command)) return false
-      return commandPrefixMatches(grantedText, command)
-    case "tool": {
-      if (!grantedText) return false
-      const head = command.trim().split(/\s+/)[0] ?? ""
-      return head === grantedText
+  request: CommandlineMatchRequest
+): NormalizedCommandlinePolicy | null {
+  // Cross-branch: request kind must align with policy executor.
+  if (request.kind === "shell") {
+    if (policy.executor !== "bash" && policy.executor !== "powershell") {
+      return null
     }
+    if (policy.executor !== request.executor) return null
+  } else {
+    if (policy.executor !== "exec_file") return null
+  }
+
+  // Windows: matcher denies any cwd grant/request until path normalization
+  // supports backslash / drive letters / UNC.
+  if (request.platform === "win32") {
+    if (policy.workingDirectory || request.workingDirectory) {
+      return null
+    }
+  }
+
+  if (request.kind === "shell") {
+    const shellPolicy = policy as CommandlineShellPolicyShape
+    // PowerShell v1 only supports exact (compound-operator heuristics +
+    // token boundary semantics are Bash-shaped; PowerShell parser is a
+    // follow-up).
+    if (
+      shellPolicy.executor === "powershell" &&
+      shellPolicy.commandMatchType !== "exact"
+    ) {
+      return null
+    }
+    if (
+      !workingDirCheckPasses(
+        shellPolicy.workingDirectory,
+        request.workingDirectory
+      )
+    ) {
+      return null
+    }
+    const command = normalizeCommandText(request.command)
+    if (!command) return null
+    const grantedText = normalizeCommandText(shellPolicy.commandText)
+    switch (shellPolicy.commandMatchType) {
+      case "exact":
+        return grantedText && grantedText === command ? shellPolicy : null
+      case "prefix":
+        if (!grantedText) return null
+        if (hasCompoundShellOperators(command)) return null
+        return commandPrefixMatches(grantedText, command) ? shellPolicy : null
+      case "tool": {
+        if (!grantedText) return null
+        const head = command.trim().split(/\s+/)[0] ?? ""
+        return head === grantedText ? shellPolicy : null
+      }
+      default:
+        return null
+    }
+  }
+
+  // exec_file branch
+  const execFilePolicy = policy as CommandlineExecFilePolicyShape
+  if (
+    !workingDirCheckPasses(
+      execFilePolicy.workingDirectory,
+      request.workingDirectory
+    )
+  ) {
+    return null
+  }
+  // If the caller requires bundled fallback (API set allowBundledToolchain
+  // on the request because the program needs it on this device), only a
+  // grant that ALSO has allowBundledToolchain=true covers. Otherwise a
+  // pre-existing "no bundle" grant would silently satisfy the match and
+  // the device would reject at execution.
+  if (
+    request.kind === "exec_file" &&
+    request.requiresBundled === true &&
+    execFilePolicy.allowBundledToolchain !== true
+  ) {
+    return null
+  }
+  const policyProgram = normalizeProgramName(execFilePolicy.program)
+  const requestProgram = normalizeProgramName(request.program)
+  if (execFilePolicy.commandMatchType === "argv_exact_preapproved") {
+    for (const entry of ARGV_EXACT_PREAPPROVED) {
+      const entryProgramNorm = normalizeProgramName(entry.program)
+      if (entryProgramNorm !== requestProgram) continue
+      if (!argvEqualsExact(entry.argvEquals, request.argv)) continue
+      return execFilePolicy
+    }
+    return null
+  }
+  // argv_exact / argv_prefix both require .program match.
+  if (policyProgram !== requestProgram) return null
+  switch (execFilePolicy.commandMatchType) {
+    case "argv_exact":
+      if (!execFilePolicy.argvPrefix) return null
+      return argvEqualsExact(execFilePolicy.argvPrefix, request.argv)
+        ? execFilePolicy
+        : null
+    case "argv_prefix":
+      if (!execFilePolicy.argvPrefix) return null
+      // Empty argvPrefix would authorize any args for this program.
+      if (execFilePolicy.argvPrefix.length === 0) return null
+      return argvHasPrefix(execFilePolicy.argvPrefix, request.argv)
+        ? execFilePolicy
+        : null
     default:
-      return false
+      return null
   }
 }

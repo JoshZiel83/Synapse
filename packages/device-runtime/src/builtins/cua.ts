@@ -5,10 +5,7 @@
 // runtime; the path is resolved from SYNAPSE_DEVICE_CUA_HELPER_PATH or the
 // `helperPath` option.
 
-import type {
-  CatalogProvider,
-  CatalogToolInvocationResult,
-} from "../types.js"
+import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
@@ -104,20 +101,29 @@ interface CuaToolMeta {
 }
 
 const TOOL_META: Record<string, CuaToolMeta> = {
-  cua_list_displays: { toolName: "cua_list_displays", rpcMethod: "list_displays" },
-  cua_capture_display: { toolName: "cua_capture_display", rpcMethod: "capture_display" },
+  cua_list_displays: {
+    toolName: "cua_list_displays",
+    rpcMethod: "list_displays",
+  },
+  cua_capture_display: {
+    toolName: "cua_capture_display",
+    rpcMethod: "capture_display",
+  },
   cua_click: { toolName: "cua_click", rpcMethod: "click" },
   cua_type_text: { toolName: "cua_type_text", rpcMethod: "type_text" },
 }
 
-export function createCuaBuiltin(opts: CuaBuiltinOptions = {}): CatalogProvider {
+export function createCuaBuiltin(
+  opts: CuaBuiltinOptions = {}
+): CatalogProvider {
   let handle: SidecarHandle | null = null
   let startupError: Error | null = null
 
   function ensureHandle(): SidecarHandle | null {
     if (handle) return handle
     if (startupError) return null
-    const binaryPath = opts.helperPath ?? process.env.SYNAPSE_DEVICE_CUA_HELPER_PATH
+    const binaryPath =
+      opts.helperPath ?? process.env.SYNAPSE_DEVICE_CUA_HELPER_PATH
     if (!binaryPath) {
       startupError = new Error(
         "SYNAPSE_DEVICE_CUA_HELPER_PATH not set and helperPath option missing"
@@ -143,7 +149,10 @@ export function createCuaBuiltin(opts: CuaBuiltinOptions = {}): CatalogProvider 
           transport: "builtin",
           builtin_kind: "cua",
           metadata: {
-            helperPath: opts.helperPath ?? process.env.SYNAPSE_DEVICE_CUA_HELPER_PATH ?? null,
+            helperPath:
+              opts.helperPath ??
+              process.env.SYNAPSE_DEVICE_CUA_HELPER_PATH ??
+              null,
             schemaVersion: 1,
           },
           tools: [
@@ -195,9 +204,7 @@ export function createCuaBuiltin(opts: CuaBuiltinOptions = {}): CatalogProvider 
       try {
         const result = await handle.request(meta.rpcMethod, input.args)
         return {
-          content: [
-            { type: "text", text: JSON.stringify(result, null, 2) },
-          ],
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
           _meta: { cua_method: meta.rpcMethod },
         }
       } catch (err) {

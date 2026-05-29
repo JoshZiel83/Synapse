@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "programs": {
+    "node": {
+      "version": "22.11.0",
+      "platforms": {
+        "linux-x64": {
+          "sha256": "4f862bab52039835efbe613b532238b6e4dde98d139a34e6923193e073438b13",
+          "download": {
+            "url": "https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.gz",
+            "license": "MIT",
+            "trustedSource": "nodejs.org-official"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 1,
+          "executable": "bin/node",
+          "binDir": "bin",
+          "requiredFiles": ["bin/node"],
+          "env": {}
+        },
+        "linux-arm64": {
+          "sha256": "27453f7a0dd6b9e6738f1f6ea6a09b102ec7aa484de1e39d6a1c3608ad47aa6a",
+          "download": {
+            "url": "https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-arm64.tar.gz",
+            "license": "MIT",
+            "trustedSource": "nodejs.org-official"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 1,
+          "executable": "bin/node",
+          "binDir": "bin",
+          "requiredFiles": ["bin/node"],
+          "env": {}
+        },
+        "darwin-x64": {
+          "sha256": "668d30b9512137b5f5baeef6c1bb4c46efff9a761ba990a034fb6b28b9da2465",
+          "download": {
+            "url": "https://nodejs.org/dist/v22.11.0/node-v22.11.0-darwin-x64.tar.gz",
+            "license": "MIT",
+            "trustedSource": "nodejs.org-official"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 1,
+          "executable": "bin/node",
+          "binDir": "bin",
+          "requiredFiles": ["bin/node"],
+          "env": {}
+        },
+        "darwin-arm64": {
+          "sha256": "2e89afe6f4e3aa6c7e21c560d8a0453d84807e97850bbb819b998531a22bdfde",
+          "download": {
+            "url": "https://nodejs.org/dist/v22.11.0/node-v22.11.0-darwin-arm64.tar.gz",
+            "license": "MIT",
+            "trustedSource": "nodejs.org-official"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 1,
+          "executable": "bin/node",
+          "binDir": "bin",
+          "requiredFiles": ["bin/node"],
+          "env": {}
+        }
+      }
+    },
+    "python": {
+      "version": "3.12.13+20260510",
+      "platforms": {
+        "linux-x64": {
+          "sha256": "e7332b4b4bb85006deb48d251c786a04c14de104c9b3a006b33457a4a604b8bc",
+          "download": {
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.12.13+20260510-x86_64-unknown-linux-gnu-install_only.tar.gz",
+            "license": "PSF-2.0",
+            "trustedSource": "astral-sh-python-build-standalone"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 0,
+          "executable": "python/bin/python3",
+          "binDir": "python/bin",
+          "requiredFiles": ["python/bin/python3", "python/lib"],
+          "env": {
+            "PYTHONHOME": "{rootDir}/python"
+          }
+        },
+        "linux-arm64": {
+          "sha256": "87097de12bc212e41ea8409efd0083fe06465d725e35d130e4007a4bf7e4f1c8",
+          "download": {
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.12.13+20260510-aarch64-unknown-linux-gnu-install_only.tar.gz",
+            "license": "PSF-2.0",
+            "trustedSource": "astral-sh-python-build-standalone"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 0,
+          "executable": "python/bin/python3",
+          "binDir": "python/bin",
+          "requiredFiles": ["python/bin/python3", "python/lib"],
+          "env": {
+            "PYTHONHOME": "{rootDir}/python"
+          }
+        },
+        "darwin-x64": {
+          "sha256": "cd369e76973c3179bc578230d8615ab621968ed758c5e32f636eecef4ad79894",
+          "download": {
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.12.13+20260510-x86_64-apple-darwin-install_only.tar.gz",
+            "license": "PSF-2.0",
+            "trustedSource": "astral-sh-python-build-standalone"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 0,
+          "executable": "python/bin/python3",
+          "binDir": "python/bin",
+          "requiredFiles": ["python/bin/python3", "python/lib"],
+          "env": {
+            "PYTHONHOME": "{rootDir}/python"
+          }
+        },
+        "darwin-arm64": {
+          "sha256": "5a30271f8d345a5b02b0c9e4e31e0f1e1455a8e4a04fba95cd9762472abc3b17",
+          "download": {
+            "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.12.13+20260510-aarch64-apple-darwin-install_only.tar.gz",
+            "license": "PSF-2.0",
+            "trustedSource": "astral-sh-python-build-standalone"
+          },
+          "archiveFormat": "tar.gz",
+          "stripComponents": 0,
+          "executable": "python/bin/python3",
+          "binDir": "python/bin",
+          "requiredFiles": ["python/bin/python3", "python/lib"],
+          "env": {
+            "PYTHONHOME": "{rootDir}/python"
+          }
+        }
+      }
+    },
+    "git": {
+      "version": "2.54.0.windows.1",
+      "platforms": {
+        "win32-x64": {
+          "sha256": "04f937e1f0918b17b9be6f2294cb2bb66e96e1d9832d1c298e2de088a1d0e668",
+          "download": {
+            "url": "https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/MinGit-2.54.0-64-bit.zip",
+            "license": "GPL-2.0",
+            "trustedSource": "git-for-windows"
+          },
+          "archiveFormat": "zip",
+          "stripComponents": 0,
+          "executable": "cmd/git.exe",
+          "binDir": "cmd",
+          "requiredFiles": [
+            "cmd/git.exe",
+            "mingw64/bin/git.exe",
+            "mingw64/bin/git-remote-https.exe",
+            "mingw64/share/git-core/templates"
+          ],
+          "env": {
+            "GIT_EXEC_PATH": "{rootDir}/mingw64/libexec/git-core",
+            "GIT_TEMPLATE_DIR": "{rootDir}/mingw64/share/git-core/templates"
+          }
+        },
+        "win32-arm64": {
+          "sha256": "68f6bdda5b58f4e40f431c0da48b05ba5596445314d5e491e7b4aebb1ec2e985",
+          "download": {
+            "url": "https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/MinGit-2.54.0-arm64.zip",
+            "license": "GPL-2.0",
+            "trustedSource": "git-for-windows"
+          },
+          "archiveFormat": "zip",
+          "stripComponents": 0,
+          "executable": "cmd/git.exe",
+          "binDir": "cmd",
+          "requiredFiles": [
+            "cmd/git.exe",
+            "clangarm64/bin/git.exe",
+            "clangarm64/bin/git-remote-https.exe",
+            "clangarm64/share/git-core/templates"
+          ],
+          "env": {
+            "GIT_EXEC_PATH": "{rootDir}/clangarm64/libexec/git-core",
+            "GIT_TEMPLATE_DIR": "{rootDir}/clangarm64/share/git-core/templates"
+          }
+        }
+      }
+    }
+  }
+}

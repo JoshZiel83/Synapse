@@ -31,7 +31,9 @@ import { getSession, updateSessionStatus } from "./service.js"
 // the trimmed-string normalization inline so the relay-tool fallback branch in
 // buildDeviceBuiltinToolBlocks still works for legacy task rows that may still
 // carry a builtinKind metadata field.
-function normalizeDeviceBuiltinAuthorizationKind(value: unknown): string | null {
+function normalizeDeviceBuiltinAuthorizationKind(
+  value: unknown
+): string | null {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null

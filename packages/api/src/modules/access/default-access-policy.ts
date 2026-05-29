@@ -10,7 +10,7 @@
  * transaction style can keep all writes atomic with the binding insert.
  */
 
-import { SUBJECT_KIND } from "@synapse/shared"
+import { SUBJECT_KIND, workspaceRef, workspaceMemberRef } from "@synapse/shared"
 import type {
   KyselyDb,
   QueryExecutor,
@@ -373,23 +373,9 @@ export async function grantApprovedAccessOn(
 }
 
 function workspaceTarget(workspaceId: string) {
-  return {
-    targetType: "workspace" as const,
-    subjectWorkspaceId: workspaceId,
-    subjectWorkspaceMemberId: null,
-    subjectActorId: null,
-    subjectConversationId: null,
-    subjectConversationActorContextId: null,
-  }
+  return { subject: workspaceRef(workspaceId) }
 }
 
 function workspaceMemberTarget(memberId: string) {
-  return {
-    targetType: "workspace_member" as const,
-    subjectWorkspaceId: null,
-    subjectWorkspaceMemberId: memberId,
-    subjectActorId: null,
-    subjectConversationId: null,
-    subjectConversationActorContextId: null,
-  }
+  return { subject: workspaceMemberRef(memberId) }
 }
