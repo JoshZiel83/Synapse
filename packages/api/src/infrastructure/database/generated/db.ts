@@ -211,7 +211,9 @@ export type MemoryItemsState = "active" | "archived" | "superseded";
 
 export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
 
-export type MemorySpacesSpaceType = "actor_private" | "conversation_shared" | "participant_private" | "user_private" | "workspace_shared";
+// subject-scope-refactor: MemorySpacesSpaceType dropped at cutover; memory_spaces now keyed by (owner_subject_id, scope_subject_id?, namespace_key).
+export type MemoryPermission = "delete" | "edit" | "manage" | "read" | "recall" | "write";
+export type MemoryAccessGrantsStatus = "active" | "revoked" | "superseded";
 
 export type ModelGroupGrantsStatus = "active" | "revoked";
 
@@ -1541,14 +1543,30 @@ export interface MemoryRecallRuns {
 }
 
 export interface MemorySpaces {
-  anchor_actor_id: string | null;
-  anchor_conversation_actor_context_id: string | null;
-  anchor_conversation_id: string | null;
-  anchor_workspace_member_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Timestamp>;
   id: Generated<string>;
-  space_type: MemorySpacesSpaceType;
-  updated_at: Generated<Timestamp | null>;
+  namespace_key: Generated<string>;
+  owner_subject_id: string;
+  scope_subject_id: string | null;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
+}
+
+export interface MemoryAccessGrants {
+  created_at: Generated<Timestamp>;
+  created_by_workspace_member_id: string | null;
+  id: Generated<string>;
+  memory_item_id: string | null;
+  memory_space_id: string;
+  permissions: MemoryPermission[];
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source: string | null;
+  source_interaction_id: string | null;
+  status: Generated<MemoryAccessGrantsStatus>;
+  subject_id: string;
+  superseded_at: Timestamp | null;
+  updated_at: Generated<Timestamp>;
   workspace_id: string;
 }
 
@@ -2544,6 +2562,7 @@ export interface DB {
   interaction_transport_projections: InteractionTransportProjections;
   interaction_user_input_requests: InteractionUserInputRequests;
   memory_embedding_cache: MemoryEmbeddingCache;
+  memory_access_grants: MemoryAccessGrants;
   memory_item_chunks: MemoryItemChunks;
   memory_item_parts: MemoryItemParts;
   memory_items: MemoryItems;

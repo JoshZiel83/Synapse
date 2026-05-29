@@ -135,3 +135,45 @@ export const ACCESS_BINDING_SOURCES = [
 ] as const
 
 export type AccessBindingSource = (typeof ACCESS_BINDING_SOURCES)[number]
+
+/**
+ * subject-scope-refactor: memory_access_grants table permissions. Grants can
+ * be scoped to a memory_space or a single memory_item; the same permission
+ * tuple applies to both. Used by memory module access-grant-storage and by
+ * evaluator's hasMemoryItemPermission / hasMemorySpacePermission to honor
+ * explicit grants on top of legacy space_type-based decision tree.
+ */
+export const MEMORY_PERMISSION = {
+  READ: "read",
+  RECALL: "recall",
+  WRITE: "write",
+  EDIT: "edit",
+  DELETE: "delete",
+  MANAGE: "manage",
+} as const
+
+export const MEMORY_PERMISSIONS = [
+  MEMORY_PERMISSION.READ,
+  MEMORY_PERMISSION.RECALL,
+  MEMORY_PERMISSION.WRITE,
+  MEMORY_PERMISSION.EDIT,
+  MEMORY_PERMISSION.DELETE,
+  MEMORY_PERMISSION.MANAGE,
+] as const
+
+export type MemoryPermission = (typeof MEMORY_PERMISSIONS)[number]
+
+export const MEMORY_ACCESS_GRANT_STATUS = {
+  ACTIVE: "active",
+  REVOKED: "revoked",
+  SUPERSEDED: "superseded",
+} as const
+
+export const MEMORY_ACCESS_GRANT_STATUSES = [
+  MEMORY_ACCESS_GRANT_STATUS.ACTIVE,
+  MEMORY_ACCESS_GRANT_STATUS.REVOKED,
+  MEMORY_ACCESS_GRANT_STATUS.SUPERSEDED,
+] as const
+
+export type MemoryAccessGrantStatus =
+  (typeof MEMORY_ACCESS_GRANT_STATUSES)[number]

@@ -495,14 +495,11 @@ export interface MemoryEntry {
   id: UUID
   workspaceId: UUID
   spaceId: UUID
-  spaceType: MemorySpaceType
-  ownerScope: MemoryScope
-  actorId?: UUID
-  conversationId?: UUID
-  workspaceMemberId?: UUID
-  ownerActorId?: UUID
-  ownerConversationId?: UUID
-  ownerWorkspaceMemberId?: UUID
+  // D4: memory_spaces is now (owner_subject_id, scope_subject_id?, namespace_key).
+  // The wire shape exposes owner / scope as SubjectRefs and the literal namespace key.
+  owner: SubjectRef
+  scope?: SubjectRef
+  namespaceKey: string
   category: MemoryCategory
   state: MemoryItemState
   status: MemoryStatus
@@ -525,9 +522,9 @@ export interface MemoryEntry {
   indexError?: string
   createdAt: Timestamp
   updatedAt: Timestamp
-  actorName?: string
-  conversationTitle?: string
-  workspaceMemberName?: string
+  /** Display-friendly labels derived from owner / scope subject joins. */
+  ownerLabel?: string
+  scopeLabel?: string
 }
 
 export type Memory = MemoryEntry
