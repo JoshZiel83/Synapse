@@ -6,3 +6,9 @@
 # toward language stats or PR file counts.
 packages/remote-agent-daemon/src/codex/generated/** linguist-generated=true
 packages/remote-agent-daemon/src/codex/generated/** -diff
+
+# device-runtime toolchain bundles ship as prebuilt per-platform archives
+# (git/bash/etc. for zero-network first-run). They are large binaries — store
+# them via Git LFS so the repo working history stays pointer-only.
+packages/device-runtime-bundles-*/bundles/*.tar.gz filter=lfs diff=lfs merge=lfs -text
+packages/device-runtime-bundles-*/bundles/*.zip filter=lfs diff=lfs merge=lfs -text
