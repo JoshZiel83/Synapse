@@ -65,27 +65,31 @@ import {
  * Discriminated union of principals that capability projection evaluates
  * tools for. See docs/device-runtime-v3.md §10.3.
  *
- * - `actor` with optional conversationId — chat runtime acting on behalf of
- *   an actor. When conversationId is provided, projection ALSO reads
- *   conversation-scoped bindings (the 1:1 device-picker output).
- * - `actor_in_conversation` — group-chat actor, anchored to a specific
- *   conversation_actor_context.
- * - `conversation` — transcript-side jobs with no actor in play.
+ * - `actor` with optional conversationId — chat runtime acting on behalf
+ *   of an actor. When conversationId is provided AND the actor is an
+ *   active participant of that conversation, projection ALSO reads
+ *   conversation-scoped bindings (the 1:1 device-picker output) plus
+ *   `subject=actor + scope=conversation` grants (the group-chat picker
+ *   output). The active-participant guard is enforced by the canonical
+ *   `buildRuntimePrincipalContext`; without it, a non-member actor's
+ *   `conversationId` would silently pull in unrelated grants.
+ * - `conversation` — transcript-side jobs with no actor in play. Per
+ *   Decision 8, this principal does NOT inherit the workspace subject:
+ *   `subject=workspace` device grants stay invisible to bridged
+ *   conversation participants (IM bridges, virtual chats).
  * - `remote_agent` — reverse MCP caller bridged into a conversation.
- * - `workspace_member` — dashboard introspection; never used for executable
- *   dispatch.
- */
-/**
- * subject-scope-refactor: actor_in_conversation collapsed into
- * `actor` + `activeConversationSubjectId` (computed via
- * `principalSubjectIds`'s active-participant guard). External callers
- * (`capabilities/surface.ts`, `remote-agents/mcp-endpoint.ts`) never
- * constructed an `actor_in_conversation` principal in practice — the
- * variant only existed to encode "this actor is currently in conversation
- * Y" via principal-kind branching. That information is now carried by
- * the `RuntimePrincipalContext.activeConversationSubjectId` field at the
- * subject level, where `actor + scope=conversation` grants can be matched
- * by SQL rather than re-derived in every dispatch branch.
+ *   Same active-participant guard as `actor`.
+ * - `workspace_member` — dashboard introspection; never used for
+ *   executable dispatch.
+ *
+ * subject-scope-refactor: the legacy `actor_in_conversation` discriminator
+ * is dropped. Its semantics ("this actor, narrowed to this conversation")
+ * are now expressed as `actor` principal + `RuntimePrincipalContext.
+ * activeConversationSubjectId`, with the conversation subject also pushed
+ * into `runtimeScopeSubjectIds` so `(subject=actor, scope=conversation)`
+ * grants match SQL-side rather than requiring an extra principal-kind
+ * branch in every dispatcher. The legacy `conversation_actor_context`
+ * subject kind is gone with the discriminator.
  */
 export type DevicePrincipal =
   | { kind: "actor"; actorId: string; conversationId?: string }
