@@ -1147,6 +1147,11 @@ function buildInteractionSummary(
               `Interaction ${row.id} runtime_authorization.requestMode is invalid`
             )
           })(),
+    // Surface the persisted retry_nonce so the dedupe-reuse path in
+    // runtime-authorizations/requests.ts can return the row's actual nonce
+    // (the one that will match source_retry_nonce on the eventual grant)
+    // instead of the freshly-generated nonce that no grant will ever match.
+    sourceRetryNonce: row.source_retry_nonce ?? undefined,
   }
 
   return {
@@ -1897,8 +1902,28 @@ async function insertInteractionRequest(
     targetParticipantId?: string
     expiresAt?: string
   }
-) {
+): Promise<string | null> {
   const interactionId = uuidv4()
+  // ON CONFLICT DO NOTHING on the pending-request unique index
+  // (idx_interaction_requests_pending_request_key, schema.sql).
+  //
+  // Without this, two concurrent callers racing on the same dedupe key
+  // would both pass the pre-INSERT lookup, one would succeed, the other
+  // would crash on the unique-constraint violation, abort its enclosing
+  // transaction, and the caller would surface "authorization request
+  // failed" — instead of treating the call as deduped against the
+  // winner. ON CONFLICT keeps the transaction alive so the caller can
+  // re-query for the winner via findPendingInteractionIdByRequestKey and
+  // fall through to its existing dedupe-reuse path (including the
+  // orphan-task cleanup downstream).
+  //
+  // The partial unique index (WHERE status='pending') means ON CONFLICT
+  // must specify the same predicate or the planner can't match it. We
+  // use the column list + predicate form.
+  //
+  // Returns the new id on a fresh insert, or null when the row already
+  // existed at insert time. Callers MUST handle null by re-querying for
+  // the conflict winner — see the create*InteractionRequest functions.
   const created = await executeCompiledSql<{ id: string }>(
     client,
     sql<{ id: string }>`
@@ -1928,13 +1953,40 @@ async function insertInteractionRequest(
         ${params.targetParticipantId || null},
         ${params.expiresAt || null}
       )
+      ON CONFLICT (workspace_id, request_key)
+        WHERE status = 'pending'
+        DO NOTHING
       RETURNING id
     `.compile(db)
   )
-  if (!created.rows[0]?.id) {
-    throw new Error("Failed to create interaction request")
+  return created.rows[0]?.id ?? null
+}
+
+/**
+ * Resolve the existing-pending-interaction id that won an INSERT race
+ * against `insertInteractionRequest` (which returned null on conflict).
+ * Centralized here so every caller does the same lookup the same way —
+ * critical for the dedupe contract: the row we return must be exactly
+ * the one the conflicting unique index pinned.
+ */
+async function resolveInsertConflictWinner(
+  client: Queryable,
+  params: { workspaceId: string; requestKey: string; taskId?: string }
+): Promise<string | null> {
+  // Prefer the task-keyed lookup when available — for plan_approval /
+  // runtime_authorization the request_key is derived from the task so
+  // both lookups would return the same row, but staying consistent with
+  // the pre-INSERT lookup ordering avoids surprising any cross-callsite
+  // assumption.
+  if (params.taskId) {
+    const byTask = await findInteractionIdByTaskId(params.taskId, client)
+    if (byTask) return byTask
   }
-  return created.rows[0]!.id
+  return findPendingInteractionIdByRequestKey(
+    params.workspaceId,
+    params.requestKey,
+    client
+  )
 }
 
 async function findInteractionIdByTaskId(
@@ -2223,6 +2275,26 @@ export async function createUserInputInteractionRequest(
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race won by another caller — re-resolve and
+      // return the conflict winner instead of crashing on the unique
+      // index. Same outcome as the pre-INSERT dedupe-hit path.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+        taskId: params.taskId,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error("Failed to load conflict-winning interaction request")
+      }
+      return winner
+    }
 
     await insertUserInputInteractionDetails(client, {
       interactionId,
@@ -2300,6 +2372,26 @@ export async function createRemoteAgentUserInputInteractionRequest(
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race — re-resolve and return the conflict
+      // winner. See createUserInputInteractionRequest for the rationale.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error(
+          "Failed to load conflict-winning remote-agent interaction request"
+        )
+      }
+      return winner
+    }
 
     await insertUserInputInteractionDetails(client, {
       interactionId,
@@ -2381,6 +2473,27 @@ export async function createPlanApprovalInteractionRequest(
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race — re-resolve and return the conflict
+      // winner. See createUserInputInteractionRequest for the rationale.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+        taskId: params.taskId,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error(
+          "Failed to load conflict-winning plan approval interaction request"
+        )
+      }
+      return winner
+    }
 
     await insertPlanApprovalInteractionDetails(client, {
       interactionId,
@@ -2476,6 +2589,26 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race — re-resolve and return the conflict
+      // winner. See createUserInputInteractionRequest for the rationale.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error(
+          "Failed to load conflict-winning remote-agent plan approval interaction request"
+        )
+      }
+      return winner
+    }
 
     await insertPlanApprovalInteractionDetails(client, {
       interactionId,
@@ -2623,6 +2756,30 @@ export async function createRuntimeAuthorizationInteractionRequest(
       requestKey,
       expiresAt: params.expiresAt,
     })
+    if (interactionId === null) {
+      // Concurrent dedupe race — re-resolve and return the conflict
+      // winner. The outer createRuntimeAuthorizationRequest detects this
+      // as a row-reuse via didInnerDedupeReuseRow (the winner's row
+      // carries the OTHER caller's source_retry_nonce, not ours) and
+      // cancels the orphan tool_call_task it created upstream.
+      const winnerId = await resolveInsertConflictWinner(client, {
+        workspaceId: params.workspaceId,
+        requestKey,
+        taskId: params.taskId,
+      })
+      if (!winnerId) {
+        throw new Error(
+          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+        )
+      }
+      const winner = await getInteractionRequestSummary(winnerId, client)
+      if (!winner) {
+        throw new Error(
+          "Failed to load conflict-winning runtime authorization interaction request"
+        )
+      }
+      return winner
+    }
 
     await insertRuntimeAuthorizationInteractionDetails(client, {
       interactionId,

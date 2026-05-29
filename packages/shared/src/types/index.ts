@@ -3717,6 +3717,16 @@ export interface RuntimeAuthorizationInteractionSummary {
   approvedPreset?: RuntimeAuthorizationPreset
   approvedGrant?: RuntimeAuthorizationGrantSummary
   requestMode: RuntimeAuthorizationRequestMode
+  /**
+   * The retry_nonce baked into the row when the request was first created.
+   * The post-approval grant carries the SAME value as source_retry_nonce —
+   * surfacing it here lets the dedupe-reuse path return the persisted nonce
+   * to its caller instead of a freshly-generated one that no grant will
+   * ever match. See runtime-authorizations/requests.ts background-mode
+   * dedupe branch. Optional because historical rows may not have one and
+   * non-runtime-authorization summaries don't materialize this field.
+   */
+  sourceRetryNonce?: string
 }
 
 export interface InteractionRequestSummaryBase {
