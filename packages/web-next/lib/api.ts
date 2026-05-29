@@ -743,6 +743,12 @@ class ApiClient {
       method: "DELETE",
     })
   }
+  moveMemory(wsId: string, id: string, data: any) {
+    return this.fetch(`/workspaces/${wsId}/memories/${id}/move`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
 
   // Audit
   getAuditLogs(wsId: string, params?: string) {

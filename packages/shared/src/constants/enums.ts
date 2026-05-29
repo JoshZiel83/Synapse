@@ -426,17 +426,28 @@ export const ATTACHMENT_TARGET_TYPES = [
   "actor",
   "workspace_member",
 ] as const
+// subject-scope-refactor: legacy UI label set. The actual D3 payload type
+// (ScopedSubjectTarget) is {subject: SubjectRef, scope?: SubjectRef}; these
+// string labels are kept for UI selector display only (skills / mcp-plugins
+// rendering, web-next dropdowns). subjectScopeLabel emits the same union for
+// derived labels. New code should consume SubjectRef shapes directly.
 export const ACCESS_TARGET_TYPES = [
   "workspace",
   "workspace_member",
   "conversation",
   "actor",
+  "actor_in_conversation",
+  "remote_agent",
+  "remote_agent_in_conversation",
 ] as const
 export const CAPABILITY_ACCESS_TARGET_TYPES = [
   "workspace",
   "workspace_member",
   "conversation",
   "actor",
+  "actor_in_conversation",
+  "remote_agent",
+  "remote_agent_in_conversation",
 ] as const
 export const REUSE_SCOPES = [
   "turn",

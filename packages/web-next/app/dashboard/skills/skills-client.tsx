@@ -13,7 +13,8 @@ import {
   type InstalledSkill,
   type SkillMarketplaceEntry,
 } from "@synapse/shared"
-import { type AccessTargetInput } from "@/lib/api"
+import type { CapabilityAccessTarget } from "@synapse/shared/types"
+type AccessTargetInput = CapabilityAccessTarget
 import {
   useCallback,
   useDeferredValue,
@@ -512,19 +513,31 @@ function createScopeDraft(): ScopeDraft {
 }
 
 function buildAccessTargetFromScopeDraft(
-  draft: Pick<ScopeDraft, "useScope" | "actorId" | "conversationId" | "userId">
+  draft: Pick<ScopeDraft, "useScope" | "actorId" | "conversationId" | "userId">,
+  workspaceId: string
 ): AccessTargetInput {
-  return {
-    type: draft.useScope,
-    actorId:
-      draft.useScope === "actor" || draft.useScope === "actor_in_conversation"
-        ? draft.actorId || undefined
-        : undefined,
-    conversationId:
-      draft.useScope === "conversation" ||
-      draft.useScope === "actor_in_conversation"
-        ? draft.conversationId || undefined
-        : undefined,
+  switch (draft.useScope) {
+    case "workspace":
+      return { subject: { kind: "workspace", workspaceId } }
+    case "conversation":
+      return {
+        subject: {
+          kind: "conversation",
+          conversationId: draft.conversationId ?? "",
+        },
+      }
+    case "actor":
+      return { subject: { kind: "actor", actorId: draft.actorId ?? "" } }
+    case "actor_in_conversation":
+      return {
+        subject: { kind: "actor", actorId: draft.actorId ?? "" },
+        scope: {
+          kind: "conversation",
+          conversationId: draft.conversationId ?? "",
+        },
+      }
+    default:
+      return { subject: { kind: "workspace", workspaceId } }
   }
 }
 
@@ -1091,7 +1104,10 @@ function SkillEditorDialog({
           iconFileId: draft.iconFileId || undefined,
           tags: parseTags(draft.tagsText),
           attachmentFiles,
-          accessTarget: buildAccessTargetFromScopeDraft(scopeDraft),
+          accessTarget: buildAccessTargetFromScopeDraft(
+            scopeDraft,
+            workspaceId
+          ),
         })
         toast.success("Workspace skill created")
         onOpenChange(false)
@@ -1573,7 +1589,7 @@ function InstallSkillDialog({
     try {
       const result = await api.installSkill(workspaceId, {
         marketSkillId: skill.id,
-        accessTarget: buildAccessTargetFromScopeDraft(scopeDraft),
+        accessTarget: buildAccessTargetFromScopeDraft(scopeDraft, workspaceId),
       })
       toast.success("Skill installed")
       onOpenChange(false)
@@ -2786,7 +2802,7 @@ export function WorkspaceSkillCreationPage() {
         iconFileId: draft.iconFileId || undefined,
         tags: parseTags(draft.tagsText),
         attachmentFiles,
-        accessTarget: buildAccessTargetFromScopeDraft(scopeDraft),
+        accessTarget: buildAccessTargetFromScopeDraft(scopeDraft, workspaceId),
       })
       toast.success("Workspace skill created")
       router.push(`/dashboard/skills/installed/${result.skill.id}`)

@@ -3813,8 +3813,9 @@ export interface ConversationFeedEventPayloadMap {
   memory_saved: {
     actor: ConversationEntityRef
     memoryId: UUID
-    memorySpaceType: MemorySpaceType
-    memoryScope?: MemoryScope
+    memoryOwner: SubjectRef
+    memoryScope?: SubjectRef
+    memoryNamespaceKey: string
     memoryCategory: MemoryCategory
     textDigest?: string
     sourceItemId?: UUID
@@ -3824,8 +3825,9 @@ export interface ConversationFeedEventPayloadMap {
     actor: ConversationEntityRef
     memoryId: UUID
     supersedesMemoryId?: UUID
-    memorySpaceType: MemorySpaceType
-    memoryScope?: MemoryScope
+    memoryOwner: SubjectRef
+    memoryScope?: SubjectRef
+    memoryNamespaceKey: string
     memoryCategory: MemoryCategory
     textDigest?: string
     sourceItemId?: UUID

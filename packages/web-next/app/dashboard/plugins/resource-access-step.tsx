@@ -5,7 +5,7 @@ import type {
   CapabilityAccessTarget,
   ConversationTypeKey,
 } from "@synapse/shared/types"
-import type { AccessTargetInput } from "@/lib/api"
+type AccessTargetInput = CapabilityAccessTarget
 
 // D3 / PR6 TODO: PluginGrantScope mirrors the historical 5-value label union;
 // the UI still emits this shape from its selectors. PR6 will switch to a
@@ -1416,24 +1416,42 @@ export default function ResourceAccessStep({
     setSaving(true)
     setSubmitError(null)
     try {
+      const accessTarget: AccessTargetInput = (() => {
+        switch (grantScope) {
+          case "workspace":
+            return { subject: { kind: "workspace", workspaceId } }
+          case "workspace_member":
+            return {
+              subject: {
+                kind: "workspace_member",
+                memberId: actorId ?? "",
+              },
+            }
+          case "conversation":
+            return {
+              subject: {
+                kind: "conversation",
+                conversationId: conversationId ?? "",
+              },
+            }
+          case "actor":
+            return { subject: { kind: "actor", actorId: actorId ?? "" } }
+          case "actor_in_conversation":
+            return {
+              subject: { kind: "actor", actorId: actorId ?? "" },
+              scope: {
+                kind: "conversation",
+                conversationId: conversationId ?? "",
+              },
+            }
+        }
+      })()
       const payload: {
         accessTarget?: AccessTargetInput
         conversationTypeMaskOverride?: number | null
         permissions?: string[]
       } = {
-        accessTarget: {
-          type: grantScope,
-          actorId:
-            grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR ||
-            grantScope === "actor_in_conversation"
-              ? actorId
-              : undefined,
-          conversationId:
-            grantScope === "conversation" ||
-            grantScope === "actor_in_conversation"
-              ? conversationId
-              : undefined,
-        },
+        accessTarget,
         permissions: summary?.requiredPermissions?.length
           ? summary.requiredPermissions
           : ["use"],
