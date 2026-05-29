@@ -21,6 +21,10 @@
     "./tunnel": {
       "types": "./dist/tunnel.d.ts",
       "default": "./dist/tunnel.js"
+    },
+    "./browser-tools": {
+      "types": "./dist/browser-tools.d.ts",
+      "default": "./dist/browser-tools.js"
     }
   },
   "scripts": {

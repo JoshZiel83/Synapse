@@ -9,6 +9,18 @@ export {
   executeBash,
 } from "./builtins/commandline.js"
 export { createBrowserBuiltin, listCdpTargets } from "./builtins/browser.js"
+export {
+  createChromeDevtoolsMcpBuiltin,
+  PINNED_VERSION as CHROME_DEVTOOLS_MCP_PINNED_VERSION,
+  PROVIDER_KEY as CHROME_DEVTOOLS_MCP_PROVIDER_KEY,
+} from "./builtins/chrome-devtools-mcp.js"
+export {
+  startMcpStdioSidecar,
+  type McpClient,
+  type McpCallToolResult,
+  type McpStdioSidecarHandle,
+  type McpStdioSidecarOptions,
+} from "./mcp-stdio-sidecar.js"
 export { createCuaBuiltin } from "./builtins/cua.js"
 export {
   startSidecar,

@@ -99,11 +99,23 @@ export async function dispatchSyncTool(
       error?: { code: number; message: string; data?: unknown }
     }
     if (body.error) {
+      // Preserve `body.error.data` (JSON-RPC structured data) as
+      // SynapseError.details so upstream details (e.g. sidecar diagnostic
+      // payloads) survive across the API boundary. Without this the
+      // upper layer only sees the truncated `message` string and any
+      // actionable hints are lost.
+      const data = body.error.data
       return {
         ok: false,
         error: {
           code: "runtime_constraint",
           message: body.error.message,
+          details:
+            data && typeof data === "object" && !Array.isArray(data)
+              ? (data as Record<string, unknown>)
+              : data !== undefined
+                ? { value: data }
+                : undefined,
         },
       }
     }

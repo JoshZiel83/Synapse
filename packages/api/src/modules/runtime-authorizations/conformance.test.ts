@@ -44,6 +44,8 @@ type BrowserFixture = {
       origin?: string
       host?: string
       registrableDomain?: string
+      // v3.1 fail-closed operation enforcement
+      operations?: string[]
     }
   }>
   request: {
@@ -51,6 +53,7 @@ type BrowserFixture = {
     origin?: string
     host?: string
     registrableDomain?: string
+    operations?: string[]
   }
   expected: boolean
   note?: string

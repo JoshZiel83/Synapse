@@ -29,6 +29,13 @@ export interface DeviceCapabilityToolRow {
   /** Per-device mask override. */
   device_conversation_type_mask_override: number | null
   /**
+   * v3.1: exposure.stable_key (e.g. "builtin/browser/navigation") + the
+   * provider-emitted metadata object. Used by browser preflight to detect
+   * disabled exposures and to attach disabledReason to user-facing errors.
+   */
+  exposure_stable_key: string
+  exposure_metadata: Record<string, unknown> | null
+  /**
    * Raw devices.platform string ("win32", "darwin", "linux", or other).
    * Caller (capability-projection dispatch) passes this through
    * normalizeDevicePlatform before forwarding to the commandline matcher,
@@ -96,6 +103,8 @@ export async function loadDeviceCapabilityToolsForSubjects(
       "dcr.id as catalog_revision_id",
       "dx.transport as transport",
       "dx.builtin_kind as builtin_kind",
+      "dx.stable_key as exposure_stable_key",
+      "dx.metadata as exposure_metadata",
       "dt.current_name as visible_tool_name",
       "dtr.description as visible_description",
       "dtr.input_schema as input_schema",

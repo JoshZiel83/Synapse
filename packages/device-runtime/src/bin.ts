@@ -19,6 +19,7 @@ import { createFilesystemBuiltin } from "./builtins/filesystem.js"
 import { createCommandlineBuiltin } from "./builtins/commandline.js"
 import { createCuaBuiltin } from "./builtins/cua.js"
 import { createBrowserBuiltin } from "./builtins/browser.js"
+import { createChromeDevtoolsMcpBuiltin } from "./builtins/chrome-devtools-mcp.js"
 import { createFrpTunnelAdapter } from "./tunnel/frp.js"
 import {
   defaultPrestageDirs,
@@ -44,6 +45,18 @@ import type { CliArgs } from "./cli-args.js"
 import { parseArgs, getFlag } from "./cli-args.js"
 export { parseArgs, getFlag } from "./cli-args.js"
 export type { CliArgs } from "./cli-args.js"
+
+function getBoolFlag(
+  flags: Map<string, string>,
+  name: string,
+  defaultValue: boolean
+): boolean {
+  const raw = flags.get(name)
+  if (raw === undefined) return defaultValue
+  if (raw === "" || raw === "true") return true
+  if (raw === "false") return false
+  return defaultValue
+}
 
 /**
  * Look for synapse-device-cua-helper alongside the runtime install. Returns
@@ -366,9 +379,91 @@ async function main() {
       } else if (getFlag(args.flags, "cua") === "off") {
         // explicit opt-out — no-op
       }
+      // ── Browser provider selection (v3.1) ────────────────────────────
+      // --browser-provider=lite | chrome-devtools (default lite).
+      //   lite: keep the v3.0 CDP-based browser builtin. Driven by
+      //         --browser-cdp only.
+      //   chrome-devtools: wrap the official `chrome-devtools-mcp` sidecar
+      //         (8 narrow exposures, operation-aware authz). Defaults
+      //         lean safe: --isolated, headless=false, redact-network-
+      //         headers, no usage stats/CrUX, all categories off, neither
+      //         extensions nor webmcp. High-risk flags
+      //         (--browser-url, --browser-proxy-server,
+      //         --browser-accept-insecure-certs, --browser-user-data-dir,
+      //         --browser-isolated=false) each emit a once-per-process warn.
+      const browserProvider =
+        getFlag(args.flags, "browser-provider", "lite") ?? "lite"
       const browserCdp = getFlag(args.flags, "browser-cdp")
-      if (browserCdp) {
-        providers.push(createBrowserBuiltin({ cdpEndpoint: browserCdp }))
+      if (browserProvider === "lite") {
+        if (browserCdp) {
+          providers.push(createBrowserBuiltin({ cdpEndpoint: browserCdp }))
+        }
+        // Warn-and-ignore for chrome-devtools-only flags under lite.
+        const chromeOnlyFlags = [
+          "browser-mcp-command",
+          "browser-headless",
+          "browser-isolated",
+          "browser-user-data-dir",
+          "browser-executable-path",
+          "browser-channel",
+          "browser-url",
+          "browser-proxy-server",
+          "browser-accept-insecure-certs",
+          "browser-allow-script",
+          "browser-allow-network",
+          "browser-allow-performance",
+        ]
+        for (const flag of chromeOnlyFlags) {
+          if (args.flags.has(flag)) {
+            console.warn(
+              `[bin] ignoring --${flag} because --browser-provider=lite`
+            )
+          }
+        }
+        if (args.repeatableFlags.has("browser-mcp-arg")) {
+          console.warn(
+            `[bin] ignoring --browser-mcp-arg because --browser-provider=lite`
+          )
+        }
+      } else if (browserProvider === "chrome-devtools") {
+        if (browserCdp) {
+          console.warn(
+            `[bin] ignoring --browser-cdp because --browser-provider=chrome-devtools`
+          )
+        }
+        const mcpCommandPath = getFlag(args.flags, "browser-mcp-command")
+        const mcpExtraArgs = args.repeatableFlags.get("browser-mcp-arg") ?? []
+        const mcpCommand = mcpCommandPath
+          ? { command: mcpCommandPath, args: [] }
+          : undefined
+        providers.push(
+          createChromeDevtoolsMcpBuiltin({
+            mcpCommand,
+            mcpExtraArgs,
+            headless: getBoolFlag(args.flags, "browser-headless", false),
+            isolatedProfile: getBoolFlag(args.flags, "browser-isolated", true),
+            userDataDir: getFlag(args.flags, "browser-user-data-dir"),
+            executablePath: getFlag(args.flags, "browser-executable-path"),
+            channel: getFlag(args.flags, "browser-channel") as
+              | "stable"
+              | "beta"
+              | "dev"
+              | "canary"
+              | undefined,
+            browserUrl: getFlag(args.flags, "browser-url"),
+            proxyServer: getFlag(args.flags, "browser-proxy-server"),
+            acceptInsecureCerts: args.flags.has(
+              "browser-accept-insecure-certs"
+            ),
+            allowScript: args.flags.has("browser-allow-script"),
+            allowNetwork: args.flags.has("browser-allow-network"),
+            allowPerformance: args.flags.has("browser-allow-performance"),
+          })
+        )
+      } else {
+        console.warn(
+          `[bin] unknown --browser-provider=${browserProvider}; no browser provider registered`
+        )
       }
       // Parse trusted server keys: env value is "<kid>:<base64-PEM>,..." so
       // multiple kids can be carried for rotation. The runtime refuses to

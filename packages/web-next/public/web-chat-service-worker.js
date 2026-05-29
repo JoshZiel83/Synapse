@@ -236,6 +236,238 @@
     }
   }));
 
+  // ../device-protocol/dist/enums.js
+  var DEVICE_MCP_ERROR_CODES = [
+    "tool_definition_changed",
+    "permission_denied",
+    "runtime_constraint",
+    "invalid_request",
+    "expired_envelope",
+    "replay_detected"
+  ];
+  var SERVER_FACADE_ERROR_CODES = [
+    ...DEVICE_MCP_ERROR_CODES,
+    "runtime_authorization_requested"
+  ];
+
+  // ../device-protocol/dist/browser-tools.js
+  var BROWSER_TOOL_MAP = {
+    // ── navigation ─────────────────────────────────────────────────────────
+    list_pages: {
+      exposure: "navigation",
+      operation: "page.read",
+      action: "read",
+      target: { kind: "all_pages" },
+      enabledByDefault: true
+    },
+    new_page: {
+      exposure: "navigation",
+      operation: "page.navigate",
+      action: "write",
+      target: { kind: "argument_url", argKey: "url" },
+      enabledByDefault: true
+    },
+    navigate_page: {
+      // chrome-devtools-mcp 0.7.0: schema is {url} — no `type` discriminator.
+      exposure: "navigation",
+      operation: "page.navigate",
+      action: "write",
+      target: { kind: "argument_url", argKey: "url" },
+      enabledByDefault: true
+    },
+    navigate_page_history: {
+      // back/forward on the currently selected page.
+      exposure: "navigation",
+      operation: "page.navigate",
+      action: "write",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    select_page: {
+      exposure: "navigation",
+      operation: "page.read",
+      action: "read",
+      target: { kind: "page_id", argKey: "pageIdx" },
+      enabledByDefault: true
+    },
+    close_page: {
+      exposure: "navigation",
+      operation: "page.navigate",
+      action: "write",
+      target: { kind: "page_id", argKey: "pageIdx" },
+      enabledByDefault: true
+    },
+    wait_for: {
+      exposure: "navigation",
+      operation: "page.read",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    // ── read ───────────────────────────────────────────────────────────────
+    take_snapshot: {
+      exposure: "read",
+      operation: "page.read",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    take_screenshot: {
+      exposure: "read",
+      operation: "screenshot.capture",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    list_console_messages: {
+      exposure: "read",
+      operation: "console.read",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    // ── input ──────────────────────────────────────────────────────────────
+    // 0.7.0 input tools: click, hover, fill, drag, fill_form, upload_file +
+    // handle_dialog (lives in pages.js but classified as INPUT_AUTOMATION).
+    // `press_key` / `type_text` do not exist upstream.
+    click: {
+      exposure: "input",
+      operation: "page.input",
+      action: "write",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    fill: {
+      exposure: "input",
+      operation: "page.input",
+      action: "write",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    fill_form: {
+      exposure: "input",
+      operation: "page.input",
+      action: "write",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    hover: {
+      exposure: "input",
+      operation: "page.input",
+      action: "write",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    handle_dialog: {
+      exposure: "input",
+      operation: "page.input",
+      action: "write",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    },
+    // ── network (allow-flag gated) ─────────────────────────────────────────
+    list_network_requests: {
+      exposure: "network",
+      operation: "network.list",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: false,
+      allowFlag: "network"
+    },
+    get_network_request: {
+      // 0.7.0: schema is {url}. The URL identifies the request AND is the
+      // authz target — no need for a separate current-page lookup.
+      exposure: "network",
+      operation: "network.body.read",
+      action: "read",
+      target: { kind: "argument_url", argKey: "url" },
+      enabledByDefault: false,
+      allowFlag: "network"
+    },
+    // ── performance (allow-flag gated) ─────────────────────────────────────
+    performance_start_trace: {
+      exposure: "performance",
+      operation: "performance.trace",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: false,
+      allowFlag: "performance"
+    },
+    performance_stop_trace: {
+      exposure: "performance",
+      operation: "performance.trace",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: false,
+      allowFlag: "performance"
+    },
+    performance_analyze_insight: {
+      exposure: "performance",
+      operation: "performance.trace",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: false,
+      allowFlag: "performance"
+    },
+    // ── script (allow-flag gated) ──────────────────────────────────────────
+    evaluate_script: {
+      exposure: "script",
+      operation: "script.evaluate",
+      action: "write",
+      target: { kind: "current_page" },
+      enabledByDefault: false,
+      allowFlag: "script"
+    },
+    // ── lite provider legacy tools (kept here so api/buildRequestedAction can
+    //    project them without a special case; lite exposure self-declares them) ─
+    browser_navigate: {
+      // exposure value is irrelevant for lite; api preflight only checks the
+      // descriptor itself. Pick navigation for visual consistency.
+      exposure: "navigation",
+      operation: "page.navigate",
+      action: "write",
+      target: { kind: "argument_url", argKey: "url" },
+      enabledByDefault: true
+    },
+    browser_read_text: {
+      exposure: "read",
+      operation: "page.read",
+      action: "read",
+      target: { kind: "current_page" },
+      enabledByDefault: true
+    }
+  };
+  var BROWSER_OPERATION_REQUIRED_ACTION_BASE = {
+    "page.read": "read",
+    "page.navigate": "write",
+    "page.input": "write",
+    "screenshot.capture": "read",
+    "console.read": "read",
+    "network.list": "read",
+    "network.body.read": "read",
+    "script.evaluate": "write",
+    "performance.trace": "read",
+    // Deferred operations: not in BROWSER_TOOL_MAP today, but listed in the
+    // enum so a grant policy can name them. Each one is write-sensitive
+    // (uploads files, manages extensions, executes WebMCP tools), so
+    // explicit "write" prevents an action=read grant from covering them
+    // if/when the deferred exposure ships.
+    "file.upload": "write",
+    "extension.manage": "write",
+    "webmcp.execute": "write"
+  };
+  var BROWSER_OPERATION_REQUIRED_ACTION = (() => {
+    const out = {
+      ...BROWSER_OPERATION_REQUIRED_ACTION_BASE
+    };
+    for (const desc of Object.values(BROWSER_TOOL_MAP)) {
+      if (desc.action === "write") {
+        out[desc.operation] = "write";
+      }
+    }
+    return out;
+  })();
+
   // ../shared/dist/constants/enums.js
   var RELATIONSHIP_PROFILE_SUBJECT_TYPE = {
     MEMBER: "workspace_member",

@@ -35,6 +35,11 @@ export {
   type CommandlineMatchRequest,
   type NormalizedCommandlinePolicy,
 } from "./matchers.js"
+export { resolveUrlScope, type ResolvedUrlScope } from "./url-scope.js"
+export {
+  normalizeBrowserGrantPolicy,
+  BrowserGrantPolicyError,
+} from "./browser-grant-validator.js"
 export {
   BUNDLE_ELIGIBLE_PROGRAMS,
   BUNDLE_PROGRAM_PLATFORMS,

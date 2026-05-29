@@ -124,23 +124,45 @@ export default function DeviceDetailPage() {
       <section>
         <h2 className="text-sm font-semibold">Capabilities</h2>
         <ul className="mt-2 divide-y rounded border">
-          {device.capabilities.map((cap) => (
-            <li
-              key={cap.id}
-              className="flex items-center justify-between gap-4 p-3 text-sm"
-            >
-              <div>
-                <div className="font-medium">{cap.display_name}</div>
-                <div className="text-xs text-muted-foreground">
-                  {cap.transport}
-                  {cap.builtin_kind ? ` · ${cap.builtin_kind}` : ""}
+          {device.capabilities.map((cap) => {
+            const meta = cap.metadata as
+              | {
+                  enabled?: boolean
+                  disabledReason?: string
+                }
+              | null
+              | undefined
+            const isDisabled = meta?.enabled === false
+            return (
+              <li
+                key={cap.id}
+                className={`flex items-center justify-between gap-4 p-3 text-sm ${
+                  isDisabled ? "opacity-60" : ""
+                }`}
+              >
+                <div>
+                  <div className="font-medium">
+                    {cap.display_name}
+                    {isDisabled ? (
+                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 uppercase dark:bg-amber-900/50 dark:text-amber-300">
+                        Coming soon
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {cap.transport}
+                    {cap.builtin_kind ? ` · ${cap.builtin_kind}` : ""}
+                    {isDisabled && meta?.disabledReason
+                      ? ` · ${meta.disabledReason}`
+                      : ""}
+                  </div>
                 </div>
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {cap.runtime_status}
-              </span>
-            </li>
-          ))}
+                <span className="text-xs text-muted-foreground">
+                  {cap.runtime_status}
+                </span>
+              </li>
+            )
+          })}
           {device.capabilities.length === 0 ? (
             <li className="p-3 text-xs text-muted-foreground">
               No active capabilities. The runtime has not pushed a catalog yet.

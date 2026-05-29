@@ -21,28 +21,49 @@
 export interface CliArgs {
   cmd: string
   flags: Map<string, string>
+  /** Repeatable flags (currently --browser-mcp-arg) collected as arrays. */
+  repeatableFlags: Map<string, string[]>
 }
+
+/**
+ * Flags that may be supplied multiple times and should be collected as an
+ * array. Anything not in this set defaults to single-value semantics with
+ * last-write-wins.
+ */
+const REPEATABLE_FLAGS = new Set(["browser-mcp-arg"])
 
 export function parseArgs(argv: string[]): CliArgs {
   const cmd = argv[0] ?? "run"
   const flags = new Map<string, string>()
+  const repeatableFlags = new Map<string, string[]>()
   for (let i = 1; i < argv.length; i++) {
     const tok = argv[i]
     if (!tok.startsWith("--")) continue
     const eq = tok.indexOf("=")
+    let name: string
+    let value: string
     if (eq > 0) {
-      flags.set(tok.slice(2, eq), tok.slice(eq + 1))
-      continue
-    }
-    const next = argv[i + 1]
-    if (next === undefined || next.startsWith("--")) {
-      flags.set(tok.slice(2), "true")
+      name = tok.slice(2, eq)
+      value = tok.slice(eq + 1)
     } else {
-      flags.set(tok.slice(2), next)
-      i++
+      name = tok.slice(2)
+      const next = argv[i + 1]
+      if (next === undefined || next.startsWith("--")) {
+        value = "true"
+      } else {
+        value = next
+        i++
+      }
+    }
+    if (REPEATABLE_FLAGS.has(name)) {
+      const arr = repeatableFlags.get(name) ?? []
+      arr.push(value)
+      repeatableFlags.set(name, arr)
+    } else {
+      flags.set(name, value)
     }
   }
-  return { cmd, flags }
+  return { cmd, flags, repeatableFlags }
 }
 
 export function getFlag(

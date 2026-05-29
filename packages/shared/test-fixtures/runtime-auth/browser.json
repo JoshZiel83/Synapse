@@ -1,13 +1,14 @@
 [
   {
-    "description": "origin scope matches exact origin",
+    "description": "origin scope matches exact origin (with matching operation)",
     "policies": [
       {
         "capability": "browser",
         "browser": {
           "action": "read",
           "scopeType": "origin",
-          "origin": "https://example.com"
+          "origin": "https://example.com",
+          "operations": ["page.read"]
         }
       }
     ],
@@ -15,7 +16,8 @@
       "action": "read",
       "origin": "https://example.com",
       "host": "example.com",
-      "registrableDomain": "example.com"
+      "registrableDomain": "example.com",
+      "operations": ["page.read"]
     },
     "expected": true
   },
@@ -27,7 +29,8 @@
         "browser": {
           "action": "read",
           "scopeType": "host",
-          "host": "example.com"
+          "host": "example.com",
+          "operations": ["page.read"]
         }
       }
     ],
@@ -35,7 +38,8 @@
       "action": "read",
       "origin": "https://example.com:8443",
       "host": "example.com",
-      "registrableDomain": "example.com"
+      "registrableDomain": "example.com",
+      "operations": ["page.read"]
     },
     "expected": true
   },
@@ -47,7 +51,8 @@
         "browser": {
           "action": "read",
           "scopeType": "domain",
-          "registrableDomain": "example.com"
+          "registrableDomain": "example.com",
+          "operations": ["page.read"]
         }
       }
     ],
@@ -55,7 +60,8 @@
       "action": "read",
       "origin": "https://sub.example.com",
       "host": "sub.example.com",
-      "registrableDomain": "example.com"
+      "registrableDomain": "example.com",
+      "operations": ["page.read"]
     },
     "expected": true
   },
@@ -67,7 +73,8 @@
         "browser": {
           "action": "read",
           "scopeType": "origin",
-          "origin": "https://example.com"
+          "origin": "https://example.com",
+          "operations": ["page.read"]
         }
       }
     ],
@@ -75,19 +82,21 @@
       "action": "read",
       "origin": "https://evil.example",
       "host": "evil.example",
-      "registrableDomain": "example"
+      "registrableDomain": "example",
+      "operations": ["page.read"]
     },
     "expected": false
   },
   {
-    "description": "action mismatch denies",
+    "description": "action mismatch denies (read grant cannot serve write request)",
     "policies": [
       {
         "capability": "browser",
         "browser": {
           "action": "read",
           "scopeType": "host",
-          "host": "example.com"
+          "host": "example.com",
+          "operations": ["page.read"]
         }
       }
     ],
@@ -95,7 +104,8 @@
       "action": "write",
       "origin": "https://example.com",
       "host": "example.com",
-      "registrableDomain": "example.com"
+      "registrableDomain": "example.com",
+      "operations": ["page.input"]
     },
     "expected": false
   },
@@ -107,7 +117,8 @@
         "browser": {
           "action": "read",
           "scopeType": "galactic",
-          "host": "example.com"
+          "host": "example.com",
+          "operations": ["page.read"]
         }
       }
     ],
@@ -115,9 +126,120 @@
       "action": "read",
       "origin": "https://example.com",
       "host": "example.com",
-      "registrableDomain": "example.com"
+      "registrableDomain": "example.com",
+      "operations": ["page.read"]
     },
     "expected": false,
     "note": "Unknown scopeType must NOT grant access. This catches the historical 'default: return true' bug."
+  },
+  {
+    "description": "v3.1 — grant operations=[page.read] denies page.input request",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "write",
+          "scopeType": "origin",
+          "origin": "https://example.com",
+          "operations": ["page.read"]
+        }
+      }
+    ],
+    "request": {
+      "action": "write",
+      "origin": "https://example.com",
+      "host": "example.com",
+      "registrableDomain": "example.com",
+      "operations": ["page.input"]
+    },
+    "expected": false
+  },
+  {
+    "description": "v3.1 — grant operations=[page.read,page.input] permits page.read request (write covers read)",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "write",
+          "scopeType": "origin",
+          "origin": "https://example.com",
+          "operations": ["page.read", "page.input"]
+        }
+      }
+    ],
+    "request": {
+      "action": "read",
+      "origin": "https://example.com",
+      "host": "example.com",
+      "registrableDomain": "example.com",
+      "operations": ["page.read"]
+    },
+    "expected": true
+  },
+  {
+    "description": "v3.1 — grant operations=[page.read,page.input] permits page.input request",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "write",
+          "scopeType": "origin",
+          "origin": "https://example.com",
+          "operations": ["page.read", "page.input"]
+        }
+      }
+    ],
+    "request": {
+      "action": "write",
+      "origin": "https://example.com",
+      "host": "example.com",
+      "registrableDomain": "example.com",
+      "operations": ["page.input"]
+    },
+    "expected": true
+  },
+  {
+    "description": "v3.1 — grant without operations field denies any operation request (fail-closed)",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "write",
+          "scopeType": "origin",
+          "origin": "https://example.com"
+        }
+      }
+    ],
+    "request": {
+      "action": "write",
+      "origin": "https://example.com",
+      "host": "example.com",
+      "registrableDomain": "example.com",
+      "operations": ["page.input"]
+    },
+    "expected": false,
+    "note": "v3.1 fail-closed: grants missing the operations field deny any operation-requesting call. No legacy compat."
+  },
+  {
+    "description": "v3.1 — grant operations=[screenshot.capture] denies page.input",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "write",
+          "scopeType": "origin",
+          "origin": "https://example.com",
+          "operations": ["screenshot.capture"]
+        }
+      }
+    ],
+    "request": {
+      "action": "write",
+      "origin": "https://example.com",
+      "host": "example.com",
+      "registrableDomain": "example.com",
+      "operations": ["page.input"]
+    },
+    "expected": false
   }
 ]

@@ -3676,6 +3676,26 @@ export interface RuntimeAuthorizationRequestedActionFilesystem extends RuntimeAu
   scopeIsPushdown?: boolean
 }
 
+/**
+ * RequestedAction-side browser block. Extends the grant-side policy with a
+ * `scopeSource` signal so the UI / runtime can tell *where* the URL came from
+ * (args vs runtime-discovered active page vs page_id lookup vs unknown). The
+ * field is request-only — `BrowserPolicySchema.strip()` drops it when the
+ * approval path round-trips through `GrantPolicySchema.parse`, and
+ * `normalizeBrowserGrantPolicy` strips it again before any write to
+ * `runtime_authorization_grants.policy` (3 layers of defence).
+ */
+export type RuntimeAuthorizationBrowserScopeSource =
+  | "args"
+  | "runtime_active_page"
+  | "runtime_page_id"
+  | "runtime_all_pages"
+  | "unknown_tool"
+
+export interface RuntimeAuthorizationRequestedActionBrowser extends RuntimeAuthorizationBrowserPolicy {
+  scopeSource?: RuntimeAuthorizationBrowserScopeSource
+}
+
 export interface RuntimeAuthorizationRequestedAction {
   capability: RuntimeAuthorizationCapability
   toolName: string
@@ -3683,7 +3703,7 @@ export interface RuntimeAuthorizationRequestedAction {
   detail?: string
   filesystem?: RuntimeAuthorizationRequestedActionFilesystem
   cua?: RuntimeAuthorizationCUAPolicy
-  browser?: RuntimeAuthorizationBrowserPolicy
+  browser?: RuntimeAuthorizationRequestedActionBrowser
   commandline?: RuntimeAuthorizationCommandlinePolicy
 }
 

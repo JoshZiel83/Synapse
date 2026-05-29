@@ -41,9 +41,13 @@
     "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@synapse/device-protocol": "*",
+    "tldts": "^6.1.86",
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/node": "^22.7.5",
+    "tsx": "^4.20.0",
     "typescript": "^5.4.0"
   }
 }

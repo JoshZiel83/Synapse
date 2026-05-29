@@ -67,6 +67,11 @@ import {
   maskAllowsConversationType,
   resolveNarrowedConversationTypeMask,
 } from "@synapse/shared"
+import { resolveUrlScope } from "@synapse/shared/access/policies"
+import {
+  BROWSER_TOOL_MAP,
+  resolveEffectiveTarget,
+} from "@synapse/device-protocol/browser-tools"
 
 /**
  * Discriminated union of principals that capability projection evaluates
@@ -469,6 +474,27 @@ function unionWithDevice(
     // operates on tool args, so the device never sees it and the input_hash
     // is computed over the user-facing schema.
     const sanitizedInput: Record<string, unknown> = stripPlannerNonce(input)
+
+    // v3.1 browser preflight (plan §#3, #14, #18) — runs BEFORE grant lookup
+    // so disabled exposures / unknown tools / scheme violations / args type
+    // mismatches never spawn an empty authorization request. The structured
+    // (code, details) is surfaced via synapseErrorBlock so the downstream UI /
+    // model can distinguish capability-disabled from invalid-request from
+    // scheme-violation without parsing bracketed text.
+    if (row.builtin_kind === "browser") {
+      const denial = browserPreflightDeny(
+        row,
+        row.visible_tool_name,
+        sanitizedInput
+      )
+      if (denial) {
+        return synapseErrorBlock({
+          code: denial.code,
+          message: denial.message,
+          details: denial.details,
+        })
+      }
+    }
     // canonicalized arguments — the device verifier rejects envelopes whose
     // input_hash doesn't match the actual `arguments` it received.
     const inputCanonical = canonicalizeEnvelopePayload(sanitizedInput)
@@ -668,16 +694,38 @@ function unionWithDevice(
     // is gone — by the time dispatchSyncTool returns, the grant is already
     // marked consumed and no second window for concurrent reuse exists.
     if (!result.ok) {
-      return mcpErrorBlock(
-        `device dispatch failed (${result.error?.code}): ${result.error?.message}`
-      )
+      const err = result.error
+      // v3.1 — drift-fix: preserve the runtime's structured synapse_error
+      // so the chat UI can detect `details.scopeSource` / currentUrl etc.
+      // and surface the "Manual grant required" widget for the active-page
+      // UX (plan §clarification #33). Without this passthrough the
+      // `_meta.synapse_error.details` block emitted by the chrome-devtools-mcp
+      // provider's permission_denied path gets collapsed to plain text
+      // before chat ever sees it.
+      return {
+        content: [
+          textBlock(
+            `device dispatch failed (${err?.code}): ${err?.message}`
+          ) as CanonicalContentBlock,
+        ],
+        isError: true,
+        metadata: { synapse_error: err },
+      }
     }
     const tool = result.result as
-      | { content?: CanonicalContentBlock[]; isError?: boolean }
+      | {
+          content?: CanonicalContentBlock[]
+          isError?: boolean
+          _meta?: Record<string, unknown>
+        }
       | undefined
+    // Forward non-error _meta back to the planner too — runtime providers
+    // attach contextual data (e.g. synapse_list_pages) that the chat-side
+    // renderer may want to read.
     return {
       content: tool?.content ?? [],
       isError: tool?.isError,
+      metadata: tool?._meta,
     }
   }
 
@@ -725,6 +773,86 @@ function mcpErrorBlock(message: string): NormalizedMcpToolResult {
     content: [textBlock(message) as CanonicalContentBlock],
     isError: true,
   }
+}
+
+// v3.1 browser preflight (plan §#3, #13, #14, #17, #18). Runs in
+// dispatchDeviceTool BEFORE grant lookup so disabled exposures, unknown tools,
+// scheme violations, and navigate_page arg-shape mismatches never spawn an
+// empty authorization request. Returns a structured denial — caller wraps
+// it into NormalizedMcpToolResult.metadata.synapse_error so the upstream
+// SynapseError code/details survive the API edge instead of being
+// flattened to a bracketed text string.
+interface BrowserPreflightDenial {
+  code: "runtime_constraint" | "invalid_request"
+  message: string
+  details?: Record<string, unknown>
+}
+
+function browserPreflightDeny(
+  row: DeviceCapabilityToolRow,
+  visibleToolName: string,
+  args: Record<string, unknown>
+): BrowserPreflightDenial | null {
+  const metadata = row.exposure_metadata
+  if (
+    metadata &&
+    typeof metadata === "object" &&
+    (metadata as { enabled?: unknown }).enabled === false
+  ) {
+    const disabledReason =
+      typeof (metadata as { disabledReason?: unknown }).disabledReason ===
+      "string"
+        ? (metadata as { disabledReason: string }).disabledReason
+        : undefined
+    return {
+      code: "runtime_constraint",
+      message: `capability disabled${disabledReason ? ` (${disabledReason})` : ""}: ${row.exposure_stable_key}`,
+      details: {
+        exposureStableKey: row.exposure_stable_key,
+        ...(disabledReason ? { disabledReason } : {}),
+      },
+    }
+  }
+  const lookup = visibleToolName.toLowerCase()
+  const descriptor = BROWSER_TOOL_MAP[lookup]
+  if (!descriptor) {
+    return {
+      code: "invalid_request",
+      message: `unknown browser tool: ${visibleToolName}`,
+      details: { visibleToolName },
+    }
+  }
+  const effective = resolveEffectiveTarget(descriptor, args)
+  if (!effective.ok) {
+    return {
+      code: "invalid_request",
+      message: effective.detail,
+      details: { reason: effective.code },
+    }
+  }
+  if (effective.target.kind === "argument_url") {
+    let parsed: URL | null = null
+    try {
+      parsed = new URL(effective.target.url)
+    } catch {
+      // fall through; parsed === null below triggers deny
+    }
+    if (!parsed) {
+      return {
+        code: "invalid_request",
+        message: `url is not parseable: ${effective.target.url}`,
+        details: { url: effective.target.url },
+      }
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return {
+        code: "invalid_request",
+        message: `url scheme not allowed: ${parsed.protocol}`,
+        details: { url: effective.target.url, scheme: parsed.protocol },
+      }
+    }
+  }
+  return null
 }
 
 /**
@@ -1183,19 +1311,68 @@ export function buildRequestedAction(args: {
       }
     }
     case "browser": {
-      const url =
-        typeof args.args["url"] === "string" ? (args.args["url"] as string) : ""
-      const action: "read" | "write" =
-        tool === "browser_navigate" ? "write" : "read"
+      // v3.1: look up the descriptor in BROWSER_TOOL_MAP (single source of
+      // truth — see @synapse/device-protocol/browser-tools). Unknown tools
+      // should never reach this point because dispatchDeviceTool's
+      // browserPreflightDeny rejects them first; return a fail-closed
+      // shape just in case (empty operations → matcher always false).
+      const descriptor = BROWSER_TOOL_MAP[tool]
+      if (!descriptor) {
+        return {
+          capability: "browser",
+          toolName: args.toolName,
+          summary: `unknown browser tool: ${args.toolName}`,
+          detail,
+          browser: {
+            action: "read",
+            scopeType: undefined,
+            origin: undefined,
+            operations: [],
+            scopeSource: "unknown_tool",
+          },
+        }
+      }
+      const effective = resolveEffectiveTarget(descriptor, args.args)
+      if (effective.ok && effective.target.kind === "argument_url") {
+        const scope = resolveUrlScope(effective.target.url)
+        return {
+          capability: "browser",
+          toolName: args.toolName,
+          summary,
+          detail,
+          browser: {
+            action: descriptor.action,
+            scopeType: "origin",
+            origin: scope.origin,
+            host: scope.host,
+            registrableDomain: scope.registrableDomain,
+            operations: [descriptor.operation],
+            scopeSource: "args",
+          },
+        }
+      }
+      // current_page / page_id / all_pages — server cannot know the URL;
+      // origin/host/registrableDomain stay undefined. Runtime resolves the
+      // active page after envelope verification and runs the URL check
+      // there (see chrome-devtools-mcp.ts step 6). scopeSource tells the
+      // UI / chat card that this denial needs a manual grant.
+      const scopeSource =
+        effective.ok && effective.target.kind === "page_id"
+          ? "runtime_page_id"
+          : effective.ok && effective.target.kind === "all_pages"
+            ? "runtime_all_pages"
+            : "runtime_active_page"
       return {
         capability: "browser",
         toolName: args.toolName,
         summary,
         detail,
         browser: {
-          action,
-          scopeType: "origin",
-          origin: safeOrigin(url),
+          action: descriptor.action,
+          scopeType: undefined,
+          origin: undefined,
+          operations: [descriptor.operation],
+          scopeSource,
         },
       }
     }
@@ -1244,6 +1421,22 @@ function buildGrantOptions(
     commandline?: typeof requestedAction.commandline
   }
 }[] {
+  // v3.1 §clarification G: for active_page / page_id / all_pages browser
+  // tools, origin/host/registrableDomain are undefined. A default grant
+  // option built from this would persist a scope-less browser grant —
+  // normalizeBrowserGrantPolicy rejects it AND a one-click "Approve" UX
+  // would silently fail. Suppress the default option entirely; the chat
+  // card renders "Manual grant required" instead and the operator goes to
+  // Settings. (Only the runtime-resolved browser targets hit this; args-URL
+  // browser tools carry a concrete origin and keep their default option.)
+  const suppressDefaultBrowserGrant =
+    requestedAction.capability === "browser" &&
+    requestedAction.browser !== undefined &&
+    requestedAction.browser.scopeSource !== undefined &&
+    requestedAction.browser.scopeSource !== "args"
+  if (suppressDefaultBrowserGrant) {
+    return []
+  }
   const baseOption = {
     id: "default",
     summary: requestedAction.summary,

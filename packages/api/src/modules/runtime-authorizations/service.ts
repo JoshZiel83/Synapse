@@ -44,6 +44,10 @@ import {
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import {
+  BrowserGrantPolicyError,
+  normalizeBrowserGrantPolicy,
+} from "@synapse/shared/access/policies"
+import {
   upsertAccessSubject,
   upsertAccessSubjectOn,
   upsertAccessSubjectOnTrx,
@@ -539,6 +543,12 @@ function normalizeGrantSpecForInsert(
             grantSpec.browser.registrableDomain.trim()
               ? grantSpec.browser.registrableDomain.trim().toLowerCase()
               : undefined,
+          // v3.1: preserve operations; if a stale upstream caller sneaked in
+          // a scopeSource, the surrounding object literal dropped it because
+          // we only enumerate known keys. dedup + sort for stable JSONB.
+          operations: Array.isArray(grantSpec.browser.operations)
+            ? Array.from(new Set(grantSpec.browser.operations)).sort()
+            : undefined,
         }
       : undefined,
     commandline: grantSpec.commandline
@@ -581,11 +591,18 @@ export async function createRuntimeAuthorizationGrant(
   // can't slip through nonsense combinations like workspace_member+conversation.
   assertSupportedRuntimeGrantTarget(params.subject, params.scope)
 
-  const grantSpec = normalizeGrantSpecForInsert(
-    GrantPolicySchema.parse(
-      params.policy
-    ) as SharedRuntimeAuthorizationGrantSpec
-  )
+  // v3.1 §clarification #24: browser grants must pass
+  // normalizeBrowserGrantPolicy unconditionally. This is the final defence
+  // before the policy lands in JSONB — manual endpoint + approval path both
+  // rely on this so neither can write a scope-less / dead grant. Throws
+  // BrowserGrantPolicyError; callers map to HTTP 400 / interaction reject.
+  const parsedPolicy = GrantPolicySchema.parse(
+    params.policy
+  ) as SharedRuntimeAuthorizationGrantSpec
+  if (parsedPolicy.browser) {
+    parsedPolicy.browser = normalizeBrowserGrantPolicy(parsedPolicy.browser)
+  }
+  const grantSpec = normalizeGrantSpecForInsert(parsedPolicy)
 
   if (isKyselyTransaction(executor)) {
     return createGrantInKyselyTx(executor, params, grantSpec)
@@ -903,6 +920,13 @@ export function browserPolicyMatches(
   const requested = action.browser
   if (!granted || !requested) return false
   if (!granted.scopeType) return false
+  // Apply write-covers-read to mirror the device-side check in
+  // builtins/browser.ts; a navigate (write) grant should satisfy a
+  // read_text (read) request on the same scope.
+  //
+  // v3.1: the shared matcher fail-closes when requested.operations is
+  // populated but granted.operations is missing/empty — see
+  // shared/access/policies/matchers.ts.
   return sharedBrowserPolicyAllows(
     {
       action: granted.action,
@@ -910,14 +934,73 @@ export function browserPolicyMatches(
       origin: granted.origin,
       host: granted.host,
       registrableDomain: granted.registrableDomain,
+      operations: granted.operations,
     },
     {
       needed: requested.action,
       origin: requested.origin,
       host: requested.host,
       registrableDomain: requested.registrableDomain,
+      neededOperations: requested.operations,
     }
   )
+}
+
+/**
+ * True when the browser requested-action's effective scope was resolved by
+ * the runtime (current page / page_id / all pages) rather than supplied as a
+ * literal URL arg. For these the server has no origin to match, so the
+ * grant match defers the URL check to the device via prefilterBrowserGrants.
+ */
+function isRuntimeResolvedBrowserTarget(
+  action: RuntimeAuthorizationRequestedAction
+): boolean {
+  const src = action.browser?.scopeSource
+  return (
+    src === "runtime_active_page" ||
+    src === "runtime_page_id" ||
+    src === "runtime_all_pages"
+  )
+}
+
+/**
+ * v3.1 server-side prefilter for browser tools whose effective target is
+ * NOT an argument_url (current_page / page_id / all_pages). In those cases
+ * the server can't know the actual URL, so we filter candidate grants by
+ * (capability + action + operation) only and ship every matching grant to
+ * the device via envelope.grant_specs. The runtime then runs the full
+ * shared matcher (action + operation + URL) with the discovered URL.
+ *
+ * Action coverage explicitly preserves write-covers-read so a `page.input`
+ * grant also satisfies a read-only `take_snapshot` request on the same
+ * page.
+ *
+ * Operation coverage fails closed: missing/empty `granted.operations`
+ * never satisfies a request that names operations.
+ */
+export function prefilterBrowserGrants(
+  grant: SharedRuntimeAuthorizationGrantSpec,
+  action: RuntimeAuthorizationRequestedAction
+): boolean {
+  const granted = grant.browser
+  const requested = action.browser
+  if (grant.capability !== "browser" || !granted || !requested) return false
+  if (requested.scopeSource === "unknown_tool") return false
+  // action coverage (write covers read)
+  if (requested.action === "write" && granted.action !== "write") return false
+  // operation coverage (fail-closed)
+  if (requested.operations && requested.operations.length > 0) {
+    if (!Array.isArray(granted.operations) || granted.operations.length === 0) {
+      return false
+    }
+    const grantedOps = new Set(granted.operations)
+    for (const op of requested.operations) {
+      if (!grantedOps.has(op)) return false
+    }
+  }
+  // URL check is intentionally skipped — runtime does it after resolving
+  // the active/page_id URL.
+  return true
 }
 
 export function commandlinePolicyMatches(
@@ -1020,7 +1103,14 @@ export function runtimeAuthorizationGrantMatchesTriState(
       )
       break
     case "browser":
-      matched = browserPolicyMatches(grant, requestedAction)
+      // Runtime-resolved browser targets (current page / page_id / all pages)
+      // have no origin at projection time — the device resolves the active
+      // URL and does the scope check itself. For those we use
+      // prefilterBrowserGrants (action + operation coverage, URL deferred);
+      // for "args"-sourced targets we do the full origin/host/domain check.
+      matched = isRuntimeResolvedBrowserTarget(requestedAction)
+        ? prefilterBrowserGrants(grant, requestedAction)
+        : browserPolicyMatches(grant, requestedAction)
       break
     case "commandline":
       matched = commandlinePolicyMatches(grant, requestedAction)
@@ -1055,7 +1145,9 @@ export function runtimeAuthorizationGrantMatches(
         )
       )
     case "browser":
-      return browserPolicyMatches(grant, requestedAction)
+      return isRuntimeResolvedBrowserTarget(requestedAction)
+        ? prefilterBrowserGrants(grant, requestedAction)
+        : browserPolicyMatches(grant, requestedAction)
     case "commandline":
       return commandlinePolicyMatches(grant, requestedAction, opts)
     default:

@@ -180,12 +180,28 @@ class ApiClient {
 
     const data = await res.json().catch(() => null)
     if (!res.ok) {
-      throw new ApiError(
-        data && typeof data.error === "string" ? data.error : "API error",
-        res.status,
-        data && typeof data.code === "string" ? data.code : undefined,
-        data
-      )
+      // Prefer structured error fields in priority order. Endpoints that
+      // return `{message, code, details, allowed, ...}` (e.g. devices /
+      // runtime-authorization endpoints) used to be flattened to a
+      // generic "API error" because only `data.error` was checked.
+      const candidate =
+        (data && typeof data.message === "string" && data.message) ||
+        (data && typeof data.error === "string" && data.error) ||
+        (data &&
+          typeof data.error === "object" &&
+          data.error &&
+          typeof data.error.message === "string" &&
+          data.error.message) ||
+        `API error (HTTP ${res.status})`
+      const code =
+        (data && typeof data.code === "string" && data.code) ||
+        (data &&
+          typeof data.error === "object" &&
+          data.error &&
+          typeof data.error.code === "string" &&
+          data.error.code) ||
+        undefined
+      throw new ApiError(candidate, res.status, code, data)
     }
 
     return data
@@ -1948,6 +1964,21 @@ class ApiClient {
       `/workspaces/${wsId}/devices/${deviceId}/services/${serviceId}`,
       { method: "DELETE" }
     )
+  }
+  // v3.1: manual runtime-authorization grant endpoint. The chat card for
+  // active-page / page_id / all_pages browser tools renders "Manual grant
+  // required" — this is the endpoint that backs the Settings page.
+  createManualRuntimeAuthorizationGrant(
+    wsId: string,
+    body: {
+      device_capability_id: string
+      policy: Record<string, unknown>
+    }
+  ): Promise<{ grant: Record<string, unknown> }> {
+    return this.fetch(`/workspaces/${wsId}/runtime-authorization-grants`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
   }
 
   // Automation Event Sources
