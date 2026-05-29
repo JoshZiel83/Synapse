@@ -17,9 +17,9 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
  * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
  * `bootstrap.test.ts` enforces the length invariant.
  */
-export const CURRENT_SCHEMA_VERSION = "2026-05-29-subject-scope-refactor"
+export const CURRENT_SCHEMA_VERSION = "2026-05-29-remove-a2a"
 export const CURRENT_SCHEMA_DESCRIPTION =
-  "subject-scope-refactor merge into device-runtime-v3: runtime_authorization_grants drops scope enum + conversation_actor_context_id; adds scope_subject_id + four-dimension dispatch index + tg_runtime_authorization_grant_validate trigger with subject/scope whitelist (actor|remote_agent + conversation only). interaction_runtime_authorization_requests drops principal_remote_agent_id + principal_conversation_actor_context_id; adds principal_subject_id NOT NULL + principal_scope_subject_id (ON DELETE RESTRICT). resource_access_bindings adds scope_subject_id + partial index + tg_rab_validate trigger. access_subjects drops conversation_actor_context_id column + 'conversation_actor_context' subject_kind value. device_operations_principal_kind drops 'actor_in_conversation'; CHECK tightened to require principal_subject_id for all 4 kinds; FK to access_subjects changes ON DELETE SET NULL → RESTRICT. New SQL helpers: is_workspace_bound_subject_kind, is_scope_eligible_subject, is_memory_owner_subject_kind, access_subject_workspace_id, device_*_workspace_id. memory_spaces/memory_access_grants schema lands in Batch 11."
+  "remove legacy A2A (agent-to-agent) design: drop 'a2a_proxy' label from tool_calls_tool_kind + tool_execution_attempts_executor_kind enums and 'a2a' label from runtime_events_source enum. No A2A tables ever existed; the enum labels were unused. Existing dev DBs must rebuild to drop the labels (no data preservation required). Prior: subject-scope-refactor merge into device-runtime-v3 (runtime_authorization_grants / interaction_runtime_authorization_requests / resource_access_bindings / access_subjects / device_operations_principal_kind reshape; memory_spaces/memory_access_grants in Batch 11)."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

@@ -288,7 +288,6 @@ export async function createToolCall(params: {
     | "mcp_plugin"
     | "mcp_device"
     | "provider_builtin"
-    | "a2a_proxy"
   toolName: string
   pluginId?: string | null
   deviceId?: string
@@ -353,7 +352,6 @@ export async function createToolExecutionAttempt(params: {
     | "mcp_plugin"
     | "mcp_device"
     | "provider_builtin"
-    | "a2a_proxy"
   pluginId?: string | null
   deviceId?: string
   transport?: string
@@ -537,7 +535,7 @@ export async function logRuntimeEvent(params: {
   toolAttemptId?: string
   actorId?: string
   userId?: string
-  source: "conversation" | "provider" | "tool" | "device" | "a2a" | "system"
+  source: "conversation" | "provider" | "tool" | "device" | "system"
   level?: "debug" | "info" | "warn" | "error"
   eventType: string
   payload?: Record<string, unknown>
