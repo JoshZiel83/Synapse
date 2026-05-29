@@ -126,19 +126,12 @@ export const DEVICE_PAIRING_STATUSES = [
 ] as const
 export type DevicePairingStatus = (typeof DEVICE_PAIRING_STATUSES)[number]
 
-// Runtime authorization grant. Scope set extended with actor_in_conversation
-// in v3 (see §4.2); remote_agent added so bridged remote agents can hold
-// device-capability grants in their own subject-scoped row.
-export const RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
-  "once",
-  "actor",
-  "conversation",
-  "actor_in_conversation",
-  "remote_agent",
-  "workspace",
-] as const
-export type RuntimeAuthorizationGrantScope =
-  (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number]
+// subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPES enum dropped at
+// cutover. The envelope `runtime_authorization.grant_scope` field is now a
+// derived label string (z.string().min(1).max(64) in schemas.ts), produced by
+// `subjectScopeLabel(target)` in packages/shared/src/access/subject.ts. Scope
+// itself is expressed via subject_id + scope_subject_id on
+// runtime_authorization_grants.
 
 export const RUNTIME_AUTHORIZATION_GRANT_RETENTIONS = [
   "consume_once",
@@ -213,10 +206,13 @@ export type DeviceOperationAttemptStatus =
   (typeof DEVICE_OPERATION_ATTEMPT_STATUSES)[number]
 
 // Principal kinds passed to capability-projection.projectToolsForPrincipal.
+// subject-scope-refactor: 'actor_in_conversation' removed at cutover. The
+// scoped-actor semantics is expressed by (principal.kind='actor',
+// activeConversationSubjectId set) in RuntimePrincipalContext. The DB enum
+// device_operations_principal_kind matches.
 export const DEVICE_PRINCIPAL_KINDS = [
   "actor",
   "conversation",
-  "actor_in_conversation",
   "remote_agent",
   "workspace_member",
 ] as const

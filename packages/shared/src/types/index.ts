@@ -73,8 +73,6 @@ import {
   RUNTIME_AUTHORIZATION_CUA_ACCESSES,
   RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_PRESETS,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
@@ -114,6 +112,7 @@ import type {
   CommandlinePolicy as CommandlinePolicyBase,
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
+import type { SubjectRef, ScopedSubjectTarget } from "../access/subject.js"
 
 // ============ Common ============
 export type UUID = string
@@ -2498,19 +2497,15 @@ export interface AttachmentTarget {
   workspaceMemberId?: string
 }
 
-export interface AccessTarget {
-  type: AccessTargetType
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
-}
-
-export interface CapabilityAccessTarget {
-  type: CapabilityAccessTargetType
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
-}
+// subject-scope-refactor D3: AccessTarget / CapabilityAccessTarget collapsed to
+// the unified ScopedSubjectTarget = {subject: SubjectRef; scope?: SubjectRef}.
+// AccessTargetType / CapabilityAccessTargetType remain as legacy display label
+// types for UI selectors only (see ACCESS_TARGET_TYPES /
+// CAPABILITY_ACCESS_TARGET_TYPES in constants/enums.ts). Payload type aliases
+// re-export the wide model; device-side wire windows continue to use the narrow
+// DeviceCapabilityAccessTarget from @synapse/device-protocol.
+export type AccessTarget = ScopedSubjectTarget
+export type CapabilityAccessTarget = ScopedSubjectTarget
 
 export interface PluginAuthValueSource {
   source: "config" | "env" | "literal" | "derived"
@@ -3618,8 +3613,10 @@ export interface DeviceAccessDenialDescriptor {
   resolution: DeviceAccessDenialResolution
 }
 
-export type RuntimeAuthorizationGrantScope =
-  (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number]
+// subject-scope-refactor: RuntimeAuthorizationGrantScope type dropped at cutover.
+// Scope is expressed via grant.subject + grant.scope SubjectRef pair, and the
+// wire-stable `grant_scope` envelope field carries a derived label string via
+// `subjectScopeLabel(target)` (see packages/shared/src/access/subject.ts).
 
 export type RuntimeAuthorizationGrantRetention =
   (typeof RUNTIME_AUTHORIZATION_GRANT_RETENTIONS)[number]
@@ -3669,21 +3666,30 @@ export interface RuntimeAuthorizationRequestedAction {
   }
 }
 
-// P4: now derived from the Zod GrantPolicySchema (see
-// packages/shared/src/access/policies). Hand-written extension types below
-// (Summary/View) compose on top so they keep their extra identity fields.
-export type RuntimeAuthorizationGrantSpec = GrantPolicyBase
+// subject-scope-refactor: SharedRuntimeAuthorizationGrantSpec (camelCase) is the
+// API-side policy payload type. Wire-side snake_case spec is
+// `RuntimeAuthorizationGrantWireSpec` in @synapse/device-protocol; API code
+// MUST import the explicit alias rather than the deprecated bare
+// `RuntimeAuthorizationGrantSpec` (which once doubled as both).
+// P4: derived from the Zod GrantPolicySchema (see packages/shared/src/access/policies).
+export type SharedRuntimeAuthorizationGrantSpec = GrantPolicyBase
+/** @deprecated Use SharedRuntimeAuthorizationGrantSpec (camelCase, API side) or
+ * RuntimeAuthorizationGrantWireSpec (snake_case, wire side from
+ * @synapse/device-protocol) to disambiguate. */
+export type RuntimeAuthorizationGrantSpec = SharedRuntimeAuthorizationGrantSpec
 
 export interface RuntimeAuthorizationGrantOption {
   id: string
   summary: string
   detail?: string
-  grantSpec: RuntimeAuthorizationGrantSpec
+  grantSpec: SharedRuntimeAuthorizationGrantSpec
 }
 
-export interface RuntimeAuthorizationGrantSummary extends RuntimeAuthorizationGrantSpec {
+export interface RuntimeAuthorizationGrantSummary extends SharedRuntimeAuthorizationGrantSpec {
   id: UUID
-  scope: RuntimeAuthorizationGrantScope
+  subject: SubjectRef
+  scope?: SubjectRef
+  scopeLabel: string
   retention: RuntimeAuthorizationGrantRetention
   status: RuntimeAuthorizationGrantStatus
   createdAt: Timestamp
@@ -3697,8 +3703,6 @@ export interface RuntimeAuthorizationGrantView extends RuntimeAuthorizationGrant
   deviceId: UUID
   deviceCapabilityId: UUID
   exposureId: UUID
-  conversationId?: UUID
-  actorId?: UUID
 }
 
 export interface RuntimeAuthorizationInteractionSummary {

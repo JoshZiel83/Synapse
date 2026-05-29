@@ -431,14 +431,12 @@ export const ACCESS_TARGET_TYPES = [
   "workspace_member",
   "conversation",
   "actor",
-  "actor_in_conversation",
 ] as const
 export const CAPABILITY_ACCESS_TARGET_TYPES = [
   "workspace",
   "workspace_member",
   "conversation",
   "actor",
-  "actor_in_conversation",
 ] as const
 export const REUSE_SCOPES = [
   "turn",
@@ -761,29 +759,20 @@ export const TASK_NOTICE_STATUSES = [
 // constants. All consumers were migrated to the RUNTIME_* / DEVICE_* names; the
 // relay_* tables and the Go relay binaries were deleted at the same time.
 
+// subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPE / RUNTIME_AUTHORIZATION_GRANT_SCOPES
+// constants dropped at cutover. Scope is now expressed via subject_id +
+// scope_subject_id on runtime_authorization_grants; the wire-stable
+// `grant_scope` envelope field carries a derived label string via
+// `subjectScopeLabel(target)` (see packages/shared/src/access/subject.ts).
+// 'actor_in_conversation' removed from RUNTIME_AUTHORIZATION_PRESETS; UI
+// renders it via subjectScopeLabel from (subject=actor, scope=conversation).
+
 export const RUNTIME_AUTHORIZATION_PRESETS = [
   "once",
   "actor",
-  "actor_in_conversation",
   "conversation",
   "remote_agent",
   "workspace",
-] as const
-export const RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
-  ONCE: "once",
-  ACTOR: "actor",
-  CONVERSATION: "conversation",
-  ACTOR_IN_CONVERSATION: "actor_in_conversation",
-  REMOTE_AGENT: "remote_agent",
-  WORKSPACE: "workspace",
-} as const
-export const RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ONCE,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.CONVERSATION,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR_IN_CONVERSATION,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.REMOTE_AGENT,
-  RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE,
 ] as const
 export const RUNTIME_AUTHORIZATION_GRANT_RETENTIONS = [
   "consume_once",

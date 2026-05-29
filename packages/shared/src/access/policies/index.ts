@@ -5,7 +5,13 @@ export {
   CommandlinePolicySchema,
   type CommandlinePolicy,
 } from "./commandline.js"
-export { GrantPolicySchema, type GrantPolicy } from "./grant.js"
+export {
+  GrantPolicySchema,
+  type GrantPolicy,
+  validateGrantPolicyForCapability,
+  type PolicyValidationFailure,
+  type PolicyValidationResult,
+} from "./grant.js"
 export {
   filesystemPolicyAllows,
   commandlinePolicyAllows,
