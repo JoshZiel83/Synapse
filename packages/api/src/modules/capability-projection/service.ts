@@ -17,7 +17,7 @@ import type {
   ConversationBoundary,
   CanonicalContentBlock,
 } from "@synapse/shared/types"
-import { SUBJECT_KIND, textBlock } from "@synapse/shared"
+import { SUBJECT_KIND, textBlock, type SubjectRef } from "@synapse/shared"
 import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
 // subject-scope-refactor: Renamed alias to disambiguate from the API-side
 // SharedRuntimeAuthorizationGrantSpec; envelope payloads use the snake_case
@@ -29,8 +29,7 @@ import {
   type ResolvedMcpTools,
 } from "../mcp-plugins/tool-resolver.js"
 import { db } from "../../infrastructure/database/kysely.js"
-import { upsertAccessSubject } from "../access/subject-registry.js"
-import { isSubjectActiveConversationParticipant } from "../access/subject-resolution.js"
+import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { ensureConversationActorContext } from "../session/service.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
@@ -221,20 +220,31 @@ function namespaceDeviceToolName(row: DeviceCapabilityToolRow): string {
 }
 
 /**
- * Resolved subject ids for a principal. `workspaceSubjectId` is always
- * populated (every caller can see workspace-scoped bindings). The
- * principal-specific subject id (actor / conversation / context /
- * remote_agent) is the one used for audit + grant filtering — never use
- * `workspaceSubjectId` as the "principal" identity or the audit row will
- * mis-attribute the operation to the workspace bucket.
+ * Resolved subject ids for a principal. Mirrors
+ * `RuntimePrincipalContext` from access/subject-resolution.ts — this is a
+ * thin adapter that derives the canonical context once and surfaces the
+ * fields capability-projection actually uses (allIds, scopeSubjectIds,
+ * principalSubjectId, activeConversationSubjectId).
+ *
+ * Critical: the *canonical* builder enforces three rules this projection
+ * MUST inherit (delegating here is the only way to keep them in sync):
+ *   1. Decision 8 — pure-conversation principals do NOT inherit the
+ *      workspace subject (otherwise `subject=workspace` device grants
+ *      leak to bridged conversation participants).
+ *   2. Active-participant guard — `actor`/`remote_agent` get the
+ *      conversation subject in BOTH `allIds` and `scopeSubjectIds` ONLY
+ *      when they are an active participant. Without this, a non-member
+ *      actor can claim `subject=conversation` device bindings.
+ *   3. Cross-workspace guard — `actor`/`remote_agent` must belong to the
+ *      named workspace, else workspace-level grants leak across
+ *      workspaces.
+ *
+ * Earlier merge-prep versions had a local helper that violated #1 and #2
+ * (unconditionally pushed workspace + conversation subjects into allIds
+ * irrespective of active participation), and skipped #3 entirely.
  */
 export interface ResolvedPrincipalSubjects {
-  workspaceSubjectId: string
   principalSubjectId: string | null
-  actorSubjectId?: string
-  conversationSubjectId?: string
-  contextSubjectId?: string
-  remoteAgentSubjectId?: string
   /** Every subject id that participates in binding visibility checks. */
   allIds: string[]
   /**
@@ -253,88 +263,62 @@ export interface ResolvedPrincipalSubjects {
   activeConversationSubjectId?: string
 }
 
+function devicePrincipalToSubjectRef(
+  principal: DevicePrincipal
+): SubjectRef | null {
+  switch (principal.kind) {
+    case "actor":
+      return { kind: SUBJECT_KIND.ACTOR, actorId: principal.actorId }
+    case "conversation":
+      return {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: principal.conversationId,
+      }
+    case "remote_agent":
+      return {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: principal.remoteAgentId,
+      }
+    case "workspace_member":
+      // Filtered out by projectDeviceTools (dashboard introspection path
+      // doesn't dispatch).
+      return null
+  }
+}
+
 async function principalSubjectIds(
   input: ProjectToolsInput
 ): Promise<ResolvedPrincipalSubjects> {
-  const workspaceSubjectId = await upsertAccessSubject(db, {
-    kind: SUBJECT_KIND.WORKSPACE,
+  const subjectRef = devicePrincipalToSubjectRef(input.principal)
+  if (!subjectRef) {
+    return {
+      principalSubjectId: null,
+      allIds: [],
+      scopeSubjectIds: [],
+    }
+  }
+  // Resolve which conversation to consider for the active-participant
+  // guard. For `actor` principals it's optional; for `remote_agent` /
+  // `conversation` it's mandatory by construction.
+  const conversationId =
+    input.principal.kind === "conversation"
+      ? input.principal.conversationId
+      : input.principal.kind === "actor"
+        ? input.principal.conversationId
+        : input.principal.kind === "remote_agent"
+          ? input.principal.conversationId
+          : undefined
+  const ctx = await buildRuntimePrincipalContext(db, {
+    principal: subjectRef,
     workspaceId: input.workspaceId,
+    conversationId: conversationId ?? null,
   })
-  const out: ResolvedPrincipalSubjects = {
-    workspaceSubjectId,
-    principalSubjectId: null,
-    allIds: [workspaceSubjectId],
-    scopeSubjectIds: [],
+  return {
+    principalSubjectId: ctx.principalSubjectId,
+    allIds: ctx.runtimeSubjectIds,
+    scopeSubjectIds: ctx.runtimeScopeSubjectIds,
+    activeConversationSubjectId: ctx.activeConversationSubjectId,
   }
-  const principal = input.principal
-  switch (principal.kind) {
-    case "actor": {
-      out.actorSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: principal.actorId,
-      })
-      out.allIds.push(out.actorSubjectId)
-      out.principalSubjectId = out.actorSubjectId
-      if (principal.conversationId) {
-        out.conversationSubjectId = await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.CONVERSATION,
-          conversationId: principal.conversationId,
-        })
-        out.allIds.push(out.conversationSubjectId)
-        // Active-conversation guard: only count this scope if the actor is an
-        // active participant. Without this guard `actor + scope=conversation`
-        // grants would leak to actors not present in the conversation.
-        const active = await isSubjectActiveConversationParticipant(
-          db,
-          principal.conversationId,
-          out.actorSubjectId
-        )
-        if (active) {
-          out.activeConversationSubjectId = out.conversationSubjectId
-          out.scopeSubjectIds.push(out.conversationSubjectId)
-        }
-      }
-      break
-    }
-    case "conversation": {
-      out.conversationSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: principal.conversationId,
-      })
-      out.allIds.push(out.conversationSubjectId)
-      out.principalSubjectId = out.conversationSubjectId
-      // Pure-conversation principal: the conversation subject itself is the
-      // principal, not a scope. No scope subject populated (a scoped grant
-      // is not applicable to a pure-conversation principal).
-      break
-    }
-    case "remote_agent": {
-      out.remoteAgentSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.REMOTE_AGENT,
-        remoteAgentId: principal.remoteAgentId,
-      })
-      out.conversationSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: principal.conversationId,
-      })
-      out.allIds.push(out.remoteAgentSubjectId, out.conversationSubjectId)
-      out.principalSubjectId = out.remoteAgentSubjectId
-      const active = await isSubjectActiveConversationParticipant(
-        db,
-        principal.conversationId,
-        out.remoteAgentSubjectId
-      )
-      if (active) {
-        out.activeConversationSubjectId = out.conversationSubjectId
-        out.scopeSubjectIds.push(out.conversationSubjectId)
-      }
-      break
-    }
-    case "workspace_member":
-      // Already gated by the projectToolsForPrincipal switch above.
-      break
-  }
-  return out
 }
 
 async function projectDeviceTools(
@@ -347,7 +331,6 @@ async function projectDeviceTools(
       tools: [],
       handlers: new Map(),
       subjects: {
-        workspaceSubjectId: "",
         principalSubjectId: null,
         allIds: [],
         scopeSubjectIds: [],
@@ -569,6 +552,7 @@ function unionWithDevice(
         sanitizedInput,
         requestedAction,
         principalSubjectId: device.subjects.principalSubjectId ?? "",
+        principalScopeSubjectId: device.subjects.activeConversationSubjectId,
       })
     }
     if (claim.kind === "race_lost") {
@@ -691,8 +675,19 @@ async function requestAuthorizationOrDeny(args: {
   sanitizedInput: Record<string, unknown>
   requestedAction: ReturnType<typeof buildRequestedAction>
   principalSubjectId: string
+  /**
+   * subject-scope-refactor: when the principal is an active participant of
+   * the conversation, propagate the conversation subject_id as the locked
+   * scope. The approval flow rebuilds the principal's runtime context in
+   * the same pg transaction and compares the rebuilt active scope against
+   * this locked value — if we omit it here, the approval gate sees
+   * `locked = NULL` vs `rebuilt = <conversation subject>` and throws
+   * ScopeRebuildMismatchError, blocking every legitimate actor/remote_agent
+   * approval in the common case.
+   */
+  principalScopeSubjectId?: string
 }): Promise<NormalizedMcpToolResult> {
-  const { projectInput, row, toolName, input, requestedAction } = args
+  const { projectInput, row, toolName, requestedAction } = args
   const supportsAuthRequest =
     projectInput.principal.kind === "actor" ||
     projectInput.principal.kind === "remote_agent"
@@ -723,6 +718,7 @@ async function requestAuthorizationOrDeny(args: {
         conversationId,
         sessionId: projectInput.sessionId ?? "",
         principalSubjectId: args.principalSubjectId,
+        principalScopeSubjectId: args.principalScopeSubjectId ?? null,
         actorId:
           principal.kind === "remote_agent" ? undefined : principal.actorId,
         remoteAgentId:
@@ -766,7 +762,12 @@ async function requestAuthorizationOrDeny(args: {
           ? ["once", "remote_agent", "conversation", "workspace"]
           : ["once", "actor", "conversation", "workspace"],
       reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
-      sourceRequestArgs: input,
+      // subject-scope-refactor: persist the device-cleaned args (no
+      // __synapse_retry_nonce). auto-retry computes input_hash over this
+      // payload and forwards it verbatim; persisting the raw `input` would
+      // leak the stale planner-side nonce into the device-visible args and
+      // mismatch the hash the device computes on receive.
+      sourceRequestArgs: args.sanitizedInput,
     })
     return {
       content: [

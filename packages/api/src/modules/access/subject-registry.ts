@@ -299,6 +299,27 @@ export async function loadAccessSubject(
   return row ? rowToSubjectRef(row) : null
 }
 
+/**
+ * subject-scope-refactor: pg-form variant of loadAccessSubject. Reads the
+ * access_subjects row over the supplied transactional client so the result
+ * reflects writes made earlier in the same transaction (and approval-time
+ * reads stay on a single connection, matching the "all approval consistency
+ * checks happen on the same pg client" plan).
+ */
+export async function loadAccessSubjectOn(
+  client: import("../../infrastructure/events/index.js").Queryable,
+  subjectId: string
+): Promise<SubjectRef | null> {
+  const result = await client.query(
+    `SELECT id, kind, workspace_id, workspace_member_id, actor_id, remote_agent_id,
+            conversation_id, user_id, external_identity_key
+       FROM access_subjects WHERE id = $1 LIMIT 1`,
+    [subjectId]
+  )
+  if (result.rows.length === 0) return null
+  return rowToSubjectRef(result.rows[0] as AccessSubjectRow)
+}
+
 export async function loadAccessSubjectMany(
   db: KyselyDb,
   subjectIds: readonly string[]

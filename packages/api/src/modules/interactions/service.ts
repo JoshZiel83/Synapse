@@ -3584,12 +3584,12 @@ export async function resolveInteractionRequest(
         // grant creation at approval time.
         const { presetToOwnerScope, UnsupportedGrantTargetError } =
           await import("../runtime-authorizations/service.js")
-        const { loadAccessSubject } =
+        const { loadAccessSubjectOn } =
           await import("../access/subject-registry.js")
         const { buildRuntimePrincipalContextOn } =
           await import("../access/subject-resolution.js")
-        const lockedPrincipalSubject = await loadAccessSubject(
-          db,
+        const lockedPrincipalSubject = await loadAccessSubjectOn(
+          client,
           locked.principal_subject_id
         )
         if (!lockedPrincipalSubject) {
