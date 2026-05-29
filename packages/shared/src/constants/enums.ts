@@ -826,11 +826,18 @@ export const RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES = [
   "domain",
   "origin",
 ] as const
-export const RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS = ["bash"] as const
+export const RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS = [
+  "bash",
+  "powershell",
+  "exec_file",
+] as const
 export const RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES = [
   "exact",
   "prefix",
   "tool",
+  "argv_exact",
+  "argv_prefix",
+  "argv_exact_preapproved",
 ] as const
 
 export const AUTOMATION_TRIGGER_KINDS = ["schedule", "event"] as const

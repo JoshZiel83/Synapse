@@ -1155,6 +1155,7 @@ export interface DeviceRuntimeSessionServices {
 }
 
 export interface Devices {
+  arch: string | null;
   automation_lifecycle_event_at: Timestamp | null;
   automation_lifecycle_grace_until: Timestamp | null;
   automation_lifecycle_state: DevicesAutomationLifecycleState | null;

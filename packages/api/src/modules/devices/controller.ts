@@ -56,6 +56,7 @@ const consumePairingBodySchema = z.object({
   title: z.string().optional(),
   device_type: deviceTypeSchema.optional(),
   platform: z.string().optional(),
+  arch: z.string().optional(),
 })
 
 const claimDaemonBodySchema = z.object({
@@ -254,6 +255,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
             title: parsed.data.title,
             deviceType: parsed.data.device_type,
             platform: parsed.data.platform,
+            arch: parsed.data.arch,
           },
           { controlPlaneUrl: resolveControlPlaneUrl() }
         )
@@ -390,6 +392,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       client_version?: string
       host_provider?: string
       platform?: string
+      arch?: string
     }
     if (!body?.bootstrap_token || !body.device_pubkey || !body.service_pubkey) {
       reply.status(400).send({
@@ -407,6 +410,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           clientVersion: body.client_version,
           hostProvider: body.host_provider,
           platform: body.platform,
+          arch: body.arch,
         },
         { controlPlaneUrl: resolveControlPlaneUrl() }
       )

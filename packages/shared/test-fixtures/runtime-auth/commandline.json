@@ -208,5 +208,143 @@
       "workingDirectory": ""
     },
     "expected": false
+  },
+  {
+    "description": "exec_file argv_exact match",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "exec_file",
+          "commandMatchType": "argv_exact",
+          "program": "git",
+          "argvPrefix": ["status", "--short"]
+        }
+      }
+    ],
+    "request": {
+      "executor": "exec_file",
+      "program": "git",
+      "argvPrefix": ["status", "--short"]
+    },
+    "expected": true
+  },
+  {
+    "description": "exec_file argv_exact rejects extra args",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "exec_file",
+          "commandMatchType": "argv_exact",
+          "program": "git",
+          "argvPrefix": ["status"]
+        }
+      }
+    ],
+    "request": {
+      "executor": "exec_file",
+      "program": "git",
+      "argvPrefix": ["status", "--branch"]
+    },
+    "expected": false
+  },
+  {
+    "description": "exec_file argv_prefix matches longer argv",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "exec_file",
+          "commandMatchType": "argv_prefix",
+          "program": "git",
+          "argvPrefix": ["log"]
+        }
+      }
+    ],
+    "request": {
+      "executor": "exec_file",
+      "program": "git",
+      "argvPrefix": ["log", "--oneline", "-n", "5"]
+    },
+    "expected": true
+  },
+  {
+    "description": "exec_file argv_prefix rejects empty prefix",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "exec_file",
+          "commandMatchType": "argv_prefix",
+          "program": "git",
+          "argvPrefix": []
+        }
+      }
+    ],
+    "request": {
+      "executor": "exec_file",
+      "program": "git",
+      "argvPrefix": ["status"]
+    },
+    "expected": false
+  },
+  {
+    "description": "exec_file argv_exact_preapproved hits node --version",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "exec_file",
+          "commandMatchType": "argv_exact_preapproved",
+          "program": "node"
+        }
+      }
+    ],
+    "request": {
+      "executor": "exec_file",
+      "program": "node",
+      "argvPrefix": ["--version"]
+    },
+    "expected": true
+  },
+  {
+    "description": "exec_file argv_exact_preapproved excludes git",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "exec_file",
+          "commandMatchType": "argv_exact_preapproved",
+          "program": "git"
+        }
+      }
+    ],
+    "request": {
+      "executor": "exec_file",
+      "program": "git",
+      "argvPrefix": ["status"]
+    },
+    "expected": false
+  },
+  {
+    "description": "exec_file alias python3 hits policy program=python",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "exec_file",
+          "commandMatchType": "argv_prefix",
+          "program": "python",
+          "argvPrefix": ["-m"]
+        }
+      }
+    ],
+    "request": {
+      "executor": "exec_file",
+      "program": "python3",
+      "argvPrefix": ["-m", "pytest"]
+    },
+    "expected": true
   }
 ]

@@ -1,0 +1,5 @@
+#!/bin/sh
+# fixture binary used by toolchain-manager tests. Returns a deterministic
+# version string so the resolver tests can verify bundled-archive extraction
+# without depending on a real git build.
+echo "fake-git-0.0.0"

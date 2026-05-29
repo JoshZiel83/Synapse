@@ -288,18 +288,43 @@ function describeRuntimeAuthorizationSpec(
   }
 
   if (scope.capability === "commandline" && scope.commandline) {
+    const cmd = scope.commandline
+    // Structural narrowing via `"program" in cmd` instead of
+    // `cmd.executor === "exec_file"` — see the analogous comment in
+    // web-next's message-bubble.tsx. Both narrowings are correct when
+    // the shared CommandlinePolicy discriminated union is fresh, but
+    // the structural one survives stale @synapse/shared dist that
+    // npm-workspace mid-builds occasionally produce.
+    if ("program" in cmd) {
+      const argv = cmd.argvPrefix ?? []
+      const argvSummary = argv.length === 0 ? "" : ` ${argv.join(" ")}`
+      const summaryLabel =
+        cmd.commandMatchType === "argv_exact"
+          ? "结构化命令授权（精确）"
+          : cmd.commandMatchType === "argv_prefix"
+            ? "结构化命令授权（前缀）"
+            : "结构化命令授权（预批准）"
+      return {
+        summary: `${summaryLabel}：${cmd.program}${argvSummary}`,
+        detailLines: [
+          cmd.workingDirectory ? `工作目录：${cmd.workingDirectory}` : null,
+          cmd.allowBundledToolchain ? "允许使用 Synapse 自带工具链" : null,
+          cmd.allowedEnv && cmd.allowedEnv.length > 0
+            ? `继承环境变量：${cmd.allowedEnv.join(", ")}`
+            : null,
+        ].filter((value): value is string => Boolean(value)),
+      }
+    }
     return {
       summary:
-        scope.commandline.commandMatchType === "exact"
-          ? "精确命令授权"
-          : scope.commandline.commandMatchType === "prefix"
-            ? "命令前缀授权"
-            : "命令行访问",
+        cmd.commandMatchType === "exact"
+          ? `精确命令授权（${cmd.executor}）`
+          : cmd.commandMatchType === "prefix"
+            ? `命令前缀授权（${cmd.executor}）`
+            : `命令行访问（${cmd.executor}）`,
       detailLines: [
-        scope.commandline.commandText || "bash",
-        scope.commandline.workingDirectory
-          ? `工作目录：${scope.commandline.workingDirectory}`
-          : null,
+        cmd.commandText || cmd.executor,
+        cmd.workingDirectory ? `工作目录：${cmd.workingDirectory}` : null,
       ].filter((value): value is string => Boolean(value)),
     }
   }

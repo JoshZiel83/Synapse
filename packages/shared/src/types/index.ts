@@ -3648,7 +3648,17 @@ export interface RuntimeAuthorizationCUAPolicy extends CUAPolicyBase {}
 
 export interface RuntimeAuthorizationBrowserPolicy extends BrowserPolicyBase {}
 
-export interface RuntimeAuthorizationCommandlinePolicy extends CommandlinePolicyBase {}
+/**
+ * Commandline policy as it appears on a requested action. Discriminated by
+ * `executor`. Shell branch keeps `commandText` (required when generated from
+ * a tool call) so consumers can render the exact command being authorized;
+ * exec_file branch carries `program + argvPrefix` instead.
+ */
+export type RuntimeAuthorizationCommandlinePolicy =
+  | (Extract<CommandlinePolicyBase, { executor: "bash" | "powershell" }> & {
+      commandText: string
+    })
+  | Extract<CommandlinePolicyBase, { executor: "exec_file" }>
 
 /**
  * RequestedAction-side filesystem block. Extends the grant-side policy with
@@ -3674,9 +3684,7 @@ export interface RuntimeAuthorizationRequestedAction {
   filesystem?: RuntimeAuthorizationRequestedActionFilesystem
   cua?: RuntimeAuthorizationCUAPolicy
   browser?: RuntimeAuthorizationBrowserPolicy
-  commandline?: RuntimeAuthorizationCommandlinePolicy & {
-    commandText: string
-  }
+  commandline?: RuntimeAuthorizationCommandlinePolicy
 }
 
 // subject-scope-refactor: SharedRuntimeAuthorizationGrantSpec (camelCase) is the

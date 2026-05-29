@@ -20,36 +20,30 @@ import { createCommandlineBuiltin } from "./builtins/commandline.js"
 import { createCuaBuiltin } from "./builtins/cua.js"
 import { createBrowserBuiltin } from "./builtins/browser.js"
 import { createFrpTunnelAdapter } from "./tunnel/frp.js"
+import {
+  defaultPrestageDirs,
+  installBundles,
+  summarizeInstallReport,
+} from "./bundles/install.js"
+import {
+  defaultManifestPath,
+  defaultPackageRoot,
+  defaultToolchainDir,
+  loadManifestFromPath,
+} from "./bundles/manifest-loader.js"
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { CatalogProvider } from "./types.js"
+import type { TerminalPlatform } from "./terminal/types.js"
 
-interface CliArgs {
-  cmd: string
-  flags: Map<string, string>
-}
-
-function parseArgs(argv: string[]): CliArgs {
-  const cmd = argv[0] ?? "run"
-  const flags = new Map<string, string>()
-  for (let i = 1; i < argv.length; i++) {
-    const tok = argv[i]
-    if (tok.startsWith("--")) {
-      const eq = tok.indexOf("=")
-      if (eq > 0) {
-        flags.set(tok.slice(2, eq), tok.slice(eq + 1))
-      } else {
-        flags.set(tok.slice(2), argv[++i] ?? "")
-      }
-    }
-  }
-  return { cmd, flags }
-}
-
-function getFlag(flags: Map<string, string>, name: string, fallback?: string) {
-  return flags.get(name) ?? fallback
-}
+// Argv parsing + getFlag live in cli-args.ts so unit tests can
+// exercise the parsing rules without triggering bin.ts's top-level
+// `main()` call.
+import type { CliArgs } from "./cli-args.js"
+import { parseArgs, getFlag } from "./cli-args.js"
+export { parseArgs, getFlag } from "./cli-args.js"
+export type { CliArgs } from "./cli-args.js"
 
 /**
  * Look for synapse-device-cua-helper alongside the runtime install. Returns
@@ -290,6 +284,46 @@ async function main() {
           process.env.SYNAPSE_DEVICE_FS_HELPER_RPC_TIMEOUT_MS,
         30_000
       )
+      // Shared environment snapshot + toolchain manager so every builtin
+      // looks at the same probed PATH and toolchain dir. install-bundles
+      // and run use the SAME --bundled-toolchain-dir / --toolchain-manifest
+      // defaults; ToolchainManager.resolve hits whatever install-bundles
+      // populated earlier.
+      const { detectTerminalEnvironment } = await import(
+        "./terminal/environment.js"
+      )
+      const { createToolchainManager } = await import(
+        "./terminal/toolchain-manager.js"
+      )
+      const { defaultPathResolver } = await import("./terminal/environment.js")
+      const environment = await detectTerminalEnvironment()
+      const manifestPath =
+        getFlag(args.flags, "toolchain-manifest") ??
+        process.env.SYNAPSE_DEVICE_TOOLCHAIN_MANIFEST ??
+        defaultManifestPath()
+      const toolchainDir =
+        getFlag(args.flags, "bundled-toolchain-dir") ??
+        process.env.SYNAPSE_DEVICE_TOOLCHAIN_DIR ??
+        defaultToolchainDir()
+      const toolchainManager = existsSync(manifestPath)
+        ? createToolchainManager({
+            manifestPath,
+            toolchainDir,
+            environment,
+            pathResolver: defaultPathResolver,
+            // Wire sidecar prestage dirs (and operator env override +
+            // package-root archives) so a first-run resolve on this
+            // device hits committed/staged archives BEFORE attempting
+            // any HTTPS fetch. Without this, the run path skips the
+            // sidecars and silently degrades to network — defeating the
+            // whole point of the optionalDependencies sidecar
+            // architecture. Install-bundles already passes the same
+            // dirs; symmetry between the two entry points means the
+            // operator gets identical behavior whether they pre-stage
+            // via install-bundles or just start `synapse-device run`.
+            prestageDirs: defaultPrestageDirs(defaultPackageRoot()),
+          })
+        : undefined
       const providers: CatalogProvider[] = [
         createFilesystemBuiltin({
           rootPath: fsRoot,
@@ -321,7 +355,7 @@ async function main() {
           helperRpcTimeoutMs: fsHelperRpcTimeoutMs,
           indexIgnore: fsIndexIgnore,
         }),
-        createCommandlineBuiltin(),
+        createCommandlineBuiltin({ environment, toolchainManager }),
       ]
       const cuaHelperPath =
         getFlag(args.flags, "cua-helper") ??
@@ -482,11 +516,110 @@ async function main() {
       process.exit(2)
       return
     }
+    case "install-bundles": {
+      // Eager download + extract for every program in the manifest. Shares
+      // --bundled-toolchain-dir / --toolchain-manifest with `run` so the
+      // same on-disk layout is read by the runtime.
+      const platformRaw = getFlag(args.flags, "platform") ?? "auto"
+      const parsed = parsePlatformAndArch(platformRaw)
+      if (!parsed) {
+        console.error(
+          `synapse-device install-bundles: unsupported --platform ${platformRaw} (use auto | linux-x64 | linux-arm64 | darwin-x64 | darwin-arm64 | win32-x64)`
+        )
+        process.exit(2)
+      }
+      const archOverride = getFlag(args.flags, "arch")
+      const manifestPath =
+        getFlag(args.flags, "toolchain-manifest") ??
+        process.env.SYNAPSE_DEVICE_TOOLCHAIN_MANIFEST ??
+        defaultManifestPath()
+      const toolchainDir =
+        getFlag(args.flags, "bundled-toolchain-dir") ??
+        process.env.SYNAPSE_DEVICE_TOOLCHAIN_DIR ??
+        defaultToolchainDir()
+      const manifest = loadManifestFromPath(manifestPath)
+      const skipExisting = getFlag(args.flags, "force") !== "true"
+      const strict = getFlag(args.flags, "strict") === "true"
+      const requirePrestaged =
+        getFlag(args.flags, "require-prestaged") === "true"
+      const prestageDirsRaw = getFlag(args.flags, "prestage-dir")
+      const prestageDirs: string[] = []
+      if (prestageDirsRaw) {
+        for (const seg of prestageDirsRaw.split(",")) {
+          const t = seg.trim()
+          if (t.length > 0) prestageDirs.push(t)
+        }
+      }
+      // Always merge defaults (env var + package-root bundles/archives)
+      // after explicit flags so operators can extend, not replace, the
+      // standard lookup order.
+      prestageDirs.push(...defaultPrestageDirs(defaultPackageRoot()))
+      const report = await installBundles({
+        manifest,
+        toolchainDir,
+        platform: parsed.platform,
+        arch: archOverride ?? parsed.arch,
+        skipExisting,
+        prestageDirs,
+        requirePrestaged,
+        logger: (m) => console.log(m),
+      })
+      console.log(JSON.stringify(report, null, 2))
+      const summary = summarizeInstallReport(report)
+      // Exit 1 if anything FAILED, or nothing usable on disk after the
+      // run (no installs AND no "already installed" cache hits — e.g.
+      // `--platform=win32-x64` against the current manifest produces
+      // four skipped + zero installed, which the operator should NOT
+      // misread as "toolchain ready"). --strict additionally fails if
+      // ANY entry was unhealthy-skipped (incomplete platform matrix
+      // for the target — useful for CI).
+      if (
+        summary.failedCount > 0 ||
+        !summary.anyUsable ||
+        (strict && summary.unhealthySkippedCount > 0)
+      ) {
+        console.error(
+          `install-bundles: not all programs usable on ${parsed.platform}-${archOverride ?? parsed.arch} ` +
+            `(installed=${summary.installedCount} healthy_skipped=${summary.healthySkippedCount} ` +
+            `unhealthy_skipped=${summary.unhealthySkippedCount} failed=${summary.failedCount})`
+        )
+        process.exit(1)
+      }
+      return
+    }
     default: {
       console.error(`unknown command: ${args.cmd}`)
       process.exit(2)
     }
   }
+}
+
+function mapHostPlatform(platform: NodeJS.Platform): string {
+  if (platform === "win32") return "win32-" + process.arch
+  if (platform === "darwin") return "darwin-" + process.arch
+  return "linux-" + process.arch
+}
+
+/**
+ * Parse a `--platform=...` argument into `{platform, arch}`. Accepts:
+ *   - "auto" / "" / undefined → host platform + host arch
+ *   - "linux" / "darwin" / "win32" → that platform + host arch
+ *   - "linux-x64" / "darwin-arm64" / "win32-x64" → platform + explicit arch
+ */
+function parsePlatformAndArch(
+  value: string
+): { platform: TerminalPlatform; arch: string } | null {
+  const v =
+    value === "auto" || value === "" ? mapHostPlatform(process.platform) : value
+  let platform: TerminalPlatform | null = null
+  if (v.startsWith("win32")) platform = "win32"
+  else if (v.startsWith("darwin")) platform = "darwin"
+  else if (v.startsWith("linux")) platform = "linux"
+  if (!platform) return null
+  const dashIdx = v.indexOf("-")
+  const arch = dashIdx >= 0 ? v.slice(dashIdx + 1) : process.arch
+  if (!arch) return null
+  return { platform, arch }
 }
 
 main().catch((err) => {

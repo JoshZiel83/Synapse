@@ -320,6 +320,10 @@ export interface ConsumePairingInput {
   title?: string
   deviceType?: DeviceType
   platform?: string
+  /** process.arch as reported by the device runtime; together with
+   *  platform forms the bundles manifest `platformKey` so the API can
+   *  exact-match the toolchain availability table. */
+  arch?: string
 }
 
 export interface ConsumePairingResult {
@@ -459,6 +463,7 @@ export async function consumePairing(
         host_provider: null,
         device_type: deviceType,
         platform: input.platform ?? null,
+        arch: input.arch ?? null,
         public_key: input.devicePubkey,
         public_key_fingerprint: pubkeyFingerprint,
         trust_status: "trusted",

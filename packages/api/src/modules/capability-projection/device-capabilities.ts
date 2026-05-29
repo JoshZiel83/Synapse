@@ -28,6 +28,16 @@ export interface DeviceCapabilityToolRow {
   capability_conversation_type_mask_override: number | null
   /** Per-device mask override. */
   device_conversation_type_mask_override: number | null
+  /**
+   * Raw devices.platform string ("win32", "darwin", "linux", or other).
+   * Caller (capability-projection dispatch) passes this through
+   * normalizeDevicePlatform before forwarding to the commandline matcher,
+   * which uses it to apply Windows-specific guards (cwd unsupported in v1).
+   */
+  device_platform: string | null
+  /** Raw devices.arch string (e.g. "x64", "arm64"). Combined with
+   *  platform forms the bundles manifest's platformKey. */
+  device_arch: string | null
 }
 
 export interface LoadDeviceToolsParams {
@@ -91,6 +101,18 @@ export async function loadDeviceCapabilityToolsForSubjects(
       "dtr.input_schema as input_schema",
       "dc.conversation_type_mask_override as capability_conversation_type_mask_override",
       "d.conversation_type_mask_override as device_conversation_type_mask_override",
+      // Commit 8: surface device.platform so the commandline matcher can
+      // apply Windows-specific guards (cwd unsupported in v1) at projection
+      // time instead of relying solely on device-side bottom-of-stack
+      // rejection. normalizeDevicePlatform turns the raw DB string into
+      // "win32" | "linux" | "darwin" | undefined.
+      "d.platform as device_platform",
+      // Surface arch alongside platform so isBundleAvailableForPlatform can
+      // exact-match against the runtime manifest's platformKey
+      // (`<platform>-<arch>`). Without arch the API would have to assume
+      // the device's arch matches an entry, which previously caused
+      // "approved-but-unrunnable" for arm-only or x64-only manifests.
+      "d.arch as device_arch",
     ])
     .where("dc.workspace_id", "=", params.workspaceId)
     .where("dc.status", "=", "active")

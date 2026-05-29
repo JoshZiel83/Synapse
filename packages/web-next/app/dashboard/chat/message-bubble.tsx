@@ -563,18 +563,55 @@ function describeRuntimeAuthorizationSpec(
   }
 
   if (scope.capability === "commandline" && scope.commandline) {
+    // Use `"program" in cmd` as the narrowing predicate instead of
+    // `cmd.executor === "exec_file"`. Both work when the shared
+    // CommandlinePolicy discriminated union is correctly typed, but
+    // the executor comparison surfaces a TS2367 "no overlap" error
+    // if a consumer has a stale @synapse/shared dist (the kind a
+    // monorepo can produce when shared isn't rebuilt before web-next
+    // type-checks). The structural check is stable across those
+    // builds and remains a true discriminator at runtime — only the
+    // exec_file branch has `program`.
+    const cmd = scope.commandline
+    if ("program" in cmd) {
+      const argv = cmd.argvPrefix ?? []
+      const argvSummary = argv.length === 0 ? "" : ` ${argv.join(" ")}`
+      const summaryLabel =
+        cmd.commandMatchType === "argv_exact"
+          ? "exec_file exact"
+          : cmd.commandMatchType === "argv_prefix"
+            ? "exec_file prefix"
+            : "exec_file (preapproved)"
+      return {
+        icon: Wrench,
+        summary: `${summaryLabel}: ${cmd.program}${argvSummary}`,
+        detail: [
+          cmd.workingDirectory
+            ? `Working directory: ${cmd.workingDirectory}`
+            : null,
+          cmd.allowBundledToolchain
+            ? "Bundled toolchain fallback allowed"
+            : null,
+          cmd.allowedEnv && cmd.allowedEnv.length > 0
+            ? `Inherits env: ${cmd.allowedEnv.join(", ")}`
+            : null,
+        ]
+          .filter((v): v is string => Boolean(v))
+          .join("\n"),
+      }
+    }
     return {
       icon: Wrench,
       summary:
-        scope.commandline.commandMatchType === "exact"
-          ? "exact command"
-          : scope.commandline.commandMatchType === "prefix"
-            ? "command prefix"
-            : "commandline tool access",
+        cmd.commandMatchType === "exact"
+          ? `${cmd.executor} exact`
+          : cmd.commandMatchType === "prefix"
+            ? `${cmd.executor} prefix`
+            : `${cmd.executor} tool`,
       detail: [
-        scope.commandline.commandText || "bash",
-        scope.commandline.workingDirectory
-          ? `Working directory: ${scope.commandline.workingDirectory}`
+        cmd.commandText || cmd.executor,
+        cmd.workingDirectory
+          ? `Working directory: ${cmd.workingDirectory}`
           : null,
       ]
         .filter(Boolean)

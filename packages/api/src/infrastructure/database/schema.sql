@@ -3560,6 +3560,7 @@ CREATE TABLE devices (
   host_provider TEXT,                        -- e2b, modal, k8s, ... NULL for local
   device_type devices_device_type NOT NULL DEFAULT 'desktop_computer',
   platform VARCHAR(40),                       -- darwin, linux, win32
+  arch VARCHAR(32),                            -- x64, arm64, ... (process.arch). Combined with platform forms the platformKey the device-runtime bundles manifest keys on.
   public_key TEXT NOT NULL,
   public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
   trust_status devices_trust_status NOT NULL DEFAULT 'pending',

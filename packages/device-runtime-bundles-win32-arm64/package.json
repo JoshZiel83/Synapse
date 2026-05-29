@@ -1,0 +1,17 @@
+{
+  "name": "@synapse/device-runtime-bundles-win32-arm64",
+  "version": "0.1.0",
+  "description": "Pre-staged Synapse device toolchain archives for win32-arm64. Companion sidecar to @synapse/device-runtime.",
+  "publishConfig": {
+    "os": [
+      "win32"
+    ],
+    "cpu": [
+      "arm64"
+    ]
+  },
+  "files": [
+    "bundles",
+    "README.md"
+  ]
+}

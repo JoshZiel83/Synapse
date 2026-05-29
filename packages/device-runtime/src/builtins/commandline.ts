@@ -1,18 +1,74 @@
-// Commandline builtin (§4.5 / spec §10). v3.0 device-runtime commandline
-// host. Provides two tools: bash (sync) and bash_task (async via
-// task_mode='async'); v3.0 ships sync only — async lifecycle wiring lands
-// when the API-side task plumbing is in place.
+// Commandline builtin: registers bash / powershell / exec_file tools and
+// routes invocations through the terminal/ stack landed in Commits 1-4.
+//
+// Tool registration is platform-aware:
+//   - POSIX: bash (if bash on PATH), exec_file (always)
+//   - Windows: powershell (if pwsh/powershell.exe on PATH), exec_file
+//
+// invokeTool flow (设计红线 §11/§13/§16/§17/§18):
+//   1. strict argument validation (program/args type, isBareCommandName,
+//      command non-empty) — produces invalid_request BEFORE the matcher.
+//   2. checkCommandlineAccess: matcher against signed envelope's
+//      commandline grants; returns matched policy or permission_denied.
+//   3. exec_file branch: resolve the program (bundle-eligible -> resolver
+//      with policy.allowBundledToolchain; otherwise resolveBare for system
+//      PATH only). Both branches yield a ResolvedToolchain.
+//   4. build spawn descriptor (shell provider for bash/powershell,
+//      buildExecFileDescriptor for exec_file).
+//   5. spawnTerminalProcess with the resolved environment, toolchain env,
+//      toolchain binDirs, sanitized PATH. Windows policy+request workdir
+//      already filtered out by the matcher; we still defense-in-depth
+//      double-check before spawn.
 
-import { spawn } from "node:child_process"
 import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
 } from "@synapse/device-protocol"
 import { toolErrorResult } from "../mcp-host.js"
-import { commandlinePolicyAllows } from "@synapse/shared"
+import { isBareCommandName, isBundleEligibleProgram } from "@synapse/shared"
+
+import { detectTerminalEnvironment } from "../terminal/environment.js"
+import { spawnTerminalProcess } from "../terminal/executor.js"
+import {
+  buildExecFileDescriptor,
+  PosixBashProvider,
+  PowerShellProvider,
+  ShellNotAvailableError,
+} from "../terminal/shell-provider.js"
+import { buildUtf8Env, InvalidAllowedEnvError } from "../terminal/utf8.js"
+import { defaultPrestageDirs } from "../bundles/install.js"
+import {
+  createToolchainManager,
+  ToolchainSha256MismatchError,
+  ToolchainUnavailableError,
+} from "../terminal/toolchain-manager.js"
+import { checkCommandlineAccess } from "../terminal/permissions.js"
+import { defaultPathResolver } from "../terminal/environment.js"
+import type {
+  CommandlineMatchRequest,
+  NormalizedCommandlinePolicy,
+} from "@synapse/shared/access/policies"
+import type {
+  PathResolver,
+  ResolvedTerminalEnvironment,
+  ResolvedToolchain,
+  ToolchainManager,
+} from "../terminal/types.js"
+
+import { fileURLToPath } from "node:url"
+import { dirname, join, resolve as pathResolve } from "node:path"
 
 const PROVIDER_KEY = "builtin.commandline"
+
+// Bundle eligibility (which programs get ToolchainManager.resolve with
+// bundled fallback vs resolveBare for system PATH only) is the SAME list
+// the API uses to decide whether to set `allowBundledToolchain: true` on
+// the grant. Centralized in @synapse/shared/access/policies via
+// BUNDLE_ELIGIBLE_PROGRAMS so the two sides can't drift — see the
+// extensive comment there before touching the list.
+
+// ───────────────────────────── tool definitions ─────────────────────────────
 
 const BASH_TOOL: DeviceCatalogTool = {
   stable_key: "commandline/bash",
@@ -36,8 +92,76 @@ const BASH_TOOL: DeviceCatalogTool = {
   },
 }
 
+const POWERSHELL_TOOL: DeviceCatalogTool = {
+  stable_key: "commandline/powershell",
+  name: "powershell",
+  description:
+    "Run a PowerShell command on the device (pwsh preferred, falling back to Windows PowerShell). UTF-8 output. Subject to runtime authorization grants of capability='commandline'.",
+  input_schema: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "PowerShell command to execute" },
+      working_directory: {
+        type: "string",
+        description: "Optional working directory (not supported on Windows v1)",
+      },
+      timeout_ms: {
+        type: "integer",
+        description: "Max execution time (default 60s)",
+      },
+    },
+    required: ["command"],
+  },
+}
+
+const EXEC_FILE_TOOL: DeviceCatalogTool = {
+  stable_key: "commandline/exec_file",
+  name: "exec_file",
+  description:
+    "Spawn an executable directly with structured argv (no shell). Program must be a bare command name (no path separators, parent traversal, or absolute paths). Subject to runtime authorization grants of capability='commandline' with executor='exec_file'.",
+  input_schema: {
+    type: "object",
+    properties: {
+      program: {
+        type: "string",
+        description:
+          "Bare command name (e.g. 'python', 'node', 'git', or any system PATH binary like 'rg'). Resolved via system PATH; programs on the bundled-toolchain allow-list (python + node on linux/darwin x64/arm64; git on Windows x64/arm64 via MinGit) may additionally fall back to a vetted bundled archive when policy.allow_bundled_toolchain=true. Other programs require a working system installation.",
+      },
+      args: {
+        type: "array",
+        items: { type: "string" },
+        description: "Arguments to pass to the program (default [])",
+      },
+      working_directory: {
+        type: "string",
+        description: "Optional working directory",
+      },
+      timeout_ms: {
+        type: "integer",
+        description: "Max execution time (default 60s)",
+      },
+    },
+    required: ["program"],
+  },
+}
+
+// ─────────────────────────── builtin factory ────────────────────────────────
+
 export interface CommandlineBuiltinOptions {
   displayName?: string
+  /**
+   * Pre-detected environment. Production (bin.ts) shares one snapshot
+   * across all builtins; tests typically omit and let the builtin lazy-
+   * detect via getDefaultEnvironment().
+   */
+  environment?: ResolvedTerminalEnvironment
+  /**
+   * Pre-constructed manager. When omitted, the builtin builds a default
+   * manager pointing at the packaged manifest under bundles/manifest.json.
+   */
+  toolchainManager?: ToolchainManager
+  /** Path resolver — defaults to defaultPathResolver. */
+  pathResolver?: PathResolver
 }
 
 export function createCommandlineBuiltin(
@@ -46,105 +170,379 @@ export function createCommandlineBuiltin(
   return {
     providerKey: PROVIDER_KEY,
     async describeExposures(): Promise<DeviceCatalogExposure[]> {
+      const env = await resolveEnvironment(opts)
+      const tools: DeviceCatalogTool[] = []
+      const executors: string[] = []
+      if (env.platform === "win32") {
+        if (env.powershell) {
+          tools.push(POWERSHELL_TOOL)
+          executors.push("powershell")
+        }
+      } else {
+        if (env.bash) {
+          tools.push(BASH_TOOL)
+          executors.push("bash")
+        }
+      }
+      tools.push(EXEC_FILE_TOOL)
+      executors.push("exec_file")
       return [
         {
           stable_key: "builtin/commandline",
-          display_name: opts.displayName ?? "Commandline (bash)",
+          display_name: opts.displayName ?? "Commandline (shell + exec_file)",
           transport: "builtin",
           builtin_kind: "commandline",
           metadata: {
-            executors: ["bash"],
+            executors,
             asyncTasksSupported: false,
-            schemaVersion: 1,
+            schemaVersion: 2,
           },
-          tools: [BASH_TOOL],
+          tools,
         },
       ]
     },
     async invokeTool(input): Promise<CatalogToolInvocationResult> {
-      if (input.toolName !== "bash") {
+      const env = await resolveEnvironment(opts)
+      const platform = env.platform
+
+      // Strict parameter validation FIRST (设计红线 §13: must precede
+      // the matcher so a malformed call returns invalid_request, not
+      // permission_denied).
+      let request: CommandlineMatchRequest
+      let timeoutMs: number | undefined
+      let resolvedWorkingDirectory: string | undefined
+
+      const rawWorkingDirectory = input.args["working_directory"]
+      if (
+        rawWorkingDirectory !== undefined &&
+        typeof rawWorkingDirectory !== "string"
+      ) {
         return toolErrorResult({
           code: "invalid_request",
-          message: `commandline builtin does not handle ${input.toolName}`,
+          message: "working_directory must be a string",
         })
       }
-      const command = input.args["command"]
-      if (typeof command !== "string" || command.length === 0) {
+      resolvedWorkingDirectory =
+        typeof rawWorkingDirectory === "string"
+          ? rawWorkingDirectory
+          : undefined
+
+      const rawTimeout = input.args["timeout_ms"]
+      if (rawTimeout !== undefined && typeof rawTimeout !== "number") {
         return toolErrorResult({
           code: "invalid_request",
-          message: "bash: 'command' (string) is required",
+          message: "timeout_ms must be a number",
         })
       }
-      const workingDirectory = input.args["working_directory"]
-      // Device-side runtime authorization: the server-signed envelope must
-      // carry a commandline grant_spec whose policy allows this command.
-      // Reject if no commandline policy is present.
-      const grantSpecs =
-        input.envelope?.runtime_authorization?.grant_specs ?? []
-      const commandlinePolicies = grantSpecs
-        .filter((g) => g.capability === "commandline" && g.commandline)
-        .map((g) => g.commandline!)
-      if (input.envelope && commandlinePolicies.length === 0) {
-        return toolErrorResult({
-          code: "permission_denied",
-          message:
-            "no runtime_authorization grant covers capability='commandline' for this bash call",
-        })
-      }
-      if (commandlinePolicies.length > 0) {
-        const matched = commandlinePolicies.some((p) =>
-          commandlinePolicyAllows(
-            {
-              executor: p.executor,
-              commandMatchType: p.command_match_type,
-              commandText: p.command_text,
-              workingDirectory: p.working_directory,
-            },
-            {
-              command,
-              workingDirectory:
-                typeof workingDirectory === "string"
-                  ? workingDirectory
-                  : undefined,
+      timeoutMs = typeof rawTimeout === "number" ? rawTimeout : undefined
+
+      switch (input.toolName) {
+        case "bash":
+        case "powershell": {
+          const command = input.args["command"]
+          if (typeof command !== "string" || command.length === 0) {
+            return toolErrorResult({
+              code: "invalid_request",
+              message: `${input.toolName}: 'command' (non-empty string) is required`,
+            })
+          }
+          request = {
+            kind: "shell",
+            executor: input.toolName,
+            command,
+            workingDirectory: resolvedWorkingDirectory,
+            platform,
+          }
+          break
+        }
+        case "exec_file": {
+          const program = input.args["program"]
+          if (typeof program !== "string" || program.length === 0) {
+            return toolErrorResult({
+              code: "invalid_request",
+              message: "exec_file: 'program' (non-empty string) is required",
+            })
+          }
+          if (!isBareCommandName(program)) {
+            return toolErrorResult({
+              code: "invalid_request",
+              message:
+                "exec_file: 'program' must be a bare command name (no /, \\, .., absolute path, or ~ prefix)",
+            })
+          }
+          const rawArgv = input.args["args"]
+          let argv: string[] = []
+          if (rawArgv !== undefined) {
+            if (
+              !Array.isArray(rawArgv) ||
+              rawArgv.some((v) => typeof v !== "string")
+            ) {
+              return toolErrorResult({
+                code: "invalid_request",
+                message: "exec_file: 'args' must be string[] if provided",
+              })
             }
-          )
+            argv = rawArgv as string[]
+          }
+          request = {
+            kind: "exec_file",
+            program,
+            argv,
+            workingDirectory: resolvedWorkingDirectory,
+            platform,
+          }
+          break
+        }
+        default:
+          return toolErrorResult({
+            code: "invalid_request",
+            message: `commandline builtin does not handle ${input.toolName}`,
+          })
+      }
+
+      // Permission gate.
+      const access = checkCommandlineAccess({
+        envelope: input.envelope,
+        request,
+        toolName: input.toolName,
+      })
+      if (!access.ok) return access.tool
+
+      // Resolve toolchain (exec_file only).
+      let resolved: ResolvedToolchain | undefined
+      if (request.kind === "exec_file") {
+        const manager = await getDefaultToolchainManager(opts, env)
+        try {
+          if (isBundleEligibleProgram(request.program)) {
+            resolved = await manager.resolve(
+              request.program,
+              Boolean(access.policy.allowBundledToolchain)
+            )
+          } else {
+            const bare = await manager.resolveBare(request.program)
+            if (!bare) {
+              return toolErrorResult({
+                code: "permission_denied",
+                message: `program not found on PATH: ${request.program}`,
+                details: { reason: "program_not_found" },
+              })
+            }
+            resolved = bare
+          }
+        } catch (err) {
+          if (err instanceof ToolchainUnavailableError) {
+            return toolErrorResult({
+              code: "runtime_constraint",
+              message: err.message,
+              details: { reason: "toolchain_unavailable" },
+            })
+          }
+          if (err instanceof ToolchainSha256MismatchError) {
+            return toolErrorResult({
+              code: "runtime_constraint",
+              message: err.message,
+              details: { reason: "toolchain_sha256_mismatch" },
+            })
+          }
+          throw err
+        }
+      }
+
+      // Build spawn descriptor.
+      let descriptor
+      if (request.kind === "shell") {
+        try {
+          if (request.executor === "bash") {
+            const provider = PosixBashProvider.fromEnvironment(env)
+            if (!provider) throw new ShellNotAvailableError("bash")
+            descriptor = provider.buildShellDescriptor(request)
+          } else {
+            const provider = PowerShellProvider.fromEnvironment(env)
+            if (!provider) throw new ShellNotAvailableError("powershell")
+            descriptor = provider.buildShellDescriptor(request)
+          }
+        } catch (err) {
+          if (err instanceof ShellNotAvailableError) {
+            return toolErrorResult({
+              code: "runtime_constraint",
+              message: err.message,
+              details: { reason: `${err.executor}_unavailable` },
+            })
+          }
+          throw err
+        }
+      } else {
+        // Map matcher request (uses `argv`) to TerminalExecFileRequest
+        // (uses `args`). The shared matcher names mirror the wire format
+        // (argv_prefix etc); the executor's descriptor naming is just
+        // node's `child_process.spawn` shape.
+        descriptor = buildExecFileDescriptor(
+          {
+            kind: "exec_file",
+            program: (request as { program: string }).program,
+            args: (request as { argv: readonly string[] }).argv,
+            workingDirectory: resolvedWorkingDirectory,
+            timeoutMs,
+          },
+          resolved!
         )
-        if (!matched) {
+      }
+
+      // Build base env (utf8 + dangerous strip + locale + sanitized PATH).
+      let baseEnv: Record<string, string>
+      try {
+        baseEnv = buildUtf8Env(env.osEnv, {
+          allowedEnv: access.policy.allowedEnv ?? [],
+          platform,
+        })
+      } catch (err) {
+        if (err instanceof InvalidAllowedEnvError) {
+          return toolErrorResult({
+            code: "invalid_request",
+            message: err.message,
+            details: { reason: "allowed_env_path_forbidden" },
+          })
+        }
+        throw err
+      }
+
+      // Defense in depth: matcher should already have filtered Windows cwd,
+      // but if anything slipped through (e.g. matcher called with
+      // platform=undefined), refuse before spawn.
+      if (platform === "win32") {
+        const policyWd = access.policy.workingDirectory
+        if (policyWd || resolvedWorkingDirectory) {
           return toolErrorResult({
             code: "permission_denied",
-            message: `bash command not covered by any commandline grant policy: ${command.slice(0, 80)}`,
+            message:
+              "Windows commandline policy v1 does not support working_directory",
+            details: { reason: "windows_workdir_unsupported" },
           })
         }
       }
-      const timeoutMs = input.args["timeout_ms"]
-      const exec = await executeBash({
-        command,
-        workingDirectory:
-          typeof workingDirectory === "string" ? workingDirectory : undefined,
-        timeoutMs: typeof timeoutMs === "number" ? timeoutMs : undefined,
+
+      const exec = await spawnTerminalProcess(descriptor, {
+        cwd: resolvedWorkingDirectory,
+        baseEnv,
+        toolchainBinDirs: resolved ? [resolved.binDir] : [],
+        toolchainEnv: resolved?.env ?? {},
+        platform,
+        osEnv: env.osEnv,
+        timeoutMs,
       })
       const exitText = exec.killed
         ? `(killed after ${exec.durationMs}ms)`
         : `exit ${exec.exitCode} in ${exec.durationMs}ms`
+      // Surface a "..." marker inline so the model can tell its tool
+      // result was clipped. Detailed counts go in _meta below.
+      const stdoutText = exec.stdoutTruncated
+        ? `${exec.stdout}\n... (truncated: ${exec.stdoutDroppedBytes ?? 0} bytes dropped)`
+        : exec.stdout
+      const stderrText = exec.stderrTruncated
+        ? `${exec.stderr}\n... (truncated: ${exec.stderrDroppedBytes ?? 0} bytes dropped)`
+        : exec.stderr
       const text = [
         `# ${exitText}`,
-        exec.stdout ? `## stdout\n${exec.stdout}` : "",
-        exec.stderr ? `## stderr\n${exec.stderr}` : "",
+        stdoutText ? `## stdout\n${stdoutText}` : "",
+        stderrText ? `## stderr\n${stderrText}` : "",
       ]
         .filter(Boolean)
         .join("\n")
+      const meta: Record<string, unknown> = {
+        exit_code: exec.exitCode,
+        duration_ms: exec.durationMs,
+        killed: exec.killed,
+      }
+      if (resolved) meta.toolchain_source = resolved.source
+      // Only emit truncation fields when truncation actually happened —
+      // keeps the happy-path _meta minimal (设计红线 §12: stable set).
+      if (exec.stdoutTruncated || exec.stderrTruncated) {
+        meta.truncated = true
+        meta.stdout_truncated = exec.stdoutTruncated ?? false
+        meta.stderr_truncated = exec.stderrTruncated ?? false
+        meta.stdout_dropped_bytes = exec.stdoutDroppedBytes ?? 0
+        meta.stderr_dropped_bytes = exec.stderrDroppedBytes ?? 0
+      }
       return {
         content: [{ type: "text", text }],
         isError: exec.exitCode !== 0 || exec.killed,
-        _meta: {
-          exit_code: exec.exitCode,
-          duration_ms: exec.durationMs,
-          killed: exec.killed,
-        },
+        _meta: meta,
       }
     },
   }
 }
+
+// ─────────────────────── environment + manager cache ─────────────────────────
+
+let cachedEnvironment: Promise<ResolvedTerminalEnvironment> | null = null
+let cachedManager: ToolchainManager | null = null
+
+async function resolveEnvironment(
+  opts: CommandlineBuiltinOptions
+): Promise<ResolvedTerminalEnvironment> {
+  if (opts.environment) return opts.environment
+  if (!cachedEnvironment) {
+    cachedEnvironment = detectTerminalEnvironment({
+      pathResolver: opts.pathResolver,
+    })
+  }
+  return cachedEnvironment
+}
+
+async function getDefaultToolchainManager(
+  opts: CommandlineBuiltinOptions,
+  env: ResolvedTerminalEnvironment
+): Promise<ToolchainManager> {
+  if (opts.toolchainManager) return opts.toolchainManager
+  if (cachedManager) return cachedManager
+  const manifestPath = defaultManifestPath()
+  const toolchainDir = defaultToolchainDir()
+  // Pre-stage lookup uses the canonical `defaultPrestageDirs` helper
+  // from bundles/install.ts so EVERY entry point (install-bundles CLI,
+  // synapse-device run wiring, and this lazy commandline builtin path)
+  // sees the same lookup order:
+  //   1. SYNAPSE_DEVICE_PRESTAGED_DIR env override
+  //   2. Installed @synapse/device-runtime-bundles-<platformKey>
+  //      sidecar packages (via node_modules walk OR monorepo packages/
+  //      walk — same helper handles both layouts)
+  //   3. device-runtime's own bundles/archives directory
+  // Symmetric behavior between entry points means an archive staged
+  // anywhere in that list is honored wherever the runtime ultimately
+  // resolves, and a fresh `npm install @synapse/device-runtime` on a
+  // host with the matching optional dep populates the sidecar path
+  // BEFORE the runtime ever reaches the HTTPS fallback.
+  const packageRoot = pathResolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    ".."
+  )
+  const prestageDirs = defaultPrestageDirs(packageRoot)
+  cachedManager = createToolchainManager({
+    manifestPath,
+    toolchainDir,
+    environment: env,
+    pathResolver: opts.pathResolver ?? defaultPathResolver,
+    prestageDirs,
+  })
+  return cachedManager
+}
+
+function defaultManifestPath(): string {
+  // dist/builtins/commandline.js → walk up to package root, then bundles/.
+  const here = dirname(fileURLToPath(import.meta.url))
+  return pathResolve(here, "..", "..", "bundles", "manifest.json")
+}
+
+function defaultToolchainDir(): string {
+  const xdg = process.env.XDG_CACHE_HOME
+  const home = process.env.HOME ?? process.cwd()
+  if (xdg && xdg.length > 0) {
+    return join(xdg, "synapse", "device-toolchains")
+  }
+  return join(home, ".cache", "synapse", "device-toolchains")
+}
+
+// ───────────────────────── legacy executeBash export ─────────────────────────
 
 export interface BashExecutionResult {
   exitCode: number
@@ -160,51 +558,57 @@ export interface BashExecutionOptions {
   timeoutMs?: number
 }
 
+export class BashUnavailableError extends Error {
+  readonly name = "BashUnavailableError"
+  constructor() {
+    super("bash executable not found on PATH (device cannot run bash tool)")
+  }
+}
+
 /**
- * Synchronous bash execution helper used by the MCP host's tool handler.
- * Returns the captured streams + exit code. Throws only on spawn failure;
- * non-zero exits surface as part of the result.
+ * Synchronous bash execution helper preserved for back-compat. Uses the
+ * same lazy-detected environment as the builtin; production callers can
+ * still pass an explicit `environment` snapshot.
  */
-export function executeBash(
-  opts: BashExecutionOptions
+export async function executeBash(
+  optsArgs: BashExecutionOptions,
+  environment?: ResolvedTerminalEnvironment
 ): Promise<BashExecutionResult> {
-  const timeoutMs = Math.max(
-    1000,
-    Math.min(opts.timeoutMs ?? 60_000, 5 * 60_000)
-  )
-  return new Promise<BashExecutionResult>((resolve, reject) => {
-    const started = Date.now()
-    let killed = false
-    let stdoutChunks: Buffer[] = []
-    let stderrChunks: Buffer[] = []
-    const child = spawn("bash", ["-lc", opts.command], {
-      cwd: opts.workingDirectory ?? process.cwd(),
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-    const timer = setTimeout(() => {
-      killed = true
-      try {
-        child.kill("SIGKILL")
-      } catch {
-        /* ignore */
+  const env =
+    environment ??
+    (await (async () => {
+      if (!cachedEnvironment) {
+        cachedEnvironment = detectTerminalEnvironment()
       }
-    }, timeoutMs)
-    child.stdout.on("data", (b: Buffer) => stdoutChunks.push(b))
-    child.stderr.on("data", (b: Buffer) => stderrChunks.push(b))
-    child.on("error", (err) => {
-      clearTimeout(timer)
-      reject(err)
-    })
-    child.on("close", (code) => {
-      clearTimeout(timer)
-      resolve({
-        exitCode: code ?? -1,
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        durationMs: Date.now() - started,
-        killed,
-      })
-    })
+      return cachedEnvironment
+    })())
+  const provider = PosixBashProvider.fromEnvironment(env)
+  if (!provider) {
+    throw new BashUnavailableError()
+  }
+  const descriptor = provider.buildShellDescriptor({
+    kind: "shell",
+    executor: "bash",
+    command: optsArgs.command,
   })
+  const baseEnv = buildUtf8Env(env.osEnv, {
+    allowedEnv: [],
+    platform: env.platform,
+  })
+  const result = await spawnTerminalProcess(descriptor, {
+    cwd: optsArgs.workingDirectory,
+    baseEnv,
+    toolchainBinDirs: [],
+    toolchainEnv: {},
+    platform: env.platform,
+    osEnv: env.osEnv,
+    timeoutMs: optsArgs.timeoutMs,
+  })
+  return {
+    exitCode: result.exitCode ?? -1,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    durationMs: result.durationMs,
+    killed: result.killed,
+  }
 }
