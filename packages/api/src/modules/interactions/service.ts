@@ -96,6 +96,17 @@ type RawInteractionRow = {
   source_request_args: unknown
   source_runtime_session_id: string | null
   source_retry_nonce: string | null
+  // subject-scope-refactor: principal_remote_agent_id +
+  // principal_conversation_actor_context_id dropped from
+  // interaction_runtime_authorization_requests. Replaced by
+  // principal_subject_id (NOT NULL) + principal_scope_subject_id (nullable),
+  // both FK to access_subjects with ON DELETE RESTRICT (durable audit).
+  principal_subject_id: string
+  principal_scope_subject_id: string | null
+  // Retained on the type for transitional caller compatibility — the SELECT
+  // projections below alias these via access_subjects JOIN so existing
+  // consumers (e.g. dashboard rendering, runtime auth request matching) can
+  // continue to address familiar field names during the merge-prep window.
   principal_remote_agent_id: string | null
   principal_conversation_actor_context_id: string | null
   resolution_payload: unknown
@@ -262,16 +273,24 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   sourceRequestArgs?: Record<string, unknown>
   expiresAt?: string
   /**
-   * Set when the triggering dispatch was a remote_agent principal.
-   * Lands on interaction_runtime_authorization_requests.principal_remote_agent_id
-   * so the approval flow can build a remote_agent-scoped grant.
+   * subject-scope-refactor: principalSubjectId (NOT NULL) — the
+   * access_subjects row for the principal that triggered the dispatch.
+   * Caller resolves via upsertAccessSubject(actor/remote_agent/conversation)
+   * before invoking this function.
+   */
+  principalSubjectId: string
+  /**
+   * Optional principal scope subject id (the conversation subject when the
+   * triggering principal was an active participant); null otherwise.
+   */
+  principalScopeSubjectId?: string | null
+  /**
+   * @deprecated kept for transitional callers; not written to the DB.
+   * The approval flow now uses principalSubjectId + presetToOwnerScope.
    */
   principalRemoteAgentId?: string
   /**
-   * Set when the triggering dispatch was an actor_in_conversation
-   * principal. Lands on
-   * interaction_runtime_authorization_requests.principal_conversation_actor_context_id
-   * so the approval flow can build an actor_in_conversation-scoped grant.
+   * @deprecated kept for transitional callers; not written to the DB.
    */
   principalConversationActorContextId?: string
 }
@@ -1717,9 +1736,11 @@ async function maybeAutoRetryAfterApproval(args: {
   if (!args.sourceRetryNonce) return null
   if (!args.sourceRequestArgs) return null
   // Resolve the actor's subject id so the audit row points back to the
-  // principal who originally triggered the dispatch (NOT the approver —
-  // they're recorded separately on the grant). Drops to null if we can't
-  // resolve; the operation row still records principalKind='actor'.
+  // subject-scope-refactor: principalSubjectId is non-null at audit time
+  // (chk_device_operations_principal CHECK tightened to require it for all 4
+  // kinds; BeginOperationInput.principalSubjectId TS type is `string`). When
+  // we can't resolve the requesterActorId to an access_subjects row, we
+  // refuse to auto-retry rather than fabricate a null audit row.
   let principalSubjectId: string | null = null
   if (args.requesterActorId) {
     const { upsertAccessSubject } =
@@ -1728,6 +1749,11 @@ async function maybeAutoRetryAfterApproval(args: {
       kind: SUBJECT_KIND.ACTOR,
       actorId: args.requesterActorId,
     }).catch(() => null)
+  }
+  if (!principalSubjectId) {
+    // Skip auto-retry rather than throw — the approval itself already
+    // succeeded; auto-retry is best-effort (dev behavior preserved).
+    return null
   }
   // The visible tool name (== device-side stable_key) is what the
   // dispatcher uses as params.name when calling /mcp tools/call.
@@ -1966,13 +1992,21 @@ async function insertRuntimeAuthorizationInteractionDetails(
     availablePresets: RuntimeAuthorizationPreset[]
     dedupeKey: string
     /** When the triggering dispatch was a remote_agent principal, the
-     * remote_agent.id; otherwise null. The approval flow uses it to
-     * create a `remote_agent`-scoped grant. */
+    /** subject-scope-refactor: principal subject_id (NOT NULL on
+     * interaction_runtime_authorization_requests). Caller resolves the
+     * triggering principal (actor / remote_agent / conversation) to an
+     * access_subjects row via upsertAccessSubjectOn(client, ...) and passes
+     * the id here. */
+    principalSubjectId: string
+    /** subject-scope-refactor: optional principal scope subject_id (the
+     * conversation subject when the triggering principal was active in a
+     * conversation; null otherwise). */
+    principalScopeSubjectId?: string | null
+    /** @deprecated retained for transitional caller compatibility; not
+     * written to the DB. */
     principalRemoteAgentId?: string
-    /** When the triggering dispatch was an actor_in_conversation
-     * principal, the conversation_actor_contexts.id; otherwise null. The
-     * approval flow uses it to create an `actor_in_conversation`-scoped
-     * grant. */
+    /** @deprecated retained for transitional caller compatibility; not
+     * written to the DB. */
     principalConversationActorContextId?: string
   }
 ) {
@@ -1992,9 +2026,8 @@ async function insertRuntimeAuthorizationInteractionDetails(
       source_request_args: jsonbValue(
         params.sourceRequestArgs
       ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["source_request_args"],
-      principal_remote_agent_id: params.principalRemoteAgentId || null,
-      principal_conversation_actor_context_id:
-        params.principalConversationActorContextId || null,
+      principal_subject_id: params.principalSubjectId,
+      principal_scope_subject_id: params.principalScopeSubjectId || null,
       requested_action: jsonbValue(
         params.requestedAction
       ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["requested_action"],
@@ -2562,6 +2595,8 @@ export async function createRuntimeAuthorizationInteractionRequest(
       sourceRuntimeSessionId: params.runtimeSessionId,
       sourceRetryNonce: params.sourceRetryNonce,
       sourceRequestArgs: params.sourceRequestArgs || {},
+      principalSubjectId: params.principalSubjectId,
+      principalScopeSubjectId: params.principalScopeSubjectId,
       principalRemoteAgentId: params.principalRemoteAgentId,
       principalConversationActorContextId:
         params.principalConversationActorContextId,
@@ -3497,21 +3532,59 @@ export async function resolveInteractionRequest(
           )
         }
 
+        // subject-scope-refactor: presetToOwnerScope translates the wire
+        // preset + locked request context into the new (subject, scope?,
+        // retention) triple that createRuntimeAuthorizationGrant accepts.
+        // The principal subject is reconstructed from the locked row via
+        // loadAccessSubject; for unscoped workspace/conversation presets the
+        // subject is derived from the preset itself, not the principal.
+        const { presetToOwnerScope, UnsupportedGrantTargetError } =
+          await import("../runtime-authorizations/service.js")
+        const { loadAccessSubject } =
+          await import("../access/subject-registry.js")
+        const lockedPrincipalSubject = await loadAccessSubject(
+          db,
+          locked.principal_subject_id
+        )
+        if (!lockedPrincipalSubject) {
+          throw new Error(
+            `interaction ${locked.id}: principal subject ${locked.principal_subject_id} not found`
+          )
+        }
+        // Construct a minimal RuntimePrincipalContext sufficient for
+        // presetToOwnerScope. We populate principalSubjectId from locked,
+        // runtimeConversationId from locked.conversation_id, and the
+        // activeConversationSubjectId from locked.principal_scope_subject_id
+        // (set at request creation time when principal was an active
+        // participant).
+        const minimalCtx = {
+          principal: lockedPrincipalSubject,
+          principalSubjectId: locked.principal_subject_id,
+          runtimeSubjectIds: [locked.principal_subject_id],
+          runtimeScopeSubjectIds: locked.principal_scope_subject_id
+            ? [locked.principal_scope_subject_id]
+            : [],
+          runtimeConversationId: locked.conversation_id ?? undefined,
+          activeConversationSubjectId:
+            locked.principal_scope_subject_id ?? undefined,
+        }
+        const presetTriple = presetToOwnerScope(
+          params.preset || "once",
+          minimalCtx,
+          locked.workspace_id
+        )
         createdGrant = await createRuntimeAuthorizationGrant(
           {
             workspaceId: locked.workspace_id,
             deviceId: locked.device_id || "",
             deviceCapabilityId: locked.device_capability_id || "",
             deviceExposureId: locked.device_exposure_id || "",
-            conversationId: locked.conversation_id,
-            actorId: locked.requester_actor_id || undefined,
-            remoteAgentId: locked.principal_remote_agent_id || undefined,
-            conversationActorContextId:
-              locked.principal_conversation_actor_context_id || undefined,
+            subject: presetTriple.subject,
+            scope: presetTriple.scope,
+            retention: presetTriple.retention,
             createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
             sourceInteractionId: locked.id,
             sourceTaskId: locked.task_id || undefined,
-            preset: params.preset || "once",
             sourceRetryNonce: locked.source_retry_nonce || undefined,
             sourceRuntimeSessionId:
               locked.source_runtime_session_id || undefined,
@@ -3520,7 +3593,7 @@ export async function resolveInteractionRequest(
               typeof locked.source_request_args === "object"
                 ? (locked.source_request_args as Record<string, unknown>)
                 : {},
-            grantSpec: selectedOption.grantSpec,
+            policy: selectedOption.grantSpec,
           },
           client
         )

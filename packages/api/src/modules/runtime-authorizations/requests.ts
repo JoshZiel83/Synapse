@@ -29,24 +29,30 @@ export interface RuntimeAuthorizationRequestSource {
   conversationId: string
   sessionId: string
   /**
-   * Required for actor / actor_in_conversation principals. For
-   * remote_agent principals leave undefined and set `remoteAgentId`
-   * instead — the requester is then resolved as the bridged
-   * remote_agent participant of the conversation, not a chat actor.
+   * subject-scope-refactor: principal subject_id (NOT NULL on
+   * interaction_runtime_authorization_requests). Caller resolves the
+   * triggering principal to an access_subjects row via
+   * upsertAccessSubject(actor / remote_agent / conversation) and passes the
+   * id here. This is the new canonical principal channel; the legacy
+   * actorId / remoteAgentId / conversationActorContextId fields below are
+   * retained for transitional caller compatibility (consumed only as
+   * resolution hints, not persisted into the new column).
+   */
+  principalSubjectId: string
+  /**
+   * Optional principal scope subject id (set when the triggering principal
+   * was an active conversation participant).
+   */
+  principalScopeSubjectId?: string | null
+  /**
+   * @deprecated subject-scope-refactor: resolved into principalSubjectId
+   * upstream. Kept as a hint for inbound resolver glue (e.g. to identify
+   * the bridged remote_agent participant of the conversation).
    */
   actorId?: string
-  /**
-   * Required for remote_agent principals. Populates
-   * interaction_runtime_authorization_requests.principal_remote_agent_id
-   * so the eventual grant can be subject-scoped to the remote agent.
-   */
+  /** @deprecated see actorId */
   remoteAgentId?: string
-  /**
-   * Required for actor_in_conversation principals. Populates
-   * interaction_runtime_authorization_requests.principal_conversation_actor_context_id
-   * so the eventual grant can be subject-scoped to the per-conversation
-   * actor context.
-   */
+  /** @deprecated see actorId */
   conversationActorContextId?: string
   sourceToolName: string
   conversationKind?: "private" | "group" | "virtual"
@@ -384,6 +390,8 @@ export async function createRuntimeAuthorizationRequest(
       requestMode: params.requestMode,
       sourceRetryNonce: retryNonce,
       sourceRequestArgs: params.sourceRequestArgs,
+      principalSubjectId: params.source.principalSubjectId,
+      principalScopeSubjectId: params.source.principalScopeSubjectId,
       principalRemoteAgentId: params.source.remoteAgentId,
       principalConversationActorContextId:
         params.source.conversationActorContextId,

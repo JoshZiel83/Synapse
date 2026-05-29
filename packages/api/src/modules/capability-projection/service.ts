@@ -610,6 +610,11 @@ function unionWithDevice(
             workspaceId: projectInput.workspaceId,
             conversationId,
             sessionId: projectInput.sessionId ?? "",
+            // subject-scope-refactor: principalSubjectId is now required.
+            // device.subjects.principalSubjectId is populated by
+            // capability-projection's resolveResolvedPrincipalSubjects (see
+            // file top); device subject set is constructed in the same step.
+            principalSubjectId: device.subjects.principalSubjectId ?? "",
             actorId:
               principal.kind === "remote_agent" ? undefined : principal.actorId,
             remoteAgentId:
