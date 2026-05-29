@@ -23,16 +23,16 @@
 // sessionId; production paths today always have one.
 
 /**
- * Narrow union mirroring DevicePrincipal's relevant fields. We don't import
- * DevicePrincipal here because (a) it lives in service.ts and re-importing
- * would create a circular-feeling dependency for what is otherwise a pure
- * helper, and (b) DevicePrincipal evolves with new kinds — making this
- * helper independent forces an explicit decision when that happens (the
- * exhaustive switch below will throw on an unhandled kind).
+ * Mirrors the canonical `DevicePrincipal` (capability-projection/service.ts).
+ * Kept as a structurally-identical local type (not an import) only to avoid a
+ * circular-feeling dependency for this otherwise-pure helper — it MUST stay in
+ * lock-step with DevicePrincipal. subject-scope-refactor dropped the legacy
+ * `actor_in_conversation` discriminator, so it is intentionally absent here;
+ * the exhaustive switch below throws on any kind DevicePrincipal grows that
+ * this helper hasn't handled, forcing an explicit decision.
  */
 export type PrincipalForScope =
   | { kind: "actor"; actorId: string; conversationId?: string }
-  | { kind: "actor_in_conversation"; conversationActorContextId: string }
   | { kind: "remote_agent"; remoteAgentId: string; conversationId: string }
   | { kind: "conversation"; conversationId: string }
   | { kind: "workspace_member"; workspaceMemberId: string }
@@ -48,8 +48,6 @@ export function deriveCuaFocusScopeId(input: CuaFocusScopeInput): string {
   if (input.sessionId) return `session:${input.sessionId}`
   const p = input.principal
   switch (p.kind) {
-    case "actor_in_conversation":
-      return `aic:${p.conversationActorContextId}`
     case "remote_agent":
       return `ra:${p.conversationId}:${p.remoteAgentId}`
     case "actor":

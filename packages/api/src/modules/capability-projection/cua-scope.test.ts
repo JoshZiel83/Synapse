@@ -13,16 +13,11 @@ const ACTOR = "00000000-0000-0000-0000-000000000002"
 const CONV = "00000000-0000-0000-0000-000000000003"
 const SESSION = "00000000-0000-0000-0000-000000000004"
 const RA = "00000000-0000-0000-0000-000000000005"
-const AIC = "00000000-0000-0000-0000-000000000006"
 const WM = "00000000-0000-0000-0000-000000000007"
 
 test("sessionId always wins, regardless of principal kind", () => {
   for (const principal of [
     { kind: "actor" as const, actorId: ACTOR, conversationId: CONV },
-    {
-      kind: "actor_in_conversation" as const,
-      conversationActorContextId: AIC,
-    },
     {
       kind: "remote_agent" as const,
       remoteAgentId: RA,
@@ -38,17 +33,6 @@ test("sessionId always wins, regardless of principal kind", () => {
     })
     assert.equal(got, `session:${SESSION}`)
   }
-})
-
-test("fallback for actor_in_conversation uses conversationActorContextId", () => {
-  const got = deriveCuaFocusScopeId({
-    workspaceId: WS,
-    principal: {
-      kind: "actor_in_conversation",
-      conversationActorContextId: AIC,
-    },
-  })
-  assert.equal(got, `aic:${AIC}`)
 })
 
 test("fallback for remote_agent factors in both conversationId and remoteAgentId", () => {
