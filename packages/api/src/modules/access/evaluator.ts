@@ -29,12 +29,7 @@ type AccessResourceType =
   | "model_profile"
 
 type PermissionSubject = {
-  type:
-    | "user"
-    | "workspace_member"
-    | "actor"
-    | "workspace"
-    | "conversation_actor_context"
+  type: "user" | "workspace_member" | "actor" | "workspace" | "remote_agent"
   id: string
 }
 

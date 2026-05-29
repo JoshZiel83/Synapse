@@ -111,9 +111,31 @@ export async function isSubjectActiveConversationParticipant(
  */
 export type RuntimePrincipalContext = {
   principal: SubjectRef
+  /**
+   * subject-scope-refactor: explicit principal subject_id field. Equals
+   * `upsertAccessSubject(db, principal)` — i.e. the access_subjects row that
+   * corresponds to the SubjectRef passed in. Always set (every principal is
+   * upsertable into access_subjects). Consumers MUST read this field instead
+   * of indexing `runtimeSubjectIds[0]`, which is incidental implementation
+   * order and not a public contract.
+   */
+  principalSubjectId: string
   runtimeSubjectIds: string[]
   runtimeScopeSubjectIds: string[]
   runtimeConversationId?: string
+  /**
+   * subject-scope-refactor: set when the principal subject was positively
+   * verified as an active participant of `params.conversationId` (via
+   * `isSubjectActiveConversationParticipant`). The value is the
+   * access_subjects.id of the conversation subject row (NOT the business
+   * `conversation_id`). Used by `presetToOwnerScope` as an active-scope guard
+   * — pure functions can decide "is this dispatch in an active conversation
+   * scope?" without a DB call. NOT limited to actor/remote_agent: any
+   * workspace-bound principal that passes the active-participant gate gets
+   * this populated; `presetToOwnerScope` separately limits scope attachment
+   * to actor/remote_agent only (per wire schema whitelist).
+   */
+  activeConversationSubjectId?: string
 }
 
 /**
@@ -271,6 +293,7 @@ export async function buildRuntimePrincipalContext(
     runtimeScopeSubjectIds.push(workspaceSubjectId)
   }
 
+  let activeConversationSubjectId: string | undefined
   if (params.conversationId) {
     const isActive = await isSubjectActiveConversationParticipant(
       db,
@@ -284,6 +307,7 @@ export async function buildRuntimePrincipalContext(
       })
       runtimeSubjectIds.push(convSubjectId)
       runtimeScopeSubjectIds.push(convSubjectId)
+      activeConversationSubjectId = convSubjectId
     }
   }
 
@@ -313,9 +337,11 @@ export async function buildRuntimePrincipalContext(
 
   return {
     principal: params.principal,
+    principalSubjectId,
     runtimeSubjectIds: Array.from(new Set(runtimeSubjectIds)),
     runtimeScopeSubjectIds: Array.from(new Set(runtimeScopeSubjectIds)),
     runtimeConversationId: params.conversationId ?? undefined,
+    activeConversationSubjectId,
   }
 }
 
