@@ -2,7 +2,7 @@ module github.com/PekingSpades/Synapse/sidecars/cua
 
 go 1.24.1
 
-require github.com/PekingSpades/DeskAct v0.0.0-20260407132730-fb65faab540c
+require github.com/PekingSpades/DeskAct v0.0.0-20260526121458-e86582dfa1d1
 
 require (
 	github.com/gen2brain/shm v0.1.0 // indirect

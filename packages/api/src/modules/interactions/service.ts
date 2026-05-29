@@ -358,6 +358,14 @@ export interface FindOpenRuntimeAuthorizationInteractionParams {
   grantOptions: RuntimeAuthorizationGrantOption[]
   availablePresets: RuntimeAuthorizationPreset[]
   requestMode: RuntimeAuthorizationRequestMode
+  /**
+   * Source Agent session id (chat-runtime session.id). Must match the
+   * value the caller would write via createRuntimeAuthorizationInteractionRequest's
+   * `runtimeSessionId` field so the dedupe key matches a previously-created
+   * row. Pass the empty string when the caller has no session context (the
+   * dedupe still works within that single bucket).
+   */
+  runtimeSessionId: string
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
@@ -477,7 +485,14 @@ function jsonbValue<T>(value: T) {
   return sql<T>`${JSON.stringify(value ?? null)}::jsonb`
 }
 
-function buildRuntimeAuthorizationDedupeKey(params: {
+/**
+ * Build the dedupe key used to merge identical pending runtime-authorization
+ * requests. Exported for unit-testing the per-session isolation contract —
+ * two callers differing only in runtimeSessionId MUST produce different
+ * keys so concurrent Agent sessions never share a single pending interaction
+ * (and, post-approval, never inherit each other's source_runtime_session_id).
+ */
+export function buildRuntimeAuthorizationDedupeKey(params: {
   deviceId: string
   deviceCapabilityId: string
   deviceExposureId: string
@@ -487,6 +502,18 @@ function buildRuntimeAuthorizationDedupeKey(params: {
   requestedAction: RuntimeAuthorizationRequestedAction
   grantOptions: RuntimeAuthorizationGrantOption[]
   availablePresets: RuntimeAuthorizationPreset[]
+  /**
+   * Source Agent session id. Included in the dedupe key so two Agent
+   * sessions making the same tool call don't merge into a single pending
+   * interaction — critical for CUA where the per-session focusStore would
+   * end up keyed off whichever session wrote the row first, then the
+   * auto-retry would stamp the WRONG cua_focus_scope_id into the approved
+   * envelope. Non-cua capabilities also benefit from per-session approval
+   * isolation (different sessions = different audit-trail intent). Pass
+   * the empty string for legacy callers that don't have it; the dedupe
+   * still works within that single "no-session" bucket.
+   */
+  runtimeSessionId: string
 }) {
   return stableJsonStringify({
     deviceId: params.deviceId,
@@ -498,6 +525,7 @@ function buildRuntimeAuthorizationDedupeKey(params: {
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
     availablePresets: params.availablePresets,
+    runtimeSessionId: params.runtimeSessionId,
   })
 }
 
@@ -1816,7 +1844,13 @@ async function maybeAutoRetryAfterApproval(args: {
       conversationId: args.interaction.conversationId,
       principalKind: audit.principalKind,
       principalSubjectId: audit.principalSubjectId,
-      initiatedBySessionId: null,
+      // Thread the source Agent session id from the persisted grant
+      // (originally written via capability-projection at request creation
+      // time). auto-retry's cuaFocusScopeForAutoRetry consumes it to stamp
+      // the same cua_focus_scope_id the projection dispatch would have used.
+      // Falls back to null for non-cua tools or pre-existing grants missing
+      // the field — the helper handles undefined safely.
+      initiatedBySessionId: args.createdGrant.sourceRuntimeSessionId ?? null,
       initiatedByWorkspaceMemberId: args.resolverWorkspaceMemberId ?? null,
     },
   }).catch((err) => ({
@@ -2711,6 +2745,7 @@ export async function createRuntimeAuthorizationInteractionRequest(
       requestedAction: params.requestedAction,
       grantOptions: params.grantOptions,
       availablePresets: params.availablePresets,
+      runtimeSessionId: params.runtimeSessionId,
     })
     const requestKey = buildRuntimeAuthorizationInteractionRequestKey({
       conversationId: params.conversationId,
@@ -2860,6 +2895,7 @@ export async function findOpenRuntimeAuthorizationInteraction(
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
     availablePresets: params.availablePresets,
+    runtimeSessionId: params.runtimeSessionId,
   })
   const row = await db
     .selectFrom("interaction_requests as ir")

@@ -33,7 +33,11 @@ import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { ensureConversationActorContext } from "../session/service.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
-import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
+import {
+  canonicalizeEnvelopePayload,
+  CUA_WRITE_TOOLS,
+} from "@synapse/device-protocol"
+import type { SynapseError } from "@synapse/device-protocol"
 import { createHash } from "node:crypto"
 import {
   selectAndClaimRuntimeAuthorizationGrant,
@@ -58,6 +62,7 @@ import {
   type OperationPrincipalKind,
 } from "../devices/operations.js"
 import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
+import { deriveCuaFocusScopeId, type PrincipalForScope } from "./cua-scope.js"
 import {
   loadDeviceCapabilityToolsForSubjects,
   type DeviceCapabilityToolRow,
@@ -571,6 +576,18 @@ function unionWithDevice(
           | { ok: false; failure: PrepareFailure }
         > => {
           try {
+            // For cua builtins we sign a stable focus-scope id into the
+            // envelope so the device sidecar can key per-Agent-session focus
+            // state. Other tool kinds don't need it — leaving the field
+            // undefined keeps non-cua envelopes byte-identical to v2.
+            const cuaFocusScopeId =
+              row.builtin_kind === "cua"
+                ? deriveCuaFocusScopeId({
+                    sessionId: projectInput.sessionId,
+                    workspaceId: projectInput.workspaceId,
+                    principal: projectInput.principal as PrincipalForScope,
+                  })
+                : undefined
             const envelope = signEnvelopeForDispatch({
               operation_id: randomUUID(),
               attempt_id: randomUUID(),
@@ -587,6 +604,9 @@ function unionWithDevice(
                 grant_specs: [toRuntimeAuthorizationGrantWireSpec(grant)],
                 retry_nonce: envelopeRetryNonce,
               },
+              ...(cuaFocusScopeId
+                ? { cua_focus_scope_id: cuaFocusScopeId }
+                : {}),
               issued_at: new Date().toISOString(),
               expires_at: new Date(Date.now() + 60_000).toISOString(),
             })
@@ -768,10 +788,20 @@ function unionWithDevice(
   }
 }
 
-function mcpErrorBlock(message: string): NormalizedMcpToolResult {
+function mcpErrorBlock(
+  message: string,
+  synapseError?: SynapseError
+): NormalizedMcpToolResult {
   return {
     content: [textBlock(message) as CanonicalContentBlock],
     isError: true,
+    // Forward the full SynapseError (code / message / details / interaction_id /
+    // retry_nonce / authorization_task_id) when available so the dashboard and
+    // downstream observers see the same shape the runtime exposes via
+    // _meta.synapse_error. Keeping the bare-message overload preserves
+    // backward compatibility for all the existing call sites that don't have
+    // a structured error in hand.
+    ...(synapseError ? { metadata: { synapse_error: synapseError } } : {}),
   }
 }
 
@@ -929,7 +959,13 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       deviceExposureId: row.device_exposure_id,
       requestedToolName: toolName,
       deviceToolStableKey: row.visible_tool_name,
-      runtimeSessionId: "",
+      // Persist the source Agent session id so the post-approval auto-retry
+      // path can stamp the same cua_focus_scope_id this dispatch would have
+      // used (session:<sessionId>). Without it the device cua builtin
+      // fail-closes on the retry envelope and the user-approved tool call
+      // silently fails. Backs interaction_runtime_authorization_requests.
+      // source_runtime_session_id (TEXT) — the chat-runtime session.id.
+      runtimeSessionId: projectInput.sessionId ?? "",
       deviceDisplayName: row.device_name,
     },
     authorizationPlan: {
@@ -1378,7 +1414,11 @@ export function buildRequestedAction(args: {
     }
     case "cua":
     default: {
-      const writeTools = new Set(["cua_click", "cua_type_text"])
+      // CUA_WRITE_TOOLS is the single source of truth for which cua tool
+      // names require runtime_authorization access='write'. Imported from
+      // @synapse/device-protocol so this classifier and the device-side
+      // enforcement in device-runtime/src/builtins/cua.ts stay in lockstep.
+      const writeTools = new Set<string>(CUA_WRITE_TOOLS)
       return {
         capability: "cua",
         toolName: args.toolName,

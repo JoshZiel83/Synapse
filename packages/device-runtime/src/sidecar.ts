@@ -45,7 +45,7 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
       let frame: {
         id?: string
         result?: unknown
-        error?: { code: number; message: string }
+        error?: { code: number; message: string; data?: unknown }
       }
       try {
         frame = JSON.parse(line)
@@ -57,7 +57,18 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
       if (!p) return
       pending.delete(String(frame.id))
       if (frame.error) {
-        p.reject(new Error(`${frame.error.code}: ${frame.error.message}`))
+        // Surface the full JSON-RPC error so callers can inspect the
+        // structured `data` payload (e.g. cua sidecar's diagnostic block
+        // with backend / fallback / cua_error / synapse_code). Without
+        // this the cua builtin would only see the integer code + message
+        // string, which loses every diagnostic the device helper
+        // attaches.
+        const err = new Error(
+          `${frame.error.code}: ${frame.error.message}`
+        ) as Error & { jsonRpcCode?: number; jsonRpcData?: unknown }
+        err.jsonRpcCode = frame.error.code
+        err.jsonRpcData = frame.error.data
+        p.reject(err)
       } else {
         p.resolve(frame.result)
       }

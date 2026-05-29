@@ -7,12 +7,85 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
+import { cuaFocusScopeForAutoRetry } from "./auto-retry.js"
+
 test("auto-retry helper is exported with the contract the approval flow expects", async () => {
   const mod = await import("./auto-retry.js")
   assert.equal(
     typeof mod.autoDispatchRuntimeAuthorizationRetry,
     "function",
     "autoDispatchRuntimeAuthorizationRetry must exist so interactions/service can wire it"
+  )
+})
+
+test("cuaFocusScopeForAutoRetry returns session:<id> for cua + sessionId", () => {
+  const got = cuaFocusScopeForAutoRetry({
+    capability: "cua",
+    initiatedBySessionId: "abc-123",
+  })
+  assert.equal(got, "session:abc-123")
+})
+
+test("cuaFocusScopeForAutoRetry returns undefined for non-cua grants", () => {
+  // Non-cua envelopes must stay byte-identical to v2 — we only inject the
+  // field when the device-side fail-closed gate would otherwise fire.
+  for (const capability of ["filesystem", "browser", "commandline"]) {
+    const got = cuaFocusScopeForAutoRetry({
+      capability,
+      initiatedBySessionId: "abc-123",
+    })
+    assert.equal(
+      got,
+      undefined,
+      `capability=${capability} should yield undefined`
+    )
+  }
+})
+
+test("cuaFocusScopeForAutoRetry returns undefined when sessionId missing — fail-closed", () => {
+  // Plan decision: when sessionId is unavailable we leave the field unset
+  // rather than silently bucketing concurrent agents under a shared
+  // "default" focus key. The device cua builtin will then return
+  // invalid_request, which is the correct signal — surfacing the gap as a
+  // server-side bug rather than letting a quiet focus collision corrupt
+  // another agent's state.
+  for (const sessionId of [null, ""]) {
+    const got = cuaFocusScopeForAutoRetry({
+      capability: "cua",
+      initiatedBySessionId: sessionId,
+    })
+    assert.equal(
+      got,
+      undefined,
+      `sessionId=${JSON.stringify(sessionId)} should yield undefined`
+    )
+  }
+})
+
+test("end-to-end wiring: grant record's sourceRuntimeSessionId drives cua_focus_scope_id", () => {
+  // Production round-trip:
+  //   1. projection writes runtimeSessionId = projectInput.sessionId
+  //      → interaction_runtime_authorization_requests.source_runtime_session_id
+  //   2. approval applies it to the new grant
+  //      → runtime_authorization_grants.source_runtime_session_id
+  //   3. interactions/service.ts passes grant.sourceRuntimeSessionId as
+  //      audit.initiatedBySessionId into autoDispatchRuntimeAuthorizationRetry
+  //   4. auto-retry calls cuaFocusScopeForAutoRetry → session:<id>
+  //
+  // This test simulates step 4 with the exact shape step 3 produces so a
+  // future refactor that drops the wiring at any step trips this check.
+  const grant = {
+    sourceRuntimeSessionId: "agent-session-abc",
+    capability: "cua",
+  }
+  const got = cuaFocusScopeForAutoRetry({
+    capability: grant.capability,
+    initiatedBySessionId: grant.sourceRuntimeSessionId,
+  })
+  assert.equal(
+    got,
+    "session:agent-session-abc",
+    "auto-retry must inherit the source session id end-to-end so the cua envelope it dispatches survives the device-side fail-closed check"
   )
 })
 

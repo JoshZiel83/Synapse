@@ -1,1 +1,6 @@
-synapse-device-cua-helper
+# Anchored to this directory (the compiled binary lives at
+# sidecars/cua/synapse-device-cua-helper). Without the leading "/" this
+# pattern matches every path containing this segment, including the
+# `cmd/synapse-device-cua-helper/` source directory, which silently hides
+# new .go files added under it.
+/synapse-device-cua-helper
