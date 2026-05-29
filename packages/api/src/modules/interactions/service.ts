@@ -28,7 +28,7 @@ import type {
   PlanApprovalDecision,
   PlanChecklistStep,
   RuntimeAuthorizationGrantOption,
-  RuntimeAuthorizationGrantSpec,
+  SharedRuntimeAuthorizationGrantSpec,
   RuntimeAuthorizationInteractionSummary,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
@@ -109,6 +109,7 @@ type RawInteractionRow = {
   // continue to address familiar field names during the merge-prep window.
   principal_remote_agent_id: string | null
   principal_conversation_actor_context_id: string | null
+  principal_subject_kind: string | null
   resolution_payload: unknown
   resolved_at: string | Date | null
   expires_at: string | Date | null
@@ -1167,8 +1168,11 @@ async function getInteractionRowById(
             auth.source_request_args AS source_request_args,
             auth.source_runtime_session_id AS source_runtime_session_id,
             auth.source_retry_nonce AS source_retry_nonce,
-            auth.principal_remote_agent_id AS principal_remote_agent_id,
-            auth.principal_conversation_actor_context_id AS principal_conversation_actor_context_id,
+            auth.principal_subject_id AS principal_subject_id,
+            auth.principal_scope_subject_id AS principal_scope_subject_id,
+            principal_subj.kind AS principal_subject_kind,
+            principal_subj.remote_agent_id AS principal_remote_agent_id,
+            NULL::uuid AS principal_conversation_actor_context_id,
             COALESCE(
               user_input.resolution_payload,
               plan.resolution_payload,
@@ -1222,6 +1226,8 @@ async function getInteractionRowById(
        ON plan.interaction_id = ir.id
      LEFT JOIN interaction_runtime_authorization_requests auth
        ON auth.interaction_id = ir.id
+     LEFT JOIN access_subjects principal_subj
+       ON principal_subj.id = auth.principal_subject_id
      LEFT JOIN conversation_participants requester
        ON requester.id = ir.requester_participant_id
      LEFT JOIN access_subjects requester_subj
@@ -1339,8 +1345,11 @@ async function getInteractionRowByIdForUpdate(
             auth.source_request_args AS source_request_args,
             auth.source_runtime_session_id AS source_runtime_session_id,
             auth.source_retry_nonce AS source_retry_nonce,
-            auth.principal_remote_agent_id AS principal_remote_agent_id,
-            auth.principal_conversation_actor_context_id AS principal_conversation_actor_context_id,
+            auth.principal_subject_id AS principal_subject_id,
+            auth.principal_scope_subject_id AS principal_scope_subject_id,
+            principal_subj.kind AS principal_subject_kind,
+            principal_subj.remote_agent_id AS principal_remote_agent_id,
+            NULL::uuid AS principal_conversation_actor_context_id,
             COALESCE(
               user_input.resolution_payload,
               plan.resolution_payload,
@@ -1394,6 +1403,8 @@ async function getInteractionRowByIdForUpdate(
        ON plan.interaction_id = ir.id
      LEFT JOIN interaction_runtime_authorization_requests auth
        ON auth.interaction_id = ir.id
+     LEFT JOIN access_subjects principal_subj
+       ON principal_subj.id = auth.principal_subject_id
      LEFT JOIN conversation_participants requester
        ON requester.id = ir.requester_participant_id
      LEFT JOIN access_subjects requester_subj

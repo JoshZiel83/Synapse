@@ -29,7 +29,7 @@ import {
   consumeRuntimeAuthorizationGrant,
   type RuntimeAuthorizationGrantRecord,
 } from "./service.js"
-import type { RuntimeAuthorizationGrantSpec } from "@synapse/device-protocol"
+import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
 
 export interface AutoRetryDispatchResult {
   ok: boolean
@@ -140,7 +140,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   // GrantSpec the envelope expects. We carry exactly ONE grant_spec — the
   // grant the user just approved — so the device-side matcher has the
   // narrowest possible authorization to apply.
-  const spec: RuntimeAuthorizationGrantSpec = {
+  const spec: RuntimeAuthorizationGrantWireSpec = {
     capability: args.approvedGrant.capability,
     filesystem: args.approvedGrant.filesystem
       ? {

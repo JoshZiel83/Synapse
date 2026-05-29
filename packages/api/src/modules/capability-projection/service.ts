@@ -18,10 +18,10 @@ import type {
   CanonicalContentBlock,
 } from "@synapse/shared/types"
 import { SUBJECT_KIND, textBlock } from "@synapse/shared"
-// subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPE now sourced from
-// the runtime-authorizations service shim (deprecated; the wire-stable scope
-// labels are derived from subject/scope SubjectRef pair via subjectScopeLabel).
 import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
+// subject-scope-refactor: Renamed alias to disambiguate from the API-side
+// SharedRuntimeAuthorizationGrantSpec; envelope payloads use the snake_case
+// wire spec.
 import type { McpExecutionContext } from "../mcp-plugins/instance-manager.js"
 import {
   resolveMcpToolsForActor,
@@ -34,7 +34,6 @@ import { ensureConversationActorContext } from "../session/service.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
-import type { RuntimeAuthorizationGrantSpec } from "@synapse/device-protocol"
 import { createHash } from "node:crypto"
 import {
   listActiveRuntimeAuthorizationGrantsForExposure,
@@ -437,7 +436,7 @@ function unionWithDevice(
     // subject set. Without this filter, every actor in the workspace
     // inherits every other actor's actor/conversation grants on the same
     // capability — a critical security hole.
-    let grantSpecs: RuntimeAuthorizationGrantSpec[] = []
+    let grantSpecs: RuntimeAuthorizationGrantWireSpec[] = []
     const grantIds: string[] = []
     let onceGrantIdsForConsume: string[] = []
     // subject-scope-refactor: grant_scope envelope field is now a free-form
@@ -512,7 +511,7 @@ function unionWithDevice(
         runtimeAuthorizationGrantMatches(g, requestedActionForCheck)
       )
       for (const grant of applicable) {
-        const spec: RuntimeAuthorizationGrantSpec = {
+        const spec: RuntimeAuthorizationGrantWireSpec = {
           capability: grant.capability,
           // Translate camelCase shared GrantPolicy fields into the snake_case
           // wire shape the envelope schema requires.
