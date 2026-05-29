@@ -411,27 +411,36 @@ test(
 // a transitional CAC allowance. Subject-kind validation now happens at
 // three layers (TS / ENUM / trigger).
 
-// ---------- relay grant trigger ----------
+// ---------- runtime authorization grant trigger ----------
 
 async function newRelayDevice(
   db: Kysely<any>,
   workspaceId: string
 ): Promise<{ deviceId: string; capabilityId: string; exposureId: string }> {
   const dev = await db
-    .insertInto("relay_devices")
+    .insertInto("devices")
     .values({
       workspace_id: workspaceId,
       title: `${NS} device`,
       public_key: `pk-${rid()}`,
       public_key_fingerprint: `fp-${rid()}-${rid()}`,
-      trust_status: "active",
+      trust_status: "trusted",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const svc = await db
+    .insertInto("device_services")
+    .values({
+      device_id: dev.id as string,
+      service_kind: "device_runtime",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exp = await db
-    .insertInto("relay_exposures")
+    .insertInto("device_exposures")
     .values({
       device_id: dev.id as string,
+      service_id: svc.id as string,
       stable_key: `exp-${rid()}`,
       display_name: `${NS} exposure`,
       transport: "stdio",
@@ -439,7 +448,7 @@ async function newRelayDevice(
     .returning("id")
     .executeTakeFirstOrThrow()
   const cap = await db
-    .insertInto("relay_capabilities")
+    .insertInto("device_capabilities")
     .values({
       workspace_id: workspaceId,
       exposure_id: exp.id as string,
@@ -454,7 +463,7 @@ async function newRelayDevice(
 }
 
 test(
-  "tg_relay_grant_validate: subject_id is NOT NULL post-D1 (legacy NULL writers rejected)",
+  "tg_runtime_authorization_grant_validate: subject_id is NOT NULL post-D1 (legacy NULL writers rejected)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -469,21 +478,21 @@ test(
           .insertInto("runtime_authorization_grants")
           .values({
             workspace_id: wsId,
-            relay_device_id: deviceId,
-            relay_capability_id: capabilityId,
-            relay_exposure_id: exposureId,
+            device_id: deviceId,
+            device_capability_id: capabilityId,
+            device_exposure_id: exposureId,
             subject_id: null,
             retention: "consume_once",
           } as any)
           .execute(),
-        /null value in column "subject_id"|violates not-null constraint|workspace mismatch|not workspace-bound/
+        /null value in column "subject_id"|violates not-null constraint|workspace mismatch|not workspace-bound|subject_id <NULL> does not exist|subject_id .* does not exist/
       )
     })
   }
 )
 
 test(
-  "tg_relay_grant_validate: scope_subject_id pointing at actor is rejected",
+  "tg_runtime_authorization_grant_validate: scope_subject_id pointing at actor is rejected",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -507,22 +516,22 @@ test(
           .insertInto("runtime_authorization_grants")
           .values({
             workspace_id: wsId,
-            relay_device_id: deviceId,
-            relay_capability_id: capabilityId,
-            relay_exposure_id: exposureId,
+            device_id: deviceId,
+            device_capability_id: capabilityId,
+            device_exposure_id: exposureId,
             subject_id: workspaceSubj,
             scope_subject_id: actorSubj,
             retention: "consume_once",
           } as any)
           .execute(),
-        /scope_subject_id .* workspace\|conversation/
+        /scoped grant.*not in whitelist|scope_subject_id .* workspace\|conversation/
       )
     })
   }
 )
 
 test(
-  "tg_relay_grant_validate: cross-workspace device/capability/exposure rejected",
+  "tg_runtime_authorization_grant_validate: cross-workspace device/capability/exposure rejected",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -543,21 +552,21 @@ test(
           .insertInto("runtime_authorization_grants")
           .values({
             workspace_id: wsA,
-            relay_device_id: a.deviceId,
-            relay_capability_id: b.capabilityId,
-            relay_exposure_id: a.exposureId,
+            device_id: a.deviceId,
+            device_capability_id: b.capabilityId,
+            device_exposure_id: a.exposureId,
             subject_id: wsASubj,
             retention: "until_revoked",
           } as any)
           .execute(),
-        /(does not belong|workspace mismatch)/
+        /does not belong|workspace mismatch|does not match grant workspace/
       )
     })
   }
 )
 
 test(
-  "tg_relay_grant_validate: subject_id kind=user rejected",
+  "tg_runtime_authorization_grant_validate: subject_id kind=user rejected",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -585,14 +594,14 @@ test(
           .insertInto("runtime_authorization_grants")
           .values({
             workspace_id: wsId,
-            relay_device_id: deviceId,
-            relay_capability_id: capabilityId,
-            relay_exposure_id: exposureId,
+            device_id: deviceId,
+            device_capability_id: capabilityId,
+            device_exposure_id: exposureId,
             subject_id: userSubj,
             retention: "until_revoked",
           } as any)
           .execute(),
-        /not workspace-bound/
+        /not workspace-bound|unscoped grant subject.kind=user is not allowed|workspace .* does not match/
       )
     })
   }

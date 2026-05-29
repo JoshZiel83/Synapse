@@ -4053,9 +4053,8 @@ AS $$
 DECLARE v_workspace_id UUID;
 BEGIN
   IF p_capability_id IS NULL THEN RETURN NULL; END IF;
-  SELECT d.workspace_id INTO v_workspace_id
+  SELECT dc.workspace_id INTO v_workspace_id
     FROM device_capabilities dc
-    JOIN devices d ON d.id = dc.device_id
     WHERE dc.id = p_capability_id;
   RETURN v_workspace_id;
 END;
