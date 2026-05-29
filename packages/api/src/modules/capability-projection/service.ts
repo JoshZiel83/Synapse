@@ -298,13 +298,16 @@ async function principalSubjectIds(
     }
   }
   // Resolve which conversation to consider for the active-participant
-  // guard. For `actor` principals it's optional; for `remote_agent` /
-  // `conversation` it's mandatory by construction.
+  // guard. `actor` principals get `principal.conversationId ??
+  // input.conversationId` so callers that pass the conversation at the
+  // input level (mirroring projectLegacyTools / requestAuthorizationOrDeny)
+  // still activate the scope guard. `remote_agent` / `conversation` carry
+  // a mandatory conversationId on the principal itself.
   const conversationId =
     input.principal.kind === "conversation"
       ? input.principal.conversationId
       : input.principal.kind === "actor"
-        ? input.principal.conversationId
+        ? (input.principal.conversationId ?? input.conversationId)
         : input.principal.kind === "remote_agent"
           ? input.principal.conversationId
           : undefined
