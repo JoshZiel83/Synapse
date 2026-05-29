@@ -1426,3 +1426,60 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
   }
   return { valid, corrupt }
 }
+
+/**
+ * @deprecated Use `selectAndClaimRuntimeAuthorizationGrant` for dispatch flows.
+ * This helper is kept for compatibility with capability-projection's existing
+ * list-then-consume flow during the merge-prep stabilization phase. It returns
+ * raw RuntimeAuthorizationGrantRecord entries without claim semantics.
+ */
+export async function listActiveRuntimeAuthorizationGrantsForExposure(
+  deviceCapabilityId: string,
+  queryable?: Queryable
+): Promise<RuntimeAuthorizationGrantRecord[]> {
+  const statement = db
+    .selectFrom("runtime_authorization_grants as g")
+    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
+    .leftJoin(
+      "access_subjects as scope_subj",
+      "scope_subj.id",
+      "g.scope_subject_id"
+    )
+    .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
+    .where("g.device_capability_id", "=", deviceCapabilityId)
+    .where("g.status", "=", "active")
+    .orderBy("g.created_at", "desc")
+  const rows = isQueryExecutor(queryable)
+    ? (await executeCompiledQuery<any>(queryable, statement)).rows
+    : await statement.execute()
+  const records: RuntimeAuthorizationGrantRecord[] = []
+  for (const row of rows as any[]) {
+    let candidate: RuntimeAuthorizationGrantCandidate
+    try {
+      candidate = rowToCandidate(row)
+    } catch {
+      continue
+    }
+    if (!candidate.policyValidationResult.ok) continue
+    records.push(
+      mapRuntimeAuthorizationGrantCandidate(
+        candidate,
+        candidate.policyValidationResult.parsed
+      )
+    )
+  }
+  return records
+}
+
+/**
+ * @deprecated The full SubjectRef discriminator API is preferred. Kept as a
+ * shim so capability-projection's existing call-sites (preset-style filtering)
+ * continue to type-check during the merge-prep stabilization phase.
+ */
+export const RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
+  ONCE: "once",
+  ACTOR: "actor",
+  CONVERSATION: "conversation",
+  REMOTE_AGENT: "remote_agent",
+  WORKSPACE: "workspace",
+} as const

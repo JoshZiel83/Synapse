@@ -139,17 +139,20 @@ export async function resolveAccessTargetSubjectId(
       })
     }
     case "actor_in_conversation": {
+      // subject-scope-refactor: D2 dropped the CONVERSATION_ACTOR_CONTEXT
+      // subject kind. The "actor X in conversation Y" semantics is now
+      // expressed as actor subject + conversation scope at the binding /
+      // grant layer. For target-resolution purposes (where this helper feeds
+      // into capability-projection's principal subject set), we still
+      // construct the actor subject row — the conversation scope is held
+      // separately on the binding/grant row, not as a sub-kind here.
       if (!input.actorId || !input.conversationId)
         throw new Error(
           "actorId and conversationId required for actor_in_conversation target"
         )
-      const context = await ensureConversationActorContext({
-        actorId: input.actorId,
-        conversationId: input.conversationId,
-      })
       return upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: context.conversationActorContextId,
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: input.actorId,
       })
     }
     case "remote_agent": {

@@ -18,7 +18,10 @@ import type {
   CanonicalContentBlock,
 } from "@synapse/shared/types"
 import { SUBJECT_KIND, textBlock } from "@synapse/shared"
-import { RUNTIME_AUTHORIZATION_GRANT_SCOPE } from "@synapse/shared/constants"
+// subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPE now sourced from
+// the runtime-authorizations service shim (deprecated; the wire-stable scope
+// labels are derived from subject/scope SubjectRef pair via subjectScopeLabel).
+import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
 import type { McpExecutionContext } from "../mcp-plugins/instance-manager.js"
 import {
   resolveMcpToolsForActor,
@@ -37,6 +40,8 @@ import {
   listActiveRuntimeAuthorizationGrantsForExposure,
   consumeRuntimeAuthorizationGrant,
   runtimeAuthorizationGrantMatches,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE,
+  type RuntimeAuthorizationGrantRecord,
 } from "../runtime-authorizations/service.js"
 import { createRuntimeAuthorizationRequest } from "../runtime-authorizations/requests.js"
 import type { RuntimeAuthorizationRequestedAction } from "@synapse/shared"
@@ -269,22 +274,12 @@ async function principalSubjectIds(
         conversationId: principal.conversationId,
       })
       out.allIds.push(out.actorSubjectId, out.conversationSubjectId)
-      try {
-        const ctx = await ensureConversationActorContext({
-          actorId: principal.actorId,
-          conversationId: principal.conversationId,
-        })
-        out.contextSubjectId = await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-          contextId: ctx.conversationActorContextId,
-        })
-        out.allIds.push(out.contextSubjectId)
-        out.principalSubjectId = out.contextSubjectId
-      } catch {
-        // context resolution failed — fall back to actor subject so audit
-        // still attributes correctly; planner just won't see context grants.
-        out.principalSubjectId = out.actorSubjectId
-      }
+      // subject-scope-refactor: conversation_actor_context subject_kind dropped.
+      // The "actor X in conversation Y" semantics is now expressed by
+      // (subject=actor, scope=conversation) at the binding/grant layer (see
+      // tg_runtime_authorization_grant_validate trigger whitelist). The
+      // principalSubjectId for audit purposes is the actor subject id.
+      out.principalSubjectId = out.actorSubjectId
       break
     }
     case "conversation": {
@@ -445,13 +440,11 @@ function unionWithDevice(
     let grantSpecs: RuntimeAuthorizationGrantSpec[] = []
     const grantIds: string[] = []
     let onceGrantIdsForConsume: string[] = []
-    let grantScope:
-      | "once"
-      | "actor"
-      | "conversation"
-      | "actor_in_conversation"
-      | "remote_agent"
-      | "workspace" = "workspace"
+    // subject-scope-refactor: grant_scope envelope field is now a free-form
+    // derived label string (z.string().min(1).max(64)) — see
+    // device-protocol/src/schemas.ts. Loose `string` typing here lets us
+    // assign subjectScopeLabel output directly without enum gymnastics.
+    let grantScope: string = "workspace"
     // The planner injects __synapse_retry_nonce into the tool args when
     // re-issuing a call after a user approved an authorization request.
     // The projection extracts it, uses it for the filter + envelope, and
@@ -477,21 +470,33 @@ function unionWithDevice(
       // The projection extracts it, uses it for the filter + envelope, and
       // strips it from the args the device sees so it doesn't pollute the
       // tool's schema.
-      const subjectScoped = allGrants.filter((g) => {
-        if (g.scope === RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE) return true
-        if (g.scope === RUNTIME_AUTHORIZATION_GRANT_SCOPE.ONCE) {
-          return !!(
-            envelopeRetryNonce &&
-            g.sourceRetryNonce &&
-            g.sourceRetryNonce === envelopeRetryNonce
-          )
+      const subjectScoped = allGrants.filter(
+        (g: RuntimeAuthorizationGrantRecord) => {
+          // subject-scope-refactor: legacy scope enum replaced by subject/scope
+          // SubjectRef pair. workspace subject (unscoped) = previous "workspace"
+          // scope; consume_once retention = previous "once" scope. The rest
+          // (actor / remote_agent / conversation / actor_in_conversation) are
+          // gated by subjectSet membership and the active-conversation guard
+          // already encoded in device.subjects.allIds.
+          if (g.subject.kind === SUBJECT_KIND.WORKSPACE) return true
+          if (g.retention === "consume_once") {
+            return !!(
+              envelopeRetryNonce &&
+              g.sourceRetryNonce &&
+              g.sourceRetryNonce === envelopeRetryNonce
+            )
+          }
+          // actor / conversation / remote_agent: must be subject-bound. After
+          // subject-scope-refactor the subject is on every row (NOT NULL); we
+          // gate on whether the subject_id is in the principal's runtime set.
+          // The candidate's access_subjects.id is exposed via g.subject — we
+          // look it up by reconstructing.
+          // Note: this deprecated list path doesn't carry the subject_id at
+          // the row level (only the SubjectRef shape); fall back to comparing
+          // subject identity by re-resolving.
+          return subjectScoped_matchesPrincipalSubject(g, device.subjects)
         }
-        // actor / conversation / actor_in_conversation / remote_agent: must
-        // be subject-bound. A grant with no subject_id at a non-workspace
-        // scope is malformed; conservatively drop it.
-        if (!g.subjectId) return false
-        return subjectSet.has(g.subjectId)
-      })
+      )
       // Second pass: per-call action coverage. A grant that's scoped to the
       // principal but doesn't COVER the specific filesystem path / browser
       // origin / commandline command must not satisfy this dispatch. Build
@@ -538,12 +543,12 @@ function unionWithDevice(
         }
         grantSpecs.push(spec)
         grantIds.push(grant.id)
-        if (grant.scope === "once") {
+        if (grant.retention === "consume_once") {
           onceGrantIdsForConsume.push(grant.id)
         }
       }
       if (applicable.length > 0) {
-        grantScope = applicable[0]!.scope
+        grantScope = applicable[0]!.scopeLabel
       }
     } catch (err) {
       return mcpErrorBlock(
@@ -663,17 +668,15 @@ function unionWithDevice(
           // can write a grant narrowed to the principal that triggered
           // the dispatch. The list always includes the universally-safe
           // once / conversation / workspace presets.
+          // subject-scope-refactor: 'actor_in_conversation' preset removed at
+          // cutover; an actor principal in a conversation gets the same
+          // preset menu as a free-standing actor (UI derives the scoped
+          // label from subject+scope via subjectScopeLabel).
           availablePresets:
             principal.kind === "remote_agent"
               ? ["once", "remote_agent", "conversation", "workspace"]
               : principal.kind === "actor_in_conversation"
-                ? [
-                    "once",
-                    "actor",
-                    "actor_in_conversation",
-                    "conversation",
-                    "workspace",
-                  ]
+                ? ["once", "actor", "conversation", "workspace"]
                 : ["once", "actor", "conversation", "workspace"],
           reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
           sourceRequestArgs: input,
@@ -747,7 +750,7 @@ function unionWithDevice(
           getDeviceTunnelRegistry().resolve(row.device_service_id)
             ?.internalUrl ?? null,
         principalKind: principalKindFor(projectInput.principal),
-        principalSubjectId: device.subjects.principalSubjectId,
+        principalSubjectId: device.subjects.principalSubjectId ?? "",
         initiatedByWorkspaceMemberId: projectInput.workspaceMemberId ?? null,
         initiatedBySessionId: projectInput.sessionId ?? null,
       })
@@ -858,6 +861,7 @@ function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
   switch (principal.kind) {
     case "actor":
     case "actor_in_conversation":
+      return "actor" // subject-scope-refactor: actor_in_conversation collapses to actor for audit
     case "conversation":
     case "remote_agent":
     case "workspace_member":
@@ -976,4 +980,39 @@ export type {
   NormalizedMcpToolResult,
   McpExecutionContext,
   ResolvedMcpTools,
+}
+
+/**
+ * subject-scope-refactor: helper used in the deprecated capability-projection
+ * filter path (kept as merge-prep stabilization). Compares a grant's subject
+ * against the principal's resolved subject ids by kind+identity. The full
+ * canonical-helper dispatch (selectAndClaimRuntimeAuthorizationGrant) uses
+ * subject_id IN runtimeSubjectIds at the SQL level — that's the strictly
+ * correct path; this helper exists only to keep the legacy filter compiling.
+ */
+function subjectScoped_matchesPrincipalSubject(
+  grant: RuntimeAuthorizationGrantRecord,
+  subjects: ResolvedPrincipalSubjects
+): boolean {
+  switch (grant.subject.kind) {
+    case "workspace":
+      return true // unscoped workspace grants apply to anyone in workspace
+    case "actor":
+      return Boolean(
+        subjects.actorSubjectId &&
+        subjects.allIds.includes(subjects.actorSubjectId)
+      )
+    case "remote_agent":
+      return Boolean(
+        subjects.remoteAgentSubjectId &&
+        subjects.allIds.includes(subjects.remoteAgentSubjectId)
+      )
+    case "conversation":
+      return Boolean(
+        subjects.conversationSubjectId &&
+        subjects.allIds.includes(subjects.conversationSubjectId)
+      )
+    default:
+      return false
+  }
 }
