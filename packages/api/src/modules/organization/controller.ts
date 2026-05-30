@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { z } from "zod"
+import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import {
   ACTOR_DOC_TEMPLATES,
   ACTOR_DOC_VISIBILITIES,
@@ -21,14 +22,14 @@ const actorDocKeys = new Set(
 
 const contentBlockSchema = z.discriminatedUnion("type", [
   z.object({
-    id: z.string().uuid().optional(),
+    id: z.uuid().optional(),
     type: z.literal("text"),
     text: z.string(),
   }),
   z.object({
-    id: z.string().uuid().optional(),
+    id: z.uuid().optional(),
     type: z.literal("file_ref"),
-    fileId: z.string().uuid(),
+    fileId: z.uuid(),
     url: z.string(),
     mimeType: z.string(),
     originalName: z.string(),
@@ -38,7 +39,7 @@ const contentBlockSchema = z.discriminatedUnion("type", [
 ])
 
 const actorDocSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: z.uuid().optional(),
   key: z.custom<ActorDoc["key"]>(
     (value) =>
       typeof value === "string" &&
@@ -56,13 +57,13 @@ const createActorSchema = z
     name: z.string().min(1).max(255),
     role: z.enum(ACTOR_ROLES),
     title: z.string().max(255).default(""),
-    avatarFileId: z.string().uuid().optional(),
+    avatarFileId: z.uuid().optional(),
     avatarEmoji: z.string().min(1).max(32).optional(),
     canRepresentUser: z.boolean().default(false),
     docs: z.array(actorDocSchema).optional(),
-    parentId: z.string().uuid().optional(),
+    parentId: z.uuid().optional(),
     specialties: z.array(z.string()).optional(),
-    config: z.record(z.unknown()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
   })
   .refine((body) => !(body.avatarFileId && body.avatarEmoji), {
     message: "avatarFileId and avatarEmoji are mutually exclusive",
@@ -74,13 +75,13 @@ const updateActorSchema = z
     name: z.string().min(1).max(255).optional(),
     role: z.enum(ACTOR_ROLES).optional(),
     title: z.string().max(255).optional(),
-    avatarFileId: z.string().uuid().nullable().optional(),
+    avatarFileId: z.uuid().nullable().optional(),
     avatarEmoji: z.string().min(1).max(32).nullable().optional(),
     canRepresentUser: z.boolean().optional(),
     docs: z.array(actorDocSchema).optional(),
-    parentId: z.string().uuid().nullable().optional(),
+    parentId: z.uuid().nullable().optional(),
     specialties: z.array(z.string()).optional(),
-    config: z.record(z.unknown()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
   })
   .refine((body) => !(body.avatarFileId && body.avatarEmoji), {
     message: "avatarFileId and avatarEmoji are mutually exclusive",
@@ -90,7 +91,7 @@ const updateActorSchema = z
 const installActorPackageSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   title: z.string().max(255).optional(),
-  parentId: z.string().uuid().nullable().optional(),
+  parentId: z.uuid().nullable().optional(),
   syncMode: z.enum(ACTOR_PACKAGE_SYNC_MODES).default("notify"),
 })
 
@@ -136,9 +137,10 @@ export async function organizationController(app: FastifyInstance) {
 
     const parsed = createActorSchema.safeParse(request.body)
     if (!parsed.success) {
-      return reply
-        .status(400)
-        .send({ error: "Validation failed", details: parsed.error.flatten() })
+      return reply.status(400).send({
+        error: "Validation failed",
+        details: formatValidationDetails(parsed.error),
+      })
     }
 
     try {
@@ -206,9 +208,10 @@ export async function organizationController(app: FastifyInstance) {
 
     const parsed = installActorPackageSchema.safeParse(request.body)
     if (!parsed.success) {
-      return reply
-        .status(400)
-        .send({ error: "Validation failed", details: parsed.error.flatten() })
+      return reply.status(400).send({
+        error: "Validation failed",
+        details: formatValidationDetails(parsed.error),
+      })
     }
 
     try {
@@ -288,9 +291,10 @@ export async function organizationController(app: FastifyInstance) {
 
     const parsed = updateActorSchema.safeParse(request.body)
     if (!parsed.success) {
-      return reply
-        .status(400)
-        .send({ error: "Validation failed", details: parsed.error.flatten() })
+      return reply.status(400).send({
+        error: "Validation failed",
+        details: formatValidationDetails(parsed.error),
+      })
     }
 
     try {

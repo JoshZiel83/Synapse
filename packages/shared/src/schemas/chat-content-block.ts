@@ -18,7 +18,7 @@ import { CANONICAL_FILE_CATEGORIES } from "../constants/enums.js"
  *   the server resolves later — tightening it would force callers to
  *   ship internal IDs they shouldn't have to.
  */
-const blockIdSchema = z.string().uuid().optional()
+const blockIdSchema = z.uuid().optional()
 
 export const canonicalTextBlockSchema = z.object({
   id: blockIdSchema,
@@ -29,7 +29,7 @@ export const canonicalTextBlockSchema = z.object({
 export const canonicalFileRefBlockSchema = z.object({
   id: blockIdSchema,
   type: z.literal("file_ref"),
-  fileId: z.string().uuid(),
+  fileId: z.uuid(),
   url: z.string().min(1),
   mimeType: z.string().min(1),
   originalName: z.string().min(1),
@@ -40,7 +40,7 @@ export const canonicalFileRefBlockSchema = z.object({
 export const canonicalMentionBlockSchema = z.object({
   id: blockIdSchema,
   type: z.literal("mention"),
-  mention: z.record(z.any()),
+  mention: z.record(z.string(), z.any()),
 })
 
 export const CanonicalContentBlockSchema = z.discriminatedUnion("type", [

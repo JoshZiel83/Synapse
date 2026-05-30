@@ -30,11 +30,11 @@ import {
 import { resolveScopedSubjectTarget } from "../capability-projection/device-capabilities.js"
 import { withTestDb } from "../../test/helpers/db.js"
 
-const wsId = "00000000-0000-0000-0000-000000000001"
-const actorId = "00000000-0000-0000-0000-000000000002"
-const convId = "00000000-0000-0000-0000-000000000003"
-const remoteAgentId = "00000000-0000-0000-0000-000000000004"
-const capId = "00000000-0000-0000-0000-000000000005"
+const wsId = "00000000-0000-4000-8000-000000000001"
+const actorId = "00000000-0000-4000-8000-000000000002"
+const convId = "00000000-0000-4000-8000-000000000003"
+const remoteAgentId = "00000000-0000-4000-8000-000000000004"
+const capId = "00000000-0000-4000-8000-000000000005"
 
 // (a) — wire shape SDK sends must parse server-side.
 test("Batch 18: POST body accepts SDK wire shape — unscoped workspace target", () => {

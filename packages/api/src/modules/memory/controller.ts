@@ -79,14 +79,14 @@ function accessSubjectToSubjectRef(subject: AccessSubject): SubjectRef | null {
 
 const contentBlockSchema = z.discriminatedUnion("type", [
   z.object({
-    id: z.string().uuid().optional(),
+    id: z.uuid().optional(),
     type: z.literal("text"),
     text: z.string(),
   }),
   z.object({
-    id: z.string().uuid().optional(),
+    id: z.uuid().optional(),
     type: z.literal("file_ref"),
-    fileId: z.string().uuid(),
+    fileId: z.uuid(),
     url: z.string(),
     mimeType: z.string(),
     originalName: z.string(),
@@ -103,40 +103,40 @@ const contentBlockSchema = z.discriminatedUnion("type", [
 const ownerSubjectRefSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE),
-    workspaceId: z.string().uuid(),
+    workspaceId: z.uuid(),
   }),
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.string().uuid(),
+    memberId: z.uuid(),
   }),
-  z.object({ kind: z.literal(SUBJECT_KIND.ACTOR), actorId: z.string().uuid() }),
+  z.object({ kind: z.literal(SUBJECT_KIND.ACTOR), actorId: z.uuid() }),
   z.object({
     kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
-    remoteAgentId: z.string().uuid(),
+    remoteAgentId: z.uuid(),
   }),
   z.object({
     kind: z.literal(SUBJECT_KIND.CONVERSATION),
-    conversationId: z.string().uuid(),
+    conversationId: z.uuid(),
   }),
 ])
 
 const scopeSubjectRefSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE),
-    workspaceId: z.string().uuid(),
+    workspaceId: z.uuid(),
   }),
   z.object({
     kind: z.literal(SUBJECT_KIND.CONVERSATION),
-    conversationId: z.string().uuid(),
+    conversationId: z.uuid(),
   }),
 ])
 
 const memoryPayloadBase = z.object({
   // Preset shim
   preset: memoryPresetEnum.optional(),
-  presetActorId: z.string().uuid().optional(),
-  presetConversationId: z.string().uuid().optional(),
-  presetWorkspaceMemberId: z.string().uuid().optional(),
+  presetActorId: z.uuid().optional(),
+  presetConversationId: z.uuid().optional(),
+  presetWorkspaceMemberId: z.uuid().optional(),
   // Canonical
   owner: ownerSubjectRefSchema.optional(),
   scope: scopeSubjectRefSchema.optional(),
@@ -152,11 +152,11 @@ const memoryPayloadBase = z.object({
   contentBlocks: z.array(contentBlockSchema).optional(),
   textDigest: z.string().optional(),
   searchText: z.string().optional(),
-  sourceItemId: z.string().uuid().optional(),
-  sourceToolCallId: z.string().uuid().optional(),
-  sourceTurnId: z.string().uuid().optional(),
-  supersedesMemoryId: z.string().uuid().optional(),
-  metadata: z.record(z.any()).optional(),
+  sourceItemId: z.uuid().optional(),
+  sourceToolCallId: z.uuid().optional(),
+  sourceTurnId: z.uuid().optional(),
+  supersedesMemoryId: z.uuid().optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 })
 
 const createMemorySchema = memoryPayloadBase
@@ -173,9 +173,9 @@ const createMemorySchema = memoryPayloadBase
 const updateMemorySchema = memoryPayloadBase.partial()
 
 const listMemoriesSchema = z.object({
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
+  actorId: z.uuid().optional(),
+  conversationId: z.uuid().optional(),
+  workspaceMemberId: z.uuid().optional(),
   owner: ownerSubjectRefSchema.optional(),
   scope: scopeSubjectRefSchema.optional(),
   namespaceKey: z.string().max(255).optional(),
@@ -198,9 +198,9 @@ const listMemoriesSchema = z.object({
 
 const searchMemoriesSchema = z.object({
   queryText: z.string().min(1),
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
+  actorId: z.uuid().optional(),
+  conversationId: z.uuid().optional(),
+  workspaceMemberId: z.uuid().optional(),
   owners: z.array(ownerSubjectRefSchema).optional(),
   scopes: z.array(scopeSubjectRefSchema).optional(),
   namespaceKeys: z.array(z.string().max(255)).optional(),
@@ -208,7 +208,7 @@ const searchMemoriesSchema = z.object({
   states: z.array(memoryStateEnum).optional(),
   statuses: z.array(memoryStateEnum).optional(),
   limit: z.number().int().min(1).max(50).optional(),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 })
 
 const recallMemoriesSchema = searchMemoriesSchema.extend({
@@ -224,25 +224,25 @@ const recallMemoriesSchema = searchMemoriesSchema.extend({
 const grantSubjectRefSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE),
-    workspaceId: z.string().uuid(),
+    workspaceId: z.uuid(),
   }),
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.string().uuid(),
+    memberId: z.uuid(),
   }),
-  z.object({ kind: z.literal(SUBJECT_KIND.ACTOR), actorId: z.string().uuid() }),
+  z.object({ kind: z.literal(SUBJECT_KIND.ACTOR), actorId: z.uuid() }),
   z.object({
     kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
-    remoteAgentId: z.string().uuid(),
+    remoteAgentId: z.uuid(),
   }),
   z.object({
     kind: z.literal(SUBJECT_KIND.CONVERSATION),
-    conversationId: z.string().uuid(),
+    conversationId: z.uuid(),
   }),
 ])
 
 const createMemoryGrantSchema = z.object({
-  memoryItemId: z.string().uuid().nullish(),
+  memoryItemId: z.uuid().nullish(),
   subject: grantSubjectRefSchema,
   scope: scopeSubjectRefSchema.optional(),
   permissions: z.array(z.enum(MEMORY_PERMISSIONS)).min(1),
@@ -308,7 +308,7 @@ function handleError(error: unknown, reply: FastifyReply) {
   if (error instanceof z.ZodError) {
     return reply.status(400).send({
       error: "Validation failed",
-      details: error.errors.map((item) => ({
+      details: error.issues.map((item) => ({
         field: item.path.join("."),
         message: item.message,
       })),

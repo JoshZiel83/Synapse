@@ -56,7 +56,7 @@ import { isPlatformSuperAdmin } from "../platform/admin-service.js"
 
 const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 
-const jsonRecordSchema = z.record(z.any()).optional()
+const jsonRecordSchema = z.record(z.string(), z.any()).optional()
 
 // CanonicalContentBlock zod is owned by @synapse/shared so any future
 // consumer (ingest CLI, device-runtime, etc.) validates against the same

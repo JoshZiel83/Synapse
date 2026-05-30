@@ -43,7 +43,7 @@
   "dependencies": {
     "@synapse/device-protocol": "*",
     "tldts": "^6.1.86",
-    "zod": "^3.23.0"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",

@@ -1,6 +1,7 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { z } from "zod"
+import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import { PLATFORM_ACCESS_KEYS } from "@synapse/shared/constants"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
@@ -14,7 +15,7 @@ import { requireRequestAction } from "../access/guards.js"
 import { authorizeAction, userSubject } from "../access/service.js"
 
 const platformAccessSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   accessKey: z.enum(PLATFORM_ACCESS_KEYS),
 })
 
@@ -78,9 +79,10 @@ export function registerPlatformRoutes(app: FastifyInstance) {
 
     const parsed = platformAccessSchema.safeParse(request.body)
     if (!parsed.success) {
-      return reply
-        .status(400)
-        .send({ error: "Validation failed", details: parsed.error.flatten() })
+      return reply.status(400).send({
+        error: "Validation failed",
+        details: formatValidationDetails(parsed.error),
+      })
     }
 
     try {

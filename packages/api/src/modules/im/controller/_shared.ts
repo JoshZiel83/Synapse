@@ -21,12 +21,12 @@ import { refreshTransportRuntimeManager } from "../runtime.js"
 
 export const transportAccountOwnerCreateShape = {
   ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).default("workspace"),
-  ownerWorkspaceMemberId: z.string().uuid().nullable().optional(),
+  ownerWorkspaceMemberId: z.uuid().nullable().optional(),
 }
 
 export const transportAccountOwnerUpdateShape = {
   ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).optional(),
-  ownerWorkspaceMemberId: z.string().uuid().nullable().optional(),
+  ownerWorkspaceMemberId: z.uuid().nullable().optional(),
 }
 
 const transportAccountInboundActorModeSchema = z.enum(
@@ -39,17 +39,17 @@ const transportConversationInboundActorModeSchema = z.enum(
 
 export const transportAccountInboundActorCreateShape = {
   inboundActorMode: transportAccountInboundActorModeSchema.optional(),
-  inboundActorId: z.string().uuid().nullable().optional(),
+  inboundActorId: z.uuid().nullable().optional(),
 }
 
 export const transportAccountInboundActorUpdateShape = {
   inboundActorMode: transportAccountInboundActorModeSchema.optional(),
-  inboundActorId: z.string().uuid().nullable().optional(),
+  inboundActorId: z.uuid().nullable().optional(),
 }
 
 export const transportConversationInboundActorUpdateShape = {
   inboundActorMode: transportConversationInboundActorModeSchema.optional(),
-  inboundActorId: z.string().uuid().nullable().optional(),
+  inboundActorId: z.uuid().nullable().optional(),
 }
 
 export function validateTransportAccountOwnerCreate(
@@ -61,7 +61,7 @@ export function validateTransportAccountOwnerCreate(
 ) {
   if (value.ownerScope === "workspace" && value.ownerWorkspaceMemberId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message:
         "Workspace-owned transport accounts cannot include ownerWorkspaceMemberId",
       path: ["ownerWorkspaceMemberId"],
@@ -72,7 +72,7 @@ export function validateTransportAccountOwnerCreate(
     !value.ownerWorkspaceMemberId
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message:
         "Workspace-member transport accounts require ownerWorkspaceMemberId",
       path: ["ownerWorkspaceMemberId"],
@@ -89,7 +89,7 @@ export function validateTransportAccountOwnerUpdate(
 ) {
   if (value.ownerScope === "workspace" && value.ownerWorkspaceMemberId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message:
         "Workspace-owned transport accounts cannot include ownerWorkspaceMemberId",
       path: ["ownerWorkspaceMemberId"],
@@ -107,14 +107,14 @@ export function validateTransportAccountInboundActorCreate(
 ) {
   if (!value.inboundActorMode && value.inboundActorId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "inboundActorId requires inboundActorMode=specified_actor",
       path: ["inboundActorId"],
     })
   }
   if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "specified_actor requires inboundActorId",
       path: ["inboundActorId"],
     })
@@ -125,7 +125,7 @@ export function validateTransportAccountInboundActorCreate(
     value.inboundActorId
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "Only specified_actor can include inboundActorId",
       path: ["inboundActorId"],
     })
@@ -135,7 +135,7 @@ export function validateTransportAccountInboundActorCreate(
     value.ownerScope !== "workspace_member"
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message:
         "follow_owner_chief_actor requires a workspace_member-owned account",
       path: ["inboundActorMode"],
@@ -153,7 +153,7 @@ export function validateTransportAccountInboundActorUpdate(
 ) {
   if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "specified_actor requires inboundActorId",
       path: ["inboundActorId"],
     })
@@ -164,7 +164,7 @@ export function validateTransportAccountInboundActorUpdate(
     value.inboundActorId
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "Only specified_actor can include inboundActorId",
       path: ["inboundActorId"],
     })
@@ -174,7 +174,7 @@ export function validateTransportAccountInboundActorUpdate(
     value.ownerScope === "workspace"
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message:
         "follow_owner_chief_actor requires a workspace_member-owned account",
       path: ["inboundActorMode"],
@@ -191,7 +191,7 @@ export function validateTransportConversationInboundActorUpdate(
 ) {
   if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "specified_actor requires inboundActorId",
       path: ["inboundActorId"],
     })
@@ -202,7 +202,7 @@ export function validateTransportConversationInboundActorUpdate(
     value.inboundActorId
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "Only specified_actor can include inboundActorId",
       path: ["inboundActorId"],
     })
@@ -216,9 +216,9 @@ export const accountSchema = z
     displayName: z.string().trim().min(1).max(255),
     connectionMode: z.enum(TRANSPORT_CONNECTION_MODES),
     status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
-    credentials: z.record(z.unknown()).optional(),
-    config: z.record(z.unknown()).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    credentials: z.record(z.string(), z.unknown()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
     ...transportAccountOwnerCreateShape,
     ...transportAccountInboundActorCreateShape,
   })
@@ -230,9 +230,9 @@ export const updateAccountSchema = z
     displayName: z.string().trim().min(1).max(255).optional(),
     connectionMode: z.enum(TRANSPORT_CONNECTION_MODES).optional(),
     status: z.enum(TRANSPORT_ACCOUNT_STATUSES).optional(),
-    credentials: z.record(z.unknown()).optional(),
-    config: z.record(z.unknown()).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    credentials: z.record(z.string(), z.unknown()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
     ...transportAccountOwnerUpdateShape,
     ...transportAccountInboundActorUpdateShape,
   })
@@ -306,7 +306,7 @@ const wecomBaseWsUrlSchema = z
   })
 
 export const wecomAccountSchema = z
-  .object({
+  .strictObject({
     displayName: z.string().trim().min(1).max(255),
     accountKey: z.string().trim().min(1).max(120).optional(),
     connectionMode: z.literal("long_connection").default("long_connection"),
@@ -317,18 +317,17 @@ export const wecomAccountSchema = z
     ...transportAccountOwnerCreateShape,
     ...transportAccountInboundActorCreateShape,
   })
-  .strict()
   .superRefine(validateTransportAccountOwnerCreate)
   .superRefine(validateTransportAccountInboundActorCreate)
 
 export const updateWecomAccountSchema = z
-  .object({
+  .strictObject({
     displayName: z.string().trim().min(1).max(255).optional(),
     // `accountKey` intentionally omitted from the update shape: the
     // shared `updateTransportAccount` service does not currently update
     // `account_key`, so accepting it here would silently no-op. With
-    // `.strict()` below, sending `accountKey` now returns a 400 instead
-    // of a misleading 200.
+    // `z.strictObject` (below), sending `accountKey` now returns a 400
+    // instead of a misleading 200.
     connectionMode: z.literal("long_connection").optional(),
     botId: z.string().trim().min(1).max(255).optional(),
     secret: z.string().trim().min(1).max(255).optional(),
@@ -342,7 +341,6 @@ export const updateWecomAccountSchema = z
     ...transportAccountOwnerUpdateShape,
     ...transportAccountInboundActorUpdateShape,
   })
-  .strict()
   .superRefine(validateTransportAccountOwnerUpdate)
   .superRefine(validateTransportAccountInboundActorUpdate)
 
@@ -396,7 +394,7 @@ export const updateQqAccountSchema = z
 export const transportSessionSettingsSchema = z
   .object({
     outboundEnabled: z.boolean().optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
     ...transportConversationInboundActorUpdateShape,
   })
   .superRefine(validateTransportConversationInboundActorUpdate)
@@ -413,11 +411,11 @@ export const weixinQrSessionSchema = z
   .superRefine(validateTransportAccountInboundActorCreate)
 
 export const linkedUserSchema = z.object({
-  workspaceMemberId: z.string().uuid().nullable(),
+  workspaceMemberId: z.uuid().nullable(),
 })
 
 export const bindingAutoLinkSchema = z.object({
-  workspaceMemberId: z.string().uuid().nullable(),
+  workspaceMemberId: z.uuid().nullable(),
 })
 
 export async function requireWorkspaceAction(

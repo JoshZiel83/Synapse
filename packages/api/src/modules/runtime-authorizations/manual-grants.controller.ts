@@ -14,6 +14,7 @@
 
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
+import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -30,7 +31,7 @@ import {
 import { createRuntimeAuthorizationGrant } from "./service.js"
 
 const manualGrantBodySchema = z.object({
-  device_capability_id: z.string().uuid(),
+  device_capability_id: z.uuid(),
   policy: z.unknown(), // validated below via GrantPolicySchema
 })
 
@@ -77,9 +78,10 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       }
       const parsed = manualGrantBodySchema.safeParse(request.body)
       if (!parsed.success) {
-        reply
-          .status(400)
-          .send({ code: "invalid_request", details: parsed.error.flatten() })
+        reply.status(400).send({
+          code: "invalid_request",
+          details: formatValidationDetails(parsed.error),
+        })
         return
       }
 
@@ -90,7 +92,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         reply.status(400).send({
           code: "invalid_request",
           message: "policy did not match GrantPolicySchema",
-          details: policyParse.error.flatten(),
+          details: formatValidationDetails(policyParse.error),
         })
         return
       }

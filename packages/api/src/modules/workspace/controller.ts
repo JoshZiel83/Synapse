@@ -1,6 +1,7 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify"
 import { z } from "zod"
+import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import {
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   INVITE_TRUST_LEVELS,
@@ -56,7 +57,7 @@ const updateWorkspaceSchema = z.object({
 })
 
 const addMemberSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   trustLevel: z.enum(INVITE_TRUST_LEVELS),
 })
 
@@ -67,12 +68,12 @@ const createInviteSchema = z.object({
 })
 
 const workspaceAccessSchema = z.object({
-  workspaceMemberId: z.string().uuid(),
+  workspaceMemberId: z.uuid(),
   accessKey: z.enum(WORKSPACE_ACCESS_KEYS),
 })
 
 const chiefActorPreferenceSchema = z.object({
-  chiefActorId: z.string().uuid().nullable(),
+  chiefActorId: z.uuid().nullable(),
 })
 
 const conversationTypeMaskSchema = z.number().int().min(1).max(31)
@@ -129,9 +130,10 @@ export async function handleCreateWorkspace(
 ) {
   const parsed = createWorkspaceSchema.safeParse(request.body)
   if (!parsed.success) {
-    return reply
-      .status(400)
-      .send({ error: "Validation failed", details: parsed.error.flatten() })
+    return reply.status(400).send({
+      error: "Validation failed",
+      details: formatValidationDetails(parsed.error),
+    })
   }
 
   const workspace = await createWorkspace({
@@ -185,9 +187,10 @@ export async function handleUpdateWorkspace(
 
   const parsed = updateWorkspaceSchema.safeParse(request.body)
   if (!parsed.success) {
-    return reply
-      .status(400)
-      .send({ error: "Validation failed", details: parsed.error.flatten() })
+    return reply.status(400).send({
+      error: "Validation failed",
+      details: formatValidationDetails(parsed.error),
+    })
   }
 
   const workspace = await updateWorkspace(
@@ -215,9 +218,10 @@ export async function handleAddMember(
 
   const parsed = addMemberSchema.safeParse(request.body)
   if (!parsed.success) {
-    return reply
-      .status(400)
-      .send({ error: "Validation failed", details: parsed.error.flatten() })
+    return reply.status(400).send({
+      error: "Validation failed",
+      details: formatValidationDetails(parsed.error),
+    })
   }
 
   const member = await addMember({
@@ -305,9 +309,10 @@ export async function handleUpdateWorkspaceCapabilityConversationTypePolicies(
       request.body
     )
   if (!parsed.success) {
-    return reply
-      .status(400)
-      .send({ error: "Validation failed", details: parsed.error.flatten() })
+    return reply.status(400).send({
+      error: "Validation failed",
+      details: formatValidationDetails(parsed.error),
+    })
   }
 
   return reply.send(
@@ -360,9 +365,10 @@ export async function handleUpdateWorkspaceChiefActorPreference(
 
   const parsed = chiefActorPreferenceSchema.safeParse(request.body)
   if (!parsed.success) {
-    return reply
-      .status(400)
-      .send({ error: "Validation failed", details: parsed.error.flatten() })
+    return reply.status(400).send({
+      error: "Validation failed",
+      details: formatValidationDetails(parsed.error),
+    })
   }
 
   try {
@@ -427,9 +433,10 @@ export async function handleGrantWorkspaceAccess(
 
   const parsed = workspaceAccessSchema.safeParse(request.body)
   if (!parsed.success) {
-    return reply
-      .status(400)
-      .send({ error: "Validation failed", details: parsed.error.flatten() })
+    return reply.status(400).send({
+      error: "Validation failed",
+      details: formatValidationDetails(parsed.error),
+    })
   }
 
   try {
@@ -504,9 +511,10 @@ export async function handleCreateInvite(
 
   const parsed = createInviteSchema.safeParse(request.body)
   if (!parsed.success) {
-    return reply
-      .status(400)
-      .send({ error: "Validation failed", details: parsed.error.flatten() })
+    return reply.status(400).send({
+      error: "Validation failed",
+      details: formatValidationDetails(parsed.error),
+    })
   }
 
   const invite = await createInvite({

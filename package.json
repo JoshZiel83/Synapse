@@ -28,19 +28,21 @@
     "format:staged": "lint-staged",
     "build:cua-helper": "bash scripts/build-cua-helper.sh",
     "build:fs-helper": "bash scripts/build-fs-helper.sh",
-    "build": "npm run build:cua-helper && npm run build:fs-helper && npm run build -w packages/shared && npm run build -w packages/device-protocol && npm run build -w packages/device-runtime && npm run build -w packages/device-sdk && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
+    "build": "npm run build:cua-helper && npm run build:fs-helper && npm run build -w packages/device-protocol && npm run build -w packages/shared && npm run build -w packages/device-runtime && npm run build -w packages/device-sdk && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
     "build:shared": "npm run build -w packages/shared",
     "build:device-protocol": "npm run build -w packages/device-protocol",
     "build:device-runtime": "npm run build -w packages/device-runtime",
     "build:device-sdk": "npm run build -w packages/device-sdk",
     "build:api": "npm run build -w packages/api",
     "build:daemon": "npm run build -w packages/remote-agent-daemon",
-    "build:web": "npm run build -w packages/shared && npm run build -w packages/device-protocol && npm run build -w packages/web-next",
+    "build:web": "npm run build -w packages/device-protocol && npm run build -w packages/shared && npm run build -w packages/web-next",
     "test": "npm run test -w packages/api",
     "test:api": "npm run test -w packages/api",
     "test:conformance": "npm run test:conformance -w packages/api",
     "audit:business-enums": "node ./scripts/audit-business-enum-literals.mjs",
     "audit:device-runtime-sidecars": "tsx ./scripts/audit-device-runtime-sidecars.mts",
+    "lint:deps": "syncpack lint --dependencies 'zod'",
+    "lint:deps:fix": "syncpack fix --dependencies 'zod'",
     "db:bootstrap": "npm run db:bootstrap -w packages/api",
     "db:codegen": "npm run db:codegen -w packages/api",
     "db:seed": "npm run db:seed -w packages/api",
@@ -50,7 +52,10 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "@modelcontextprotocol/sdk": {
+      "zod": "4.3.6"
+    }
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
@@ -60,7 +65,8 @@
     "prettier-plugin-tailwindcss": "^0.7.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "shadcn": "^4.0.5"
+    "shadcn": "^4.0.5",
+    "syncpack": "15.3.1"
   },
   "lint-staged": {
     "*.{js,mjs,cjs,jsx,ts,tsx,json,css,md,mdx,yml,yaml,html}": "node scripts/format-files.mjs --formatter=prettier"

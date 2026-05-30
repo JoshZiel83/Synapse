@@ -53,21 +53,21 @@ const contentBlocksSchema = z.array(z.any()).optional()
 
 const triggerSchema = z.object({
   triggerKind: z.enum(AUTOMATION_TRIGGER_KINDS),
-  eventSourceId: z.string().uuid().optional(),
+  eventSourceId: z.uuid().optional(),
   sourceKind: z.enum(AUTOMATION_TRIGGER_SOURCE_KINDS).optional(),
   sourceLocator: z.string().trim().min(1).max(255).optional(),
   matchKey: z.string().trim().min(1).max(255).optional(),
-  matcher: z.record(z.unknown()).optional(),
+  matcher: z.record(z.string(), z.unknown()).optional(),
   scheduleKind: z.enum(AUTOMATION_SCHEDULE_KINDS).optional(),
   scheduleExpr: z.string().trim().min(1).max(255).optional(),
   scheduleTimezone: z.string().trim().min(1).max(64).optional(),
   intervalSeconds: z.number().int().positive().optional(),
-  startsAt: z.string().datetime().optional(),
+  startsAt: z.iso.datetime().optional(),
 })
 
 const policySchema = z.object({
-  activeFrom: z.string().datetime().optional(),
-  activeUntil: z.string().datetime().optional(),
+  activeFrom: z.iso.datetime().optional(),
+  activeUntil: z.iso.datetime().optional(),
   maxTriggerCount: z.number().int().positive().optional(),
   completionStatus: z.enum(AUTOMATION_COMPLETION_STATUSES).optional(),
 })
@@ -77,7 +77,7 @@ const deliverySchema = z.object({
   wakeReason: z.string().optional(),
   messageBlocks: contentBlocksSchema,
   targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
-  targetParticipantIds: z.array(z.string().uuid()).optional(),
+  targetParticipantIds: z.array(z.uuid()).optional(),
 })
 
 const updateDeliverySchema = z.object({
@@ -85,29 +85,29 @@ const updateDeliverySchema = z.object({
   wakeReason: z.string().optional(),
   messageBlocks: contentBlocksSchema,
   targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
-  targetParticipantIds: z.array(z.string().uuid()).optional(),
+  targetParticipantIds: z.array(z.uuid()).optional(),
 })
 
 const createAutomationSchema = z.object({
   name: z.string().trim().min(1).max(255),
   description: z.string().default(""),
   status: z.enum(AUTOMATION_RULE_STATUSES).optional(),
-  conversationId: z.string().uuid(),
+  conversationId: z.uuid(),
   trigger: triggerSchema,
   policy: policySchema.optional(),
   delivery: deliverySchema,
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
 const updateAutomationSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   description: z.string().optional(),
   status: z.enum(AUTOMATION_RULE_STATUSES).optional(),
-  conversationId: z.string().uuid().optional(),
+  conversationId: z.uuid().optional(),
   trigger: triggerSchema.partial().optional(),
   policy: policySchema.partial().optional(),
   delivery: updateDeliverySchema.optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
 const conversationTypeMaskSchema = z.number().int().min(1).max(31)
@@ -120,9 +120,9 @@ const accessTargetSchema = z
       "actor",
       "actor_in_conversation",
     ]),
-    conversationId: z.string().uuid().optional(),
-    actorId: z.string().uuid().optional(),
-    workspaceMemberId: z.string().uuid().optional(),
+    conversationId: z.uuid().optional(),
+    actorId: z.uuid().optional(),
+    workspaceMemberId: z.uuid().optional(),
   })
   .superRefine((value, ctx) => {
     if (
@@ -131,7 +131,7 @@ const accessTargetSchema = z
       !value.conversationId
     ) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["conversationId"],
         message: "conversationId is required for this access target",
       })
@@ -141,14 +141,14 @@ const accessTargetSchema = z
       !value.actorId
     ) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["actorId"],
         message: "actorId is required for this access target",
       })
     }
     if (value.type === "workspace_member" && !value.workspaceMemberId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["workspaceMemberId"],
         message: "workspaceMemberId is required for this access target",
       })
@@ -190,11 +190,11 @@ const accessGrantUpdateSchema = z.object({
 
 const createWebhookEndpointSchema = z.object({
   name: z.string().trim().min(1).max(255),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
 const integrationEventSourceSchema = z.object({
-  installationId: z.string().uuid(),
+  installationId: z.uuid(),
   provider: z.enum(AUTOMATION_INTEGRATION_PROVIDERS),
   ingressKind: z.enum(AUTOMATION_INTEGRATION_INGRESS_KINDS).optional(),
   targetKind: z.enum(AUTOMATION_INTEGRATION_TARGET_KINDS),
@@ -211,23 +211,23 @@ const eventSourceSchema = z
     name: z.string().trim().min(1).max(255).optional(),
     description: z.string().trim().min(1).optional(),
     recommendedUsage: z.string().trim().min(1).optional(),
-    payloadSchema: z.record(z.unknown()).optional(),
-    examplePayload: z.record(z.unknown()).optional(),
+    payloadSchema: z.record(z.string(), z.unknown()).optional(),
+    examplePayload: z.record(z.string(), z.unknown()).optional(),
     status: z.enum(AUTOMATION_EVENT_SOURCE_STATUSES).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.providerKind === "integration") {
       if (!value.integration) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ["integration"],
           message: "integration is required",
         })
       }
       if (!value.sourceKey) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ["sourceKey"],
           message: "sourceKey is required",
         })
@@ -237,21 +237,21 @@ const eventSourceSchema = z
 
     if (!value.name?.trim()) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["name"],
         message: "name is required",
       })
     }
     if (!value.description?.trim()) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["description"],
         message: "description is required",
       })
     }
     if (value.providerKind === "webhook" && !value.providerRef?.trim()) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["providerRef"],
         message: "providerRef is required",
       })
@@ -263,27 +263,25 @@ const updateEventSourceSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().min(1).optional(),
   recommendedUsage: z.string().trim().min(1).optional(),
-  payloadSchema: z.record(z.unknown()).optional(),
-  examplePayload: z.record(z.unknown()).optional(),
+  payloadSchema: z.record(z.string(), z.unknown()).optional(),
+  examplePayload: z.record(z.string(), z.unknown()).optional(),
   status: z.enum(AUTOMATION_EVENT_SOURCE_STATUSES).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
 const ingestEventSchema = z.object({
-  payload: z.record(z.unknown()).optional(),
-  sourceSnapshot: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+  sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
   dedupeKey: z.string().trim().min(1).max(255).optional(),
-  occurredAt: z.string().datetime().optional(),
+  occurredAt: z.iso.datetime().optional(),
 })
 
-const webhookIngressSchema = z
-  .object({
-    payload: z.record(z.unknown()).optional(),
-    sourceSnapshot: z.record(z.unknown()).optional(),
-    dedupeKey: z.string().trim().min(1).max(255).optional(),
-    occurredAt: z.string().datetime().optional(),
-  })
-  .passthrough()
+const webhookIngressSchema = z.looseObject({
+  payload: z.record(z.string(), z.unknown()).optional(),
+  sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
+  dedupeKey: z.string().trim().min(1).max(255).optional(),
+  occurredAt: z.iso.datetime().optional(),
+})
 
 function extractWebhookSecret(headers: Record<string, unknown>) {
   const direct =

@@ -43,15 +43,15 @@ import {
 // evaluator) — those are out of scope here.
 
 export const SubjectRefWireSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("workspace"), workspaceId: z.string().uuid() }),
-  z.object({ kind: z.literal("actor"), actorId: z.string().uuid() }),
+  z.object({ kind: z.literal("workspace"), workspaceId: z.uuid() }),
+  z.object({ kind: z.literal("actor"), actorId: z.uuid() }),
   z.object({
     kind: z.literal("remote_agent"),
-    remoteAgentId: z.string().uuid(),
+    remoteAgentId: z.uuid(),
   }),
   z.object({
     kind: z.literal("conversation"),
-    conversationId: z.string().uuid(),
+    conversationId: z.uuid(),
   }),
 ])
 export type SubjectRefWire = z.infer<typeof SubjectRefWireSchema>
@@ -80,7 +80,7 @@ export const ScopedSubjectTargetWireSchema = z
       target.scope.kind === "conversation"
     if (!allowed) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `scoped target (subject.kind=${target.subject.kind}, scope.kind=${target.scope.kind}) is not in whitelist (only actor+conversation, remote_agent+conversation)`,
         path: ["scope"],
       })
@@ -186,7 +186,7 @@ export const RuntimeAuthorizationGrantSpecSchema = z
               : undefined
     if (!branch) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `grant spec missing required branch payload "${spec.capability}"`,
         path: [spec.capability],
       })
@@ -215,13 +215,13 @@ export type RuntimeAuthorizationGrantWireSpec = z.infer<
  * included in the signed payload.
  */
 export const OperationEnvelopeSchema = z.object({
-  operation_id: z.string().uuid(),
-  attempt_id: z.string().uuid(),
-  device_runtime_session_id: z.string().uuid(),
-  device_capability_id: z.string().uuid(),
-  device_exposure_id: z.string().uuid(),
-  device_tool_id: z.string().uuid(),
-  device_tool_revision_id: z.string().uuid(),
+  operation_id: z.uuid(),
+  attempt_id: z.uuid(),
+  device_runtime_session_id: z.uuid(),
+  device_capability_id: z.uuid(),
+  device_exposure_id: z.uuid(),
+  device_tool_id: z.uuid(),
+  device_tool_revision_id: z.uuid(),
   input_hash: z.string(),
   task_mode: z.enum(DEVICE_OPERATION_TASK_MODES),
   runtime_authorization: z
@@ -251,17 +251,17 @@ export const SynapseErrorSchema = z.object({
   code: z.enum(SERVER_FACADE_ERROR_CODES),
   message: z.string(),
   retry_nonce: z.string().optional(),
-  interaction_id: z.string().uuid().optional(),
-  authorization_task_id: z.string().uuid().optional(),
-  details: z.record(z.unknown()).optional(),
+  interaction_id: z.uuid().optional(),
+  authorization_task_id: z.uuid().optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
 })
 export type SynapseError = z.infer<typeof SynapseErrorSchema>
 
 // ───────────────────────────── REST DTOs ─────────────────────────────────────
 
 export const DeviceSummarySchema = z.object({
-  id: z.string().uuid(),
-  workspace_id: z.string().uuid(),
+  id: z.uuid(),
+  workspace_id: z.uuid(),
   title: z.string(),
   host_kind: z.enum(HOST_KINDS),
   host_provider: z.string().nullable(),
@@ -274,20 +274,20 @@ export const DeviceSummarySchema = z.object({
 export type DeviceSummary = z.infer<typeof DeviceSummarySchema>
 
 export const DeviceServiceSummarySchema = z.object({
-  id: z.string().uuid(),
-  device_id: z.string().uuid(),
+  id: z.uuid(),
+  device_id: z.uuid(),
   service_kind: z.enum(DEVICE_SERVICE_KINDS),
   version: z.string().nullable(),
   status: z.enum(DEVICE_SERVICE_STATUSES),
   last_seen_at: z.string().nullable(),
-  remote_agent_machine_id: z.string().uuid().nullable(),
+  remote_agent_machine_id: z.uuid().nullable(),
 })
 export type DeviceServiceSummary = z.infer<typeof DeviceServiceSummarySchema>
 
 export const DeviceCapabilitySummarySchema = z.object({
-  id: z.string().uuid(),
-  workspace_id: z.string().uuid(),
-  exposure_id: z.string().uuid(),
+  id: z.uuid(),
+  workspace_id: z.uuid(),
+  exposure_id: z.uuid(),
   // v3.1: stable_key (e.g. "builtin/browser/navigation") so UI can group /
   // filter without guessing from display_name. Needed by the Settings →
   // Runtime Authorizations page to scope the operation chip list to
@@ -300,7 +300,7 @@ export const DeviceCapabilitySummarySchema = z.object({
   // v3.1: exposure-level metadata pass-through. chrome-devtools-mcp provider
   // sets metadata.enabled and metadata.disabledReason so the dashboard can
   // render "Coming soon" / disabled rows without guessing.
-  metadata: z.record(z.unknown()).nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 })
 export type DeviceCapabilitySummary = z.infer<
   typeof DeviceCapabilitySummarySchema
@@ -308,14 +308,14 @@ export type DeviceCapabilitySummary = z.infer<
 
 export const DeviceDetailSchema = DeviceSummarySchema.extend({
   description: z.string().nullable(),
-  owner_workspace_member_id: z.string().uuid().nullable(),
+  owner_workspace_member_id: z.uuid().nullable(),
   services: z.array(DeviceServiceSummarySchema),
   capabilities: z.array(DeviceCapabilitySummarySchema),
 })
 export type DeviceDetail = z.infer<typeof DeviceDetailSchema>
 
 export const CreateCloudDeviceInputSchema = z.object({
-  workspace_id: z.string().uuid(),
+  workspace_id: z.uuid(),
   title: z.string().min(1),
   host_provider: z.literal("e2b"),
   preset: z.string().optional(),
@@ -328,9 +328,9 @@ export type CreateCloudDeviceInput = z.infer<
 // info, NOT a DeviceDetail. The sandbox runtime claims the device row via
 // /api/v1/devices/bootstrap with the bootstrap_token.
 export const CreateCloudDeviceResultSchema = z.object({
-  pending_device_id: z.string().uuid(),
+  pending_device_id: z.uuid(),
   bootstrap_token: z.string(),
-  pairing_session_id: z.string().uuid(),
+  pairing_session_id: z.uuid(),
   expires_at: z.string(),
 })
 export type CreateCloudDeviceResult = z.infer<
@@ -338,19 +338,19 @@ export type CreateCloudDeviceResult = z.infer<
 >
 
 export const StartPairingInputSchema = z.object({
-  workspace_id: z.string().uuid(),
+  workspace_id: z.uuid(),
   mode: z.enum(DEVICE_PAIRING_MODES),
   title: z.string().optional(),
   device_type: z.enum(DEVICE_TYPES).optional(),
   // service_join only:
-  device_id: z.string().uuid().optional(),
+  device_id: z.uuid().optional(),
   requested_pubkey_fingerprint: z.string().optional(),
   self_challenge: z.string().optional(),
 })
 export type StartPairingInput = z.infer<typeof StartPairingInputSchema>
 
 export const PairingTicketSchema = z.object({
-  pairing_session_id: z.string().uuid(),
+  pairing_session_id: z.uuid(),
   mode: z.enum(DEVICE_PAIRING_MODES),
   pairing_code: z.string().nullable(),
   expires_at: z.string(),
@@ -370,15 +370,15 @@ export const ConsumePairingInputSchema = z.object({
 export type ConsumePairingInput = z.infer<typeof ConsumePairingInputSchema>
 
 export const ConsumePairingResultSchema = z.object({
-  device_id: z.string().uuid(),
-  service_id: z.string().uuid(),
-  service_key_id: z.string().uuid(),
+  device_id: z.uuid(),
+  service_id: z.uuid(),
+  service_key_id: z.uuid(),
   control_plane_url: z.string(),
 })
 export type ConsumePairingResult = z.infer<typeof ConsumePairingResultSchema>
 
 export const ClaimDaemonInputSchema = z.object({
-  remote_agent_machine_id: z.string().uuid(),
+  remote_agent_machine_id: z.uuid(),
 })
 export type ClaimDaemonInput = z.infer<typeof ClaimDaemonInputSchema>
 
@@ -388,9 +388,9 @@ export type ClaimDaemonInput = z.infer<typeof ClaimDaemonInputSchema>
 // `actor+conversation` / `remote_agent+conversation`. wire field
 // `device_capability_ids` is unchanged (SDK + server protocol stability).
 export const SetActiveDeviceCapabilitiesInputSchema = z.object({
-  workspaceId: z.string().uuid(),
+  workspaceId: z.uuid(),
   target: ScopedSubjectTargetWireSchema,
-  device_capability_ids: z.array(z.string().uuid()),
+  device_capability_ids: z.array(z.uuid()),
 })
 export type SetActiveDeviceCapabilitiesInput = z.infer<
   typeof SetActiveDeviceCapabilitiesInputSchema
@@ -423,8 +423,8 @@ export type JsonRpcResponse = z.infer<typeof JsonRpcResponseSchema>
 
 // device → server
 export const DeviceHelloParamsSchema = z.object({
-  device_id: z.string().uuid(),
-  service_id: z.string().uuid(),
+  device_id: z.uuid(),
+  service_id: z.uuid(),
   service_kind: z.enum(DEVICE_SERVICE_KINDS),
   client_version: z.string(),
   signed_challenge: z.string(),
@@ -435,8 +435,8 @@ export const DeviceCatalogToolSchema = z.object({
   stable_key: z.string(),
   name: z.string(),
   description: z.string(),
-  input_schema: z.record(z.unknown()),
-  annotations: z.record(z.unknown()).optional(),
+  input_schema: z.record(z.string(), z.unknown()),
+  annotations: z.record(z.string(), z.unknown()).optional(),
 })
 export type DeviceCatalogTool = z.infer<typeof DeviceCatalogToolSchema>
 
@@ -446,7 +446,7 @@ export const DeviceCatalogExposureSchema = z.object({
   description: z.string().optional(),
   transport: z.enum(DEVICE_EXPOSURE_TRANSPORTS),
   builtin_kind: z.enum(DEVICE_BUILTIN_KINDS).nullable().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   tools: z.array(DeviceCatalogToolSchema),
 })
 export type DeviceCatalogExposure = z.infer<typeof DeviceCatalogExposureSchema>
@@ -465,21 +465,21 @@ export const DeviceServiceStatusParamsSchema = z.object({
 
 // server → device
 export const ServerRuntimeSessionOpenParamsSchema = z.object({
-  runtime_session_id: z.string().uuid(),
-  conversation_id: z.string().uuid().nullable(),
+  runtime_session_id: z.uuid(),
+  conversation_id: z.uuid().nullable(),
 })
 
 export const ServerRuntimeSessionCloseParamsSchema = z.object({
-  runtime_session_id: z.string().uuid(),
+  runtime_session_id: z.uuid(),
 })
 
 export const ServerOperationCancelParamsSchema = z.object({
-  operation_id: z.string().uuid(),
+  operation_id: z.uuid(),
   reason: z.string().optional(),
 })
 
 export const ServerCuaTerminateParamsSchema = z.object({
-  runtime_session_id: z.string().uuid(),
+  runtime_session_id: z.uuid(),
   reason: z.string(),
 })
 

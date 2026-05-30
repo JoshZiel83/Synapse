@@ -6,10 +6,10 @@ import { requireRequestAction } from "../access/guards.js"
 import { z } from "zod"
 
 const querySchema = z.object({
-  workspaceId: z.string().uuid().optional(),
+  workspaceId: z.uuid().optional(),
   action: z.string().optional(),
   resourceType: z.string().optional(),
-  resourceId: z.string().uuid().optional(),
+  resourceId: z.uuid().optional(),
   page: z.coerce.number().default(1),
   pageSize: z.coerce.number().default(50),
 })

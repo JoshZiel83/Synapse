@@ -23,6 +23,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { WebSocket } from "ws"
 import { sql } from "kysely"
+import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import {
   DeviceCatalogSyncParamsSchema,
   DeviceHelloParamsSchema,
@@ -369,7 +370,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 req.id ?? null,
                 -32602,
                 "Invalid device.hello params",
-                parsed.error.flatten()
+                formatValidationDetails(parsed.error)
               )
               return
             }
@@ -500,7 +501,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 req.id ?? null,
                 -32602,
                 "Invalid device.catalog.sync params",
-                parsedCatalog.error.flatten()
+                formatValidationDetails(parsedCatalog.error)
               )
               return
             }

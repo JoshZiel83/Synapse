@@ -15,10 +15,10 @@ export type PersistResult =
 // ─── device.runtime_session.opened / closed ─────────────────────────────────
 
 const RuntimeSessionOpenedSchema = z.object({
-  runtime_session_id: z.string().uuid(),
-  conversation_id: z.string().uuid().nullable().optional(),
-  actor_id: z.string().uuid().nullable().optional(),
-  conversation_actor_context_id: z.string().uuid().nullable().optional(),
+  runtime_session_id: z.uuid(),
+  conversation_id: z.uuid().nullable().optional(),
+  actor_id: z.uuid().nullable().optional(),
+  conversation_actor_context_id: z.uuid().nullable().optional(),
 })
 
 export async function persistRuntimeSessionOpened(
@@ -83,7 +83,7 @@ export async function persistRuntimeSessionOpened(
 }
 
 const RuntimeSessionClosedSchema = z.object({
-  runtime_session_id: z.string().uuid(),
+  runtime_session_id: z.uuid(),
 })
 
 export async function persistRuntimeSessionClosed(
@@ -131,8 +131,8 @@ export async function persistRuntimeSessionClosed(
 // ─── device.task.* (async lifecycle for existing device_operations) ─────────
 
 const TaskRefSchema = z.object({
-  operation_id: z.string().uuid(),
-  attempt_id: z.string().uuid().optional(),
+  operation_id: z.uuid(),
+  attempt_id: z.uuid().optional(),
 })
 const TaskOutputSchema = TaskRefSchema.extend({
   output: z.unknown(),
@@ -350,8 +350,8 @@ export async function persistTaskResult(
 const EventEmitSchema = z.object({
   event_type: z.string().min(1).max(80),
   level: z.enum(["debug", "info", "warn", "error"]).optional(),
-  conversation_id: z.string().uuid().nullable().optional(),
-  payload: z.record(z.unknown()).optional(),
+  conversation_id: z.uuid().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
 })
 
 export async function persistDeviceEventEmit(
@@ -381,8 +381,8 @@ export async function persistDeviceEventEmit(
 // ─── device.vfs.exposure.upsert ─────────────────────────────────────────────
 
 const VfsExposureUpsertSchema = z.object({
-  exposure_id: z.string().uuid(),
-  vfs: z.record(z.unknown()),
+  exposure_id: z.uuid(),
+  vfs: z.record(z.string(), z.unknown()),
 })
 
 /**

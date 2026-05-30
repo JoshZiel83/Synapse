@@ -16,7 +16,7 @@ const authTransportSchema = z.enum(AUTH_TRANSPORTS)
 const authSessionPersistenceSchema = z.enum(AUTH_SESSION_PERSISTENCES)
 
 const registerSchema = z.object({
-  email: z.string().email("Invalid email address"),
+  email: z.email("Invalid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
   name: z.string().min(1, "Name is required").max(100),
   clientType: authClientTypeSchema.optional(),
@@ -27,7 +27,7 @@ const registerSchema = z.object({
 })
 
 const loginSchema = z.object({
-  email: z.string().email("Invalid email address"),
+  email: z.email("Invalid email address"),
   password: z.string().min(1, "Password is required"),
   clientType: authClientTypeSchema.optional(),
   transport: authTransportSchema.optional(),
@@ -39,7 +39,7 @@ const loginSchema = z.object({
 const updateMeSchema = z
   .object({
     name: z.string().min(1).max(100).optional(),
-    avatarFileId: z.string().uuid().nullable().optional(),
+    avatarFileId: z.uuid().nullable().optional(),
   })
   .refine(
     (body) => body.name !== undefined || body.avatarFileId !== undefined,
@@ -49,11 +49,11 @@ const updateMeSchema = z
   )
 
 const sessionParamsSchema = z.object({
-  sessionId: z.string().uuid(),
+  sessionId: z.uuid(),
 })
 
 const qrLoginRequestParamsSchema = z.object({
-  requestId: z.string().uuid(),
+  requestId: z.uuid(),
 })
 
 const qrLoginTokenSchema = z.object({
@@ -112,7 +112,7 @@ function handleAuthError(error: unknown, reply: FastifyReply) {
     return reply.status(400).send({
       error: "Validation failed",
       code: "VALIDATION_ERROR",
-      details: error.errors.map((item) => ({
+      details: error.issues.map((item) => ({
         field: item.path.join("."),
         message: item.message,
       })),

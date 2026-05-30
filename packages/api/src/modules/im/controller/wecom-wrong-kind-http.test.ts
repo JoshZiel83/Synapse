@@ -182,7 +182,7 @@ test("PUT with invalid body (ZodError) → 400 invalid_request, not 500", async 
   const schema = z
     .object({
       botId: z.string().min(1),
-      baseWsUrl: z.string().url(),
+      baseWsUrl: z.url(),
     })
     .strict()
   app.put("/api/v1/test-route", async (request: { body: unknown }) => {

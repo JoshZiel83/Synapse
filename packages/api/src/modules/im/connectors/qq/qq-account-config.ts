@@ -54,15 +54,14 @@ const HostnameSchema = z
   })
 
 export const QqAccountConfigSchema = z
-  .object({
+  // Use `z.looseObject` so unknown fields the dashboard might add later
+  // don't fail validation here — only the typed surface is what
+  // connector code can trust.
+  .looseObject({
     webhookInboundConfirmed: z.boolean().default(false),
     allowProactiveBestEffort: z.boolean().default(false),
     configuredUrlDomains: z.array(HostnameSchema).default([]),
   })
-  // Use `.passthrough` so unknown fields the dashboard might add later
-  // don't fail validation here — only the typed surface is what
-  // connector code can trust.
-  .passthrough()
 
 export type QqAccountConfig = z.infer<typeof QqAccountConfigSchema>
 

@@ -88,7 +88,7 @@ test("browserPolicyAllows — write covers read still holds with operations", ()
   )
 })
 
-test("BrowserPolicySchema.strip() drops unknown scopeSource on parse", () => {
+test("BrowserPolicySchema drops unknown scopeSource on parse (zod default stripping)", () => {
   const parsed = BrowserPolicySchema.parse({
     action: "read",
     scopeType: "origin",

@@ -14,6 +14,7 @@
 // client compatibility).
 
 import { z } from "zod"
+import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
 import {
   ScopedSubjectTargetWireSchema,
@@ -35,9 +36,9 @@ import {
 // the route used a discriminated union while the SDK migrated to
 // ScopedSubjectTarget).
 export const setActiveBodySchema = z.object({
-  workspaceId: z.string().uuid(),
+  workspaceId: z.uuid(),
   target: ScopedSubjectTargetWireSchema,
-  device_capability_ids: z.array(z.string().uuid()),
+  device_capability_ids: z.array(z.uuid()),
   reason: z.string().max(2000).optional(),
 })
 
@@ -120,18 +121,18 @@ const listQuerySchema = z
       "conversation",
       "remote_agent",
     ]),
-    subject_workspace_id: z.string().uuid().optional(),
-    subject_actor_id: z.string().uuid().optional(),
-    subject_conversation_id: z.string().uuid().optional(),
-    subject_remote_agent_id: z.string().uuid().optional(),
+    subject_workspace_id: z.uuid().optional(),
+    subject_actor_id: z.uuid().optional(),
+    subject_conversation_id: z.uuid().optional(),
+    subject_remote_agent_id: z.uuid().optional(),
     scope_kind: z.enum(["conversation"]).optional(),
-    scope_conversation_id: z.string().uuid().optional(),
+    scope_conversation_id: z.uuid().optional(),
   })
   .superRefine((q, ctx) => {
     if (q.scope_kind === "conversation") {
       if (!q.scope_conversation_id) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message:
             "scope_conversation_id required when scope_kind=conversation",
           path: ["scope_conversation_id"],
@@ -139,7 +140,7 @@ const listQuerySchema = z
       }
       if (q.subject_kind !== "actor" && q.subject_kind !== "remote_agent") {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: `scope_kind=conversation only allowed with subject_kind=actor|remote_agent (got ${q.subject_kind})`,
           path: ["scope_kind"],
         })
@@ -350,9 +351,10 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
       }
       const parsed = setActiveBodySchema.safeParse(request.body)
       if (!parsed.success) {
-        reply
-          .status(400)
-          .send({ code: "invalid_request", details: parsed.error.flatten() })
+        reply.status(400).send({
+          code: "invalid_request",
+          details: formatValidationDetails(parsed.error),
+        })
         return
       }
       if (parsed.data.workspaceId !== pathWorkspaceId) {
@@ -455,7 +457,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
       if (!queryParsed.success) {
         reply.status(400).send({
           code: "invalid_request",
-          details: queryParsed.error.flatten(),
+          details: formatValidationDetails(queryParsed.error),
         })
         return
       }

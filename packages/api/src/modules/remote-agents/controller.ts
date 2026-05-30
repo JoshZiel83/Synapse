@@ -40,16 +40,16 @@ const createRemoteAgentSchema = z.object({
   title: z.string().trim().min(1).max(255),
   description: z.string().trim().max(5000).optional(),
   runtimeKind: runtimeKindSchema,
-  avatarFileId: z.string().uuid().optional(),
+  avatarFileId: z.uuid().optional(),
   avatarEmoji: z.string().trim().max(32).optional(),
   accessPolicy: accessPolicySchema.optional(),
   isPublicShared: z.boolean().optional(),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 })
 
 const updateRemoteAgentSchema = createRemoteAgentSchema.partial().extend({
   description: z.string().trim().max(5000).nullable().optional(),
-  avatarFileId: z.string().uuid().nullable().optional(),
+  avatarFileId: z.uuid().nullable().optional(),
   avatarEmoji: z.string().trim().max(32).nullable().optional(),
   isActive: z.boolean().optional(),
 })
@@ -60,14 +60,14 @@ const createMachineSchema = z.object({
 })
 
 const bindRemoteAgentSchema = z.object({
-  machineId: z.string().uuid(),
+  machineId: z.uuid(),
   runtimeKind: runtimeKindSchema,
   runtimePath: z.string().trim().min(1).optional(),
   localRootPath: z.string().trim().min(1).optional(),
 })
 
 const groupInteractionGrantsSchema = z.object({
-  workspaceMemberIds: z.array(z.string().uuid()).max(200),
+  workspaceMemberIds: z.array(z.uuid()).max(200),
 })
 
 const historyQuerySchema = z.object({
@@ -81,47 +81,47 @@ const checkMessagesQuerySchema = z.object({
 })
 
 const searchMessagesQuerySchema = z.object({
-  conversationId: z.string().uuid(),
+  conversationId: z.uuid(),
   q: z.string().trim().min(1).max(512),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 })
 
 const sendMessageSchema = z.object({
-  conversationId: z.string().uuid(),
-  clientMessageId: z.string().uuid().optional(),
+  conversationId: z.uuid(),
+  clientMessageId: z.uuid().optional(),
   contentBlocks: z.array(z.any()).min(1),
-  replyToItemId: z.string().uuid().optional(),
-  metadata: z.record(z.any()).optional(),
+  replyToItemId: z.uuid().optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 })
 
 const completeDeliveriesSchema = z.object({
-  deliveryIds: z.array(z.string().uuid()).min(1),
+  deliveryIds: z.array(z.uuid()).min(1),
 })
 
 const failDeliveriesSchema = z.object({
-  deliveryIds: z.array(z.string().uuid()).min(1),
+  deliveryIds: z.array(z.uuid()).min(1),
   reason: z.string().trim().max(2000).optional(),
 })
 
 const internalUserInputInteractionSchema = z.object({
-  conversationId: z.string().uuid(),
+  conversationId: z.uuid(),
   runKey: z.string().trim().min(1).max(255),
   title: z.string().trim().min(1).max(255),
   instructions: z.string().trim().max(5000).optional(),
   questions: z.array(z.any()).min(1).max(4),
-  expiresAt: z.string().datetime().optional(),
+  expiresAt: z.iso.datetime().optional(),
 })
 
 const internalPlanApprovalInteractionSchema = z.object({
-  conversationId: z.string().uuid(),
+  conversationId: z.uuid(),
   runKey: z.string().trim().min(1).max(255),
   title: z.string().trim().min(1).max(255),
   summary: z.string().trim().max(5000).optional(),
   planMarkdown: z.string().trim().min(1),
   checklist: z.array(z.any()).optional(),
   collaborationMode: z.string().trim().max(120).optional(),
-  collaborationState: z.record(z.any()).optional(),
-  expiresAt: z.string().datetime().optional(),
+  collaborationState: z.record(z.string(), z.any()).optional(),
+  expiresAt: z.iso.datetime().optional(),
 })
 
 function getRequestUserId(request: any) {

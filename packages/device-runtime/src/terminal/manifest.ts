@@ -135,13 +135,13 @@ export const ManifestPlatformEntrySchema = z.object({
    * These come from a trusted manifest, so they are NOT subject to
    * DANGEROUS_ENV_KEYS stripping inside the executor.
    */
-  env: z.record(z.string()).default({}),
+  env: z.record(z.string(), z.string()).default({}),
 })
 export type ManifestPlatformEntry = z.infer<typeof ManifestPlatformEntrySchema>
 
 export const ManifestProgramSchema = z.object({
   version: z.string().min(1),
-  platforms: z.record(ManifestPlatformEntrySchema),
+  platforms: z.record(z.string(), ManifestPlatformEntrySchema),
 })
 export type ManifestProgram = z.infer<typeof ManifestProgramSchema>
 
@@ -151,7 +151,7 @@ export const ToolchainManifestSchema = z.object({
   // Keys are matched against `normalizeProgramName(...)` at resolve time.
   // Use `.passthrough()` would be looser; instead expose a strongly-typed
   // record so unknown top-level keys cause loader to surface them clearly.
-  programs: z.record(ManifestProgramSchema),
+  programs: z.record(z.string(), ManifestProgramSchema),
 })
 export type ToolchainManifest = z.infer<typeof ToolchainManifestSchema>
 

@@ -1,6 +1,7 @@
 import type { ToolCall, ActorAction } from "@synapse/shared"
 import { textResult } from "@synapse/shared"
 import { z } from "zod"
+import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import { registerToolPlugin } from "./tool-plugins.js"
 import { throwToolError } from "./tool-errors.js"
 import { executeActorActions } from "../orchestrator/service.js"
@@ -63,77 +64,55 @@ const emojiAvatarSchema = z
   .max(16)
   .refine(isLikelyEmojiAvatar, "Use a single emoji or short emoji sequence.")
 
-const pixelArtAvatarOptionsSchema = z
-  .object({
-    seed: z.string().trim().min(1).max(80).optional(),
-    accessories: z
-      .string()
-      .trim()
-      .regex(new RegExp(ACCESSORIES_PATTERN))
-      .optional(),
-    accessoriesProbability: z.coerce.number().int().min(0).max(100).optional(),
-    clothing: z.string().trim().regex(new RegExp(CLOTHING_PATTERN)).optional(),
-    eyes: z.string().trim().regex(new RegExp(EYES_PATTERN)).optional(),
-    glasses: z.string().trim().regex(new RegExp(GLASSES_PATTERN)).optional(),
-    glassesProbability: z.coerce.number().int().min(0).max(100).optional(),
-    beard: z.string().trim().regex(new RegExp(BEARD_PATTERN)).optional(),
-    beardProbability: z.coerce.number().int().min(0).max(100).optional(),
-    mouth: z.string().trim().regex(new RegExp(MOUTH_PATTERN)).optional(),
-    hair: z.string().trim().regex(new RegExp(HAIR_PATTERN)).optional(),
-    hat: z.string().trim().regex(new RegExp(HAT_PATTERN)).optional(),
-    hatProbability: z.coerce.number().int().min(0).max(100).optional(),
-    accessoriesColor: z
-      .string()
-      .trim()
-      .regex(new RegExp(HEX_COLOR_PATTERN))
-      .optional(),
-    clothingColor: z
-      .string()
-      .trim()
-      .regex(new RegExp(HEX_COLOR_PATTERN))
-      .optional(),
-    eyesColor: z
-      .string()
-      .trim()
-      .regex(new RegExp(HEX_COLOR_PATTERN))
-      .optional(),
-    glassesColor: z
-      .string()
-      .trim()
-      .regex(new RegExp(HEX_COLOR_PATTERN))
-      .optional(),
-    hairColor: z
-      .string()
-      .trim()
-      .regex(new RegExp(HEX_COLOR_PATTERN))
-      .optional(),
-    hatColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-    mouthColor: z
-      .string()
-      .trim()
-      .regex(new RegExp(HEX_COLOR_PATTERN))
-      .optional(),
-    skinColor: z
-      .string()
-      .trim()
-      .regex(new RegExp(HEX_COLOR_PATTERN))
-      .optional(),
-  })
-  .strict()
+const pixelArtAvatarOptionsSchema = z.strictObject({
+  seed: z.string().trim().min(1).max(80).optional(),
+  accessories: z
+    .string()
+    .trim()
+    .regex(new RegExp(ACCESSORIES_PATTERN))
+    .optional(),
+  accessoriesProbability: z.coerce.number().int().min(0).max(100).optional(),
+  clothing: z.string().trim().regex(new RegExp(CLOTHING_PATTERN)).optional(),
+  eyes: z.string().trim().regex(new RegExp(EYES_PATTERN)).optional(),
+  glasses: z.string().trim().regex(new RegExp(GLASSES_PATTERN)).optional(),
+  glassesProbability: z.coerce.number().int().min(0).max(100).optional(),
+  beard: z.string().trim().regex(new RegExp(BEARD_PATTERN)).optional(),
+  beardProbability: z.coerce.number().int().min(0).max(100).optional(),
+  mouth: z.string().trim().regex(new RegExp(MOUTH_PATTERN)).optional(),
+  hair: z.string().trim().regex(new RegExp(HAIR_PATTERN)).optional(),
+  hat: z.string().trim().regex(new RegExp(HAT_PATTERN)).optional(),
+  hatProbability: z.coerce.number().int().min(0).max(100).optional(),
+  accessoriesColor: z
+    .string()
+    .trim()
+    .regex(new RegExp(HEX_COLOR_PATTERN))
+    .optional(),
+  clothingColor: z
+    .string()
+    .trim()
+    .regex(new RegExp(HEX_COLOR_PATTERN))
+    .optional(),
+  eyesColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  glassesColor: z
+    .string()
+    .trim()
+    .regex(new RegExp(HEX_COLOR_PATTERN))
+    .optional(),
+  hairColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  hatColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  mouthColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+  skinColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+})
 
 const changeAvatarToolInputSchema = z.discriminatedUnion("mode", [
-  z
-    .object({
-      mode: z.literal(EMOJI_MODE),
-      emoji: emojiAvatarSchema,
-    })
-    .strict(),
-  z
-    .object({
-      mode: z.literal(PIXEL_ART_MODE),
-      ...pixelArtAvatarOptionsSchema.shape,
-    })
-    .strict(),
+  z.strictObject({
+    mode: z.literal(EMOJI_MODE),
+    emoji: emojiAvatarSchema,
+  }),
+  z.strictObject({
+    mode: z.literal(PIXEL_ART_MODE),
+    ...pixelArtAvatarOptionsSchema.shape,
+  }),
 ])
 
 type ChangeAvatarToolInput = z.infer<typeof changeAvatarToolInputSchema>
@@ -499,7 +478,7 @@ export function registerActionToolPlugins(): void {
       )
       if (!parsed.success) {
         throwToolError("Invalid change_avatar input", {
-          details: parsed.error.flatten(),
+          details: formatValidationDetails(parsed.error),
           extra: {
             guidance:
               `Use mode="${EMOJI_MODE}" with one emoji, or mode="${PIXEL_ART_MODE}" with optional DiceBear pixel-art parameters. ` +

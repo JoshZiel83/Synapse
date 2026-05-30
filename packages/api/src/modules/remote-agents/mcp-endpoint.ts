@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
 import { textBlock, type ToolDefinition } from "@synapse/shared"
 import type { ConversationBoundary } from "@synapse/shared/types"
-import { z, type ZodTypeAny } from "zod"
+import { z } from "zod"
 import {
   authenticateMachineForRemoteAgent,
   checkRemoteAgentMessages,
@@ -47,7 +47,7 @@ function jsonToolResult<T extends Record<string, unknown>>(
   }
 }
 
-function jsonSchemaPropertyToZod(prop: unknown): ZodTypeAny {
+function jsonSchemaPropertyToZod(prop: unknown): z.ZodType {
   if (!prop || typeof prop !== "object") return z.any()
   const p = prop as { type?: string | string[]; enum?: unknown[] }
   if (Array.isArray(p.enum) && p.enum.every((v) => typeof v === "string")) {
@@ -65,7 +65,7 @@ function jsonSchemaPropertyToZod(prop: unknown): ZodTypeAny {
     case "array":
       return z.array(z.any())
     case "object":
-      return z.record(z.any())
+      return z.record(z.string(), z.any())
     default:
       return z.any()
   }
@@ -73,8 +73,8 @@ function jsonSchemaPropertyToZod(prop: unknown): ZodTypeAny {
 
 function toolDefinitionToZodShape(
   def: ToolDefinition
-): Record<string, ZodTypeAny> {
-  const shape: Record<string, ZodTypeAny> = {}
+): Record<string, z.ZodType> {
+  const shape: Record<string, z.ZodType> = {}
   const required = new Set(def.parameters?.required ?? [])
   for (const [key, prop] of Object.entries(def.parameters?.properties ?? {})) {
     const base = jsonSchemaPropertyToZod(prop)
@@ -222,7 +222,7 @@ function registerImTools(params: {
         "Send a text reply into the bound Synapse conversation as this remote agent.",
       inputSchema: {
         content: z.string().trim().min(1).max(20000),
-        replyToItemId: z.string().uuid().optional(),
+        replyToItemId: z.uuid().optional(),
       },
       outputSchema: { item: z.any() },
     },

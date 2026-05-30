@@ -377,7 +377,7 @@ export interface TransportConnector {
   /**
    * Optional: validate the `transport_accounts.config` JSONB shape.
    * Used for connector-specific config fields the generic
-   * `accountSchema.config: z.record(z.unknown())` cannot constrain.
+   * `accountSchema.config: z.record(z.string(), z.unknown())` cannot constrain.
    * Example: WeCom rejects a `baseWsUrl` that isn't `ws(s)://`.
    * Connectors that don't care about config can omit this entirely;
    * the service helper treats absence as "any config is acceptable".

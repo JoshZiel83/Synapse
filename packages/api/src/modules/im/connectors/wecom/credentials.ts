@@ -76,7 +76,7 @@ export function validateWecomCredentialsForMode(
  * Connector-level config validation. Used by
  * `service/account-credentials.ts:validateAndNormalizeAccountConfig` to
  * close the gap left by the generic `accountSchema.config:
- * z.record(z.unknown())` — without this, a POST to the generic
+ * z.record(z.string(), z.unknown())` — without this, a POST to the generic
  * `/im/accounts` route could write any `config` blob (including an
  * `http://` `baseWsUrl`) and bypass the per-transport schema
  * refinement in `controller/_shared.ts`.

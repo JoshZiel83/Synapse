@@ -5,20 +5,19 @@ const MAX_FILENAME_LENGTH = 255
 const MAX_MIME_TYPE_LENGTH = 255
 
 const actorUploadFileInputSchema = z
-  .object({
+  .strictObject({
     filename: z.string().trim().min(1).max(MAX_FILENAME_LENGTH),
     mimeType: z.string().trim().min(1).max(MAX_MIME_TYPE_LENGTH).optional(),
     textContent: z.string().optional(),
     base64Content: z.string().optional(),
   })
-  .strict()
   .superRefine((value, ctx) => {
     const sourceCount = [value.textContent, value.base64Content].filter(
       (candidate) => candidate !== undefined
     ).length
     if (sourceCount !== 1) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "Provide exactly one of textContent or base64Content.",
         path: ["textContent"],
       })

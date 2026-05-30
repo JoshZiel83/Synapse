@@ -27,14 +27,14 @@ const realtimeAsrAudioConfigSchema = z
   .superRefine((value, ctx) => {
     if (value.format === "pcm" && value.codec !== "raw") {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "PCM audio must use the raw codec",
       })
     }
 
     if (value.format === "ogg" && value.codec !== "opus") {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "OGG audio must use the opus codec",
       })
     }

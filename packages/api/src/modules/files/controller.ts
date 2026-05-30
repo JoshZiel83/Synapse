@@ -20,13 +20,11 @@ import {
   getLatestAvailableFileParse,
 } from "./parse-service.js"
 
-const fileUploadOriginSchema = z
-  .object({
-    family: z.literal("user_upload"),
-    system: z.enum(USER_UPLOAD_FILE_ORIGIN_SYSTEMS),
-    details: z.record(z.string(), z.unknown()).optional(),
-  })
-  .strict()
+const fileUploadOriginSchema = z.strictObject({
+  family: z.literal("user_upload"),
+  system: z.enum(USER_UPLOAD_FILE_ORIGIN_SYSTEMS),
+  details: z.record(z.string(), z.unknown()).optional(),
+})
 
 async function sendStoredFile(
   reply: FastifyReply,

@@ -149,19 +149,15 @@ const selectableQuestionFieldTypeOptions = userInputQuestionTypeOptions.filter(
     "text"
   > => value !== "text"
 )
-const sendToInputSchema = z
-  .object({
-    message: z.string().trim().min(1).max(12000),
-    intent: sendToIntentSchema,
-    summary: z.string().trim().min(1).max(240),
-    replyToRef: z.string().trim().min(1).optional(),
-  })
-  .strict()
-const currentTimeInputSchema = z
-  .object({
-    timeZone: z.string().trim().min(1).max(100).optional(),
-  })
-  .strict()
+const sendToInputSchema = z.strictObject({
+  message: z.string().trim().min(1).max(12000),
+  intent: sendToIntentSchema,
+  summary: z.string().trim().min(1).max(240),
+  replyToRef: z.string().trim().min(1).optional(),
+})
+const currentTimeInputSchema = z.strictObject({
+  timeZone: z.string().trim().min(1).max(100).optional(),
+})
 
 function getToolContextConversationId(ctx: ToolResolveContext) {
   return ctx.conversationId

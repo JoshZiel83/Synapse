@@ -54,7 +54,7 @@ const identitySearchQuerySchema = z.object({
 })
 
 const requestRelationshipBySearchSchema = z.object({
-  profileId: z.string().uuid(),
+  profileId: z.uuid(),
 })
 
 const updateActorProfileSchema = z.object({

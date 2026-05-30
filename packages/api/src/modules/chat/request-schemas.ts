@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-export const chatUuidSchema = z.string().uuid()
+export const chatUuidSchema = z.uuid()
 
 export const chatWorkspaceParamsSchema = z.object({
   workspaceId: chatUuidSchema,

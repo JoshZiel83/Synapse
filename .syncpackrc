@@ -1,0 +1,11 @@
+{
+  "versionGroups": [
+    {
+      "label": "zod-pinned-exact",
+      "dependencies": ["zod"],
+      "dependencyTypes": ["prod", "dev"],
+      "packages": ["**"],
+      "pinVersion": "4.3.6"
+    }
+  ]
+}

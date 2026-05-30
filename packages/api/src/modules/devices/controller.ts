@@ -13,6 +13,7 @@
 // surface land in PR #5 + PR #12.
 
 import { z } from "zod"
+import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import type { FastifyInstance } from "fastify"
 import {
   DEVICE_PAIRING_MODES,
@@ -43,8 +44,8 @@ const startPairingBodySchema = z.object({
   title: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).optional(),
   device_type: deviceTypeSchema.optional(),
-  device_id: z.string().uuid().optional(),
-  context: z.record(z.unknown()).optional(),
+  device_id: z.uuid().optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
 })
 
 const consumePairingBodySchema = z.object({
@@ -61,7 +62,7 @@ const consumePairingBodySchema = z.object({
 
 const claimDaemonBodySchema = z.object({
   service_kind: z.literal("remote_agent_daemon"),
-  remote_agent_machine_id: z.string().uuid(),
+  remote_agent_machine_id: z.uuid(),
 })
 
 function sendModuleError(reply: any, err: unknown) {
@@ -203,9 +204,10 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         return
       const parsed = startPairingBodySchema.safeParse(request.body)
       if (!parsed.success) {
-        reply
-          .status(400)
-          .send({ code: "invalid_request", details: parsed.error.flatten() })
+        reply.status(400).send({
+          code: "invalid_request",
+          details: formatValidationDetails(parsed.error),
+        })
         return
       }
       const session = (request as { session?: { workspaceMemberId?: string } })
@@ -239,9 +241,10 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const parsed = consumePairingBodySchema.safeParse(request.body)
       if (!parsed.success) {
-        reply
-          .status(400)
-          .send({ code: "invalid_request", details: parsed.error.flatten() })
+        reply.status(400).send({
+          code: "invalid_request",
+          details: formatValidationDetails(parsed.error),
+        })
         return
       }
       try {
@@ -287,9 +290,10 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         return
       const parsed = claimDaemonBodySchema.safeParse(request.body)
       if (!parsed.success) {
-        reply
-          .status(400)
-          .send({ code: "invalid_request", details: parsed.error.flatten() })
+        reply.status(400).send({
+          code: "invalid_request",
+          details: formatValidationDetails(parsed.error),
+        })
         return
       }
       try {

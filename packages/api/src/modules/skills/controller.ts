@@ -53,9 +53,9 @@ const accessTargetTypeSchema = z.enum([
 const conversationTypeMaskSchema = z.number().int().min(1).max(31)
 const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
+  actorId: z.uuid().optional(),
+  conversationId: z.uuid().optional(),
+  workspaceMemberId: z.uuid().optional(),
 })
 
 function inputToCapabilityAccessTarget(
@@ -107,38 +107,38 @@ const skillAttachmentSchema = z.object({
 })
 
 const publishSkillSchema = z.object({
-  skillId: z.string().uuid().optional(),
+  skillId: z.uuid().optional(),
   slug: z.string().min(1),
   name: z.string().min(1),
   description: z.any().optional(),
-  iconFileId: z.string().uuid().nullable().optional(),
+  iconFileId: z.uuid().nullable().optional(),
   tags: z.array(z.string()).optional(),
   version: z.string().min(1),
   changelog: z.string().optional(),
   isActive: z.boolean().optional(),
   defaultConversationTypeMask: conversationTypeMaskSchema.optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
 })
 
 const createWorkspaceSkillSchema = z.object({
   name: z.string().min(1),
   description: z.any().optional(),
-  iconFileId: z.string().uuid().optional(),
+  iconFileId: z.uuid().optional(),
   tags: z.array(z.string()).optional(),
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
   accessTarget: accessTargetSchema,
 })
 
 const installSkillSchema = z.object({
-  marketSkillId: z.string().uuid(),
+  marketSkillId: z.uuid(),
   accessTarget: accessTargetSchema,
 })
 
 const importMarketplaceSkillSchema = z.discriminatedUnion("sourceType", [
   z.object({
     sourceType: z.literal("github"),
-    repoUrl: z.string().url(),
+    repoUrl: z.url(),
     path: z.string().min(1),
     ref: z.string().trim().min(1).optional(),
   }),
@@ -153,7 +153,7 @@ const importMarketplaceSkillSchema = z.discriminatedUnion("sourceType", [
 const updateInstalledSkillSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.any().optional(),
-  iconFileId: z.string().uuid().nullable().optional(),
+  iconFileId: z.uuid().nullable().optional(),
   tags: z.array(z.string()).optional(),
   isEnabled: z.boolean().optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema
@@ -178,14 +178,14 @@ const skillAccessGrantUpdateSchema = z.object({
 
 const listInstalledSkillsQuerySchema = z.object({
   accessTargetType: accessTargetTypeSchema.optional(),
-  actorId: z.string().uuid().optional(),
+  actorId: z.uuid().optional(),
   // Round 12 review (P3): workspace_member filter mode needs the id
   // to resolve a SubjectRef. Without it,
   // scopedTargetFromSkillUseScope("workspace_member") in
   // findSkillIdsByBindingFilter throws on missing workspaceMemberId.
-  workspaceMemberId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  sourceSkillId: z.string().uuid().optional(),
+  workspaceMemberId: z.uuid().optional(),
+  conversationId: z.uuid().optional(),
+  sourceSkillId: z.uuid().optional(),
 })
 
 function handleError(reply: FastifyReply, error: unknown) {
@@ -195,7 +195,7 @@ function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof z.ZodError) {
     return reply.status(400).send({
       error: "Validation failed",
-      details: error.errors.map((item) => ({
+      details: error.issues.map((item) => ({
         field: item.path.join("."),
         message: item.message,
       })),

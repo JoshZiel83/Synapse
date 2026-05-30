@@ -54,34 +54,34 @@ const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
 const conversationTypeMaskSchema = z.number().int().min(1).max(31)
 const attachmentTargetSchema = z.object({
   type: attachmentTargetTypeSchema,
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
+  actorId: z.uuid().optional(),
+  conversationId: z.uuid().optional(),
+  workspaceMemberId: z.uuid().optional(),
 })
 const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
+  actorId: z.uuid().optional(),
+  conversationId: z.uuid().optional(),
+  workspaceMemberId: z.uuid().optional(),
 })
 
 const installSchema = z.object({
-  pluginId: z.string().uuid(),
+  pluginId: z.uuid(),
   attachmentTarget: attachmentTargetSchema,
   lifecycleScope: lifecycleScopeSchema.optional(),
-  configData: z.record(z.unknown()).optional(),
-  authSessionIds: z.record(z.string().uuid()).optional(),
+  configData: z.record(z.string(), z.unknown()).optional(),
+  authSessionIds: z.record(z.string(), z.uuid()).optional(),
 })
 
 const updateInstallSchema = z.object({
   isEnabled: z.boolean().optional(),
-  configData: z.record(z.unknown()).optional(),
+  configData: z.record(z.string(), z.unknown()).optional(),
   lifecycleScope: lifecycleScopeSchema.optional(),
   attachmentTarget: attachmentTargetSchema.optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema
     .nullable()
     .optional(),
-  authSessionIds: z.record(z.string().uuid()).optional(),
+  authSessionIds: z.record(z.string(), z.uuid()).optional(),
 })
 
 const installPlanSchema = z.object({
@@ -89,9 +89,9 @@ const installPlanSchema = z.object({
 })
 
 const startAuthSchema = z.object({
-  installationId: z.string().uuid().optional(),
-  draftConfig: z.record(z.unknown()).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  installationId: z.uuid().optional(),
+  draftConfig: z.record(z.string(), z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
 const accessGrantSchema = z.object({
@@ -163,7 +163,7 @@ function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof z.ZodError) {
     return reply.status(400).send({
       error: "Validation error",
-      details: error.errors,
+      details: error.issues,
     })
   }
   console.error("[MCP Controller]", error)

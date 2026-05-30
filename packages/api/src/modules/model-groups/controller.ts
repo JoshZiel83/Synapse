@@ -49,16 +49,14 @@ const engineKindSchema = z
   .refine(isKnownModelEngineKind, "Unknown engine kind")
 const grantScopeEnum = z.enum(MODEL_GROUP_GRANT_SCOPES)
 
-const attemptPolicySchema = z
-  .object({
-    maxAttemptsTotal: z.number().int().positive().optional(),
-    maxAttemptsPerBinding: z.number().int().positive().optional(),
-    timeoutMsPerAttempt: z.number().int().positive().optional(),
-    continueOn: z.array(z.string()).optional(),
-    stopOn: z.array(z.string()).optional(),
-    retryBackoffMs: z.array(z.number().int().min(0)).optional(),
-  })
-  .passthrough()
+const attemptPolicySchema = z.looseObject({
+  maxAttemptsTotal: z.number().int().positive().optional(),
+  maxAttemptsPerBinding: z.number().int().positive().optional(),
+  timeoutMsPerAttempt: z.number().int().positive().optional(),
+  continueOn: z.array(z.string()).optional(),
+  stopOn: z.array(z.string()).optional(),
+  retryBackoffMs: z.array(z.number().int().min(0)).optional(),
+})
 
 const createGroupSchema = z.object({
   name: z.string().min(1).max(255),
@@ -88,7 +86,7 @@ const addItemSchema = z.object({
   modelName: z.string().min(1),
   maxTokens: z.number().int().positive().optional(),
   capabilityTags: z.array(z.string()).optional(),
-  extraConfig: z.record(z.unknown()).optional(),
+  extraConfig: z.record(z.string(), z.unknown()).optional(),
   requestTimeoutMs: z.number().int().positive().optional(),
   maxRetries: z.number().int().min(0).optional(),
 })
@@ -105,7 +103,7 @@ const updateItemSchema = z.object({
   modelName: z.string().min(1).optional(),
   maxTokens: z.number().int().positive().optional(),
   capabilityTags: z.array(z.string()).optional(),
-  extraConfig: z.record(z.unknown()).optional(),
+  extraConfig: z.record(z.string(), z.unknown()).optional(),
   requestTimeoutMs: z.number().int().positive().optional(),
   maxRetries: z.number().int().min(0).optional(),
 })
@@ -113,7 +111,7 @@ const updateItemSchema = z.object({
 const setActorGroupsSchema = z.object({
   groups: z.array(
     z.object({
-      groupId: z.string().uuid(),
+      groupId: z.uuid(),
       priority: z.number().int(),
     })
   ),
@@ -121,9 +119,9 @@ const setActorGroupsSchema = z.object({
 
 const issueGrantSchema = z.object({
   grantScope: grantScopeEnum,
-  workspaceId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
-  actorId: z.string().uuid().optional(),
+  workspaceId: z.uuid().optional(),
+  workspaceMemberId: z.uuid().optional(),
+  actorId: z.uuid().optional(),
   reason: z.string().max(1000).optional(),
 })
 
@@ -134,7 +132,7 @@ function handleError(error: unknown, reply: FastifyReply) {
   if (error instanceof z.ZodError) {
     return reply.status(400).send({
       error: "Validation failed",
-      details: error.errors.map((e) => ({
+      details: error.issues.map((e) => ({
         field: e.path.join("."),
         message: e.message,
       })),
