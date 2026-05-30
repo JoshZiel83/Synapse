@@ -1,0 +1,25 @@
+# Self-hosted Verdaccio for the Synapse private npm registry.
+#
+# Usage (from this directory):
+#   cp .env.example .env          # then edit if needed
+#   # create a publisher (one-time) — see README.md
+#   docker compose up -d
+#
+# The named volume `verdaccio-storage` holds published @synapse/*
+# tarballs AND the npmjs uplink cache. BACK IT UP — recreating the
+# container without it loses every published version.
+
+services:
+  verdaccio:
+    image: verdaccio/verdaccio:6
+    container_name: synapse-verdaccio
+    ports:
+      - "${VERDACCIO_PORT:-4873}:4873"
+    volumes:
+      - ./config.yaml:/verdaccio/conf/config.yaml:ro
+      - ./htpasswd:/verdaccio/conf/htpasswd
+      - verdaccio-storage:/verdaccio/storage
+    restart: unless-stopped
+
+volumes:
+  verdaccio-storage:

@@ -13,5 +13,8 @@
   "files": [
     "bundles",
     "README.md"
-  ]
+  ],
+  "scripts": {
+    "prepublishOnly": "node ../../scripts/sidecar-publish-guard.mjs"
+  }
 }

@@ -23,7 +23,15 @@
 # Usage (run from repo root):
 #   bash scripts/publish-device-runtime-sidecars.sh [--dry-run]
 #
-# Honors NPM_PUBLISH_FLAGS (e.g. `--tag=next`).
+# Registry: the destination is taken from $NPM_REGISTRY (required) and
+# pinned internally with `--registry`; it is NEVER taken from ambient npm
+# config, because the staging dir lives under /tmp and would not see the
+# repo-root .npmrc @synapse:registry mapping. A publish to public
+# npmjs/yarnpkg is refused outright.
+#
+# Honors NPM_PUBLISH_FLAGS for extra flags (e.g. `--tag=next`), but a
+# `--registry` inside it is REFUSED (npm's last-wins would let it override
+# the pinned private registry).
 
 set -euo pipefail
 
@@ -96,6 +104,23 @@ if [[ -n "$LIST_PLATFORMS" ]]; then
   exit 0
 fi
 
+# --- registry guard (publish + dry-run only; --list-platforms exited above) ---
+# These six are the largest, most sensitive packages; never let them slip
+# to the wrong registry on a missing/foot-gun flag. The destination is
+# taken from $NPM_REGISTRY and pinned with --registry below — NOT from
+# ambient npm config (the /tmp staging dir can't see the repo .npmrc).
+: "${NPM_REGISTRY:?NPM_REGISTRY must be set (the private registry URL); refusing to publish sidecars}"
+case "$NPM_REGISTRY" in
+  *registry.npmjs.org*|*registry.yarnpkg.com*)
+    echo "ERROR: NPM_REGISTRY ($NPM_REGISTRY) points at public npm; sidecars are private. Refusing." >&2
+    exit 2
+    ;;
+esac
+if [[ "${NPM_PUBLISH_FLAGS:-}" == *"--registry"* || "${NPM_PUBLISH_FLAGS:-}" == *"registry="* ]]; then
+  echo "ERROR: NPM_PUBLISH_FLAGS must not contain --registry/registry= (it would override the pinned \$NPM_REGISTRY). Refusing." >&2
+  exit 2
+fi
+
 echo "Found ${#PLATFORMS[@]} sidecar(s): ${PLATFORMS[*]}"
 echo
 
@@ -110,16 +135,27 @@ for plat in "${PLATFORMS[@]}"; do
   # Copy package contents (just the files needed for the npm tarball).
   cp -r "$src/." "$staging/"
   # Hoist publishConfig.os / publishConfig.cpu to top-level so the
-  # registry filter actually fires on consumers' `npm install`.
+  # registry filter actually fires on consumers' `npm install`. Also
+  # strip `.scripts` so the staged tarball carries no prepublishOnly
+  # guard (the guard exists only to block a direct `npm publish -w
+  # <sidecar>`; the staged copy is the sanctioned path and ships clean).
   jq '
     .os = (.publishConfig.os // empty)
     | .cpu = (.publishConfig.cpu // empty)
     | del(.publishConfig.os, .publishConfig.cpu)
     | if (.publishConfig | length) == 0 then del(.publishConfig) else . end
+    | del(.scripts)
   ' "$src/package.json" > "$staging/package.json"
   echo "==> publishing $plat from staging $staging"
   diff -u "$src/package.json" "$staging/package.json" || true
-  ( cd "$staging" && npm publish $DRY_RUN ${NPM_PUBLISH_FLAGS:-} )
+  # Pin --registry LAST (npm last-wins) so nothing in NPM_PUBLISH_FLAGS
+  # can redirect it; SYNAPSE_SIDECAR_PUBLISH_OK is belt-and-suspenders
+  # (staging already stripped the guard script).
+  (
+    cd "$staging" &&
+      SYNAPSE_SIDECAR_PUBLISH_OK=1 \
+        npm publish $DRY_RUN ${NPM_PUBLISH_FLAGS:-} --registry "$NPM_REGISTRY"
+  )
   rm -rf "$staging"
   trap - EXIT
 done

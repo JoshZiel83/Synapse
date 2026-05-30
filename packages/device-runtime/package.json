@@ -1,8 +1,10 @@
 {
   "name": "@synapse/device-runtime",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -23,18 +25,18 @@
     "bundles/manifest.production.template.json",
     "bundles/README.md",
     "bundles/build-scripts",
-    "bundles/__fixtures__",
     "bundles/archives"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "dev": "tsc --watch",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "prepublishOnly": "node ../../scripts/prepublish-guard.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "@synapse/device-protocol": "*",
-    "@synapse/shared": "*",
+    "@synapse/device-protocol": "0.1.0",
+    "@synapse/shared": "0.1.0",
     "semver": "^7.6.3",
     "tar": "^7.5.0",
     "trash": "^9.0.0",
