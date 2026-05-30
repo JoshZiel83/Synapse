@@ -135,17 +135,16 @@ esac
 echo "Found ${#PLATFORMS[@]} sidecar(s): ${PLATFORMS[*]}"
 echo
 
-# Build a CONTROLLED userconfig that forces the destination registry for
-# the @synapse scope (and generic). We START from the operator's existing
-# userconfig (so the auth token is preserved) and APPEND our registry/scope
-# pins LAST — within one npmrc file, the last assignment of a key wins, so
-# our pins override any stray @synapse:registry the operator's config
-# carries. Publishing with `--userconfig "$CTRL_NPMRC"` from a neutral dir
-# (the repo root, which has its own .npmrc that we also neutralize via the
-# generic+scope pins here taking precedence) makes this authoritative.
-# This is what actually defeats the scoped-publish foot-gun: a plain
-# --registry does NOT win for a scoped package, but a scope mapping in the
-# highest-precedence npmrc does.
+# Build a CONTROLLED userconfig that carries the AUTH token (and, as a
+# belt-and-suspenders, registry pins) for the publish. We START from the
+# operator's existing userconfig (so the auth token for the target host is
+# preserved) and APPEND registry/scope pins LAST (last-assignment wins
+# within one npmrc file). NOTE: the AUTHORITATIVE destination control is
+# NOT this userconfig — it is the cmdline `--@synapse:registry=` flag on
+# the publish below (cmdline beats every npmrc layer; for a scoped package
+# that is the value npm routes on). This userconfig is for auth + an
+# extra layer; the publish also runs from a NEUTRAL dir so no project
+# .npmrc can outrank it.
 CTRL_NPMRC="$(mktemp)"
 trap 'rm -f "$CTRL_NPMRC"' EXIT
 # Seed from the operator's userconfig if set/exists (preserves auth).
@@ -185,9 +184,7 @@ for plat in "${PLATFORMS[@]}"; do
   # Pack to a tarball FIRST, then publish the tarball. npm's in-publish
   # re-pack path round-trips these very large (100-200MB) archives through
   # the cacache and can fail with TAR_BAD_ARCHIVE on a flaky/slow upload;
-  # publishing a pre-built tgz avoids that. The controlled userconfig (not
-  # --@synapse:registry, which npm mis-parses for a file publish) forces
-  # the destination registry safely.
+  # publishing a pre-built tgz avoids that.
   (
     cd "$staging" &&
       SYNAPSE_SIDECAR_PUBLISH_OK=1 npm pack >/dev/null
@@ -198,14 +195,24 @@ for plat in "${PLATFORMS[@]}"; do
     rm -rf "$staging"
     exit 1
   fi
+  TGZ="$(cd "$staging" && pwd)/$(basename "$TGZ")" # absolute path
+  # Publish from a NEUTRAL dir (no project .npmrc) so config precedence is
+  # cmdline > userconfig. The destination is forced on the CMDLINE with the
+  # `=` form of --@synapse:registry (highest precedence; for a SCOPED
+  # package this is the value npm actually routes on, and it beats any
+  # ambient scope mapping incl. a project/user .npmrc — verified). The
+  # controlled userconfig carries only the AUTH token. A bare --registry is
+  # kept for the unscoped fallback but is inert for scoped resolution.
+  pubdir="$(mktemp -d)"
   (
-    cd "$ROOT" &&
+    cd "$pubdir" &&
       SYNAPSE_SIDECAR_PUBLISH_OK=1 \
         npm publish "$TGZ" $DRY_RUN ${NPM_PUBLISH_FLAGS:-} \
           --userconfig "$CTRL_NPMRC" \
-          --registry "$NPM_REGISTRY"
+          --registry="$NPM_REGISTRY" \
+          --@synapse:registry="$NPM_REGISTRY"
   )
-  rm -rf "$staging"
+  rm -rf "$staging" "$pubdir"
 done
 
 echo
