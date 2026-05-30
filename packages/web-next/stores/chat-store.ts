@@ -54,7 +54,7 @@ export interface ConversationParticipant {
 
 export interface ConversationMember {
   participantId: string
-  participantType: Exclude<ConversationParticipantType, "system">
+  participantType: ConversationParticipantType
   id: string
   workspaceMemberId?: string
   remoteAgentId?: string
@@ -612,11 +612,6 @@ function resolveConversationTransportKind(conversation: ChatConversationView) {
 function toConversationMember(
   participant: ChatConversationView["participants"][number]
 ): ConversationMember {
-  if (participant.participantType === "system") {
-    throw new Error(
-      "system participants should not be mapped into conversation members"
-    )
-  }
   const id =
     participant.actorId ||
     participant.remoteAgentId ||
@@ -700,8 +695,7 @@ function rawConversationToSummary(
   snapshot: ChatWorkspaceSnapshot
 ): ConversationSummary {
   const activeParticipants = conversation.participants.filter(
-    (participant) =>
-      participant.state === "active" && participant.participantType !== "system"
+    (participant) => participant.state === "active"
   )
   const title = getConversationDisplayName(
     conversation,

@@ -32,9 +32,10 @@ export type SubjectRef =
   | { readonly kind: typeof SUBJECT_KIND.USER; readonly userId: string }
   | {
       readonly kind: typeof SUBJECT_KIND.EXTERNAL
-      readonly externalIdentityKey: string
+      readonly workspaceId: string
+      readonly transportAddressId: string
     }
-  | { readonly kind: typeof SUBJECT_KIND.SYSTEM }
+  | { readonly kind: typeof SUBJECT_KIND.PLATFORM }
 
 /**
  * Workspace-scoped subjects only — the variants that can be referenced from
@@ -140,10 +141,13 @@ export function conversationRef(conversationId: string): SubjectRef {
 export function userRef(userId: string): SubjectRef {
   return { kind: SUBJECT_KIND.USER, userId }
 }
-export function externalRef(externalIdentityKey: string): SubjectRef {
-  return { kind: SUBJECT_KIND.EXTERNAL, externalIdentityKey }
+export function externalRef(
+  workspaceId: string,
+  transportAddressId: string
+): SubjectRef {
+  return { kind: SUBJECT_KIND.EXTERNAL, workspaceId, transportAddressId }
 }
-export const systemRef: SubjectRef = { kind: SUBJECT_KIND.SYSTEM }
+export const platformRef: SubjectRef = { kind: SUBJECT_KIND.PLATFORM }
 
 // ---------- Equality ----------
 
@@ -188,13 +192,17 @@ export function subjectsEqual(a: SubjectRef, b: SubjectRef): boolean {
         a.userId ===
         (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.USER }>).userId
       )
-    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.EXTERNAL: {
+      const bb = b as Extract<
+        SubjectRef,
+        { kind: typeof SUBJECT_KIND.EXTERNAL }
+      >
       return (
-        a.externalIdentityKey ===
-        (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.EXTERNAL }>)
-          .externalIdentityKey
+        a.workspaceId === bb.workspaceId &&
+        a.transportAddressId === bb.transportAddressId
       )
-    case SUBJECT_KIND.SYSTEM:
+    }
+    case SUBJECT_KIND.PLATFORM:
       return true
   }
 }
@@ -218,9 +226,9 @@ export function subjectKey(ref: SubjectRef): string {
     case SUBJECT_KIND.USER:
       return `user:${ref.userId}`
     case SUBJECT_KIND.EXTERNAL:
-      return `external:${ref.externalIdentityKey}`
-    case SUBJECT_KIND.SYSTEM:
-      return "system:_"
+      return `external:${ref.workspaceId}:${ref.transportAddressId}`
+    case SUBJECT_KIND.PLATFORM:
+      return "platform:_"
   }
 }
 
@@ -242,10 +250,14 @@ export function parseSubjectKey(key: string): SubjectRef | null {
       return conversationRef(payload)
     case SUBJECT_KIND.USER:
       return userRef(payload)
-    case SUBJECT_KIND.EXTERNAL:
-      return externalRef(payload)
-    case SUBJECT_KIND.SYSTEM:
-      return systemRef
+    case SUBJECT_KIND.EXTERNAL: {
+      // payload is `${workspaceId}:${transportAddressId}`
+      const dot = payload.indexOf(":")
+      if (dot < 0) return null
+      return externalRef(payload.slice(0, dot), payload.slice(dot + 1))
+    }
+    case SUBJECT_KIND.PLATFORM:
+      return platformRef
     default:
       return null
   }
@@ -283,8 +295,10 @@ export function isScopeEligibleSubject(ref: SubjectRef): boolean {
 /**
  * The kinds legitimate as subjects of a workspace-bound authorization row
  * (resource_access_bindings / runtime_authorization_grants / memory_access_grants).
- * Excludes user / external / system — those are platform-wide subjects that
- * cannot anchor a workspace-bound grant.
+ * Excludes user / external / platform. NOTE: external is workspace-rooted now
+ * (it carries workspaceId) but is intentionally still excluded — first-class
+ * external identities are not yet authorization principals (see plan "后续可选").
+ * Mirrors the `is_workspace_bound_subject_kind` SQL helper.
  */
 export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
   return (
@@ -300,7 +314,7 @@ export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
  * Allowed `memory_spaces.owner_subject_id` kinds.
  *
  * Scope note: this iteration of the memory model is **workspace-bound only**.
- * `user`, `external`, and `system` are intentionally NOT memory owners — they
+ * `user`, `external`, and `platform` are intentionally NOT memory owners — they
  * would require a separate platform-memory storage path (nullable
  * `memory_items.workspace_id`, cross-workspace recall, cross-tenant indexing
  * pipeline) that lives outside this refactor's scope. If platform user memory
@@ -347,7 +361,7 @@ export type ScopedCapabilityAccessTarget = ScopedSubjectTarget
  *   - remote_agent + scope=conversation  → "remote_agent_in_conversation"
  *   - workspace / workspace_member / actor / conversation / remote_agent →
  *     mirrors the subject.kind value
- *   - anything else (user, external, system, scope-only) falls back to
+ *   - anything else (user, external, platform, scope-only) falls back to
  *     the raw subject.kind for diagnostic use; UI maps should default-case.
  *
  * Round 9 review extension: previously only the actor-side composite was

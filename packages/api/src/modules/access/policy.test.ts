@@ -213,7 +213,6 @@ test(
         .insertInto("conversation_participants")
         .values({
           conversation_id: conversationId,
-          participant_type: "actor",
           subject_id: actorSubjectId,
           state: "active",
         })
@@ -271,7 +270,6 @@ test(
         .insertInto("conversation_participants")
         .values({
           conversation_id: conversationId,
-          participant_type: "remote_agent",
           subject_id: remoteAgentSubjectId,
           state: "active",
         })
@@ -329,7 +327,6 @@ test(
         .insertInto("conversation_participants")
         .values({
           conversation_id: conversationId,
-          participant_type: "workspace_member",
           subject_id: memberSubjectId,
           state: "active",
         })

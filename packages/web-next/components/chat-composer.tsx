@@ -139,10 +139,7 @@ type SuggestionListHandle = {
 export type ChatComposerParticipant = {
   id: string
   name: string
-  participantType: Exclude<
-    ConversationParticipantType,
-    typeof CONVERSATION_PARTICIPANT_TYPE.SYSTEM
-  >
+  participantType: ConversationParticipantType
   targetType?: Exclude<
     MentionTargetType,
     typeof CHAT_COMPOSER_MENTION_TARGET_TYPE.ATTACHMENT

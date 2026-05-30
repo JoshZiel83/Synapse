@@ -774,7 +774,6 @@ export function getMentionableConversationParticipants(
   return (conversation?.participants ?? []).filter(
     (participant) =>
       participant.state === "active" &&
-      participant.participantType !== CONVERSATION_PARTICIPANT_TYPE.SYSTEM &&
       participant.participantId !== viewerParticipantId
   )
 }

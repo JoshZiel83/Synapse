@@ -161,7 +161,6 @@ async function isSubjectActiveParticipantInConversation(
     .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", params.conversationId)
-    .where("participant_type", "=", params.participantType)
     .where("subject_id", "=", params.subjectId)
     .where("state", "=", "active")
     .limit(1)

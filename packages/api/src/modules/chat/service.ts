@@ -38,6 +38,7 @@ import {
   type ConversationMessageSubtype,
   type ConversationParticipantType,
   type ConversationReplyRef,
+  type SessionWakeupSourceParticipantType,
   isTransportKind,
 } from "@synapse/shared"
 import type {
@@ -62,6 +63,7 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import { SUBJECT_KIND } from "@synapse/shared"
 import {
+  subjectKindToParticipantType,
   upsertAccessSubject,
   upsertAccessSubjectOn,
 } from "../access/subject-registry.js"
@@ -275,7 +277,8 @@ type HydratedConversationItemRecord = {
 type ConversationCreateExternalParticipantInput = {
   displayName: string
   metadata?: Record<string, unknown>
-  transportAddressIds?: string[]
+  // The single transport address identifying this first-class external person.
+  transportAddressId: string
 }
 
 type ConversationCreateInput = {
@@ -525,16 +528,14 @@ function participantDisplayName(row: ParticipantRow): string {
     }
   }
   if (
-    (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
-      row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
+    row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
     typeof row.transport_display_name === "string" &&
     row.transport_display_name.trim()
   ) {
     return row.transport_display_name.trim()
   }
   if (
-    (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
-      row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
+    row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
     typeof row.display_name === "string" &&
     row.display_name.trim()
   ) {
@@ -552,9 +553,7 @@ function participantDisplayName(row: ParticipantRow): string {
   if (typeof row.display_name === "string" && row.display_name.trim()) {
     return row.display_name.trim()
   }
-  return row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
-    ? "System"
-    : "Unknown"
+  return "Unknown"
 }
 
 function participantAvatarUrl(row: ParticipantRow): string | undefined {
@@ -841,7 +840,7 @@ async function listConversationParticipantRows(
       SELECT
         cp.id,
         cp.conversation_id,
-        cp.participant_type,
+        cpsubj.kind AS participant_type,
         cpsubj.workspace_member_id AS workspace_member_id,
         cpsubj.actor_id AS actor_id,
         cpsubj.remote_agent_id AS remote_agent_id,
@@ -950,7 +949,7 @@ async function getWorkspaceMemberConversationParticipantRow(
       SELECT
         cp.id,
         cp.conversation_id,
-        cp.participant_type,
+        cpsubj.kind AS participant_type,
         cpsubj.workspace_member_id AS workspace_member_id,
         cpsubj.actor_id AS actor_id,
         cpsubj.remote_agent_id AS remote_agent_id,
@@ -2146,7 +2145,11 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   workspaceId?: string
   conversationId: string
   itemId: string
-  sourceParticipantType?: ParticipantKind
+  // sourceParticipantType mixes a real participant author kind with the
+  // "system" wakeup source (automation / tool-call completion), so it is typed
+  // as the wakeup-source enum (which retains 'system') rather than
+  // ParticipantKind. The DB participant kind never equals 'system'.
+  sourceParticipantType?: SessionWakeupSourceParticipantType
   sourceParticipantId?: string
   sourceName?: string
   summary?: string
@@ -2211,10 +2214,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     : undefined
   const sourceParticipantType =
     params.sourceParticipantType ?? authorParticipant?.participant_type
-  if (
-    !sourceParticipantType ||
-    sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
-  ) {
+  if (!sourceParticipantType || sourceParticipantType === "system") {
     return [] as PendingActorWakeup[]
   }
 
@@ -2346,6 +2346,91 @@ async function syncConversationUpsertForWorkspaceMembers(
   }
 }
 
+/**
+ * Resolve the access_subjects.id for a participant of the given kind, minting
+ * the subject if needed. Shared by `insertParticipant` (write) and
+ * `ensureConversationParticipant` (dedup lookup) so both agree on the subject
+ * identity — dedup is keyed on (conversation_id, subject_id), not display_name.
+ */
+async function resolveParticipantSubjectId(
+  queryable: Queryable,
+  params: {
+    participantType: ParticipantKind
+    workspaceMemberId?: string
+    actorId?: string
+    remoteAgentId?: string
+    transportAddressId?: string
+  }
+): Promise<string> {
+  if (
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
+    params.workspaceMemberId
+  ) {
+    return upsertAccessSubjectOn(queryable, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      memberId: params.workspaceMemberId,
+    })
+  }
+  if (
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+    params.actorId
+  ) {
+    return upsertAccessSubjectOn(queryable, {
+      kind: SUBJECT_KIND.ACTOR,
+      actorId: params.actorId,
+    })
+  }
+  if (
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+    params.remoteAgentId
+  ) {
+    return upsertAccessSubjectOn(queryable, {
+      kind: SUBJECT_KIND.REMOTE_AGENT,
+      remoteAgentId: params.remoteAgentId,
+    })
+  }
+  // external participant. Require a transport identity (no throwaway).
+  if (!params.transportAddressId) {
+    throw new Error(
+      "resolveParticipantSubjectId: external participant requires transportAddressId"
+    )
+  }
+  // Defence-in-depth: every funnel that mints an external subject validates the
+  // address here, so a future caller of ensureConversationParticipant can't
+  // attach a bot/system or member-linked address as an external participant —
+  // even if it skips the higher-level validateTransportAddresses gate.
+  const addr = await executeSqlOn<{
+    workspace_id: string
+    address_type: string
+    workspace_member_id: string | null
+  }>(
+    queryable,
+    `SELECT workspace_id, address_type, workspace_member_id
+       FROM transport_addresses WHERE id = $1`,
+    [params.transportAddressId]
+  )
+  if (!addr.rows[0]) {
+    throw new Error(
+      `resolveParticipantSubjectId: transport_addresses(${params.transportAddressId}) not found`
+    )
+  }
+  if (addr.rows[0].address_type !== "user") {
+    throw new Error(
+      `resolveParticipantSubjectId: address ${params.transportAddressId} is not a user address`
+    )
+  }
+  if (addr.rows[0].workspace_member_id) {
+    throw new Error(
+      `resolveParticipantSubjectId: address ${params.transportAddressId} is linked to a workspace member; add it as a member, not an external participant`
+    )
+  }
+  return upsertAccessSubjectOn(queryable, {
+    kind: SUBJECT_KIND.EXTERNAL,
+    workspaceId: addr.rows[0].workspace_id,
+    transportAddressId: params.transportAddressId,
+  })
+}
+
 async function insertParticipant(
   queryable: Queryable,
   params: {
@@ -2358,55 +2443,29 @@ async function insertParticipant(
     displayName?: string
     roleKey: string
     metadata?: Record<string, unknown>
-    transportAddressIds?: string[]
+    // The transport identity for an external participant: mints the first-class
+    // subject AND is bound to the participant via conversation_participant_addresses.
+    transportAddressId?: string
+    // Optional pre-resolved subject id (from resolveParticipantSubjectId) so
+    // the dedup lookup and the insert agree on the same subject without
+    // resolving twice.
+    subjectId?: string
   }
 ) {
   const participantId = crypto.randomUUID()
-  // P1b: every participant gets a subject_id (no NULL escape hatch).
-  // Workspace_member / actor / remote_agent map to their canonical
-  // access_subjects rows. External + system participants are anonymous and
-  // would have nothing to point to under the strict {kind, payload} schema, so
-  // we mint a per-participant kind='external' subject keyed by the participant
-  // id itself ('participant:<uuid>'). participant_type stays as the display
-  // discriminator (external vs system) since both share kind='external' here.
-  let participantSubjectId: string
-  if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
-    params.workspaceMemberId
-  ) {
-    participantSubjectId = await upsertAccessSubjectOn(queryable, {
-      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-      memberId: params.workspaceMemberId,
-    })
-  } else if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
-    params.actorId
-  ) {
-    participantSubjectId = await upsertAccessSubjectOn(queryable, {
-      kind: SUBJECT_KIND.ACTOR,
-      actorId: params.actorId,
-    })
-  } else if (
-    params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
-    params.remoteAgentId
-  ) {
-    participantSubjectId = await upsertAccessSubjectOn(queryable, {
-      kind: SUBJECT_KIND.REMOTE_AGENT,
-      remoteAgentId: params.remoteAgentId,
-    })
-  } else {
-    participantSubjectId = await upsertAccessSubjectOn(queryable, {
-      kind: SUBJECT_KIND.EXTERNAL,
-      externalIdentityKey: `participant:${participantId}`,
-    })
-  }
+  // Every participant gets a real subject_id. Workspace_member / actor /
+  // remote_agent map to their canonical access_subjects rows; external maps to
+  // a first-class, workspace-rooted subject keyed by its transport_address
+  // (deduped across conversations). There is no throwaway/anonymous escape
+  // hatch — an external participant must carry a transport identity.
+  const participantSubjectId =
+    params.subjectId ?? (await resolveParticipantSubjectId(queryable, params))
   await executeSqlOn(
     queryable,
     `
       INSERT INTO conversation_participants (
         id,
         conversation_id,
-        participant_type,
         subject_id,
         actor_join_version_id,
         display_name,
@@ -2415,12 +2474,11 @@ async function insertParticipant(
         metadata,
         joined_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8::jsonb, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, 'active', $7::jsonb, NOW())
     `,
     [
       participantId,
       params.conversationId,
-      params.participantType,
       participantSubjectId,
       params.actorJoinVersionId ?? null,
       params.displayName ?? null,
@@ -2445,31 +2503,23 @@ async function insertParticipant(
     [params.conversationId, participantId]
   )
 
-  if (
-    Array.isArray(params.transportAddressIds) &&
-    params.transportAddressIds.length > 0
-  ) {
-    for (const [
-      index,
-      transportAddressId,
-    ] of params.transportAddressIds.entries()) {
-      await executeSqlOn(
-        queryable,
-        `
-          INSERT INTO conversation_participant_addresses (
-            conversation_participant_id,
-            transport_address_id,
-            is_primary,
-            metadata,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, $2, $3, '{}'::jsonb, NOW(), NOW())
-          ON CONFLICT (conversation_participant_id, transport_address_id) DO NOTHING
-        `,
-        [participantId, transportAddressId, index === 0]
-      )
-    }
+  if (params.transportAddressId) {
+    await executeSqlOn(
+      queryable,
+      `
+        INSERT INTO conversation_participant_addresses (
+          conversation_participant_id,
+          transport_address_id,
+          is_primary,
+          metadata,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, TRUE, '{}'::jsonb, NOW(), NOW())
+        ON CONFLICT (conversation_participant_id, transport_address_id) DO NOTHING
+      `,
+      [participantId, params.transportAddressId]
+    )
   }
 
   return {
@@ -2522,6 +2572,7 @@ async function loadActorsByIds(
 
 async function loadRemoteAgentsByIds(
   queryable: Queryable,
+  workspaceId: string,
   remoteAgentIds: string[]
 ) {
   if (remoteAgentIds.length === 0) {
@@ -2532,10 +2583,11 @@ async function loadRemoteAgentsByIds(
     `
       SELECT id, name
       FROM remote_agents
-      WHERE is_active = TRUE
-        AND id = ANY($1::uuid[])
+      WHERE workspace_id = $1
+        AND is_active = TRUE
+        AND id = ANY($2::uuid[])
     `,
-    [remoteAgentIds]
+    [workspaceId, remoteAgentIds]
   )
   return result.rows
 }
@@ -2548,10 +2600,18 @@ async function validateTransportAddresses(
   if (addressIds.length === 0) {
     return
   }
-  const result = await executeSqlOn<{ id: string }>(
+  // F6: an external participant address must (a) belong to this workspace,
+  // (b) be address_type='user' (not a bot/system endpoint), and (c) be UNLINKED
+  // (workspace_member_id IS NULL). A linked address represents an internal
+  // member and must be added as a workspace_member participant, not external.
+  const result = await executeSqlOn<{
+    id: string
+    address_type: string
+    workspace_member_id: string | null
+  }>(
     queryable,
     `
-      SELECT id
+      SELECT id, address_type, workspace_member_id
       FROM transport_addresses
       WHERE workspace_id = $1
         AND id = ANY($2::uuid[])
@@ -2564,6 +2624,45 @@ async function validateTransportAddresses(
       "invalid_transport_address",
       "One or more transport addresses are invalid"
     )
+  }
+  for (const row of result.rows) {
+    if (row.address_type !== "user") {
+      throw createChatError(
+        400,
+        "invalid_transport_address",
+        `Transport address ${row.id} is not a user address`
+      )
+    }
+    if (row.workspace_member_id) {
+      throw createChatError(
+        400,
+        "invalid_transport_address",
+        `Transport address ${row.id} is linked to a workspace member; add it as a member, not an external participant`
+      )
+    }
+  }
+}
+
+/**
+ * Reject duplicate external participants pointing at the same transport address:
+ * they would mint the same external subject and collide on the
+ * (conversation_id, subject_id) unique index. Surfaces a clean 400 instead of a
+ * raw DB constraint error. Shared by every create/add path that accepts
+ * `externalParticipants`.
+ */
+function assertNoDuplicateExternalParticipants(
+  externalParticipants: readonly ConversationCreateExternalParticipantInput[]
+) {
+  const seen = new Set<string>()
+  for (const ext of externalParticipants) {
+    if (seen.has(ext.transportAddressId)) {
+      throw createChatError(
+        400,
+        "duplicate_external_participant",
+        "Duplicate external participant transport address"
+      )
+    }
+    seen.add(ext.transportAddressId)
   }
 }
 
@@ -2645,16 +2744,7 @@ export async function createConversationForWorkspaceMember(params: {
   queryable?: Queryable
 }) {
   const executeCreate = async (queryable: Queryable) => {
-    const conversation = await createConversation({
-      kind: params.kind,
-      boundary: params.boundary ?? "internal",
-      workspaceId: params.workspaceId,
-      title: params.title,
-      createdByWorkspaceMemberId: params.creatorWorkspaceMemberId,
-      metadata: params.metadata,
-      queryable,
-    })
-
+    const externalParticipants = params.externalParticipants ?? []
     const workspaceMemberIds = [
       ...new Set(
         [
@@ -2667,84 +2757,114 @@ export async function createConversationForWorkspaceMember(params: {
     ]
     const actorIds = [...new Set(params.actorIds ?? [])]
     const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
-    const externalParticipants = params.externalParticipants ?? []
 
-    if (workspaceMemberIds.length > 0) {
-      const memberRows = await loadWorkspaceMembersByIds(
-        queryable,
-        params.workspaceId,
-        workspaceMemberIds
-      )
-      if (memberRows.length !== workspaceMemberIds.length) {
+    // Validate EVERY participant before creating the conversation, so a rejected
+    // request never leaves an orphan conversation behind (the caller may pass a
+    // non-transactional queryable). Same external rule as createChatConversation
+    // / addConversationParticipants: internal never accepts external; every
+    // external address must belong to this workspace, be a user address, and be
+    // unlinked.
+    if (externalParticipants.length > 0) {
+      if ((params.boundary ?? "internal") === "internal") {
         throw createChatError(
           400,
-          "invalid_workspace_member",
-          "One or more workspace members are invalid"
+          "external_participants_not_allowed",
+          "Internal conversations do not allow external participants"
         )
       }
-      for (const member of memberRows) {
-        await ensureConversationParticipant({
-          conversationId: conversation.id as string,
-          participantType: "workspace_member",
-          workspaceMemberId: member.id,
-          displayName: member.user_name,
-          roleKey:
-            member.id === params.creatorWorkspaceMemberId ? "owner" : "member",
-          queryable,
-        })
-        await upsertConversationView(queryable, {
-          workspaceMemberId: member.id,
-          conversationId: conversation.id as string,
-          unreadCount: 0,
-        })
-      }
+      assertNoDuplicateExternalParticipants(externalParticipants)
+      await validateTransportAddresses(queryable, params.workspaceId, [
+        ...new Set(externalParticipants.map((p) => p.transportAddressId)),
+      ])
     }
 
-    if (actorIds.length > 0) {
-      const actorRows = await loadActorsByIds(
-        queryable,
-        params.workspaceId,
-        actorIds
+    const memberRows =
+      workspaceMemberIds.length > 0
+        ? await loadWorkspaceMembersByIds(
+            queryable,
+            params.workspaceId,
+            workspaceMemberIds
+          )
+        : []
+    if (memberRows.length !== workspaceMemberIds.length) {
+      throw createChatError(
+        400,
+        "invalid_workspace_member",
+        "One or more workspace members are invalid"
       )
-      if (actorRows.length !== actorIds.length) {
-        throw createChatError(
-          400,
-          "invalid_actor",
-          "One or more actors are invalid"
-        )
-      }
-      for (const actor of actorRows) {
-        await ensureConversationParticipant({
-          conversationId: conversation.id as string,
-          participantType: "actor",
-          actorId: actor.id,
-          displayName: actor.name,
-          queryable,
-        })
-      }
+    }
+    const actorRows =
+      actorIds.length > 0
+        ? await loadActorsByIds(queryable, params.workspaceId, actorIds)
+        : []
+    if (actorRows.length !== actorIds.length) {
+      throw createChatError(
+        400,
+        "invalid_actor",
+        "One or more actors are invalid"
+      )
+    }
+    const remoteAgentRows =
+      remoteAgentIds.length > 0
+        ? await loadRemoteAgentsByIds(
+            queryable,
+            params.workspaceId,
+            remoteAgentIds
+          )
+        : []
+    if (remoteAgentRows.length !== remoteAgentIds.length) {
+      throw createChatError(
+        400,
+        "invalid_remote_agent",
+        "One or more remote agents are invalid"
+      )
     }
 
-    if (remoteAgentIds.length > 0) {
-      const remoteAgentRows = await loadRemoteAgentsByIds(
+    const conversation = await createConversation({
+      kind: params.kind,
+      boundary: params.boundary ?? "internal",
+      workspaceId: params.workspaceId,
+      title: params.title,
+      createdByWorkspaceMemberId: params.creatorWorkspaceMemberId,
+      metadata: params.metadata,
+      queryable,
+    })
+
+    for (const member of memberRows) {
+      await ensureConversationParticipant({
+        conversationId: conversation.id as string,
+        participantType: "workspace_member",
+        workspaceMemberId: member.id,
+        displayName: member.user_name,
+        roleKey:
+          member.id === params.creatorWorkspaceMemberId ? "owner" : "member",
         queryable,
-        remoteAgentIds
-      )
-      if (remoteAgentRows.length !== remoteAgentIds.length) {
-        throw createChatError(
-          400,
-          "invalid_remote_agent",
-          "One or more remote agents are invalid"
-        )
-      }
-      for (const remoteAgent of remoteAgentRows) {
-        await ensureConversationParticipant({
-          conversationId: conversation.id as string,
-          participantType: "remote_agent",
-          remoteAgentId: remoteAgent.id,
-          displayName: remoteAgent.name,
-          queryable,
-        })
-      }
+      })
+      await upsertConversationView(queryable, {
+        workspaceMemberId: member.id,
+        conversationId: conversation.id as string,
+        unreadCount: 0,
+      })
+    }
+
+    for (const actor of actorRows) {
+      await ensureConversationParticipant({
+        conversationId: conversation.id as string,
+        participantType: "actor",
+        actorId: actor.id,
+        displayName: actor.name,
+        queryable,
+      })
+    }
+
+    for (const remoteAgent of remoteAgentRows) {
+      await ensureConversationParticipant({
+        conversationId: conversation.id as string,
+        participantType: "remote_agent",
+        remoteAgentId: remoteAgent.id,
+        displayName: remoteAgent.name,
+        queryable,
+      })
     }
 
     for (const externalParticipant of externalParticipants) {
@@ -2753,7 +2873,7 @@ export async function createConversationForWorkspaceMember(params: {
         participantType: "external",
         displayName: externalParticipant.displayName,
         metadata: externalParticipant.metadata,
-        transportAddressIds: externalParticipant.transportAddressIds,
+        transportAddressId: externalParticipant.transportAddressId,
         queryable,
       })
     }
@@ -2844,7 +2964,7 @@ export async function ensureConversationParticipant(params: {
   actorJoinVersionId?: string
   roleKey?: string
   metadata?: Record<string, unknown>
-  transportAddressIds?: string[]
+  transportAddressId?: string
   queryable?: Queryable
 }) {
   const queryable = params.queryable ?? rootQueryable()
@@ -2872,33 +2992,28 @@ export async function ensureConversationParticipant(params: {
     throw new Error("remoteAgentId is required for remote agent participants")
   }
 
+  // F3: resolve the target subject_id up front and dedup by
+  // (conversation_id, subject_id) — the canonical identity — instead of by
+  // display_name (which let a renamed external participant insert a duplicate
+  // and let two different externals with the same name collide).
+  const targetSubjectId = await resolveParticipantSubjectId(queryable, {
+    participantType: params.participantType,
+    workspaceMemberId: params.workspaceMemberId,
+    actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
+    transportAddressId: params.transportAddressId,
+  })
+
   const existing = await executeSqlOn<{ id: string; state: string }>(
     queryable,
     `
       SELECT cp.id, cp.state
       FROM conversation_participants cp
-      LEFT JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       WHERE cp.conversation_id = $1
-        AND cp.participant_type = $2
-        AND (
-          ($2 = 'workspace_member' AND cpsubj.workspace_member_id = $3)
-          OR ($2 = 'actor' AND cpsubj.actor_id = $4)
-          OR ($2 = 'remote_agent' AND cpsubj.remote_agent_id = $5)
-          OR (
-            $2 IN ('external', 'system')
-            AND COALESCE(cp.display_name, '') = COALESCE($6, '')
-          )
-        )
+        AND cp.subject_id = $2
       LIMIT 1
     `,
-    [
-      params.conversationId,
-      params.participantType,
-      params.workspaceMemberId ?? null,
-      params.actorId ?? null,
-      params.remoteAgentId ?? null,
-      params.displayName ?? null,
-    ]
+    [params.conversationId, targetSubjectId]
   )
 
   const existingId = existing.rows[0]?.id
@@ -2927,17 +3042,10 @@ export async function ensureConversationParticipant(params: {
       ]
     )
 
-    if (
-      Array.isArray(params.transportAddressIds) &&
-      params.transportAddressIds.length > 0
-    ) {
-      for (const [
-        index,
-        transportAddressId,
-      ] of params.transportAddressIds.entries()) {
-        await executeSqlOn(
-          queryable,
-          `
+    if (params.transportAddressId) {
+      await executeSqlOn(
+        queryable,
+        `
             INSERT INTO conversation_participant_addresses (
               conversation_participant_id,
               transport_address_id,
@@ -2946,14 +3054,13 @@ export async function ensureConversationParticipant(params: {
               created_at,
               updated_at
             )
-            VALUES ($1, $2, $3, '{}'::jsonb, NOW(), NOW())
+            VALUES ($1, $2, TRUE, '{}'::jsonb, NOW(), NOW())
             ON CONFLICT (conversation_participant_id, transport_address_id) DO UPDATE
             SET is_primary = EXCLUDED.is_primary,
                 updated_at = NOW()
           `,
-          [existingId, transportAddressId, index === 0]
-        )
-      }
+        [existingId, params.transportAddressId]
+      )
     }
 
     return getConversationParticipant({
@@ -2973,7 +3080,8 @@ export async function ensureConversationParticipant(params: {
     displayName: params.displayName,
     roleKey: params.roleKey ?? "member",
     metadata: params.metadata,
-    transportAddressIds: params.transportAddressIds,
+    transportAddressId: params.transportAddressId,
+    subjectId: targetSubjectId,
   })
 
   return getConversationParticipant({
@@ -2997,6 +3105,35 @@ export async function addConversationParticipants(params: {
     const actorIds = [...new Set(params.actorIds ?? [])]
     const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
     const externalParticipants = params.externalParticipants ?? []
+
+    // P1 (round 7): mirror createChatConversation's external gating so the
+    // public add-participants API can't bypass it. Internal conversations never
+    // accept external participants; every external address must belong to this
+    // workspace, be a user address, and be unlinked (linked => add as member).
+    if (externalParticipants.length > 0) {
+      const conversation = await getConversation(
+        params.conversationId,
+        queryable
+      )
+      if (!conversation) {
+        throw createChatError(
+          404,
+          "conversation_not_found",
+          "Conversation not found"
+        )
+      }
+      if (conversation.boundary === "internal") {
+        throw createChatError(
+          400,
+          "external_participants_not_allowed",
+          "Internal conversations do not allow external participants"
+        )
+      }
+      assertNoDuplicateExternalParticipants(externalParticipants)
+      await validateTransportAddresses(queryable, params.workspaceId, [
+        ...new Set(externalParticipants.map((p) => p.transportAddressId)),
+      ])
+    }
 
     if (workspaceMemberIds.length > 0) {
       const memberRows = await loadWorkspaceMembersByIds(
@@ -3054,6 +3191,7 @@ export async function addConversationParticipants(params: {
     if (remoteAgentIds.length > 0) {
       const remoteAgentRows = await loadRemoteAgentsByIds(
         queryable,
+        params.workspaceId,
         remoteAgentIds
       )
       if (remoteAgentRows.length !== remoteAgentIds.length) {
@@ -3080,7 +3218,7 @@ export async function addConversationParticipants(params: {
         participantType: "external",
         displayName: externalParticipant.displayName,
         metadata: externalParticipant.metadata,
-        transportAddressIds: externalParticipant.transportAddressIds,
+        transportAddressId: externalParticipant.transportAddressId,
         queryable,
       })
     }
@@ -3767,7 +3905,7 @@ function participantRowToEntityRef(
   const transportKind = asParticipantTransportKind(participant.transport_kind)
   return {
     participantId: participant.id,
-    participantType: participant.participant_type,
+    participantType: subjectKindToParticipantType(participant.participant_type),
     workspaceMemberId: participant.workspace_member_id ?? undefined,
     actorId: participant.actor_id ?? undefined,
     remoteAgentId: participant.remote_agent_id ?? undefined,
@@ -3795,7 +3933,7 @@ function participantRowToChatParticipantSummary(
   return {
     participantId: participant.id,
     conversationId: participant.conversation_id,
-    participantType: participant.participant_type,
+    participantType: subjectKindToParticipantType(participant.participant_type),
     workspaceMemberId: entity.workspaceMemberId,
     actorId: entity.actorId,
     remoteAgentId: entity.remoteAgentId,
@@ -4406,6 +4544,7 @@ export async function createChatConversation(params: {
       "Internal conversations do not allow external participants"
     )
   }
+  assertNoDuplicateExternalParticipants(externalParticipants)
 
   const conversationId = await transaction(async (client) => {
     const existingRequest = await executeSqlOn<{ conversation_id: string }>(
@@ -4449,7 +4588,11 @@ export async function createChatConversation(params: {
       )
     }
 
-    const remoteAgentRows = await loadRemoteAgentsByIds(client, remoteAgentIds)
+    const remoteAgentRows = await loadRemoteAgentsByIds(
+      client,
+      params.workspaceId,
+      remoteAgentIds
+    )
     if (remoteAgentRows.length !== remoteAgentIds.length) {
       throw createChatError(
         400,
@@ -4458,8 +4601,8 @@ export async function createChatConversation(params: {
       )
     }
 
-    const addressIds = externalParticipants.flatMap(
-      (participant) => participant.transportAddressIds ?? []
+    const addressIds = externalParticipants.map(
+      (participant) => participant.transportAddressId
     )
     await validateTransportAddresses(client, params.workspaceId, [
       ...new Set(addressIds),
@@ -4538,7 +4681,7 @@ export async function createChatConversation(params: {
         displayName: external.displayName,
         roleKey: "member",
         metadata: external.metadata ?? {},
-        transportAddressIds: external.transportAddressIds,
+        transportAddressId: external.transportAddressId,
       })
     }
 
@@ -5669,7 +5812,7 @@ export async function loadParticipantById(
   }>(
     queryable,
     `
-      SELECT cp.id, cp.conversation_id, cp.participant_type,
+      SELECT cp.id, cp.conversation_id, cpsubj.kind AS participant_type,
              cpsubj.workspace_member_id AS workspace_member_id,
              cpsubj.actor_id AS actor_id,
              cpsubj.remote_agent_id AS remote_agent_id,

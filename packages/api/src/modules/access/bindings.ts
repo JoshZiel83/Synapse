@@ -399,13 +399,17 @@ function subjectRefEqual(a: SubjectRef, b: SubjectRef): boolean {
         a.userId ===
         (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.USER }>).userId
       )
-    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.EXTERNAL: {
+      const bb = b as Extract<
+        SubjectRef,
+        { kind: typeof SUBJECT_KIND.EXTERNAL }
+      >
       return (
-        a.externalIdentityKey ===
-        (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.EXTERNAL }>)
-          .externalIdentityKey
+        a.workspaceId === bb.workspaceId &&
+        a.transportAddressId === bb.transportAddressId
       )
-    case SUBJECT_KIND.SYSTEM:
+    }
+    case SUBJECT_KIND.PLATFORM:
       return true
   }
 }

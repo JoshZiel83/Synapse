@@ -3679,6 +3679,17 @@ export async function openDirectConversation(params: {
     resolved.kind === CONTACT_HUB_KIND.WORKSPACE_REMOTE_AGENT &&
     resolved.remoteAgent
   ) {
+    // A direct conversation is workspace-internal (kind=private, boundary
+    // defaults to internal), so its participants must all belong to the
+    // requester's workspace. A friend remote agent from another workspace
+    // (public-shared discovery makes this reachable) cannot be opened as a
+    // direct chat — reject explicitly here rather than letting it surface as a
+    // generic invalid_remote_agent / participant-trigger error downstream.
+    if (resolved.remoteAgent.workspace.id !== params.workspaceId) {
+      throw new Error(
+        "Cannot open a direct conversation with a remote agent from another workspace"
+      )
+    }
     const canInvoke = await authorizeAction(db, {
       subject: await resolveWorkspaceAccessSubject(
         db,

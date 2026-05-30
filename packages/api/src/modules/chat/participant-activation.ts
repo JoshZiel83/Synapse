@@ -41,12 +41,7 @@ async function resolveInitiator(params: {
 }
 
 async function loadParticipantDisplay(params: {
-  participantType:
-    | "actor"
-    | "remote_agent"
-    | "workspace_member"
-    | "external"
-    | "system"
+  participantType: "actor" | "remote_agent" | "workspace_member" | "external"
   actorId?: string
   workspaceMemberId?: string
   displayName?: string
@@ -66,9 +61,7 @@ async function loadParticipantDisplay(params: {
           : params.participantType ===
               CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
             ? "User"
-            : params.participantType === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
-              ? "System"
-              : "External participant",
+            : "External participant",
     title: undefined as string | undefined,
   }
 }
@@ -76,13 +69,16 @@ async function loadParticipantDisplay(params: {
 export async function activateConversationParticipant(params: {
   workspaceId?: string
   conversationId: string
-  participantType: "actor" | "workspace_member" | "external" | "system"
+  participantType: "actor" | "workspace_member" | "external"
   workspaceMemberId?: string
   actorId?: string
   remoteAgentId?: string
   displayName?: string
   actorJoinVersionId?: string
   metadata?: Record<string, unknown>
+  // Required when participantType === "external": the transport address that
+  // identifies this external person (used to mint the first-class subject).
+  transportAddressId?: string
   initiator?: ParticipantInitiator
   recordJoinEvent?: boolean
 }) {
@@ -105,6 +101,7 @@ export async function activateConversationParticipant(params: {
     displayName: params.displayName,
     actorJoinVersionId: params.actorJoinVersionId,
     metadata: params.metadata,
+    transportAddressId: params.transportAddressId,
   })
 
   if (!member) {
@@ -138,10 +135,7 @@ export async function activateConversationParticipant(params: {
         participants: [
           {
             participantId: member.id,
-            participantType:
-              params.participantType === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
-                ? CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
-                : params.participantType,
+            participantType: params.participantType,
             actorId: params.actorId,
             remoteAgentId: params.remoteAgentId,
             workspaceMemberId: params.workspaceMemberId,

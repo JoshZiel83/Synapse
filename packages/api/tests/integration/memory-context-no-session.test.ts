@@ -93,8 +93,8 @@ test("createMemory(owner=actor + scope=conversation) does NOT create a sessions 
 
   await client.query(
     `INSERT INTO conversation_participants
-      (id, conversation_id, participant_type, subject_id, role_key, state)
-     VALUES ($1, $2, 'actor', $3, 'member', 'active')`,
+      (id, conversation_id, subject_id, role_key, state)
+     VALUES ($1, $2, $3, 'member', 'active')`,
     [actorParticipantId, conversationId, actorSubjectId]
   )
   await client.query(

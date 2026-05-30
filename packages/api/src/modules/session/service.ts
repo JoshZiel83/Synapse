@@ -189,7 +189,6 @@ async function requireActiveActorConversationParticipant(
       .selectFrom("conversation_participants")
       .select("id")
       .where("conversation_id", "=", conversationId)
-      .where("participant_type", "=", "actor")
       .where("subject_id", "=", actorSubjectId)
       .where("state", "=", "active")
       .limit(1)

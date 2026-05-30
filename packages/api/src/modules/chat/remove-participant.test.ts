@@ -124,7 +124,6 @@ async function insertConversationParticipant(
     .insertInto("conversation_participants")
     .values({
       conversation_id: conversationId,
-      participant_type: participantType,
       subject_id: subjectId,
       role_key: "member",
       state,
