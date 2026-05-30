@@ -33,12 +33,17 @@ function fail(msg) {
 
 // --- 1. registry ---------------------------------------------------------
 
-const NPMJS_HOSTS = new Set(["registry.npmjs.org", "registry.yarnpkg.com"])
+// All npm-owned / public hosts a private package must never reach.
+const NPMJS_HOSTS = new Set([
+  "registry.npmjs.org",
+  "registry.npmjs.com",
+  "registry.yarnpkg.com",
+])
 
 function normalize(raw) {
   if (!raw) return null
   const trimmed = String(raw).trim()
-  if (!trimmed) return null
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") return null
   // An unresolved ${NPM_REGISTRY} (env not exported) is NOT a registry.
   if (trimmed.includes("${")) return null
   let u
@@ -52,22 +57,35 @@ function normalize(raw) {
   return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, "")}`
 }
 
-function effectiveRegistry() {
-  // Env-injected (present only when publish was run with --registry=...
-  // or a default registry= config).
-  const fromEnv = normalize(process.env.npm_config_registry)
-  if (fromEnv) return fromEnv
-  // Fall back to the @synapse:registry scope mapping (the .npmrc route).
+function npmConfigGet(key) {
   try {
-    const out = execSync("npm config get @synapse:registry", {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-    return normalize(out)
+    return normalize(
+      execSync(`npm config get ${key}`, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+    )
   } catch {
     return null
   }
 }
+
+// The DESTINATION of a scoped publish is governed by the scope-specific
+// registry (@synapse:registry), NOT the generic registry / --registry.
+// (Verified: `npm publish --registry=PRIVATE` still ships to the scope
+// registry if @synapse:registry is set.) So the scope registry is the
+// authoritative signal; the generic one is only a secondary check.
+const scope = name.startsWith("@") ? name.slice(0, name.indexOf("/")) : null
+const scopeReg = scope ? npmConfigGet(`${scope}:registry`) : null
+const genericReg =
+  normalize(process.env.npm_config_registry) ?? npmConfigGet("registry")
+
+// Authoritative target: for a scoped package the scope registry governs
+// the publish destination (and overrides --registry); only when there is
+// NO scope registry does the generic registry decide. npm's generic
+// `registry` defaults to npmjs.org, so screening it for a scoped package
+// would false-reject every normal config — we must NOT do that.
+const effective = scopeReg ?? genericReg
 
 // Allowlist: whatever NPM_REGISTRY points at, plus any explicit extras in
 // SYNAPSE_NPM_REGISTRY_ALLOWLIST (comma/space separated). If NPM_REGISTRY
@@ -83,23 +101,27 @@ const allowlist = new Set(
     .filter(Boolean)
 )
 
-const effective = effectiveRegistry()
 if (!effective) {
   fail(
-    "could not resolve an effective registry (npm_config_registry unset and " +
-      '@synapse:registry unresolved). Publish with --registry="$NPM_REGISTRY".'
+    "could not resolve an effective registry (neither the @synapse scope " +
+      "registry nor the generic registry is set). Publish via " +
+      'scripts/safe-publish.mjs or pass --@synapse:registry="$NPM_REGISTRY".'
   )
 }
+// Reject if the AUTHORITATIVE target is public npm.
 if (NPMJS_HOSTS.has(new URL(effective).host)) {
   fail(
-    `effective registry is public npm (${effective}). This package is private.`
+    `the effective publish registry is public npm (${effective}). This ` +
+      `package is private. Note: for scoped packages the @synapse:registry ` +
+      `mapping governs the destination and overrides --registry — publish ` +
+      `via scripts/safe-publish.mjs which pins --@synapse:registry.`
   )
 }
 if (allowlist.size > 0 && !allowlist.has(effective)) {
   fail(
     `effective registry ${effective} is not in the allowlist ` +
       `[${[...allowlist].join(", ")}]. Set NPM_REGISTRY / ` +
-      `SYNAPSE_NPM_REGISTRY_ALLOWLIST or pass --registry.`
+      `SYNAPSE_NPM_REGISTRY_ALLOWLIST or publish via scripts/safe-publish.mjs.`
   )
 }
 

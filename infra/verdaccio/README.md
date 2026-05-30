@@ -64,12 +64,20 @@ From the repo root, with `NPM_REGISTRY` exported (e.g.
 `set -a && source infra/verdaccio/.env && set +a`):
 
 ```bash
-npm publish -w packages/device-protocol      --registry="$NPM_REGISTRY"
-npm publish -w packages/shared               --registry="$NPM_REGISTRY"
+node scripts/safe-publish.mjs packages/device-protocol
+node scripts/safe-publish.mjs packages/shared
 bash scripts/publish-device-runtime-sidecars.sh        # 6 sidecars FIRST
-npm publish -w packages/device-runtime       --registry="$NPM_REGISTRY"
-npm publish -w packages/remote-agent-daemon  --registry="$NPM_REGISTRY"
+node scripts/safe-publish.mjs packages/device-runtime
+node scripts/safe-publish.mjs packages/remote-agent-daemon
 ```
+
+Use `scripts/safe-publish.mjs`, **not** a bare `npm publish --registry=…`.
+For scoped packages npm routes the publish to the `@synapse:registry`
+mapping, which **overrides** a plain `--registry` flag — so a stray
+`@synapse:registry=…npmjs…` in your `~/.npmrc` could leak a private
+package to public npm. `safe-publish.mjs` pins `--@synapse:registry`
+(which wins) and refuses any npmjs target. The sidecar wrapper does the
+same internally.
 
 Sidecars must be published **before** the main `@synapse/device-runtime`
 (it pins them as exact `optionalDependencies`).
