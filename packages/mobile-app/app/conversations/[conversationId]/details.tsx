@@ -1,6 +1,5 @@
 import Feather from "@expo/vector-icons/Feather"
 import {
-  CONVERSATION_BOUNDARY,
   CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_STATE,
   CONVERSATION_PARTICIPANT_TYPE,
@@ -107,15 +106,11 @@ export default function ConversationDetailScreen() {
               <View style={styles.heroBody}>
                 <Text style={styles.heroTitle}>{conversation.title}</Text>
                 <Text style={styles.heroSubtitle}>
-                  {`${conversation.kind === CONVERSATION_KIND.PRIVATE ? "单聊" : "群聊"} · ${activeCount} 位成员`}
+                  {`${conversation.kind === CONVERSATION_KIND.DIRECT ? "单聊" : "群聊"} · ${activeCount} 位成员`}
                 </Text>
               </View>
               <Pill
-                label={
-                  conversation.boundary === CONVERSATION_BOUNDARY.EXTERNAL
-                    ? "外部"
-                    : "内部"
-                }
+                label={conversation.isIm ? "IM" : "应用内"}
                 tone="primary"
               />
             </View>

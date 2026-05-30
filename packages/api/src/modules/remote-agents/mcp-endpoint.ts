@@ -4,7 +4,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
 import { textBlock, type ToolDefinition } from "@synapse/shared"
-import type { ConversationBoundary } from "@synapse/shared/types"
 import { z } from "zod"
 import {
   authenticateMachineForRemoteAgent,
@@ -267,8 +266,8 @@ async function registerResolvedTools(params: {
   workspaceId: string
   remoteAgentId: string
   conversationId: string
-  conversationKind: "private" | "group" | "virtual"
-  conversationBoundary: ConversationBoundary
+  conversationKind: "direct" | "group"
+  isImConversation: boolean
   sessionKey: string
 }): Promise<() => Promise<void>> {
   // The resolver evaluates resource_access_bindings exactly like an actor
@@ -277,11 +276,11 @@ async function registerResolvedTools(params: {
   // We mount each one as a passthrough that calls back into the same
   // executor.
   //
-  // conversationKind + conversationBoundary are LOAD-BEARING here: the
+  // conversationKind + isImConversation are LOAD-BEARING here: the
   // resolver's conversation_type mask filter (loadVisiblePlugins +
   // projectDeviceTools) rejects rows that don't match the conversation
   // type, and shared/utils:maskAllowsConversationType returns false when
-  // either field is missing. Without these two values plugin / device tools
+  // the kind is missing. Without these values plugin / device tools
   // would be silently filtered out even when authorization passes.
   const resolved = await projectToolsForPrincipal({
     workspaceId: params.workspaceId,
@@ -292,7 +291,7 @@ async function registerResolvedTools(params: {
     },
     conversationId: params.conversationId,
     conversationKind: params.conversationKind,
-    conversationBoundary: params.conversationBoundary,
+    isImConversation: params.isImConversation,
     consumer: "reverse_mcp",
     sessionId: params.sessionKey,
   })
@@ -365,8 +364,8 @@ async function createSessionTransport(params: {
   conversationId: string
   machineKey: string
   workspaceId: string
-  conversationKind: "private" | "group" | "virtual"
-  conversationBoundary: ConversationBoundary
+  conversationKind: "direct" | "group"
+  isImConversation: boolean
 }): Promise<ActiveTransport> {
   // sessionId is used downstream as a cache scope (device-tool runtime
   // context map keys, "session:<id>:turn:<uuid>" reuse keys) AND
@@ -399,7 +398,7 @@ async function createSessionTransport(params: {
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     conversationKind: params.conversationKind,
-    conversationBoundary: params.conversationBoundary,
+    isImConversation: params.isImConversation,
     sessionKey,
   })
   let storedSessionId: string | undefined
@@ -426,16 +425,25 @@ async function createSessionTransport(params: {
 }
 
 async function loadConversationTypeFacts(conversationId: string): Promise<{
-  kind: "private" | "group" | "virtual"
-  boundary: ConversationBoundary
+  kind: "direct" | "group"
+  isIm: boolean
 } | null> {
   const result = await executeSql<{
-    kind: "private" | "group" | "virtual"
-    boundary: ConversationBoundary
-  }>(`SELECT kind, boundary FROM conversations WHERE id = $1 LIMIT 1`, [
-    conversationId,
-  ])
-  return result.rows[0] ?? null
+    kind: "direct" | "group"
+    is_im: boolean
+  }>(
+    `SELECT kind, EXISTS (
+       SELECT 1 FROM conversation_transport_bindings b
+       WHERE b.conversation_id = conversations.id
+     ) AS is_im
+     FROM conversations WHERE id = $1 LIMIT 1`,
+    [conversationId]
+  )
+  const row = result.rows[0]
+  if (!row) {
+    return null
+  }
+  return { kind: row.kind, isIm: Boolean(row.is_im) }
 }
 
 export async function handleRemoteAgentMcpRequest(
@@ -511,7 +519,7 @@ export async function handleRemoteAgentMcpRequest(
       machineKey,
       workspaceId,
       conversationKind: conversationFacts.kind,
-      conversationBoundary: conversationFacts.boundary,
+      isImConversation: conversationFacts.isIm,
     })
   }
   active.lastActivityAt = Date.now()

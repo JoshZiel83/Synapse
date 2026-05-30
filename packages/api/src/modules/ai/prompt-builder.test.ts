@@ -47,7 +47,7 @@ test("buildActorPrompt injects request-user-input guidance for human conversatio
         user_name: "Ada",
       },
     ],
-    "private",
+    "direct",
     undefined,
     "default"
   )
@@ -70,7 +70,7 @@ test("buildActorPrompt injects stronger plan mode guidance", () => {
         user_name: "Ada",
       },
     ],
-    "private",
+    "direct",
     undefined,
     "plan_drafting"
   )
@@ -82,7 +82,7 @@ test("buildActorPrompt injects stronger plan mode guidance", () => {
   )
 })
 
-test("buildActorPrompt teaches private threads not to overuse replyToRef", () => {
+test("buildActorPrompt teaches direct threads not to overuse replyToRef", () => {
   const prompt = buildActorPrompt(
     {
       id: "actor-1",
@@ -100,7 +100,7 @@ test("buildActorPrompt teaches private threads not to overuse replyToRef", () =>
         user_name: "Ada",
       },
     ],
-    "private",
+    "direct",
     undefined,
     "default"
   )
@@ -174,7 +174,7 @@ test("buildActorPrompt no longer emits legacy relay routing guidance for builtin
         user_name: "Ada",
       },
     ],
-    "private",
+    "direct",
     undefined,
     "default"
   )

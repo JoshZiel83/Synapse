@@ -54,15 +54,14 @@ test("GET /chat/conversations lists the conversations the user belongs to", asyn
   assert.equal(Array.isArray(empty.conversations), true)
   assert.equal(empty.conversations.length, 0)
 
-  // Create one private conversation between just the owner.
+  // Create one direct conversation between just the owner.
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
   }>(`/workspaces/${ws.id}/chat/conversations`, {
     method: "POST",
     json: {
       clientRequestId: clientRequestId(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "S3 test convo",
     },
   })
@@ -88,8 +87,7 @@ test("GET /chat/conversations/:cid returns the single conversation", async () =>
     method: "POST",
     json: {
       clientRequestId: clientRequestId(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "detail test",
     },
   })
@@ -116,7 +114,6 @@ test("PATCH /chat/conversations/:cid renames the conversation", async () => {
     json: {
       clientRequestId: clientRequestId(),
       kind: "group",
-      boundary: "internal",
       title: "before",
     },
   })
@@ -146,7 +143,6 @@ test("POST /participants then DELETE /participants/:id round-trips", async () =>
     json: {
       clientRequestId: clientRequestId(),
       kind: "group",
-      boundary: "internal",
       title: "group convo",
     },
   })
@@ -192,7 +188,6 @@ test("POST /chat/conversations/:cid/leave removes self", async () => {
     json: {
       clientRequestId: clientRequestId(),
       kind: "group",
-      boundary: "internal",
       title: "leave test",
     },
   })

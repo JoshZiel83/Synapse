@@ -147,12 +147,12 @@ function publicReuseScope(scope: VisiblePluginRow["reuse_scope"]) {
 
 function isConversationTypeAllowed(
   mask: number,
-  params: Pick<ResolveParams, "conversationKind" | "conversationBoundary">
+  params: Pick<ResolveParams, "conversationKind" | "isImConversation">
 ) {
   return maskAllowsConversationType(
     mask,
     params.conversationKind,
-    params.conversationBoundary
+    params.isImConversation ?? false
   )
 }
 

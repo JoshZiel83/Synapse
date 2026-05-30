@@ -343,7 +343,7 @@ export function ChatComposer({
   const uploadControllersRef = useRef(new Map<string, AbortController>())
   const pendingMentionInsertIndexRef = useRef<number | null>(null)
   const maxInputHeight = Math.max(120, Math.floor(windowHeight * 0.4))
-  const mentionsEnabled = conversation.kind !== "private"
+  const mentionsEnabled = conversation.kind !== "direct"
 
   const mentionCandidates = useMemo(
     () =>

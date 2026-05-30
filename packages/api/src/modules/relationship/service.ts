@@ -3524,7 +3524,7 @@ export async function getContactHub(params: {
           {
             id: thread.conversationId,
             kind: thread.kind,
-            boundary: thread.boundary,
+            is_im: thread.isIm,
             title: thread.title,
             unread_count: thread.unreadCount,
             created_at: thread.createdAt,
@@ -3760,7 +3760,7 @@ export async function openDirectConversation(params: {
       workspaceId: params.workspaceId,
       userId: params.userId,
       clientRequestId: uuidv4(),
-      kind: CONVERSATION_KIND.PRIVATE,
+      kind: CONVERSATION_KIND.DIRECT,
       actorIds:
         resolved.peerIdentity.kind === RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR
           ? [resolved.peerIdentity.actorId]

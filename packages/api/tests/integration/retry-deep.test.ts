@@ -72,7 +72,6 @@ test("retry succeeds end-to-end and enqueues a session_wakeup with the correct w
     json: {
       clientRequestId: uuid(),
       kind: "group",
-      boundary: "internal",
       title: "retry-deep-test",
       workspaceMemberIds: [],
     },

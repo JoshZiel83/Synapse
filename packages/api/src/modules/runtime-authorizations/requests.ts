@@ -1,5 +1,4 @@
 import type {
-  ConversationBoundary,
   InteractionRequestSummary,
   RuntimeAuthorizationGrantOption,
   RuntimeAuthorizationPreset,
@@ -55,8 +54,8 @@ export interface RuntimeAuthorizationRequestSource {
   /** @deprecated see actorId */
   conversationActorContextId?: string
   sourceToolName: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: ConversationBoundary
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
   workspaceMemberId?: string
   turnId?: string
   sourceToolCallId?: string
@@ -174,21 +173,17 @@ function buildWaitingSummary(deviceDisplayName?: string) {
 
 async function loadConversationKindAndBoundary(
   conversationId: string,
-  fallback?: Pick<
-    RuntimeAuthorizationRequestSource,
-    "conversationKind" | "conversationBoundary"
-  >
+  fallback?: Pick<RuntimeAuthorizationRequestSource, "conversationKind">
 ) {
-  if (fallback?.conversationKind && fallback?.conversationBoundary) {
+  if (fallback?.conversationKind) {
     return {
       kind: fallback.conversationKind,
-      boundary: fallback.conversationBoundary,
     }
   }
 
   return db
     .selectFrom("conversations")
-    .select(["kind", "boundary"])
+    .select(["kind"])
     .where("id", "=", conversationId)
     .limit(1)
     .executeTakeFirst()

@@ -3150,7 +3150,7 @@ export async function canUserResolveInteraction(params: {
       return false
     }
 
-    if (viewerMembership.conversation_kind === "private") {
+    if (viewerMembership.conversation_kind === "direct") {
       return true
     }
 
@@ -3494,7 +3494,7 @@ export async function resolveInteractionRequest(
       if (!conversationRow) {
         throw new Error(`Conversation ${locked.conversation_id} not found`)
       }
-      if (conversationRow.kind !== "private") {
+      if (conversationRow.kind !== "direct") {
         const grantRow = await executeSqlOn<{ workspace_member_id: string }>(
           client,
           `

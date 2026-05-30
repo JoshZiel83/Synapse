@@ -250,7 +250,7 @@ export default function GlobalSearchScreen() {
                     </View>
                     <Pill
                       label={
-                        conversation.kind === CONVERSATION_KIND.PRIVATE
+                        conversation.kind === CONVERSATION_KIND.DIRECT
                           ? "单聊"
                           : "群聊"
                       }

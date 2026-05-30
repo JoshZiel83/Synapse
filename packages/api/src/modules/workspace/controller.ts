@@ -76,7 +76,7 @@ const chiefActorPreferenceSchema = z.object({
   chiefActorId: z.uuid().nullable(),
 })
 
-const conversationTypeMaskSchema = z.number().int().min(1).max(31)
+const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const capabilityConversationTypePolicyFamilySchema = z.enum(
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES
 )

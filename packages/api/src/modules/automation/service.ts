@@ -56,6 +56,7 @@ import {
   getConversationParticipant,
   listConversationParticipants,
 } from "../chat/service.js"
+import { hasConversationTransportBinding } from "../im/service/bindings.js"
 import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import {
   buildIntegrationEventSourceTemplate,
@@ -1340,9 +1341,7 @@ function bindingAllowsConversationType(params: {
     typeof params.conversation.kind === "string"
       ? params.conversation.kind
       : null,
-    typeof params.conversation.boundary === "string"
-      ? params.conversation.boundary
-      : null
+    Boolean(params.conversation.is_im)
   )
 }
 
@@ -1423,7 +1422,7 @@ function automationEventSourceGrantApplies(params: {
     case "workspace":
       return (
         ((subject as { workspaceId: string }).workspaceId || null) ===
-          ((params.conversation.internal_workspace_id as
+          ((params.conversation.workspace_id as
             | string
             | null
             | undefined) || null) ||
@@ -1552,11 +1551,27 @@ async function getBindingTargetConversation(target: CapabilityAccessTarget) {
       .conversationId
   }
   if (!conversationId) return null
+  return loadConversationWithImFlag(conversationId, { required: true })
+}
+
+/**
+ * Load a conversation row and attach `is_im` (derived from the transport
+ * binding) so the conversation-type mask check can resolve direct/group vs
+ * im_direct/im_group. Returns null when missing unless { required: true }.
+ */
+async function loadConversationWithImFlag(
+  conversationId: string,
+  opts?: { required?: boolean }
+): Promise<Record<string, unknown> | null> {
   const conversation = await getConversation(conversationId)
   if (!conversation) {
-    throw new Error(`Conversation ${conversationId} not found`)
+    if (opts?.required) {
+      throw new Error(`Conversation ${conversationId} not found`)
+    }
+    return null
   }
-  return conversation
+  const isIm = await hasConversationTransportBinding({ conversationId })
+  return { ...conversation, is_im: isIm }
 }
 
 export async function grantAutomationEventSourceAccess(input: {
@@ -1725,7 +1740,7 @@ async function pauseAutomationRulesMissingEventSourceAccess(
   )
 
   for (const row of result.rows) {
-    const conversation = await getConversation(row.conversation_id)
+    const conversation = await loadConversationWithImFlag(row.conversation_id)
     const creatorParticipant = await getConversationParticipant({
       conversationId: row.conversation_id,
       participantId: row.created_by_participant_id,
@@ -1836,7 +1851,9 @@ export async function listAutomationEventSources(
     return sources
   }
 
-  const conversation = await getConversation(accessContext.conversationId)
+  const conversation = await loadConversationWithImFlag(
+    accessContext.conversationId
+  )
   if (!conversation) {
     return []
   }
@@ -3413,7 +3430,9 @@ export async function createAutomationRule(
     throw createAutomationValidationError(issues)
   }
 
-  const conversation = await getConversation(input.conversationId)
+  const conversation = await loadConversationWithImFlag(input.conversationId, {
+    required: true,
+  })
   if (!conversation) {
     throw new Error(`Conversation ${input.conversationId} not found`)
   }
@@ -3636,7 +3655,10 @@ export async function updateAutomationRule(
   if (!creatorParticipant?.id) {
     throw new Error("Automation creator participant no longer exists")
   }
-  const conversation = await getConversation(existing.conversationId)
+  const conversation = await loadConversationWithImFlag(
+    existing.conversationId,
+    { required: true }
+  )
   if (!conversation) {
     throw new Error(`Conversation ${existing.conversationId} not found`)
   }

@@ -199,13 +199,12 @@ interface ChatState {
   syncFromServer: (workspaceId?: string) => Promise<void>
   createWorkspaceThread: (
     workspaceId: string,
-    kind: "private" | "group",
+    kind: "direct" | "group",
     actorIds: string[],
     options?: {
       title?: string
       workspaceMemberIds?: string[]
       remoteAgentIds?: string[]
-      externalParticipants?: ChatConversationCreateInput["externalParticipants"]
       metadata?: Record<string, unknown>
     }
   ) => Promise<string>
@@ -583,7 +582,7 @@ function getConversationDisplayName(
   conversation: ChatConversationView,
   workspaceMemberId?: string | null
 ) {
-  if (conversation.kind === "private") {
+  if (conversation.kind === "direct") {
     const peer = getPeerParticipant(conversation, workspaceMemberId)
     return peer?.name?.trim() || conversation.title?.trim() || "Direct chat"
   }
@@ -2013,7 +2012,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       actorIds,
       workspaceMemberIds: options?.workspaceMemberIds ?? [],
       remoteAgentIds: options?.remoteAgentIds ?? [],
-      externalParticipants: options?.externalParticipants ?? [],
       metadata: options?.metadata,
     })
 

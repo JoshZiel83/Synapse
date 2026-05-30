@@ -54,8 +54,7 @@ test("retry endpoint is mounted under /chat/conversations/.../messages/:itemId/r
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "retry-route-test",
     },
   })
@@ -88,8 +87,7 @@ test("retry returns 400 for a non-retryable item (e.g. user message)", async () 
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "retry-validation-test",
     },
   })

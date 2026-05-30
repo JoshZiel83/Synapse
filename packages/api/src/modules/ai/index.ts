@@ -603,8 +603,8 @@ export async function actorThink(
     turnId?: string
     collaborationMode?: SessionCollaborationMode
     conversationId?: string
-    conversationKind?: "private" | "group" | "virtual"
-    conversationBoundary?: "internal" | "external"
+    conversationKind?: "direct" | "group"
+    isImConversation?: boolean
     conversationParticipants?: ConversationParticipantEntry[]
     userId?: string
     workspaceMemberId?: string
@@ -719,7 +719,7 @@ export async function actorThink(
     collaborationMode: currentCollaborationMode,
     conversationId: options?.conversationId,
     conversationKind: options?.conversationKind,
-    conversationBoundary: options?.conversationBoundary,
+    isImConversation: options?.isImConversation,
     conversationParticipants: currentToolConversationParticipants,
     workspaceMemberId: options?.workspaceMemberId,
     availableSkills: options?.availableSkills,
@@ -819,7 +819,7 @@ export async function actorThink(
         turnId,
         conversationId: options.conversationId,
         conversationKind: options.conversationKind,
-        conversationBoundary: options.conversationBoundary,
+        isImConversation: options.isImConversation,
       },
       () => _actorThinkInner()
     )

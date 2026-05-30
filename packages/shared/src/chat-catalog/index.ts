@@ -27,7 +27,7 @@ export type ConversationCatalogEntry = {
   id: string
   title: string
   kind: ChatConversationView["kind"]
-  boundary: ChatConversationView["boundary"]
+  isIm: boolean
   conversationTypeKey: ConversationTypeKey | null
   unreadCount: number
   participants: ConversationCatalogParticipant[]
@@ -52,10 +52,10 @@ export function normalizeConversationCatalogEntry(
     id: conversation.conversationId,
     title: buildConversationTitle(conversation),
     kind: conversation.kind,
-    boundary: conversation.boundary,
+    isIm: conversation.isIm,
     conversationTypeKey: resolveConversationTypeKey(
       conversation.kind,
-      conversation.boundary
+      conversation.isIm
     ),
     unreadCount: conversation.unreadCount,
     participants: conversation.participants.map(

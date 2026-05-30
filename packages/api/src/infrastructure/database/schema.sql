@@ -12,8 +12,7 @@ CREATE TYPE platform_access_bindings_source AS ENUM ('config', 'manual');
 CREATE TYPE workspace_members_trust_level AS ENUM ('admin', 'member', 'guest');
 CREATE TYPE workspace_access_bindings_access_key AS ENUM ('model_admin', 'actor_admin', 'remote_agent_admin', 'skill_admin', 'plugin_admin', 'memory_admin', 'device_admin', 'conversation_admin');
 CREATE TYPE workspace_invites_trust_level AS ENUM ('admin', 'member', 'guest');
-CREATE TYPE conversations_kind AS ENUM ('group', 'private', 'virtual');
-CREATE TYPE conversations_boundary AS ENUM ('internal', 'external');
+CREATE TYPE conversations_kind AS ENUM ('direct', 'group');
 CREATE TYPE file_content_kind AS ENUM ('image', 'audio', 'video', 'document');
 CREATE TYPE file_storage_backend AS ENUM ('local_fs');
 CREATE TYPE file_origin_family AS ENUM ('user_upload', 'actor_output', 'tool_output', 'model_output', 'external_import', 'package_import', 'system_generated', 'platform_asset');
@@ -322,7 +321,7 @@ CREATE TABLE workspace_capability_conversation_type_policies (
   resource_family VARCHAR(60) NOT NULL
     CHECK (resource_family IN ('plugin_installation', 'installed_skill', 'device_capability')),
   default_conversation_type_mask INT NOT NULL
-    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
+    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 15),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   PRIMARY KEY (subject_id, resource_family)
@@ -346,24 +345,23 @@ CREATE TABLE workspace_invites (
 CREATE TABLE conversations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   kind conversations_kind NOT NULL,
-  boundary conversations_boundary NOT NULL,
-  internal_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   title VARCHAR(500),
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT chk_conversations_internal_workspace CHECK (
-    (boundary = 'internal' AND internal_workspace_id IS NOT NULL) OR
-    (boundary = 'external' AND internal_workspace_id IS NULL)
-  )
+  -- IM-ness is derived from the presence of a conversation_transport_bindings
+  -- row (see hasConversationTransportBinding); there is no stored boundary axis.
+  -- Every conversation is workspace-scoped (workspace_id NOT NULL). The
+  -- (id, workspace_id) UNIQUE is the target for composite FKs that enforce the
+  -- same-workspace invariant on transport bindings and conversation subjects.
+  CONSTRAINT uq_conversations_id_workspace UNIQUE (id, workspace_id)
 );
 
 CREATE INDEX idx_conversations_kind ON conversations(kind, created_at DESC);
-CREATE INDEX idx_conversations_boundary ON conversations(boundary, created_at DESC);
-CREATE INDEX idx_conversations_internal_workspace
-  ON conversations(internal_workspace_id, created_at DESC)
-  WHERE internal_workspace_id IS NOT NULL;
+CREATE INDEX idx_conversations_workspace
+  ON conversations(workspace_id, created_at DESC);
 
 -- ============ Audit Logs ============
 CREATE TABLE audit_logs (
@@ -678,8 +676,8 @@ CREATE TABLE actor_template_version_specs (
 CREATE TABLE skill_package_version_specs (
   catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE CASCADE,
   skill_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
-  default_conversation_type_mask INT NOT NULL DEFAULT 31
-    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
+  default_conversation_type_mask INT NOT NULL DEFAULT 15
+    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 15),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -694,8 +692,8 @@ CREATE TABLE plugin_package_version_specs (
   auth_bindings JSONB NOT NULL DEFAULT '[]',
   default_mount_scope plugin_package_version_specs_default_mount_scope NOT NULL DEFAULT 'workspace',
   default_reuse_scope plugin_package_version_specs_default_reuse_scope NOT NULL DEFAULT 'conversation',
-  default_conversation_type_mask INT NOT NULL DEFAULT 31
-    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
+  default_conversation_type_mask INT NOT NULL DEFAULT 15
+    CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 15),
   supported_reuse_scopes plugin_package_version_specs_default_reuse_scope[] NOT NULL
     DEFAULT ARRAY['turn', 'session', 'workspace', 'conversation', 'actor']::plugin_package_version_specs_default_reuse_scope[],
   requires_handshake BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1412,7 +1410,12 @@ CREATE TABLE access_subjects (
   workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  -- conversation_id's single-column FK is replaced by the composite FK
+  -- (conversation_id, workspace_id) -> conversations(id, workspace_id) declared
+  -- after conversations (search "fk_access_subjects_conversation"); this enforces
+  -- that a conversation subject's denormalized workspace_id matches the
+  -- conversation's real workspace (the value access_subject_workspace_id trusts).
+  conversation_id UUID,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   -- transport_address_id is the payload for kind='external': a first-class,
   -- workspace-rooted, cross-conversation external IM identity. The composite FK
@@ -1426,21 +1429,23 @@ CREATE TABLE access_subjects (
   transport_address_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   -- workspace_id is REQUIRED for kinds that are unambiguously workspace-bound
-  -- (workspace, workspace_member, actor, remote_agent, external). It is
-  -- denormalized from the underlying table by `upsertAccessSubject` via a SELECT
-  -- lookup so that workspace-scoped queries on access_subjects can filter
-  -- without a JOIN. For conversation it is best-effort (external conversations
-  -- have no owning workspace). `user` / `platform` are platform-wide subjects
-  -- and intentionally have no workspace. The `conversation_actor_context`
-  -- subject kind was dropped at the subject-scope-refactor cutover (D2): the
-  -- semantics it carried — "actor X in conversation Y" — are now expressed as
-  -- (subject=actor, scope=conversation) at the binding/grant layer.
+  -- (workspace, workspace_member, actor, remote_agent, external, conversation).
+  -- It is denormalized from the underlying table by `upsertAccessSubject` via a
+  -- SELECT lookup so that workspace-scoped queries on access_subjects can filter
+  -- without a JOIN. Every conversation is now workspace-scoped (conversations.
+  -- workspace_id NOT NULL), so conversation subjects also require workspace_id,
+  -- and a composite FK keeps it consistent with the conversation's real
+  -- workspace. `user` / `platform` are platform-wide subjects and intentionally
+  -- have no workspace. The `conversation_actor_context` subject kind was dropped
+  -- at the subject-scope-refactor cutover (D2): the semantics it carried —
+  -- "actor X in conversation Y" — are now expressed as (subject=actor,
+  -- scope=conversation) at the binding/grant layer.
   CONSTRAINT chk_access_subjects_payload CHECK (
     (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
     (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
     (kind = 'actor' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
     (kind = 'remote_agent' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
-    (kind = 'conversation' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
+    (kind = 'conversation' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
     (kind = 'user' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NOT NULL AND transport_address_id IS NULL) OR
     (kind = 'external' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NOT NULL) OR
     (kind = 'platform' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL)
@@ -1544,7 +1549,10 @@ CREATE TABLE transport_accounts (
     (inbound_actor_mode = 'specified_actor' AND inbound_actor_id IS NOT NULL) OR
     (inbound_actor_mode <> 'specified_actor' AND inbound_actor_id IS NULL)
   ),
-  UNIQUE(workspace_id, transport_kind, account_key)
+  UNIQUE(workspace_id, transport_kind, account_key),
+  -- Target for conversation_transport_bindings' composite FK enforcing that a
+  -- binding's account lives in the same workspace as the binding/conversation.
+  UNIQUE(id, workspace_id)
 );
 
 CREATE INDEX idx_transport_accounts_workspace
@@ -1563,7 +1571,10 @@ CREATE TABLE transport_endpoints (
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(transport_account_id, endpoint_type, external_id)
+  UNIQUE(transport_account_id, endpoint_type, external_id),
+  -- Target for conversation_transport_bindings' composite FK enforcing that a
+  -- binding's endpoint belongs to the binding's account (account→workspace chain).
+  UNIQUE(id, transport_account_id)
 );
 
 CREATE INDEX idx_transport_endpoints_account
@@ -1572,9 +1583,21 @@ CREATE INDEX idx_transport_endpoints_account
 CREATE TABLE conversation_transport_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  transport_account_id UUID NOT NULL REFERENCES transport_accounts(id) ON DELETE CASCADE,
-  transport_endpoint_id UUID NOT NULL REFERENCES transport_endpoints(id) ON DELETE CASCADE,
+  -- The presence of this row is the sole source of a conversation's "IM-ness"
+  -- (see hasConversationTransportBinding / resolveConversationTypeKey). The FKs
+  -- below are composite so the bound conversation, account and endpoint all
+  -- share the binding's workspace. conversation_id CASCADEs (deleting the
+  -- conversation removes its binding). account_id / endpoint_id are
+  -- DEFERRABLE NO ACTION, NOT cascade: a standalone delete of an account or
+  -- endpoint that still has a bound conversation must be rejected (otherwise the
+  -- conversation would silently flip from IM to native while keeping external
+  -- participants). Workspace deletion's multi-path CASCADE still settles within
+  -- the transaction because the binding is removed via the conversation/workspace
+  -- path before COMMIT. Standalone account/endpoint deletion is gated in the
+  -- service layer (archive/migrate bound conversations first).
+  conversation_id UUID NOT NULL,
+  transport_account_id UUID NOT NULL,
+  transport_endpoint_id UUID NOT NULL,
   outbound_enabled BOOLEAN NOT NULL DEFAULT TRUE,
   inbound_actor_mode conversation_transport_bindings_inbound_actor_mode NOT NULL DEFAULT 'inherit_account',
   inbound_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
@@ -1586,7 +1609,15 @@ CREATE TABLE conversation_transport_bindings (
     (inbound_actor_mode <> 'specified_actor' AND inbound_actor_id IS NULL)
   ),
   UNIQUE(conversation_id),
-  UNIQUE(transport_endpoint_id)
+  UNIQUE(transport_endpoint_id),
+  FOREIGN KEY (conversation_id, workspace_id)
+    REFERENCES conversations(id, workspace_id) ON DELETE CASCADE,
+  FOREIGN KEY (transport_account_id, workspace_id)
+    REFERENCES transport_accounts(id, workspace_id)
+    ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (transport_endpoint_id, transport_account_id)
+    REFERENCES transport_endpoints(id, transport_account_id)
+    ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX idx_conversation_transport_bindings_workspace
@@ -1595,7 +1626,13 @@ CREATE INDEX idx_conversation_transport_bindings_workspace
 CREATE TABLE transport_addresses (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  transport_account_id UUID NOT NULL REFERENCES transport_accounts(id) ON DELETE CASCADE,
+  -- transport_account_id's workspace MUST equal this row's workspace. Enforced
+  -- by the composite FK (transport_account_id, workspace_id) ->
+  -- transport_accounts(id, workspace_id) below (transport_accounts has
+  -- UNIQUE(id, workspace_id)); a plain single-column FK would let a
+  -- cross-workspace address poison the (account, address_type, external_id)
+  -- unique key and later be rejected by the participant trigger.
+  transport_account_id UUID NOT NULL,
   transport_kind transport_addresses_transport_kind NOT NULL,
   address_type transport_addresses_address_type NOT NULL DEFAULT 'user',
   external_id VARCHAR(255) NOT NULL,
@@ -1610,7 +1647,9 @@ CREATE TABLE transport_addresses (
   -- subject's denormalized workspace_id matches its address's workspace. id is
   -- already the PK; this extra UNIQUE is required because Postgres composite FKs
   -- must reference a UNIQUE/PK column set.
-  UNIQUE(id, workspace_id)
+  UNIQUE(id, workspace_id),
+  FOREIGN KEY (transport_account_id, workspace_id)
+    REFERENCES transport_accounts(id, workspace_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_transport_addresses_workspace
@@ -1631,6 +1670,19 @@ ALTER TABLE access_subjects
   FOREIGN KEY (transport_address_id, workspace_id)
   REFERENCES transport_addresses(id, workspace_id)
   ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+
+-- Composite FK for kind='conversation' subjects: the denormalized workspace_id
+-- must match the conversation's real workspace (the value trusted by
+-- access_subject_workspace_id and downstream grant/scope checks). ON DELETE
+-- CASCADE preserves the original single-column FK's behavior — deleting a
+-- conversation (directly or via workspace cascade) removes its conversation
+-- subject row, so a conversation that has been referenced by a conversationRef
+-- subject (scope grant / memory subject) is still deletable.
+ALTER TABLE access_subjects
+  ADD CONSTRAINT fk_access_subjects_conversation
+  FOREIGN KEY (conversation_id, workspace_id)
+  REFERENCES conversations(id, workspace_id)
+  ON DELETE CASCADE;
 
 CREATE TABLE conversation_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2909,7 +2961,7 @@ CREATE TABLE installed_skills (
   current_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -2958,7 +3010,7 @@ CREATE TABLE plugin_installations (
   approved_runtime_permissions TEXT[] DEFAULT '{}',
   reuse_scope plugin_installations_reuse_scope NOT NULL DEFAULT 'conversation',
   conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
   status plugin_installations_status NOT NULL DEFAULT 'active',
   installed_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -3101,7 +3153,7 @@ CREATE TABLE resource_access_bindings (
   -- inserting a binding row with a non-null scope_subject_id.
   scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE,
   conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
   status resource_access_bindings_status NOT NULL DEFAULT 'active',
   source resource_access_bindings_source NOT NULL DEFAULT 'manual',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
@@ -3595,7 +3647,7 @@ CREATE TABLE devices (
   public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
   trust_status devices_trust_status NOT NULL DEFAULT 'pending',
   conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
   last_seen_at TIMESTAMPTZ,
   last_connected_at TIMESTAMPTZ,
   last_catalog_changed_at TIMESTAMPTZ,
@@ -3771,7 +3823,7 @@ CREATE TABLE device_capabilities (
   exposure_id UUID NOT NULL UNIQUE REFERENCES device_exposures(id) ON DELETE CASCADE,
   status device_capabilities_status NOT NULL DEFAULT 'active',
   conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -4183,18 +4235,23 @@ CREATE TRIGGER tg_rab_validate
 -- tg_conversation_participant_validate: participant subject invariants
 -- ============================================================================
 -- DB-level enforcement that the participant model can't be corrupted by raw SQL
--- (the participant_type column is being retired in favour of deriving the type
--- from the joined subject kind, so these invariants must live in the DB):
+-- (there is no participant_type column; the type is derived from the joined
+-- subject kind, so these invariants must live in the DB). The boundary axis was
+-- removed: a conversation is "IM" iff a conversation_transport_bindings row
+-- exists for it. The invariants are:
 --   (1) kind: a participant's subject must be one of
 --       workspace_member / actor / remote_agent / external. platform / user /
 --       workspace / conversation subjects can never be conversation participants.
---   (2) workspace (internal conversations only): for boundary='internal'
---       conversations the participant subject's workspace must equal the
---       conversation's internal_workspace_id, AND external-kind subjects are
---       rejected outright (external participants belong only to external
---       conversations). external (boundary='external') conversations have no
---       single owning workspace — their participant membership is governed by
---       the transport binding layer, so the workspace match is skipped.
+--   (2) workspace match (ALL participants, unconditional): every conversation is
+--       workspace-scoped (conversations.workspace_id NOT NULL) and every
+--       participant subject — including external — carries a workspace_id, so the
+--       subject's workspace must equal the conversation's workspace.
+--   (3) external is IM-only: an external subject may join only a conversation
+--       that has a transport binding (i.e. an IM conversation).
+--   (4) external account match: the external subject's transport address must
+--       belong to the same transport account that the conversation is bound to,
+--       so account B's address can't join a conversation bound to account A
+--       within the same workspace.
 -- ============================================================================
 CREATE OR REPLACE FUNCTION validate_conversation_participant_subject()
 RETURNS TRIGGER
@@ -4202,9 +4259,10 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_kind subject_kind;
-  v_boundary conversations_boundary;
   v_conv_ws UUID;
   v_subject_ws UUID;
+  v_binding_account_id UUID;
+  v_subject_account_id UUID;
 BEGIN
   SELECT kind INTO v_kind FROM access_subjects WHERE id = NEW.subject_id;
   IF v_kind IS NULL THEN
@@ -4213,17 +4271,32 @@ BEGIN
   IF v_kind NOT IN ('workspace_member', 'actor', 'remote_agent', 'external') THEN
     RAISE EXCEPTION 'conversation_participants.subject_id % has kind % which cannot be a participant', NEW.subject_id, v_kind;
   END IF;
-  SELECT boundary, internal_workspace_id INTO v_boundary, v_conv_ws
+
+  SELECT workspace_id INTO v_conv_ws
     FROM conversations WHERE id = NEW.conversation_id;
-  IF v_boundary = 'internal' THEN
-    IF v_kind = 'external' THEN
-      RAISE EXCEPTION 'conversation_participants.subject_id % is external and cannot join internal conversation %', NEW.subject_id, NEW.conversation_id;
+
+  -- (2) Unconditional workspace match for every participant kind.
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM v_conv_ws THEN
+    RAISE EXCEPTION 'conversation_participants.subject_id % workspace % does not match conversation % workspace %', NEW.subject_id, v_subject_ws, NEW.conversation_id, v_conv_ws;
+  END IF;
+
+  -- (3)/(4) External participants are IM-only and must match the binding account.
+  IF v_kind = 'external' THEN
+    SELECT transport_account_id INTO v_binding_account_id
+      FROM conversation_transport_bindings WHERE conversation_id = NEW.conversation_id;
+    IF v_binding_account_id IS NULL THEN
+      RAISE EXCEPTION 'conversation_participants.subject_id % is external but conversation % has no transport binding (external participants are IM-only)', NEW.subject_id, NEW.conversation_id;
     END IF;
-    v_subject_ws := access_subject_workspace_id(NEW.subject_id);
-    IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM v_conv_ws THEN
-      RAISE EXCEPTION 'conversation_participants.subject_id % workspace % does not match internal conversation workspace %', NEW.subject_id, v_subject_ws, v_conv_ws;
+    SELECT ta.transport_account_id INTO v_subject_account_id
+      FROM access_subjects asx
+      JOIN transport_addresses ta ON ta.id = asx.transport_address_id
+      WHERE asx.id = NEW.subject_id;
+    IF v_subject_account_id IS DISTINCT FROM v_binding_account_id THEN
+      RAISE EXCEPTION 'conversation_participants.subject_id % transport account % does not match conversation % binding account %', NEW.subject_id, v_subject_account_id, NEW.conversation_id, v_binding_account_id;
     END IF;
   END IF;
+
   RETURN NEW;
 END;
 $$;
@@ -4232,6 +4305,122 @@ CREATE TRIGGER tg_conversation_participant_validate
   BEFORE INSERT OR UPDATE ON conversation_participants
   FOR EACH ROW
   EXECUTE FUNCTION validate_conversation_participant_subject();
+
+-- ============================================================================
+-- tg_binding_account_consistency: a binding's account can't drift away from its
+-- external participants
+-- ============================================================================
+-- tg_conversation_participant_validate enforces, at participant write time, that
+-- an external participant's transport address belongs to the conversation's
+-- binding account. But that check does not re-fire when the BINDING itself is
+-- replaced (upsertConversationTransportBinding's ON CONFLICT swaps
+-- transport_account_id / transport_endpoint_id). Without this guard a
+-- conversation could be re-bound from account A to account B while keeping
+-- account A's external participants OR account A's participant addresses
+-- (conversation_participant_addresses) — leaving rows the participant /
+-- participant-address triggers would now reject. We forbid changing a binding's
+-- transport_account_id while ANY external participant OR any attached
+-- participant address on that conversation still resolves to a different account
+-- (re-pointing the endpoint within the same account is fine).
+CREATE OR REPLACE FUNCTION validate_binding_account_consistency()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.transport_account_id IS DISTINCT FROM OLD.transport_account_id THEN
+    -- (a) external participants whose address belongs to another account.
+    IF EXISTS (
+      SELECT 1
+        FROM conversation_participants cp
+        JOIN access_subjects asx ON asx.id = cp.subject_id
+        JOIN transport_addresses ta ON ta.id = asx.transport_address_id
+       WHERE cp.conversation_id = NEW.conversation_id
+         AND asx.kind = 'external'
+         AND ta.transport_account_id IS DISTINCT FROM NEW.transport_account_id
+    ) THEN
+      RAISE EXCEPTION 'conversation_transport_bindings(%) cannot change transport_account to % while external participants from another account remain', NEW.conversation_id, NEW.transport_account_id;
+    END IF;
+    -- (b) attached participant addresses (incl. linked workspace_member rows)
+    --     belonging to another account.
+    IF EXISTS (
+      SELECT 1
+        FROM conversation_participant_addresses cpa
+        JOIN conversation_participants cp
+          ON cp.id = cpa.conversation_participant_id
+        JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
+       WHERE cp.conversation_id = NEW.conversation_id
+         AND ta.transport_account_id IS DISTINCT FROM NEW.transport_account_id
+    ) THEN
+      RAISE EXCEPTION 'conversation_transport_bindings(%) cannot change transport_account to % while participant addresses from another account remain', NEW.conversation_id, NEW.transport_account_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_binding_account_consistency
+  BEFORE UPDATE OF transport_account_id ON conversation_transport_bindings
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_binding_account_consistency();
+
+-- ============================================================================
+-- tg_binding_delete_guard: deleting a binding can't silently strip a
+-- conversation's IM-ness while IM-only rows remain
+-- ============================================================================
+-- IM-ness is derived purely from the presence of a conversation_transport_
+-- bindings row. Deleting the binding flips the conversation IM -> native, but
+-- external participants and participant addresses (conversation_participant_
+-- addresses) are IM-only artifacts that would be orphaned and would no longer
+-- satisfy their own triggers. Forbid deleting a binding while its conversation
+-- still exists AND still has external participants or attached addresses.
+--
+-- DEFERRABLE INITIALLY DEFERRED + the "conversation still exists" guard make the
+-- legitimate teardown paths pass: deleting the conversation (or the workspace)
+-- cascades to conversation_participants / _addresses / the binding within one
+-- transaction; by COMMIT the conversation row is gone, so this constraint is
+-- satisfied. Only a standalone binding delete (conversation kept) is rejected —
+-- callers must first migrate/remove the IM participants + addresses.
+CREATE OR REPLACE FUNCTION guard_binding_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Conversation already gone (cascade teardown) -> nothing to protect.
+  IF NOT EXISTS (
+    SELECT 1 FROM conversations c WHERE c.id = OLD.conversation_id
+  ) THEN
+    RETURN OLD;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM conversation_participants cp
+      JOIN access_subjects asx ON asx.id = cp.subject_id
+     WHERE cp.conversation_id = OLD.conversation_id
+       AND asx.kind = 'external'
+  ) THEN
+    RAISE EXCEPTION 'conversation_transport_bindings(%) cannot be deleted while external participants remain (migrate/remove them first)', OLD.conversation_id;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM conversation_participant_addresses cpa
+      JOIN conversation_participants cp
+        ON cp.id = cpa.conversation_participant_id
+     WHERE cp.conversation_id = OLD.conversation_id
+  ) THEN
+    RAISE EXCEPTION 'conversation_transport_bindings(%) cannot be deleted while participant addresses remain (migrate/remove them first)', OLD.conversation_id;
+  END IF;
+
+  RETURN OLD;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER tg_binding_delete_guard
+  AFTER DELETE ON conversation_transport_bindings
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW
+  EXECUTE FUNCTION guard_binding_delete();
 
 -- ============================================================================
 -- tg_access_subject_identity_guard: freeze a referenced subject's identity
@@ -4273,6 +4462,72 @@ CREATE TRIGGER tg_access_subject_identity_guard
   ON access_subjects
   FOR EACH ROW
   EXECUTE FUNCTION guard_access_subject_identity_update();
+
+-- ============================================================================
+-- tg_participant_address_consistency: an attached transport address must match
+-- the conversation's workspace and (if bound) its binding account
+-- ============================================================================
+-- conversation_participant_addresses links a participant to a transport_address
+-- for delivery. Nothing structurally prevented attaching an address from the
+-- wrong workspace or a different transport account than the conversation's
+-- binding — the linked-workspace_member branch in
+-- syncTransportAddressConversationParticipant creates a non-external participant
+-- (which the participant trigger does NOT account-check) and then attaches an
+-- address, and raw SQL / exported helpers could do the same. This trigger closes
+-- that gap: resolve participant -> conversation, require the address's workspace
+-- to equal the conversation's workspace, and — when the conversation has a
+-- transport binding — require the address's transport_account_id to equal the
+-- binding's account.
+CREATE OR REPLACE FUNCTION validate_participant_address_consistency()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_conv_id UUID;
+  v_conv_ws UUID;
+  v_addr_ws UUID;
+  v_addr_account UUID;
+  v_binding_account UUID;
+BEGIN
+  SELECT cp.conversation_id INTO v_conv_id
+    FROM conversation_participants cp
+   WHERE cp.id = NEW.conversation_participant_id;
+  IF v_conv_id IS NULL THEN
+    RAISE EXCEPTION 'conversation_participant_addresses.conversation_participant_id % does not exist', NEW.conversation_participant_id;
+  END IF;
+
+  SELECT c.workspace_id INTO v_conv_ws
+    FROM conversations c WHERE c.id = v_conv_id;
+  SELECT ta.workspace_id, ta.transport_account_id
+    INTO v_addr_ws, v_addr_account
+    FROM transport_addresses ta WHERE ta.id = NEW.transport_address_id;
+
+  IF v_addr_ws IS DISTINCT FROM v_conv_ws THEN
+    RAISE EXCEPTION 'conversation_participant_addresses: address % workspace % does not match conversation % workspace %', NEW.transport_address_id, v_addr_ws, v_conv_id, v_conv_ws;
+  END IF;
+
+  -- Participant addresses are an IM-only artifact (they drive IM delivery), so
+  -- the conversation MUST have a transport binding, and the address MUST belong
+  -- to that binding's account. A native (non-IM) conversation can never carry a
+  -- participant address.
+  SELECT b.transport_account_id INTO v_binding_account
+    FROM conversation_transport_bindings b
+   WHERE b.conversation_id = v_conv_id;
+  IF v_binding_account IS NULL THEN
+    RAISE EXCEPTION 'conversation_participant_addresses: conversation % has no transport binding (participant addresses are IM-only)', v_conv_id;
+  END IF;
+  IF v_addr_account IS DISTINCT FROM v_binding_account THEN
+    RAISE EXCEPTION 'conversation_participant_addresses: address % account % does not match conversation % binding account %', NEW.transport_address_id, v_addr_account, v_conv_id, v_binding_account;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_participant_address_consistency
+  BEFORE INSERT OR UPDATE ON conversation_participant_addresses
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_participant_address_consistency();
 
 -- ============================================================================
 -- tg_runtime_authorization_grant_validate: subject + scope + device/capability/

@@ -96,7 +96,7 @@ export async function resolveActorCapabilitySurface(
     sessionId: resolved.sessionId,
     conversationId: resolved.conversationId,
     conversationKind: resolved.conversationKind,
-    conversationBoundary: resolved.conversationBoundary,
+    isImConversation: resolved.isImConversation,
   })
 
   return {

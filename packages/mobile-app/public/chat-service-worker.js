@@ -678,22 +678,12 @@
     FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON
   ];
   var CONVERSATION_KIND = {
-    GROUP: "group",
-    PRIVATE: "private",
-    VIRTUAL: "virtual"
+    DIRECT: "direct",
+    GROUP: "group"
   };
   var CONVERSATION_KINDS = [
-    CONVERSATION_KIND.GROUP,
-    CONVERSATION_KIND.PRIVATE,
-    CONVERSATION_KIND.VIRTUAL
-  ];
-  var CONVERSATION_BOUNDARY = {
-    INTERNAL: "internal",
-    EXTERNAL: "external"
-  };
-  var CONVERSATION_BOUNDARIES = [
-    CONVERSATION_BOUNDARY.INTERNAL,
-    CONVERSATION_BOUNDARY.EXTERNAL
+    CONVERSATION_KIND.DIRECT,
+    CONVERSATION_KIND.GROUP
   ];
   var CONVERSATION_PARTICIPANT_TYPE = {
     WORKSPACE_MEMBER: "workspace_member",
@@ -776,19 +766,25 @@
     CONVERSATION_ITEM_ROLE.TOOL
   ];
   var CONVERSATION_TYPE_MASK_BITS = {
-    internal_private: 1 << 0,
-    internal_group: 1 << 1,
-    external_private: 1 << 2,
-    external_group: 1 << 3,
-    virtual: 1 << 4
+    direct: 1 << 0,
+    group: 1 << 1,
+    im_direct: 1 << 2,
+    im_group: 1 << 3
   };
   var CONVERSATION_TYPE_MASK_PRESETS = {
-    ALL: CONVERSATION_TYPE_MASK_BITS.internal_private | CONVERSATION_TYPE_MASK_BITS.internal_group | CONVERSATION_TYPE_MASK_BITS.external_private | CONVERSATION_TYPE_MASK_BITS.external_group | CONVERSATION_TYPE_MASK_BITS.virtual,
-    INTERNAL_ONLY: CONVERSATION_TYPE_MASK_BITS.internal_private | CONVERSATION_TYPE_MASK_BITS.internal_group,
-    EXTERNAL_ONLY: CONVERSATION_TYPE_MASK_BITS.external_private | CONVERSATION_TYPE_MASK_BITS.external_group,
-    GROUP_ONLY: CONVERSATION_TYPE_MASK_BITS.internal_group | CONVERSATION_TYPE_MASK_BITS.external_group,
-    PRIVATE_ONLY: CONVERSATION_TYPE_MASK_BITS.internal_private | CONVERSATION_TYPE_MASK_BITS.external_private,
-    VIRTUAL_ONLY: CONVERSATION_TYPE_MASK_BITS.virtual
+    ALL: CONVERSATION_TYPE_MASK_BITS.direct | CONVERSATION_TYPE_MASK_BITS.group | CONVERSATION_TYPE_MASK_BITS.im_direct | CONVERSATION_TYPE_MASK_BITS.im_group,
+    // Native (in-app, non-IM) conversations only — replaces the old INTERNAL_ONLY.
+    NATIVE_ONLY: CONVERSATION_TYPE_MASK_BITS.direct | CONVERSATION_TYPE_MASK_BITS.group,
+    // IM-bridged conversations only — replaces the old EXTERNAL_ONLY / VIRTUAL_ONLY.
+    IM_ONLY: CONVERSATION_TYPE_MASK_BITS.im_direct | CONVERSATION_TYPE_MASK_BITS.im_group,
+    // 1:1 conversations across both native and IM.
+    DIRECT_ONLY: CONVERSATION_TYPE_MASK_BITS.direct | CONVERSATION_TYPE_MASK_BITS.im_direct,
+    // Group conversations across both native and IM.
+    GROUP_ONLY: CONVERSATION_TYPE_MASK_BITS.group | CONVERSATION_TYPE_MASK_BITS.im_group,
+    // Native (in-app) group conversations only — excludes IM groups. Used by
+    // capabilities that must not act on IM-bridged group chats (e.g. invite_actor,
+    // which must not pull more actors into a third-party IM group).
+    NATIVE_GROUP_ONLY: CONVERSATION_TYPE_MASK_BITS.group
   };
   var DEFAULT_CONVERSATION_TYPE_MASK = CONVERSATION_TYPE_MASK_PRESETS.ALL;
   var INTERACTION_REQUEST_KIND = {
@@ -1357,8 +1353,7 @@
 
   // ../shared/dist/utils/index.js
   var GROUP_CONVERSATION_KIND = CONVERSATION_KIND.GROUP;
-  var PRIVATE_CONVERSATION_KIND = CONVERSATION_KIND.PRIVATE;
-  var VIRTUAL_CONVERSATION_KIND = CONVERSATION_KIND.VIRTUAL;
+  var DIRECT_CONVERSATION_KIND = CONVERSATION_KIND.DIRECT;
 
   // ../shared/dist/automation/event-definitions/integrations.js
   function readString(value) {

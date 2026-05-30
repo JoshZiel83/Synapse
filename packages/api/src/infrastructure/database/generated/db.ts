@@ -107,9 +107,7 @@ export type ConversationItemTargetsTargetKind = "cc" | "to" | "visible";
 
 export type ConversationParticipantsState = "active" | "left" | "removed";
 
-export type ConversationsBoundary = "external" | "internal";
-
-export type ConversationsKind = "group" | "private" | "virtual";
+export type ConversationsKind = "direct" | "group";
 
 export type ConversationTransportBindingsInboundActorMode = "inherit_account" | "none" | "specified_actor";
 
@@ -959,15 +957,14 @@ export interface ConversationParticipantStates {
 }
 
 export interface Conversations {
-  boundary: ConversationsBoundary;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
   id: Generated<string>;
-  internal_workspace_id: string | null;
   kind: ConversationsKind;
   metadata: Generated<Json | null>;
   title: string | null;
   updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
 }
 
 export interface ConversationTransportBindings {

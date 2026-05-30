@@ -769,8 +769,6 @@ export class ChatRuntime {
       actorIds: input.actorIds ?? [],
       workspaceMemberIds: input.workspaceMemberIds ?? [],
       remoteAgentIds: input.remoteAgentIds ?? [],
-      externalParticipants: input.externalParticipants ?? [],
-      boundary: input.boundary,
       metadata: input.metadata,
     })
 

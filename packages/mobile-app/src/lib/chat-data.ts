@@ -453,7 +453,7 @@ export function getConversationDisplayName(
   conversation: ChatConversationView,
   workspaceMemberId?: string | null
 ) {
-  if (conversation.kind === CONVERSATION_KIND.PRIVATE) {
+  if (conversation.kind === CONVERSATION_KIND.DIRECT) {
     const peer = getConversationPeerParticipant(conversation, workspaceMemberId)
     return getParticipantDisplayName(peer) || conversation.title || "聊天"
   }

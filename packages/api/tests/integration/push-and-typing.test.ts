@@ -106,8 +106,7 @@ test("typing endpoint returns broadcast: true for authorized participants", asyn
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "typing test",
     },
   })
@@ -129,8 +128,7 @@ test("typing endpoint rejects unauthorized callers with 403", async () => {
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "private",
     },
   })

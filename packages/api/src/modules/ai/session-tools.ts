@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { z } from "zod"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
-  CONVERSATION_TYPE_MASK_BITS,
+  CONVERSATION_TYPE_MASK_PRESETS,
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
@@ -167,8 +167,8 @@ function getToolContextConversationKind(ctx: ToolResolveContext) {
   return ctx.conversationKind
 }
 
-function getToolContextConversationBoundary(ctx: ToolResolveContext) {
-  return ctx.conversationBoundary
+function getToolContextIsImConversation(ctx: ToolResolveContext) {
+  return ctx.isImConversation ?? false
 }
 
 function getToolContextConversationParticipants(ctx: ToolResolveContext) {
@@ -523,7 +523,7 @@ function resolveHumanInteractionTarget(params: {
 }) {
   const requestedParticipantId = params.requestedParticipantId?.trim() || ""
   const isPrivateConversation =
-    params.conversationKind === "private" && params.candidates.length === 1
+    params.conversationKind === "direct" && params.candidates.length === 1
 
   if (isPrivateConversation) {
     const implicitCandidate = params.candidates[0] || null
@@ -994,13 +994,17 @@ async function listInviteableActors(params: {
 async function canActorUseInviteActorTool(params: {
   actorId: string
   conversationId: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: "internal" | "external"
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
 }) {
+  // invite_actor is restricted to NATIVE (in-app) group conversations. Actors
+  // must not pull additional actors into an IM-bridged group chat (preserves the
+  // pre-refactor "internal group only" behavior; the bit-mask equivalent is the
+  // native `group` bit, NOT GROUP_ONLY which also includes im_group).
   if (
     !params.conversationId ||
     !isGroupConversationKind(params.conversationKind) ||
-    params.conversationBoundary !== "internal"
+    params.isImConversation
   ) {
     return false
   }
@@ -1156,7 +1160,7 @@ export function registerCallableToolPlugins(): void {
           sessionId: context.sessionId,
           conversationId: session.conversation_id,
           conversationKind: session.conversation_kind,
-          conversationBoundary: session.conversation_boundary,
+          isImConversation: session.isImConversation,
           skillName,
           assetPath: path || undefined,
         })
@@ -1457,7 +1461,7 @@ export function registerCallableToolPlugins(): void {
         return { active: false, definition: null as any }
       }
       const isPrivateConversation =
-        getToolContextConversationKind(ctx) === "private" &&
+        getToolContextConversationKind(ctx) === "direct" &&
         candidates.length === 1
       const candidateDirectory = buildUserInteractionDirectory(candidates)
       return {
@@ -1923,7 +1927,7 @@ export function registerCallableToolPlugins(): void {
         return { active: false, definition: null as any }
       }
       const isPrivateConversation =
-        getToolContextConversationKind(ctx) === "private" &&
+        getToolContextConversationKind(ctx) === "direct" &&
         candidates.length === 1
       const candidateDirectory = buildUserInteractionDirectory(candidates)
       return {
@@ -2415,7 +2419,7 @@ export function registerCallableToolPlugins(): void {
   registerToolPlugin({
     name: "invite_actor",
     kind: "callable",
-    conversationTypeMask: CONVERSATION_TYPE_MASK_BITS.internal_group,
+    conversationTypeMask: CONVERSATION_TYPE_MASK_PRESETS.NATIVE_GROUP_ONLY,
     definition: {
       name: "invite_actor",
       description:
@@ -2444,7 +2448,7 @@ export function registerCallableToolPlugins(): void {
             actorId: ctx.actorId,
             conversationId,
             conversationKind: getToolContextConversationKind(ctx),
-            conversationBoundary: getToolContextConversationBoundary(ctx),
+            isImConversation: getToolContextIsImConversation(ctx),
           })
         : false
       if (!requesterAllowed) {
@@ -2482,16 +2486,16 @@ export function registerCallableToolPlugins(): void {
       if (!isGroupConversationKind(session.conversation_kind)) {
         throwToolError("invite_actor is only available in group conversations.")
       }
-      if (session.conversation_boundary !== "internal") {
+      if (session.isImConversation) {
         throwToolError(
-          "invite_actor is only available in internal group conversations."
+          "invite_actor is not available in IM group conversations."
         )
       }
       const requesterAllowed = await canActorUseInviteActorTool({
         actorId: context.actorId,
         conversationId,
         conversationKind: session.conversation_kind,
-        conversationBoundary: session.conversation_boundary,
+        isImConversation: session.isImConversation,
       })
       if (!requesterAllowed) {
         throwToolError(

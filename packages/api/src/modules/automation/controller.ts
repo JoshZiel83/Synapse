@@ -110,7 +110,7 @@ const updateAutomationSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
-const conversationTypeMaskSchema = z.number().int().min(1).max(31)
+const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const accessTargetSchema = z
   .object({
     type: z.enum([

@@ -1,5 +1,4 @@
 import {
-  CONVERSATION_BOUNDARY,
   CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
@@ -86,7 +85,7 @@ function buildConversationPresentation(params: {
     (participant) => participant.state === "active"
   )
   const peer =
-    row.kind === CONVERSATION_KIND.PRIVATE
+    row.kind === CONVERSATION_KIND.DIRECT
       ? activeParticipants.find(
           (participant) =>
             !(
@@ -98,7 +97,7 @@ function buildConversationPresentation(params: {
       : undefined
 
   const directPeerNames =
-    row.kind === CONVERSATION_KIND.PRIVATE
+    row.kind === CONVERSATION_KIND.DIRECT
       ? activeParticipants
           .filter(
             (participant) =>
@@ -113,7 +112,7 @@ function buildConversationPresentation(params: {
       : []
 
   const title =
-    row.kind === CONVERSATION_KIND.PRIVATE && directPeerNames.length > 0
+    row.kind === CONVERSATION_KIND.DIRECT && directPeerNames.length > 0
       ? directPeerNames.join(", ")
       : row.title ||
         activeParticipants
@@ -124,29 +123,30 @@ function buildConversationPresentation(params: {
         "Untitled thread"
 
   const chatType =
-    row.kind === CONVERSATION_KIND.PRIVATE
+    row.kind === CONVERSATION_KIND.DIRECT
       ? ("direct" as const)
-      : row.kind === CONVERSATION_KIND.GROUP
-        ? ("group" as const)
-        : ("virtual" as const)
-  const boundaryLabel =
-    row.boundary === CONVERSATION_BOUNDARY.EXTERNAL ? "External" : "Internal"
+      : ("group" as const)
+  const isIm = Boolean(row.is_im ?? row.isIm)
   const canRename =
-    row.kind !== CONVERSATION_KIND.PRIVATE && canManageConversation
+    row.kind !== CONVERSATION_KIND.DIRECT && canManageConversation
   const canManageConversationParticipants =
-    row.kind !== CONVERSATION_KIND.PRIVATE && canManageParticipants
+    row.kind !== CONVERSATION_KIND.DIRECT && canManageParticipants
 
+  const isDirect = row.kind === CONVERSATION_KIND.DIRECT
   return {
     chatType,
     title,
     avatarUrl:
-      row.kind === CONVERSATION_KIND.PRIVATE
+      row.kind === CONVERSATION_KIND.DIRECT
         ? peer?.avatarUrl
         : row.avatar_url || undefined,
-    subtitle:
-      row.kind === CONVERSATION_KIND.PRIVATE
-        ? `${boundaryLabel} direct chat`
-        : `${boundaryLabel} group chat`,
+    subtitle: isIm
+      ? isDirect
+        ? "IM direct chat"
+        : "IM group chat"
+      : isDirect
+        ? "Direct message"
+        : "Group chat",
     peer,
     canRename,
     canManageParticipants: canManageConversationParticipants,
@@ -186,7 +186,7 @@ export async function mapConversationSummaryView(
       ? viewerMembership.role_key
       : "member"
   const canManageConversation =
-    row.kind !== CONVERSATION_KIND.PRIVATE &&
+    row.kind !== CONVERSATION_KIND.DIRECT &&
     (viewerConversationRole === "owner" || viewerConversationRole === "admin")
   const canManageParticipants = canManageConversation
   const presentation = buildConversationPresentation({
@@ -200,7 +200,7 @@ export async function mapConversationSummaryView(
   return {
     id: row.id,
     kind: row.kind,
-    boundary: row.boundary,
+    isIm: Boolean(row.is_im ?? row.isIm),
     status: hasOpenLane ? ("active" as const) : ("completed" as const),
     transportKind: row.transport_kind || undefined,
     participants: mappedParticipants,

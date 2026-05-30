@@ -127,8 +127,8 @@ type ConversationOption = {
   id: string
   name: string
   title?: string
-  kind: "group" | "private" | "virtual"
-  boundary: "internal" | "external"
+  kind: "direct" | "group"
+  isIm: boolean
   conversationTypeKey: ConversationTypeKey | null
   participants: Array<{
     participantId: string
@@ -264,44 +264,39 @@ const conversationTypeOptions: Array<{
   description: string
 }> = [
   {
-    key: "internal_private",
-    label: "Internal private",
-    description: "Private conversations inside the workspace graph.",
+    key: "direct",
+    label: "Direct",
+    description: "1:1 conversations in the app (non-IM).",
   },
   {
-    key: "internal_group",
-    label: "Internal group",
-    description: "Workspace-local group conversations.",
+    key: "group",
+    label: "Group",
+    description: "Group conversations in the app (non-IM).",
   },
   {
-    key: "external_private",
-    label: "External private",
-    description: "Cross-workspace private conversations.",
+    key: "im_direct",
+    label: "IM direct",
+    description: "1:1 conversations bridged from a third-party IM.",
   },
   {
-    key: "external_group",
-    label: "External group",
-    description: "Cross-workspace group conversations.",
-  },
-  {
-    key: "virtual",
-    label: "Virtual",
-    description: "Virtual or synthetic conversations.",
+    key: "im_group",
+    label: "IM group",
+    description: "Group conversations bridged from a third-party IM.",
   },
 ]
 
 const conversationTypePresets = [
   { label: "All", value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
   {
-    label: "Internal only",
-    value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY,
+    label: "Native only",
+    value: CONVERSATION_TYPE_MASK_PRESETS.NATIVE_ONLY,
   },
   {
-    label: "External only",
-    value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY,
+    label: "IM only",
+    value: CONVERSATION_TYPE_MASK_PRESETS.IM_ONLY,
   },
   { label: "Group only", value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
-  { label: "Private only", value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
+  { label: "Direct only", value: CONVERSATION_TYPE_MASK_PRESETS.DIRECT_ONLY },
 ] as const
 
 function formatConversationTypeKeys(keys: ConversationTypeKey[]) {
@@ -330,7 +325,7 @@ function normalizeConversationOption(
     name: group.title || "Untitled conversation",
     title: group.title,
     kind: group.kind,
-    boundary: group.boundary,
+    isIm: group.isIm,
     conversationTypeKey: group.conversationTypeKey,
     participants: group.participants,
   }
@@ -888,7 +883,7 @@ export default function ResourceAccessStep({
         ? maskAllowsConversationType(
             currentGrantBaseMask,
             selectedConversation.kind,
-            selectedConversation.boundary
+            selectedConversation.isIm
           )
         : false,
     [currentGrantBaseMask, selectedConversation]
@@ -910,7 +905,7 @@ export default function ResourceAccessStep({
         const allowed = maskAllowsConversationType(
           currentGrantBaseMask,
           conversation.kind,
-          conversation.boundary
+          conversation.isIm
         )
         return {
           id: conversation.id,
@@ -1350,7 +1345,7 @@ export default function ResourceAccessStep({
       const allowed = maskAllowsConversationType(
         nextMask,
         catalogEntry.kind,
-        catalogEntry.boundary
+        catalogEntry.isIm
       )
       if (!allowed) {
         invalidTargets.push(

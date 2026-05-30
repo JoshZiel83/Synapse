@@ -51,7 +51,7 @@ const accessTargetTypeSchema = z.enum([
   "actor_in_conversation",
 ])
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
-const conversationTypeMaskSchema = z.number().int().min(1).max(31)
+const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const attachmentTargetSchema = z.object({
   type: attachmentTargetTypeSchema,
   actorId: z.uuid().optional(),

@@ -99,7 +99,7 @@ export default function ChatDetailScreen() {
     ? getConversationDisplayName(conversation, workspaceMemberId)
     : "聊天"
   const directActorParticipant =
-    conversation?.kind === CONVERSATION_KIND.PRIVATE
+    conversation?.kind === CONVERSATION_KIND.DIRECT
       ? (conversation.participants.find(
           (participant) =>
             participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR

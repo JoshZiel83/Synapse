@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify"
 import { ZodError, z } from "zod"
 import {
   CHAT_TYPING_STATES,
-  CONVERSATION_BOUNDARIES,
   CONVERSATION_KINDS,
   INTERACTION_DECISIONS,
   PLAN_APPROVAL_DECISIONS,
@@ -63,26 +62,18 @@ const jsonRecordSchema = z.record(z.string(), z.any()).optional()
 // shape the chat HTTP API enforces here.
 const canonicalContentBlockSchema = CanonicalContentBlockSchema
 
-const createConversationSchema = z.object({
+// strictObject so legacy clients sending the removed `boundary` /
+// `externalParticipants` fields get a clean 400 instead of having them silently
+// stripped (zod's default object strips unknown keys). External participants are
+// created only by the IM ingest path now; IM-ness is derived from the transport
+// binding, never passed at create time.
+const createConversationSchema = z.strictObject({
   clientRequestId: chatUuidSchema,
   kind: z.enum(CONVERSATION_KINDS),
-  boundary: z.enum(CONVERSATION_BOUNDARIES).optional(),
   title: z.string().trim().min(1).max(255).optional(),
   workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
   actorIds: z.array(chatUuidSchema).optional().default([]),
   remoteAgentIds: z.array(chatUuidSchema).optional().default([]),
-  externalParticipants: z
-    .array(
-      z.object({
-        displayName: z.string().trim().min(1).max(255),
-        metadata: jsonRecordSchema,
-        // The single transport address identifying this first-class external
-        // person (no anonymous/throwaway externals).
-        transportAddressId: chatUuidSchema,
-      })
-    )
-    .optional()
-    .default([]),
   metadata: jsonRecordSchema,
 })
 
@@ -121,28 +112,16 @@ const patchConversationSchema = z
   )
 
 const addParticipantsSchema = z
-  .object({
+  .strictObject({
     workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
     actorIds: z.array(chatUuidSchema).optional().default([]),
     remoteAgentIds: z.array(chatUuidSchema).optional().default([]),
-    externalParticipants: z
-      .array(
-        z.object({
-          displayName: z.string().trim().min(1).max(255),
-          metadata: jsonRecordSchema,
-          // The single transport address identifying this first-class external.
-          transportAddressId: chatUuidSchema,
-        })
-      )
-      .optional()
-      .default([]),
   })
   .refine(
     (value) =>
       value.workspaceMemberIds.length +
         value.actorIds.length +
-        value.remoteAgentIds.length +
-        value.externalParticipants.length >
+        value.remoteAgentIds.length >
       0,
     { message: "At least one participant identifier is required" }
   )
@@ -409,12 +388,10 @@ export default async function chatController(app: FastifyInstance) {
         userId: getRequestUserId(request),
         clientRequestId: body.clientRequestId,
         kind: body.kind,
-        boundary: body.boundary,
         title: body.title,
         workspaceMemberIds: body.workspaceMemberIds,
         actorIds: body.actorIds,
         remoteAgentIds: body.remoteAgentIds,
-        externalParticipants: body.externalParticipants,
         metadata: body.metadata,
       })
       return reply.send(response)
@@ -730,7 +707,6 @@ export default async function chatController(app: FastifyInstance) {
           workspaceMemberIds: body.workspaceMemberIds,
           actorIds: body.actorIds,
           remoteAgentIds: body.remoteAgentIds,
-          externalParticipants: body.externalParticipants,
         })
         return reply.status(201).send(response)
       } catch (error) {

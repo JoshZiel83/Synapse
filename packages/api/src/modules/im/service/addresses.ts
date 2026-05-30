@@ -208,6 +208,36 @@ export async function syncTransportAddressConversationParticipant(params: {
     throw new Error("Transport external user not found")
   }
 
+  // Preflight (RF3): the DB triggers (tg_conversation_participant_validate /
+  // tg_participant_address_consistency) are the hard backstop, but they fire
+  // mid-write — a rejection AFTER we have already activated the participant (and
+  // possibly cleared an existing primary address) would leave a half-applied
+  // state, since this helper is not wrapped in a single transaction. Validate
+  // the binding + account + workspace up front so a mismatch throws before any
+  // write. participant addresses are IM-only: the conversation MUST be bound,
+  // and the address MUST belong to the binding's account in the same workspace.
+  const binding = await db
+    .selectFrom("conversation_transport_bindings")
+    .select(["workspace_id", "transport_account_id"])
+    .where("conversation_id", "=", params.conversationId)
+    .limit(1)
+    .executeTakeFirst()
+  if (!binding) {
+    throw new Error(
+      `syncTransportAddressConversationParticipant: conversation ${params.conversationId} has no transport binding (participant addresses are IM-only)`
+    )
+  }
+  if (binding.workspace_id !== address.workspace_id) {
+    throw new Error(
+      `syncTransportAddressConversationParticipant: address ${address.id} workspace ${address.workspace_id} does not match conversation binding workspace ${binding.workspace_id}`
+    )
+  }
+  if (binding.transport_account_id !== address.transport_account_id) {
+    throw new Error(
+      `syncTransportAddressConversationParticipant: address ${address.id} account ${address.transport_account_id} does not match conversation binding account ${binding.transport_account_id}`
+    )
+  }
+
   // F6 defence-in-depth (both branches): only a 'user' transport address ever
   // becomes a conversation participant — never a bot/system endpoint. Asserted
   // here so future callers of this exported helper can't bypass it.

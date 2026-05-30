@@ -14,7 +14,6 @@ import type {
   ToolDefinition,
   NormalizedMcpToolResult,
   RuntimeActorContext,
-  ConversationBoundary,
   CanonicalContentBlock,
 } from "@synapse/shared/types"
 import { SUBJECT_KIND, textBlock, type SubjectRef } from "@synapse/shared"
@@ -69,7 +68,8 @@ import {
 } from "./device-capabilities.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import {
-  maskAllowsConversationType,
+  maskAllowsConversationTypeKey,
+  resolveConversationTypeKey,
   resolveNarrowedConversationTypeMask,
 } from "@synapse/shared"
 import { resolveUrlScope } from "@synapse/shared/access/policies"
@@ -138,8 +138,8 @@ export interface ProjectToolsInput extends Omit<
   workspaceId: string
   principal: DevicePrincipal
   conversationId?: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: ConversationBoundary
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
   consumer: CapabilityProjectionConsumer
 }
 
@@ -386,15 +386,22 @@ async function projectDeviceTools(
   // Conversation-type-mask filter: every device capability row gets
   // narrowed to (workspace default ∩ device override ∩ capability override).
   // A capability whose effective mask doesn't include the current
-  // conversation's (kind, boundary) bit is dropped from the surface.
+  // conversation's type-key bit is dropped from the surface. The type-key is
+  // loop-invariant (a property of the conversation, not the capability row), so
+  // resolve it once here and use the pure key check inside the filter.
   const conversationKind = input.conversationKind ?? null
-  const conversationBoundary = input.conversationBoundary ?? null
+  const conversationTypeKey = conversationKind
+    ? resolveConversationTypeKey(
+        conversationKind,
+        input.isImConversation ?? false
+      )
+    : null
   const workspacePolicies =
     await getWorkspaceCapabilityConversationTypePolicyMap([input.workspaceId])
   const workspaceDefault =
     workspacePolicies.get(input.workspaceId)?.device_capability ?? null
   const filteredRows = rows.filter((row) => {
-    if (!conversationKind) {
+    if (!conversationTypeKey) {
       // No conversation context (e.g. dashboard introspection) — surface
       // everything; the dispatch-side check still rejects per-call.
       return true
@@ -406,11 +413,7 @@ async function projectDeviceTools(
       ),
       row.capability_conversation_type_mask_override
     )
-    return maskAllowsConversationType(
-      effectiveMask,
-      conversationKind,
-      conversationBoundary
-    )
+    return maskAllowsConversationTypeKey(effectiveMask, conversationTypeKey)
   })
 
   const handlers = new Map<string, DeviceCapabilityToolRow>()
@@ -950,7 +953,7 @@ export function buildRuntimeAuthorizationRequestParams(args: {
         principal.kind === "remote_agent" ? principal.remoteAgentId : undefined,
       sourceToolName: toolName,
       conversationKind: projectInput.conversationKind,
-      conversationBoundary: projectInput.conversationBoundary,
+      isImConversation: projectInput.isImConversation,
       workspaceMemberId: projectInput.workspaceMemberId,
     },
     runtimeTarget: {

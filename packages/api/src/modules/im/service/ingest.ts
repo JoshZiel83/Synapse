@@ -84,8 +84,7 @@ async function ensureTransportConversationBinding(params: {
   await getWorkspaceOwnerId(account.workspaceId)
   const created = await createConversation({
     workspaceId: account.workspaceId,
-    kind: "virtual",
-    boundary: "external",
+    kind: envelope.endpointType === "group" ? "group" : "direct",
     title:
       envelope.endpointDisplayName ||
       `${account.displayName} ${envelope.endpointType === "group" ? "群聊" : "私聊"}`,

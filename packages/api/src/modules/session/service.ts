@@ -81,7 +81,7 @@ function normalizeSessionRow(row: any) {
     ...row,
     conversationId: row.conversation_id,
     conversationKind: row.conversation_kind,
-    conversationBoundary: row.conversation_boundary,
+    isImConversation: Boolean(row.conversation_is_im),
     conversationTitle: row.conversation_title,
     collaborationMode: row.collaboration_mode || "default",
     activePlanApprovalInteractionId:
@@ -115,10 +115,17 @@ async function loadSession(sessionId: UUID): Promise<any | null> {
     .innerJoin("actors as a", "a.id", "s.actor_id")
     .innerJoin("conversations as c", "c.id", "s.conversation_id")
     .selectAll("s")
-    .select([
+    .select((eb) => [
       "a.name as actor_name",
       "c.kind as conversation_kind",
-      "c.boundary as conversation_boundary",
+      eb
+        .exists(
+          eb
+            .selectFrom("conversation_transport_bindings as b")
+            .select("b.id")
+            .whereRef("b.conversation_id", "=", "c.id")
+        )
+        .as("conversation_is_im"),
       "c.title as conversation_title",
     ])
     .where("s.id", "=", sessionId)

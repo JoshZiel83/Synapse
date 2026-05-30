@@ -8,7 +8,7 @@
 
 import {
   isValidConversationTypeMask,
-  maskAllowsConversationType,
+  maskAllowsConversationTypeKey,
   normalizeConversationTypeMask,
   resolveConversationTypeKey,
   resolveNarrowedConversationTypeMask,
@@ -22,12 +22,14 @@ import { upsertAccessSubject } from "./subject-registry.js"
 type ConversationTargetRecord = {
   conversationId: string
   kind: string
-  boundary: string
+  isIm: boolean
   conversationTypeKey: ConversationTypeKey
 }
 
 function formatConversationTypeKey(value: ConversationTypeKey) {
-  return value.replaceAll("_", " ")
+  // im_direct / im_group should read as "IM direct" / "IM group" (the leading
+  // "im" segment is an initialism), not "im direct".
+  return value.replaceAll("_", " ").replace(/^im /, "IM ")
 }
 
 /**
@@ -111,22 +113,34 @@ async function loadConversationTargetRecord(
   conversationId: string
 ): Promise<ConversationTargetRecord | null> {
   const row = await db
-    .selectFrom("conversations")
-    .select(["id", "kind", "boundary"])
-    .where("id", "=", conversationId)
+    .selectFrom("conversations as c")
+    .select((eb) => [
+      "c.id as id",
+      "c.kind as kind",
+      eb
+        .exists(
+          eb
+            .selectFrom("conversation_transport_bindings as b")
+            .select("b.id")
+            .whereRef("b.conversation_id", "=", "c.id")
+        )
+        .as("is_im"),
+    ])
+    .where("c.id", "=", conversationId)
     .limit(1)
     .executeTakeFirst()
   if (!row) {
     return null
   }
-  const conversationTypeKey = resolveConversationTypeKey(row.kind, row.boundary)
+  const isIm = Boolean(row.is_im)
+  const conversationTypeKey = resolveConversationTypeKey(row.kind, isIm)
   if (!conversationTypeKey) {
     return null
   }
   return {
     conversationId: row.id,
     kind: row.kind,
-    boundary: row.boundary,
+    isIm,
     conversationTypeKey,
   }
 }
@@ -246,10 +260,9 @@ export async function validateConversationScopedAccessTarget(params: {
   }
 
   if (
-    !maskAllowsConversationType(
+    !maskAllowsConversationTypeKey(
       params.effectiveConversationTypeMask,
-      conversation.kind,
-      conversation.boundary
+      conversation.conversationTypeKey
     )
   ) {
     throw params.buildError(

@@ -2,7 +2,7 @@ import {
   isPlanAwaitingApprovalCollaborationMode,
   isPlanCollaborationMode,
   isPlanDraftingCollaborationMode,
-  isPrivateConversationKind,
+  isDirectConversationKind,
 } from "@synapse/shared/utils"
 import type { SessionCollaborationMode } from "@synapse/shared/types"
 
@@ -35,14 +35,14 @@ const PLAN_AWAITING_APPROVAL_ALLOWED_TOOLS = new Set([
 export function isPlanModeConversationKind(
   conversationKind: string | null | undefined
 ): boolean {
-  return isPrivateConversationKind(conversationKind)
+  return isDirectConversationKind(conversationKind)
 }
 
 export function assertPlanModeConversationKind(
   conversationKind: string | null | undefined
 ): void {
   if (!isPlanModeConversationKind(conversationKind)) {
-    throw new Error("Plan mode is only available in private conversations.")
+    throw new Error("Plan mode is only available in direct conversations.")
   }
 }
 

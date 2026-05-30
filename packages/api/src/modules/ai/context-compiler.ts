@@ -364,7 +364,7 @@ function compileManifestMessage(
       openXmlTag("conversation_manifest", {
         conversationId: manifest.conversationId,
         kind: manifest.conversationKind,
-        boundary: manifest.conversationBoundary,
+        im: manifest.isImConversation ? "true" : "false",
         selfParticipantId: manifest.selfParticipantId,
         selfActorId: manifest.selfActorId,
       })

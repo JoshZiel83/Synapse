@@ -229,10 +229,10 @@ async function assertTargetInWorkspace(
         return { ok: false, reason: "conversationId required" }
       const row = await db
         .selectFrom("conversations")
-        .select("internal_workspace_id")
+        .select("workspace_id")
         .where("id", "=", target.conversationId)
         .executeTakeFirst()
-      if (!row || row.internal_workspace_id !== workspaceId) {
+      if (!row || row.workspace_id !== workspaceId) {
         return {
           ok: false,
           reason: "conversation not found in this workspace",
@@ -253,13 +253,13 @@ async function assertTargetInWorkspace(
         .executeTakeFirst()
       const conversation = await db
         .selectFrom("conversations")
-        .select("internal_workspace_id")
+        .select("workspace_id")
         .where("id", "=", target.conversationId)
         .executeTakeFirst()
       if (!actor || actor.workspace_id !== workspaceId) {
         return { ok: false, reason: "actor not found in this workspace" }
       }
-      if (!conversation || conversation.internal_workspace_id !== workspaceId) {
+      if (!conversation || conversation.workspace_id !== workspaceId) {
         return {
           ok: false,
           reason: "conversation not found in this workspace",
@@ -296,7 +296,7 @@ async function assertTargetInWorkspace(
         .executeTakeFirst()
       const conversation = await db
         .selectFrom("conversations")
-        .select("internal_workspace_id")
+        .select("workspace_id")
         .where("id", "=", target.conversationId)
         .executeTakeFirst()
       if (!agent || agent.workspace_id !== workspaceId) {
@@ -305,7 +305,7 @@ async function assertTargetInWorkspace(
           reason: "remote_agent not found in this workspace",
         }
       }
-      if (!conversation || conversation.internal_workspace_id !== workspaceId) {
+      if (!conversation || conversation.workspace_id !== workspaceId) {
         return {
           ok: false,
           reason: "conversation not found in this workspace",

@@ -77,7 +77,6 @@ async function setupAliceBobGroup() {
     json: {
       clientRequestId: uuid(),
       kind: "group",
-      boundary: "internal",
       title: "perm-test",
       workspaceMemberIds: [bobBootstrap.workspaceMemberId],
     },

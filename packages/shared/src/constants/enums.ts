@@ -276,22 +276,12 @@ export const FILE_PARSE_OUTPUT_KINDS = [
   "derived_file",
 ] as const
 export const CONVERSATION_KIND = {
+  DIRECT: "direct",
   GROUP: "group",
-  PRIVATE: "private",
-  VIRTUAL: "virtual",
 } as const
 export const CONVERSATION_KINDS = [
+  CONVERSATION_KIND.DIRECT,
   CONVERSATION_KIND.GROUP,
-  CONVERSATION_KIND.PRIVATE,
-  CONVERSATION_KIND.VIRTUAL,
-] as const
-export const CONVERSATION_BOUNDARY = {
-  INTERNAL: "internal",
-  EXTERNAL: "external",
-} as const
-export const CONVERSATION_BOUNDARIES = [
-  CONVERSATION_BOUNDARY.INTERNAL,
-  CONVERSATION_BOUNDARY.EXTERNAL,
 ] as const
 export const CONVERSATION_PARTICIPANT_TYPE = {
   WORKSPACE_MEMBER: "workspace_member",
@@ -378,39 +368,43 @@ export const CONVERSATION_ITEM_ROLES = [
   CONVERSATION_ITEM_ROLE.TOOL,
 ] as const
 export const CONVERSATION_TYPE_KEYS = [
-  "internal_private",
-  "internal_group",
-  "external_private",
-  "external_group",
-  "virtual",
+  "direct",
+  "group",
+  "im_direct",
+  "im_group",
 ] as const
 export const CONVERSATION_TYPE_MASK_BITS = {
-  internal_private: 1 << 0,
-  internal_group: 1 << 1,
-  external_private: 1 << 2,
-  external_group: 1 << 3,
-  virtual: 1 << 4,
+  direct: 1 << 0,
+  group: 1 << 1,
+  im_direct: 1 << 2,
+  im_group: 1 << 3,
 } as const
 export const CONVERSATION_TYPE_MASK_PRESETS = {
   ALL:
-    CONVERSATION_TYPE_MASK_BITS.internal_private |
-    CONVERSATION_TYPE_MASK_BITS.internal_group |
-    CONVERSATION_TYPE_MASK_BITS.external_private |
-    CONVERSATION_TYPE_MASK_BITS.external_group |
-    CONVERSATION_TYPE_MASK_BITS.virtual,
-  INTERNAL_ONLY:
-    CONVERSATION_TYPE_MASK_BITS.internal_private |
-    CONVERSATION_TYPE_MASK_BITS.internal_group,
-  EXTERNAL_ONLY:
-    CONVERSATION_TYPE_MASK_BITS.external_private |
-    CONVERSATION_TYPE_MASK_BITS.external_group,
+    CONVERSATION_TYPE_MASK_BITS.direct |
+    CONVERSATION_TYPE_MASK_BITS.group |
+    CONVERSATION_TYPE_MASK_BITS.im_direct |
+    CONVERSATION_TYPE_MASK_BITS.im_group,
+  // Native (in-app, non-IM) conversations only — replaces the old INTERNAL_ONLY.
+  NATIVE_ONLY:
+    CONVERSATION_TYPE_MASK_BITS.direct |
+    CONVERSATION_TYPE_MASK_BITS.group,
+  // IM-bridged conversations only — replaces the old EXTERNAL_ONLY / VIRTUAL_ONLY.
+  IM_ONLY:
+    CONVERSATION_TYPE_MASK_BITS.im_direct |
+    CONVERSATION_TYPE_MASK_BITS.im_group,
+  // 1:1 conversations across both native and IM.
+  DIRECT_ONLY:
+    CONVERSATION_TYPE_MASK_BITS.direct |
+    CONVERSATION_TYPE_MASK_BITS.im_direct,
+  // Group conversations across both native and IM.
   GROUP_ONLY:
-    CONVERSATION_TYPE_MASK_BITS.internal_group |
-    CONVERSATION_TYPE_MASK_BITS.external_group,
-  PRIVATE_ONLY:
-    CONVERSATION_TYPE_MASK_BITS.internal_private |
-    CONVERSATION_TYPE_MASK_BITS.external_private,
-  VIRTUAL_ONLY: CONVERSATION_TYPE_MASK_BITS.virtual,
+    CONVERSATION_TYPE_MASK_BITS.group |
+    CONVERSATION_TYPE_MASK_BITS.im_group,
+  // Native (in-app) group conversations only — excludes IM groups. Used by
+  // capabilities that must not act on IM-bridged group chats (e.g. invite_actor,
+  // which must not pull more actors into a third-party IM group).
+  NATIVE_GROUP_ONLY: CONVERSATION_TYPE_MASK_BITS.group,
 } as const
 export const DEFAULT_CONVERSATION_TYPE_MASK = CONVERSATION_TYPE_MASK_PRESETS.ALL
 export const CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES = [
