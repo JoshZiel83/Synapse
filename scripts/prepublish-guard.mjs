@@ -8,12 +8,15 @@
 // any failure exits non-zero and aborts the publish:
 //
 //   1. REGISTRY: the effective publish registry must be the private one,
-//      never npmjs/yarnpkg. We can't rely solely on npm_config_registry
-//      — it's undefined in the lifecycle when the publish relies only on
-//      the @synapse:registry scope mapping (verified empirically). So we
-//      resolve an "effective registry" (env-injected npm_config_registry
-//      first, then the scope mapping via `npm config get`), normalize
-//      with new URL(), and compare against an allowlist.
+//      never npmjs/yarnpkg. For a SCOPED package the destination is
+//      governed by the scope-specific @synapse:registry mapping, which
+//      OVERRIDES --registry / the generic registry (verified). So we
+//      resolve the scope registry first (via `npm config get`), fall back
+//      to the generic registry only for an unscoped package, normalize
+//      with new URL(), reject npmjs, and check an allowlist. NOTE: this
+//      lifecycle guard is best-effort defense-in-depth — the authoritative
+//      enforcement is scripts/safe-publish.mjs / the sidecar wrapper,
+//      which actively PIN the destination so a stray npmrc cannot redirect.
 //   2. DIST: build output exists. All four need dist/index.js; only
 //      @synapse/device-runtime additionally needs dist/bin.js (its bin).
 //   3. CLEANLINESS: no *.test.* or *.map files leaked into dist/ (guards
