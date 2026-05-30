@@ -26,6 +26,17 @@ import { execSync } from "node:child_process"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
+// Usually invoked by npm as the package's `prepublishOnly` (cwd = the
+// package dir). It can ALSO be invoked directly by safe-publish.mjs with
+// the package dir as argv[2] — that path is un-bypassable by
+// --ignore-scripts (the lifecycle hook is skippable; a direct parent-process
+// run is not). When given a dir, chdir into it so all the cwd-relative
+// checks below (package.json, dist/) target that package.
+const targetDir = process.argv[2]
+if (targetDir) {
+  process.chdir(targetDir)
+}
+
 const pkg = JSON.parse(readFileSync("package.json", "utf8"))
 const name = pkg.name
 

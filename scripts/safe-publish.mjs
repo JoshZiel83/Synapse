@@ -29,6 +29,10 @@
 //   node scripts/safe-publish.mjs packages/shared --dry-run
 
 import { execFileSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
+import { dirname, join, resolve } from "node:path"
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 
 const NPMJS_HOSTS = new Set([
   "registry.npmjs.org",
@@ -59,22 +63,34 @@ if (!ws) die("usage: safe-publish.mjs <workspace-dir> [npm publish args...]")
 const extra = process.argv.slice(3)
 
 // Reject extra args that would defeat the guards:
-//   - --ignore-scripts / ignore-scripts=true skips prepublishOnly, which
-//     is exactly the dist/test/map/registry guard. Refuse it (and we also
-//     force NPM_CONFIG_IGNORE_SCRIPTS=false in the child env below).
+//   - ANY ignore-scripts form skips the prepublishOnly lifecycle hook.
+//     npm's nopt parser accepts many spellings (--ignore-scripts,
+//     --ignore-scripts=true, --ignore-scripts=TRUE, -ignore-scripts, and
+//     unambiguous abbreviations like --ig), and a cmdline flag BEATS the
+//     forced NPM_CONFIG_IGNORE_SCRIPTS=false env — so string-matching the
+//     literal form is NOT enough. We (a) reject anything that looks like
+//     an ignore-scripts flag here, AND (b) run the guard ourselves in the
+//     parent process below (un-bypassable regardless of what npm does with
+//     scripts).
 //   - any registry override in extra would fight the pins we add and could
 //     redirect the publish; refuse it (the destination is fixed here).
+function looksLikeIgnoreScripts(arg) {
+  // Strip leading dashes, lowercase, take the key before '='. Matches the
+  // canonical flag and any nopt-style unambiguous abbreviation of
+  // "ignore-scripts" (>= 2 chars to avoid matching unrelated short flags).
+  const a = String(arg).trim().toLowerCase()
+  if (!a.startsWith("-")) return false
+  const key = a.replace(/^-+/, "").split("=")[0]
+  return key.length >= 2 && "ignore-scripts".startsWith(key)
+}
 for (const arg of extra) {
-  const a = String(arg).toLowerCase()
-  if (
-    a === "--ignore-scripts" ||
-    a.replace(/\s/g, "") === "ignore-scripts=true"
-  ) {
+  if (looksLikeIgnoreScripts(arg)) {
     die(
-      `refusing --ignore-scripts: it would skip the prepublishOnly guard ` +
-        `(dist/test/map/registry checks).`
+      `refusing ${arg}: any ignore-scripts form would skip the prepublishOnly ` +
+        `guard (dist/test/map/registry checks).`
     )
   }
+  const a = String(arg).toLowerCase()
   if (
     a === "--registry" ||
     a.startsWith("--registry=") ||
@@ -118,6 +134,33 @@ try {
   }
 } catch {
   /* npm config get is best-effort diagnostics */
+}
+
+// Run the prepublish guard OURSELVES, in the parent process, before npm.
+// This is the un-bypassable enforcement: the package's prepublishOnly hook
+// can be skipped with any --ignore-scripts spelling (cmdline beats env),
+// but a direct parent-process run cannot. We pass the workspace dir as
+// argv and the same env the publish will use (so the guard validates the
+// effective @synapse:registry we are about to pin). The lifecycle
+// prepublishOnly stays as defense-in-depth for direct `npm publish`.
+const wsAbs = resolve(ws)
+const guardEnv = {
+  ...process.env,
+  // Make the guard's effective-registry resolution match what we pin: the
+  // scope registry is the authoritative one for scoped packages.
+  npm_config_registry: registry,
+  "npm_config_@synapse:registry": registry,
+  NPM_REGISTRY: registry,
+}
+try {
+  execFileSync(
+    process.execPath,
+    [join(SCRIPT_DIR, "prepublish-guard.mjs"), wsAbs],
+    { stdio: "inherit", env: guardEnv }
+  )
+} catch (e) {
+  console.error(`[safe-publish] prepublish guard failed for ${ws}; aborting.`)
+  process.exit(e.status ?? 1)
 }
 
 // Pin BOTH the generic and the scope-specific registry. The scope flag is
