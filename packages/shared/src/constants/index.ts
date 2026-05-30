@@ -53,11 +53,6 @@ export const MCP_INSTANCE_TTL = {
   workspace: 60 * 60 * 1000, // 60 minutes
 } as const
 
-// A2A Protocol
-export const A2A_PROTOCOL_VERSION = "0.3"
-export const A2A_API_KEY_HEADER = "x-api-key"
-export const A2A_DEFAULT_RATE_LIMIT = 60
-
 export * from "./model-providers.js"
 export * from "./enums.js"
 export * from "./uuid-namespaces.js"

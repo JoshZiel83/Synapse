@@ -293,7 +293,7 @@ export type RuntimeAuthorizationRequestMode = "background" | "blocking";
 
 export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
-export type RuntimeEventsSource = "a2a" | "conversation" | "device" | "provider" | "system" | "tool";
+export type RuntimeEventsSource = "conversation" | "device" | "provider" | "system" | "tool";
 
 export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
 
@@ -323,7 +323,7 @@ export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
 
-export type ToolCallsToolKind = "a2a_proxy" | "action" | "builtin" | "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
+export type ToolCallsToolKind = "action" | "builtin" | "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
 
 export type ToolCallTaskOutputChunksStream = "stderr" | "stdout" | "system";
 
@@ -335,7 +335,7 @@ export type ToolCallTasksExecutorKind = "device_mcp" | "interaction_user_input" 
 
 export type ToolCallTasksStatus = "cancelled" | "completed" | "failed" | "input_required" | "working";
 
-export type ToolExecutionAttemptsExecutorKind = "a2a_proxy" | "action" | "builtin" | "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
+export type ToolExecutionAttemptsExecutorKind = "action" | "builtin" | "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
 
 export type ToolExecutionAttemptsStatus = "error" | "success" | "timeout";
 

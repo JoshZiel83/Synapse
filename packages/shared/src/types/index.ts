@@ -952,7 +952,6 @@ export type ActorRuntimeToolKind =
   | "mcp_plugin"
   | "mcp_device"
   | "provider_builtin"
-  | "a2a_proxy"
 
 export type ActorRuntimeTaskStatus =
   | "working"
@@ -4753,90 +4752,6 @@ export type ChatSocketEvent<
 > = {
   type: T
   payload: ChatSocketEventPayloadMap[T]
-}
-
-// ============ A2A (Agent-to-Agent) Protocol ============
-export type A2ATaskState =
-  | "submitted"
-  | "working"
-  | "input-required"
-  | "completed"
-  | "failed"
-  | "canceled"
-  | "rejected"
-
-export interface A2AApp {
-  id: UUID
-  workspaceId: UUID
-  name: string
-  description: string
-  apiKeyPrefix: string
-  rateLimitRpm: number
-  isActive: boolean
-  createdByPrincipalType?: "workspace_member" | "actor" | "user"
-  createdByPrincipalId?: UUID
-  createdAt: Timestamp
-  updatedAt: Timestamp
-}
-
-export interface A2AAppActor {
-  id: UUID
-  appId: UUID
-  actorId: UUID
-  createdAt: Timestamp
-}
-
-export interface A2ATask {
-  id: UUID
-  appId: UUID
-  contextId?: string
-  sessionId: UUID
-  createdAt: Timestamp
-}
-
-export interface A2AAgentSkill {
-  id: string
-  name: string
-  description: string
-  tags?: string[]
-  examples?: string[]
-}
-
-export interface A2AAgentCard {
-  name: string
-  description: string
-  url: string
-  version: string
-  capabilities: {
-    streaming: boolean
-    pushNotifications: boolean
-    stateTransitionHistory: boolean
-  }
-  skills: A2AAgentSkill[]
-  defaultInputModes: string[]
-  defaultOutputModes: string[]
-}
-
-export interface A2APart {
-  type: "text"
-  text: string
-}
-
-export interface A2AMessage {
-  role: "user" | "agent"
-  parts: A2APart[]
-}
-
-export interface A2ATaskResponse {
-  id: string
-  contextId?: string
-  status: {
-    state: A2ATaskState
-    message?: A2AMessage
-    timestamp: string
-  }
-  artifacts?: { parts: A2APart[]; index: number }[]
-  history?: A2AMessage[]
 }
 
 // ============ Content Helpers ============
