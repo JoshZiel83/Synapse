@@ -15,6 +15,32 @@ test("daemon command pins the private --registry when a public URL is set", () =
   assert.match(cmd, /--api-key key-123/)
 })
 
+test("daemon command ALSO pins --@synapse:registry (scope flag overrides a hostile ~/.npmrc mapping)", () => {
+  // For a scoped package npm routes on @synapse:registry, which beats a
+  // plain --registry. If the user's ~/.npmrc maps @synapse:registry to
+  // npmjs, only the scope-specific CLI flag forces the private registry.
+  const registry = "https://npm.example.com/"
+  const cmd = buildDaemonCommand({
+    serverUrl: "https://synapse.example.com",
+    apiKey: "key-123",
+    npmRegistryUrl: registry,
+  })
+  assert.match(
+    cmd,
+    /--@synapse:registry=https:\/\/npm\.example\.com\//,
+    `command must pin the scope-specific registry: ${cmd}`
+  )
+  // Both registry flags must point at the private host (defense in depth).
+  const flags = cmd.match(/--(@synapse:)?registry=(\S+)/g) || []
+  assert.ok(flags.length >= 2, `expected both registry flags, got: ${flags}`)
+  for (const f of flags) {
+    assert.ok(
+      f.endsWith(registry),
+      `every registry flag must target the private registry, got: ${f}`
+    )
+  }
+})
+
 test("daemon command never points at public npmjs", () => {
   const cmd = buildDaemonCommand({
     serverUrl: "https://synapse.example.com",

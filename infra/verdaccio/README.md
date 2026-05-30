@@ -87,3 +87,23 @@ Sidecars must be published **before** the main `@synapse/device-runtime`
 The `verdaccio-storage` named volume holds all published `@synapse/*`
 tarballs and the uplink cache. Back it up; losing it loses published
 versions (and npm forbids re-publishing the same version).
+
+## API config: `PUBLIC_NPM_REGISTRY_URL` (one-click daemon command)
+
+The Synapse **API server** builds the daemon install command shown on the
+dashboard from `PUBLIC_NPM_REGISTRY_URL` (read into
+`config.remoteAgent.npmRegistryUrl`). This is a **separate** value from
+`NPM_REGISTRY`:
+
+| Var                       | Who uses it                                         | Reachability                                                                                                    |
+| ------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `NPM_REGISTRY`            | the publisher machine + repo `.npmrc` scope mapping | how the **publisher** reaches Verdaccio (often internal/localhost)                                              |
+| `PUBLIC_NPM_REGISTRY_URL` | the API server, embedded into the dashboard command | how an **end user's laptop** reaches Verdaccio (must be externally routable, e.g. `https://npm.your-host.tld/`) |
+
+Set `PUBLIC_NPM_REGISTRY_URL` in the **API service's** environment. If it
+is unset, the dashboard command degrades from a true one-click
+`npm exec --registry=… --@synapse:registry=… …` to a bare
+`synapse-remote-agent-daemon …` that only works if the user already
+configured `@synapse:registry` in their own `~/.npmrc`. Never set it to an
+internal address (`http://verdaccio:4873`, `http://localhost:4873`) — that
+is unreachable from user machines.

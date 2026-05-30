@@ -120,6 +120,10 @@ if [[ "${NPM_PUBLISH_FLAGS:-}" == *"--registry"* || "${NPM_PUBLISH_FLAGS:-}" == 
   echo "ERROR: NPM_PUBLISH_FLAGS must not contain --registry/registry= (it would override the pinned \$NPM_REGISTRY). Refusing." >&2
   exit 2
 fi
+if [[ "${NPM_PUBLISH_FLAGS:-}" == *"ignore-scripts"* ]]; then
+  echo "ERROR: NPM_PUBLISH_FLAGS must not contain --ignore-scripts (it would skip the sidecar publish guard). Refusing." >&2
+  exit 2
+fi
 # For SCOPED packages, the @synapse:registry mapping in an operator's
 # ~/.npmrc / global npmrc OVERRIDES a plain --registry flag. Detect a
 # stray scope mapping that points at public npm and warn — we always

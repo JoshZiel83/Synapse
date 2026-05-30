@@ -58,6 +58,35 @@ const ws = process.argv[2]
 if (!ws) die("usage: safe-publish.mjs <workspace-dir> [npm publish args...]")
 const extra = process.argv.slice(3)
 
+// Reject extra args that would defeat the guards:
+//   - --ignore-scripts / ignore-scripts=true skips prepublishOnly, which
+//     is exactly the dist/test/map/registry guard. Refuse it (and we also
+//     force NPM_CONFIG_IGNORE_SCRIPTS=false in the child env below).
+//   - any registry override in extra would fight the pins we add and could
+//     redirect the publish; refuse it (the destination is fixed here).
+for (const arg of extra) {
+  const a = String(arg).toLowerCase()
+  if (
+    a === "--ignore-scripts" ||
+    a.replace(/\s/g, "") === "ignore-scripts=true"
+  ) {
+    die(
+      `refusing --ignore-scripts: it would skip the prepublishOnly guard ` +
+        `(dist/test/map/registry checks).`
+    )
+  }
+  if (
+    a === "--registry" ||
+    a.startsWith("--registry=") ||
+    a.includes("registry=")
+  ) {
+    die(
+      `refusing a registry override in extra args (${arg}): the destination ` +
+        `is pinned to $NPM_REGISTRY by this wrapper.`
+    )
+  }
+}
+
 const registry = normalize(process.env.NPM_REGISTRY)
 if (!registry) {
   die(
@@ -105,7 +134,12 @@ const args = [
 
 console.error(`[safe-publish] npm ${args.join(" ")}`)
 try {
-  execFileSync("npm", args, { stdio: "inherit" })
+  execFileSync("npm", args, {
+    stdio: "inherit",
+    // Force scripts ON so the prepublishOnly guard always runs, even if the
+    // operator's npm config has ignore-scripts=true.
+    env: { ...process.env, NPM_CONFIG_IGNORE_SCRIPTS: "false" },
+  })
 } catch (e) {
   process.exit(e.status ?? 1)
 }
