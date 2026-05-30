@@ -262,10 +262,7 @@ function buildAuthor(
     }
   }
 
-  if (
-    authorParticipant?.participant_type === "system" ||
-    row.role === "system"
-  ) {
+  if (row.role === "system") {
     return {
       participantId:
         authorParticipant?.id ||

@@ -693,15 +693,13 @@
     WORKSPACE_MEMBER: "workspace_member",
     ACTOR: "actor",
     REMOTE_AGENT: "remote_agent",
-    EXTERNAL: "external",
-    SYSTEM: "system"
+    EXTERNAL: "external"
   };
   var CONVERSATION_PARTICIPANT_TYPES = [
     CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
     CONVERSATION_PARTICIPANT_TYPE.ACTOR,
     CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT,
-    CONVERSATION_PARTICIPANT_TYPE.EXTERNAL,
-    CONVERSATION_PARTICIPANT_TYPE.SYSTEM
+    CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
   ];
   var CONVERSATION_PARTICIPANT_STATE = {
     ACTIVE: "active",
@@ -1795,7 +1793,7 @@
     CONVERSATION: "conversation",
     USER: "user",
     EXTERNAL: "external",
-    SYSTEM: "system"
+    PLATFORM: "platform"
   };
   var SUBJECT_KINDS = [
     SUBJECT_KIND.WORKSPACE,
@@ -1805,7 +1803,7 @@
     SUBJECT_KIND.CONVERSATION,
     SUBJECT_KIND.USER,
     SUBJECT_KIND.EXTERNAL,
-    SUBJECT_KIND.SYSTEM
+    SUBJECT_KIND.PLATFORM
   ];
   var ACCESS_RESOURCE_TYPE = {
     PLATFORM: "platform",
@@ -1909,7 +1907,7 @@
   ];
 
   // ../shared/dist/access/subject.js
-  var systemRef = { kind: SUBJECT_KIND.SYSTEM };
+  var platformRef = { kind: SUBJECT_KIND.PLATFORM };
 
   // ../shared/dist/chat-queue/index.js
   var CHAT_QUEUE_DB_NAME = "synapse-chat-queue";

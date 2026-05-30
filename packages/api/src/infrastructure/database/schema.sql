@@ -53,7 +53,6 @@ CREATE TYPE model_groups_routing_strategy AS ENUM ('weighted_random', 'round_rob
 CREATE TYPE model_group_grants_status AS ENUM ('active', 'revoked');
 CREATE TYPE sessions_status AS ENUM ('idle', 'queued', 'running', 'blocked', 'closed');
 CREATE TYPE sessions_collaboration_mode AS ENUM ('default', 'plan_drafting', 'plan_awaiting_approval');
-CREATE TYPE conversation_participants_type AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
 CREATE TYPE conversation_participants_state AS ENUM ('active', 'left', 'removed');
 CREATE TYPE subject_kind AS ENUM (
   'workspace',
@@ -63,7 +62,7 @@ CREATE TYPE subject_kind AS ENUM (
   'conversation',
   'user',
   'external',
-  'system'
+  'platform'
 );
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
 CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin', 'wecom', 'dingtalk', 'qq');
@@ -1298,7 +1297,7 @@ CREATE TABLE model_group_grants (
   -- P1b: polymorphic (grant_scope + 3 nullable FKs) collapsed into a single
   -- subject_id FK into access_subjects. The legacy `grant_scope` enum
   -- (platform/workspace/workspace_member/actor) is recoverable from the
-  -- subject's `kind` (system/workspace/workspace_member/actor respectively).
+  -- subject's `kind` (platform/workspace/workspace_member/actor respectively).
   -- The FK constraint to access_subjects is added after the access_subjects
   -- table is defined later in this file (search "ALTER TABLE model_group_grants").
   subject_id UUID NOT NULL,
@@ -1415,27 +1414,36 @@ CREATE TABLE access_subjects (
   remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  external_identity_key VARCHAR(255),
+  -- transport_address_id is the payload for kind='external': a first-class,
+  -- workspace-rooted, cross-conversation external IM identity. The composite FK
+  -- (transport_address_id, workspace_id) -> transport_addresses(id, workspace_id)
+  -- is declared after transport_addresses is defined (search
+  -- "fk_access_subjects_transport_address"); it is DEFERRABLE so workspace
+  -- deletion's multi-path CASCADE resolves within one transaction without the
+  -- constraint blocking it, while a standalone transport_address delete still
+  -- fails if an external subject still references it (protecting historical
+  -- external authorship).
+  transport_address_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   -- workspace_id is REQUIRED for kinds that are unambiguously workspace-bound
-  -- (workspace, workspace_member, actor, remote_agent). It is denormalized from
-  -- the underlying table by `upsertAccessSubject` via a SELECT lookup so that
-  -- workspace-scoped queries on access_subjects can filter without a JOIN.
-  -- For conversation it is best-effort (external conversations have no owning
-  -- workspace). `user` / `external` / `system` are platform-wide subjects and
-  -- intentionally have no workspace. The `conversation_actor_context` subject
-  -- kind was dropped at the subject-scope-refactor cutover (D2): the semantics
-  -- it carried — "actor X in conversation Y" — are now expressed as
+  -- (workspace, workspace_member, actor, remote_agent, external). It is
+  -- denormalized from the underlying table by `upsertAccessSubject` via a SELECT
+  -- lookup so that workspace-scoped queries on access_subjects can filter
+  -- without a JOIN. For conversation it is best-effort (external conversations
+  -- have no owning workspace). `user` / `platform` are platform-wide subjects
+  -- and intentionally have no workspace. The `conversation_actor_context`
+  -- subject kind was dropped at the subject-scope-refactor cutover (D2): the
+  -- semantics it carried — "actor X in conversation Y" — are now expressed as
   -- (subject=actor, scope=conversation) at the binding/grant layer.
   CONSTRAINT chk_access_subjects_payload CHECK (
-    (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'actor' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'remote_agent' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'conversation' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'user' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NOT NULL AND external_identity_key IS NULL) OR
-    (kind = 'external' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NOT NULL) OR
-    (kind = 'system' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL)
+    (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
+    (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
+    (kind = 'actor' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
+    (kind = 'remote_agent' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
+    (kind = 'conversation' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
+    (kind = 'user' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NOT NULL AND transport_address_id IS NULL) OR
+    (kind = 'external' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NOT NULL) OR
+    (kind = 'platform' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL)
   )
 );
 
@@ -1453,10 +1461,13 @@ CREATE UNIQUE INDEX uq_access_subjects_conversation
   ON access_subjects(conversation_id) WHERE kind = 'conversation';
 CREATE UNIQUE INDEX uq_access_subjects_user
   ON access_subjects(user_id) WHERE kind = 'user';
+-- One external subject per transport_address (cross-conversation dedup). The
+-- partial predicate keys on the column's NOT NULL state rather than kind so the
+-- index also serves the composite FK's child-side lookup.
 CREATE UNIQUE INDEX uq_access_subjects_external
-  ON access_subjects(external_identity_key) WHERE kind = 'external';
-CREATE UNIQUE INDEX uq_access_subjects_system
-  ON access_subjects((1)) WHERE kind = 'system';
+  ON access_subjects(transport_address_id) WHERE transport_address_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_access_subjects_platform
+  ON access_subjects((1)) WHERE kind = 'platform';
 
 CREATE INDEX idx_access_subjects_kind
   ON access_subjects(kind, created_at DESC);
@@ -1593,7 +1604,13 @@ CREATE TABLE transport_addresses (
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(transport_account_id, address_type, external_id)
+  UNIQUE(transport_account_id, address_type, external_id),
+  -- Supports the composite FK access_subjects(transport_address_id, workspace_id)
+  -- -> transport_addresses(id, workspace_id), which enforces that an external
+  -- subject's denormalized workspace_id matches its address's workspace. id is
+  -- already the PK; this extra UNIQUE is required because Postgres composite FKs
+  -- must reference a UNIQUE/PK column set.
+  UNIQUE(id, workspace_id)
 );
 
 CREATE INDEX idx_transport_addresses_workspace
@@ -1601,6 +1618,19 @@ CREATE INDEX idx_transport_addresses_workspace
 CREATE INDEX idx_transport_addresses_workspace_member
   ON transport_addresses(workspace_member_id, transport_kind, created_at DESC)
   WHERE workspace_member_id IS NOT NULL;
+
+-- Composite FK from access_subjects.external payload. Declared here (after
+-- transport_addresses exists) rather than inline on access_subjects, which is
+-- defined earlier in this file. DEFERRABLE INITIALLY DEFERRED: checked at COMMIT,
+-- so workspace deletion's multi-path CASCADE (which removes both transport_addresses
+-- and access_subjects rows) settles within the transaction without the constraint
+-- aborting it; a standalone transport_address delete that leaves an external
+-- subject dangling still fails at COMMIT, protecting historical authorship.
+ALTER TABLE access_subjects
+  ADD CONSTRAINT fk_access_subjects_transport_address
+  FOREIGN KEY (transport_address_id, workspace_id)
+  REFERENCES transport_addresses(id, workspace_id)
+  ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE conversation_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1663,13 +1693,13 @@ CREATE INDEX idx_conversation_item_parts_item ON conversation_item_parts(item_id
 CREATE TABLE conversation_participants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  -- P1b: participant_type is a denormalized discriminator that mirrors the
-  -- subject's kind. Workspace_member / actor / remote_agent participants
-  -- carry the corresponding access_subjects row (kind matches); external /
-  -- system participants carry an access_subjects row of kind='external' with
-  -- a per-participant external_identity_key of the form 'participant:<uuid>'
-  -- so every participant has a real subject_id (no NULL escape hatch).
-  participant_type conversation_participants_type NOT NULL,
+  -- The participant's identity/type is the kind of its access_subjects row
+  -- (workspace_member / actor / remote_agent / external), derived at read time
+  -- via subjectKindToParticipantType. There is no denormalized participant_type
+  -- column; tg_conversation_participant_validate enforces that subject_id refers
+  -- to one of those four kinds (and, for internal conversations, the matching
+  -- workspace). External participants carry a first-class, cross-conversation
+  -- access_subjects row keyed by transport_address_id.
   subject_id UUID NOT NULL,
   actor_join_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
   display_name VARCHAR(255),
@@ -2519,7 +2549,7 @@ CREATE INDEX idx_session_wakeups_automation_occurrence
 -- `space_type + 5 anchor_*_id` shape with `(owner_subject_id, scope_subject_id?,
 -- namespace_key)`. Owner kinds are restricted via the
 -- tg_memory_space_validate trigger to {workspace_member, actor, remote_agent,
--- workspace, conversation} — user/external/system can never own a space.
+-- workspace, conversation} — user/external/platform can never own a space.
 -- Scope (when present) must be workspace|conversation per is_scope_eligible_subject.
 CREATE TABLE memory_spaces (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3981,8 +4011,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
 
 -- Predicate: subject kinds that can legitimately anchor a workspace-bound
 -- authorization row (resource_access_bindings, runtime_authorization_grants,
--- memory_access_grants). Excludes user / external / system — those are
--- platform-wide subjects and cannot own workspace-bound grants.
+-- memory_access_grants). Excludes user / external / platform. NOTE: external is
+-- workspace-rooted (it carries workspace_id) but is intentionally still excluded
+-- here — first-class external identities are not yet authorization principals;
+-- opening that is a deliberate future step (see plan's "后续可选").
 CREATE OR REPLACE FUNCTION is_workspace_bound_subject_kind(p_subject_id UUID)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -4031,7 +4063,9 @@ END;
 $$;
 
 -- Helper: resolve the workspace_id of an access_subjects row. NULL for
--- platform-wide subjects (user / external / system) or unknown subject_id.
+-- platform-wide subjects (user / platform) or unknown subject_id. external is
+-- workspace-rooted and returns its workspace_id (denormalized, kept consistent
+-- with its transport_address via the composite FK).
 CREATE OR REPLACE FUNCTION access_subject_workspace_id(p_subject_id UUID)
 RETURNS UUID
 LANGUAGE plpgsql
@@ -4144,6 +4178,101 @@ CREATE TRIGGER tg_rab_validate
   BEFORE INSERT OR UPDATE ON resource_access_bindings
   FOR EACH ROW
   EXECUTE FUNCTION validate_resource_access_binding_subject_scope();
+
+-- ============================================================================
+-- tg_conversation_participant_validate: participant subject invariants
+-- ============================================================================
+-- DB-level enforcement that the participant model can't be corrupted by raw SQL
+-- (the participant_type column is being retired in favour of deriving the type
+-- from the joined subject kind, so these invariants must live in the DB):
+--   (1) kind: a participant's subject must be one of
+--       workspace_member / actor / remote_agent / external. platform / user /
+--       workspace / conversation subjects can never be conversation participants.
+--   (2) workspace (internal conversations only): for boundary='internal'
+--       conversations the participant subject's workspace must equal the
+--       conversation's internal_workspace_id, AND external-kind subjects are
+--       rejected outright (external participants belong only to external
+--       conversations). external (boundary='external') conversations have no
+--       single owning workspace — their participant membership is governed by
+--       the transport binding layer, so the workspace match is skipped.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION validate_conversation_participant_subject()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_kind subject_kind;
+  v_boundary conversations_boundary;
+  v_conv_ws UUID;
+  v_subject_ws UUID;
+BEGIN
+  SELECT kind INTO v_kind FROM access_subjects WHERE id = NEW.subject_id;
+  IF v_kind IS NULL THEN
+    RAISE EXCEPTION 'conversation_participants.subject_id % does not exist in access_subjects', NEW.subject_id;
+  END IF;
+  IF v_kind NOT IN ('workspace_member', 'actor', 'remote_agent', 'external') THEN
+    RAISE EXCEPTION 'conversation_participants.subject_id % has kind % which cannot be a participant', NEW.subject_id, v_kind;
+  END IF;
+  SELECT boundary, internal_workspace_id INTO v_boundary, v_conv_ws
+    FROM conversations WHERE id = NEW.conversation_id;
+  IF v_boundary = 'internal' THEN
+    IF v_kind = 'external' THEN
+      RAISE EXCEPTION 'conversation_participants.subject_id % is external and cannot join internal conversation %', NEW.subject_id, NEW.conversation_id;
+    END IF;
+    v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+    IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM v_conv_ws THEN
+      RAISE EXCEPTION 'conversation_participants.subject_id % workspace % does not match internal conversation workspace %', NEW.subject_id, v_subject_ws, v_conv_ws;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_conversation_participant_validate
+  BEFORE INSERT OR UPDATE ON conversation_participants
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_conversation_participant_subject();
+
+-- ============================================================================
+-- tg_access_subject_identity_guard: freeze a referenced subject's identity
+-- ============================================================================
+-- The participant invariant trigger above validates subject kind + workspace at
+-- participant insert/update time, but a raw UPDATE of the subject's own identity
+-- columns afterwards would not re-fire it, leaving a participant whose subject no
+-- longer matches the conversation/workspace (or is no longer a participant kind).
+-- The application never UPDATEs these columns (subjects are upsert-only), so once
+-- a subject is referenced by a conversation_participant we freeze its entire
+-- identity payload (kind + every FK/payload column + workspace_id). Pure
+-- defence-in-depth against out-of-band SQL.
+CREATE OR REPLACE FUNCTION guard_access_subject_identity_update()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF (
+       NEW.kind IS DISTINCT FROM OLD.kind
+       OR NEW.workspace_id IS DISTINCT FROM OLD.workspace_id
+       OR NEW.workspace_member_id IS DISTINCT FROM OLD.workspace_member_id
+       OR NEW.actor_id IS DISTINCT FROM OLD.actor_id
+       OR NEW.remote_agent_id IS DISTINCT FROM OLD.remote_agent_id
+       OR NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
+       OR NEW.user_id IS DISTINCT FROM OLD.user_id
+       OR NEW.transport_address_id IS DISTINCT FROM OLD.transport_address_id
+     )
+     AND EXISTS (SELECT 1 FROM conversation_participants WHERE subject_id = NEW.id) THEN
+    RAISE EXCEPTION 'access_subjects.% identity is immutable while referenced by a conversation participant', NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_access_subject_identity_guard
+  BEFORE UPDATE OF
+    kind, workspace_id, workspace_member_id, actor_id,
+    remote_agent_id, conversation_id, user_id, transport_address_id
+  ON access_subjects
+  FOR EACH ROW
+  EXECUTE FUNCTION guard_access_subject_identity_update();
 
 -- ============================================================================
 -- tg_runtime_authorization_grant_validate: subject + scope + device/capability/

@@ -21,11 +21,13 @@ if (
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
+import pg from "pg"
 import {
   setupChatStack,
   teardownChatStack,
   registerTestUser,
   createTestWorkspace,
+  buildDatabaseUrl,
   type ChatStack,
 } from "./harness/index.js"
 
@@ -33,6 +35,32 @@ const uuid = () =>
   ([8, 4, 4, 4, 12] as const)
     .map((len) => randomBytes(len / 2).toString("hex"))
     .join("-")
+
+// External participants are first-class, single-address identities: the API
+// requires a real transport_addresses row. Create one directly over pg (there
+// is no public transport-address create endpoint in this harness).
+async function createTransportAddress(workspaceId: string): Promise<string> {
+  const pool = new pg.Pool({ connectionString: buildDatabaseUrl() })
+  try {
+    const account = await pool.query<{ id: string }>(
+      `INSERT INTO transport_accounts
+         (workspace_id, transport_kind, account_key, display_name, connection_mode, owner_scope)
+       VALUES ($1, 'qq', $2, 'Test account', 'webhook', 'workspace')
+       RETURNING id`,
+      [workspaceId, `acct-${randomBytes(4).toString("hex")}`]
+    )
+    const addr = await pool.query<{ id: string }>(
+      `INSERT INTO transport_addresses
+         (workspace_id, transport_account_id, transport_kind, address_type, external_id)
+       VALUES ($1, $2, 'qq', 'user', $3)
+       RETURNING id`,
+      [workspaceId, account.rows[0].id, `ext-${randomBytes(4).toString("hex")}`]
+    )
+    return addr.rows[0].id
+  } finally {
+    await pool.end()
+  }
+}
 
 type ParticipantSummary = {
   participantId: string
@@ -109,6 +137,7 @@ test("create conversation forwards externalParticipants: response includes an ex
   const ws = await createTestWorkspace(ctx.client)
 
   const externalName = `S27 External ${randomBytes(2).toString("hex")}`
+  const transportAddressId = await createTransportAddress(ws.id)
   const created = await ctx.client.json<{
     conversation: {
       conversationId: string
@@ -121,7 +150,7 @@ test("create conversation forwards externalParticipants: response includes an ex
       kind: "group",
       boundary: "external",
       title: "s27-external",
-      externalParticipants: [{ displayName: externalName }],
+      externalParticipants: [{ displayName: externalName, transportAddressId }],
     },
   })
 
@@ -158,6 +187,7 @@ test("create conversation accepts mixed actorIds + remoteAgentIds + externalPart
   const agent = agentResponse.remoteAgent
 
   const externalName = `S27 Mixed External ${randomBytes(2).toString("hex")}`
+  const transportAddressId = await createTransportAddress(ws.id)
   const created = await ctx.client.json<{
     conversation: { participants: ParticipantSummary[] }
   }>(`/workspaces/${ws.id}/chat/conversations`, {
@@ -169,7 +199,7 @@ test("create conversation accepts mixed actorIds + remoteAgentIds + externalPart
       title: "s27-mixed",
       actorIds: [],
       remoteAgentIds: [agent.id],
-      externalParticipants: [{ displayName: externalName }],
+      externalParticipants: [{ displayName: externalName, transportAddressId }],
       metadata: { s27Marker: "mixed" },
     },
   })

@@ -36,7 +36,6 @@ export async function isActorActiveConversationParticipant(
     .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", conversationId)
-    .where("participant_type", "=", "actor")
     .where("subject_id", "=", actorSubjectId)
     .where("state", "=", "active")
     .limit(1)
@@ -57,7 +56,6 @@ export async function isRemoteAgentActiveConversationParticipant(
     .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", conversationId)
-    .where("participant_type", "=", "remote_agent")
     .where("subject_id", "=", remoteAgentSubjectId)
     .where("state", "=", "active")
     .limit(1)
@@ -69,7 +67,7 @@ export async function isRemoteAgentActiveConversationParticipant(
  * PR2: generic active-participant check, replacing the kind-specific
  * `isActorActiveConversationParticipant` / `isRemoteAgentActiveConversationParticipant`
  * helpers. Works for any participant kind backed by `conversation_participants.subject_id`
- * — actor / remote_agent / workspace_member / external / system. Used by:
+ * — actor / remote_agent / workspace_member / external. Used by:
  *   - `buildRuntimePrincipalContext` (PR2) to decide whether to add the
  *     conversation subject_id to `runtimeScopeSubjectIds`.
  *   - `hasConversationPermission` (PR3) to evaluate `subject=conversation`
@@ -151,7 +149,7 @@ export type RuntimePrincipalContext = {
  * matches `subject=workspace W` grants in W.
  *
  * `workspace` principals are accepted iff the principal IS the workspace.
- * `user` / `external` / `system` principals are platform-wide and have no
+ * `user` / `external` / `platform` principals are platform-wide and have no
  * single workspace to validate against — we accept them here and rely on
  * the per-resource permission helpers to refuse them as appropriate.
  */
@@ -213,7 +211,7 @@ async function assertPrincipalBelongsToWorkspace(
     case SUBJECT_KIND.CONVERSATION:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
-    case SUBJECT_KIND.SYSTEM:
+    case SUBJECT_KIND.PLATFORM:
       // No single-workspace identity; accept and let per-resource helpers
       // refuse if appropriate.
       return
@@ -224,7 +222,7 @@ async function assertPrincipalBelongsToWorkspace(
  * PR-fix-round-2: which principal kinds are validated to belong to the
  * runtime workspace by `assertPrincipalBelongsToWorkspace`. Only these
  * earn the workspace subject_id in `runtimeSubjectIds` /
- * `runtimeScopeSubjectIds`. Platform-wide kinds (user/external/system)
+ * `runtimeScopeSubjectIds`. Platform-wide kinds (user/external/platform)
  * and conversation principals are accepted as the principal itself but
  * MUST NOT auto-collect workspace subject — otherwise a user principal
  * could mint runtime context against any workspace and silently match
@@ -240,7 +238,7 @@ function isPrincipalWorkspaceBound(principal: SubjectRef): boolean {
     case SUBJECT_KIND.CONVERSATION:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
-    case SUBJECT_KIND.SYSTEM:
+    case SUBJECT_KIND.PLATFORM:
       return false
   }
 }
@@ -272,7 +270,7 @@ export async function buildRuntimePrincipalContext(
   //
   // PR-fix-round-2: assertPrincipalBelongsToWorkspace verifies the
   // principal is in the workspace for workspace-bound kinds, but it
-  // intentionally accepts user/external/system/conversation (no single
+  // intentionally accepts user/external/platform/conversation (no single
   // workspace identity). To prevent THOSE platform-wide principals from
   // automatically picking up `subject=workspace W` grants, we only mint
   // the workspace subject for principals that were positively verified
@@ -354,7 +352,7 @@ export async function buildRuntimePrincipalContext(
  * Mirrors the Kysely builder exactly (same security invariants — actor /
  * remote_agent principals do NOT auto-collect the creator's workspace_member
  * subject; conversation principals do NOT collect the workspace subject;
- * platform-wide kinds (user/external/system) are accepted as the principal
+ * platform-wide kinds (user/external/platform) are accepted as the principal
  * but skip the workspace mint). The only differences are wire-level:
  *
  *  - takes a pg `Queryable` (the same connection / transaction the caller
@@ -504,7 +502,7 @@ async function assertPrincipalBelongsToWorkspaceOn(
     case SUBJECT_KIND.CONVERSATION:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
-    case SUBJECT_KIND.SYSTEM:
+    case SUBJECT_KIND.PLATFORM:
       return
   }
 }

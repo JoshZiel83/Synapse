@@ -105,14 +105,12 @@ async function newConversation(
 async function addParticipant(
   db: Kysely<any>,
   conversationId: string,
-  subjectId: string,
-  type: "actor" | "remote_agent" | "workspace_member" | "external" | "system"
+  subjectId: string
 ): Promise<void> {
   await db
     .insertInto("conversation_participants")
     .values({
       conversation_id: conversationId,
-      participant_type: type,
       subject_id: subjectId,
       state: "active",
     } as any)
@@ -156,8 +154,8 @@ test(
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
         memberId,
       })
-      await addParticipant(db, convA, memberSubjectId, "workspace_member")
-      await addParticipant(db, convB, memberSubjectId, "workspace_member")
+      await addParticipant(db, convA, memberSubjectId)
+      await addParticipant(db, convB, memberSubjectId)
 
       const inA = await buildRuntimePrincipalContext(db, {
         principal: {

@@ -83,12 +83,12 @@ test(
 )
 
 test(
-  "upsertAccessSubject system kind is a singleton",
+  "upsertAccessSubject platform kind is a singleton",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const a = await upsertAccessSubject(db, { kind: SUBJECT_KIND.SYSTEM })
-      const b = await upsertAccessSubject(db, { kind: SUBJECT_KIND.SYSTEM })
+      const a = await upsertAccessSubject(db, { kind: SUBJECT_KIND.PLATFORM })
+      const b = await upsertAccessSubject(db, { kind: SUBJECT_KIND.PLATFORM })
       assert.equal(a, b)
     })
   }
@@ -247,26 +247,35 @@ test(
 // stays (session/runtime state), but never participates in access_subjects.
 
 test(
-  "upsertAccessSubject for user and external kinds leaves workspace_id null",
+  "upsertAccessSubject: user kind leaves workspace_id null; external carries its workspace",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const userId = await insertUser(db, "u@example.test")
+      const workspaceId = await insertWorkspace(db, userId)
+      const transportAddressId = await insertTransportAddress(db, workspaceId)
       const userSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.USER,
         userId,
       })
       const externalSubject = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.EXTERNAL,
-        externalIdentityKey: `ext-${Math.random().toString(36).slice(2, 8)}`,
+        workspaceId,
+        transportAddressId,
       })
       const rows = await db
         .selectFrom("access_subjects")
-        .select(["id", "kind", "workspace_id"])
+        .select(["id", "kind", "workspace_id", "transport_address_id"])
         .where("id", "in", [userSubject, externalSubject])
         .execute()
       for (const row of rows) {
-        assert.equal(row.workspace_id, null)
+        if (row.kind === "user") {
+          assert.equal(row.workspace_id, null)
+        } else {
+          assert.equal(row.kind, "external")
+          assert.equal(row.workspace_id, workspaceId)
+          assert.equal(row.transport_address_id, transportAddressId)
+        }
       }
     })
   }
@@ -378,7 +387,7 @@ test(
 )
 
 test(
-  "upsertAccessSubjectOn handles every kind (workspace_member, actor, remote_agent, conversation, cac, user, external, system)",
+  "upsertAccessSubjectOn handles every kind (workspace_member, actor, remote_agent, conversation, user, external, platform)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db, client }) => {
@@ -388,6 +397,7 @@ test(
       const actorId = await insertActor(db, workspaceId)
       const remoteAgentId = await insertRemoteAgent(db, workspaceId)
       const conversationId = await insertConversation(db, { workspaceId })
+      const transportAddressId = await insertTransportAddress(db, workspaceId)
 
       const wsId = await upsertAccessSubjectOn(client, {
         kind: SUBJECT_KIND.WORKSPACE,
@@ -415,10 +425,11 @@ test(
       })
       const extId = await upsertAccessSubjectOn(client, {
         kind: SUBJECT_KIND.EXTERNAL,
-        externalIdentityKey: `ext-${Math.random().toString(36).slice(2, 8)}`,
+        workspaceId,
+        transportAddressId,
       })
-      const sysId = await upsertAccessSubjectOn(client, {
-        kind: SUBJECT_KIND.SYSTEM,
+      const platformId = await upsertAccessSubjectOn(client, {
+        kind: SUBJECT_KIND.PLATFORM,
       })
 
       const ids = new Set([
@@ -429,7 +440,7 @@ test(
         convoId,
         userSubjId,
         extId,
-        sysId,
+        platformId,
       ])
       assert.equal(ids.size, 8)
     })
@@ -536,6 +547,36 @@ async function insertConversation(
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
+}
+
+async function insertTransportAddress(
+  db: import("kysely").Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const account = await db
+    .insertInto("transport_accounts")
+    .values({
+      workspace_id: workspaceId,
+      transport_kind: "qq",
+      account_key: `acct-${Math.random().toString(36).slice(2, 8)}`,
+      display_name: "Test account",
+      connection_mode: "webhook",
+      owner_scope: "workspace",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const addr = await db
+    .insertInto("transport_addresses")
+    .values({
+      workspace_id: workspaceId,
+      transport_account_id: account.id as string,
+      transport_kind: "qq",
+      address_type: "user",
+      external_id: `ext-${Math.random().toString(36).slice(2, 8)}`,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return addr.id as string
 }
 
 async function insertActor(

@@ -12,6 +12,7 @@ import {
 } from "@synapse/shared"
 import type {
   CanonicalContextItem,
+  CanonicalContextTarget,
   ConversationEntityRef,
 } from "@synapse/shared/types"
 
@@ -160,10 +161,10 @@ function compileReplyPreviewBlocks(
 }
 
 function compileRestrictedAudience(
-  targets?: Array<ConversationEntityRef | undefined>
+  targets?: Array<CanonicalContextTarget | undefined>
 ) {
   const resolved = (targets || []).filter(
-    (target): target is ConversationEntityRef => Boolean(target)
+    (target): target is CanonicalContextTarget => Boolean(target)
   )
   if (resolved.length === 0) return []
 
@@ -175,8 +176,6 @@ function compileRestrictedAudience(
           participantId: target.participantId,
           participantType: target.participantType,
           name: target.name,
-          title: target.title,
-          role: target.role,
         })
       )
     ),

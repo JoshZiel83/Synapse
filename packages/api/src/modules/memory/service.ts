@@ -757,7 +757,7 @@ export async function validateMemorySpaceTuple(
   if (
     ownerKind === SUBJECT_KIND.USER ||
     ownerKind === SUBJECT_KIND.EXTERNAL ||
-    ownerKind === SUBJECT_KIND.SYSTEM
+    ownerKind === SUBJECT_KIND.PLATFORM
   ) {
     throw new MemoryError(
       `Memory space owner kind '${ownerKind}' is not permitted`,
@@ -889,7 +889,7 @@ export async function resolveOrCreateMemorySpace(
   if (
     ownerKind === SUBJECT_KIND.USER ||
     ownerKind === SUBJECT_KIND.EXTERNAL ||
-    ownerKind === SUBJECT_KIND.SYSTEM
+    ownerKind === SUBJECT_KIND.PLATFORM
   ) {
     throw new MemoryError(
       `Memory space owner kind '${ownerKind}' is not permitted`,

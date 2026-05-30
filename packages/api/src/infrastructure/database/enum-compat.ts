@@ -39,7 +39,6 @@ import {
   AUTOMATION_TRIGGER_SOURCE_KINDS,
   ATTACHMENT_TARGET_TYPES,
   CONTACT_TARGET_TYPES,
-  CONVERSATION_PARTICIPANT_TYPES,
   MEMORY_SPACE_TYPES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
@@ -76,7 +75,6 @@ import type {
   AuthQrLoginRequestsApprovedSessionPersistence,
   AuthSessionsClientType,
   AuthSessionsTransport,
-  ConversationParticipantsType,
   InteractionRequestsStatus,
   MemoryItemsCategory,
   MemoryItemsIndexStatus,
@@ -343,12 +341,11 @@ type _AccessBindingSourceMatchesDb = Assert<
 // have been dropped. ATTACHMENT_TARGET_TYPES remains a pure application-layer
 // enum used at the API layer / translated to SubjectKind via
 // buildPluginAttachmentSubjectRef.
-type _ConversationParticipantTypeMatchesDb = Assert<
-  IsEqual<
-    (typeof CONVERSATION_PARTICIPANT_TYPES)[number],
-    ConversationParticipantsType
-  >
->
+// external-first-class-subject: conversation_participants.participant_type
+// column + the conversation_participants_type DB enum have been dropped. The
+// participant type is now derived from the joined access_subjects.kind via
+// subjectKindToParticipantType. CONVERSATION_PARTICIPANT_TYPES remains a pure
+// application/API-layer enum (the API still exposes a derived participantType).
 // Note: the historical `actor_access_policy` Postgres enum + the
 // `actors.access_policy` / `remote_agents.access_policy` columns have been
 // dropped (P2). `RELATIONSHIP_ACCESS_POLICIES` is now a pure

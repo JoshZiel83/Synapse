@@ -140,10 +140,10 @@ test("isScopeEligibleSubject only accepts workspace / conversation", () => {
     }),
     false
   )
-  assert.equal(isScopeEligibleSubject({ kind: SUBJECT_KIND.SYSTEM }), false)
+  assert.equal(isScopeEligibleSubject({ kind: SUBJECT_KIND.PLATFORM }), false)
 })
 
-test("isWorkspaceBoundSubjectKind excludes user/external/system", () => {
+test("isWorkspaceBoundSubjectKind excludes user/external/platform", () => {
   for (const ref of [
     { kind: SUBJECT_KIND.ACTOR, actorId: "x" },
     { kind: SUBJECT_KIND.REMOTE_AGENT, remoteAgentId: "x" },
@@ -159,8 +159,12 @@ test("isWorkspaceBoundSubjectKind excludes user/external/system", () => {
   }
   for (const ref of [
     { kind: SUBJECT_KIND.USER, userId: "x" },
-    { kind: SUBJECT_KIND.EXTERNAL, externalIdentityKey: "x" },
-    { kind: SUBJECT_KIND.SYSTEM },
+    {
+      kind: SUBJECT_KIND.EXTERNAL,
+      workspaceId: "x",
+      transportAddressId: "y",
+    },
+    { kind: SUBJECT_KIND.PLATFORM },
   ] as SubjectRef[]) {
     assert.equal(
       isWorkspaceBoundSubjectKind(ref),

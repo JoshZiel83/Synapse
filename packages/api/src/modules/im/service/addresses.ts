@@ -163,8 +163,9 @@ async function archiveConversationParticipantIfOrphaned(
 ) {
   const row = await db
     .selectFrom("conversation_participants as cm")
+    .leftJoin("access_subjects as cmsubj", "cmsubj.id", "cm.subject_id")
     .select([
-      "cm.participant_type",
+      "cmsubj.kind as subject_kind",
       "cm.state",
       sql<boolean>`EXISTS (
         SELECT 1
@@ -177,7 +178,7 @@ async function archiveConversationParticipantIfOrphaned(
     .executeTakeFirst()
   if (!row) return
   if (
-    row.participant_type !== "external" ||
+    row.subject_kind !== "external" ||
     row.state !== "active" ||
     row.has_addresses
   ) {
@@ -207,32 +208,70 @@ export async function syncTransportAddressConversationParticipant(params: {
     throw new Error("Transport external user not found")
   }
 
-  const desiredMember = params.workspaceMemberId
-    ? (
-        await activateConversationParticipant({
-          workspaceId: address.workspace_id,
-          conversationId: params.conversationId,
-          participantType: "workspace_member",
-          workspaceMemberId: params.workspaceMemberId,
-          recordJoinEvent: params.recordJoinEvent,
-        })
-      ).member
-    : (
-        await activateConversationParticipant({
-          workspaceId: address.workspace_id,
-          conversationId: params.conversationId,
-          participantType: "external",
-          displayName:
-            params.displayName ||
-            address.display_name ||
-            address.external_id ||
-            "External user",
-          metadata: {
-            externalUserKey: `${address.transport_kind}:${address.external_id}`,
-          },
-          recordJoinEvent: params.recordJoinEvent,
-        })
-      ).member
+  // F6 defence-in-depth (both branches): only a 'user' transport address ever
+  // becomes a conversation participant — never a bot/system endpoint. Asserted
+  // here so future callers of this exported helper can't bypass it.
+  if (address.address_type !== "user") {
+    throw new Error(
+      `syncTransportAddressConversationParticipant: address ${address.id} is not a user address (${address.address_type})`
+    )
+  }
+
+  const linkedMemberId = params.workspaceMemberId
+  const desiredMember = linkedMemberId
+    ? await (async () => {
+        // The address must already be linked to exactly this member. We never
+        // silently attach an unlinked (or differently-linked) address to a
+        // member participant — the link must be established first (via
+        // setTransportAddressLinkedUser / the ingest auto-link path, which
+        // updates transport_addresses.workspace_member_id before we re-read it
+        // here). This keeps transport_addresses.workspace_member_id the single
+        // source of truth for member↔address binding.
+        if (address.workspace_member_id !== linkedMemberId) {
+          throw new Error(
+            address.workspace_member_id
+              ? `syncTransportAddressConversationParticipant: address ${address.id} is linked to a different workspace member`
+              : `syncTransportAddressConversationParticipant: address ${address.id} is not linked to workspace member ${linkedMemberId}; link it first`
+          )
+        }
+        return (
+          await activateConversationParticipant({
+            workspaceId: address.workspace_id,
+            conversationId: params.conversationId,
+            participantType: "workspace_member",
+            workspaceMemberId: linkedMemberId,
+            recordJoinEvent: params.recordJoinEvent,
+          })
+        ).member
+      })()
+    : await (async () => {
+        // An external participant must be an UNLINKED user address. A linked
+        // address belongs to an internal member (caller should have passed
+        // workspaceMemberId).
+        if (address.workspace_member_id) {
+          throw new Error(
+            `syncTransportAddressConversationParticipant: address ${address.id} is linked to a workspace member; pass workspaceMemberId to add as a member`
+          )
+        }
+        return (
+          await activateConversationParticipant({
+            workspaceId: address.workspace_id,
+            conversationId: params.conversationId,
+            participantType: "external",
+            displayName:
+              params.displayName ||
+              address.display_name ||
+              address.external_id ||
+              "External user",
+            metadata: {
+              externalUserKey: `${address.transport_kind}:${address.external_id}`,
+            },
+            // First-class external subject is keyed by this transport address.
+            transportAddressId: address.id,
+            recordJoinEvent: params.recordJoinEvent,
+          })
+        ).member
+      })()
 
   await ensureConversationParticipantTransportAddress({
     conversationParticipantId: desiredMember.id,
@@ -247,7 +286,7 @@ export async function syncTransportAddressConversationParticipant(params: {
       "cm.id",
       "cpa.conversation_participant_id"
     )
-    .select(["cm.id", "cm.participant_type"])
+    .select(["cm.id"])
     .where("cpa.transport_address_id", "=", address.id)
     .where("cm.conversation_id", "=", params.conversationId)
     .where("cm.id", "<>", desiredMember.id)
@@ -311,13 +350,14 @@ async function loadConversationExternalParticipantPrimaryAddress(params: {
       "cm.id"
     )
     .leftJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
+    .leftJoin("access_subjects as cmsubj", "cmsubj.id", "cm.subject_id")
     .select([
       "cm.id as conversation_participant_id",
       "ta.id as transport_address_id",
     ])
     .where("cm.conversation_id", "=", params.conversationId)
     .where("cm.id", "=", params.conversationParticipantId)
-    .where("cm.participant_type", "=", "external")
+    .where("cmsubj.kind", "=", "external")
     .where("ta.workspace_id", "=", params.workspaceId)
     .orderBy("cpa.is_primary", "desc")
     .orderBy("cpa.created_at", "asc")

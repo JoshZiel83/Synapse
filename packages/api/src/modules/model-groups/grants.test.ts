@@ -94,7 +94,7 @@ async function insertModelGroup(
 }
 
 test(
-  "model_group_grants accepts a system-kind subject_id (platform scope)",
+  "model_group_grants accepts a platform-kind subject_id (platform scope)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -102,7 +102,7 @@ test(
       const workspaceId = await insertWorkspace(db, userId)
       const groupId = await insertModelGroup(db, workspaceId)
       const subjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.SYSTEM,
+        kind: SUBJECT_KIND.PLATFORM,
       })
       await db
         .insertInto("model_group_grants")
@@ -118,7 +118,7 @@ test(
         .select(["mgs.kind", "mgs.workspace_id"])
         .where("mgg.group_id", "=", groupId)
         .executeTakeFirstOrThrow()
-      assert.equal(row.kind, "system")
+      assert.equal(row.kind, "platform")
       assert.equal(row.workspace_id, null)
     })
   }

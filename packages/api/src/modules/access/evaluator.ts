@@ -1234,7 +1234,7 @@ async function listModelGroupIds(
             eb("mg.owner_type", "=", "workspace"),
             eb("mg.owner_workspace_id", "=", actor.workspace_id),
           ]),
-          eb("mgs.kind", "=", "system"),
+          eb("mgs.kind", "=", "platform"),
           eb.and([
             eb("mgs.kind", "=", "workspace"),
             eb("mgs.workspace_id", "=", actor.workspace_id),
@@ -1279,7 +1279,7 @@ async function listModelGroupIds(
           eb("mg.owner_type", "=", "workspace_member"),
           eb("mg.owner_workspace_member_id", "=", access.id),
         ]),
-        eb("mgs.kind", "=", "system"),
+        eb("mgs.kind", "=", "platform"),
         eb.and([
           eb("mgs.kind", "=", "workspace"),
           eb("mgs.workspace_id", "=", access.workspaceId),

@@ -24,7 +24,29 @@ import { executeSqlOn } from "../../infrastructure/database/kysely.js"
 
 export type AccessSubjectRow = TableRow<"access_subjects">
 
-const SYSTEM_EXTERNAL_KEY = "__synapse_system__"
+/**
+ * Maps an access_subjects.kind to the conversation participant_type semantic.
+ * Only the four participant-eligible kinds are valid; anything else is a
+ * programming/data error (the DB trigger tg_conversation_participant_validate
+ * enforces the same invariant). Used by the chat DB→API mapper now that the
+ * `conversation_participants.participant_type` column is derived from the joined
+ * subject kind rather than stored.
+ */
+export function subjectKindToParticipantType(
+  kind: AccessSubjectRow["kind"]
+): "workspace_member" | "actor" | "remote_agent" | "external" {
+  switch (kind) {
+    case "workspace_member":
+    case "actor":
+    case "remote_agent":
+    case "external":
+      return kind
+    default:
+      throw new Error(
+        `subjectKindToParticipantType: kind '${kind}' cannot be a conversation participant`
+      )
+  }
+}
 
 function subjectColumns(ref: SubjectRef): {
   kind: AccessSubjectRow["kind"]
@@ -34,7 +56,7 @@ function subjectColumns(ref: SubjectRef): {
   remote_agent_id: string | null
   conversation_id: string | null
   user_id: string | null
-  external_identity_key: string | null
+  transport_address_id: string | null
 } {
   const base = {
     workspace_id: null,
@@ -43,7 +65,7 @@ function subjectColumns(ref: SubjectRef): {
     remote_agent_id: null,
     conversation_id: null,
     user_id: null,
-    external_identity_key: null,
+    transport_address_id: null,
   }
   switch (ref.kind) {
     case SUBJECT_KIND.WORKSPACE:
@@ -73,22 +95,26 @@ function subjectColumns(ref: SubjectRef): {
     case SUBJECT_KIND.USER:
       return { ...base, kind: "user", user_id: ref.userId }
     case SUBJECT_KIND.EXTERNAL:
+      // external is workspace-rooted and identified by its transport_address.
+      // workspace_id is carried on the ref (validated against the address by the
+      // composite FK), so unlike other workspace-bound kinds it is set here.
       return {
         ...base,
         kind: "external",
-        external_identity_key: ref.externalIdentityKey,
+        workspace_id: ref.workspaceId,
+        transport_address_id: ref.transportAddressId,
       }
-    case SUBJECT_KIND.SYSTEM:
-      return { ...base, kind: "system" }
+    case SUBJECT_KIND.PLATFORM:
+      return { ...base, kind: "platform" }
   }
 }
 
 /**
  * For workspace-scoped kinds, look up the owning workspace_id from the
- * underlying entity table. Returns null for platform-wide kinds (user,
- * external, system) and for the workspace kind itself (where workspace_id is
- * carried by the ref). Required by `chk_access_subjects_payload` which insists
- * workspace-scoped subjects know their workspace.
+ * underlying entity table. external carries workspace_id on the ref; user /
+ * platform are platform-wide and return null; workspace carries its own id.
+ * Required by `chk_access_subjects_payload` which insists workspace-scoped
+ * subjects know their workspace.
  */
 async function resolveOwningWorkspaceId(
   db: KyselyDb,
@@ -167,9 +193,12 @@ async function resolveOwningWorkspaceId(
       }
       return row.workspace_id
     }
-    case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
-    case SUBJECT_KIND.SYSTEM:
+      // external carries its workspace_id on the ref; the composite FK ensures
+      // it matches the transport_address's workspace.
+      return ref.workspaceId
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.PLATFORM:
       return null
   }
 }
@@ -200,10 +229,11 @@ export function rowToSubjectRef(row: AccessSubjectRow): SubjectRef {
     case "external":
       return {
         kind: SUBJECT_KIND.EXTERNAL,
-        externalIdentityKey: row.external_identity_key!,
+        workspaceId: row.workspace_id!,
+        transportAddressId: row.transport_address_id!,
       }
-    case "system":
-      return { kind: SUBJECT_KIND.SYSTEM }
+    case "platform":
+      return { kind: SUBJECT_KIND.PLATFORM }
   }
 }
 
@@ -246,15 +276,15 @@ export async function upsertAccessSubject(
       lookup = lookup.where("user_id", "=", ref.userId)
       break
     case SUBJECT_KIND.EXTERNAL:
-      lookup = lookup.where(
-        "external_identity_key",
-        "=",
-        ref.externalIdentityKey
-      )
+      // P2#4: match on transport_address_id AND workspace_id so a ref carrying
+      // the wrong workspace can never resolve to another workspace's subject.
+      lookup = lookup
+        .where("transport_address_id", "=", ref.transportAddressId)
+        .where("workspace_id", "=", ref.workspaceId)
       break
-    case SUBJECT_KIND.SYSTEM:
-      // System subject is a singleton — the partial-unique index on
-      // (kind='system') guarantees at most one row.
+    case SUBJECT_KIND.PLATFORM:
+      // Platform subject is a singleton — the partial-unique index on
+      // (kind='platform') guarantees at most one row.
       break
   }
 
@@ -312,7 +342,7 @@ export async function loadAccessSubjectOn(
 ): Promise<SubjectRef | null> {
   const result = await client.query(
     `SELECT id, kind, workspace_id, workspace_member_id, actor_id, remote_agent_id,
-            conversation_id, user_id, external_identity_key
+            conversation_id, user_id, transport_address_id
        FROM access_subjects WHERE id = $1 LIMIT 1`,
     [subjectId]
   )
@@ -374,13 +404,11 @@ export async function findAccessSubjectId(
       lookup = lookup.where("user_id", "=", ref.userId)
       break
     case SUBJECT_KIND.EXTERNAL:
-      lookup = lookup.where(
-        "external_identity_key",
-        "=",
-        ref.externalIdentityKey
-      )
+      lookup = lookup
+        .where("transport_address_id", "=", ref.transportAddressId)
+        .where("workspace_id", "=", ref.workspaceId)
       break
-    case SUBJECT_KIND.SYSTEM:
+    case SUBJECT_KIND.PLATFORM:
       break
   }
   const row = await lookup.executeTakeFirst()
@@ -435,7 +463,7 @@ export async function upsertAccessSubjectOn(
     `INSERT INTO access_subjects (
        kind, workspace_id, workspace_member_id, actor_id,
        remote_agent_id, conversation_id,
-       user_id, external_identity_key
+       user_id, transport_address_id
      )
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT DO NOTHING
@@ -448,7 +476,7 @@ export async function upsertAccessSubjectOn(
       columns.remote_agent_id,
       columns.conversation_id,
       columns.user_id,
-      columns.external_identity_key,
+      columns.transport_address_id,
     ]
   )
   if (insertResult.rows[0]) return insertResult.rows[0].id
@@ -529,9 +557,12 @@ async function resolveOwningWorkspaceIdOn(
       }
       return r.rows[0].workspace_id
     }
-    case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
-    case SUBJECT_KIND.SYSTEM:
+      // external carries its workspace_id on the ref; the composite FK ensures
+      // it matches the transport_address's workspace.
+      return ref.workspaceId
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.PLATFORM:
       return null
   }
 }
@@ -567,11 +598,13 @@ function whereClauseFor(ref: SubjectRef): {
     case SUBJECT_KIND.USER:
       return { condition: "user_id = $2", values: [ref.userId] }
     case SUBJECT_KIND.EXTERNAL:
+      // P2#4: bind on (transport_address_id, workspace_id) so a wrong-workspace
+      // ref cannot resolve to another workspace's external subject.
       return {
-        condition: "external_identity_key = $2",
-        values: [ref.externalIdentityKey],
+        condition: "transport_address_id = $2 AND workspace_id = $3",
+        values: [ref.transportAddressId, ref.workspaceId],
       }
-    case SUBJECT_KIND.SYSTEM:
+    case SUBJECT_KIND.PLATFORM:
       return { condition: "TRUE", values: [] }
   }
 }

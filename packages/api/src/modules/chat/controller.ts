@@ -76,7 +76,9 @@ const createConversationSchema = z.object({
       z.object({
         displayName: z.string().trim().min(1).max(255),
         metadata: jsonRecordSchema,
-        transportAddressIds: z.array(chatUuidSchema).optional().default([]),
+        // The single transport address identifying this first-class external
+        // person (no anonymous/throwaway externals).
+        transportAddressId: chatUuidSchema,
       })
     )
     .optional()
@@ -128,7 +130,8 @@ const addParticipantsSchema = z
         z.object({
           displayName: z.string().trim().min(1).max(255),
           metadata: jsonRecordSchema,
-          transportAddressIds: z.array(chatUuidSchema).optional().default([]),
+          // The single transport address identifying this first-class external.
+          transportAddressId: chatUuidSchema,
         })
       )
       .optional()

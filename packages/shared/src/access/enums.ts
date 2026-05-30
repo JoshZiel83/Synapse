@@ -14,7 +14,7 @@ export const SUBJECT_KIND = {
   CONVERSATION: "conversation",
   USER: "user",
   EXTERNAL: "external",
-  SYSTEM: "system",
+  PLATFORM: "platform",
 } as const
 
 export const SUBJECT_KINDS = [
@@ -25,7 +25,7 @@ export const SUBJECT_KINDS = [
   SUBJECT_KIND.CONVERSATION,
   SUBJECT_KIND.USER,
   SUBJECT_KIND.EXTERNAL,
-  SUBJECT_KIND.SYSTEM,
+  SUBJECT_KIND.PLATFORM,
 ] as const
 
 export type SubjectKind = (typeof SUBJECT_KINDS)[number]

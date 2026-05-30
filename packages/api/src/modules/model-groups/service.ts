@@ -35,7 +35,7 @@ function buildModelGroupGrantSubjectRef(input: {
 }): SubjectRef {
   switch (input.grantScope) {
     case MODEL_GROUP_GRANT_SCOPE.PLATFORM:
-      return { kind: SUBJECT_KIND.SYSTEM }
+      return { kind: SUBJECT_KIND.PLATFORM }
     case MODEL_GROUP_GRANT_SCOPE.WORKSPACE:
       if (!input.workspaceId) {
         throw new Error("workspaceId required for workspace grant scope")
@@ -63,7 +63,7 @@ function subjectKindToModelGroupGrantScope(
   kind: SubjectRef["kind"]
 ): ModelGroupGrantScope {
   switch (kind) {
-    case SUBJECT_KIND.SYSTEM:
+    case SUBJECT_KIND.PLATFORM:
       return MODEL_GROUP_GRANT_SCOPE.PLATFORM
     case SUBJECT_KIND.WORKSPACE:
       return MODEL_GROUP_GRANT_SCOPE.WORKSPACE
@@ -561,7 +561,7 @@ export async function listWorkspaceModelGroups(workspaceId: string) {
           eb("mg.owner_type", "=", "workspace"),
           eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb("mgs.kind", "=", "system"),
+        eb("mgs.kind", "=", "platform"),
         eb.and([
           eb("mgs.kind", "=", "workspace"),
           eb("mgs.workspace_id", "=", workspaceId),
@@ -696,7 +696,7 @@ export async function isModelGroupAvailableInWorkspace(
           eb("mg.owner_type", "=", "workspace"),
           eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb("mgs.kind", "=", "system"),
+        eb("mgs.kind", "=", "platform"),
         eb.and([
           eb("mgs.kind", "=", "workspace"),
           eb("mgs.workspace_id", "=", workspaceId),
@@ -1231,7 +1231,7 @@ async function ensureAssignableModelGroups(
           eb("mg.owner_type", "=", "workspace"),
           eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb("mgs.kind", "=", "system"),
+        eb("mgs.kind", "=", "platform"),
         eb.and([
           eb("mgs.kind", "=", "workspace"),
           eb("mgs.workspace_id", "=", workspaceId),
@@ -1338,7 +1338,7 @@ export async function getActorModelGroups(
           WHERE mgg.group_id = mg.id
             AND mgg.status = 'active'
             AND (
-              mgs2.kind = 'system'
+              mgs2.kind = 'platform'
               OR (mgs2.kind = 'workspace' AND mgs2.workspace_id = ${workspaceId})
               OR (
                 mgs2.kind = 'workspace_member'
@@ -1416,7 +1416,7 @@ export async function listVisibleActorModelGroups(
           eb("mg.owner_type", "=", "workspace"),
           eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb("mgs.kind", "=", "system"),
+        eb("mgs.kind", "=", "platform"),
         eb.and([
           eb("mgs.kind", "=", "workspace"),
           eb("mgs.workspace_id", "=", workspaceId),

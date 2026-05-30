@@ -261,6 +261,7 @@ async function hasNewUserFacingConversationMessage(
       "cp.id",
       "ci.author_participant_id"
     )
+    .leftJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
     .select("ci.id")
     .where("ci.conversation_id", "=", conversationId)
     .where("ci.item_type", "=", "message")
@@ -268,7 +269,7 @@ async function hasNewUserFacingConversationMessage(
     .where((eb) =>
       eb.or([
         eb("ci.role", "=", "user"),
-        eb("cp.participant_type", "in", ["workspace_member", "external"]),
+        eb("cpsubj.kind", "in", ["workspace_member", "external"]),
       ])
     )
     .limit(1)

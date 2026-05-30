@@ -17,9 +17,9 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
  * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
  * `bootstrap.test.ts` enforces the length invariant.
  */
-export const CURRENT_SCHEMA_VERSION = "2026-05-29-remove-a2a"
+export const CURRENT_SCHEMA_VERSION = "2026-05-30-external-first-class-subject"
 export const CURRENT_SCHEMA_DESCRIPTION =
-  "remove legacy A2A (agent-to-agent) design: drop 'a2a_proxy' label from tool_calls_tool_kind + tool_execution_attempts_executor_kind enums and 'a2a' label from runtime_events_source enum. No A2A tables ever existed; the enum labels were unused. Existing dev DBs must rebuild to drop the labels (no data preservation required). Prior: subject-scope-refactor merge into device-runtime-v3 (runtime_authorization_grants / interaction_runtime_authorization_requests / resource_access_bindings / access_subjects / device_operations_principal_kind reshape; memory_spaces/memory_access_grants in Batch 11)."
+  "external IM identities become first-class, cross-conversation subjects: access_subjects gains transport_address_id (composite FK to transport_addresses(id, workspace_id), NO ACTION DEFERRABLE) + workspace_id, drops external_identity_key; kind='external' now workspace-rooted and deduped per transport_address (throwaway 'participant:<uuid>' subjects removed). subject_kind 'system' renamed to 'platform' (platform-scoped model-group grants). conversation_participants_type drops 'system' (participant-layer system removed; role='system' projection unaffected). New invariant triggers: tg_conversation_participant_validate (subject kind in member|actor|remote_agent|external + internal-conversation workspace match) and tg_access_subject_identity_guard (a subject's kind + identity payload are immutable while referenced by a participant). conversation_participants.participant_type column dropped (derived from joined subject kind). Prior: remove legacy A2A enum labels."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

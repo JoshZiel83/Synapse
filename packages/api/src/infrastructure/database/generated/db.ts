@@ -107,8 +107,6 @@ export type ConversationItemTargetsTargetKind = "cc" | "to" | "visible";
 
 export type ConversationParticipantsState = "active" | "left" | "removed";
 
-export type ConversationParticipantsType = "actor" | "external" | "remote_agent" | "system" | "workspace_member";
-
 export type ConversationsBoundary = "external" | "internal";
 
 export type ConversationsKind = "group" | "private" | "virtual";
@@ -201,6 +199,8 @@ export type JsonPrimitive = boolean | number | string | null;
 
 export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
+export type MemoryAccessGrantsStatus = "active" | "revoked" | "superseded";
+
 export type MemoryItemPartsPartType = "file_ref" | "json" | "text";
 
 export type MemoryItemsCategory = "artifact" | "decision" | "fact" | "preference" | "procedure" | "relationship" | "summary";
@@ -209,11 +209,9 @@ export type MemoryItemsIndexStatus = "failed" | "lexical_ready" | "ready";
 
 export type MemoryItemsState = "active" | "archived" | "superseded";
 
-export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
-
-// subject-scope-refactor: MemorySpacesSpaceType dropped at cutover; memory_spaces now keyed by (owner_subject_id, scope_subject_id?, namespace_key).
 export type MemoryPermission = "delete" | "edit" | "manage" | "read" | "recall" | "write";
-export type MemoryAccessGrantsStatus = "active" | "revoked" | "superseded";
+
+export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
 
 export type ModelGroupGrantsStatus = "active" | "revoked";
 
@@ -285,8 +283,6 @@ export type ResourceAccessBindingsStatus = "active" | "revoked";
 
 export type RuntimeAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
-// subject-scope-refactor: RuntimeAuthorizationGrantsScope dropped at cutover; scope is now expressed via subject_id + scope_subject_id.
-
 export type RuntimeAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
 
 export type RuntimeAuthorizationRequestMode = "background" | "blocking";
@@ -317,7 +313,7 @@ export type SkillMirrorSourcesSyncStatus = "error" | "pending" | "synced";
 
 export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
-export type SubjectKind = "actor" | "conversation" | "external" | "remote_agent" | "system" | "user" | "workspace" | "workspace_member";
+export type SubjectKind = "actor" | "conversation" | "external" | "platform" | "remote_agent" | "user" | "workspace" | "workspace_member";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -375,10 +371,10 @@ export interface AccessSubjects {
   actor_id: string | null;
   conversation_id: string | null;
   created_at: Generated<Timestamp>;
-  external_identity_key: string | null;
   id: Generated<string>;
   kind: SubjectKind;
   remote_agent_id: string | null;
+  transport_address_id: string | null;
   user_id: string | null;
   workspace_id: string | null;
   workspace_member_id: string | null;
@@ -947,7 +943,6 @@ export interface ConversationParticipants {
   joined_at: Generated<Timestamp>;
   left_at: Timestamp | null;
   metadata: Generated<Json>;
-  participant_type: ConversationParticipantsType;
   role_key: Generated<string>;
   state: Generated<ConversationParticipantsState>;
   subject_id: string;
@@ -1096,7 +1091,7 @@ export interface DeviceOperations {
   input_payload: Generated<Json>;
   operation_timeout_ms: number | null;
   principal_kind: DeviceOperationsPrincipalKind;
-  principal_subject_id: string;
+  principal_subject_id: string | null;
   requires_replan: Generated<boolean>;
   result_hash: string | null;
   runtime_session_id: string | null;
@@ -1448,6 +1443,24 @@ export interface InteractionUserInputRequests {
   resolution_payload: Generated<Json>;
 }
 
+export interface MemoryAccessGrants {
+  created_at: Generated<Timestamp>;
+  created_by_workspace_member_id: string | null;
+  id: Generated<string>;
+  memory_item_id: string | null;
+  memory_space_id: string;
+  permissions: ArrayType<MemoryPermission>;
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source: string | null;
+  source_interaction_id: string | null;
+  status: Generated<MemoryAccessGrantsStatus>;
+  subject_id: string;
+  superseded_at: Timestamp | null;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
+}
+
 export interface MemoryEmbeddingCache {
   content_hash: string;
   created_at: Generated<Timestamp | null>;
@@ -1549,24 +1562,6 @@ export interface MemorySpaces {
   namespace_key: Generated<string>;
   owner_subject_id: string;
   scope_subject_id: string | null;
-  updated_at: Generated<Timestamp>;
-  workspace_id: string;
-}
-
-export interface MemoryAccessGrants {
-  created_at: Generated<Timestamp>;
-  created_by_workspace_member_id: string | null;
-  id: Generated<string>;
-  memory_item_id: string | null;
-  memory_space_id: string;
-  permissions: MemoryPermission[];
-  revoked_at: Timestamp | null;
-  scope_subject_id: string | null;
-  source: string | null;
-  source_interaction_id: string | null;
-  status: Generated<MemoryAccessGrantsStatus>;
-  subject_id: string;
-  superseded_at: Timestamp | null;
   updated_at: Generated<Timestamp>;
   workspace_id: string;
 }
@@ -2562,8 +2557,8 @@ export interface DB {
   interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
   interaction_transport_projections: InteractionTransportProjections;
   interaction_user_input_requests: InteractionUserInputRequests;
-  memory_embedding_cache: MemoryEmbeddingCache;
   memory_access_grants: MemoryAccessGrants;
+  memory_embedding_cache: MemoryEmbeddingCache;
   memory_item_chunks: MemoryItemChunks;
   memory_item_parts: MemoryItemParts;
   memory_items: MemoryItems;

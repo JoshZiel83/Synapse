@@ -114,8 +114,8 @@ test("retry succeeds end-to-end and enqueues a session_wakeup with the correct w
     const actorSubjectId = subjectRow.rows[0].id
     await pg.query(
       `INSERT INTO conversation_participants
-        (id, conversation_id, participant_type, subject_id, role_key, state)
-       VALUES ($1, $2, 'actor', $3, 'member', 'active')`,
+        (id, conversation_id, subject_id, role_key, state)
+       VALUES ($1, $2, $3, 'member', 'active')`,
       [actorParticipantId, conversationId, actorSubjectId]
     )
     await pg.query(

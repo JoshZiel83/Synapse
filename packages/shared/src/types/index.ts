@@ -1236,7 +1236,7 @@ export interface RemoteAgentAccessRequestListResponse {
 export interface ConversationParticipantView {
   memberId?: UUID
   participantId?: UUID
-  participantType?: Exclude<ConversationParticipantType, "system">
+  participantType?: ConversationParticipantType
   id?: UUID
   workspaceMemberId?: UUID
   actorId?: UUID
@@ -3238,7 +3238,7 @@ export interface ConversationReplyRef {
 
 export type ConversationParticipantRef = ConversationEntityRef & {
   participantId: UUID
-  participantType: Exclude<ConversationParticipantType, "system">
+  participantType: ConversationParticipantType
 }
 
 export interface TransportConnectorCapability {
@@ -4474,7 +4474,10 @@ export interface ChatClientInstanceRegistrationResponse {
 export interface ChatConversationCreateExternalParticipantRequest {
   displayName: string
   metadata?: Record<string, unknown>
-  transportAddressIds?: UUID[]
+  // The single transport address identifying this first-class external person
+  // (see external-first-class-subject refactor). Multi-address aggregation is
+  // deferred to a future external_contact entity.
+  transportAddressId: UUID
 }
 
 export interface ChatConversationCreateRequest {

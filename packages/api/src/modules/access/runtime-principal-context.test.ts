@@ -125,7 +125,6 @@ async function addActorParticipant(
     .insertInto("conversation_participants")
     .values({
       conversation_id: conversationId,
-      participant_type: "actor",
       subject_id: subjectId,
       state: "active",
     } as any)
