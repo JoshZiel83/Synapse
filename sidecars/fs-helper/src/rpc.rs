@@ -179,6 +179,64 @@ pub struct ExtractTextInput {
     pub max_bytes: Option<u64>,
 }
 
+// ─────────────────────── CAS + manifest inputs ───────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CasPutInput {
+    /// Absolute host path of the source file to ingest into the CAS.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CasHasInput {
+    pub sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CasGcInput {
+    /// The complete reachable set; any blob NOT in this set is deleted.
+    pub reachable_sha256: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManifestMaterializeInput {
+    /// Manifest blob sha to materialize; None/empty = empty tree.
+    #[serde(default)]
+    pub manifest_sha256: Option<String>,
+    /// Absolute host path of the plain directory to populate.
+    pub target_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManifestScanCommitInput {
+    /// Absolute host path of the live working directory to scan.
+    pub dir: String,
+    /// What the live dir was materialized from (for 3-way merge base).
+    #[serde(default)]
+    pub base_manifest_sha256: Option<String>,
+    /// Current space head (may have advanced past base); when present and
+    /// != base, a 3-way merge is performed.
+    #[serde(default)]
+    pub latest_manifest_sha256: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirSyncInput {
+    /// Absolute host path of the live working directory to reconcile.
+    pub dir: String,
+    /// The dir's current base manifest.
+    #[serde(default)]
+    pub base_manifest_sha256: Option<String>,
+    /// The new head manifest to merge toward.
+    pub to_manifest_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManifestCleanupInput {
+    /// Absolute host paths (scratch dirs) to remove.
+    pub paths: Vec<String>,
+}
+
 // ─────────────────────────── outputs ─────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -289,4 +347,73 @@ pub struct ExtractTextResult {
     pub source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _error: Option<String>,
+}
+
+// ─────────────────────── CAS + manifest outputs ──────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct CasPutResult {
+    pub sha256: String,
+    pub size: u64,
+    pub dedup: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasHasResult {
+    pub exists: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasGcResult {
+    pub deleted_count: u64,
+}
+
+/// Wire form of a manifest entry returned by scan_commit (so the TS caller
+/// can persist path→sha mappings without re-reading the manifest blob).
+#[derive(Debug, Serialize)]
+pub struct ManifestEntryWire {
+    pub path: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    pub mode: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+impl From<&crate::manifest::ManifestEntry> for ManifestEntryWire {
+    fn from(e: &crate::manifest::ManifestEntry) -> Self {
+        let kind = match e.kind {
+            crate::manifest::EntryKind::File => "file",
+            crate::manifest::EntryKind::Dir => "dir",
+            crate::manifest::EntryKind::Symlink => "symlink",
+        };
+        Self {
+            path: e.path.clone(),
+            kind: kind.to_string(),
+            sha256: e.sha256.clone(),
+            mode: e.mode,
+            size: e.size,
+            target: e.target.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManifestScanCommitResult {
+    pub manifest_sha256: String,
+    pub entries: Vec<ManifestEntryWire>,
+    pub new_blobs: Vec<String>,
+    pub conflict_paths: Vec<String>,
+    pub entry_count: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DirSyncResult {
+    pub applied: Vec<String>,
+    pub deferred_conflicts: Vec<String>,
+    pub new_base_manifest_sha256: String,
 }

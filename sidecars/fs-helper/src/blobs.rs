@@ -98,6 +98,119 @@ impl BlobStore {
         Ok(fs::read(&p)?)
     }
 
+    /// True if a blob with this sha256 is present.
+    pub fn exists(&self, sha256: &str) -> bool {
+        self.blob_path(sha256).exists()
+    }
+
+    /// Size in bytes of a stored blob, or None if absent.
+    pub fn size_of(&self, sha256: &str) -> Result<Option<u64>, RpcError> {
+        let p = self.blob_path(sha256);
+        match fs::metadata(&p) {
+            Ok(m) => Ok(Some(m.len())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Store in-memory bytes into the CAS with the same atomic + dedup
+    /// semantics as `put_streaming`. Used for manifest blobs computed in
+    /// memory by scan_commit. Returns (sha256, size, dedup_flag).
+    pub fn put_bytes(&self, bytes: &[u8]) -> Result<(String, u64, bool), RpcError> {
+        let sha = hex::encode(Sha256::digest(bytes));
+        let final_path = self.blob_path(&sha);
+        if let Some(parent) = final_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if final_path.exists() {
+            return Ok((sha, bytes.len() as u64, true));
+        }
+        let tmp_path = self.root.join(format!("incoming.{}", uuid_like()));
+        {
+            let mut tmp_file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .truncate(true)
+                .open(&tmp_path)?;
+            tmp_file.write_all(bytes)?;
+            tmp_file.sync_all()?;
+        }
+        if final_path.exists() {
+            let _ = fs::remove_file(&tmp_path);
+            return Ok((sha, bytes.len() as u64, true));
+        }
+        fs::rename(&tmp_path, &final_path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                fs::set_permissions(&final_path, fs::Permissions::from_mode(0o600));
+        }
+        Ok((sha, bytes.len() as u64, false))
+    }
+
+    /// Materialize a blob's bytes into `dest` as a regular file, creating
+    /// parent dirs, then set its permission bits to `mode`. v1 does a plain
+    /// copy (Step 11 swaps in reflink/CoW where the filesystem supports it).
+    /// `dest` is a path the supervisor controls (a materialized live dir),
+    /// not user-supplied, so no symlink-jail concerns here. We DELIBERATELY
+    /// do not hardlink: the sandbox runs under a different uid and CAS blobs
+    /// are 0600 owned by the supervisor, so a shared inode would be
+    /// unreadable and any chmod would corrupt the CAS blob's mode.
+    pub fn copy_to(
+        &self,
+        sha256: &str,
+        dest: &Path,
+        mode: u32,
+    ) -> Result<(), RpcError> {
+        let src = self.blob_path(sha256);
+        if !src.exists() {
+            return Err(RpcError::NotFound(format!("blob {sha256}")));
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // Remove any pre-existing dest so copy is deterministic.
+        if dest.symlink_metadata().is_ok() {
+            let _ = fs::remove_file(dest);
+        }
+        fs::copy(&src, dest)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dest, fs::Permissions::from_mode(mode))?;
+        }
+        let _ = mode;
+        Ok(())
+    }
+
+    /// Every sha256 currently present in the store (walk blobs/<aa>/<sha>).
+    /// Used by GC mark-sweep. Ignores the transient `incoming.*` temp files
+    /// (they live directly under blobs/, not under a 2-char fan-out dir) and
+    /// any non-64-hex entries.
+    pub fn list_all(&self) -> Result<Vec<String>, RpcError> {
+        let mut out = Vec::new();
+        if !self.root.exists() {
+            return Ok(out);
+        }
+        for aa in fs::read_dir(&self.root)? {
+            let aa = aa?;
+            if !aa.file_type()?.is_dir() {
+                continue;
+            }
+            for f in fs::read_dir(aa.path())? {
+                let f = f?;
+                if let Some(name) = f.file_name().to_str() {
+                    if name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit())
+                    {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Stage a blob's contents into a tmp file with the given token. Used by
     /// restore tmp_token mode.
     pub fn stage_to(&self, sha256: &str, dest: &Path) -> Result<u64, RpcError> {
