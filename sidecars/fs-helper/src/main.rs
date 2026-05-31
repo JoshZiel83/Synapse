@@ -582,6 +582,14 @@ async fn dir_sync(state: &Arc<State>, params: Value) -> Result<Value, RpcError> 
     Ok(serde_json::to_value(rpc::DirSyncResult {
         applied: res.applied,
         deferred_conflicts: res.deferred_conflicts,
+        conflict_sidecars: res
+            .conflict_sidecars
+            .into_iter()
+            .map(|c| rpc::ConflictSidecar {
+                original: c.original,
+                sidecar: c.sidecar,
+            })
+            .collect(),
         new_base_manifest_sha256: res.new_base_manifest_sha256,
     })
     .unwrap())

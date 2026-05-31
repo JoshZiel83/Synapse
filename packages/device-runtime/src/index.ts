@@ -73,5 +73,6 @@ export type {
   ManifestEntryKind,
   DirSyncInput,
   DirSyncResult,
+  ConflictSidecar,
   ManifestCleanupInput,
 } from "./builtins/fs-helper-types.js"

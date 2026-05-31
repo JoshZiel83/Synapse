@@ -26,7 +26,6 @@ import {
   teardownSandbox,
   peekPendingCommitConflicts,
   clearPendingCommitConflicts,
-  CONFLICT_SIDECAR_PREFIX,
 } from "../modules/sandbox/index.js"
 import { config } from "../config/index.js"
 import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
@@ -565,11 +564,6 @@ export function startSessionThinkingWorker() {
             const pendingCommitConflicts =
               await peekPendingCommitConflicts(sessionId)
 
-            // Per-mount sidecar path: a conflict path P under mount /<sub> has
-            // its preserved-local sidecar at /<sub>/.synapse-conflicts/<P>.
-            const sidecarFor = (subpath: string, p: string) =>
-              `/${subpath}${CONFLICT_SIDECAR_PREFIX}${p}`
-
             const refreshEntries = Object.entries(
               refresh.deferredConflictsBySubpath
             )
@@ -579,8 +573,31 @@ export function startSessionThinkingWorker() {
                 `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
             )
             const commitLines = commitEntries.map(
+              ([sp, c]) =>
+                `/${sp}: ${c.paths.map((p) => `/${sp}${p}`).join(", ")}`
+            )
+            // The sidecars fs-helper actually wrote on REFRESH (file conflicts
+            // only; dir/delete/kind conflicts have none). Already mount-prefixed
+            // + deduped per file by the service layer (round-7 #B).
+            const refreshSidecars = Object.values(
+              refresh.sidecarsBySubpath
+            ).flat()
+            const sidecarPairs = refreshSidecars.map(
+              (s) => `${s.original} → ${s.sidecar}`
+            )
+            // Per-path coverage (round-7 #D): a deferred conflict path is
+            // "covered" iff some sidecar's original IS that path or sits under it.
+            // Don't infer coverage from counts — a single tree conflict can fan
+            // out to many sidecars (or zero), so a count compare mislabels.
+            const sidecarOriginals = refreshSidecars.map((s) => s.original)
+            const hasUncoveredRefreshConflict = refreshEntries.some(
               ([sp, paths]) =>
-                `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
+                paths.some((p) => {
+                  const abs = `/${sp}${p}`
+                  return !sidecarOriginals.some(
+                    (o) => o === abs || o.startsWith(`${abs}/`)
+                  )
+                })
             )
 
             if (refreshLines.length > 0 || commitLines.length > 0) {
@@ -596,20 +613,30 @@ export function startSessionThinkingWorker() {
               }
               const sections: string[] = []
               if (refreshEntries.length > 0) {
-                // Build an accurate per-file sidecar map; only file conflicts
-                // have a sidecar (dir/delete/kind conflicts don't).
-                const sidecars = refreshEntries
-                  .flatMap(([sp, paths]) =>
-                    paths.map((p) => `/${sp}${p} → ${sidecarFor(sp, p)}`)
-                  )
-                  .join("; ")
+                const sidecarNote =
+                  sidecarPairs.length > 0
+                    ? ` Your pre-conflict copy of each conflicting FILE was preserved at a sidecar (read it, reconcile with the live/head version, write the merged result back to the original path — it will then commit cleanly): ${sidecarPairs.join("; ")}.`
+                    : ""
+                const noSidecarNote = hasUncoveredRefreshConflict
+                  ? " For directory/deletion conflicts there is no sidecar — re-read the live path (it now holds the other writer's version)."
+                  : ""
                 sections.push(
-                  `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}. Your pre-conflict version of any FILE conflict was preserved at its conflict sidecar so nothing is lost — read both, reconcile, and write the merged result back to the original path (it will commit cleanly). Sidecars (file conflicts only; directory/delete conflicts have none — just re-read the live path): ${sidecars}.`
+                  `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}.${sidecarNote}${noSidecarNote}`
                 )
               }
               if (commitEntries.length > 0) {
+                // round-7 #C: the post-commit reconcile preserved the agent's
+                // pre-conflict copy at a sidecar — point at it instead of
+                // claiming the work was simply lost.
+                const commitSidecarPairs = commitEntries
+                  .flatMap(([, c]) => c.sidecars)
+                  .map((s) => `${s.original} → ${s.sidecar}`)
+                const commitSidecarNote =
+                  commitSidecarPairs.length > 0
+                    ? ` Your pre-conflict copy of each affected FILE was preserved at a sidecar — read it, reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
+                    : ""
                 sections.push(
-                  `Your previous turn's save to these paths LOST to a concurrent writer and was NOT persisted (${commitLines.join("; ")}); the current saved version is the other writer's. Re-read each path and re-apply your change if it's still needed.`
+                  `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote} Re-read each path and re-apply your change if it's still needed.`
                 )
                 surfacedPendingCommitConflicts = true
               }

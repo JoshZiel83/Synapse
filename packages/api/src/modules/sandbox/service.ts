@@ -379,17 +379,21 @@ async function waitForCatalog(
  * mount's base_snapshot_id to the merged-in head. /actor-conversation is single
  * writer — not refreshed.
  *
- * Returns per-subpath deferred conflicts: paths the agent dirtied locally that
- * also changed in the incoming head, so the merge kept the local copy and the
- * incoming change was NOT applied. The caller surfaces these to the agent so it
- * can reconcile (otherwise the agent silently works on a stale view of those
- * paths).
+ * Returns, per subpath: the deferred conflict paths (head won the live path;
+ * the agent must reconcile) and the actual sidecar paths written (agent-visible
+ * VFS paths where each conflicting file's pre-conflict local copy was preserved
+ * — file conflicts only). The caller surfaces both to the agent.
  */
-export async function refreshSpaces(
-  sessionId: string
-): Promise<{ deferredConflictsBySubpath: Record<string, string[]> }> {
+export async function refreshSpaces(sessionId: string): Promise<{
+  deferredConflictsBySubpath: Record<string, string[]>
+  sidecarsBySubpath: Record<string, { original: string; sidecar: string }[]>
+}> {
   const mounts = await getActiveMountsForSession(pool, sessionId)
   const deferredConflictsBySubpath: Record<string, string[]> = {}
+  const sidecarsBySubpath: Record<
+    string,
+    { original: string; sidecar: string }[]
+  > = {}
   for (const mount of mounts) {
     if (mount.mount_subpath === "actor-conversation") continue
     if (!mount.materialized_dir) continue
@@ -412,6 +416,17 @@ export async function refreshSpaces(
     if (sync.deferred_conflicts.length > 0) {
       deferredConflictsBySubpath[mount.mount_subpath] = sync.deferred_conflicts
     }
+    if (sync.conflict_sidecars.length > 0) {
+      // Make the sidecar VFS paths agent-visible by prefixing the mount subpath
+      // (the Rust paths are relative to the mount root, e.g.
+      // /.synapse-conflicts/foo → /conversation/.synapse-conflicts/foo).
+      sidecarsBySubpath[mount.mount_subpath] = sync.conflict_sidecars.map(
+        (c) => ({
+          original: `/${mount.mount_subpath}${c.original}`,
+          sidecar: `/${mount.mount_subpath}${c.sidecar}`,
+        })
+      )
+    }
     // ALWAYS advance base to the synced-in head. dir_sync resolves conflicts
     // HEAD-WINS in the live tree (head applied to the live path; the agent's
     // pre-conflict local copy preserved at the conflict sidecar), so after sync
@@ -422,7 +437,7 @@ export async function refreshSpaces(
     // path already holds head, not the agent's stale local copy.
     await updateFileMount(pool, mount.id, { baseSnapshotId: head })
   }
-  return { deferredConflictsBySubpath }
+  return { deferredConflictsBySubpath, sidecarsBySubpath }
 }
 
 export interface CommitResult {
@@ -430,6 +445,25 @@ export interface CommitResult {
   snapshotIdBySubpath: Record<string, string>
   /** subpath → conflict paths surfaced (per-file isolation). */
   conflictsBySubpath: Record<string, string[]>
+  /**
+   * subpath → sidecars the post-commit reconcile preserved (original VFS path →
+   * sidecar path). The agent's pre-conflict copy of each lost file lives here,
+   * so the next-turn notice can point at it instead of claiming the work was
+   * simply lost (round-7 #C).
+   */
+  sidecarsBySubpath: Record<string, { original: string; sidecar: string }[]>
+}
+
+/** A conflicting file whose pre-conflict local copy was preserved at a sidecar. */
+export interface ConflictSidecarRef {
+  original: string
+  sidecar: string
+}
+
+/** Per-subpath pending commit conflicts: the lost paths + their sidecars. */
+export interface PendingCommitConflict {
+  paths: string[]
+  sidecars: ConflictSidecarRef[]
 }
 
 /**
@@ -446,7 +480,11 @@ export async function commitSpaces(
   if (!ctx) throw new SandboxServiceError(`session ${sessionId} not found`, 404)
   const mounts = await getActiveMountsForSession(pool, sessionId)
   const subpaths = which ?? ["conversation", "actor"]
-  const out: CommitResult = { snapshotIdBySubpath: {}, conflictsBySubpath: {} }
+  const out: CommitResult = {
+    snapshotIdBySubpath: {},
+    conflictsBySubpath: {},
+    sidecarsBySubpath: {},
+  }
 
   for (const mount of mounts) {
     if (!subpaths.includes(mount.mount_subpath)) continue
@@ -459,18 +497,25 @@ export async function commitSpaces(
     if (result.conflicts.length > 0) {
       out.conflictsBySubpath[mount.mount_subpath] = result.conflicts
     }
+    if (result.sidecars.length > 0) {
+      out.sidecarsBySubpath[mount.mount_subpath] = result.sidecars
+    }
   }
   // Persist commit conflicts durably: turn-end commit runs AFTER the actor has
   // already replied, so the conflict can't be fixed this turn. Stash it on the
   // session so the NEXT turn surfaces it as a notice (the agent's local change
-  // to those paths lost to the concurrent head — it must redo/reconcile).
+  // to those paths lost to the concurrent head — it must redo/reconcile, and its
+  // pre-conflict copy is preserved at the recorded sidecar).
   if (Object.keys(out.conflictsBySubpath).length > 0) {
-    await recordPendingCommitConflicts(sessionId, out.conflictsBySubpath).catch(
-      (err) =>
-        console.error(
-          `[sandbox] failed to persist commit conflicts for ${sessionId}:`,
-          err
-        )
+    const pending: Record<string, PendingCommitConflict> = {}
+    for (const [sub, paths] of Object.entries(out.conflictsBySubpath)) {
+      pending[sub] = { paths, sidecars: out.sidecarsBySubpath[sub] ?? [] }
+    }
+    await recordPendingCommitConflicts(sessionId, pending).catch((err) =>
+      console.error(
+        `[sandbox] failed to persist commit conflicts for ${sessionId}:`,
+        err
+      )
     )
   }
   return out
@@ -478,20 +523,78 @@ export async function commitSpaces(
 
 const PENDING_CONFLICTS_KEY = "_sandboxPendingCommitConflicts"
 
-/** Stash turn-end commit conflicts on the session for the next turn to surface. */
+/**
+ * Stash turn-end commit conflicts on the session for the next turn to surface.
+ * MERGES with any already-pending conflicts (union by subpath: deduped paths +
+ * deduped sidecars) rather than replacing — otherwise a still-undelivered notice
+ * from a turn whose actorThink threw (so it wasn't cleared) would be clobbered by
+ * a new conflict. Each subpath carries both the lost paths and the sidecars where
+ * the agent's pre-conflict copy was preserved (round-7 #C).
+ */
 async function recordPendingCommitConflicts(
   sessionId: string,
-  conflictsBySubpath: Record<string, string[]>
+  conflictsBySubpath: Record<string, PendingCommitConflict>
 ): Promise<void> {
-  await db
-    .updateTable("sessions")
-    .set({
-      collaboration_state: sql`COALESCE(collaboration_state, '{}'::jsonb) || jsonb_build_object(${PENDING_CONFLICTS_KEY}::text, ${JSON.stringify(
-        conflictsBySubpath
-      )}::jsonb)`,
-    } as never)
-    .where("id", "=", sessionId)
-    .execute()
+  await transaction(async (txq) => {
+    const existing = await txq.query(
+      `SELECT collaboration_state FROM sessions WHERE id = $1 FOR UPDATE`,
+      [sessionId]
+    )
+    const state = (existing.rows[0]?.collaboration_state ?? {}) as Record<
+      string,
+      unknown
+    >
+    const prev = normalizePendingConflicts(state[PENDING_CONFLICTS_KEY])
+    const merged: Record<string, PendingCommitConflict> = { ...prev }
+    for (const [sub, incoming] of Object.entries(conflictsBySubpath)) {
+      const existingEntry = merged[sub] ?? { paths: [], sidecars: [] }
+      const paths = Array.from(
+        new Set([...existingEntry.paths, ...incoming.paths])
+      )
+      // Dedup sidecars by original path (a re-occurring conflict keeps the
+      // latest sidecar location — they share the deterministic prefix anyway).
+      const byOriginal = new Map<string, ConflictSidecarRef>()
+      for (const s of [...existingEntry.sidecars, ...incoming.sidecars]) {
+        byOriginal.set(s.original, s)
+      }
+      merged[sub] = { paths, sidecars: Array.from(byOriginal.values()) }
+    }
+    await txq.query(
+      `UPDATE sessions
+       SET collaboration_state =
+         COALESCE(collaboration_state, '{}'::jsonb)
+         || jsonb_build_object($2::text, $3::jsonb)
+       WHERE id = $1`,
+      [sessionId, PENDING_CONFLICTS_KEY, JSON.stringify(merged)]
+    )
+  })
+}
+
+/**
+ * Coerce the stored pending-conflicts blob into the current shape. Tolerates the
+ * pre-round-7 format (subpath → string[]) so a notice stashed by an older build
+ * still surfaces after upgrade. Exported for unit coverage.
+ */
+export function normalizePendingConflicts(
+  raw: unknown
+): Record<string, PendingCommitConflict> {
+  if (!raw || typeof raw !== "object") return {}
+  const out: Record<string, PendingCommitConflict> = {}
+  for (const [sub, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (Array.isArray(val)) {
+      // Legacy: a bare path array, no sidecar info.
+      out[sub] = { paths: val as string[], sidecars: [] }
+    } else if (val && typeof val === "object") {
+      const v = val as { paths?: unknown; sidecars?: unknown }
+      out[sub] = {
+        paths: Array.isArray(v.paths) ? (v.paths as string[]) : [],
+        sidecars: Array.isArray(v.sidecars)
+          ? (v.sidecars as ConflictSidecarRef[])
+          : [],
+      }
+    }
+  }
+  return out
 }
 
 /**
@@ -503,17 +606,15 @@ async function recordPendingCommitConflicts(
  */
 export async function peekPendingCommitConflicts(
   sessionId: string
-): Promise<Record<string, string[]>> {
+): Promise<Record<string, PendingCommitConflict>> {
   const row = await db
     .selectFrom("sessions")
     .select("collaboration_state")
     .where("id", "=", sessionId)
     .executeTakeFirst()
   const state = (row?.collaboration_state ?? {}) as Record<string, unknown>
-  const pending = state[PENDING_CONFLICTS_KEY] as
-    | Record<string, string[]>
-    | undefined
-  return pending && Object.keys(pending).length > 0 ? pending : {}
+  const pending = normalizePendingConflicts(state[PENDING_CONFLICTS_KEY])
+  return Object.keys(pending).length > 0 ? pending : {}
 }
 
 /** Clear the stashed commit conflicts (after the agent has consumed them). */
@@ -534,7 +635,11 @@ async function commitOneMount(
   sessionId: string,
   mount: FileMountRow,
   attempt = 0
-): Promise<{ snapshotId: string | null; conflicts: string[] }> {
+): Promise<{
+  snapshotId: string | null
+  conflicts: string[]
+  sidecars: { original: string; sidecar: string }[]
+}> {
   if (attempt > 3) {
     throw new SandboxServiceError(
       `commit for mount ${mount.id} kept losing the head race`,
@@ -558,17 +663,66 @@ async function commitOneMount(
     latestManifestSha256: latestManifest ?? undefined,
   })
 
+  // CRITICAL (round-6 #1): scan_commit only COMPUTES the merged manifest — it
+  // does NOT touch the live dir. On a conflict the merged manifest keeps HEAD,
+  // but the live dir still holds the agent's local loser L. If we advance base
+  // to the committed manifest without reconciling the live dir, next turn's
+  // refresh sees head==base and skips, leaving L in place; the following commit
+  // then treats L as a fresh edit on the new base and SILENTLY OVERWRITES the
+  // concurrent writer. So whenever there were conflicts, sync the live dir to
+  // the committed manifest (head-wins) and sidecar the local losers — exactly
+  // like refresh — so live == committed and base-advance is safe.
+  //
+  // Returns the sidecars written (mount-subpath-prefixed, so the caller can tell
+  // the agent where its pre-conflict copy is — round-7 #C), or `null` if the
+  // reconcile RPC FAILED. On failure the caller MUST NOT advance base: leaving
+  // head!=base lets next turn's refresh re-run the reconcile and self-heal,
+  // whereas advancing base now would re-open the round-6 #1 silent-overwrite bug
+  // (round-7 #A — the reconcile is an out-of-process RPC that can throw).
+  const reconcileLiveDir = async (
+    committedManifestSha: string
+  ): Promise<{ original: string; sidecar: string }[] | null> => {
+    if (scan.conflict_paths.length === 0) return []
+    try {
+      const res = await syncDir({
+        dir: mount.materialized_dir!,
+        baseManifestSha256: baseManifest ?? undefined,
+        toManifestSha256: committedManifestSha,
+      })
+      // Make the sidecar VFS paths agent-visible by prefixing the mount subpath
+      // (the Rust paths are relative to the mount root).
+      return res.conflict_sidecars.map((c) => ({
+        original: `/${mount.mount_subpath}${c.original}`,
+        sidecar: `/${mount.mount_subpath}${c.sidecar}`,
+      }))
+    } catch (err) {
+      console.error(
+        `[sandbox] post-commit reconcile failed for mount ${mount.id}:`,
+        err
+      )
+      return null
+    }
+  }
+
   // Nothing to commit beyond the current head (no local changes, or all local
   // changes lost to head on conflict): the merged manifest equals latest. Don't
-  // bump the version, BUT advance the mount base to latest so the next commit
-  // doesn't re-derive the same conflict set against a now-stale base forever.
+  // bump the version, BUT reconcile the live dir + advance the mount base to
+  // latest so the next commit doesn't re-derive the same conflict (and doesn't
+  // overwrite head with the stale local copy).
   if (latestManifest && scan.manifest_sha256 === latestManifest) {
+    const sidecars = await reconcileLiveDir(latestManifest)
+    if (sidecars === null) {
+      // Reconcile failed → do NOT advance base. Next turn's refresh (head!=base)
+      // re-runs the reconcile and self-heals; advancing now would let the stale
+      // local loser silently overwrite head on the following commit (round-7 #A).
+      return { snapshotId: null, conflicts: scan.conflict_paths, sidecars: [] }
+    }
     if (latestSnapshotId && mount.base_snapshot_id !== latestSnapshotId) {
       await updateFileMount(pool, mount.id, {
         baseSnapshotId: latestSnapshotId,
       })
     }
-    return { snapshotId: null, conflicts: scan.conflict_paths }
+    return { snapshotId: null, conflicts: scan.conflict_paths, sidecars }
   }
 
   // Short locked txn: re-check head, ingest blobs, append snapshot. Use the
@@ -594,12 +748,29 @@ async function commitOneMount(
         createdBySessionId: sessionId,
       })
     })
+    // Reconcile the live dir to the committed manifest (head-wins + sidecar the
+    // losers) BEFORE advancing base, so the next turn never overwrites head with
+    // a stale local copy. (No-op → [] when there were no conflicts.)
+    const sidecars = await reconcileLiveDir(scan.manifest_sha256)
+    if (sidecars === null) {
+      // Reconcile failed AFTER the snapshot committed (head advanced to
+      // snapshot.id). Record the result snapshot for audit but do NOT advance
+      // base — next turn's refresh (head=snapshot.id != base=old) re-runs the
+      // reconcile and self-heals. Advancing base here would re-open round-6 #1
+      // (the stale local loser would silently overwrite head) (round-7 #A).
+      await updateFileMount(pool, mount.id, { resultSnapshotId: snapshot.id })
+      return {
+        snapshotId: snapshot.id,
+        conflicts: scan.conflict_paths,
+        sidecars: [],
+      }
+    }
     // Advance the mount base to the snapshot we just produced.
     await updateFileMount(pool, mount.id, {
       baseSnapshotId: snapshot.id,
       resultSnapshotId: snapshot.id,
     })
-    return { snapshotId: snapshot.id, conflicts: scan.conflict_paths }
+    return { snapshotId: snapshot.id, conflicts: scan.conflict_paths, sidecars }
   } catch (err) {
     // Head moved during scan → re-scan against the new head (cheap: blobs are
     // already in CAS). Never merge the already-merged manifest again.

@@ -31,13 +31,16 @@ use crate::rpc::RpcError;
 /// snapshot).
 const INTERNAL_DIRNAME: &str = ".synapse-internal";
 
-/// Conflict-sidecar namespace. On a refresh (dir_sync) conflict the live local
-/// copy is KEPT in place (so the agent's in-progress edit isn't destroyed) and
-/// the incoming/head version of the contested file is written here as
-/// `.synapse-conflicts/<path>` so the agent can actually READ what the other
-/// writer committed and reconcile. Unlike `.synapse-internal` (which the VFS
-/// blocks the agent from reading), this dir is agent-readable; like it, it is
-/// NEVER scanned into a snapshot, so the sidecars don't get committed.
+/// Conflict-sidecar namespace. On a refresh (dir_sync) conflict, HEAD WINS in
+/// the live tree: head's version is applied to the original path, and the
+/// agent's PRE-CONFLICT LOCAL version of every dirty file in the affected
+/// subtree is preserved here as `.synapse-conflicts/<path>` so its work isn't
+/// lost (including the tree/delete case, where applying head would otherwise
+/// remove the whole subtree). The agent reconciles by reading the live path
+/// (now head) + its sidecar and re-saving the merged result, which then commits
+/// cleanly. Unlike `.synapse-internal` (which the VFS blocks the agent from
+/// reading), this dir is agent-readable; like it, it is NEVER scanned into a
+/// snapshot, so the sidecars don't get committed.
 
 /// Kind of a manifest entry. A pure path→content map cannot represent an
 /// empty directory or a symlink, so we tag every entry.
@@ -626,24 +629,61 @@ pub fn three_way_merge(
     }
 }
 
+/// A preserved local file from a conflict: its original VFS path and the
+/// sidecar path its pre-conflict bytes were written to.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConflictSidecar {
+    pub original: String,
+    pub sidecar: String,
+}
+
 /// Result of `dir_sync`: how the live dir was reconciled toward a new head.
 #[derive(Debug)]
 pub struct DirSyncResult {
     /// Paths whose incoming (head) version was applied into the live dir
     /// without conflict (no local edit).
     pub applied: Vec<String>,
-    /// Paths where a local uncommitted change collided with an incoming change.
-    /// HEAD WINS: head's version is applied to the live path and the agent's
-    /// pre-conflict local version is preserved at
-    /// /.synapse-conflicts/<path> (file conflicts only). Reported so the caller
-    /// can tell the agent to reconcile + re-apply.
+    /// Incoming paths where a local uncommitted change collided. HEAD WINS:
+    /// head's version is applied to the live path; every locally-dirty FILE in
+    /// the affected subtree is first preserved at a sidecar (see
+    /// `conflict_sidecars`). Reported so the caller can tell the agent.
     pub deferred_conflicts: Vec<String>,
+    /// The actual sidecars written (original path → sidecar path). Empty for a
+    /// conflict whose dirty subtree had no files (e.g. a purely-empty-dir edit).
+    /// Lets the caller list ONLY real sidecars to the agent.
+    pub conflict_sidecars: Vec<ConflictSidecar>,
     /// The manifest the live dir's base should advance to (= `to`), stored in
     /// CAS. The caller ALWAYS advances file_mounts.base_snapshot_id to this —
     /// since head won every conflict, working == head for all incoming paths, so
     /// a later commit sees no spurious conflict and the agent's reconciled
     /// re-edit commits cleanly.
     pub new_base_manifest_sha256: String,
+}
+
+/// Every locally-dirty FILE entry whose path is within the conflict path's
+/// subtree (the path itself, or a descendant, or — for the tree case — a path
+/// the conflict path descends into). Used to sidecar-preserve local work before
+/// head-wins overwrites/removes the live path. Only file entries are returned
+/// (we can materialize a file's bytes from CAS; dirs/symlinks aren't bytes).
+fn dirty_files_in_subtree<'a>(
+    working: &'a Manifest,
+    local_dirty: &std::collections::BTreeSet<String>,
+    conflict_path: &str,
+) -> Vec<(&'a String, &'a ManifestEntry)> {
+    let mut out = Vec::new();
+    for q in local_dirty {
+        if !paths_overlap(conflict_path, q) {
+            continue;
+        }
+        if let Some(e) = working.entries.get(q) {
+            if e.kind == EntryKind::File {
+                if let Some((k, v)) = working.entries.get_key_value(q) {
+                    out.push((k, v));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Three-way directory sync (refresh): merge the changes between `from`
@@ -671,6 +711,15 @@ pub fn dir_sync(
 
     let mut applied = Vec::new();
     let mut deferred = Vec::new();
+    let mut conflict_sidecars: Vec<ConflictSidecar> = Vec::new();
+    // A dirty file can sit under MULTIPLE overlapping incoming conflict paths
+    // (e.g. head replaces /dir with a file: incoming = {/dir, /dir/sub,
+    // /dir/sub/x.txt} all overlap the agent's edit of /dir/sub/x.txt). Sidecar
+    // each such file ONCE — both to avoid redundant copies and to keep
+    // conflict_sidecars free of duplicate entries (the caller's notice + its
+    // sidecar-coverage check depend on this being a true per-file set).
+    let mut sidecar_done: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
 
     for p in &incoming {
         let locally_dirty_direct = local_dirty.contains(p);
@@ -692,26 +741,33 @@ pub fn dir_sync(
 
         if collides {
             deferred.push(p.clone());
-            // HEAD WINS in the live tree (resolves the round-4 dead-end): if we
-            // kept the agent's local copy here and didn't advance base, a later
-            // commit would re-judge the agent's *reconciled* result a conflict
-            // against head and discard it — making "reconcile and save"
-            // impossible. Instead we apply HEAD to the live path now (so the
-            // working tree == head for this path, base can advance, and the
-            // agent's next edit commits cleanly), and preserve the agent's
-            // pre-conflict LOCAL version at a readable sidecar so its work isn't
-            // lost. Only file entries get a byte sidecar (we can materialize the
-            // local file's content from CAS); dir/delete/kind conflicts have no
-            // sidecar — the agent re-reads the live tree (now head's version).
-            if let Some(we) = working_entry {
-                if we.kind == EntryKind::File {
-                    let sidecar_vfs = format!("/{CONFLICTS_DIRNAME}{p}");
-                    // Best-effort: a sidecar write failure must not fail refresh.
-                    let _ = apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(we));
+            // HEAD WINS in the live tree (resolves the round-4 dead-end): apply
+            // HEAD to the live path now (so working == head there, base can
+            // advance, and the agent's reconciled re-edit commits cleanly), and
+            // FIRST preserve every locally-dirty FILE in the affected subtree at
+            // a readable sidecar so nothing is lost — including the tree/delete
+            // case (incoming deletes /dir while the agent edited /dir/x.txt:
+            // applying head removes /dir, so /dir/x.txt must be sidecar'd first).
+            for (dirty_path, dirty_entry) in
+                dirty_files_in_subtree(&working, &local_dirty, p)
+            {
+                if !sidecar_done.insert(dirty_path.clone()) {
+                    // Already sidecar'd under an earlier overlapping conflict path.
+                    continue;
+                }
+                let sidecar_vfs = format!("/{CONFLICTS_DIRNAME}{dirty_path}");
+                // Best-effort: a sidecar write failure must not fail refresh.
+                if apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(dirty_entry))
+                    .is_ok()
+                {
+                    conflict_sidecars.push(ConflictSidecar {
+                        original: dirty_path.clone(),
+                        sidecar: sidecar_vfs,
+                    });
                 }
             }
             // Overwrite the live path with head's version (or remove it if head
-            // deleted it).
+            // deleted it). Any dirty subtree files were sidecar'd just above.
             apply_entry_to_dir(cas, dir, p, to_entry)?;
             continue;
         }
@@ -725,6 +781,7 @@ pub fn dir_sync(
     Ok(DirSyncResult {
         applied,
         deferred_conflicts: deferred,
+        conflict_sidecars,
         new_base_manifest_sha256: new_base,
     })
 }

@@ -417,8 +417,15 @@ pub struct ManifestScanCommitResult {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ConflictSidecar {
+    pub original: String,
+    pub sidecar: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct DirSyncResult {
     pub applied: Vec<String>,
     pub deferred_conflicts: Vec<String>,
+    pub conflict_sidecars: Vec<ConflictSidecar>,
     pub new_base_manifest_sha256: String,
 }

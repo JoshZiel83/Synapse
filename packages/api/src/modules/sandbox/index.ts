@@ -15,6 +15,8 @@ export {
   SandboxServiceError,
   type ProvisionSandboxOptions,
   type CommitResult,
+  type PendingCommitConflict,
+  type ConflictSidecarRef,
   type TeardownSandboxOptions,
   type RecoverFailedMountsResult,
 } from "./service.js"

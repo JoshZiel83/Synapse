@@ -241,9 +241,20 @@ export interface DirSyncInput {
   /** The new head manifest to merge toward. */
   to_manifest_sha256: string
 }
+/** A preserved local file from a conflict: original VFS path → sidecar path. */
+export interface ConflictSidecar {
+  original: string
+  sidecar: string
+}
 export interface DirSyncResult {
   applied: string[]
   deferred_conflicts: string[]
+  /**
+   * The sidecars actually written (head-wins preserved the agent's local file
+   * here). Only file conflicts produce a sidecar; dir/delete/kind conflicts
+   * appear in deferred_conflicts but not here.
+   */
+  conflict_sidecars: ConflictSidecar[]
   /** Advance file_mounts.base_snapshot_id to the snapshot for this sha. */
   new_base_manifest_sha256: string
 }
