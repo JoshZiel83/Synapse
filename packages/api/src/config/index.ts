@@ -39,6 +39,13 @@ export const config = {
       process.env.NEXT_PUBLIC_SITE_URL ||
       "http://localhost:3001",
   },
+  sandbox: {
+    // Per-session file sandbox (device-runtime + content-addressed mounts).
+    // Off by default: provisioning spawns a device-runtime child + requires the
+    // fs-helper binary, so it stays opt-in until an environment is validated.
+    enabled:
+      (process.env.SYNAPSE_SANDBOX_ENABLED || "").toLowerCase() === "true",
+  },
   database: {
     url:
       process.env.DATABASE_URL ||

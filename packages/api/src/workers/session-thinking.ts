@@ -19,6 +19,13 @@ import type {
 } from "@synapse/shared"
 import type { CanonicalContextItem } from "@synapse/shared/types"
 import { actorThink } from "../modules/ai/index.js"
+import {
+  provisionSandbox,
+  refreshSpaces,
+  commitSpaces,
+  teardownSandbox,
+} from "../modules/sandbox/index.js"
+import { config } from "../config/index.js"
 import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
 import {
   buildConversationContextItems,
@@ -85,6 +92,9 @@ function deriveThinkingPhase(status: string): ThinkingPhase {
   return "thinking"
 }
 
+// Opt-in file sandbox (device-runtime + content-addressed mounts).
+const sandboxEnabled = config.sandbox.enabled
+
 async function runCleanupStep(
   label: string,
   operation: () => Promise<unknown>
@@ -133,6 +143,20 @@ async function putSessionToIdle(sessionId: string) {
   const session = await getSession(sessionId)
   if (!session || session.status !== "running") {
     return
+  }
+
+  // Tear down the file sandbox on the clean running→idle transition: commit all
+  // dirty spaces, stop the daemon, delete live dirs, revoke grants, delete the
+  // device. Best-effort — a teardown failure must not block the idle transition.
+  if (sandboxEnabled) {
+    try {
+      await teardownSandbox(sessionId)
+    } catch (err) {
+      console.error(
+        `[session-thinking] sandbox teardown failed for ${sessionId}:`,
+        err
+      )
+    }
   }
 
   await updateSessionStatus(sessionId, "idle", { errorMessage: null })
@@ -662,6 +686,22 @@ export function startSessionThinkingWorker() {
         try {
           await emitThinkingStatus("Calling AI model...")
 
+          // File sandbox lifecycle (opt-in via SYNAPSE_SANDBOX_ENABLED).
+          // First turn: provision (idempotent). Every turn: refresh the
+          // multi-writer spaces so this turn sees other writers' new commits.
+          // Best-effort — a sandbox failure must not abort the think turn.
+          if (sandboxEnabled) {
+            try {
+              await provisionSandbox(sessionId)
+              await refreshSpaces(sessionId)
+            } catch (sandboxErr) {
+              console.error(
+                `[session-thinking] sandbox provision/refresh failed for ${sessionId}:`,
+                sandboxErr
+              )
+            }
+          }
+
           result = await actorThink(
             actor,
             contextWindow,
@@ -733,6 +773,20 @@ export function startSessionThinkingWorker() {
           )
         } finally {
           clearInterval(lockRefreshInterval)
+          // Turn-end: commit the multi-writer spaces (/conversation, /actor) so
+          // the next turn — and other actors — see this turn's file writes.
+          // (/actor-conversation is single-writer; committed at teardown.)
+          // Best-effort: a commit failure must not abort action execution.
+          if (sandboxEnabled) {
+            try {
+              await commitSpaces(sessionId, ["conversation", "actor"])
+            } catch (err) {
+              console.error(
+                `[session-thinking] sandbox commit failed for ${sessionId}:`,
+                err
+              )
+            }
+          }
         }
 
         await executeActorActions(workspaceId, actorId, result.actions, {
