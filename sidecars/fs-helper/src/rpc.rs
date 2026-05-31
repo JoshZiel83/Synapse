@@ -196,6 +196,11 @@ pub struct CasHasInput {
 pub struct CasGcInput {
     /// The complete reachable set; any blob NOT in this set is deleted.
     pub reachable_sha256: Vec<String>,
+    /// Grace window (seconds): blobs modified more recently than this are NEVER
+    /// deleted even if unreachable, protecting in-flight commits whose blobs are
+    /// on disk before their snapshot row commits. Defaults to 3600 when omitted.
+    #[serde(default)]
+    pub grace_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

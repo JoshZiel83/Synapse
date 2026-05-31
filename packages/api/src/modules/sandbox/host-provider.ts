@@ -174,12 +174,68 @@ export function createLocalHostProvider(opts?: {
         stdio: ["ignore", "pipe", "pipe"],
         detached: false,
       })
+
+      // The daemon is long-lived; a ChildProcess that emits 'error' with no
+      // listener throws as an uncaughtException and would take down the whole
+      // API process. Always keep a listener attached: during startup it feeds
+      // the early-failure rejection below; afterwards it logs.
+      let settled = false
+      let earlyStderr = ""
+      child.stderr?.on("data", (d) => {
+        if (!settled) earlyStderr += d.toString()
+      })
+      const onError = (err: Error) => {
+        if (settled) {
+          console.error("[sandbox] device-runtime daemon error:", err)
+        }
+      }
+      const onExit = (code: number | null) => {
+        if (settled) {
+          console.error(
+            `[sandbox] device-runtime daemon exited unexpectedly (code=${code ?? "null"})`
+          )
+        }
+      }
+      child.on("error", onError)
+      child.on("exit", onExit)
+
+      // Race the spawn against early death: if the daemon dies (bad broker-dir,
+      // missing identity, startup throw) within a short window, fail loudly with
+      // the real stderr instead of returning a dead pid that only surfaces as a
+      // misleading 30s catalog-sync timeout downstream.
+      await new Promise<void>((resolvePromise, reject) => {
+        const STARTUP_WINDOW_MS = 800
+        const timer = setTimeout(() => {
+          settled = true
+          resolvePromise()
+        }, STARTUP_WINDOW_MS)
+        child.once("error", (err) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          reject(
+            new HostProviderError(
+              `synapse-device run failed to spawn: ${err.message}`
+            )
+          )
+        })
+        child.once("exit", (code) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          reject(
+            new HostProviderError(
+              `synapse-device run exited ${code} during startup: ${earlyStderr.slice(0, 300)}`
+            )
+          )
+        })
+      })
+
       if (typeof child.pid !== "number") {
         throw new HostProviderError(
           "failed to spawn synapse-device run (no pid)"
         )
       }
-      // Surface early spawn errors (binary missing, etc.).
       const pid = child.pid
       return {
         pid,
@@ -215,25 +271,46 @@ function runToCompletion(
 }
 
 function parsePairOutput(stdout: string): PairResult | null {
-  // The CLI prints a JSON object; tolerate surrounding log lines by scanning
-  // each line for a JSON object carrying device_id.
-  const lines = stdout.split("\n")
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith("{")) continue
-    try {
-      const obj = JSON.parse(trimmed)
-      const deviceId = obj.device_id ?? obj.deviceId
-      const serviceId = obj.service_id ?? obj.serviceId
-      if (typeof deviceId === "string" && typeof serviceId === "string") {
-        return {
-          deviceId,
-          serviceId,
-          controlPlaneUrl: obj.control_plane_url ?? obj.controlPlaneUrl,
+  // The CLI prints the result via JSON.stringify(result, null, 2) — pretty,
+  // MULTI-LINE JSON — possibly preceded/followed by log lines. Extract the
+  // first balanced {...} block (from the first '{' to its matching '}') and
+  // parse that, rather than scanning line-by-line (which never sees a complete
+  // object).
+  const start = stdout.indexOf("{")
+  if (start < 0) return null
+  let depth = 0
+  let inStr = false
+  let escaped = false
+  for (let i = start; i < stdout.length; i++) {
+    const ch = stdout[i]
+    if (inStr) {
+      if (escaped) escaped = false
+      else if (ch === "\\") escaped = true
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') inStr = true
+    else if (ch === "{") depth++
+    else if (ch === "}") {
+      depth--
+      if (depth === 0) {
+        const block = stdout.slice(start, i + 1)
+        try {
+          const obj = JSON.parse(block)
+          const deviceId = obj.device_id ?? obj.deviceId
+          const serviceId = obj.service_id ?? obj.serviceId
+          if (typeof deviceId === "string" && typeof serviceId === "string") {
+            return {
+              deviceId,
+              serviceId,
+              controlPlaneUrl: obj.control_plane_url ?? obj.controlPlaneUrl,
+            }
+          }
+        } catch {
+          // Not valid JSON — fall through to null.
         }
+        return null
       }
-    } catch {
-      // not this line
     }
   }
   return null
@@ -258,4 +335,4 @@ async function stopChild(child: ChildProcess): Promise<void> {
   })
 }
 
-export { resolveDeviceCliPath }
+export { resolveDeviceCliPath, parsePairOutput }

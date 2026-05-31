@@ -45,12 +45,15 @@ test("buildBwrapArgs: includes the core isolation flags + cwd + terminator", () 
   }
 })
 
-test("wrapDescriptorWithBwrap: program becomes bwrap, original command trails", () => {
+test("wrapDescriptorWithBwrap: program is the absolute bwrap path, original command trails", () => {
   const wrapped = wrapDescriptorWithBwrap(
     { program: "/bin/echo", args: ["hi"], stdio: ["ignore", "pipe", "pipe"] },
     { sandboxRoot: "/nonexistent-sandbox" }
   )
-  assert.equal(wrapped.program, "bwrap")
+  // Absolute path (never a bare "bwrap" — that would be PATH-resolved against
+  // the toolchain-prepended child PATH and could be shadowed).
+  assert.match(wrapped.program, /\/bwrap$/)
+  assert.ok(wrapped.program.startsWith("/"), "absolute bwrap path")
   // The original program + args appear after the -- terminator.
   const dashIdx = wrapped.args.indexOf("--")
   assert.ok(dashIdx >= 0)

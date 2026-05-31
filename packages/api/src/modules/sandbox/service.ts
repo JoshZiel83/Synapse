@@ -219,6 +219,9 @@ export async function provisionSandbox(
     })
   }
 
+  // Hoisted so the catch can tear down whatever was created.
+  let pairedDeviceId: string | null = null
+  let runHandle: RunHandle | null = null
   try {
     // ⑥ local pairing: startPairing(local_qr) → pair → run.
     const pairing = await startPairing({
@@ -243,7 +246,8 @@ export async function provisionSandbox(
       title: `Sandbox ${sessionId.slice(0, 8)}`,
     }
     const paired = await hostProvider.pair(spawnParams)
-    const runHandle = await hostProvider.run(spawnParams)
+    pairedDeviceId = paired.deviceId
+    runHandle = await hostProvider.run(spawnParams)
     liveRunHandles.set(paired.deviceId, runHandle)
 
     // Record device + pid on all mounts immediately (teardown/recovery need it).
@@ -284,8 +288,27 @@ export async function provisionSandbox(
       mountIds: mounts.map((m) => m.id),
     }
   } catch (err) {
-    // Provision failed after materialize: mark mounts failed + best-effort clean.
     const message = err instanceof Error ? err.message : String(err)
+    // Best-effort cleanup of everything provisioned before the failure — the
+    // mounts get marked 'failed' (so getActiveMountsForSession excludes them
+    // and teardown can't recover), which means cleanup MUST happen here:
+    //  - stop the spawned daemon + drop its in-process handle,
+    //  - revoke any partial grants + delete the paired device (cascades),
+    //  - remove the on-disk scratch dirs (CAS untouched).
+    if (runHandle) {
+      await runHandle.stop().catch(() => {})
+    }
+    if (pairedDeviceId) {
+      liveRunHandles.delete(pairedDeviceId)
+      await revokeSandboxGrants({
+        workspaceId: ctx.workspaceId,
+        deviceId: pairedDeviceId,
+        actorId: ctx.actorId,
+        conversationId: ctx.conversationId,
+      }).catch(() => {})
+      await deleteDevice(ctx.workspaceId, pairedDeviceId).catch(() => {})
+    }
+    await rm(sandboxRoot, { recursive: true, force: true }).catch(() => {})
     for (const mount of mounts) {
       await updateFileMount(pool, mount.id, {
         status: "failed",

@@ -506,13 +506,11 @@ async fn cas_gc(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {
     let cas = cas_lock(state).await?;
     let reachable: std::collections::HashSet<String> =
         input.reachable_sha256.into_iter().collect();
-    let mut deleted = 0u64;
-    for sha in cas.list_all()? {
-        if !reachable.contains(&sha) {
-            cas.delete(&sha)?;
-            deleted += 1;
-        }
-    }
+    // Default 1h grace: never delete a blob younger than this, so a concurrent
+    // commit (which writes blobs to the CAS before committing the snapshot row
+    // that makes them reachable) can't be raced into corruption.
+    let grace_secs = input.grace_secs.unwrap_or(3600);
+    let (deleted, _skipped_young) = cas.gc_sweep(&reachable, grace_secs)?;
     Ok(serde_json::to_value(rpc::CasGcResult { deleted_count: deleted }).unwrap())
 }
 

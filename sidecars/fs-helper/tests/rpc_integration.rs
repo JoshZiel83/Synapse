@@ -1837,14 +1837,50 @@ fn cas_gc_deletes_orphans_keeps_reachable() {
         ["result"]["sha256"].as_str().unwrap().to_string();
     let orphan_sha = helper.call(2, "fs.cas.put", serde_json::json!({ "path": orphan_src.to_str().unwrap() }))
         ["result"]["sha256"].as_str().unwrap().to_string();
-    // GC with reachable = [keep_sha] → orphan deleted.
+    // GC with grace_secs=0 (no young-blob protection) and reachable=[keep_sha]
+    // → orphan deleted immediately.
     let g = helper.call(
         3,
         "fs.cas.gc",
-        serde_json::json!({ "reachable_sha256": [keep_sha.clone()] }),
+        serde_json::json!({ "reachable_sha256": [keep_sha.clone()], "grace_secs": 0 }),
     );
     assert_eq!(g["result"]["deleted_count"].as_u64(), Some(1), "{g}");
     assert_eq!(helper.call(4, "fs.cas.has", serde_json::json!({ "sha256": keep_sha }))["result"]["exists"], true);
     assert_eq!(helper.call(5, "fs.cas.has", serde_json::json!({ "sha256": orphan_sha }))["result"]["exists"], false);
+    helper.stop();
+}
+
+#[test]
+fn cas_gc_grace_window_protects_young_unreachable_blobs() {
+    // The commit/GC race guard: a freshly-written blob that is not (yet) in the
+    // reachable set must NOT be deleted while it's younger than grace_secs.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+    let young_src = tmp.path().join("young.txt");
+    std::fs::write(&young_src, "fresh-uncommitted").unwrap();
+    let young_sha = helper
+        .call(1, "fs.cas.put", serde_json::json!({ "path": young_src.to_str().unwrap() }))
+        ["result"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // GC with an EMPTY reachable set but a large grace window → the young blob
+    // is unreachable yet protected (deleted_count = 0).
+    let g = helper.call(
+        2,
+        "fs.cas.gc",
+        serde_json::json!({ "reachable_sha256": [], "grace_secs": 3600 }),
+    );
+    assert_eq!(g["result"]["deleted_count"].as_u64(), Some(0), "{g}");
+    assert_eq!(
+        helper.call(3, "fs.cas.has", serde_json::json!({ "sha256": young_sha }))["result"]["exists"],
+        true,
+        "young unreachable blob protected by the grace window"
+    );
     helper.stop();
 }

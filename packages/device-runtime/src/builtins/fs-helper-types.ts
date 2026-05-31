@@ -189,6 +189,11 @@ export interface CasHasResult {
 export interface CasGcInput {
   /** Complete reachable set; any blob NOT in this set is deleted. */
   reachable_sha256: string[]
+  /**
+   * Grace window (seconds): blobs modified more recently are never deleted even
+   * if unreachable, protecting in-flight commits. Helper default 3600 if omitted.
+   */
+  grace_secs?: number
 }
 export interface CasGcResult {
   deleted_count: number

@@ -133,11 +133,22 @@ export async function syncDir(input: {
   )
 }
 
-/** Garbage-collect CAS blobs not in the reachable set. */
-export async function gcCas(reachableSha256: string[]): Promise<number> {
+/**
+ * Garbage-collect CAS blobs not in the reachable set. `graceSecs` protects
+ * blobs younger than the window from deletion (default 1h in the helper) so an
+ * in-flight commit — which writes blobs before its snapshot row commits — can't
+ * be raced into corruption.
+ */
+export async function gcCas(
+  reachableSha256: string[],
+  graceSecs?: number
+): Promise<number> {
   const ctx = helperContext()
   const result = await withOneShotFsHelper(ctx, (helper) =>
-    helper.casGc({ reachable_sha256: reachableSha256 })
+    helper.casGc({
+      reachable_sha256: reachableSha256,
+      ...(graceSecs !== undefined ? { grace_secs: graceSecs } : {}),
+    })
   )
   return result.deleted_count
 }

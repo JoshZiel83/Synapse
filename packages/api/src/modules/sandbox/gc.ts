@@ -38,7 +38,7 @@ export interface GcResult {
  * executor (e.g. a test transaction); defaults to the singleton pool.
  */
 export async function runContentGc(
-  opts: { dryRun?: boolean; dbh?: QueryExecutor } = {}
+  opts: { dryRun?: boolean; dbh?: QueryExecutor; graceSecs?: number } = {}
 ): Promise<GcResult> {
   const dbh = opts.dbh ?? pool
   const reachable = new Set<string>()
@@ -92,7 +92,7 @@ export async function runContentGc(
 
   let deletedCount = 0
   if (!opts.dryRun) {
-    deletedCount = await gcCas(Array.from(reachable))
+    deletedCount = await gcCas(Array.from(reachable), opts.graceSecs)
   }
 
   return {

@@ -245,4 +245,117 @@ test("contentAccessResolver", async (t) => {
       assert.equal(allowed, false)
     })
   })
+
+  await t.test(
+    "(a) message-ref: directed message denies a non-targeted participant",
+    async () => {
+      await withTestDb(async (db) => {
+        const userA = await newUser(db) // author + target
+        const userB = await newUser(db) // participant but NOT targeted
+        const ws = await newWorkspace(db, userA)
+        const memberA = await addMember(db, ws, userA)
+        // memberB: a second workspace member + active participant.
+        await db
+          .insertInto("workspace_members")
+          .values({
+            workspace_id: ws,
+            user_id: userB,
+            trust_level: "member",
+          } as any)
+          .execute()
+        const memberBRow = await db
+          .selectFrom("workspace_members")
+          .select("id")
+          .where("workspace_id", "=", ws)
+          .where("user_id", "=", userB)
+          .executeTakeFirstOrThrow()
+        const memberB = memberBRow.id as string
+        await putContentBlob(db, SHA_B)
+
+        const conv = await db
+          .insertInto("conversations")
+          .values({
+            workspace_id: ws,
+            kind: "group",
+            title: "t",
+            created_by_workspace_member_id: memberA,
+          } as any)
+          .returning("id")
+          .executeTakeFirstOrThrow()
+
+        const subjA = await upsertAccessSubject(db as any, {
+          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+          memberId: memberA,
+        })
+        const subjB = await upsertAccessSubject(db as any, {
+          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+          memberId: memberB,
+        })
+        const partA = await db
+          .insertInto("conversation_participants")
+          .values({
+            conversation_id: conv.id,
+            subject_id: subjA,
+            role_key: "member",
+            state: "active",
+          } as any)
+          .returning("id")
+          .executeTakeFirstOrThrow()
+        await db
+          .insertInto("conversation_participants")
+          .values({
+            conversation_id: conv.id,
+            subject_id: subjB,
+            role_key: "member",
+            state: "active",
+          } as any)
+          .execute()
+
+        // A directed (audience-restricted) item authored by A, targeting A only.
+        const item = await db
+          .insertInto("conversation_items")
+          .values({
+            conversation_id: conv.id,
+            scope: "shared",
+            surface: "visible",
+            item_type: "message",
+            subtype: "user_message",
+            role: "user",
+            author_participant_id: partA.id,
+          } as any)
+          .returning("id")
+          .executeTakeFirstOrThrow()
+        await db
+          .insertInto("conversation_item_parts")
+          .values({
+            item_id: item.id,
+            ordinal: 0,
+            part_type: "file_ref",
+            ref_sha256: SHA_B,
+            ref_path: "/conversation/secret.png",
+            mime_type: "image/png",
+            name: "secret.png",
+          } as any)
+          .execute()
+        await db
+          .insertInto("conversation_item_targets")
+          .values({
+            item_id: item.id,
+            target_participant_id: partA.id,
+            target_kind: "to",
+          } as any)
+          .execute()
+
+        // A (author + target) can read; B (participant but not targeted) cannot.
+        assert.equal(
+          await canUserAccessContent(SHA_B, userA, { dbh: db }),
+          true
+        )
+        assert.equal(
+          await canUserAccessContent(SHA_B, userB, { dbh: db }),
+          false
+        )
+      })
+    }
+  )
 })

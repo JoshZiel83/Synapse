@@ -97,7 +97,11 @@ async function hasVisibleMessageRef(
 ): Promise<boolean> {
   // Shared/visible conversation_item file_ref parts the user can see. The
   // participant linkage: conversation_participants.subject_id →
-  // access_subjects.workspace_member_id → workspace_members.user_id.
+  // access_subjects.workspace_member_id → workspace_members.user_id. We ALSO
+  // honor directed-message audience restrictions (conversation_item_targets):
+  // an item with target rows is only visible to its author or a listed target —
+  // mirroring getChatConversationMessages so a non-targeted participant can't
+  // fetch an attachment the chat read path would hide from them.
   const itemRef = await dbh
     .selectFrom("conversation_item_parts as cip")
     .innerJoin("conversation_items as ci", "ci.id", "cip.item_id")
@@ -114,6 +118,29 @@ async function hasVisibleMessageRef(
     .where("cp.state", "=", "active")
     .where("ci.scope", "=", "shared")
     .where("ci.surface", "=", "visible")
+    .where((eb) =>
+      eb.or([
+        // No audience restriction on this item.
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("conversation_item_targets as cit0")
+              .select("cit0.item_id")
+              .whereRef("cit0.item_id", "=", "ci.id")
+          )
+        ),
+        // The caller's participant authored it.
+        eb("ci.author_participant_id", "=", eb.ref("cp.id")),
+        // The caller's participant is an explicit target.
+        eb.exists(
+          eb
+            .selectFrom("conversation_item_targets as cit")
+            .select("cit.item_id")
+            .whereRef("cit.item_id", "=", "ci.id")
+            .whereRef("cit.target_participant_id", "=", "cp.id")
+        ),
+      ])
+    )
     .$if(Boolean(conversationId), (qb) =>
       qb.where("ci.conversation_id", "=", conversationId as string)
     )

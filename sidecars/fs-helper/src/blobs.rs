@@ -256,6 +256,47 @@ impl BlobStore {
         }
         Ok(())
     }
+
+    /// Age (seconds) since a blob's last modification, or None if it can't be
+    /// stat'd. Used by GC to protect just-written blobs from a concurrent sweep.
+    fn blob_age_secs(&self, sha256: &str) -> Option<u64> {
+        let meta = fs::metadata(self.blob_path(sha256)).ok()?;
+        let mtime = meta.modified().ok()?;
+        mtime.elapsed().ok().map(|d| d.as_secs())
+    }
+
+    /// GC mark-sweep with a grace window: delete every blob whose sha is NOT in
+    /// `reachable`, EXCEPT blobs modified within the last `grace_secs` seconds.
+    ///
+    /// The grace guard closes the commit/GC data-loss race: commit ingests new
+    /// blobs into the CAS BEFORE the snapshot row is committed, so for a brief
+    /// window a freshly-written blob is on disk but not yet DB-reachable. Without
+    /// the guard a concurrent GC would delete it and corrupt the in-flight
+    /// snapshot. `grace_secs` must exceed the longest plausible
+    /// scan→ingest→commit duration. Returns (deleted, skipped_young).
+    pub fn gc_sweep(
+        &self,
+        reachable: &std::collections::HashSet<String>,
+        grace_secs: u64,
+    ) -> Result<(u64, u64), RpcError> {
+        let mut deleted = 0u64;
+        let mut skipped_young = 0u64;
+        for sha in self.list_all()? {
+            if reachable.contains(&sha) {
+                continue;
+            }
+            // Protect blobs younger than the grace window (in-flight commits).
+            if let Some(age) = self.blob_age_secs(&sha) {
+                if age < grace_secs {
+                    skipped_young += 1;
+                    continue;
+                }
+            }
+            self.delete(&sha)?;
+            deleted += 1;
+        }
+        Ok((deleted, skipped_young))
+    }
 }
 
 /// Open `src` with O_NOFOLLOW so a final-component symlink swap can't

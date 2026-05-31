@@ -112,7 +112,10 @@ test(
     await withOneShotFsHelper({ helperPath: HELPER!, casDir }, async (h) => {
       const k = await h.casPut({ path: keep })
       const o = await h.casPut({ path: orphan })
-      const gc = await h.casGc({ reachable_sha256: [k.sha256] })
+      // grace_secs:0 disables the young-blob protection so the just-written
+      // orphan is collectable in this unit test (the 1h default that guards
+      // in-flight commits is covered by the Rust grace-window test).
+      const gc = await h.casGc({ reachable_sha256: [k.sha256], grace_secs: 0 })
       assert.equal(gc.deleted_count, 1)
       assert.equal((await h.casHas({ sha256: k.sha256 })).exists, true)
       assert.equal((await h.casHas({ sha256: o.sha256 })).exists, false)

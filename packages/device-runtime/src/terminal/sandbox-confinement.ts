@@ -46,14 +46,24 @@ const SYSTEM_RO_PATHS = [
 
 export const DEFAULT_SANDBOX_CWD = "/conversation"
 
+// Absolute bwrap path candidates, in preference order. We spawn bwrap by its
+// absolute path (never a bare "bwrap" resolved via the child PATH, which is
+// prepended with toolchain bin dirs) so the confining binary itself can't be
+// shadowed by a toolchain/earlier-PATH executable named "bwrap" — that would
+// run the agent's command unconfined on the host (fail-open).
+const BWRAP_PATHS = ["/usr/bin/bwrap", "/bin/bwrap"] as const
+
+/** The absolute path to bwrap, or null if not found. */
+export function resolveBwrapPath(): string | null {
+  for (const p of BWRAP_PATHS) {
+    if (existsSync(p)) return p
+  }
+  return null
+}
+
 /** Probe whether bwrap is invocable (caller should also gate on platform). */
 export function bwrapAvailable(): boolean {
-  // Cheap path existence probe; the caller (model.ts isSandboxCommandlineAvailable)
-  // does the authoritative `bwrap --version` check at provision time.
-  return (
-    process.platform === "linux" &&
-    (existsSync("/usr/bin/bwrap") || existsSync("/bin/bwrap"))
-  )
+  return process.platform === "linux" && resolveBwrapPath() !== null
 }
 
 /**
@@ -118,9 +128,15 @@ export function wrapDescriptorWithBwrap(
   descriptor: SpawnDescriptor,
   confinement: SandboxConfinement
 ): SpawnDescriptor {
+  const bwrapPath = resolveBwrapPath()
+  if (!bwrapPath) {
+    // Caller must gate on bwrapAvailable() first; this is a defense-in-depth
+    // guard so we never silently fall back to an unconfined bare-name spawn.
+    throw new Error("bwrap not found; refusing to build a confined descriptor")
+  }
   const bwrapArgs = buildBwrapArgs(confinement)
   return {
-    program: "bwrap",
+    program: bwrapPath,
     args: [...bwrapArgs, descriptor.program, ...descriptor.args],
     stdio: descriptor.stdio,
   }
