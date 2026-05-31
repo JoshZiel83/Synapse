@@ -49,3 +49,29 @@ export {
   type VfsSessionState,
   type VfsWriteResult,
 } from "./vfs.js"
+
+// Supervisor-side one-shot fs-helper driver + CAS/manifest RPC types. Exposed
+// so the API sandbox manager can materialize / commit / sync file spaces
+// against the shared CAS without embedding a long-lived device-runtime.
+export {
+  OneShotFsHelper,
+  OneShotFsHelperError,
+  withOneShotFsHelper,
+  type OneShotFsHelperOptions,
+} from "./builtins/one-shot-fs-helper.js"
+export type {
+  CasPutInput,
+  CasPutResult,
+  CasHasInput,
+  CasHasResult,
+  CasGcInput,
+  CasGcResult,
+  ManifestMaterializeInput,
+  ManifestScanCommitInput,
+  ManifestScanCommitResult,
+  ManifestEntryWire,
+  ManifestEntryKind,
+  DirSyncInput,
+  DirSyncResult,
+  ManifestCleanupInput,
+} from "./builtins/fs-helper-types.js"
