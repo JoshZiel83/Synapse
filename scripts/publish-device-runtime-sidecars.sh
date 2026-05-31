@@ -173,15 +173,18 @@ for plat in "${PLATFORMS[@]}"; do
   cp -r "$src/." "$staging/"
   # Hoist publishConfig.os / publishConfig.cpu to top-level so the
   # registry filter actually fires on consumers' `npm install`. Also
-  # strip `.scripts` so the staged tarball carries no prepublishOnly
-  # guard (the guard exists only to block a direct `npm publish -w
-  # <sidecar>`; the staged copy is the sanctioned path and ships clean).
+  # strip `.scripts` (the prepublishOnly guard only blocks a direct
+  # `npm publish -w <sidecar>`; the staged copy is the sanctioned path and
+  # ships clean) and `.private` (the source is `private: true` so npm
+  # itself refuses a direct publish even under --ignore-scripts; the
+  # staged copy must drop it so the wrapper CAN publish).
   jq '
     .os = (.publishConfig.os // empty)
     | .cpu = (.publishConfig.cpu // empty)
     | del(.publishConfig.os, .publishConfig.cpu)
     | if (.publishConfig | length) == 0 then del(.publishConfig) else . end
     | del(.scripts)
+    | del(.private)
   ' "$src/package.json" > "$staging/package.json"
   echo "==> publishing $plat from staging $staging"
   diff -u "$src/package.json" "$staging/package.json" || true

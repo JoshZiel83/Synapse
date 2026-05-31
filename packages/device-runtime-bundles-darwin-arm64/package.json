@@ -1,6 +1,7 @@
 {
   "name": "@synapse/device-runtime-bundles-darwin-arm64",
   "version": "0.1.0",
+  "private": true,
   "description": "Pre-staged Synapse device toolchain archives for darwin-arm64. Companion sidecar to @synapse/device-runtime.",
   "publishConfig": {
     "os": [
