@@ -36,3 +36,4 @@ export {
   type PairResult,
   type SpawnSandboxRuntimeParams,
 } from "./host-provider.js"
+export { runContentGc, type GcResult } from "./gc.js"

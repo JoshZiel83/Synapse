@@ -280,11 +280,12 @@ export function resolveLocalStoragePath(storageKey: string): string {
 }
 
 // ─────────────────────── content-addressed store ─────────────────────────────
-// blobs/<aa>/<sha256> under CONTENT_STORE_DIR — identical layout to the Rust
-// fs-helper BlobStore so a topology-A deployment shares one CAS volume.
-
+// <CONTENT_STORE_DIR>/blobs/<aa>/<sha256> — identical layout to the Rust
+// fs-helper BlobStore (which does cas_dir.join("blobs").join(<aa>).join(sha)),
+// so a topology-A deployment shares one CAS volume: blobs the sandbox helper
+// writes are readable here and vice-versa.
 function casBlobPath(sha256: string): string {
-  return path.join(CONTENT_STORE_DIR, sha256.slice(0, 2), sha256);
+  return path.join(CONTENT_STORE_DIR, "blobs", sha256.slice(0, 2), sha256);
 }
 
 export interface ContentBlobRef {

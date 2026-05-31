@@ -150,13 +150,16 @@ impl BlobStore {
     }
 
     /// Materialize a blob's bytes into `dest` as a regular file, creating
-    /// parent dirs, then set its permission bits to `mode`. v1 does a plain
-    /// copy (Step 11 swaps in reflink/CoW where the filesystem supports it).
-    /// `dest` is a path the supervisor controls (a materialized live dir),
-    /// not user-supplied, so no symlink-jail concerns here. We DELIBERATELY
-    /// do not hardlink: the sandbox runs under a different uid and CAS blobs
-    /// are 0600 owned by the supervisor, so a shared inode would be
-    /// unreadable and any chmod would corrupt the CAS blob's mode.
+    /// parent dirs, then set its permission bits to `mode`. Tries a reflink
+    /// (CoW clone — O(1), near-zero space) first on same-fs CoW filesystems
+    /// (btrfs/xfs/bcachefs); falls back to a full byte copy on EXDEV / ext4 /
+    /// any filesystem that doesn't support FICLONE. `dest` is a path the
+    /// supervisor controls (a materialized live dir), not user-supplied, so no
+    /// symlink-jail concerns here. We DELIBERATELY do not hardlink: the sandbox
+    /// runs under a different uid and CAS blobs are 0600 owned by the supervisor,
+    /// so a shared inode would be unreadable and any chmod would corrupt the CAS
+    /// blob's mode. A reflink is a distinct inode (independent mode + CoW data),
+    /// so it has neither problem.
     pub fn copy_to(
         &self,
         sha256: &str,
@@ -174,7 +177,9 @@ impl BlobStore {
         if dest.symlink_metadata().is_ok() {
             let _ = fs::remove_file(dest);
         }
-        fs::copy(&src, dest)?;
+        if !try_reflink(&src, dest) {
+            fs::copy(&src, dest)?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -298,4 +303,59 @@ fn uuid_like() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{:016x}{:08x}", nanos, std::process::id())
+}
+
+/// Attempt a reflink (CoW clone) of `src` → `dest` via the Linux FICLONE ioctl.
+/// Returns true on success. Returns false (caller falls back to a byte copy) on
+/// any failure: cross-filesystem (EXDEV), unsupported fs (ext4 → ENOTTY/EOPNOTSUPP),
+/// or non-Linux. `dest` must not already exist (caller removes it first).
+#[cfg(target_os = "linux")]
+fn try_reflink(src: &Path, dest: &Path) -> bool {
+    use std::os::unix::io::AsRawFd;
+
+    // FICLONE: clone the whole file. _IOW(0x94, 9, int) on Linux.
+    const FICLONE: std::os::raw::c_ulong = 0x4004_9409;
+
+    extern "C" {
+        fn ioctl(
+            fd: std::os::raw::c_int,
+            request: std::os::raw::c_ulong,
+            ...
+        ) -> std::os::raw::c_int;
+    }
+
+    let src_file = match fs::File::open(src) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let dest_file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dest)
+    {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    // SAFETY: both fds are valid for the duration of the call; FICLONE takes the
+    // source fd as its int argument and clones into the dest fd.
+    let rc = unsafe {
+        ioctl(
+            dest_file.as_raw_fd(),
+            FICLONE,
+            src_file.as_raw_fd() as std::os::raw::c_int,
+        )
+    };
+    if rc == 0 {
+        true
+    } else {
+        // Clone failed (EXDEV/ENOTTY/EOPNOTSUPP/...). Remove the empty dest we
+        // just created so the byte-copy fallback can recreate it cleanly.
+        let _ = fs::remove_file(dest);
+        false
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn try_reflink(_src: &Path, _dest: &Path) -> bool {
+    false
 }
