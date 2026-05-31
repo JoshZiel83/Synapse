@@ -137,9 +137,18 @@ export interface CommandlineExecFilePolicyShape {
   allowedEnv?: string[]
 }
 
+export interface CommandlineSandboxPolicyShape {
+  executor: "sandbox"
+  // Optional narrower cap within the sandbox (a sub-mount). Absent = the whole
+  // sandbox (all mount points).
+  workingDirectory?: string
+  allowedEnv?: string[]
+}
+
 export type CommandlinePolicyShape =
   | CommandlineShellPolicyShape
   | CommandlineExecFilePolicyShape
+  | CommandlineSandboxPolicyShape
 
 export type NormalizedCommandlinePolicy = CommandlinePolicyShape
 
@@ -312,6 +321,14 @@ export function commandlinePolicyAllows(
   policy: CommandlinePolicyShape,
   request: CommandlineMatchRequest
 ): NormalizedCommandlinePolicy | null {
+  // Sandbox grant: isolation IS the boundary. It covers ANY command (shell or
+  // exec_file) provided the working directory resolves within the sandbox mount
+  // points. No command/argv matching — that's the whole point of the variant.
+  // (The bwrap confinement that makes this safe is enforced at spawn time.)
+  if (policy.executor === "sandbox") {
+    return sandboxPolicyAllows(policy, request)
+  }
+
   // Cross-branch: request kind must align with policy executor.
   if (request.kind === "shell") {
     if (policy.executor !== "bash" && policy.executor !== "powershell") {
@@ -420,4 +437,51 @@ export function commandlinePolicyAllows(
     default:
       return null
   }
+}
+
+// The fixed mount points a sandbox device-runtime exposes. Inlined here (rather
+// than imported from constants/enums) to keep this matcher bundle-safe and
+// dependency-free; must stay in sync with SANDBOX_MOUNT_POINTS in
+// constants/enums.ts (the API/projection copy).
+const SANDBOX_MATCHER_MOUNT_POINTS = [
+  "/conversation",
+  "/actor",
+  "/actor-conversation",
+] as const
+
+/**
+ * Sandbox commandline authorization: a sandbox grant covers any command whose
+ * working directory resolves within the sandbox mount points (and within the
+ * grant's optional narrower workingDirectory cap, if set). Command text / argv
+ * are intentionally ignored — bwrap confinement, not a command whitelist, is
+ * the security boundary.
+ *
+ * A request with NO working directory is denied: we cannot prove a command runs
+ * inside the jail without knowing its cwd, and a sandbox command always has one
+ * (provisioning sets cwd=/conversation by default).
+ */
+function sandboxPolicyAllows(
+  policy: CommandlineSandboxPolicyShape,
+  request: CommandlineMatchRequest
+): NormalizedCommandlinePolicy | null {
+  // Sandbox is Linux/bwrap-only; a win32 request can never be inside a jail.
+  if (request.platform === "win32") return null
+
+  const callDir = normalizePathPrefix(request.workingDirectory)
+  if (!callDir) return null
+
+  // Must be within at least one mount point.
+  const withinAMount = SANDBOX_MATCHER_MOUNT_POINTS.some((mount) =>
+    pathWithinPrefix(callDir, mount)
+  )
+  if (!withinAMount) return null
+
+  // Honor the grant's optional narrower cap (a sub-mount).
+  if (policy.workingDirectory) {
+    const cap = normalizePathPrefix(policy.workingDirectory)
+    if (!cap) return null
+    if (!pathWithinPrefix(callDir, cap)) return null
+  }
+
+  return policy
 }

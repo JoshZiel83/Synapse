@@ -312,12 +312,15 @@ export function createCommandlineBuiltin(
       let resolved: ResolvedToolchain | undefined
       if (request.kind === "exec_file") {
         const manager = await getDefaultToolchainManager(opts, env)
+        // A sandbox grant carries no allowBundledToolchain (isolation is the
+        // boundary; bundled-toolchain capping is a shell/exec_file concept).
+        const allowBundled =
+          access.policy.executor === "sandbox"
+            ? false
+            : Boolean(access.policy.allowBundledToolchain)
         try {
           if (isBundleEligibleProgram(request.program)) {
-            resolved = await manager.resolve(
-              request.program,
-              Boolean(access.policy.allowBundledToolchain)
-            )
+            resolved = await manager.resolve(request.program, allowBundled)
           } else {
             const bare = await manager.resolveBare(request.program)
             if (!bare) {
