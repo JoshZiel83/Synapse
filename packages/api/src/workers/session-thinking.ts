@@ -24,6 +24,7 @@ import {
   refreshSpaces,
   commitSpaces,
   teardownSandbox,
+  takePendingCommitConflicts,
 } from "../modules/sandbox/index.js"
 import { config } from "../config/index.js"
 import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
@@ -551,31 +552,50 @@ export function startSessionThinkingWorker() {
           try {
             await provisionSandbox(sessionId)
             const refresh = await refreshSpaces(sessionId)
-            const refreshConflicts = Object.entries(
+            // Commit conflicts recorded by a PREVIOUS turn's turn-end commit
+            // (which ran after the actor already replied) — surfaced now, once.
+            const pendingCommitConflicts =
+              await takePendingCommitConflicts(sessionId)
+
+            const refreshLines = Object.entries(
               refresh.deferredConflictsBySubpath
+            ).map(([sp, paths]) => `/${sp}: ${paths.join(", ")}`)
+            const commitLines = Object.entries(pendingCommitConflicts).map(
+              ([sp, paths]) => `/${sp}: ${paths.join(", ")}`
             )
-            if (refreshConflicts.length > 0) {
-              const lines = refreshConflicts
-                .map(([sp, paths]) => `/${sp}: ${paths.join(", ")}`)
-                .join("; ")
-              console.warn(
-                `[session-thinking] sandbox refresh deferred conflicts for ${sessionId}: ${lines}`
-              )
-              // Surface to the AGENT, not just the log: its local edits to these
-              // paths were KEPT but another writer also changed them upstream.
-              // Without this the agent's next commit would silently overwrite
-              // the concurrent change. Tell it to re-read the head version and
-              // reconcile before re-saving.
+
+            if (refreshLines.length > 0 || commitLines.length > 0) {
+              if (refreshLines.length > 0) {
+                console.warn(
+                  `[session-thinking] sandbox refresh deferred conflicts for ${sessionId}: ${refreshLines.join("; ")}`
+                )
+              }
+              if (commitLines.length > 0) {
+                console.warn(
+                  `[session-thinking] sandbox prior-turn commit conflicts for ${sessionId}: ${commitLines.join("; ")}`
+                )
+              }
+              // Surface to the AGENT, not just the log.
+              const sections: string[] = []
+              if (refreshLines.length > 0) {
+                sections.push(
+                  `Another writer changed these paths while you were editing them, so your in-progress local copy was kept in place and their change was NOT merged in (${refreshLines.join("; ")}). Their current version of each is at /.synapse-conflicts/<that-path> — read it, reconcile with your local copy, then save the merged result.`
+                )
+              }
+              if (commitLines.length > 0) {
+                sections.push(
+                  `Your previous turn's save to these paths LOST to a concurrent writer and was NOT persisted (${commitLines.join("; ")}); the current saved version is the other writer's. Re-read each path and re-apply your change if it's still needed.`
+                )
+              }
               sandboxConflictNotice = {
                 kind: "system_notice",
                 noticeType: "generic",
                 scope: "private",
                 surface: "internal",
-                parts: textBlocks(
-                  `File merge conflict: another writer changed these paths while you were editing them, so your in-progress local copy was kept and their change was NOT merged in (${lines}). Re-read the current version of each conflicting path and reconcile before saving, or your next write will overwrite their change.`
-                ),
+                parts: textBlocks(`File merge conflict. ${sections.join(" ")}`),
                 metadata: {
-                  sandboxConflict: refresh.deferredConflictsBySubpath,
+                  refreshConflicts: refresh.deferredConflictsBySubpath,
+                  priorCommitConflicts: pendingCommitConflicts,
                 },
               }
             }

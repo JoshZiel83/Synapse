@@ -762,3 +762,270 @@ test("contentAccessResolver: library-global (workspace_id NULL) asset is readabl
     )
   })
 })
+
+// ── conversation-scope reproducer (review round-4 #3/#4) ──────────────────────
+// A grant scoped to conversation A must NOT be usable from a request bound to
+// conversation B, even when the user actively participates in BOTH. Mirrors the
+// main runtime, which only adds the CURRENT active conversation to the scope set.
+
+const SHA_CS = "c0ffee".repeat(10) + "abcd" // 64 hex chars
+
+async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
+  const owner = await db
+    .insertInto("users")
+    .values({ email: `${rid()}@cs`, name: "o", password_hash: "x" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const ws = await db
+    .insertInto("workspaces")
+    .values({ owner_id: owner.id, slug: `ws-${rid()}`, name: "cs ws" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const memberUser = await db
+    .insertInto("users")
+    .values({ email: `${rid()}@cs`, name: "m", password_hash: "x" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: ws.id,
+      user_id: memberUser.id,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const memberSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: member.id,
+  })
+  const memberConvSubject = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: member.id,
+  })
+  // Two conversations the member actively participates in.
+  async function newConvWithMember() {
+    const conv = await db
+      .insertInto("conversations")
+      .values({ workspace_id: ws.id, kind: "group", title: "t" } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    await db
+      .insertInto("conversation_participants")
+      .values({
+        conversation_id: conv.id,
+        subject_id: memberConvSubject,
+        role_key: "member",
+        state: "active",
+      } as any)
+      .execute()
+    const convSubject = await upsertAccessSubject(db as any, {
+      kind: SUBJECT_KIND.CONVERSATION,
+      conversationId: conv.id,
+    })
+    return { convId: conv.id as string, convSubject }
+  }
+  const convA = await newConvWithMember()
+  const convB = await newConvWithMember()
+  // An actor-owned file space + a snapshot whose manifest IS SHA_CS.
+  const actor = await db
+    .insertInto("actors")
+    .values({
+      workspace_id: ws.id,
+      name: `a-${rid()}`,
+      role: "assistant",
+      title: "t",
+      current_version: 1,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const actorSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId: actor.id,
+  })
+  const space = await db
+    .insertInto("file_spaces")
+    .values({
+      workspace_id: ws.id,
+      owner_subject_id: actorSubjectId,
+      namespace_key: "default",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  await db
+    .insertInto("content_blobs")
+    .values({ sha256: SHA_CS, size_bytes: 1, backend: "local_cas" } as any)
+    .onConflict((oc: any) => oc.doNothing())
+    .execute()
+  const snap = await db
+    .insertInto("file_snapshots")
+    .values({
+      workspace_id: ws.id,
+      file_space_id: space.id,
+      version: 1,
+      manifest_sha256: SHA_CS,
+      reason: "manual",
+      entry_count: 0,
+      total_bytes: 0,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  await db
+    .updateTable("file_spaces")
+    .set({ current_snapshot_id: snap.id } as any)
+    .where("id", "=", space.id)
+    .execute()
+  return {
+    workspaceId: ws.id as string,
+    memberUserId: memberUser.id as string,
+    memberSubjectId,
+    spaceId: space.id as string,
+    convA,
+    convB,
+  }
+}
+
+test("contentAccessResolver: conv-A-scoped file grant is NOT usable from ?conv=B", async () => {
+  await withTestDb(async (db) => {
+    const s = await seedTwoConvUserWithFileSpace(db)
+    // Grant scoped to conversation A.
+    await db
+      .insertInto("file_access_grants")
+      .values({
+        workspace_id: s.workspaceId,
+        file_space_id: s.spaceId,
+        subject_id: s.memberSubjectId,
+        scope_subject_id: s.convA.convSubject,
+        permissions: ["read"],
+        status: "active",
+      } as any)
+      .execute()
+
+    // From conversation A → allowed.
+    assert.equal(
+      await canUserAccessContent(SHA_CS, s.memberUserId, {
+        dbh: db,
+        conversationId: s.convA.convId,
+      }),
+      true
+    )
+    // From conversation B (user IS a participant, but the grant is A-scoped) → denied.
+    assert.equal(
+      await canUserAccessContent(SHA_CS, s.memberUserId, {
+        dbh: db,
+        conversationId: s.convB.convId,
+      }),
+      false
+    )
+    // With no conversation context at all → A-scoped grant doesn't apply → denied.
+    assert.equal(
+      await canUserAccessContent(SHA_CS, s.memberUserId, { dbh: db }),
+      false
+    )
+  })
+})
+
+test("contentAccessResolver: scope=A memory space is NOT owner-readable from ?conv=B", async () => {
+  await withTestDb(async (db) => {
+    // Member-owned memory space scoped to conversation A; the member reads from B.
+    const ownerUser = await db
+      .insertInto("users")
+      .values({ email: `${rid()}@cm`, name: "o", password_hash: "x" })
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const ws = await db
+      .insertInto("workspaces")
+      .values({ owner_id: ownerUser.id, slug: `ws-${rid()}`, name: "cm ws" })
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const member = await db
+      .insertInto("workspace_members")
+      .values({
+        workspace_id: ws.id,
+        user_id: ownerUser.id,
+        trust_level: "member",
+      } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const memberSubject = await upsertAccessSubject(db as any, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      memberId: member.id,
+    })
+    async function convWithMember() {
+      const conv = await db
+        .insertInto("conversations")
+        .values({ workspace_id: ws.id, kind: "group", title: "t" } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conv.id,
+          subject_id: memberSubject,
+          role_key: "member",
+          state: "active",
+        } as any)
+        .execute()
+      const cs = await upsertAccessSubject(db as any, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: conv.id,
+      })
+      return { convId: conv.id as string, cs }
+    }
+    const convA = await convWithMember()
+    const convB = await convWithMember()
+    // member-owned space SCOPED to conv A.
+    const space = await db
+      .insertInto("memory_spaces")
+      .values({
+        workspace_id: ws.id,
+        owner_subject_id: memberSubject,
+        scope_subject_id: convA.cs,
+        namespace_key: "default",
+      } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const item = await db
+      .insertInto("memory_items")
+      .values({
+        workspace_id: ws.id,
+        memory_space_id: space.id,
+        category: "fact",
+      } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    await db
+      .insertInto("content_blobs")
+      .values({ sha256: SHA_M, size_bytes: 3, backend: "local_cas" } as any)
+      .onConflict((oc: any) => oc.doNothing())
+      .execute()
+    await db
+      .insertInto("memory_item_parts")
+      .values({
+        memory_item_id: item.id,
+        ordinal: 0,
+        part_type: "file_ref",
+        ref_sha256: SHA_M,
+        mime_type: "image/png",
+        name: "m.png",
+      } as any)
+      .execute()
+
+    // From conv A → owner-implicit holds (owner + scope A in scope) → allowed.
+    assert.equal(
+      await canUserAccessContent(SHA_M, ownerUser.id as string, {
+        dbh: db,
+        conversationId: convA.convId,
+      }),
+      true
+    )
+    // From conv B → space scope A not in scope → owner-implicit must NOT apply.
+    assert.equal(
+      await canUserAccessContent(SHA_M, ownerUser.id as string, {
+        dbh: db,
+        conversationId: convB.convId,
+      }),
+      false
+    )
+  })
+})

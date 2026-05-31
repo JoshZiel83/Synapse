@@ -49,15 +49,20 @@ export interface ContentAccessContext {
  *       their workspace_member subject + the workspace subject (workspace-level
  *       grants apply to every member).
  *   - scopeIds:    ids valid as a grant's `scope_subject_id` for this user —
- *       the workspace subject + every conversation the user actively
- *       participates in. A grant with scope_subject_id NULL is always in scope;
- *       a scoped grant only applies when its scope is in this set.
+ *       the workspace subject + (ONLY) the CURRENT request conversation's
+ *       subject when the user is an active participant of it. A grant with
+ *       scope_subject_id NULL is always in scope; a scoped grant only applies
+ *       when its scope is in this set. Crucially this mirrors the main runtime
+ *       (subject-resolution.ts), which adds ONLY the active conversation — not
+ *       every conversation the user is in — so a conversation-A-scoped grant is
+ *       NOT usable from a request bound to conversation B.
  * Returns null sets when the user isn't a member of the workspace.
  */
 async function resolveUserGrantContext(
   dbh: KyselyDb,
   workspaceId: string,
-  userId: string
+  userId: string,
+  currentConversationId: string | null
 ): Promise<{ subjectIds: string[]; scopeIds: string[] } | null> {
   // The user's workspace_member row in THIS workspace (membership gate).
   const member = await dbh
@@ -95,24 +100,34 @@ async function resolveUserGrantContext(
     scopeIds.push(wsSubject.id)
   }
 
-  // Conversation subjects for conversations in this workspace where the user is
-  // an active participant (valid scopes for scoped grants).
-  const convSubjects = await dbh
-    .selectFrom("conversation_participants as cp")
-    .innerJoin("conversations as c", "c.id", "cp.conversation_id")
-    .innerJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
-    .innerJoin("workspace_members as wm", "wm.id", "cpsubj.workspace_member_id")
-    .innerJoin("access_subjects as convsubj", (join) =>
-      join
-        .onRef("convsubj.conversation_id", "=", "c.id")
-        .on("convsubj.kind", "=", "conversation")
-    )
-    .select("convsubj.id as id")
-    .where("c.workspace_id", "=", workspaceId)
-    .where("wm.user_id", "=", userId)
-    .where("cp.state", "=", "active")
-    .execute()
-  for (const c of convSubjects) scopeIds.push(c.id)
+  // ONLY the current request conversation's subject (when it belongs to this
+  // workspace and the user is an active participant) is a valid scope — matching
+  // the main runtime's "active conversation" rule. Without a ?conv= context, no
+  // conversation scope is added (conversation-scoped grants don't apply).
+  if (currentConversationId) {
+    const convSubject = await dbh
+      .selectFrom("conversation_participants as cp")
+      .innerJoin("conversations as c", "c.id", "cp.conversation_id")
+      .innerJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
+      .innerJoin(
+        "workspace_members as wm",
+        "wm.id",
+        "cpsubj.workspace_member_id"
+      )
+      .innerJoin("access_subjects as convsubj", (join) =>
+        join
+          .onRef("convsubj.conversation_id", "=", "c.id")
+          .on("convsubj.kind", "=", "conversation")
+      )
+      .select("convsubj.id as id")
+      .where("c.id", "=", currentConversationId)
+      .where("c.workspace_id", "=", workspaceId)
+      .where("wm.user_id", "=", userId)
+      .where("cp.state", "=", "active")
+      .limit(1)
+      .executeTakeFirst()
+    if (convSubject) scopeIds.push(convSubject.id)
+  }
 
   return { subjectIds, scopeIds }
 }
@@ -140,14 +155,22 @@ export async function canUserAccessContent(
   }
 
   // (b) memory / context-archive ref keyed by the caller's readable spaces.
-  if (await hasReadableMemoryRef(dbh, sha256, userId)) {
+  if (
+    await hasReadableMemoryRef(dbh, sha256, userId, ctx.conversationId ?? null)
+  ) {
     return true
   }
 
   // (c) file_space ACL: an active grant to the user (via their workspace_member
   // subject) for a space whose live snapshots' manifests contain the sha.
   if (
-    await hasFileSpaceGrantReach(dbh, sha256, userId, ctx.fileSpaceId ?? null)
+    await hasFileSpaceGrantReach(
+      dbh,
+      sha256,
+      userId,
+      ctx.fileSpaceId ?? null,
+      ctx.conversationId ?? null
+    )
   ) {
     return true
   }
@@ -279,15 +302,17 @@ async function hasVisibleMessageRef(
 async function hasReadableMemoryRef(
   dbh: KyselyDb,
   sha256: string,
-  userId: string
+  userId: string,
+  currentConversationId: string | null
 ): Promise<boolean> {
   // Candidate memory parts referencing this sha, with their space + workspace +
-  // owner + (for the grant path) the grant fields. Evaluate the full ACL per
-  // candidate: owner-implicit (the space owner subject is one of the user's
-  // grant subjects) OR an active read/recall grant whose subject is one of the
+  // owner + space scope + (for the grant path) the grant fields. Evaluate the
+  // full ACL per candidate: owner-implicit (the space owner subject is one of
+  // the user's grant subjects AND the space scope is NULL or in the user's
+  // scope set) OR an active read/recall grant whose subject is one of the
   // user's grant subjects AND whose scope is NULL or in the user's scope set
-  // (space-level or item-level for this item). This matches the memory evaluator
-  // (subjectIds + scopeIds + permissions), unlike a bare workspace_member match.
+  // (space-level or item-level for this item). Matches the memory evaluator
+  // (loadOwnerImplicitSpaceIds + memoryGrantMatches), unlike a bare owner match.
   const memCandidates = await dbh
     .selectFrom("memory_item_parts as mip")
     .innerJoin("memory_items as mi", "mi.id", "mip.memory_item_id")
@@ -297,6 +322,7 @@ async function hasReadableMemoryRef(
       "ms.id as space_id",
       "ms.workspace_id as workspace_id",
       "ms.owner_subject_id as owner_subject_id",
+      "ms.scope_subject_id as space_scope_subject_id",
     ])
     .where("mip.ref_sha256", "=", sha256)
     .execute()
@@ -315,7 +341,8 @@ async function hasReadableMemoryRef(
         const resolved = await resolveUserGrantContext(
           dbh,
           cand.workspace_id,
-          userId
+          userId,
+          currentConversationId
         )
         ctx = resolved
           ? {
@@ -326,8 +353,16 @@ async function hasReadableMemoryRef(
         ctxByWorkspace.set(cand.workspace_id, ctx)
       }
       if (!ctx) continue
-      // owner-implicit: the space owner is one of the user's grant subjects.
-      if (ctx.subjectIds.has(cand.owner_subject_id)) return true
+      // owner-implicit: the space owner is one of the user's grant subjects AND
+      // the space's own scope is NULL or in the user's scope set (a scope=conv-A
+      // space is NOT owner-readable from a conv-B request).
+      if (
+        ctx.subjectIds.has(cand.owner_subject_id) &&
+        (cand.space_scope_subject_id === null ||
+          ctx.scopeIds.has(cand.space_scope_subject_id))
+      ) {
+        return true
+      }
       // active read/recall grant honoring subject + scope.
       const grant = await dbh
         .selectFrom("memory_access_grants as g")
@@ -398,7 +433,8 @@ async function hasFileSpaceGrantReach(
   dbh: KyselyDb,
   sha256: string,
   userId: string,
-  fileSpaceId: string | null
+  fileSpaceId: string | null,
+  currentConversationId: string | null
 ): Promise<boolean> {
   // Candidate spaces: distinct file_spaces (+ workspace) the user holds an
   // active grant on. We resolve the user's grant subject/scope sets PER the
@@ -437,7 +473,8 @@ async function hasFileSpaceGrantReach(
       const resolved = await resolveUserGrantContext(
         dbh,
         row.workspace_id,
-        userId
+        userId,
+        currentConversationId
       )
       ctx = resolved
         ? {

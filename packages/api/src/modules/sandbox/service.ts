@@ -14,6 +14,7 @@ import { mkdir, rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { actorRef, conversationRef } from "@synapse/shared"
+import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import { transaction, pool } from "../../infrastructure/database/index.js"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
@@ -178,13 +179,27 @@ export async function provisionSandbox(
 ): Promise<SandboxProvisionResult> {
   const existing = await getActiveMountsForSession(pool, sessionId)
   if (existing.length > 0) {
-    // Already provisioned this session.
+    // Already provisioned this session — report the ACTUAL state, not a
+    // hardcoded false: commandline is enabled iff the paired device exposes a
+    // commandline builtin (it only does so when bwrap confinement was available
+    // at spawn — see the fail-closed gate in bin.ts).
     const deviceId = existing.find((m) => m.device_id)?.device_id ?? ""
+    let commandlineEnabled = false
+    if (deviceId) {
+      const cmd = await db
+        .selectFrom("device_exposures")
+        .select("id")
+        .where("device_id", "=", deviceId)
+        .where("builtin_kind", "=", "commandline")
+        .limit(1)
+        .executeTakeFirst()
+      commandlineEnabled = Boolean(cmd)
+    }
     return {
       sessionId,
       sandboxRoot: sandboxRootFor(sessionId),
       deviceId,
-      commandlineEnabled: false,
+      commandlineEnabled,
       mountIds: existing.map((m) => m.id),
     }
   }
@@ -396,9 +411,18 @@ export async function refreshSpaces(
     })
     if (sync.deferred_conflicts.length > 0) {
       deferredConflictsBySubpath[mount.mount_subpath] = sync.deferred_conflicts
+      // Do NOT advance base on conflict. Keeping the pre-refresh base means the
+      // next commit runs a real 3-way merge (base / working / head) via
+      // scan_commit, which KEEPS HEAD for the contested paths (never clobbers
+      // the other writer) and re-reports the conflict. If we advanced base to
+      // head here, the next commit would diff working-vs-head and treat the
+      // agent's kept-local copy as a fresh edit on head — silently overwriting
+      // the concurrent change. The head version is also written to
+      // /.synapse-conflicts/<path> by dir_sync so the agent can reconcile.
+      continue
     }
-    // Advance base to the synced-in head so the next commit doesn't treat the
-    // just-merged incoming as local dirt and self-conflict.
+    // No conflicts: safe to advance base to the synced-in head so the next
+    // commit doesn't treat the just-merged incoming as local dirt.
     await updateFileMount(pool, mount.id, { baseSnapshotId: head })
   }
   return { deferredConflictsBySubpath }
@@ -439,7 +463,65 @@ export async function commitSpaces(
       out.conflictsBySubpath[mount.mount_subpath] = result.conflicts
     }
   }
+  // Persist commit conflicts durably: turn-end commit runs AFTER the actor has
+  // already replied, so the conflict can't be fixed this turn. Stash it on the
+  // session so the NEXT turn surfaces it as a notice (the agent's local change
+  // to those paths lost to the concurrent head — it must redo/reconcile).
+  if (Object.keys(out.conflictsBySubpath).length > 0) {
+    await recordPendingCommitConflicts(sessionId, out.conflictsBySubpath).catch(
+      (err) =>
+        console.error(
+          `[sandbox] failed to persist commit conflicts for ${sessionId}:`,
+          err
+        )
+    )
+  }
   return out
+}
+
+const PENDING_CONFLICTS_KEY = "_sandboxPendingCommitConflicts"
+
+/** Stash turn-end commit conflicts on the session for the next turn to surface. */
+async function recordPendingCommitConflicts(
+  sessionId: string,
+  conflictsBySubpath: Record<string, string[]>
+): Promise<void> {
+  await db
+    .updateTable("sessions")
+    .set({
+      collaboration_state: sql`COALESCE(collaboration_state, '{}'::jsonb) || jsonb_build_object(${PENDING_CONFLICTS_KEY}::text, ${JSON.stringify(
+        conflictsBySubpath
+      )}::jsonb)`,
+    } as never)
+    .where("id", "=", sessionId)
+    .execute()
+}
+
+/**
+ * Read + clear any commit conflicts stashed by a previous turn's teardown/commit.
+ * Called at turn-start so the conflict surfaces exactly once, on the next turn.
+ */
+export async function takePendingCommitConflicts(
+  sessionId: string
+): Promise<Record<string, string[]>> {
+  const row = await db
+    .selectFrom("sessions")
+    .select("collaboration_state")
+    .where("id", "=", sessionId)
+    .executeTakeFirst()
+  const state = (row?.collaboration_state ?? {}) as Record<string, unknown>
+  const pending = state[PENDING_CONFLICTS_KEY] as
+    | Record<string, string[]>
+    | undefined
+  if (!pending || Object.keys(pending).length === 0) return {}
+  await db
+    .updateTable("sessions")
+    .set({
+      collaboration_state: sql`COALESCE(collaboration_state, '{}'::jsonb) - ${PENDING_CONFLICTS_KEY}::text`,
+    } as never)
+    .where("id", "=", sessionId)
+    .execute()
+  return pending
 }
 
 async function commitOneMount(

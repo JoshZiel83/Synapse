@@ -31,6 +31,14 @@ use crate::rpc::RpcError;
 /// snapshot).
 const INTERNAL_DIRNAME: &str = ".synapse-internal";
 
+/// Conflict-sidecar namespace. On a refresh (dir_sync) conflict the live local
+/// copy is KEPT in place (so the agent's in-progress edit isn't destroyed) and
+/// the incoming/head version of the contested file is written here as
+/// `.synapse-conflicts/<path>` so the agent can actually READ what the other
+/// writer committed and reconcile. Unlike `.synapse-internal` (which the VFS
+/// blocks the agent from reading), this dir is agent-readable; like it, it is
+/// NEVER scanned into a snapshot, so the sidecars don't get committed.
+
 /// Kind of a manifest entry. A pure path→content map cannot represent an
 /// empty directory or a symlink, so we tag every entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +230,16 @@ fn is_internal(rel: &str) -> bool {
     rel == INTERNAL_DIRNAME || rel.starts_with(&format!("{INTERNAL_DIRNAME}/"))
 }
 
+const CONFLICTS_DIRNAME: &str = ".synapse-conflicts";
+
+/// Whether a path is in a reserved namespace that scan never commits: the
+/// VFS-internal staging dir OR the conflict-sidecar dir.
+fn is_reserved(rel: &str) -> bool {
+    is_internal(rel)
+        || rel == CONFLICTS_DIRNAME
+        || rel.starts_with(&format!("{CONFLICTS_DIRNAME}/"))
+}
+
 /// Canonical VFS path for a relative host path. Always leading '/', POSIX
 /// separators. Empty rel → "/" is never an entry (root is implicit).
 fn to_vfs_path(rel: &str) -> String {
@@ -268,7 +286,7 @@ fn scan_recursive(
             .map_err(|e| RpcError::Internal(format!("strip_prefix: {e}")))?
             .to_string_lossy()
             .replace('\\', "/");
-        if is_internal(&rel) {
+        if is_reserved(&rel) {
             continue;
         }
         let vfs = to_vfs_path(&rel);
@@ -667,6 +685,18 @@ pub fn dir_sync(
 
         if collides {
             deferred.push(p.clone());
+            // Write the incoming (head) version to a readable conflict sidecar
+            // so the agent can SEE what the other writer committed and reconcile
+            // — the live copy is intentionally left as the agent's local edit.
+            // Only file entries get a byte sidecar; dir/kind conflicts are just
+            // reported (the agent re-reads the live tree).
+            if let Some(te) = to_entry {
+                if te.kind == EntryKind::File {
+                    let sidecar_vfs = format!("/{CONFLICTS_DIRNAME}{p}");
+                    // Best-effort: a sidecar write failure must not fail refresh.
+                    let _ = apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(te));
+                }
+            }
             continue;
         }
 

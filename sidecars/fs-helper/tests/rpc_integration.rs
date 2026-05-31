@@ -1894,6 +1894,28 @@ fn dir_sync_defers_conflict_on_same_path_local_and_incoming() {
     assert_eq!(deferred, vec!["/x.txt".to_string()], "{r}");
     // local version is preserved (not clobbered by head).
     assert_eq!(std::fs::read(live.join("x.txt")).unwrap(), b"local");
+    // the INCOMING (head) version is written to a readable conflict sidecar so
+    // the agent can reconcile.
+    let sidecar = live.join(".synapse-conflicts").join("x.txt");
+    assert!(sidecar.is_file(), "conflict sidecar not written: {r}");
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"head");
+    // the sidecar must NOT be committed: a scan of the live dir excludes the
+    // .synapse-conflicts namespace.
+    let scan = helper.call(
+        5,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": live.to_str().unwrap() }),
+    );
+    let paths: Vec<String> = scan["result"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !paths.iter().any(|p| p.starts_with("/.synapse-conflicts")),
+        "conflict sidecar leaked into the committed manifest: {paths:?}"
+    );
     helper.stop();
 }
 

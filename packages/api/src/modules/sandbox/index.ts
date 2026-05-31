@@ -10,6 +10,7 @@ export {
   commitSpaces,
   teardownSandbox,
   recoverFailedSandboxMounts,
+  takePendingCommitConflicts,
   SandboxServiceError,
   type ProvisionSandboxOptions,
   type CommitResult,
