@@ -516,3 +516,249 @@ test("contentAccessResolver memory ACL", async (t) => {
     }
   )
 })
+
+const SHA_FS = "f".repeat(64)
+
+// A file_space + a snapshot whose MANIFEST sha IS the queried sha (so the
+// reachability check hits the `snap.manifest_sha256 === sha` short-circuit and
+// doesn't need a real CAS blob). Returns ids to attach a grant.
+async function seedFileSpaceRef(
+  db: Kysely<any>,
+  opts: { ownerActor?: boolean } = {}
+) {
+  const owner = await db
+    .insertInto("users")
+    .values({ email: `${rid()}@fs`, name: "u", password_hash: "x" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const ws = await db
+    .insertInto("workspaces")
+    .values({ owner_id: owner.id, slug: `ws-${rid()}`, name: "fs ws" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const memberUser = await db
+    .insertInto("users")
+    .values({ email: `${rid()}@fs`, name: "m", password_hash: "x" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: ws.id,
+      user_id: memberUser.id,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const memberSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: member.id,
+  })
+  // The space is owned by an actor (so the member isn't owner-implicit).
+  const actor = await db
+    .insertInto("actors")
+    .values({
+      workspace_id: ws.id,
+      name: `a-${rid()}`,
+      role: "assistant",
+      title: "t",
+      current_version: 1,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const actorSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId: actor.id,
+  })
+  const space = await db
+    .insertInto("file_spaces")
+    .values({
+      workspace_id: ws.id,
+      owner_subject_id: actorSubjectId,
+      namespace_key: "default",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  // content_blob for the manifest sha + a snapshot whose manifest IS SHA_FS.
+  await db
+    .insertInto("content_blobs")
+    .values({ sha256: SHA_FS, size_bytes: 1, backend: "local_cas" } as any)
+    .onConflict((oc: any) => oc.doNothing())
+    .execute()
+  const snap = await db
+    .insertInto("file_snapshots")
+    .values({
+      workspace_id: ws.id,
+      file_space_id: space.id,
+      version: 1,
+      manifest_sha256: SHA_FS,
+      reason: "manual",
+      entry_count: 0,
+      total_bytes: 0,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  await db
+    .updateTable("file_spaces")
+    .set({ current_snapshot_id: snap.id } as any)
+    .where("id", "=", space.id)
+    .execute()
+  void opts
+  return {
+    workspaceId: ws.id as string,
+    memberUserId: memberUser.id as string,
+    memberSubjectId,
+    spaceId: space.id as string,
+  }
+}
+
+test("contentAccessResolver file-space ACL", async (t) => {
+  await t.test("(c) no grant → denied", async () => {
+    await withTestDb(async (db) => {
+      const { memberUserId } = await seedFileSpaceRef(db)
+      assert.equal(
+        await canUserAccessContent(SHA_FS, memberUserId, { dbh: db }),
+        false
+      )
+    })
+  })
+
+  await t.test("(c) active read grant → allowed", async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, memberUserId, memberSubjectId, spaceId } =
+        await seedFileSpaceRef(db)
+      await db
+        .insertInto("file_access_grants")
+        .values({
+          workspace_id: workspaceId,
+          file_space_id: spaceId,
+          subject_id: memberSubjectId,
+          permissions: ["read"],
+          status: "active",
+        } as any)
+        .execute()
+      assert.equal(
+        await canUserAccessContent(SHA_FS, memberUserId, { dbh: db }),
+        true
+      )
+    })
+  })
+
+  await t.test(
+    "(c) write-only grant does NOT confer read → denied",
+    async () => {
+      await withTestDb(async (db) => {
+        const { workspaceId, memberUserId, memberSubjectId, spaceId } =
+          await seedFileSpaceRef(db)
+        await db
+          .insertInto("file_access_grants")
+          .values({
+            workspace_id: workspaceId,
+            file_space_id: spaceId,
+            subject_id: memberSubjectId,
+            permissions: ["write"],
+            status: "active",
+          } as any)
+          .execute()
+        assert.equal(
+          await canUserAccessContent(SHA_FS, memberUserId, { dbh: db }),
+          false
+        )
+      })
+    }
+  )
+
+  await t.test("(c) admin grant confers read → allowed", async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, memberUserId, memberSubjectId, spaceId } =
+        await seedFileSpaceRef(db)
+      await db
+        .insertInto("file_access_grants")
+        .values({
+          workspace_id: workspaceId,
+          file_space_id: spaceId,
+          subject_id: memberSubjectId,
+          permissions: ["admin"],
+          status: "active",
+        } as any)
+        .execute()
+      assert.equal(
+        await canUserAccessContent(SHA_FS, memberUserId, { dbh: db }),
+        true
+      )
+    })
+  })
+
+  await t.test(
+    "(c) grant scoped to a conversation the user is NOT in → denied",
+    async () => {
+      await withTestDb(async (db) => {
+        const { workspaceId, memberUserId, memberSubjectId, spaceId } =
+          await seedFileSpaceRef(db)
+        // A conversation the member does NOT participate in → its subject is not
+        // in the member's scope set, so a grant scoped to it must not apply.
+        const otherConv = await db
+          .insertInto("conversations")
+          .values({
+            workspace_id: workspaceId,
+            kind: "direct",
+            title: "x",
+          } as any)
+          .returning("id")
+          .executeTakeFirstOrThrow()
+        const otherConvSubject = await upsertAccessSubject(db as any, {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: otherConv.id,
+        })
+        await db
+          .insertInto("file_access_grants")
+          .values({
+            workspace_id: workspaceId,
+            file_space_id: spaceId,
+            subject_id: memberSubjectId,
+            scope_subject_id: otherConvSubject,
+            permissions: ["read"],
+            status: "active",
+          } as any)
+          .execute()
+        assert.equal(
+          await canUserAccessContent(SHA_FS, memberUserId, { dbh: db }),
+          false
+        )
+      })
+    }
+  )
+})
+
+test("contentAccessResolver: library-global (workspace_id NULL) asset is readable by any authenticated user", async () => {
+  await withTestDb(async (db) => {
+    const stranger = await db
+      .insertInto("users")
+      .values({ email: `${rid()}@glob`, name: "s", password_hash: "x" })
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const SHA_G = "1234".repeat(16)
+    await db
+      .insertInto("content_blobs")
+      .values({ sha256: SHA_G, size_bytes: 3, backend: "local_cas" } as any)
+      .onConflict((oc: any) => oc.doNothing())
+      .execute()
+    await db
+      .insertInto("file_assets")
+      .values({
+        workspace_id: null,
+        content_sha256: SHA_G,
+        original_name: "icon.png",
+        mime_type: "image/png",
+        content_kind: "image",
+        size_bytes: 3,
+        source_family: "package_import",
+        source_system: "catalog",
+      } as any)
+      .execute()
+    assert.equal(
+      await canUserAccessContent(SHA_G, stranger.id as string, { dbh: db }),
+      true
+    )
+  })
+})

@@ -4968,13 +4968,16 @@ BEGIN
     RAISE EXCEPTION 'file_access_grants.file_space_id % missing or workspace mismatch (% vs %)', NEW.file_space_id, v_space_ws, NEW.workspace_id;
   END IF;
   IF NEW.file_asset_id IS NOT NULL THEN
+    -- Existence is the FOUND flag, NOT a non-null workspace_id: a library-global
+    -- asset legitimately has workspace_id NULL, so testing v_asset_ws IS NULL
+    -- would wrongly reject a real global asset.
     SELECT workspace_id INTO v_asset_ws FROM file_assets WHERE id = NEW.file_asset_id;
-    IF v_asset_ws IS NULL THEN
+    IF NOT FOUND THEN
       RAISE EXCEPTION 'file_access_grants.file_asset_id % not found', NEW.file_asset_id;
     END IF;
     -- file_assets.workspace_id may be NULL for library-global assets; only
     -- enforce a match when the asset is workspace-scoped.
-    IF v_asset_ws IS DISTINCT FROM NEW.workspace_id THEN
+    IF v_asset_ws IS NOT NULL AND v_asset_ws IS DISTINCT FROM NEW.workspace_id THEN
       RAISE EXCEPTION 'file_access_grants.file_asset_id % workspace mismatch', NEW.file_asset_id;
     END IF;
   END IF;

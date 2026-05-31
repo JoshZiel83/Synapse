@@ -262,6 +262,29 @@ export async function getActiveMountsForSession(
 }
 
 /**
+ * Mounts left in 'failed' state with a preserved live dir — the teardown
+ * commit failed and the materialized_dir was kept for recovery. Grouped by
+ * session for the startup reconciler to retry. `limit` bounds a single sweep.
+ */
+export async function getFailedRecoverableMounts(
+  client: QueryExecutor,
+  limit = 200
+): Promise<FileMountRow[]> {
+  const result = await executeSqlOn<FileMountRow>(
+    client,
+    `SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
+            device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
+            refresh_policy, status, materialized_dir, host_pid, error_message
+     FROM file_mounts
+     WHERE status = 'failed' AND materialized_dir IS NOT NULL
+     ORDER BY updated_at ASC
+     LIMIT $1`,
+    [limit]
+  )
+  return result.rows
+}
+
+/**
  * Append a new snapshot to a space's DAG and advance current_snapshot_id, all
  * under a short transaction that serializes version assignment via
  * SELECT ... FOR UPDATE on the file_spaces row. The caller must have already

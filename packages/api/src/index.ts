@@ -57,6 +57,7 @@ import {
   shutdownAllInstances,
 } from "./modules/mcp-plugins/instance-manager.js"
 import { recoverInterruptedExecutions } from "./modules/execution/service.js"
+import { recoverFailedSandboxMounts } from "./modules/sandbox/index.js"
 import { registerActionToolPlugins } from "./modules/ai/tools.js"
 import { registerActorFileToolPlugins } from "./modules/ai/file-tools.js"
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js"
@@ -295,6 +296,21 @@ async function main() {
     }
   } catch (err) {
     console.error("Failed to recover interrupted executions:", err)
+  }
+
+  // Recover sandbox mounts whose teardown commit failed earlier (live dirs were
+  // preserved). Opt-in with the sandbox feature; best-effort.
+  if (config.sandbox.enabled) {
+    try {
+      const r = await recoverFailedSandboxMounts()
+      if (r.attempted > 0) {
+        console.warn(
+          `Recovered sandbox mounts (attempted=${r.attempted}, recovered=${r.recovered}, stillFailed=${r.stillFailed})`
+        )
+      }
+    } catch (err) {
+      console.error("Failed to recover sandbox mounts:", err)
+    }
   }
 
   registerActionToolPlugins()

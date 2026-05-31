@@ -541,7 +541,55 @@ export function startSessionThinkingWorker() {
           conversationId: session.conversation_id,
         })
         const primaryModel = resolvedModelPlan?.candidates[0] || null
-        let finalContextItems = contextItems
+
+        // File sandbox lifecycle (opt-in via SYNAPSE_SANDBOX_ENABLED). Runs
+        // BEFORE the context window is built so (a) the agent's file view
+        // reflects other writers' new commits this turn, and (b) any merge
+        // conflict is injected as a system notice the agent actually sees.
+        let sandboxConflictNotice: CanonicalContextItem | null = null
+        if (sandboxEnabled) {
+          try {
+            await provisionSandbox(sessionId)
+            const refresh = await refreshSpaces(sessionId)
+            const refreshConflicts = Object.entries(
+              refresh.deferredConflictsBySubpath
+            )
+            if (refreshConflicts.length > 0) {
+              const lines = refreshConflicts
+                .map(([sp, paths]) => `/${sp}: ${paths.join(", ")}`)
+                .join("; ")
+              console.warn(
+                `[session-thinking] sandbox refresh deferred conflicts for ${sessionId}: ${lines}`
+              )
+              // Surface to the AGENT, not just the log: its local edits to these
+              // paths were KEPT but another writer also changed them upstream.
+              // Without this the agent's next commit would silently overwrite
+              // the concurrent change. Tell it to re-read the head version and
+              // reconcile before re-saving.
+              sandboxConflictNotice = {
+                kind: "system_notice",
+                noticeType: "generic",
+                scope: "private",
+                surface: "internal",
+                parts: textBlocks(
+                  `File merge conflict: another writer changed these paths while you were editing them, so your in-progress local copy was kept and their change was NOT merged in (${lines}). Re-read the current version of each conflicting path and reconcile before saving, or your next write will overwrite their change.`
+                ),
+                metadata: {
+                  sandboxConflict: refresh.deferredConflictsBySubpath,
+                },
+              }
+            }
+          } catch (sandboxErr) {
+            console.error(
+              `[session-thinking] sandbox provision/refresh failed for ${sessionId}:`,
+              sandboxErr
+            )
+          }
+        }
+
+        let finalContextItems = sandboxConflictNotice
+          ? [sandboxConflictNotice, ...contextItems]
+          : contextItems
         if (primaryModel?.crossTurnToolHistory && !conversationId) {
           const executionToolResults =
             await loadExecutionToolResultsForSession(sessionId)
@@ -565,6 +613,11 @@ export function startSessionThinkingWorker() {
               },
               ...finalContextItems,
             ]
+          }
+          // Preserve the sandbox conflict notice (the rebuild above replaced
+          // finalContextItems wholesale).
+          if (sandboxConflictNotice) {
+            finalContextItems = [sandboxConflictNotice, ...finalContextItems]
           }
         }
 
@@ -685,36 +738,6 @@ export function startSessionThinkingWorker() {
 
         try {
           await emitThinkingStatus("Calling AI model...")
-
-          // File sandbox lifecycle (opt-in via SYNAPSE_SANDBOX_ENABLED).
-          // First turn: provision (idempotent). Every turn: refresh the
-          // multi-writer spaces so this turn sees other writers' new commits.
-          // Best-effort — a sandbox failure must not abort the think turn.
-          if (sandboxEnabled) {
-            try {
-              await provisionSandbox(sessionId)
-              const refresh = await refreshSpaces(sessionId)
-              // Surface deferred merge conflicts (paths this session dirtied that
-              // also changed upstream — the local copy was kept, the incoming
-              // change NOT applied) so they aren't silently swallowed.
-              const refreshConflicts = Object.entries(
-                refresh.deferredConflictsBySubpath
-              )
-              if (refreshConflicts.length > 0) {
-                console.warn(
-                  `[session-thinking] sandbox refresh deferred conflicts for ${sessionId}:`,
-                  refreshConflicts
-                    .map(([sp, paths]) => `${sp}: ${paths.join(", ")}`)
-                    .join("; ")
-                )
-              }
-            } catch (sandboxErr) {
-              console.error(
-                `[session-thinking] sandbox provision/refresh failed for ${sessionId}:`,
-                sandboxErr
-              )
-            }
-          }
 
           result = await actorThink(
             actor,

@@ -11,6 +11,7 @@
 //   /actor-conversation  owner=actor, scope=conversation (this-session private)
 
 import { mkdir, rm } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { actorRef, conversationRef } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
@@ -23,6 +24,7 @@ import {
   insertFileMount,
   updateFileMount,
   getActiveMountsForSession,
+  getFailedRecoverableMounts,
   getFileSpace,
   ensureContentBlob,
   appendSnapshot,
@@ -242,7 +244,14 @@ export async function provisionSandbox(
       fsRoot: sandboxRoot,
       fsHelperPath,
       serverOrigin: config.app.baseUrl,
-      confineCommands: commandlineEnabled,
+      // ALWAYS run this per-session device in sandbox mode (--cmd-sandbox), even
+      // when bwrap is unavailable. This is a sandbox device: it must never
+      // expose an UNCONFINED commandline. The device-runtime's --cmd-sandbox
+      // branch fail-closes — bwrap present → confined commandline; bwrap absent
+      // → NO commandline tool at all (so nothing could later grant a host
+      // shell). `commandlineEnabled` only decides whether WE pre-authorize the
+      // commandline grant, not whether the device runs unconfined.
+      confineCommands: true,
       title: `Sandbox ${sessionId.slice(0, 8)}`,
     }
     const paired = await hostProvider.pair(spawnParams)
@@ -629,4 +638,66 @@ function killPid(pid: number): void {
       /* gone */
     }
   }, 2_000).unref?.()
+}
+
+export interface RecoverFailedMountsResult {
+  attempted: number
+  recovered: number
+  stillFailed: number
+}
+
+/**
+ * Startup reconciler: retry the commit for mounts left in 'failed' state with a
+ * preserved live dir (a teardown commit that failed earlier). On success the
+ * mount's snapshot is appended and the mount is closed + its live dir removed;
+ * on repeated failure it's left 'failed' for the next sweep / manual triage.
+ *
+ * This is the code-level recovery entry for the "preserve on commit failure"
+ * teardown path — without it a failed mount's data would only be recoverable by
+ * hand. Best-effort and idempotent: safe to call on every API startup.
+ */
+export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsResult> {
+  const mounts = await getFailedRecoverableMounts(pool)
+  let recovered = 0
+  let stillFailed = 0
+  for (const mount of mounts) {
+    if (!mount.materialized_dir) continue
+    // The dir may have been cleaned already (e.g. by a later successful run);
+    // skip if it's gone — there's nothing to recover.
+    if (!existsSync(mount.materialized_dir)) {
+      await updateFileMount(pool, mount.id, {
+        status: "closed",
+        closedAt: true,
+        errorMessage: "recovered: live dir already gone, nothing to commit",
+      }).catch(() => {})
+      continue
+    }
+    try {
+      const result = await commitOneMount(
+        mount.workspace_id,
+        mount.session_id,
+        mount
+      )
+      // Commit succeeded (or there was nothing new) → close + remove the dir.
+      await updateFileMount(pool, mount.id, {
+        status: "closed",
+        closedAt: true,
+        resultSnapshotId: result.snapshotId ?? mount.result_snapshot_id,
+        errorMessage: result.conflicts.length
+          ? `recovered with conflicts: ${result.conflicts.join(", ")}`
+          : null,
+      })
+      await rm(mount.materialized_dir, { recursive: true, force: true }).catch(
+        () => {}
+      )
+      recovered++
+    } catch (err) {
+      stillFailed++
+      console.error(
+        `[sandbox] recovery commit still failing for mount ${mount.id}:`,
+        err
+      )
+    }
+  }
+  return { attempted: mounts.length, recovered, stillFailed }
 }

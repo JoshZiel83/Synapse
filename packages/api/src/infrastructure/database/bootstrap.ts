@@ -17,7 +17,7 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
  * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
  * `bootstrap.test.ts` enforces the length invariant.
  */
-export const CURRENT_SCHEMA_VERSION = "2026-05-31-file-service-cas-manifest"
+export const CURRENT_SCHEMA_VERSION = "2026-05-31-file-service-cas-manifest-2"
 export const CURRENT_SCHEMA_DESCRIPTION =
   "file-service refactor: unified content-addressed store. Replaced file_blobs/files/file_origins with content_blobs (sha256 PK, backend TEXT+CHECK, locator_json) + file_assets (folds files+file_origins; content_sha256 pointer). file_parse_runs/outputs now reference asset_id/derived_asset_id. New scope layer mirroring memory_spaces: file_spaces (owner/scope/namespace + current_snapshot_id composite FK), file_snapshots (working-tree DAG, parent composite FK, manifest_sha256 -> content_blobs), file_access_grants (space/asset grants), file_mounts (session x space sandbox mounts, base/result snapshot composite FKs, ON DELETE SET NULL device_id, two active partial-uniques). 16 FK fan-out: avatar/icon/logo *_file_id retargeted files->file_assets; 4 *_parts file_ref columns (conversation/tool_result/memory/context_archive) replaced file_id with ref_path + ref_sha256 (sha256 the always-present identity, path optional) + ref_sha256 partial indexes + updated file_ref CHECK. Backs the per-actor-session sandbox file spaces."
 

@@ -9,10 +9,12 @@ export {
   refreshSpaces,
   commitSpaces,
   teardownSandbox,
+  recoverFailedSandboxMounts,
   SandboxServiceError,
   type ProvisionSandboxOptions,
   type CommitResult,
   type TeardownSandboxOptions,
+  type RecoverFailedMountsResult,
 } from "./service.js"
 export {
   isSandboxCommandlineAvailable,
