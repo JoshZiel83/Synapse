@@ -600,6 +600,23 @@ function describeRuntimeAuthorizationSpec(
           .join("\n"),
       }
     }
+    if (cmd.executor === "sandbox") {
+      return {
+        icon: Wrench,
+        summary: "sandbox (confined shell)",
+        detail: [
+          "Any command inside the bwrap sandbox (no network)",
+          cmd.workingDirectory
+            ? `Working directory: ${cmd.workingDirectory}`
+            : null,
+          cmd.allowedEnv && cmd.allowedEnv.length > 0
+            ? `Inherits env: ${cmd.allowedEnv.join(", ")}`
+            : null,
+        ]
+          .filter((v): v is string => Boolean(v))
+          .join("\n"),
+      }
+    }
     return {
       icon: Wrench,
       summary:
