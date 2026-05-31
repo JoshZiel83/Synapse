@@ -58,7 +58,10 @@ test(
     const commit = await scanCommitDir({ dir: live })
     assert.ok(commit.manifest_sha256, "got a manifest sha")
     assert.ok(commit.entry_count >= 3, `entry_count ${commit.entry_count} >= 3`)
-    assert.ok(commit.new_blobs.length >= 2, "at least 2 new file blobs")
+    // new_blobs counts only blobs NOT already in the shared CAS; on a warm CAS
+    // (these exact bytes committed by a prior run) it can be 0. Correctness is
+    // proven by the re-materialize byte-check below, not the new-blob count.
+    assert.ok(Array.isArray(commit.new_blobs), "new_blobs present")
     assert.equal(
       commit.conflict_paths.length,
       0,
