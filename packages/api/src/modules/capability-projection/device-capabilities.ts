@@ -344,4 +344,78 @@ export async function listActiveDeviceCapabilitiesForTarget(params: {
     .filter((v): v is string => v !== null)
 }
 
+/**
+ * ADDITIVE capability grant: activate bindings for exactly the given capability
+ * ids on (subject, scope), WITHOUT touching the target's other capability
+ * bindings. Unlike setActiveDeviceCapabilitiesForTarget (a full replace), this
+ * is safe when several independent grantors (e.g. a sandbox provision + a
+ * manually-granted device capability) coexist on the same actor/conversation.
+ * Idempotent per (capability, subject, scope) via the active partial-unique.
+ */
+export async function addDeviceCapabilitiesForTarget(
+  params: SetActiveDeviceCapabilitiesParams,
+  options?: { db?: typeof db }
+): Promise<void> {
+  if (params.deviceCapabilityIds.length === 0) return
+  const dbHandle = options?.db ?? db
+  const { subjectId, scopeSubjectId } = await resolveScopedSubjectTarget(
+    params.target,
+    { db: dbHandle }
+  )
+  const rows = params.deviceCapabilityIds.map((capabilityId) => ({
+    workspace_id: params.workspaceId,
+    resource_type: "device_capability",
+    device_capability_id: capabilityId,
+    subject_id: subjectId,
+    scope_subject_id: scopeSubjectId ?? null,
+    status: "active",
+    source: "manual",
+    created_by_workspace_member_id: params.createdByWorkspaceMemberId ?? null,
+    reason: params.reason ?? null,
+  }))
+  await dbHandle
+    .insertInto("resource_access_bindings")
+    .values(rows as never)
+    // Re-activating an existing (re-provision) or a concurrent insert: the
+    // active partial-unique is on (resource_type, ..., device_capability_id,
+    // ..., subject_id, scope_subject_id) WHERE status='active'. Conflict → no-op.
+    .onConflict((oc) => oc.doNothing())
+    .execute()
+}
+
+/**
+ * TARGETED capability revoke: revoke ONLY the given capability ids' active
+ * bindings on (subject, scope), leaving the target's other capabilities intact.
+ * The inverse of addDeviceCapabilitiesForTarget — used at sandbox teardown so we
+ * don't clobber an unrelated manual grant on the same actor/conversation.
+ */
+export async function revokeDeviceCapabilitiesForTarget(
+  params: SetActiveDeviceCapabilitiesParams,
+  options?: { db?: typeof db }
+): Promise<void> {
+  if (params.deviceCapabilityIds.length === 0) return
+  const dbHandle = options?.db ?? db
+  const { subjectId, scopeSubjectId } = await resolveScopedSubjectTarget(
+    params.target,
+    { db: dbHandle }
+  )
+  let revoke = dbHandle
+    .updateTable("resource_access_bindings")
+    .set({
+      status: "revoked",
+      revoked_at: new Date().toISOString(),
+    } as never)
+    .where("subject_id", "=", subjectId)
+    .where("workspace_id", "=", params.workspaceId)
+    .where("resource_type", "=", "device_capability")
+    .where("status", "=", "active")
+    .where("device_capability_id", "in", params.deviceCapabilityIds)
+  if (scopeSubjectId) {
+    revoke = revoke.where("scope_subject_id", "=", scopeSubjectId)
+  } else {
+    revoke = revoke.where("scope_subject_id", "is", null)
+  }
+  await revoke.execute()
+}
+
 void sql

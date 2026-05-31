@@ -22,7 +22,10 @@ import {
 } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
-import { setActiveDeviceCapabilitiesForTarget } from "../capability-projection/device-capabilities.js"
+import {
+  addDeviceCapabilitiesForTarget,
+  revokeDeviceCapabilitiesForTarget,
+} from "../capability-projection/device-capabilities.js"
 import { createRuntimeAuthorizationGrant } from "../runtime-authorizations/service.js"
 
 export class SandboxGrantsError extends Error {
@@ -114,12 +117,14 @@ export async function createSandboxGrants(
 ): Promise<void> {
   const { workspaceId, deviceId, actorId, conversationId, builtins } = params
 
-  // ── Layer 1: capability device grant (whole list in one pass) ──
+  // ── Layer 1: capability device grant (ADDITIVE — only the sandbox's own
+  // capabilities, never clobbering a pre-existing manual grant on this actor
+  // /conversation) ──
   const capabilityIds = [builtins.filesystemCapabilityId]
   if (params.includeCommandline && builtins.commandlineCapabilityId) {
     capabilityIds.push(builtins.commandlineCapabilityId)
   }
-  await setActiveDeviceCapabilitiesForTarget({
+  await addDeviceCapabilitiesForTarget({
     workspaceId,
     target: {
       kind: "actor_in_conversation",
@@ -184,10 +189,11 @@ export async function createSandboxGrants(
 }
 
 /**
- * Revoke both layers for a torn-down sandbox: clear the actor's device
- * capability bindings (empty list = revoke all) and revoke the runtime grants
- * for this (device, actor, conversation). Runtime grants are revoked by the
- * generic revoke path keyed on the device.
+ * Revoke both layers for a torn-down sandbox. Layer 1 is a TARGETED revoke of
+ * only THIS device's capability bindings on (actor, conversation) — never the
+ * full-replace empty-list path, which would also revoke any unrelated manual
+ * capability grant on the same actor/conversation. Layer 2 revokes this device's
+ * active runtime grants.
  */
 export async function revokeSandboxGrants(params: {
   workspaceId: string
@@ -195,17 +201,34 @@ export async function revokeSandboxGrants(params: {
   actorId: string
   conversationId: string
 }): Promise<void> {
-  // Layer 1: empty capability list = revoke all bindings for this target.
-  await setActiveDeviceCapabilitiesForTarget({
-    workspaceId: params.workspaceId,
-    target: {
-      kind: "actor_in_conversation",
-      actorId: params.actorId,
-      conversationId: params.conversationId,
-    },
-    deviceCapabilityIds: [],
-    reason: "sandbox teardown",
-  })
+  // Layer 1: resolve THIS device's capability ids, then targeted-revoke only
+  // those bindings (leaving other capabilities the actor/conversation may hold).
+  const deviceCapabilityRows = await db
+    .selectFrom("device_capabilities")
+    .select("id")
+    .where("workspace_id", "=", params.workspaceId)
+    .where(
+      "exposure_id",
+      "in",
+      db
+        .selectFrom("device_exposures")
+        .select("id")
+        .where("device_id", "=", params.deviceId)
+    )
+    .execute()
+  const deviceCapabilityIds = deviceCapabilityRows.map((r) => r.id as string)
+  if (deviceCapabilityIds.length > 0) {
+    await revokeDeviceCapabilitiesForTarget({
+      workspaceId: params.workspaceId,
+      target: {
+        kind: "actor_in_conversation",
+        actorId: params.actorId,
+        conversationId: params.conversationId,
+      },
+      deviceCapabilityIds,
+      reason: "sandbox teardown",
+    })
+  }
 
   // Layer 2: revoke all active runtime grants for this device. The device is
   // about to be deleted and its grant FK is ON DELETE CASCADE, so deletion

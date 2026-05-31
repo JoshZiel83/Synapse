@@ -693,7 +693,21 @@ export function startSessionThinkingWorker() {
           if (sandboxEnabled) {
             try {
               await provisionSandbox(sessionId)
-              await refreshSpaces(sessionId)
+              const refresh = await refreshSpaces(sessionId)
+              // Surface deferred merge conflicts (paths this session dirtied that
+              // also changed upstream — the local copy was kept, the incoming
+              // change NOT applied) so they aren't silently swallowed.
+              const refreshConflicts = Object.entries(
+                refresh.deferredConflictsBySubpath
+              )
+              if (refreshConflicts.length > 0) {
+                console.warn(
+                  `[session-thinking] sandbox refresh deferred conflicts for ${sessionId}:`,
+                  refreshConflicts
+                    .map(([sp, paths]) => `${sp}: ${paths.join(", ")}`)
+                    .join("; ")
+                )
+              }
             } catch (sandboxErr) {
               console.error(
                 `[session-thinking] sandbox provision/refresh failed for ${sessionId}:`,
@@ -779,7 +793,22 @@ export function startSessionThinkingWorker() {
           // Best-effort: a commit failure must not abort action execution.
           if (sandboxEnabled) {
             try {
-              await commitSpaces(sessionId, ["conversation", "actor"])
+              const commit = await commitSpaces(sessionId, [
+                "conversation",
+                "actor",
+              ])
+              // Surface per-file commit conflicts (a path this session changed
+              // that another writer committed first — head kept, local dropped)
+              // so they aren't silently swallowed.
+              const commitConflicts = Object.entries(commit.conflictsBySubpath)
+              if (commitConflicts.length > 0) {
+                console.warn(
+                  `[session-thinking] sandbox commit conflicts for ${sessionId}:`,
+                  commitConflicts
+                    .map(([sp, paths]) => `${sp}: ${paths.join(", ")}`)
+                    .join("; ")
+                )
+              }
             } catch (err) {
               console.error(
                 `[session-thinking] sandbox commit failed for ${sessionId}:`,

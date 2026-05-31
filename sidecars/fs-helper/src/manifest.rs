@@ -349,6 +349,10 @@ pub fn materialize(
     target_dir: &Path,
 ) -> Result<(), RpcError> {
     fs::create_dir_all(target_dir)?;
+    // Start from a clean target so a re-materialize into a non-empty dir can't
+    // leave stale files (from a previous snapshot) that would pollute the next
+    // scan or shadow a type change.
+    clear_dir_contents(target_dir)?;
     // Create dirs first (sorted order means parents precede children), then
     // files/symlinks. BTreeMap iteration is already sorted by path, so a
     // parent dir entry always comes before its children.
@@ -356,6 +360,7 @@ pub fn materialize(
         let host = vfs_to_host(target_dir, &e.path);
         match e.kind {
             EntryKind::Dir => {
+                prepare_dest_for_kind(&host, EntryKind::Dir)?;
                 fs::create_dir_all(&host)?;
                 set_mode(&host, e.mode | 0o700)?;
             }
@@ -363,6 +368,7 @@ pub fn materialize(
                 if let Some(parent) = host.parent() {
                     fs::create_dir_all(parent)?;
                 }
+                prepare_dest_for_kind(&host, EntryKind::File)?;
                 let sha = e.sha256.as_deref().ok_or_else(|| {
                     RpcError::Internal(format!("file entry without sha: {}", e.path))
                 })?;
@@ -374,9 +380,7 @@ pub fn materialize(
                 if let Some(parent) = host.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                if host.symlink_metadata().is_ok() {
-                    let _ = fs::remove_file(&host);
-                }
+                prepare_dest_for_kind(&host, EntryKind::Symlink)?;
                 let target = e.target.as_deref().ok_or_else(|| {
                     RpcError::Internal(format!(
                         "symlink entry without target: {}",
@@ -401,6 +405,61 @@ fn vfs_to_host(root: &Path, vfs: &str) -> PathBuf {
         }
     }
     p
+}
+
+/// Ensure `host` is ready to receive a `desired` entry kind by removing anything
+/// already there whose type doesn't match. Without this a type change
+/// (dir→file, file→dir, file→symlink, …) fails: create_dir_all() errors on an
+/// existing file, and copy_to()/symlink only remove via remove_file() (which
+/// fails on a directory). For Dir we keep an existing directory (merge into it);
+/// for File/Symlink we remove any existing dir/file/symlink so the writer can
+/// recreate it cleanly.
+fn prepare_dest_for_kind(host: &Path, desired: EntryKind) -> Result<(), RpcError> {
+    let meta = match host.symlink_metadata() {
+        Ok(m) => m,
+        Err(_) => return Ok(()), // nothing there
+    };
+    let ft = meta.file_type();
+    match desired {
+        EntryKind::Dir => {
+            // Keep an existing real directory (we'll merge into it); remove a
+            // file/symlink occupying the path so create_dir_all can succeed.
+            if !ft.is_dir() {
+                fs::remove_file(host)?;
+            }
+        }
+        EntryKind::File | EntryKind::Symlink => {
+            if ft.is_dir() {
+                fs::remove_dir_all(host)?;
+            } else {
+                fs::remove_file(host)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Remove all entries inside `dir` (but not `dir` itself), so a materialize into
+/// a possibly-non-empty target starts clean and can't leave stale files behind
+/// that would pollute the next scan. Best-effort per entry.
+fn clear_dir_contents(dir: &Path) -> Result<(), RpcError> {
+    let rd = match fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return Ok(()),
+    };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        let meta = match p.symlink_metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_dir() {
+            let _ = fs::remove_dir_all(&p);
+        } else {
+            let _ = fs::remove_file(&p);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -646,6 +705,7 @@ fn apply_entry_to_dir(
         }
         Some(e) => match e.kind {
             EntryKind::Dir => {
+                prepare_dest_for_kind(&host, EntryKind::Dir)?;
                 fs::create_dir_all(&host)?;
                 set_mode(&host, e.mode | 0o700)?;
             }
@@ -653,6 +713,7 @@ fn apply_entry_to_dir(
                 if let Some(parent) = host.parent() {
                     fs::create_dir_all(parent)?;
                 }
+                prepare_dest_for_kind(&host, EntryKind::File)?;
                 let sha = e.sha256.as_deref().ok_or_else(|| {
                     RpcError::Internal(format!("file entry without sha: {vfs}"))
                 })?;
@@ -662,9 +723,7 @@ fn apply_entry_to_dir(
                 if let Some(parent) = host.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                if host.symlink_metadata().is_ok() {
-                    let _ = fs::remove_file(&host);
-                }
+                prepare_dest_for_kind(&host, EntryKind::Symlink)?;
                 let target = e.target.as_deref().ok_or_else(|| {
                     RpcError::Internal(format!("symlink without target: {vfs}"))
                 })?;

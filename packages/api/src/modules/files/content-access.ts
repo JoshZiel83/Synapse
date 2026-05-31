@@ -23,6 +23,7 @@
 //
 // Any single pass granting access short-circuits the rest.
 
+import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { readCasBlob } from "../../infrastructure/storage/index.js"
@@ -148,10 +149,19 @@ async function hasVisibleMessageRef(
     .executeTakeFirst()
   if (itemRef) return true
 
-  // tool_result parts: reachable by any active participant of the conversation
-  // the producing tool call belongs to (these parts are private/internal — not
-  // shown in the human timeline, but a participant may still fetch referenced
-  // bytes). Path: tool_result_parts → tool_results → tool_calls.conversation_id.
+  // tool_result parts: reachable by any active workspace_member participant of
+  // the conversation the producing tool call belongs to.
+  //
+  // SEMANTICS (explicit, reviewed): tool results are private/internal items (not
+  // in the human timeline), BUT their file_ref outputs ARE surfaced to every
+  // conversation participant via the actor-activity view (web-next
+  // actor-activity-bubble renders block.sha256 via /content). So the read
+  // audience here = the activity-view audience = active conversation
+  // participants, by design. This deliberately does NOT widen to all workspace
+  // members: the participant join (cp.state='active' + workspace_member subject)
+  // restricts it to humans actually in the conversation. If a future change
+  // hides specific tool results from some participants, this branch must gain
+  // the same per-item audience filter as branch (a).
   const toolRef = await dbh
     .selectFrom("tool_result_parts as trp")
     .innerJoin("tool_results as tr", "tr.id", "trp.tool_result_id")
@@ -178,30 +188,66 @@ async function hasVisibleMessageRef(
 }
 
 // (b) ---------------------------------------------------------------------
-// memory_item_parts / context_archive_frame_parts the user can read. A memory
-// space is readable if the user's workspace_member subject owns it or holds an
-// active memory_access_grant; context-archive frames belong to sessions in the
-// user's workspace. We bound the check to spaces in workspaces the user belongs
-// to (the cheap necessary condition) — finer-grained memory ACLs only ever
-// narrow this, and the same bytes are independently reachable via (a) for any
-// in-conversation reference.
+// memory_item_parts / context_archive_frame_parts the user can read.
+//
+// Memory honors the memory space ACL: a user may read a memory_item_part's bytes
+// only if, for the part's owning space, their workspace_member subject is the
+// space owner (owner-implicit) OR holds an active read/recall memory_access_grant
+// (space-level OR item-level for that item). Workspace membership ALONE is NOT
+// sufficient — an actor-private memory space requires an explicit grant, matching
+// memory/service.ts's evaluator (a workspace member can't read another principal's
+// private memory just by being in the workspace).
+//
+// context-archive frames are conversation-scoped: readable by an active
+// workspace_member participant of the frame's conversation.
 async function hasReadableMemoryRef(
   dbh: KyselyDb,
   sha256: string,
   userId: string
 ): Promise<boolean> {
+  // The candidate parts referencing this sha, with their space + the user's
+  // own workspace_member subject id in that space's workspace (if any). We then
+  // check owner-implicit OR an active read/recall grant to that subject.
   const memRef = await dbh
     .selectFrom("memory_item_parts as mip")
     .innerJoin("memory_items as mi", "mi.id", "mip.memory_item_id")
     .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
-    .innerJoin("workspaces as w", "w.id", "ms.workspace_id")
-    .leftJoin("workspace_members as wm", (join) =>
-      join.onRef("wm.workspace_id", "=", "w.id").on("wm.user_id", "=", userId)
+    // The caller's workspace_member subject in the SAME workspace as the space.
+    .innerJoin("workspace_members as wm", (join) =>
+      join
+        .onRef("wm.workspace_id", "=", "ms.workspace_id")
+        .on("wm.user_id", "=", userId)
+    )
+    .innerJoin("access_subjects as us", (join) =>
+      join
+        .onRef("us.workspace_member_id", "=", "wm.id")
+        .on("us.kind", "=", "workspace_member")
     )
     .select("mip.id")
     .where("mip.ref_sha256", "=", sha256)
     .where((eb) =>
-      eb.or([eb("w.owner_id", "=", userId), eb("wm.user_id", "is not", null)])
+      eb.or([
+        // owner-implicit: the user's subject owns the space.
+        eb("ms.owner_subject_id", "=", eb.ref("us.id")),
+        // active read/recall grant (space-level or this item) to the subject.
+        eb.exists(
+          eb
+            .selectFrom("memory_access_grants as g")
+            .select("g.id")
+            .whereRef("g.memory_space_id", "=", "ms.id")
+            .whereRef("g.subject_id", "=", "us.id")
+            .where("g.status", "=", "active")
+            .where((geb) =>
+              geb.or([
+                geb("g.memory_item_id", "is", null),
+                geb("g.memory_item_id", "=", eb.ref("mi.id")),
+              ])
+            )
+            .where(
+              sql<boolean>`('read'::memory_permission = ANY(g.permissions) OR 'recall'::memory_permission = ANY(g.permissions))`
+            )
+        ),
+      ])
     )
     .limit(1)
     .executeTakeFirst()

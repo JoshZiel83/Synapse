@@ -359,3 +359,160 @@ test("contentAccessResolver", async (t) => {
     }
   )
 })
+
+const SHA_M = "e".repeat(64)
+
+// Helper: an actor-owned (private) memory space with one item part referencing
+// SHA_M. Returns the ids needed to grant access.
+async function seedPrivateMemoryRef(db: Kysely<any>) {
+  const owner = await db
+    .insertInto("users")
+    .values({ email: `${rid()}@mem`, name: "u", password_hash: "x" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const ws = await db
+    .insertInto("workspaces")
+    .values({ owner_id: owner.id, slug: `ws-${rid()}`, name: "mem ws" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  // A workspace MEMBER who is not the memory owner.
+  const memberUser = await db
+    .insertInto("users")
+    .values({ email: `${rid()}@mem`, name: "m", password_hash: "x" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: ws.id,
+      user_id: memberUser.id,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const memberSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+    memberId: member.id,
+  })
+  // The memory space is owned by an ACTOR (private to that actor).
+  const actor = await db
+    .insertInto("actors")
+    .values({
+      workspace_id: ws.id,
+      name: `a-${rid()}`,
+      role: "assistant",
+      title: "t",
+      current_version: 1,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const actorSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId: actor.id,
+  })
+  const space = await db
+    .insertInto("memory_spaces")
+    .values({
+      workspace_id: ws.id,
+      owner_subject_id: actorSubjectId,
+      namespace_key: "default",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const item = await db
+    .insertInto("memory_items")
+    .values({
+      workspace_id: ws.id,
+      memory_space_id: space.id,
+      category: "fact",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  await db
+    .insertInto("content_blobs")
+    .values({ sha256: SHA_M, size_bytes: 3, backend: "local_cas" } as any)
+    .onConflict((oc: any) => oc.doNothing())
+    .execute()
+  await db
+    .insertInto("memory_item_parts")
+    .values({
+      memory_item_id: item.id,
+      ordinal: 0,
+      part_type: "file_ref",
+      ref_sha256: SHA_M,
+      mime_type: "image/png",
+      name: "m.png",
+    } as any)
+    .execute()
+  return {
+    workspaceId: ws.id as string,
+    memberUserId: memberUser.id as string,
+    memberSubjectId,
+    spaceId: space.id as string,
+  }
+}
+
+test("contentAccessResolver memory ACL", async (t) => {
+  await t.test(
+    "(b) private actor memory: a workspace member without a grant is DENIED",
+    async () => {
+      await withTestDb(async (db) => {
+        const { memberUserId } = await seedPrivateMemoryRef(db)
+        // Member is in the workspace but does NOT own the actor space and has no
+        // grant → must be denied (the pre-fix bug allowed this).
+        assert.equal(
+          await canUserAccessContent(SHA_M, memberUserId, { dbh: db }),
+          false
+        )
+      })
+    }
+  )
+
+  await t.test(
+    "(b) private actor memory: an active read grant to the member ALLOWS",
+    async () => {
+      await withTestDb(async (db) => {
+        const { workspaceId, memberUserId, memberSubjectId, spaceId } =
+          await seedPrivateMemoryRef(db)
+        await db
+          .insertInto("memory_access_grants")
+          .values({
+            workspace_id: workspaceId,
+            memory_space_id: spaceId,
+            subject_id: memberSubjectId,
+            permissions: ["read"],
+            status: "active",
+          } as any)
+          .execute()
+        assert.equal(
+          await canUserAccessContent(SHA_M, memberUserId, { dbh: db }),
+          true
+        )
+      })
+    }
+  )
+
+  await t.test(
+    "(b) private actor memory: a revoked grant does NOT allow",
+    async () => {
+      await withTestDb(async (db) => {
+        const { workspaceId, memberUserId, memberSubjectId, spaceId } =
+          await seedPrivateMemoryRef(db)
+        await db
+          .insertInto("memory_access_grants")
+          .values({
+            workspace_id: workspaceId,
+            memory_space_id: spaceId,
+            subject_id: memberSubjectId,
+            permissions: ["read"],
+            status: "revoked",
+          } as any)
+          .execute()
+        assert.equal(
+          await canUserAccessContent(SHA_M, memberUserId, { dbh: db }),
+          false
+        )
+      })
+    }
+  )
+})

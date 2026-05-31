@@ -354,9 +354,18 @@ async function waitForCatalog(
  * /actor) new head into the live dir without unmounting, then advance the
  * mount's base_snapshot_id to the merged-in head. /actor-conversation is single
  * writer — not refreshed.
+ *
+ * Returns per-subpath deferred conflicts: paths the agent dirtied locally that
+ * also changed in the incoming head, so the merge kept the local copy and the
+ * incoming change was NOT applied. The caller surfaces these to the agent so it
+ * can reconcile (otherwise the agent silently works on a stale view of those
+ * paths).
  */
-export async function refreshSpaces(sessionId: string): Promise<void> {
+export async function refreshSpaces(
+  sessionId: string
+): Promise<{ deferredConflictsBySubpath: Record<string, string[]> }> {
   const mounts = await getActiveMountsForSession(pool, sessionId)
+  const deferredConflictsBySubpath: Record<string, string[]> = {}
   for (const mount of mounts) {
     if (mount.mount_subpath === "actor-conversation") continue
     if (!mount.materialized_dir) continue
@@ -371,15 +380,19 @@ export async function refreshSpaces(sessionId: string): Promise<void> {
       ? await getSnapshotManifestSha(pool, mount.base_snapshot_id)
       : null
 
-    await syncDir({
+    const sync = await syncDir({
       dir: mount.materialized_dir,
       baseManifestSha256: baseManifest ?? undefined,
       toManifestSha256: headManifest,
     })
+    if (sync.deferred_conflicts.length > 0) {
+      deferredConflictsBySubpath[mount.mount_subpath] = sync.deferred_conflicts
+    }
     // Advance base to the synced-in head so the next commit doesn't treat the
     // just-merged incoming as local dirt and self-conflict.
     await updateFileMount(pool, mount.id, { baseSnapshotId: head })
   }
+  return { deferredConflictsBySubpath }
 }
 
 export interface CommitResult {
@@ -449,8 +462,16 @@ async function commitOneMount(
     latestManifestSha256: latestManifest ?? undefined,
   })
 
-  // Nothing changed vs latest → no new snapshot (avoid empty version bumps).
+  // Nothing to commit beyond the current head (no local changes, or all local
+  // changes lost to head on conflict): the merged manifest equals latest. Don't
+  // bump the version, BUT advance the mount base to latest so the next commit
+  // doesn't re-derive the same conflict set against a now-stale base forever.
   if (latestManifest && scan.manifest_sha256 === latestManifest) {
+    if (latestSnapshotId && mount.base_snapshot_id !== latestSnapshotId) {
+      await updateFileMount(pool, mount.id, {
+        baseSnapshotId: latestSnapshotId,
+      })
+    }
     return { snapshotId: null, conflicts: scan.conflict_paths }
   }
 
@@ -498,8 +519,12 @@ export interface TeardownSandboxOptions {
 }
 
 /**
- * Teardown: commit all dirty spaces, stop the daemon, delete the live dirs
- * (CAS untouched), close the mounts, revoke grants, delete the device.
+ * Teardown: commit all dirty spaces, stop the daemon, then — only if the commit
+ * succeeded — delete the live dirs and close the mounts. If the commit FAILS,
+ * the live dirs are PRESERVED and the mounts are marked 'failed' (not deleted),
+ * so uncommitted sandbox data is never thrown away; an operator / reconciler can
+ * retry the commit from the preserved materialized_dir. The daemon is stopped
+ * and the device deleted regardless (the process/device can't linger).
  */
 export async function teardownSandbox(
   sessionId: string,
@@ -510,7 +535,10 @@ export async function teardownSandbox(
   if (mounts.length === 0) return
 
   // ① commit ALL dirty spaces (incl /actor-conversation, and any /conversation
-  // ·/actor that an exception skipped at turn-end).
+  // ·/actor that an exception skipped at turn-end). Track success: a failure
+  // here MUST NOT lead to deleting the live dirs (that would lose data).
+  let commitOk = true
+  let commitError: unknown = null
   try {
     await commitSpaces(sessionId, [
       "conversation",
@@ -518,12 +546,15 @@ export async function teardownSandbox(
       "actor-conversation",
     ])
   } catch (err) {
+    commitOk = false
+    commitError = err
     console.error(`[sandbox] teardown commit failed for ${sessionId}:`, err)
   }
 
   const deviceId = mounts.find((m) => m.device_id)?.device_id ?? null
 
   // ② stop the daemon (in-process handle if we have it, else SIGTERM the pid).
+  // Always — a failed commit doesn't justify leaving the runtime process alive.
   if (deviceId) {
     const handle = liveRunHandles.get(deviceId)
     if (handle) {
@@ -535,21 +566,41 @@ export async function teardownSandbox(
     }
   }
 
-  // ③ delete the live dirs (CAS is the source of truth; dirs are scratch).
-  await rm(sandboxRootFor(sessionId), { recursive: true, force: true }).catch(
-    () => {}
-  )
-  await cleanupDirs([sandboxRootFor(sessionId)]).catch(() => {})
-
-  // ④ close mounts.
-  for (const mount of mounts) {
-    await updateFileMount(pool, mount.id, {
-      status: "closed",
-      closedAt: true,
+  if (commitOk) {
+    // ③ delete the live dirs (CAS is the source of truth; dirs are scratch).
+    await rm(sandboxRootFor(sessionId), {
+      recursive: true,
+      force: true,
     }).catch(() => {})
+    await cleanupDirs([sandboxRootFor(sessionId)]).catch(() => {})
+
+    // ④ close mounts.
+    for (const mount of mounts) {
+      await updateFileMount(pool, mount.id, {
+        status: "closed",
+        closedAt: true,
+      }).catch(() => {})
+    }
+  } else {
+    // Commit failed → PRESERVE the live dirs. Mark mounts 'failed' (keeping
+    // materialized_dir + host) so the data can be recovered/retried, and record
+    // the error. Do NOT rm the sandbox root.
+    const message =
+      commitError instanceof Error ? commitError.message : String(commitError)
+    for (const mount of mounts) {
+      await updateFileMount(pool, mount.id, {
+        status: "failed",
+        errorMessage: `teardown commit failed (live dir preserved at ${mount.materialized_dir}): ${message}`,
+      }).catch(() => {})
+    }
+    console.error(
+      `[sandbox] teardown for ${sessionId}: commit failed — preserved live dirs under ${sandboxRootFor(sessionId)} for recovery`
+    )
   }
 
-  // ⑤ revoke grants + ⑥ delete device (cascades device_* children).
+  // ⑤ revoke grants + ⑥ delete device (cascades device_* children). The device
+  // is paired per-session and can't be reused, so it's removed even on a failed
+  // commit; the preserved live dirs do not depend on it.
   if (ctx && deviceId) {
     await revokeSandboxGrants({
       workspaceId: ctx.workspaceId,

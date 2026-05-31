@@ -336,15 +336,17 @@ test(
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberUser = await insertUser(db)
-      const memberId = (await db
-        .insertInto("workspace_members")
-        .values({
-          workspace_id: workspaceId,
-          user_id: memberUser,
-          trust_level: "member",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()).id as string
+      const memberId = (
+        await db
+          .insertInto("workspace_members")
+          .values({
+            workspace_id: workspaceId,
+            user_id: memberUser,
+            trust_level: "member",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
 
       const conversationId = await insertConversation(db, workspaceId)
       const accountA = await insertAccount(db, workspaceId)
@@ -389,15 +391,17 @@ test(
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberUser = await insertUser(db)
-      const memberId = (await db
-        .insertInto("workspace_members")
-        .values({
-          workspace_id: workspaceId,
-          user_id: memberUser,
-          trust_level: "member",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()).id as string
+      const memberId = (
+        await db
+          .insertInto("workspace_members")
+          .values({
+            workspace_id: workspaceId,
+            user_id: memberUser,
+            trust_level: "member",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
       const conversationId = await insertConversation(db, workspaceId)
       const accountA = await insertAccount(db, workspaceId)
       await bindConversation(db, workspaceId, conversationId, accountA)
@@ -405,30 +409,37 @@ test(
       // A workspace_member participant with an account-A address attached (the
       // linked-member cpa path). No external participant involved.
       const addrA = await insertAddress(db, workspaceId, accountA)
-      const participantId = (await db
-        .insertInto("conversation_participants")
-        .values({
-          conversation_id: conversationId,
-          subject_id: (await db
-            .insertInto("access_subjects")
-            .values({
-              kind: "workspace_member",
-              workspace_id: workspaceId,
-              workspace_member_id: memberId,
-            })
-            .onConflict((oc) => oc.doNothing())
-            .returning("id")
-            .executeTakeFirst())?.id ??
-            (await db
-              .selectFrom("access_subjects")
-              .select("id")
-              .where("workspace_member_id", "=", memberId)
-              .executeTakeFirstOrThrow()).id,
-          role_key: "member",
-          state: "active",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()).id as string
+      const participantId = (
+        await db
+          .insertInto("conversation_participants")
+          .values({
+            conversation_id: conversationId,
+            subject_id:
+              (
+                await db
+                  .insertInto("access_subjects")
+                  .values({
+                    kind: "workspace_member",
+                    workspace_id: workspaceId,
+                    workspace_member_id: memberId,
+                  })
+                  .onConflict((oc) => oc.doNothing())
+                  .returning("id")
+                  .executeTakeFirst()
+              )?.id ??
+              (
+                await db
+                  .selectFrom("access_subjects")
+                  .select("id")
+                  .where("workspace_member_id", "=", memberId)
+                  .executeTakeFirstOrThrow()
+              ).id,
+            role_key: "member",
+            state: "active",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
       await db
         .insertInto("conversation_participant_addresses")
         .values({
@@ -526,15 +537,17 @@ test(
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberUser = await insertUser(db)
-      const memberId = (await db
-        .insertInto("workspace_members")
-        .values({
-          workspace_id: workspaceId,
-          user_id: memberUser,
-          trust_level: "member",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()).id as string
+      const memberId = (
+        await db
+          .insertInto("workspace_members")
+          .values({
+            workspace_id: workspaceId,
+            user_id: memberUser,
+            trust_level: "member",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
 
       // Native conversation: NO transport binding.
       const conversationId = await insertConversation(db, workspaceId)
@@ -577,9 +590,8 @@ test(
       const workspaceId = await insertWorkspace(db, userId)
       const conversationId = await insertConversation(db, workspaceId)
 
-      const { upsertAccessSubject } = await import(
-        "../access/subject-registry.js"
-      )
+      const { upsertAccessSubject } =
+        await import("../access/subject-registry.js")
       const subjectId = await upsertAccessSubject(db as never, {
         kind: "conversation",
         conversationId,
@@ -617,7 +629,11 @@ test(
       await bindConversation(db, workspaceId, conversationId, accountA)
       const addrA = await insertAddress(db, workspaceId, accountA)
 
-      const created = await addExternalParticipant(conversationId, addrA, client)
+      const created = await addExternalParticipant(
+        conversationId,
+        addrA,
+        client
+      )
 
       const { getConversationParticipant } = await import("./service.js")
       const found = await getConversationParticipant({
@@ -648,4 +664,3 @@ test("invite_actor mask is native group only (excludes im_group)", () => {
   assert.equal(maskAllowsConversationType(mask, "group", true), false)
   assert.equal(maskAllowsConversationType(mask, "direct", false), false)
 })
-

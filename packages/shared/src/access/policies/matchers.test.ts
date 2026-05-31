@@ -519,7 +519,9 @@ test("parseCommandlinePolicyFromWire: rejects unknown executor", () => {
 
 test("commandlinePolicyAllows: sandbox covers any shell command whose cwd is in a mount point", () => {
   const policy: CommandlineSandboxPolicyShape = { executor: "sandbox" }
-  // Command text is irrelevant — isolation is the boundary.
+  // Command text is irrelevant — isolation is the boundary. /conversation is
+  // also the default cwd the commandline builtin injects when a sandbox request
+  // omits working_directory, so this asserts that default is authorized.
   const result = commandlinePolicyAllows(policy, {
     kind: "shell",
     executor: "bash",

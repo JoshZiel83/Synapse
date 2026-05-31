@@ -239,6 +239,16 @@ export function createCommandlineBuiltin(
           ? rawWorkingDirectory
           : undefined
 
+      // In a sandbox, default the working directory to the sandbox cwd
+      // (/conversation) BEFORE the permission gate. The sandbox matcher requires
+      // a cwd inside a mount point and denies a request with none; applying the
+      // default here (not just at the spawn layer) means a normal sandbox
+      // command with no explicit cwd is authorized against the default mount and
+      // runs there, instead of being rejected by the matcher.
+      if (opts.sandboxRoot && resolvedWorkingDirectory === undefined) {
+        resolvedWorkingDirectory = DEFAULT_SANDBOX_CWD
+      }
+
       const rawTimeout = input.args["timeout_ms"]
       if (rawTimeout !== undefined && typeof rawTimeout !== "number") {
         return toolErrorResult({
@@ -456,6 +466,8 @@ export function createCommandlineBuiltin(
         spawnDescriptor = wrapDescriptorWithBwrap(descriptor, {
           sandboxRoot: opts.sandboxRoot,
           readonlyBinds: toolchainBinDirs,
+          // resolvedWorkingDirectory is defaulted to DEFAULT_SANDBOX_CWD above
+          // for sandbox requests, so it's always set here.
           cwd: resolvedWorkingDirectory || DEFAULT_SANDBOX_CWD,
         })
         // bwrap sets the in-jail cwd via --chdir; the bwrap process itself runs

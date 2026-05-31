@@ -1566,6 +1566,84 @@ fn manifest_scan_commit_then_materialize_roundtrip() {
 }
 
 #[test]
+fn manifest_materialize_handles_type_changes_and_clears_stale() {
+    // A re-materialize must survive every file-type change (file→dir, dir→file,
+    // file→symlink, symlink→dir) AND clear stale files from a previous snapshot,
+    // not just fail or leave junk behind.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // Snapshot A: p1 is a FILE, p2 is a DIR (with a child), p3 is a FILE,
+    // plus a stale file that snapshot B will not contain.
+    let a = tmp.path().join("treeA");
+    std::fs::create_dir_all(a.join("p2")).unwrap();
+    std::fs::write(a.join("p1"), "file-content").unwrap();
+    std::fs::write(a.join("p2/child"), "child").unwrap();
+    std::fs::write(a.join("p3"), "p3-file").unwrap();
+    std::fs::write(a.join("stale.txt"), "stale").unwrap();
+    let sha_a = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": a.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Snapshot B: p1 is now a DIR, p2 is now a FILE, p3 is now a SYMLINK.
+    // stale.txt is gone.
+    let b = tmp.path().join("treeB");
+    std::fs::create_dir_all(b.join("p1")).unwrap();
+    std::fs::write(b.join("p1/inner"), "inner").unwrap();
+    std::fs::write(b.join("p2"), "now-a-file").unwrap();
+    std::os::unix::fs::symlink("p2", b.join("p3")).unwrap();
+    let sha_b = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": b.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Materialize A into `out`, then re-materialize B into the SAME dir.
+    let out = tmp.path().join("out");
+    let m1 = helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": sha_a, "target_dir": out.to_str().unwrap() }),
+    );
+    assert!(m1.get("error").is_none(), "{m1}");
+    assert!(out.join("p1").is_file());
+    assert!(out.join("p2").is_dir());
+    assert!(out.join("stale.txt").is_file());
+
+    let m2 = helper.call(
+        4,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": sha_b, "target_dir": out.to_str().unwrap() }),
+    );
+    assert!(m2.get("error").is_none(), "type-change re-materialize failed: {m2}");
+    // p1: file → dir.
+    assert!(out.join("p1").is_dir(), "p1 should now be a dir");
+    assert_eq!(std::fs::read(out.join("p1/inner")).unwrap(), b"inner");
+    // p2: dir → file.
+    assert!(out.join("p2").is_file(), "p2 should now be a file");
+    assert_eq!(std::fs::read(out.join("p2")).unwrap(), b"now-a-file");
+    // p3: file → symlink.
+    let p3 = std::fs::symlink_metadata(out.join("p3")).unwrap();
+    assert!(p3.file_type().is_symlink(), "p3 should now be a symlink");
+    // stale.txt cleared.
+    assert!(!out.join("stale.txt").exists(), "stale file not cleared");
+    helper.stop();
+}
+
+#[test]
 fn manifest_same_tree_committed_twice_yields_same_sha() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
