@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { z } from "zod"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
-  CONVERSATION_TYPE_MASK_BITS,
+  CONVERSATION_TYPE_MASK_PRESETS,
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
@@ -167,8 +167,8 @@ function getToolContextConversationKind(ctx: ToolResolveContext) {
   return ctx.conversationKind
 }
 
-function getToolContextConversationBoundary(ctx: ToolResolveContext) {
-  return ctx.conversationBoundary
+function getToolContextIsImConversation(ctx: ToolResolveContext) {
+  return ctx.isImConversation ?? false
 }
 
 function getToolContextConversationParticipants(ctx: ToolResolveContext) {
@@ -266,7 +266,7 @@ function buildSendToDefinition(params: {
     const peerName = params.otherParticipants[0]!.name
     return {
       name: "send_to",
-      description: `Send a visible message to the other participant in this private thread. The recipient is implicit. Current peer: ${rosterDesc}.`,
+      description: `Send a visible message to the other participant in this direct thread. The recipient is implicit. Current peer: ${rosterDesc}.`,
       parameters: {
         type: "object",
         properties: {
@@ -282,11 +282,11 @@ function buildSendToDefinition(params: {
           },
           replyToRef: {
             type: "string",
-            description: buildReplyToRefUsageGuidance("private"),
+            description: buildReplyToRefUsageGuidance("direct"),
           },
           message: {
             type: "string",
-            description: `The visible message content sent in this private thread with ${peerName}. Prefer inline <mention participantId="..."/>. You may also use <mention name="${peerName}"/> when the name is unique in the roster. Mention only when the sentence itself explicitly points to a participant.`,
+            description: `The visible message content sent in this direct thread with ${peerName}. Prefer inline <mention participantId="..."/>. You may also use <mention name="${peerName}"/> when the name is unique in the roster. Mention only when the sentence itself explicitly points to a participant.`,
           },
         },
         required: ["intent", "summary", "message"],
@@ -522,10 +522,10 @@ function resolveHumanInteractionTarget(params: {
   candidates: UserInteractionCandidate[]
 }) {
   const requestedParticipantId = params.requestedParticipantId?.trim() || ""
-  const isPrivateConversation =
-    params.conversationKind === "private" && params.candidates.length === 1
+  const isDirectConversation =
+    params.conversationKind === "direct" && params.candidates.length === 1
 
-  if (isPrivateConversation) {
+  if (isDirectConversation) {
     const implicitCandidate = params.candidates[0] || null
     if (!implicitCandidate) {
       return {
@@ -539,7 +539,7 @@ function resolveHumanInteractionTarget(params: {
     ) {
       return {
         candidate: null,
-        error: `targetParticipantId must be omitted or set to ${implicitCandidate.participantId} in a private conversation.`,
+        error: `targetParticipantId must be omitted or set to ${implicitCandidate.participantId} in a direct conversation.`,
       }
     }
     return { candidate: implicitCandidate, error: null }
@@ -994,13 +994,17 @@ async function listInviteableActors(params: {
 async function canActorUseInviteActorTool(params: {
   actorId: string
   conversationId: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: "internal" | "external"
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
 }) {
+  // invite_actor is restricted to NATIVE (in-app) group conversations. Actors
+  // must not pull additional actors into an IM-bridged group chat (preserves the
+  // pre-refactor "internal group only" behavior; the bit-mask equivalent is the
+  // native `group` bit, NOT GROUP_ONLY which also includes im_group).
   if (
     !params.conversationId ||
     !isGroupConversationKind(params.conversationKind) ||
-    params.conversationBoundary !== "internal"
+    params.isImConversation
   ) {
     return false
   }
@@ -1156,7 +1160,7 @@ export function registerCallableToolPlugins(): void {
           sessionId: context.sessionId,
           conversationId: session.conversation_id,
           conversationKind: session.conversation_kind,
-          conversationBoundary: session.conversation_boundary,
+          isImConversation: session.isImConversation,
           skillName,
           assetPath: path || undefined,
         })
@@ -1385,7 +1389,7 @@ export function registerCallableToolPlugins(): void {
           targetParticipantId: {
             type: "string",
             description:
-              "Required in group conversations. Omit in a private conversation with one user.",
+              "Required in group conversations. Omit in a direct conversation with one user.",
           },
           title: {
             type: "string",
@@ -1456,17 +1460,17 @@ export function registerCallableToolPlugins(): void {
       if (candidates.length === 0) {
         return { active: false, definition: null as any }
       }
-      const isPrivateConversation =
-        getToolContextConversationKind(ctx) === "private" &&
+      const isDirectConversation =
+        getToolContextConversationKind(ctx) === "direct" &&
         candidates.length === 1
       const candidateDirectory = buildUserInteractionDirectory(candidates)
       return {
         active: true,
         definition: {
           name: "request_user_input",
-          description: isPrivateConversation
+          description: isDirectConversation
             ? buildRequestUserInputToolDescription({
-                kind: "private",
+                kind: "direct",
                 recipientLabel: candidates[0]!.label,
               })
             : buildRequestUserInputToolDescription({
@@ -1476,7 +1480,7 @@ export function registerCallableToolPlugins(): void {
           parameters: {
             type: "object",
             properties: {
-              ...(isPrivateConversation
+              ...(isDirectConversation
                 ? {}
                 : {
                     targetParticipantId: {
@@ -1869,7 +1873,7 @@ export function registerCallableToolPlugins(): void {
           targetParticipantId: {
             type: "string",
             description:
-              "Required in group conversations. Omit in a private conversation with one user.",
+              "Required in group conversations. Omit in a direct conversation with one user.",
           },
           title: {
             type: "string",
@@ -1922,17 +1926,17 @@ export function registerCallableToolPlugins(): void {
       if (candidates.length === 0) {
         return { active: false, definition: null as any }
       }
-      const isPrivateConversation =
-        getToolContextConversationKind(ctx) === "private" &&
+      const isDirectConversation =
+        getToolContextConversationKind(ctx) === "direct" &&
         candidates.length === 1
       const candidateDirectory = buildUserInteractionDirectory(candidates)
       return {
         active: true,
         definition: {
           name: "exit_plan_mode",
-          description: isPrivateConversation
+          description: isDirectConversation
             ? buildExitPlanModeToolDescription({
-                kind: "private",
+                kind: "direct",
                 recipientLabel: candidates[0]!.label,
               })
             : buildExitPlanModeToolDescription({
@@ -1942,7 +1946,7 @@ export function registerCallableToolPlugins(): void {
           parameters: {
             type: "object",
             properties: {
-              ...(isPrivateConversation
+              ...(isDirectConversation
                 ? {}
                 : {
                     targetParticipantId: {
@@ -2415,7 +2419,7 @@ export function registerCallableToolPlugins(): void {
   registerToolPlugin({
     name: "invite_actor",
     kind: "callable",
-    conversationTypeMask: CONVERSATION_TYPE_MASK_BITS.internal_group,
+    conversationTypeMask: CONVERSATION_TYPE_MASK_PRESETS.NATIVE_GROUP_ONLY,
     definition: {
       name: "invite_actor",
       description:
@@ -2444,7 +2448,7 @@ export function registerCallableToolPlugins(): void {
             actorId: ctx.actorId,
             conversationId,
             conversationKind: getToolContextConversationKind(ctx),
-            conversationBoundary: getToolContextConversationBoundary(ctx),
+            isImConversation: getToolContextIsImConversation(ctx),
           })
         : false
       if (!requesterAllowed) {
@@ -2482,16 +2486,16 @@ export function registerCallableToolPlugins(): void {
       if (!isGroupConversationKind(session.conversation_kind)) {
         throwToolError("invite_actor is only available in group conversations.")
       }
-      if (session.conversation_boundary !== "internal") {
+      if (session.isImConversation) {
         throwToolError(
-          "invite_actor is only available in internal group conversations."
+          "invite_actor is not available in IM group conversations."
         )
       }
       const requesterAllowed = await canActorUseInviteActorTool({
         actorId: context.actorId,
         conversationId,
         conversationKind: session.conversation_kind,
-        conversationBoundary: session.conversation_boundary,
+        isImConversation: session.isImConversation,
       })
       if (!requesterAllowed) {
         throwToolError(

@@ -5,9 +5,10 @@ import {
   FILE_ORIGIN_SYSTEMS,
   actorRef,
   conversationRef,
-  maskAllowsConversationType,
+  maskAllowsConversationTypeKey,
   normalizeConversationTypeMask,
   remoteAgentRef,
+  resolveConversationTypeKey,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
   subjectScopeLabel,
@@ -3790,8 +3791,8 @@ export async function listVisibleSkills(input: {
   actorId?: string
   sessionId?: string
   conversationId?: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: "internal" | "external"
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
 }) {
   const subjects = await buildVisibilitySubjects(input)
   // PR-fix-round-4: compute the scope subject set for this conversation
@@ -3821,7 +3822,7 @@ export async function listVisibleSkills(input: {
     sessionId: input.sessionId,
     conversationId: input.conversationId,
     conversationKind: input.conversationKind,
-    conversationBoundary: input.conversationBoundary,
+    isImConversation: input.isImConversation,
   })
   if (subjects.length === 0) {
     return relayAutoLoadedSkills
@@ -3897,6 +3898,12 @@ export async function listVisibleSkills(input: {
             await getWorkspaceCapabilityConversationTypePolicyMap(
               rows.rows.map((row) => row.workspace_id)
             )
+          // type-key is loop-invariant (a property of the conversation, not the
+          // skill binding), so resolve it once and use the pure key check below.
+          const conversationTypeKey = resolveConversationTypeKey(
+            input.conversationKind,
+            input.isImConversation ?? false
+          )
 
           const deduped = new Map<string, VisibleSkillRow>()
           for (const row of rows.rows) {
@@ -3911,13 +3918,12 @@ export async function listVisibleSkills(input: {
               })
             const bindings = (bindingsBySkillId.get(row.skill_id) || []).filter(
               (binding) =>
-                maskAllowsConversationType(
+                maskAllowsConversationTypeKey(
                   resolveNarrowedConversationTypeMask(
                     instanceConversationTypeMask,
                     binding.conversation_type_mask_override
                   ),
-                  input.conversationKind,
-                  input.conversationBoundary
+                  conversationTypeKey
                 )
             )
             if (bindings.length === 0) {
@@ -3972,8 +3978,8 @@ export async function readVisibleSkill(input: {
   actorId?: string
   sessionId?: string
   conversationId?: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: "internal" | "external"
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
   skillName: string
   assetPath?: string
 }) {
@@ -3983,7 +3989,7 @@ export async function readVisibleSkill(input: {
     sessionId: input.sessionId,
     conversationId: input.conversationId,
     conversationKind: input.conversationKind,
-    conversationBoundary: input.conversationBoundary,
+    isImConversation: input.isImConversation,
   })
 
   const normalizedName = input.skillName.trim().toLowerCase()

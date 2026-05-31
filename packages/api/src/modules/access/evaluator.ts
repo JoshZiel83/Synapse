@@ -69,8 +69,7 @@ type RemoteAgentRow = {
 type ConversationRow = {
   id: string
   workspace_id: string
-  kind: "private" | "group" | "virtual"
-  boundary: "internal" | "external"
+  kind: "direct" | "group"
 }
 
 type ResourceGrantMatch = {
@@ -153,19 +152,10 @@ async function loadConversationRow(
 ): Promise<ConversationRow | null> {
   return (await db
     .selectFrom("conversations as conversation")
-    .leftJoin(
-      "workspace_members as creator_member",
-      "creator_member.id",
-      "conversation.created_by_workspace_member_id"
-    )
     .select([
       "conversation.id as id",
-      sql<string | null>`COALESCE(
-        conversation.internal_workspace_id,
-        creator_member.workspace_id
-      )`.as("workspace_id"),
+      "conversation.workspace_id as workspace_id",
       "conversation.kind as kind",
-      "conversation.boundary as boundary",
     ])
     .where("conversation.id", "=", conversationId)
     .limit(1)

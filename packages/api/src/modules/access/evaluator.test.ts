@@ -956,8 +956,7 @@ async function insertConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      boundary: "internal",
-      internal_workspace_id: params.workspaceId,
+      workspace_id: params.workspaceId,
       title: "test conversation",
       created_by_workspace_member_id: params.createdByMemberId ?? null,
     })

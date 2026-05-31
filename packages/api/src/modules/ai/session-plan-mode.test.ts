@@ -8,20 +8,20 @@ import {
   isBuiltinToolAllowedInCollaborationMode,
 } from "./session-plan-mode.js"
 
-test("plan mode is available only in private conversations", () => {
-  assert.equal(canEnterPlanMode("default", "private"), true)
+test("plan mode is available only in direct conversations", () => {
+  assert.equal(canEnterPlanMode("default", "direct"), true)
   assert.equal(canEnterPlanMode("default", "group"), false)
   assert.throws(
     () => assertPlanModeConversationKind("group"),
-    /Plan mode is only available in private conversations/i
+    /Plan mode is only available in direct conversations/i
   )
 })
 
 test("drafting state enables update and exit plan tools", () => {
-  assert.equal(canUpdatePlan("plan_drafting", "private"), true)
-  assert.equal(canExitPlanMode("plan_drafting", "private"), true)
-  assert.equal(canUpdatePlan("plan_awaiting_approval", "private"), false)
-  assert.equal(canExitPlanMode("plan_awaiting_approval", "private"), false)
+  assert.equal(canUpdatePlan("plan_drafting", "direct"), true)
+  assert.equal(canExitPlanMode("plan_drafting", "direct"), true)
+  assert.equal(canUpdatePlan("plan_awaiting_approval", "direct"), false)
+  assert.equal(canExitPlanMode("plan_awaiting_approval", "direct"), false)
 })
 
 test("tool allowance changes across drafting and awaiting-approval states", () => {
@@ -29,7 +29,7 @@ test("tool allowance changes across drafting and awaiting-approval states", () =
     isBuiltinToolAllowedInCollaborationMode(
       "request_user_input",
       "plan_drafting",
-      "private"
+      "direct"
     ),
     true
   )
@@ -37,7 +37,7 @@ test("tool allowance changes across drafting and awaiting-approval states", () =
     isBuiltinToolAllowedInCollaborationMode(
       "request_user_input",
       "plan_awaiting_approval",
-      "private"
+      "direct"
     ),
     false
   )
@@ -53,7 +53,7 @@ test("tool allowance changes across drafting and awaiting-approval states", () =
     isBuiltinToolAllowedInCollaborationMode(
       "tail_task_output",
       "plan_awaiting_approval",
-      "private"
+      "direct"
     ),
     true
   )

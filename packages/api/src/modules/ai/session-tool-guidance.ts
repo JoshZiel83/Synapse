@@ -1,9 +1,9 @@
 type RequestUserInputDescriptionVariant =
   | { kind: "generic" }
-  | { kind: "private"; recipientLabel: string }
+  | { kind: "direct"; recipientLabel: string }
   | { kind: "group"; candidateDirectory: string }
 
-type ReplyToRefGuidanceVariant = "private" | "group"
+type ReplyToRefGuidanceVariant = "direct" | "group"
 
 function joinSentences(...sentences: string[]): string {
   return sentences.join(" ")
@@ -12,10 +12,10 @@ function joinSentences(...sentences: string[]): string {
 export function buildReplyToRefUsageGuidance(
   variant: ReplyToRefGuidanceVariant
 ): string {
-  if (variant === "private") {
+  if (variant === "direct") {
     return joinSentences(
       "`replyToRef` is optional and should be used only when it adds clarity.",
-      "In a private conversation, if you are replying to the immediately preceding visible message and no other recent message could plausibly be the target, omit `replyToRef` by default.",
+      "In a direct conversation, if you are replying to the immediately preceding visible message and no other recent message could plausibly be the target, omit `replyToRef` by default.",
       "Use it when replying to an older message, when multiple recent messages or questions could be the target, when newer messages may have shifted the context, or when the explicit reply preview itself would be useful.",
       "Do not add `replyToRef` mechanically just because the XML shows message refs."
     )
@@ -33,11 +33,11 @@ export function buildRequestUserInputToolDescription(
   variant: RequestUserInputDescriptionVariant
 ): string {
   const intro =
-    variant.kind === "private"
-      ? `Request structured input from the single user in this private conversation. The recipient is implicit: ${variant.recipientLabel}.`
+    variant.kind === "direct"
+      ? `Request structured input from the single user in this direct conversation. The recipient is implicit: ${variant.recipientLabel}.`
       : variant.kind === "group"
         ? `Request structured input from exactly one user in this conversation. \`targetParticipantId\` is required. Available \`targetParticipantId\` values: ${variant.candidateDirectory}.`
-        : "Request structured input from one user in the current conversation. In private conversations the target user is implicit; in group conversations you must provide `targetParticipantId`."
+        : "Request structured input from one user in the current conversation. In direct conversations the target user is implicit; in group conversations you must provide `targetParticipantId`."
 
   return joinSentences(
     intro,
@@ -64,7 +64,7 @@ export function buildUpdatePlanToolDescription(): string {
 }
 
 type ExitPlanModeDescriptionVariant =
-  | { kind: "private"; recipientLabel: string }
+  | { kind: "direct"; recipientLabel: string }
   | { kind: "group"; candidateDirectory: string }
   | { kind: "generic" }
 
@@ -72,11 +72,11 @@ export function buildExitPlanModeToolDescription(
   variant: ExitPlanModeDescriptionVariant
 ): string {
   const intro =
-    variant.kind === "private"
-      ? `Submit the completed implementation plan for approval by the single user in this private conversation. The recipient is implicit: ${variant.recipientLabel}.`
+    variant.kind === "direct"
+      ? `Submit the completed implementation plan for approval by the single user in this direct conversation. The recipient is implicit: ${variant.recipientLabel}.`
       : variant.kind === "group"
         ? `Submit the completed implementation plan for approval by exactly one user in this conversation. \`targetParticipantId\` is required. Available \`targetParticipantId\` values: ${variant.candidateDirectory}.`
-        : "Submit the completed implementation plan for user approval. In private conversations the target user is implicit; in group conversations you must provide `targetParticipantId`."
+        : "Submit the completed implementation plan for user approval. In direct conversations the target user is implicit; in group conversations you must provide `targetParticipantId`."
 
   return joinSentences(
     intro,

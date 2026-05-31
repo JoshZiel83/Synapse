@@ -53,28 +53,28 @@ test("assertConversationTypeMaskWithinParent returns the parent mask when overri
   const buildError = (m: string) => new Error(m)
   assert.equal(
     assertConversationTypeMaskWithinParent({
-      parentConversationTypeMask: 0b11111,
+      parentConversationTypeMask: 0b1111,
       conversationTypeMaskOverride: null,
       buildError,
       invalidMaskMessage: "x",
     }),
-    0b11111
+    0b1111
   )
   assert.equal(
     assertConversationTypeMaskWithinParent({
-      parentConversationTypeMask: 0b11111,
+      parentConversationTypeMask: 0b1111,
       conversationTypeMaskOverride: undefined,
       buildError,
       invalidMaskMessage: "x",
     }),
-    0b11111
+    0b1111
   )
 })
 
 test("assertConversationTypeMaskWithinParent narrows when override is a subset of parent", () => {
   const buildError = (m: string) => new Error(m)
   const mask = assertConversationTypeMaskWithinParent({
-    parentConversationTypeMask: 0b11111,
+    parentConversationTypeMask: 0b1111,
     conversationTypeMaskOverride: 0b00011,
     buildError,
     invalidMaskMessage: "x",
@@ -97,7 +97,7 @@ test("assertGrantConversationTypeOverrideAllowed rejects an override on a conver
   assert.throws(() =>
     assertGrantConversationTypeOverrideAllowed({
       target: { subject: conversationRef("c-1") },
-      parentConversationTypeMask: 0b11111,
+      parentConversationTypeMask: 0b1111,
       conversationTypeMaskOverride: 0b00001,
       buildError: (m) => new Error(m),
       invalidMaskMessage: "x",
@@ -108,7 +108,7 @@ test("assertGrantConversationTypeOverrideAllowed rejects an override on a conver
 test("assertGrantConversationTypeOverrideAllowed allows overrides on workspace + actor scopes", () => {
   const ws = assertGrantConversationTypeOverrideAllowed({
     target: { subject: workspaceRef("ws-1") },
-    parentConversationTypeMask: 0b11111,
+    parentConversationTypeMask: 0b1111,
     conversationTypeMaskOverride: 0b00111,
     buildError: (m) => new Error(m),
     invalidMaskMessage: "x",
@@ -116,12 +116,12 @@ test("assertGrantConversationTypeOverrideAllowed allows overrides on workspace +
   assert.equal(ws, 0b00111)
   const actor = assertGrantConversationTypeOverrideAllowed({
     target: { subject: actorRef("a-1") },
-    parentConversationTypeMask: 0b11111,
+    parentConversationTypeMask: 0b1111,
     conversationTypeMaskOverride: null,
     buildError: (m) => new Error(m),
     invalidMaskMessage: "x",
   })
-  assert.equal(actor, 0b11111)
+  assert.equal(actor, 0b1111)
 })
 
 test(
@@ -132,7 +132,7 @@ test(
       const result = await validateConversationScopedAccessTarget({
         db,
         target: { subject: workspaceRef("ws-1") },
-        effectiveConversationTypeMask: 0b11111,
+        effectiveConversationTypeMask: 0b1111,
         buildError: (m) => new Error(m),
       })
       assert.equal(result, null)
@@ -151,7 +151,7 @@ test(
       const result = await validateConversationScopedAccessTarget({
         db,
         target: { subject: conversationRef(conversationId) },
-        effectiveConversationTypeMask: 0b11111,
+        effectiveConversationTypeMask: 0b1111,
         buildError: (m) => new Error(m),
       })
       assert.ok(result)
@@ -168,12 +168,12 @@ test(
       const ownerId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, ownerId)
       const conversationId = await insertConversation(db, workspaceId)
-      // group + internal = bit 1; mask 0b10000 (virtual only) disallows it.
+      // group (non-IM) = bit 2; mask 0b0001 (direct only) disallows it.
       await assert.rejects(
         validateConversationScopedAccessTarget({
           db,
           target: { subject: conversationRef(conversationId) },
-          effectiveConversationTypeMask: 0b10000,
+          effectiveConversationTypeMask: 0b0001,
           buildError: (m) => new Error(m),
         }),
         /blocked by the current conversation type policy/
@@ -199,7 +199,7 @@ test(
             subject: actorRef(actorId),
             scope: conversationRef(conversationId),
           },
-          effectiveConversationTypeMask: 0b11111,
+          effectiveConversationTypeMask: 0b1111,
           buildError: (m) => new Error(m),
         }),
         /active participant/
@@ -223,7 +223,7 @@ test(
           subject: actorRef(actorId),
           scope: conversationRef(conversationId),
         },
-        effectiveConversationTypeMask: 0b11111,
+        effectiveConversationTypeMask: 0b1111,
         buildError: (m) => new Error(m),
       })
       assert.ok(ok)
@@ -255,7 +255,7 @@ test(
             subject: remoteAgentRef(remoteAgentId),
             scope: conversationRef(conversationId),
           },
-          effectiveConversationTypeMask: 0b11111,
+          effectiveConversationTypeMask: 0b1111,
           buildError: (m) => new Error(m),
         }),
         /active participant/
@@ -280,7 +280,7 @@ test(
           subject: remoteAgentRef(remoteAgentId),
           scope: conversationRef(conversationId),
         },
-        effectiveConversationTypeMask: 0b11111,
+        effectiveConversationTypeMask: 0b1111,
         buildError: (m) => new Error(m),
       })
       assert.ok(ok)
@@ -312,7 +312,7 @@ test(
             subject: workspaceMemberRef(memberId),
             scope: conversationRef(conversationId),
           },
-          effectiveConversationTypeMask: 0b11111,
+          effectiveConversationTypeMask: 0b1111,
           buildError: (m) => new Error(m),
         }),
         /active participant/
@@ -337,7 +337,7 @@ test(
           subject: workspaceMemberRef(memberId),
           scope: conversationRef(conversationId),
         },
-        effectiveConversationTypeMask: 0b11111,
+        effectiveConversationTypeMask: 0b1111,
         buildError: (m) => new Error(m),
       })
       assert.ok(ok)
@@ -379,8 +379,7 @@ async function insertConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      boundary: "internal",
-      internal_workspace_id: workspaceId,
+      workspace_id: workspaceId,
       title: "test conversation",
     })
     .returning("id")

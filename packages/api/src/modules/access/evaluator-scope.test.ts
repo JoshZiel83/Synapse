@@ -93,8 +93,7 @@ async function newConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      boundary: "internal",
-      internal_workspace_id: workspaceId,
+      workspace_id: workspaceId,
       title: `${NS} conv`,
     })
     .returning("id")

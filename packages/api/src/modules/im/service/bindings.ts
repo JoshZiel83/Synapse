@@ -13,6 +13,7 @@ import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
+  type KyselyDb,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
 import { v4 as uuidv4 } from "uuid"
@@ -93,6 +94,36 @@ export async function getConversationTransportBinding(params: {
   return row ? normalizeBindingRow(row) : null
 }
 
+/**
+ * Lightweight existence probe used to derive a conversation's "IM-ness" (a
+ * conversation is IM iff it has a transport binding). Far cheaper than
+ * getConversationTransportBinding, which hydrates the full account+endpoint row.
+ * Pass `workspaceId` to additionally scope the check to that workspace (the
+ * binding table is workspace-scoped); omitting it checks by conversation alone
+ * (conversation_id is UNIQUE on the binding table).
+ *
+ * Pass `queryable` (a Kysely transaction) to read inside an open transaction so
+ * a binding created earlier in the SAME transaction is visible (fresh
+ * derivation); omit it to read committed state via the module pool.
+ */
+export async function hasConversationTransportBinding(params: {
+  conversationId: string
+  workspaceId?: string
+  queryable?: KyselyDb
+}): Promise<boolean> {
+  const executor = params.queryable ?? db
+  let query = executor
+    .selectFrom("conversation_transport_bindings")
+    .select(sql<number>`1`.as("one"))
+    .where("conversation_id", "=", params.conversationId)
+    .limit(1)
+  if (params.workspaceId !== undefined) {
+    query = query.where("workspace_id", "=", params.workspaceId)
+  }
+  const row = await query.executeTakeFirst()
+  return Boolean(row)
+}
+
 export async function findConversationTransportBindingByEndpoint(params: {
   transportAccountId: string
   endpointType: TransportEndpointType
@@ -169,6 +200,43 @@ export async function upsertConversationTransportBinding(params: {
   )
   if (!account) {
     throw new Error("Transport account not found")
+  }
+
+  // The conversation must belong to the same workspace as the binding/account.
+  // The DB enforces this via composite FKs, but check here for a friendly error
+  // rather than a raw FK violation (and to fail before the endpoint upsert).
+  const conversationRow = await db
+    .selectFrom("conversations")
+    .select("workspace_id")
+    .where("id", "=", params.conversationId)
+    .limit(1)
+    .executeTakeFirst()
+  if (!conversationRow) {
+    throw new Error("Conversation not found")
+  }
+  if (conversationRow.workspace_id !== params.workspaceId) {
+    throw new Error("Conversation does not belong to the binding's workspace")
+  }
+
+  // Friendly guard mirroring the DB trigger tg_binding_account_consistency:
+  // re-binding a conversation to a different transport account is forbidden
+  // while external participants from another account remain (they would become
+  // account-mismatched). The trigger is the hard enforcement; this surfaces a
+  // clean error instead of a raw trigger exception.
+  const conflictingExternal = await db
+    .selectFrom("conversation_participants as cp")
+    .innerJoin("access_subjects as asx", "asx.id", "cp.subject_id")
+    .innerJoin("transport_addresses as ta", "ta.id", "asx.transport_address_id")
+    .select("cp.id")
+    .where("cp.conversation_id", "=", params.conversationId)
+    .where("asx.kind", "=", "external")
+    .where("ta.transport_account_id", "!=", params.transportAccountId)
+    .limit(1)
+    .executeTakeFirst()
+  if (conflictingExternal) {
+    throw new Error(
+      "Cannot re-bind conversation to a different transport account while external participants from another account remain"
+    )
   }
 
   assertSupportedEndpointType(

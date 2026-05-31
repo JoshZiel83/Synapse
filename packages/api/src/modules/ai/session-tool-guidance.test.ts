@@ -48,8 +48,8 @@ test("plan mode helper descriptions distinguish planning from approval", () => {
   )
 })
 
-test("replyToRef guidance discourages mechanical quoting in private threads", () => {
-  const description = buildReplyToRefUsageGuidance("private")
+test("replyToRef guidance discourages mechanical quoting in direct threads", () => {
+  const description = buildReplyToRefUsageGuidance("direct")
 
   assert.match(description, /immediately preceding visible message/i)
   assert.match(description, /omit `replyToRef` by default/i)

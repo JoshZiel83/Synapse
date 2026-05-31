@@ -70,8 +70,7 @@ test("duplicate read-watermark POST bumps duplicate_watermark_post_total", async
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "s35-watermark-dedup",
     },
   })
@@ -127,8 +126,7 @@ test("first read-watermark POST on a fresh conversation does NOT bump duplicate_
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "s37-watermark-first-post",
     },
   })
@@ -171,8 +169,7 @@ test("duplicate clientMessageId send-message bumps duplicate_clientmessageid_sen
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "s35-send-dedup",
     },
   })

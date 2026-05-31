@@ -1,5 +1,4 @@
 import {
-  CONVERSATION_BOUNDARY,
   CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_KEYS,
@@ -50,11 +49,10 @@ export function nowISO(): string {
 }
 
 export const GROUP_CONVERSATION_KIND = CONVERSATION_KIND.GROUP
-export const PRIVATE_CONVERSATION_KIND = CONVERSATION_KIND.PRIVATE
-export const VIRTUAL_CONVERSATION_KIND = CONVERSATION_KIND.VIRTUAL
+export const DIRECT_CONVERSATION_KIND = CONVERSATION_KIND.DIRECT
 export const THREAD_CONVERSATION_KINDS = [
   GROUP_CONVERSATION_KIND,
-  PRIVATE_CONVERSATION_KIND,
+  DIRECT_CONVERSATION_KIND,
 ] as const
 
 export type ThreadAddressingMode =
@@ -64,7 +62,7 @@ export type ThreadAddressingMode =
 
 export interface ThreadSemantics {
   hasThreadContext: boolean
-  isPrivateConversation: boolean
+  isDirectConversation: boolean
   isGroupConversation: boolean
   otherParticipantCount: number
   hasAddressablePeer: boolean
@@ -84,16 +82,16 @@ export function isGroupConversationKind(
   return kind === GROUP_CONVERSATION_KIND
 }
 
-export function isPrivateConversationKind(
+export function isDirectConversationKind(
   kind: string | null | undefined
 ): boolean {
-  return kind === PRIVATE_CONVERSATION_KIND
+  return kind === DIRECT_CONVERSATION_KIND
 }
 
 export function isThreadConversationKind(
   kind: string | null | undefined
 ): boolean {
-  return kind === GROUP_CONVERSATION_KIND || kind === PRIVATE_CONVERSATION_KIND
+  return kind === GROUP_CONVERSATION_KIND || kind === DIRECT_CONVERSATION_KIND
 }
 
 export function isPlanDraftingCollaborationMode(
@@ -121,29 +119,22 @@ export const CONVERSATION_TYPE_MASK_KEY_ORDER = CONVERSATION_TYPE_KEYS
 
 export function resolveConversationTypeKey(
   kind: string | null | undefined,
-  boundary: string | null | undefined
+  isIm: boolean
 ): ConversationTypeKey | null {
-  if (kind === VIRTUAL_CONVERSATION_KIND) {
-    return "virtual"
-  }
-  if (kind === PRIVATE_CONVERSATION_KIND) {
-    return boundary === CONVERSATION_BOUNDARY.EXTERNAL
-      ? "external_private"
-      : "internal_private"
+  if (kind === DIRECT_CONVERSATION_KIND) {
+    return isIm ? "im_direct" : "direct"
   }
   if (kind === GROUP_CONVERSATION_KIND) {
-    return boundary === CONVERSATION_BOUNDARY.EXTERNAL
-      ? "external_group"
-      : "internal_group"
+    return isIm ? "im_group" : "group"
   }
   return null
 }
 
 export function resolveConversationTypeBit(
   kind: string | null | undefined,
-  boundary: string | null | undefined
+  isIm: boolean
 ): ConversationTypeMask | null {
-  const key = resolveConversationTypeKey(kind, boundary)
+  const key = resolveConversationTypeKey(kind, isIm)
   return key ? CONVERSATION_TYPE_MASK_BITS[key] : null
 }
 
@@ -219,17 +210,26 @@ export function conversationTypeKeysToMask(
   )
 }
 
-export function maskAllowsConversationType(
+export function maskAllowsConversationTypeKey(
   mask: unknown,
-  kind: string | null | undefined,
-  boundary: string | null | undefined
+  key: ConversationTypeKey | null
 ): boolean {
-  const bit = resolveConversationTypeBit(kind, boundary)
-  if (!bit) {
+  if (!key) {
     return false
   }
   const normalizedMask = normalizeConversationTypeMask(mask)
-  return (normalizedMask & bit) !== 0
+  return (normalizedMask & CONVERSATION_TYPE_MASK_BITS[key]) !== 0
+}
+
+export function maskAllowsConversationType(
+  mask: unknown,
+  kind: string | null | undefined,
+  isIm: boolean
+): boolean {
+  return maskAllowsConversationTypeKey(
+    mask,
+    resolveConversationTypeKey(kind, isIm)
+  )
 }
 
 export function resolveThreadSemantics(params: {
@@ -240,13 +240,13 @@ export function resolveThreadSemantics(params: {
     0,
     Math.trunc(params.otherParticipantCount ?? 0)
   )
-  const isPrivateConversation = isPrivateConversationKind(params.kind)
+  const isDirectConversation = isDirectConversationKind(params.kind)
   const isGroupConversation = isGroupConversationKind(params.kind)
   const hasThreadContext = isThreadConversationKind(params.kind)
   const hasAddressablePeer = hasThreadContext && otherParticipantCount > 0
 
   let addressingMode: ThreadAddressingMode = "none"
-  if (isPrivateConversation) {
+  if (isDirectConversation) {
     addressingMode = "implicit_peer"
   } else if (isGroupConversation) {
     addressingMode = "explicit_recipients"
@@ -254,7 +254,7 @@ export function resolveThreadSemantics(params: {
 
   return {
     hasThreadContext,
-    isPrivateConversation,
+    isDirectConversation,
     isGroupConversation,
     otherParticipantCount,
     hasAddressablePeer,

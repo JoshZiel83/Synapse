@@ -266,8 +266,7 @@ test(
         .insertInto("conversations")
         .values({
           kind: "group",
-          boundary: "internal",
-          internal_workspace_id: ws.id as string,
+          workspace_id: ws.id as string,
           title: "c",
         })
         .returning("id")

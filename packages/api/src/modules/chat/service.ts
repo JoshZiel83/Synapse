@@ -1,7 +1,6 @@
 import { randomUUID } from "crypto"
 import {
   buildConversationMessageRef,
-  CONVERSATION_BOUNDARY,
   CONVERSATION_ITEM_SCOPE,
   CONVERSATION_ITEM_SCOPES,
   CONVERSATION_ITEM_ROLE,
@@ -34,7 +33,6 @@ import {
   type ChatSyncEventPayloadMap,
   type ChatSyncEventType,
   type ChatSyncResponse,
-  type ConversationBoundary,
   type ConversationMessageSubtype,
   type ConversationParticipantType,
   type ConversationReplyRef,
@@ -123,7 +121,7 @@ export interface ConversationItemPartInput {
 type ConversationBaseRow = {
   conversation_id: string
   kind: ConversationKind
-  boundary: ConversationBoundary
+  is_im: boolean
   title: string | null
   created_at: string | Date
   updated_at: string | Date
@@ -272,26 +270,6 @@ type HydratedConversationItemRecord = {
   metadata: Record<string, unknown>
   restrictedAudienceParticipantIds: string[]
   createdAt: string
-}
-
-type ConversationCreateExternalParticipantInput = {
-  displayName: string
-  metadata?: Record<string, unknown>
-  // The single transport address identifying this first-class external person.
-  transportAddressId: string
-}
-
-type ConversationCreateInput = {
-  workspaceId: string
-  creator: WorkspaceMemberIdentity
-  clientRequestId: string
-  kind: ConversationKind
-  boundary: ConversationBoundary
-  title?: string
-  workspaceMemberIds: string[]
-  actorIds: string[]
-  externalParticipants: ConversationCreateExternalParticipantInput[]
-  metadata?: Record<string, unknown>
 }
 
 type RegisterClientInstanceInput = {
@@ -591,7 +569,7 @@ function computeConversationTitle(params: {
     (participant) => participant.state === "active"
   )
   const labels =
-    params.kind === CONVERSATION_KIND.PRIVATE
+    params.kind === CONVERSATION_KIND.DIRECT
       ? active
           .filter(
             (participant) =>
@@ -606,7 +584,7 @@ function computeConversationTitle(params: {
 
   const uniqueLabels = [...new Set(labels.filter(Boolean))]
   if (uniqueLabels.length === 0) {
-    return params.kind === CONVERSATION_KIND.PRIVATE
+    return params.kind === CONVERSATION_KIND.DIRECT
       ? "Direct message"
       : "Untitled conversation"
   }
@@ -618,7 +596,7 @@ function computeConversationTitle(params: {
 
 function buildConversationPresentation(params: {
   kind: ConversationKind
-  boundary: ConversationBoundary
+  isIm: boolean
   participants: ChatParticipantSummary[]
   viewerWorkspaceMemberId: string
 }) {
@@ -626,7 +604,7 @@ function buildConversationPresentation(params: {
     (participant) => participant.state === "active"
   )
   const peer =
-    params.kind === CONVERSATION_KIND.PRIVATE
+    params.kind === CONVERSATION_KIND.DIRECT
       ? (activeParticipants.find(
           (participant) =>
             !(
@@ -637,27 +615,22 @@ function buildConversationPresentation(params: {
         ) ?? activeParticipants[0])
       : undefined
   const avatarParticipants =
-    params.kind === CONVERSATION_KIND.PRIVATE
+    params.kind === CONVERSATION_KIND.DIRECT
       ? peer
         ? [peer]
         : activeParticipants.slice(0, 1)
       : activeParticipants.slice(0, 4)
-  const boundaryLabel =
-    params.boundary === CONVERSATION_BOUNDARY.EXTERNAL ? "External" : "Internal"
+  const isDirect = params.kind === CONVERSATION_KIND.DIRECT
 
   return {
-    chatType:
-      params.kind === CONVERSATION_KIND.PRIVATE
-        ? "direct"
-        : params.kind === CONVERSATION_KIND.GROUP
-          ? "group"
-          : "virtual",
-    subtitle:
-      params.kind === CONVERSATION_KIND.PRIVATE
-        ? `${boundaryLabel} direct chat`
-        : params.kind === CONVERSATION_KIND.VIRTUAL
-          ? `${boundaryLabel} virtual chat`
-          : `${boundaryLabel} group chat`,
+    chatType: isDirect ? "direct" : "group",
+    subtitle: params.isIm
+      ? isDirect
+        ? "IM direct chat"
+        : "IM group chat"
+      : isDirect
+        ? "Direct message"
+        : "Group chat",
     avatarParticipantIds: avatarParticipants.map(
       (participant) => participant.participantId
     ),
@@ -1035,7 +1008,10 @@ async function getConversationBaseRow(
       SELECT
         c.id AS conversation_id,
         c.kind,
-        c.boundary,
+        EXISTS (
+          SELECT 1 FROM conversation_transport_bindings b
+          WHERE b.conversation_id = c.id
+        ) AS is_im,
         c.title,
         c.created_at,
         c.updated_at,
@@ -1068,7 +1044,10 @@ async function listConversationBaseRows(
       SELECT
         c.id AS conversation_id,
         c.kind,
-        c.boundary,
+        EXISTS (
+          SELECT 1 FROM conversation_transport_bindings b
+          WHERE b.conversation_id = c.id
+        ) AS is_im,
         c.title,
         c.created_at,
         c.updated_at,
@@ -1274,9 +1253,10 @@ async function loadConversationViews(
         ? viewerMembership.role_key
         : "member"
     const canManageConversation =
-      row.kind !== "private" &&
+      row.kind !== CONVERSATION_KIND.DIRECT &&
       (viewerConversationRole === "owner" || viewerConversationRole === "admin")
-    const canRename = row.kind !== "private" && canManageConversation
+    const canRename =
+      row.kind !== CONVERSATION_KIND.DIRECT && canManageConversation
     const canManageParticipants = canManageConversation
     const status = conversationParticipants.some(
       (participant) =>
@@ -1292,7 +1272,7 @@ async function loadConversationViews(
     })
     const presentation = buildConversationPresentation({
       kind: row.kind,
-      boundary: row.boundary,
+      isIm: row.is_im,
       participants: mappedParticipants,
       viewerWorkspaceMemberId: workspaceMemberId,
     })
@@ -1304,7 +1284,7 @@ async function loadConversationViews(
       workspaceId,
       title,
       kind: row.kind,
-      boundary: row.boundary,
+      isIm: row.is_im,
       status,
       unreadCount: toNumber(row.unread_count),
       muted: Boolean(row.muted),
@@ -1671,7 +1651,7 @@ async function requireConversationAccess(
 
 /**
  * Same as requireConversationAccess + asserts the viewer has management
- * rights (kind != "private" AND role_key in ('owner','admin')). Throws
+ * rights (kind != "direct" AND role_key in ('owner','admin')). Throws
  * 403 conversation_manage_denied otherwise. Used by PATCH conversation,
  * POST participants, DELETE participants.
  */
@@ -1685,11 +1665,11 @@ async function requireConversationManagement(
     conversationId,
     workspaceMemberId
   )
-  if (access.baseRow.kind === CONVERSATION_KIND.PRIVATE) {
+  if (access.baseRow.kind === CONVERSATION_KIND.DIRECT) {
     throw createChatError(
       403,
       "conversation_manage_denied",
-      "Private conversations cannot be managed"
+      "Direct conversations cannot be managed"
     )
   }
   const roleKey = access.participant.role_key
@@ -2592,80 +2572,6 @@ async function loadRemoteAgentsByIds(
   return result.rows
 }
 
-async function validateTransportAddresses(
-  queryable: Queryable,
-  workspaceId: string,
-  addressIds: string[]
-) {
-  if (addressIds.length === 0) {
-    return
-  }
-  // F6: an external participant address must (a) belong to this workspace,
-  // (b) be address_type='user' (not a bot/system endpoint), and (c) be UNLINKED
-  // (workspace_member_id IS NULL). A linked address represents an internal
-  // member and must be added as a workspace_member participant, not external.
-  const result = await executeSqlOn<{
-    id: string
-    address_type: string
-    workspace_member_id: string | null
-  }>(
-    queryable,
-    `
-      SELECT id, address_type, workspace_member_id
-      FROM transport_addresses
-      WHERE workspace_id = $1
-        AND id = ANY($2::uuid[])
-    `,
-    [workspaceId, addressIds]
-  )
-  if (result.rows.length !== addressIds.length) {
-    throw createChatError(
-      400,
-      "invalid_transport_address",
-      "One or more transport addresses are invalid"
-    )
-  }
-  for (const row of result.rows) {
-    if (row.address_type !== "user") {
-      throw createChatError(
-        400,
-        "invalid_transport_address",
-        `Transport address ${row.id} is not a user address`
-      )
-    }
-    if (row.workspace_member_id) {
-      throw createChatError(
-        400,
-        "invalid_transport_address",
-        `Transport address ${row.id} is linked to a workspace member; add it as a member, not an external participant`
-      )
-    }
-  }
-}
-
-/**
- * Reject duplicate external participants pointing at the same transport address:
- * they would mint the same external subject and collide on the
- * (conversation_id, subject_id) unique index. Surfaces a clean 400 instead of a
- * raw DB constraint error. Shared by every create/add path that accepts
- * `externalParticipants`.
- */
-function assertNoDuplicateExternalParticipants(
-  externalParticipants: readonly ConversationCreateExternalParticipantInput[]
-) {
-  const seen = new Set<string>()
-  for (const ext of externalParticipants) {
-    if (seen.has(ext.transportAddressId)) {
-      throw createChatError(
-        400,
-        "duplicate_external_participant",
-        "Duplicate external participant transport address"
-      )
-    }
-    seen.add(ext.transportAddressId)
-  }
-}
-
 export async function getConversation(
   conversationId: string,
   queryable: Queryable = rootQueryable()
@@ -2685,14 +2591,19 @@ export async function getConversation(
 
 export async function createConversation(params: {
   kind: ConversationKind
-  boundary?: ConversationBoundary
-  workspaceId?: string
+  workspaceId: string
   title?: string
   createdByWorkspaceMemberId?: string
   metadata?: Record<string, unknown>
   queryable?: Queryable
 }) {
   const queryable = params.queryable ?? rootQueryable()
+  if (!params.workspaceId) {
+    // Every conversation is workspace-scoped (conversations.workspace_id is
+    // NOT NULL). Assert here so a missing id fails loudly instead of writing a
+    // null and tripping the DB constraint deep in a transaction.
+    throw new Error("createConversation: workspaceId is required")
+  }
   const id = crypto.randomUUID()
   const result = await executeSqlOn<Record<string, unknown>>(
     queryable,
@@ -2700,24 +2611,20 @@ export async function createConversation(params: {
       INSERT INTO conversations (
         id,
         kind,
-        boundary,
-        internal_workspace_id,
+        workspace_id,
         title,
         created_by_workspace_member_id,
         metadata,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW(), NOW())
       RETURNING *
     `,
     [
       id,
       params.kind,
-      params.boundary ?? "internal",
-      params.boundary === CONVERSATION_BOUNDARY.EXTERNAL
-        ? null
-        : (params.workspaceId ?? null),
+      params.workspaceId,
       params.title?.trim() || null,
       params.createdByWorkspaceMemberId ?? null,
       JSON.stringify(params.metadata ?? {}),
@@ -2734,17 +2641,14 @@ export async function createConversationForWorkspaceMember(params: {
   workspaceId: string
   creatorWorkspaceMemberId?: string
   kind: ConversationKind
-  boundary?: ConversationBoundary
   title?: string
   workspaceMemberIds?: string[]
   actorIds?: string[]
   remoteAgentIds?: string[]
-  externalParticipants?: ConversationCreateExternalParticipantInput[]
   metadata?: Record<string, unknown>
   queryable?: Queryable
 }) {
   const executeCreate = async (queryable: Queryable) => {
-    const externalParticipants = params.externalParticipants ?? []
     const workspaceMemberIds = [
       ...new Set(
         [
@@ -2760,24 +2664,9 @@ export async function createConversationForWorkspaceMember(params: {
 
     // Validate EVERY participant before creating the conversation, so a rejected
     // request never leaves an orphan conversation behind (the caller may pass a
-    // non-transactional queryable). Same external rule as createChatConversation
-    // / addConversationParticipants: internal never accepts external; every
-    // external address must belong to this workspace, be a user address, and be
-    // unlinked.
-    if (externalParticipants.length > 0) {
-      if ((params.boundary ?? "internal") === "internal") {
-        throw createChatError(
-          400,
-          "external_participants_not_allowed",
-          "Internal conversations do not allow external participants"
-        )
-      }
-      assertNoDuplicateExternalParticipants(externalParticipants)
-      await validateTransportAddresses(queryable, params.workspaceId, [
-        ...new Set(externalParticipants.map((p) => p.transportAddressId)),
-      ])
-    }
-
+    // non-transactional queryable). External participants are NOT created here:
+    // they are minted only by the IM ingest path
+    // (syncTransportAddressConversationParticipant).
     const memberRows =
       workspaceMemberIds.length > 0
         ? await loadWorkspaceMembersByIds(
@@ -2822,7 +2711,6 @@ export async function createConversationForWorkspaceMember(params: {
 
     const conversation = await createConversation({
       kind: params.kind,
-      boundary: params.boundary ?? "internal",
       workspaceId: params.workspaceId,
       title: params.title,
       createdByWorkspaceMemberId: params.creatorWorkspaceMemberId,
@@ -2867,17 +2755,6 @@ export async function createConversationForWorkspaceMember(params: {
       })
     }
 
-    for (const externalParticipant of externalParticipants) {
-      await ensureConversationParticipant({
-        conversationId: conversation.id as string,
-        participantType: "external",
-        displayName: externalParticipant.displayName,
-        metadata: externalParticipant.metadata,
-        transportAddressId: externalParticipant.transportAddressId,
-        queryable,
-      })
-    }
-
     if (workspaceMemberIds.length > 0) {
       await syncConversationUpsertForWorkspaceMembers(
         queryable,
@@ -2913,6 +2790,7 @@ export async function getConversationParticipant(params: {
   actorId?: string
   remoteAgentId?: string
   workspaceMemberId?: string
+  transportAddressId?: string
   queryable?: Queryable
 }) {
   if (params.participantId) {
@@ -2949,7 +2827,9 @@ export async function getConversationParticipant(params: {
             ? participant.remote_agent_id === params.remoteAgentId
             : params.workspaceMemberId
               ? participant.workspace_member_id === params.workspaceMemberId
-              : false
+              : params.transportAddressId
+                ? participant.transport_address_id === params.transportAddressId
+                : false
     ) ?? null
   )
 }
@@ -3097,43 +2977,15 @@ export async function addConversationParticipants(params: {
   workspaceMemberIds?: string[]
   actorIds?: string[]
   remoteAgentIds?: string[]
-  externalParticipants?: ConversationCreateExternalParticipantInput[]
   queryable?: Queryable
 }) {
   const executeAdd = async (queryable: Queryable) => {
     const workspaceMemberIds = [...new Set(params.workspaceMemberIds ?? [])]
     const actorIds = [...new Set(params.actorIds ?? [])]
     const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
-    const externalParticipants = params.externalParticipants ?? []
-
-    // P1 (round 7): mirror createChatConversation's external gating so the
-    // public add-participants API can't bypass it. Internal conversations never
-    // accept external participants; every external address must belong to this
-    // workspace, be a user address, and be unlinked (linked => add as member).
-    if (externalParticipants.length > 0) {
-      const conversation = await getConversation(
-        params.conversationId,
-        queryable
-      )
-      if (!conversation) {
-        throw createChatError(
-          404,
-          "conversation_not_found",
-          "Conversation not found"
-        )
-      }
-      if (conversation.boundary === "internal") {
-        throw createChatError(
-          400,
-          "external_participants_not_allowed",
-          "Internal conversations do not allow external participants"
-        )
-      }
-      assertNoDuplicateExternalParticipants(externalParticipants)
-      await validateTransportAddresses(queryable, params.workspaceId, [
-        ...new Set(externalParticipants.map((p) => p.transportAddressId)),
-      ])
-    }
+    // External participants are not addable through this public path; they are
+    // minted only by the IM ingest path
+    // (syncTransportAddressConversationParticipant).
 
     if (workspaceMemberIds.length > 0) {
       const memberRows = await loadWorkspaceMembersByIds(
@@ -3210,17 +3062,6 @@ export async function addConversationParticipants(params: {
           queryable,
         })
       }
-    }
-
-    for (const externalParticipant of externalParticipants) {
-      await ensureConversationParticipant({
-        conversationId: params.conversationId,
-        participantType: "external",
-        displayName: externalParticipant.displayName,
-        metadata: externalParticipant.metadata,
-        transportAddressId: externalParticipant.transportAddressId,
-        queryable,
-      })
     }
 
     if (workspaceMemberIds.length > 0) {
@@ -4514,19 +4355,16 @@ export async function createChatConversation(params: {
   userId: string
   clientRequestId: string
   kind: ConversationKind
-  boundary?: ConversationBoundary
   title?: string
   workspaceMemberIds?: string[]
   actorIds?: string[]
   remoteAgentIds?: string[]
-  externalParticipants?: ConversationCreateExternalParticipantInput[]
   metadata?: Record<string, unknown>
 }): Promise<ChatConversationCreateResponse> {
   const creator = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
     params.userId
   )
-  const boundary = params.boundary ?? "internal"
   const workspaceMemberIds = [
     ...new Set([
       creator.workspaceMemberId,
@@ -4535,16 +4373,8 @@ export async function createChatConversation(params: {
   ]
   const actorIds = [...new Set(params.actorIds ?? [])]
   const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
-  const externalParticipants = params.externalParticipants ?? []
-
-  if (boundary === "internal" && externalParticipants.length > 0) {
-    throw createChatError(
-      400,
-      "external_participants_not_allowed",
-      "Internal conversations do not allow external participants"
-    )
-  }
-  assertNoDuplicateExternalParticipants(externalParticipants)
+  // External participants are not creatable through this public path; they are
+  // minted only by the IM ingest path (syncTransportAddressConversationParticipant).
 
   const conversationId = await transaction(async (client) => {
     const existingRequest = await executeSqlOn<{ conversation_id: string }>(
@@ -4601,13 +4431,6 @@ export async function createChatConversation(params: {
       )
     }
 
-    const addressIds = externalParticipants.map(
-      (participant) => participant.transportAddressId
-    )
-    await validateTransportAddresses(client, params.workspaceId, [
-      ...new Set(addressIds),
-    ])
-
     const newConversationId = crypto.randomUUID()
     await executeSqlOn(
       client,
@@ -4615,21 +4438,19 @@ export async function createChatConversation(params: {
         INSERT INTO conversations (
           id,
           kind,
-          boundary,
-          internal_workspace_id,
+          workspace_id,
           title,
           created_by_workspace_member_id,
           metadata,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW(), NOW())
       `,
       [
         newConversationId,
         params.kind,
-        boundary,
-        boundary === "internal" ? params.workspaceId : null,
+        params.workspaceId,
         params.title?.trim() || null,
         creator.workspaceMemberId,
         JSON.stringify(params.metadata ?? {}),
@@ -4671,17 +4492,6 @@ export async function createChatConversation(params: {
         displayName: remoteAgent.name,
         roleKey: "member",
         metadata: {},
-      })
-    }
-
-    for (const external of externalParticipants) {
-      await insertParticipant(client, {
-        conversationId: newConversationId,
-        participantType: "external",
-        displayName: external.displayName,
-        roleKey: "member",
-        metadata: external.metadata ?? {},
-        transportAddressId: external.transportAddressId,
       })
     }
 
@@ -5722,7 +5532,6 @@ export async function addChatConversationParticipants(params: {
   workspaceMemberIds?: string[]
   actorIds?: string[]
   remoteAgentIds?: string[]
-  externalParticipants?: ConversationCreateExternalParticipantInput[]
 }) {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
@@ -5741,7 +5550,6 @@ export async function addChatConversationParticipants(params: {
       workspaceMemberIds: params.workspaceMemberIds,
       actorIds: params.actorIds,
       remoteAgentIds: params.remoteAgentIds,
-      externalParticipants: params.externalParticipants,
       queryable: client,
     })
 

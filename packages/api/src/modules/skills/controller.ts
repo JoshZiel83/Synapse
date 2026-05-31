@@ -50,7 +50,7 @@ const accessTargetTypeSchema = z.enum([
   "actor",
   "actor_in_conversation",
 ]) satisfies z.ZodType<SkillAccessTargetType>
-const conversationTypeMaskSchema = z.number().int().min(1).max(31)
+const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
   actorId: z.uuid().optional(),

@@ -34,7 +34,6 @@ import {
   FILE_PARSE_RUN_STATUSES,
   FILE_STORAGE_BACKENDS,
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
-  CONVERSATION_BOUNDARIES,
   CONVERSATION_TYPE_KEYS,
   INVITE_TRUST_LEVELS,
   INTERACTION_DECISIONS,
@@ -867,7 +866,7 @@ export interface Session {
   workspaceId: UUID
   actorId: UUID
   conversationId: UUID
-  conversationKind?: "private" | "group" | "virtual"
+  conversationKind?: "direct" | "group"
   conversationTitle?: string
   isGroupConversation?: boolean
   hasThreadContext?: boolean
@@ -1258,7 +1257,7 @@ export interface ConversationMessagePreview {
 }
 
 export interface ConversationPresentationView {
-  chatType: "direct" | "group" | "virtual"
+  chatType: "direct" | "group"
   title: string
   avatarUrl?: string
   subtitle?: string
@@ -1270,7 +1269,7 @@ export interface ConversationPresentationView {
 export interface ConversationSummaryView {
   id: UUID
   kind: (typeof CONVERSATION_KINDS)[number]
-  boundary: ConversationBoundary
+  isIm: boolean
   status: "active" | "completed"
   transportKind?: string
   participants: ConversationParticipantView[]
@@ -2261,8 +2260,8 @@ export interface ConversationParticipantEntry {
 
 export interface ProviderContextManifest {
   conversationId?: UUID
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: ConversationBoundary
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
   selfParticipantId?: UUID
   selfActorId?: UUID
   participants: ConversationParticipantEntry[]
@@ -2274,8 +2273,8 @@ export interface ToolResolveContext {
   workspaceId: string
   collaborationMode: SessionCollaborationMode
   conversationId?: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: ConversationBoundary
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
   conversationParticipants?: ConversationParticipantEntry[]
   workspaceMemberId?: string
   availableSkills?: AvailableSkillSummary[]
@@ -2286,8 +2285,8 @@ export interface RuntimeActorContext {
   actorId: string
   sessionId: string
   conversationId?: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: ConversationBoundary
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
   conversationActorContextId?: string
   userId?: string
   // Carries the workspace_member acting on behalf of `userId` in this workspace.
@@ -2305,8 +2304,8 @@ export interface CapabilityInvocationContext {
   workspaceMemberId?: string
   sessionId?: string
   conversationId?: string
-  conversationKind?: "private" | "group" | "virtual"
-  conversationBoundary?: ConversationBoundary
+  conversationKind?: "direct" | "group"
+  isImConversation?: boolean
   conversationActorContextId?: string
   turnId?: string
   toolCallId?: string
@@ -2391,7 +2390,6 @@ export type PluginTransport =
   | "http"
   | "device"
   | "filesystem"
-export type ConversationBoundary = (typeof CONVERSATION_BOUNDARIES)[number]
 export type ConversationTypeKey = (typeof CONVERSATION_TYPE_KEYS)[number]
 export type ConversationTypeMask = number
 export type CapabilityConversationTypePolicyResourceFamily =
@@ -4321,7 +4319,7 @@ export type ChatConversationItem =
   | ChatConversationEventItem
 
 export interface ChatConversationPresentation {
-  chatType: "direct" | "group" | "virtual"
+  chatType: "direct" | "group"
   subtitle?: string
   avatarParticipantIds: UUID[]
   peerParticipantId?: UUID
@@ -4340,7 +4338,7 @@ export interface ChatConversationView {
   workspaceId: UUID
   title: string
   kind: (typeof CONVERSATION_KINDS)[number]
-  boundary: ConversationBoundary
+  isIm: boolean
   status: "active" | "completed"
   unreadCount: number
   muted: boolean
@@ -4471,24 +4469,13 @@ export interface ChatClientInstanceRegistrationResponse {
   workspaceMemberId: UUID
 }
 
-export interface ChatConversationCreateExternalParticipantRequest {
-  displayName: string
-  metadata?: Record<string, unknown>
-  // The single transport address identifying this first-class external person
-  // (see external-first-class-subject refactor). Multi-address aggregation is
-  // deferred to a future external_contact entity.
-  transportAddressId: UUID
-}
-
 export interface ChatConversationCreateRequest {
   clientRequestId: UUID
   kind: (typeof CONVERSATION_KINDS)[number]
-  boundary?: ConversationBoundary
   title?: string
   workspaceMemberIds?: UUID[]
   actorIds?: UUID[]
   remoteAgentIds?: UUID[]
-  externalParticipants?: ChatConversationCreateExternalParticipantRequest[]
   metadata?: Record<string, unknown>
 }
 

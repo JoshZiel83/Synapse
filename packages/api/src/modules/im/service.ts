@@ -74,6 +74,7 @@ export {
 export {
   findConversationTransportBindingByEndpoint,
   getConversationTransportBinding,
+  hasConversationTransportBinding,
   updateConversationTransportSettings,
   updateTransportSessionSettings,
   upsertConversationTransportBinding,

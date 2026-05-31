@@ -154,7 +154,6 @@ test("HTTP typing broadcast reaches other-member WS subscribers", async () => {
     json: {
       clientRequestId: uuid(),
       kind: "group",
-      boundary: "internal",
       title: "typing-cross-member",
       workspaceMemberIds: [bobBootstrap.workspaceMemberId],
     },
@@ -216,7 +215,6 @@ test("WS inbound {type:'typing'} broadcasts to other-member subscribers", async 
     json: {
       clientRequestId: uuid(),
       kind: "group",
-      boundary: "internal",
       title: "typing-inbound-ws",
       workspaceMemberIds: [bobBootstrap.workspaceMemberId],
     },

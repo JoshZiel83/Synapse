@@ -86,8 +86,7 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
     .insertInto("conversations")
     .values({
       kind: "group",
-      boundary: "internal",
-      internal_workspace_id: wsId,
+      workspace_id: wsId,
       title: `${NS} conv`,
     })
     .returning("id")

@@ -86,8 +86,8 @@ async function makeConversationCtx(label: string): Promise<ConversationCtx> {
   const actorId = actorRow.rows[0].id
 
   const convRow = await client.query<{ id: string }>(
-    `INSERT INTO conversations (kind, boundary, internal_workspace_id, title)
-     VALUES ('private', 'internal', $1, $2)
+    `INSERT INTO conversations (kind, workspace_id, title)
+     VALUES ('direct', $1, $2)
      RETURNING id`,
     [seed.workspaceId, `loader-conv-${slug}`]
   )

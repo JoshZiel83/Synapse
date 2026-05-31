@@ -199,43 +199,28 @@ test(
 )
 
 test(
-  "upsertAccessSubject for an internal conversation populates internal_workspace_id; external conversation leaves it null",
+  "upsertAccessSubject for a conversation populates its workspace_id (every conversation is workspace-scoped)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const userId = await insertUser(db, "owner@example.test")
       const workspaceId = await insertWorkspace(db, userId)
-      const internalConvo = await insertConversation(db, {
+      const convo = await insertConversation(db, {
         workspaceId,
       })
-      const externalConvo = await insertConversation(db, {
-        boundary: "external",
+
+      const subjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: convo,
       })
 
-      const internalSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: internalConvo,
-      })
-      const externalSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: externalConvo,
-      })
-
-      const internalRow = await db
+      const row = await db
         .selectFrom("access_subjects")
         .select(["workspace_id", "conversation_id"])
-        .where("id", "=", internalSubjectId)
+        .where("id", "=", subjectId)
         .executeTakeFirstOrThrow()
-      assert.equal(internalRow.workspace_id, workspaceId)
-      assert.equal(internalRow.conversation_id, internalConvo)
-
-      const externalRow = await db
-        .selectFrom("access_subjects")
-        .select(["workspace_id", "conversation_id"])
-        .where("id", "=", externalSubjectId)
-        .executeTakeFirstOrThrow()
-      assert.equal(externalRow.workspace_id, null)
-      assert.equal(externalRow.conversation_id, externalConvo)
+      assert.equal(row.workspace_id, workspaceId)
+      assert.equal(row.conversation_id, convo)
     })
   }
 )
@@ -532,16 +517,13 @@ async function insertRemoteAgent(
 
 async function insertConversation(
   db: import("kysely").Kysely<any>,
-  params: { workspaceId?: string; boundary?: "internal" | "external" } = {}
+  params: { workspaceId?: string } = {}
 ): Promise<string> {
-  const boundary = params.boundary ?? "internal"
   const row = await db
     .insertInto("conversations")
     .values({
       kind: "group",
-      boundary,
-      internal_workspace_id:
-        boundary === "internal" ? params.workspaceId : null,
+      workspace_id: params.workspaceId,
       title: "test conversation",
     })
     .returning("id")

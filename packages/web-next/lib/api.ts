@@ -1407,12 +1407,10 @@ class ApiClient {
       body: JSON.stringify({
         clientRequestId: input.clientRequestId,
         kind: input.kind,
-        boundary: input.boundary,
         title: input.title,
         workspaceMemberIds: input.workspaceMemberIds ?? [],
         actorIds: input.actorIds ?? [],
         remoteAgentIds: input.remoteAgentIds ?? [],
-        externalParticipants: input.externalParticipants ?? [],
         metadata: input.metadata,
       }),
     })

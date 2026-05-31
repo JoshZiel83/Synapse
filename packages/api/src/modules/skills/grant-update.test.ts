@@ -110,8 +110,7 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
     .insertInto("conversations")
     .values({
       kind: "group",
-      boundary: "internal",
-      internal_workspace_id: wsId,
+      workspace_id: wsId,
       title: `${NS} conv`,
     })
     .returning("id")
@@ -262,7 +261,7 @@ test(
         validateConversationScopedAccessTarget({
           db,
           target: target as any,
-          effectiveConversationTypeMask: 0b11111,
+          effectiveConversationTypeMask: 0b1111,
           buildError: (m) => new Error(m),
         }),
         /active participant/
@@ -284,7 +283,7 @@ test(
       const ok = await validateConversationScopedAccessTarget({
         db,
         target: target as any,
-        effectiveConversationTypeMask: 0b11111,
+        effectiveConversationTypeMask: 0b1111,
         buildError: (m) => new Error(m),
       })
       assert.ok(ok)

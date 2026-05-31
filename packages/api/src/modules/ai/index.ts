@@ -484,7 +484,7 @@ function buildSleepWithoutSendToReminder(params: {
       surface: "internal",
       parts: textBlocks(
         `You called \`sleep\` before using \`send_to\` in this wakeup. Your reasoning and tool calls are invisible to everyone else. ` +
-          `This is a private thread, so \`send_to\` goes directly to ${otherMemberName}. ` +
+          `This is a direct thread, so \`send_to\` goes directly to ${otherMemberName}. ` +
           `Send a visible result, handoff, clarification, or explicit "no action needed" message with the correct \`intent\` and \`summary\`, then call \`sleep\` again.`
       ),
     }
@@ -603,8 +603,8 @@ export async function actorThink(
     turnId?: string
     collaborationMode?: SessionCollaborationMode
     conversationId?: string
-    conversationKind?: "private" | "group" | "virtual"
-    conversationBoundary?: "internal" | "external"
+    conversationKind?: "direct" | "group"
+    isImConversation?: boolean
     conversationParticipants?: ConversationParticipantEntry[]
     userId?: string
     workspaceMemberId?: string
@@ -719,7 +719,7 @@ export async function actorThink(
     collaborationMode: currentCollaborationMode,
     conversationId: options?.conversationId,
     conversationKind: options?.conversationKind,
-    conversationBoundary: options?.conversationBoundary,
+    isImConversation: options?.isImConversation,
     conversationParticipants: currentToolConversationParticipants,
     workspaceMemberId: options?.workspaceMemberId,
     availableSkills: options?.availableSkills,
@@ -819,7 +819,7 @@ export async function actorThink(
         turnId,
         conversationId: options.conversationId,
         conversationKind: options.conversationKind,
-        conversationBoundary: options.conversationBoundary,
+        isImConversation: options.isImConversation,
       },
       () => _actorThinkInner()
     )

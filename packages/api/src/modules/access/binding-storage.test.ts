@@ -221,8 +221,7 @@ test(
         .insertInto("conversations")
         .values({
           kind: "group",
-          boundary: "internal",
-          internal_workspace_id: workspaceId,
+          workspace_id: workspaceId,
           title: "test conversation",
         })
         .returning("id")
@@ -483,8 +482,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            boundary: "internal",
-            internal_workspace_id: workspaceId,
+            workspace_id: workspaceId,
             title: "conv A",
           })
           .returning("id")
@@ -495,8 +493,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            boundary: "internal",
-            internal_workspace_id: workspaceId,
+            workspace_id: workspaceId,
             title: "conv B",
           })
           .returning("id")
@@ -843,8 +840,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            boundary: "internal",
-            internal_workspace_id: workspaceId,
+            workspace_id: workspaceId,
             title: "scope-vs-unscoped",
           })
           .returning("id")
@@ -923,8 +919,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            boundary: "internal",
-            internal_workspace_id: workspaceId,
+            workspace_id: workspaceId,
             title: "conv A",
           })
           .returning("id")
@@ -935,8 +930,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            boundary: "internal",
-            internal_workspace_id: workspaceId,
+            workspace_id: workspaceId,
             title: "conv B",
           })
           .returning("id")

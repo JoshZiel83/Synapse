@@ -86,11 +86,18 @@ const checks = [
   },
   {
     kind: "raw conversation kind comparison",
-    regex: /conversation\.kind\s*===\s*"(?<value>group|private|virtual)"/g,
+    regex: /conversation\.kind\s*===\s*"(?<value>group|direct)"/g,
   },
   {
-    kind: "raw conversation boundary comparison",
-    regex: /conversation\.boundary\s*===\s*"(?<value>internal|external)"/g,
+    // Regression guard for the conversation-type refactor: the `boundary` axis
+    // and the `internal_workspace_id` column were DELETED (IM-ness is derived
+    // from a transport binding; every conversation is workspace_id-scoped). The
+    // `private`/`virtual` kinds are gone too. These patterns catch non-typed
+    // code re-introducing the removed fields/values so they fail the build
+    // instead of silently rotting.
+    kind: "stale conversation boundary/kind field (removed in refactor)",
+    regex:
+      /\bconversation(?:Row)?\.boundary\b|\.boundary\s*(?:===|!==)\s*"(?:internal|external)"|\.internal_workspace_id\b|\binternal_workspace_id\s+(?:AS|as|UUID)\b|conversation(?:Row)?\.kind\s*(?:===|!==)\s*"(?:private|virtual)"/g,
   },
   {
     kind: "raw model-group scope comparison",

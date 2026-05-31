@@ -1,7 +1,7 @@
 /**
  * S5/S27: protocol completeness checks.
  *
- * - clients can create conversations with remoteAgentIds + externalParticipants
+ * - clients can create conversations with remoteAgentIds
  * - send-message rejects unknown block types
  * - send-message rejects malformed file_ref blocks
  * - messages endpoint paginates via beforeSequence
@@ -110,7 +110,6 @@ test("create conversation forwards remoteAgentIds: response participants include
     json: {
       clientRequestId: uuid(),
       kind: "group",
-      boundary: "internal",
       title: "s27-remote-agent",
       remoteAgentIds: [agent.id],
     },
@@ -132,89 +131,6 @@ test("create conversation forwards remoteAgentIds: response participants include
   )
 })
 
-test("create conversation forwards externalParticipants: response includes an external entry with the displayName", async () => {
-  const ctx = await registerTestUser(stack!.baseClient)
-  const ws = await createTestWorkspace(ctx.client)
-
-  const externalName = `S27 External ${randomBytes(2).toString("hex")}`
-  const transportAddressId = await createTransportAddress(ws.id)
-  const created = await ctx.client.json<{
-    conversation: {
-      conversationId: string
-      participants: ParticipantSummary[]
-    }
-  }>(`/workspaces/${ws.id}/chat/conversations`, {
-    method: "POST",
-    json: {
-      clientRequestId: uuid(),
-      kind: "group",
-      boundary: "external",
-      title: "s27-external",
-      externalParticipants: [{ displayName: externalName, transportAddressId }],
-    },
-  })
-
-  const external = created.conversation.participants.find(
-    (p) => p.participantType === "external"
-  )
-  assert.ok(
-    external,
-    `conversation must include an external participant; got ${JSON.stringify(
-      created.conversation.participants.map((p) => p.participantType)
-    )}`
-  )
-  assert.equal(
-    external!.name,
-    externalName,
-    "external participant name must round-trip through the API"
-  )
-})
-
-test("create conversation accepts mixed actorIds + remoteAgentIds + externalParticipants in one call", async () => {
-  const ctx = await registerTestUser(stack!.baseClient)
-  const ws = await createTestWorkspace(ctx.client)
-
-  const agentResponse = await ctx.client.json<{
-    remoteAgent: { id: string }
-  }>(`/workspaces/${ws.id}/remote-agents`, {
-    method: "POST",
-    json: {
-      name: `s27-mixed-${randomBytes(3).toString("hex")}`,
-      title: "S27 Mixed",
-      runtimeKind: "codex",
-    },
-  })
-  const agent = agentResponse.remoteAgent
-
-  const externalName = `S27 Mixed External ${randomBytes(2).toString("hex")}`
-  const transportAddressId = await createTransportAddress(ws.id)
-  const created = await ctx.client.json<{
-    conversation: { participants: ParticipantSummary[] }
-  }>(`/workspaces/${ws.id}/chat/conversations`, {
-    method: "POST",
-    json: {
-      clientRequestId: uuid(),
-      kind: "group",
-      boundary: "external",
-      title: "s27-mixed",
-      actorIds: [],
-      remoteAgentIds: [agent.id],
-      externalParticipants: [{ displayName: externalName, transportAddressId }],
-      metadata: { s27Marker: "mixed" },
-    },
-  })
-
-  const kinds = created.conversation.participants.map((p) => p.participantType)
-  assert.ok(
-    kinds.includes("remote_agent"),
-    "mixed conversation must include remote_agent participant"
-  )
-  assert.ok(
-    kinds.includes("external"),
-    "mixed conversation must include external participant"
-  )
-})
-
 test("send-message rejects unknown block types with 400", async () => {
   const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
@@ -224,8 +140,7 @@ test("send-message rejects unknown block types with 400", async () => {
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "send-validation",
     },
   })
@@ -262,8 +177,7 @@ test("send-message rejects file_ref blocks missing required fields", async () =>
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "block-validation",
     },
   })
@@ -298,8 +212,7 @@ test("messages endpoint accepts beforeSequence pagination param", async () => {
     method: "POST",
     json: {
       clientRequestId: uuid(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "pagination",
     },
   })

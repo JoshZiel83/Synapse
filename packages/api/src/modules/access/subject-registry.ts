@@ -13,7 +13,6 @@
  * a stored `subject_id`.
  */
 
-import { sql } from "kysely"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import type {
   KyselyDb,
@@ -161,29 +160,12 @@ async function resolveOwningWorkspaceId(
       return row.workspace_id
     }
     case SUBJECT_KIND.CONVERSATION: {
-      // Conversations are either internal (workspace-scoped via
-      // internal_workspace_id) or external (cross-workspace).
-      //
-      // P2 fix (post-D4): for external conversations we derive a "rooted"
-      // workspace from the creator's workspace_members row so the conversation
-      // subject's workspace_id matches what evaluator.loadConversationRow
-      // surfaces (COALESCE(internal_workspace_id, creator_member.workspace_id)).
-      // Without this alignment the memory_spaces trigger rejects external
-      // conversations as memory owner/scope even though the evaluator would
-      // have allowed the access.
+      // Every conversation is workspace-scoped (conversations.workspace_id is
+      // NOT NULL); IM-ness is derived from a transport binding, not a boundary
+      // axis. Read the workspace directly — no creator-member fallback.
       const row = await db
         .selectFrom("conversations as c")
-        .leftJoin(
-          "workspace_members as creator_member",
-          "creator_member.id",
-          "c.created_by_workspace_member_id"
-        )
-        .select(
-          sql<string | null>`COALESCE(
-            c.internal_workspace_id,
-            creator_member.workspace_id
-          )`.as("workspace_id")
-        )
+        .select("c.workspace_id as workspace_id")
         .where("c.id", "=", ref.conversationId)
         .executeTakeFirst()
       if (!row) {
@@ -539,14 +521,12 @@ async function resolveOwningWorkspaceIdOn(
       return r.rows[0].workspace_id
     }
     case SUBJECT_KIND.CONVERSATION: {
-      // P2 fix (post-D4): same COALESCE rule as upsertAccessSubject — root
-      // external conversations on the creator's workspace so memory triggers
-      // align with evaluator.loadConversationRow.
+      // Every conversation is workspace-scoped (workspace_id NOT NULL); read it
+      // directly — no creator-member fallback (the boundary axis is gone).
       const r = await executeSqlOn<{ workspace_id: string | null }>(
         client,
-        `SELECT COALESCE(c.internal_workspace_id, cm.workspace_id) AS workspace_id
+        `SELECT c.workspace_id AS workspace_id
            FROM conversations c
-           LEFT JOIN workspace_members cm ON cm.id = c.created_by_workspace_member_id
           WHERE c.id = $1`,
         [ref.conversationId]
       )

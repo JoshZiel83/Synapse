@@ -430,8 +430,7 @@ export function startSessionThinkingWorker() {
           contextManifest = {
             conversationId,
             conversationKind: session.conversation_kind,
-            conversationBoundary:
-              session.conversationBoundary || session.conversation_boundary,
+            isImConversation: session.isImConversation,
             selfParticipantId: actorParticipantId,
             selfActorId: actorId,
             participants: participantEntries,
@@ -558,8 +557,7 @@ export function startSessionThinkingWorker() {
           sessionId,
           conversationId: session.conversation_id,
           conversationKind: session.conversation_kind,
-          conversationBoundary:
-            session.conversationBoundary || session.conversation_boundary,
+          isImConversation: session.isImConversation,
           userId,
         })
         availableSkills = capabilitySurface.availableSkills
@@ -679,8 +677,7 @@ export function startSessionThinkingWorker() {
                 "default",
               conversationId: session.conversation_id,
               conversationKind: session.conversation_kind,
-              conversationBoundary:
-                session.conversationBoundary || session.conversation_boundary,
+              isImConversation: session.isImConversation,
               conversationParticipants: participantEntries,
               userId,
               availableSkills,

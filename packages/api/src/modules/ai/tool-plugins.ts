@@ -51,7 +51,7 @@ export async function resolveBuiltinTools(
       !maskAllowsConversationType(
         plugin.conversationTypeMask,
         ctx.conversationKind,
-        ctx.conversationBoundary
+        ctx.isImConversation ?? false
       )
     ) {
       continue

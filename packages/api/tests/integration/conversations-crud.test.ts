@@ -18,7 +18,7 @@ if (
 
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
-import { randomBytes } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import {
   setupChatStack,
   teardownChatStack,
@@ -27,10 +27,10 @@ import {
   type ChatStack,
 } from "./harness/index.js"
 
-const clientRequestId = () =>
-  ([8, 4, 4, 4, 12] as const)
-    .map((len) => randomBytes(len / 2).toString("hex"))
-    .join("-")
+// Must be a real RFC 4122 UUID: the chat request schemas validate with
+// `z.uuid()` (version/variant bits checked), so a hand-assembled UUID-shaped
+// hex string is rejected with 400 Invalid UUID.
+const clientRequestId = () => randomUUID()
 
 let stack: ChatStack | undefined
 
@@ -54,15 +54,14 @@ test("GET /chat/conversations lists the conversations the user belongs to", asyn
   assert.equal(Array.isArray(empty.conversations), true)
   assert.equal(empty.conversations.length, 0)
 
-  // Create one private conversation between just the owner.
+  // Create one direct conversation between just the owner.
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
   }>(`/workspaces/${ws.id}/chat/conversations`, {
     method: "POST",
     json: {
       clientRequestId: clientRequestId(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "S3 test convo",
     },
   })
@@ -79,6 +78,130 @@ test("GET /chat/conversations lists the conversations the user belongs to", asyn
   assert.equal(listed.conversations[0].title, "S3 test convo")
 })
 
+test("POST /chat/conversations rejects removed legacy fields (boundary / externalParticipants) with 400", async () => {
+  const ctx = await registerTestUser(stack!.baseClient)
+  const ws = await createTestWorkspace(ctx.client)
+
+  // The conversation-type refactor deleted the `boundary` axis and made
+  // external participants IM-ingest-only. createConversationSchema is a
+  // z.strictObject, so a legacy client sending either field must get a clean
+  // 400 — not have it silently stripped (which would let a compat layer quietly
+  // re-open the external write path / reintroduce boundary). We assert on the
+  // specific unrecognized_keys issue so a strictObject -> object regression
+  // (which would strip-and-accept) fails this test rather than passing.
+  const assertRejectedUnknownKey = async (
+    res: Awaited<ReturnType<typeof ctx.client.fetch>>,
+    key: string
+  ) => {
+    assert.equal(res.status, 400)
+    const body = (await res.json()) as {
+      issues?: Array<{ code?: string; keys?: string[] }>
+    }
+    const issue = (body.issues ?? []).find(
+      (i) => i.code === "unrecognized_keys" && (i.keys ?? []).includes(key)
+    )
+    assert.ok(
+      issue,
+      `expected unrecognized_keys issue for "${key}"; got ${JSON.stringify(
+        body.issues
+      )}`
+    )
+  }
+
+  const withBoundary = await ctx.client.fetch(
+    `/workspaces/${ws.id}/chat/conversations`,
+    {
+      method: "POST",
+      json: {
+        clientRequestId: clientRequestId(),
+        kind: "direct",
+        title: "legacy boundary",
+        boundary: "internal",
+      },
+    }
+  )
+  await assertRejectedUnknownKey(withBoundary, "boundary")
+
+  const withExternal = await ctx.client.fetch(
+    `/workspaces/${ws.id}/chat/conversations`,
+    {
+      method: "POST",
+      json: {
+        clientRequestId: clientRequestId(),
+        kind: "group",
+        title: "legacy external",
+        externalParticipants: [
+          { displayName: "X", transportAddressId: clientRequestId() },
+        ],
+      },
+    }
+  )
+  await assertRejectedUnknownKey(withExternal, "externalParticipants")
+
+  // Control: the same body without the legacy fields succeeds.
+  const ok = await ctx.client.fetch(`/workspaces/${ws.id}/chat/conversations`, {
+    method: "POST",
+    json: {
+      clientRequestId: clientRequestId(),
+      kind: "direct",
+      title: "clean create",
+    },
+  })
+  assert.equal(ok.status, 200)
+})
+
+test("POST /chat/conversations/:cid/participants rejects externalParticipants with 400", async () => {
+  const ctx = await registerTestUser(stack!.baseClient)
+  const ws = await createTestWorkspace(ctx.client)
+  const created = await ctx.client.json<{
+    conversation: { conversationId: string }
+  }>(`/workspaces/${ws.id}/chat/conversations`, {
+    method: "POST",
+    json: {
+      clientRequestId: clientRequestId(),
+      kind: "group",
+      title: "add-participant strict",
+    },
+  })
+
+  // Include a valid actorIds array AND the removed externalParticipants key so a
+  // 400 can only come from the z.strictObject unknown-key rejection — NOT from
+  // the "at least one participant identifier" refine (which would also 400 if
+  // strictObject were weakened to a plain z.object that strips unknown keys).
+  const res = await ctx.client.fetch(
+    `/workspaces/${ws.id}/chat/conversations/${created.conversation.conversationId}/participants`,
+    {
+      method: "POST",
+      json: {
+        actorIds: [randomUUID()],
+        externalParticipants: [
+          { displayName: "X", transportAddressId: clientRequestId() },
+        ],
+      },
+    }
+  )
+  assert.equal(res.status, 400)
+  const body = (await res.json()) as {
+    issues?: Array<{ code?: string; keys?: string[] }>
+  }
+  // The decisive assertion: the rejection is specifically an unknown-key error
+  // for `externalParticipants`, proving strictObject (not the empty-participants
+  // refine) is what failed the request.
+  const unknownKeyIssue = (body.issues ?? []).find(
+    (issue) => issue.code === "unrecognized_keys"
+  )
+  assert.ok(
+    unknownKeyIssue,
+    `expected an unrecognized_keys issue; got ${JSON.stringify(body.issues)}`
+  )
+  assert.ok(
+    (unknownKeyIssue.keys ?? []).includes("externalParticipants"),
+    `expected externalParticipants in unknown keys; got ${JSON.stringify(
+      unknownKeyIssue.keys
+    )}`
+  )
+})
+
 test("GET /chat/conversations/:cid returns the single conversation", async () => {
   const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
@@ -88,8 +211,7 @@ test("GET /chat/conversations/:cid returns the single conversation", async () =>
     method: "POST",
     json: {
       clientRequestId: clientRequestId(),
-      kind: "private",
-      boundary: "internal",
+      kind: "direct",
       title: "detail test",
     },
   })
@@ -116,7 +238,6 @@ test("PATCH /chat/conversations/:cid renames the conversation", async () => {
     json: {
       clientRequestId: clientRequestId(),
       kind: "group",
-      boundary: "internal",
       title: "before",
     },
   })
@@ -146,7 +267,6 @@ test("POST /participants then DELETE /participants/:id round-trips", async () =>
     json: {
       clientRequestId: clientRequestId(),
       kind: "group",
-      boundary: "internal",
       title: "group convo",
     },
   })
@@ -192,7 +312,6 @@ test("POST /chat/conversations/:cid/leave removes self", async () => {
     json: {
       clientRequestId: clientRequestId(),
       kind: "group",
-      boundary: "internal",
       title: "leave test",
     },
   })

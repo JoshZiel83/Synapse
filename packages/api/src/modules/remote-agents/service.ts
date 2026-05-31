@@ -1148,7 +1148,7 @@ async function loadConversationHostWorkspaceId(
   const result = await executeSqlOn<{ workspace_id: string | null }>(
     queryable,
     `
-      SELECT internal_workspace_id AS workspace_id
+      SELECT workspace_id AS workspace_id
       FROM conversations
       WHERE id = $1
       LIMIT 1
@@ -2541,7 +2541,10 @@ export async function listRemoteAgentConversations(params: {
       SELECT
         c.id,
         c.kind,
-        c.boundary,
+        EXISTS (
+          SELECT 1 FROM conversation_transport_bindings b
+          WHERE b.conversation_id = c.id
+        ) AS is_im,
         c.title,
         c.updated_at,
         view.unread_count
@@ -2561,7 +2564,7 @@ export async function listRemoteAgentConversations(params: {
     conversations: result.rows.map((row) => ({
       id: row.id,
       kind: row.kind,
-      boundary: row.boundary,
+      isIm: Boolean(row.is_im),
       title: row.title ?? undefined,
       unreadCount: Number(row.unread_count ?? 0),
       updatedAt: toIso(row.updated_at),

@@ -78,8 +78,8 @@ test("createMemory(owner=actor + scope=conversation) does NOT create a sessions 
   )
 
   await client.query(
-    `INSERT INTO conversations (id, kind, boundary, internal_workspace_id, created_by_workspace_member_id)
-     VALUES ($1, 'private', 'internal', $2, $3)`,
+    `INSERT INTO conversations (id, kind, workspace_id, created_by_workspace_member_id)
+     VALUES ($1, 'direct', $2, $3)`,
     [conversationId, seed.workspaceId, seed.workspaceMemberId]
   )
 

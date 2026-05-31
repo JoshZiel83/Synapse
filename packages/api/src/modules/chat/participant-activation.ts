@@ -76,8 +76,8 @@ export async function activateConversationParticipant(params: {
   displayName?: string
   actorJoinVersionId?: string
   metadata?: Record<string, unknown>
-  // Required when participantType === "external": the transport address that
-  // identifies this external person (used to mint the first-class subject).
+  // Required for external participants: the transport address that identifies
+  // this external person (used to mint the first-class subject).
   transportAddressId?: string
   initiator?: ParticipantInitiator
   recordJoinEvent?: boolean
@@ -87,6 +87,10 @@ export async function activateConversationParticipant(params: {
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
     remoteAgentId: params.remoteAgentId,
+    // External participants have no member/actor/agent id — they are identified
+    // by their transport address. Without this an existing external participant
+    // is never found, so every IM inbound would re-fire participant_joined.
+    transportAddressId: params.transportAddressId,
   })
   const activated = !existing || existing.state !== "active"
   const created = !existing

@@ -62,6 +62,7 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   return row.id as string
 }
 
+// A plain (non-IM) conversation: workspace-scoped, no transport binding.
 async function insertConversation(
   db: AnyDb,
   workspaceId: string
@@ -70,13 +71,80 @@ async function insertConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      boundary: "internal",
-      internal_workspace_id: workspaceId,
+      workspace_id: workspaceId,
       title: "test conversation",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
+}
+
+// An IM conversation = a normal conversation WITH a transport binding. The
+// boundary axis is gone; "IM-ness" is derived purely from the presence of a
+// conversation_transport_bindings row. The external-participant trigger also
+// requires the participant's transport address to belong to the SAME account
+// the conversation is bound to, so we return the binding account id so callers
+// can mint addresses on it (see insertTransportAddress's transportAccountId).
+async function insertTransportAccount(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const account = await db
+    .insertInto("transport_accounts")
+    .values({
+      workspace_id: workspaceId,
+      transport_kind: "qq",
+      account_key: `acct-${Math.random().toString(36).slice(2, 8)}`,
+      display_name: "Test account",
+      connection_mode: "webhook",
+      owner_scope: "workspace",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return account.id as string
+}
+
+async function insertImConversation(
+  db: AnyDb,
+  workspaceId: string,
+  opts: { transportAccountId?: string } = {}
+): Promise<{ conversationId: string; transportAccountId: string }> {
+  const transportAccountId =
+    opts.transportAccountId ?? (await insertTransportAccount(db, workspaceId))
+  const endpoint = await db
+    .insertInto("transport_endpoints")
+    .values({
+      transport_account_id: transportAccountId,
+      endpoint_type: "group",
+      external_id: `ep-${Math.random().toString(36).slice(2, 8)}`,
+      display_name: "Test endpoint",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const conv = await db
+    .insertInto("conversations")
+    .values({
+      kind: "group",
+      workspace_id: workspaceId,
+      title: "im conversation",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  await db
+    .insertInto("conversation_transport_bindings")
+    .values({
+      workspace_id: workspaceId,
+      conversation_id: conv.id as string,
+      transport_account_id: transportAccountId,
+      transport_endpoint_id: endpoint.id as string,
+      outbound_enabled: true,
+      inbound_actor_mode: "inherit_account",
+    })
+    .execute()
+  return {
+    conversationId: conv.id as string,
+    transportAccountId,
+  }
 }
 
 test(
@@ -180,28 +248,26 @@ test(
   }
 )
 
+// Creates a transport_address. By default it mints a fresh account in the given
+// workspace; pass transportAccountId to attach the address to an existing
+// account (e.g. an IM conversation's binding account, so the external-account
+// trigger passes).
 async function insertTransportAddress(
   db: AnyDb,
   workspaceId: string,
-  opts: { workspaceMemberId?: string; addressType?: string } = {}
+  opts: {
+    workspaceMemberId?: string
+    addressType?: string
+    transportAccountId?: string
+  } = {}
 ): Promise<string> {
-  const account = await db
-    .insertInto("transport_accounts")
-    .values({
-      workspace_id: workspaceId,
-      transport_kind: "qq",
-      account_key: `acct-${Math.random().toString(36).slice(2, 8)}`,
-      display_name: "Test account",
-      connection_mode: "webhook",
-      owner_scope: "workspace",
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
+  const accountId =
+    opts.transportAccountId ?? (await insertTransportAccount(db, workspaceId))
   const addr = await db
     .insertInto("transport_addresses")
     .values({
       workspace_id: workspaceId,
-      transport_account_id: account.id as string,
+      transport_account_id: accountId,
       transport_kind: "qq",
       address_type: opts.addressType ?? "user",
       external_id: `ext-${Math.random().toString(36).slice(2, 8)}`,
@@ -219,10 +285,26 @@ test(
     await withTestDbAndClient(async ({ db, client }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
-      const convA = await insertExternalConversation(db)
-      const convB = await insertExternalConversation(db)
-      const addr1 = await insertTransportAddress(db, workspaceId)
-      const addr2 = await insertTransportAddress(db, workspaceId)
+      // Both conversations must be bound to the SAME account as the shared
+      // address, otherwise the account-match trigger rejects the cross-conversation
+      // reuse. Conv A also hosts the second (different-account) address.
+      const sharedAccountId = await insertTransportAccount(db, workspaceId)
+      const convA = (
+        await insertImConversation(db, workspaceId, {
+          transportAccountId: sharedAccountId,
+        })
+      ).conversationId
+      const convB = (
+        await insertImConversation(db, workspaceId, {
+          transportAccountId: sharedAccountId,
+        })
+      ).conversationId
+      const addr1 = await insertTransportAddress(db, workspaceId, {
+        transportAccountId: sharedAccountId,
+      })
+      const addr2 = await insertTransportAddress(db, workspaceId, {
+        transportAccountId: sharedAccountId,
+      })
 
       const { ensureConversationParticipant } = await import("./service.js")
 
@@ -279,8 +361,13 @@ test(
     await withTestDbAndClient(async ({ db, client }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
-      const conversationId = await insertExternalConversation(db)
-      const addr = await insertTransportAddress(db, workspaceId)
+      const { conversationId, transportAccountId } = await insertImConversation(
+        db,
+        workspaceId
+      )
+      const addr = await insertTransportAddress(db, workspaceId, {
+        transportAccountId,
+      })
 
       const { ensureConversationParticipant } = await import("./service.js")
 
@@ -317,7 +404,7 @@ test(
     await withTestDbAndClient(async ({ db, client }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
-      const conversationId = await insertExternalConversation(db)
+      const { conversationId } = await insertImConversation(db, workspaceId)
 
       const { ensureConversationParticipant } = await import("./service.js")
 
@@ -334,297 +421,77 @@ test(
   }
 )
 
-async function insertExternalConversation(db: AnyDb): Promise<string> {
-  const row = await db
-    .insertInto("conversations")
-    .values({
-      kind: "group",
-      boundary: "external",
-      title: "external conversation",
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return row.id as string
-}
-
 test(
-  "addConversationParticipants: external gating (P1) — internal rejects external; external conv validates address (workspace / type / unlinked)",
+  "external subject cannot join a non-IM conversation (no transport binding) — DB trigger",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db, client }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
-      const memberId = await insertWorkspaceMember(db, workspaceId, userId)
-      const otherUserId = await insertUser(db)
-      const otherWorkspaceId = await insertWorkspace(db, otherUserId)
-
-      const { addConversationParticipants } = await import("./service.js")
-
-      // (a) internal conversation rejects external participants entirely.
-      const internalConv = await insertConversation(db, workspaceId)
-      const addrOk = await insertTransportAddress(db, workspaceId)
-      await assert.rejects(
-        addConversationParticipants({
-          workspaceId,
-          conversationId: internalConv,
-          externalParticipants: [
-            { displayName: "X", transportAddressId: addrOk },
-          ],
-          queryable: client,
-        }),
-        /Internal conversations do not allow external participants/
-      )
-
-      const externalConv = await insertExternalConversation(db)
-
-      // (b) address from another workspace is rejected.
-      const foreignAddr = await insertTransportAddress(db, otherWorkspaceId)
-      await assert.rejects(
-        addConversationParticipants({
-          workspaceId,
-          conversationId: externalConv,
-          externalParticipants: [
-            { displayName: "Foreign", transportAddressId: foreignAddr },
-          ],
-          queryable: client,
-        }),
-        /transport address/i
-      )
-
-      // (c) linked (member-bound) address is rejected — must be added as member.
-      const linkedAddr = await insertTransportAddress(db, workspaceId, {
-        workspaceMemberId: memberId,
-      })
-      await assert.rejects(
-        addConversationParticipants({
-          workspaceId,
-          conversationId: externalConv,
-          externalParticipants: [
-            { displayName: "Linked", transportAddressId: linkedAddr },
-          ],
-          queryable: client,
-        }),
-        /linked to a workspace member/
-      )
-
-      // (d) bot/system address type is rejected.
-      const botAddr = await insertTransportAddress(db, workspaceId, {
-        addressType: "bot",
-      })
-      await assert.rejects(
-        addConversationParticipants({
-          workspaceId,
-          conversationId: externalConv,
-          externalParticipants: [
-            { displayName: "Bot", transportAddressId: botAddr },
-          ],
-          queryable: client,
-        }),
-        /not a user address/
-      )
-
-      // (e) happy path: unlinked user address in this workspace on external conv.
-      await addConversationParticipants({
-        workspaceId,
-        conversationId: externalConv,
-        externalParticipants: [
-          { displayName: "Real External", transportAddressId: addrOk },
-        ],
-        queryable: client,
-      })
-      const parts = await db
-        .selectFrom("conversation_participants as cp")
-        .innerJoin("access_subjects as s", "s.id", "cp.subject_id")
-        .select(["s.kind", "s.transport_address_id"])
-        .where("cp.conversation_id", "=", externalConv)
-        .execute()
-      assert.equal(parts.length, 1)
-      assert.equal(parts[0].kind, "external")
-      assert.equal(parts[0].transport_address_id, addrOk)
-    })
-  }
-)
-
-test(
-  "createConversationForWorkspaceMember: external gating (round-8 P2) — internal rejects external; external validates address",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
-      const userId = await insertUser(db)
-      const workspaceId = await insertWorkspace(db, userId)
-      const memberId = await insertWorkspaceMember(db, workspaceId, userId)
-      const addrOk = await insertTransportAddress(db, workspaceId)
-      const linkedAddr = await insertTransportAddress(db, workspaceId, {
-        workspaceMemberId: memberId,
-      })
-
-      const { createConversationForWorkspaceMember } =
-        await import("./service.js")
-
-      // internal (default boundary) rejects external participants.
-      await assert.rejects(
-        createConversationForWorkspaceMember({
-          workspaceId,
-          creatorWorkspaceMemberId: memberId,
-          kind: "group",
-          externalParticipants: [
-            { displayName: "X", transportAddressId: addrOk },
-          ],
-          queryable: client,
-        }),
-        /Internal conversations do not allow external participants/
-      )
-
-      // external boundary rejects a linked address.
-      await assert.rejects(
-        createConversationForWorkspaceMember({
-          workspaceId,
-          creatorWorkspaceMemberId: memberId,
-          kind: "group",
-          boundary: "external",
-          externalParticipants: [
-            { displayName: "Linked", transportAddressId: linkedAddr },
-          ],
-          queryable: client,
-        }),
-        /linked to a workspace member/
-      )
-
-      // external boundary with a valid unlinked user address succeeds.
-      const convo = (await createConversationForWorkspaceMember({
-        workspaceId,
-        creatorWorkspaceMemberId: memberId,
-        kind: "group",
-        boundary: "external",
-        externalParticipants: [
-          { displayName: "Real", transportAddressId: addrOk },
-        ],
-        queryable: client,
-      })) as { id: string }
-      const parts = await db
-        .selectFrom("conversation_participants as cp")
-        .innerJoin("access_subjects as s", "s.id", "cp.subject_id")
-        .select(["s.kind", "s.transport_address_id"])
-        .where("cp.conversation_id", "=", convo.id)
-        .where("s.kind", "=", "external")
-        .execute()
-      assert.equal(parts.length, 1)
-      assert.equal(parts[0].transport_address_id, addrOk)
-    })
-  }
-)
-
-test(
-  "external gating (round-9 P3): duplicate transportAddressId is a clean 400, not a DB constraint error",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
-      const userId = await insertUser(db)
-      const workspaceId = await insertWorkspace(db, userId)
-      const memberId = await insertWorkspaceMember(db, workspaceId, userId)
-      const addr = await insertTransportAddress(db, workspaceId)
-
-      const { createConversationForWorkspaceMember } =
-        await import("./service.js")
-
-      await assert.rejects(
-        createConversationForWorkspaceMember({
-          workspaceId,
-          creatorWorkspaceMemberId: memberId,
-          kind: "group",
-          boundary: "external",
-          externalParticipants: [
-            { displayName: "Dup A", transportAddressId: addr },
-            { displayName: "Dup B", transportAddressId: addr },
-          ],
-          queryable: client,
-        }),
-        /[Dd]uplicate external participant/
-      )
-    })
-  }
-)
-
-test(
-  "external gating (round-9 P2): a rejected non-transactional create leaves no orphan conversation",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
-      const userId = await insertUser(db)
-      const workspaceId = await insertWorkspace(db, userId)
-      const memberId = await insertWorkspaceMember(db, workspaceId, userId)
-
-      const before = await db
-        .selectFrom("conversations")
-        .select((eb) => eb.fn.countAll<string>().as("n"))
-        .executeTakeFirstOrThrow()
-
-      const { createConversationForWorkspaceMember } =
-        await import("./service.js")
-
-      // Pass the raw (non-transactional) client and an internal boundary with an
-      // external participant → must reject BEFORE creating the conversation.
-      await assert.rejects(
-        createConversationForWorkspaceMember({
-          workspaceId,
-          creatorWorkspaceMemberId: memberId,
-          kind: "group",
-          externalParticipants: [
-            { displayName: "X", transportAddressId: crypto.randomUUID() },
-          ],
-          queryable: client,
-        }),
-        /Internal conversations do not allow external participants/
-      )
-
-      const after = await db
-        .selectFrom("conversations")
-        .select((eb) => eb.fn.countAll<string>().as("n"))
-        .executeTakeFirstOrThrow()
-      assert.equal(Number(after.n), Number(before.n))
-    })
-  }
-)
-
-test(
-  "round-10 P3a: ensureConversationParticipant cannot attach an external subject to an internal conversation (DB boundary trigger)",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
-      const userId = await insertUser(db)
-      const workspaceId = await insertWorkspace(db, userId)
-      const internalConv = await insertConversation(db, workspaceId)
+      // A plain conversation with NO transport binding is not IM.
+      const nonImConv = await insertConversation(db, workspaceId)
       const addr = await insertTransportAddress(db, workspaceId)
 
       const { ensureConversationParticipant } = await import("./service.js")
 
       await assert.rejects(
         ensureConversationParticipant({
-          conversationId: internalConv,
+          conversationId: nonImConv,
           participantType: "external",
           displayName: "Sneaky",
           transportAddressId: addr,
           queryable: client,
         }),
-        /external.*internal conversation|cannot join internal/i
+        /no transport binding|external participants are IM-only/i
       )
     })
   }
 )
 
 test(
-  "round-10 P3a: ensureConversationParticipant rejects a bot/system or linked address as external (resolver guard)",
+  "external subject from a different transport account than the conversation's binding is rejected (account mismatch) — DB trigger",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const userId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, userId)
+      // IM conversation bound to account A; the address belongs to account B.
+      const { conversationId } = await insertImConversation(db, workspaceId)
+      const otherAccountId = await insertTransportAccount(db, workspaceId)
+      const addrOnOtherAccount = await insertTransportAddress(db, workspaceId, {
+        transportAccountId: otherAccountId,
+      })
+
+      const { ensureConversationParticipant } = await import("./service.js")
+
+      await assert.rejects(
+        ensureConversationParticipant({
+          conversationId,
+          participantType: "external",
+          displayName: "Wrong account",
+          transportAddressId: addrOnOtherAccount,
+          queryable: client,
+        }),
+        /transport account .* does not match|binding account/i
+      )
+    })
+  }
+)
+
+test(
+  "ensureConversationParticipant rejects a linked (member-bound) address as external (resolver guard)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db, client }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberId = await insertWorkspaceMember(db, workspaceId, userId)
-      const externalConv = await insertExternalConversation(db)
-      const botAddr = await insertTransportAddress(db, workspaceId, {
-        addressType: "bot",
-      })
+      const { conversationId, transportAccountId } = await insertImConversation(
+        db,
+        workspaceId
+      )
       const linkedAddr = await insertTransportAddress(db, workspaceId, {
+        transportAccountId,
         workspaceMemberId: memberId,
       })
 
@@ -632,17 +499,7 @@ test(
 
       await assert.rejects(
         ensureConversationParticipant({
-          conversationId: externalConv,
-          participantType: "external",
-          displayName: "Bot",
-          transportAddressId: botAddr,
-          queryable: client,
-        }),
-        /not a user address/
-      )
-      await assert.rejects(
-        ensureConversationParticipant({
-          conversationId: externalConv,
+          conversationId,
           participantType: "external",
           displayName: "Linked",
           transportAddressId: linkedAddr,
@@ -650,6 +507,110 @@ test(
         }),
         /linked to a workspace member/
       )
+    })
+  }
+)
+
+test(
+  "ensureConversationParticipant rejects a bot/system address as external (resolver guard)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const userId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, userId)
+      const { conversationId, transportAccountId } = await insertImConversation(
+        db,
+        workspaceId
+      )
+      const botAddr = await insertTransportAddress(db, workspaceId, {
+        transportAccountId,
+        addressType: "bot",
+      })
+
+      const { ensureConversationParticipant } = await import("./service.js")
+
+      await assert.rejects(
+        ensureConversationParticipant({
+          conversationId,
+          participantType: "external",
+          displayName: "Bot",
+          transportAddressId: botAddr,
+          queryable: client,
+        }),
+        /not a user address/
+      )
+    })
+  }
+)
+
+test(
+  "ensureConversationParticipant rejects an external address from another workspace (workspace mismatch)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const userId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, userId)
+      const otherUserId = await insertUser(db)
+      const otherWorkspaceId = await insertWorkspace(db, otherUserId)
+      const { conversationId } = await insertImConversation(db, workspaceId)
+      // Address (and its account) live in a DIFFERENT workspace than the conv.
+      const foreignAddr = await insertTransportAddress(db, otherWorkspaceId)
+
+      const { ensureConversationParticipant } = await import("./service.js")
+
+      // The subject is minted in the address's (foreign) workspace, so the
+      // participant trigger's unconditional workspace match rejects it. (The
+      // account-match check would also reject; either way it must fail.)
+      await assert.rejects(
+        ensureConversationParticipant({
+          conversationId,
+          participantType: "external",
+          displayName: "Foreign",
+          transportAddressId: foreignAddr,
+          queryable: client,
+        }),
+        /does not match conversation|binding account/i
+      )
+    })
+  }
+)
+
+test(
+  "external participant happy path: unlinked user address on the binding account joins an IM conversation",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const userId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, userId)
+      const { conversationId, transportAccountId } = await insertImConversation(
+        db,
+        workspaceId
+      )
+      const addrOk = await insertTransportAddress(db, workspaceId, {
+        transportAccountId,
+      })
+
+      const { ensureConversationParticipant } = await import("./service.js")
+
+      const participant = (await ensureConversationParticipant({
+        conversationId,
+        participantType: "external",
+        displayName: "Real External",
+        transportAddressId: addrOk,
+        queryable: client,
+      })) as { id: string }
+      assert.ok(participant.id)
+
+      const parts = await db
+        .selectFrom("conversation_participants as cp")
+        .innerJoin("access_subjects as s", "s.id", "cp.subject_id")
+        .select(["s.kind", "s.transport_address_id", "s.workspace_id"])
+        .where("cp.conversation_id", "=", conversationId)
+        .execute()
+      assert.equal(parts.length, 1)
+      assert.equal(parts[0].kind, "external")
+      assert.equal(parts[0].transport_address_id, addrOk)
+      assert.equal(parts[0].workspace_id, workspaceId)
     })
   }
 )

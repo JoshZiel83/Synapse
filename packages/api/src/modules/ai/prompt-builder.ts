@@ -217,7 +217,7 @@ export function buildActorPrompt(
   _sessionContext?: any,
   extraTools?: ToolDefinition[],
   conversationParticipants?: ConversationParticipantInfo[],
-  conversationKind?: "private" | "group" | "virtual",
+  conversationKind?: "direct" | "group",
   availableSkills?: AvailableSkillSummary[],
   collaborationMode: SessionCollaborationMode = "default"
 ): { system: string } {
@@ -300,7 +300,7 @@ export function buildActorPrompt(
 
   if (hasHumanConversationParticipant(conversationParticipants)) {
     parts.push(
-      buildRequestUserInputGuidance(threadSemantics.isPrivateConversation)
+      buildRequestUserInputGuidance(threadSemantics.isDirectConversation)
     )
   }
 
@@ -308,7 +308,7 @@ export function buildActorPrompt(
     isGroupConversationKind(conversationKind) &&
     isPlanCollaborationMode(collaborationMode)
   ) {
-    throw new Error("Plan mode is only available in private conversations.")
+    throw new Error("Plan mode is only available in direct conversations.")
   }
 
   if (
@@ -331,7 +331,7 @@ export function buildActorPrompt(
   }
 
   if (conversationParticipants && conversationParticipants.length > 0) {
-    const isPrivateThread = threadSemantics.isPrivateConversation
+    const isDirectThread = threadSemantics.isDirectConversation
     const exampleRecipient =
       conversationParticipants.find((member) => member.user_id)?.user_name ||
       conversationParticipants.find(
@@ -346,8 +346,8 @@ export function buildActorPrompt(
     const roster = [
       "# Conversation Participants",
       "",
-      isPrivateThread
-        ? "You are in a private thread with the following other participants:"
+      isDirectThread
+        ? "You are in a direct thread with the following other participants:"
         : "You are in a group thread with the following other participants:",
       "The XML `<conversation_manifest>` is the authoritative roster. Use `participantId` from that manifest for `<mention .../>`.",
       "",
@@ -388,17 +388,17 @@ export function buildActorPrompt(
 
     parts.push(roster)
 
-    const communicationOverview = isPrivateThread
-      ? `All visible communication uses the \`send_to\` tool. Conversation messages are shared with the other current participant. This is a private thread, so the peer is implicit and you do not provide recipient parameters.`
+    const communicationOverview = isDirectThread
+      ? `All visible communication uses the \`send_to\` tool. Conversation messages are shared with the other current participant. This is a direct thread, so the peer is implicit and you do not provide recipient parameters.`
       : `All visible communication uses the \`send_to\` tool. Conversation messages are shared with the whole conversation. In group threads, mentioning someone inside the message body does not make the message private; it only creates an explicit inline participant reference.`
-    const sendToGuide = isPrivateThread
+    const sendToGuide = isDirectThread
       ? `Send a visible message to the other current participant.\n` +
         `Parameters:\n` +
         `- \`intent\`: \`reply\` when you are replying with information or a result; \`request\` when you are delegating, asking, or requesting action\n` +
         `- \`summary\`: a short structured summary of what you replied with or what you want the other participant to do; this is used for UI rendering\n` +
-        `- ${buildReplyToRefUsageGuidance("private")}\n` +
+        `- ${buildReplyToRefUsageGuidance("direct")}\n` +
         `- \`message\`: your visible message content\n` +
-        `- The recipient is implicit. In this private thread, \`send_to\` goes directly to ${exampleRecipient} or whoever is currently the other participant.\n` +
+        `- The recipient is implicit. In this direct thread, \`send_to\` goes directly to ${exampleRecipient} or whoever is currently the other participant.\n` +
         `- Prefer \`<mention participantId="..."/>\`. You may also use \`<mention name="${exampleRecipient}"/>\` when the roster name is unique.\n` +
         `- Use inline mention only when the sentence itself explicitly points to that person. Do not mechanically mention the other participant at the start of every message.`
       : `Send a visible group message.\n` +
@@ -411,11 +411,11 @@ export function buildActorPrompt(
         `- Prefer \`<mention participantId="..."/>\`. You may also use \`<mention name="${exampleRecipient}"/>\` when the roster name is unique.\n` +
         `- Use inline mention only when the sentence explicitly points to someone: ownership, responsibility, follow-up, or who should handle a task.\n` +
         `- Mention inside the body does not make the message private and does not replace \`replyToRef\`.`
-    const sleepGuidance = isPrivateThread
-      ? `- In a private thread, you must use \`send_to\` before \`sleep\`.\n`
+    const sleepGuidance = isDirectThread
+      ? `- In a direct thread, you must use \`send_to\` before \`sleep\`.\n`
       : `- In a group thread, you may sleep without \`send_to\` only when the wakeup is truly unrelated to you and the intended assignee already received the message, so your own visible reply would add no value.\n`
-    const mentionGuidance = isPrivateThread
-      ? `- In a private thread, \`send_to\` already goes to the other participant. Use \`<mention .../>\` only when the sentence itself needs an inline participant reference.\n`
+    const mentionGuidance = isDirectThread
+      ? `- In a direct thread, \`send_to\` already goes to the other participant. Use \`<mention .../>\` only when the sentence itself needs an inline participant reference.\n`
       : `- In a group thread, an unmentioned \`send_to\` message is a general group message.\n` +
         `- Use \`<mention .../>\` only when the sentence explicitly points to a participant. Mention does not create a private audience.\n`
     const otherToolLines = [
@@ -434,7 +434,7 @@ export function buildActorPrompt(
           ]
         : []),
     ].join("\n")
-    const workflowStepFour = isPrivateThread
+    const workflowStepFour = isDirectThread
       ? `4. This is a direct conversation with a fixed participant set. Do not suggest inviting participants, pulling people into a group, or treating it like a group chat`
       : `4. If you need help from another actor and \`invite_actor\` is available, use \`send_to\` for current participants or \`invite_actor\` for listed non-participants`
 
@@ -466,7 +466,7 @@ export function buildActorPrompt(
         `- If this wakeup leads to a result, handoff, clarification, or explicit "no action needed" decision that others should know, use \`send_to\` first and only then call \`sleep\`.\n` +
         `${sleepGuidance}` +
         `- All visible conversation messages are shared with the whole conversation.\n` +
-        `${isPrivateThread ? "- This is a direct conversation, not a group chat. Do not suggest adding participants, removing participants, or renaming it like a group.\n" : ""}` +
+        `${isDirectThread ? "- This is a direct conversation, not a group chat. Do not suggest adding participants, removing participants, or renaming it like a group.\n" : ""}` +
         `${mentionGuidance}` +
         `- If a public message is not addressed to you, treat it as shared context unless you are explicitly asked to respond or need to step in to unblock the work.\n` +
         `- Use message \`ref\` values from the XML context when you need to reply to a specific earlier message.\n` +
