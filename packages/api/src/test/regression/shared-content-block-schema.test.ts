@@ -37,10 +37,10 @@ test("CanonicalContentBlockSchema parses each canonical block kind", () => {
 
   const fileRef = CanonicalContentBlockSchema.parse({
     type: "file_ref",
-    fileId: "00000000-0000-4000-8000-000000000001",
-    url: "/files/abc",
+    sha256: "a".repeat(64),
+    path: "/conversation/shot.png",
     mimeType: "image/png",
-    originalName: "shot.png",
+    name: "shot.png",
     sizeBytes: 1024,
     category: "image",
   })
@@ -64,8 +64,8 @@ test("CanonicalContentBlockSchema rejects unknown types", () => {
 test("CanonicalContentBlockSchema rejects file_ref blocks missing required fields", () => {
   const result = CanonicalContentBlockSchema.safeParse({
     type: "file_ref",
-    fileId: "00000000-0000-4000-8000-000000000001",
-    // url + mimeType + originalName + sizeBytes + category all omitted
+    sha256: "a".repeat(64),
+    // mimeType + name + sizeBytes + category all omitted
   })
   assert.equal(result.success, false)
 })

@@ -74,7 +74,7 @@ import type {
   ChatInteractionResolveInput,
   ChatInteractionResolvePayload,
 } from "@/lib/api"
-import { cn, resolveFileUrl } from "@/lib/utils"
+import { cn, resolveContentUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
 import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
 import { buildReplyPreviewText, getEntityDisplayName } from "./reply-utils"
@@ -1920,16 +1920,16 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
       <div className="space-y-2">
         {blocks.map((block) => {
           const cat = block.category
-          const resolvedUrl = resolveFileUrl(block.url) || block.url
+          const resolvedUrl = resolveContentUrl(block.sha256)
 
           if (cat === "image") {
             return (
-              <div key={block.fileId}>
+              <div key={block.id}>
                 <img
                   src={resolvedUrl}
-                  alt={block.originalName}
+                  alt={block.name}
                   className="max-h-64 max-w-full cursor-pointer rounded-lg transition-opacity hover:opacity-90"
-                  onClick={() => setExpandedImage(resolvedUrl)}
+                  onClick={() => resolvedUrl && setExpandedImage(resolvedUrl)}
                 />
               </div>
             )
@@ -1938,11 +1938,11 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
           if (cat === "audio") {
             return (
               <div
-                key={block.fileId}
+                key={block.id}
                 className="rounded-lg bg-gray-50 p-2.5 ring-1 ring-gray-200 dark:bg-white/[0.03] dark:ring-white/[0.06]"
               >
                 <div className="mb-1.5 truncate text-[11px] text-muted-foreground">
-                  {block.originalName}
+                  {block.name}
                 </div>
                 <audio controls className="h-8 w-full" preload="metadata">
                   <source src={resolvedUrl} type={block.mimeType} />
@@ -1953,7 +1953,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
 
           if (cat === "video") {
             return (
-              <div key={block.fileId}>
+              <div key={block.id}>
                 <video
                   controls
                   className="max-h-64 max-w-full rounded-lg"
@@ -1968,7 +1968,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
           // Document
           return (
             <a
-              key={block.fileId}
+              key={block.id}
               href={resolvedUrl}
               target="_blank"
               rel="noopener noreferrer"
@@ -1979,7 +1979,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs text-foreground/80">
-                  {block.originalName}
+                  {block.name}
                 </div>
                 <div className="text-[10px] text-muted-foreground/50">
                   {formatBytes(block.sizeBytes)}

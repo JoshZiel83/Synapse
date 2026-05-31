@@ -13,6 +13,9 @@ import {
 import {
   getStableFileUrl,
   getStableFullFileUrl,
+  readCasBlob,
+  CONTENT_URL_PREFIX,
+  BASE_URL,
 } from "../../infrastructure/storage/index.js"
 import {
   buildActorOutputOrigin,
@@ -73,20 +76,12 @@ type FileJoinRow = {
   mime_type: string
   content_kind: FileRecordView["contentKind"]
   size_bytes: string | number
-  sha256: string
+  content_sha256: string
   created_at: string | Date | null
-  blob_id: string
-  backend: FileRecordView["storageBackend"]
-  storage_key: string
-  bucket: string | null
-  locator_json: unknown
   source_family: FileRecordView["originSummary"]["family"]
   source_system: FileRecordView["originSummary"]["system"]
-  initiator_user_id: string | null
   initiator_actor_id: string | null
-  provider_key: string | null
-  parent_file_id: string | null
-  external_resource_key: string | null
+  parent_asset_id: string | null
   details_json: unknown
 }
 
@@ -94,16 +89,14 @@ function mapStoredFileRecord(row: FileJoinRow): StoredFileRecord {
   const origin = {
     family: row.source_family,
     system: row.source_system,
-    initiatorUserId: row.initiator_user_id,
     initiatorActorId: row.initiator_actor_id,
-    providerKey: row.provider_key ?? undefined,
-    parentFileId: row.parent_file_id,
-    externalResourceKey: row.external_resource_key ?? undefined,
+    parentFileId: row.parent_asset_id,
     details: parseJsonObject(row.details_json),
   } satisfies FileOriginInput
 
   return {
     id: row.id,
+    assetId: row.id,
     workspaceId: row.workspace_id,
     uploaderUserId: row.uploader_user_id,
     originalName: row.original_name,
@@ -112,14 +105,10 @@ function mapStoredFileRecord(row: FileJoinRow): StoredFileRecord {
     mimeType: row.mime_type,
     contentKind: row.content_kind,
     sizeBytes: Number(row.size_bytes),
-    sha256: row.sha256,
-    storageBackend: row.backend,
+    sha256: row.content_sha256,
+    storageBackend: "local_cas",
     originSummary: toFileOriginSummary(origin),
     createdAt: toIsoString(row.created_at),
-    blobId: row.blob_id,
-    storageKey: row.storage_key,
-    bucket: row.bucket,
-    locator: parseJsonObject(row.locator_json),
   }
 }
 
@@ -127,10 +116,9 @@ async function getJoinedFileRow(
   fileId: string,
   workspaceId?: string
 ): Promise<FileJoinRow | null> {
+  // file_assets folds in the old file_origins columns, so no join needed.
   let query = db
-    .selectFrom("files as f")
-    .innerJoin("file_blobs as fb", "fb.id", "f.blob_id")
-    .innerJoin("file_origins as fo", "fo.file_id", "f.id")
+    .selectFrom("file_assets as f")
     .select([
       "f.id",
       "f.workspace_id",
@@ -139,21 +127,13 @@ async function getJoinedFileRow(
       "f.mime_type",
       "f.content_kind",
       "f.size_bytes",
-      "f.sha256",
+      "f.content_sha256",
       "f.created_at",
-      "f.blob_id",
-      "fb.backend",
-      "fb.storage_key",
-      "fb.bucket",
-      "fb.locator_json",
-      "fo.source_family",
-      "fo.source_system",
-      "fo.initiator_user_id",
-      "fo.initiator_actor_id",
-      "fo.provider_key",
-      "fo.parent_file_id",
-      "fo.external_resource_key",
-      "fo.details_json",
+      "f.source_family",
+      "f.source_system",
+      "f.initiator_actor_id",
+      "f.parent_asset_id",
+      "f.details_json",
     ])
     .where("f.id", "=", fileId)
 
@@ -286,17 +266,74 @@ export async function readFileBase64ById(
   return fileToBase64(record)
 }
 
+// Content-addressed read/url helpers. The file-service refactor addresses
+// blobs by sha256; providers read bytes + build native-media URLs by sha.
+export async function readContentBufferBySha(
+  sha256: string
+): Promise<Buffer | null> {
+  try {
+    return await readCasBlob(sha256)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Best-effort MIME for a content blob. content_blobs deliberately stores no MIME
+ * (the same sha can be presented as different MIME in different contexts), so we
+ * read it back from whatever references the sha: an entity asset, or any file_ref
+ * part that carries a mime_type. Falls back to application/octet-stream.
+ */
+export async function getContentMimeBySha(sha256: string): Promise<string> {
+  const asset = await db
+    .selectFrom("file_assets")
+    .select("mime_type")
+    .where("content_sha256", "=", sha256)
+    .limit(1)
+    .executeTakeFirst()
+  if (asset?.mime_type) return asset.mime_type
+
+  const part = await db
+    .selectFrom("conversation_item_parts")
+    .select("mime_type")
+    .where("ref_sha256", "=", sha256)
+    .where("mime_type", "is not", null)
+    .limit(1)
+    .executeTakeFirst()
+  if (part?.mime_type) return part.mime_type
+
+  const toolPart = await db
+    .selectFrom("tool_result_parts")
+    .select("mime_type")
+    .where("ref_sha256", "=", sha256)
+    .where("mime_type", "is not", null)
+    .limit(1)
+    .executeTakeFirst()
+  if (toolPart?.mime_type) return toolPart.mime_type
+
+  return "application/octet-stream"
+}
+
+/** Relative content URL for a sha256: /content/<sha256>. */
+export function getContentUrlBySha(sha256: string): string {
+  return `${CONTENT_URL_PREFIX}${sha256}`
+}
+
+/** Absolute content URL for a sha256. */
+export function getFullContentUrlBySha(sha256: string): string {
+  return `${BASE_URL}${getContentUrlBySha(sha256)}`
+}
+
 export function toCanonicalFileRefBlock(
   record: Pick<
     FileRecordView,
-    "id" | "url" | "mimeType" | "originalName" | "sizeBytes"
+    "mimeType" | "originalName" | "sizeBytes" | "sha256"
   >
 ): CanonicalFileRefBlock {
   return fileRefBlock({
-    fileId: record.id,
-    url: record.url,
+    sha256: record.sha256,
     mimeType: record.mimeType,
-    originalName: record.originalName,
+    name: record.originalName,
     sizeBytes: record.sizeBytes,
     category: mimeToCanonicalFileCategory(record.mimeType),
   })

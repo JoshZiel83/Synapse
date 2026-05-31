@@ -192,7 +192,7 @@ export const CANONICAL_FILE_CATEGORIES = [
   "video",
   "document",
 ] as const
-export const FILE_STORAGE_BACKENDS = ["local_fs"] as const
+export const FILE_STORAGE_BACKENDS = ["local_cas"] as const
 export const FILE_ORIGIN_FAMILIES = [
   "user_upload",
   "actor_output",
@@ -387,20 +387,17 @@ export const CONVERSATION_TYPE_MASK_PRESETS = {
     CONVERSATION_TYPE_MASK_BITS.im_group,
   // Native (in-app, non-IM) conversations only — replaces the old INTERNAL_ONLY.
   NATIVE_ONLY:
-    CONVERSATION_TYPE_MASK_BITS.direct |
-    CONVERSATION_TYPE_MASK_BITS.group,
+    CONVERSATION_TYPE_MASK_BITS.direct | CONVERSATION_TYPE_MASK_BITS.group,
   // IM-bridged conversations only — replaces the old EXTERNAL_ONLY / VIRTUAL_ONLY.
   IM_ONLY:
     CONVERSATION_TYPE_MASK_BITS.im_direct |
     CONVERSATION_TYPE_MASK_BITS.im_group,
   // 1:1 conversations across both native and IM.
   DIRECT_ONLY:
-    CONVERSATION_TYPE_MASK_BITS.direct |
-    CONVERSATION_TYPE_MASK_BITS.im_direct,
+    CONVERSATION_TYPE_MASK_BITS.direct | CONVERSATION_TYPE_MASK_BITS.im_direct,
   // Group conversations across both native and IM.
   GROUP_ONLY:
-    CONVERSATION_TYPE_MASK_BITS.group |
-    CONVERSATION_TYPE_MASK_BITS.im_group,
+    CONVERSATION_TYPE_MASK_BITS.group | CONVERSATION_TYPE_MASK_BITS.im_group,
   // Native (in-app) group conversations only — excludes IM groups. Used by
   // capabilities that must not act on IM-bridged group chats (e.g. invite_actor,
   // which must not pull more actors into a third-party IM group).

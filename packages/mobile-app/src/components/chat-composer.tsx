@@ -685,10 +685,9 @@ export function ChatComposer({
           ...draftBlocks,
           ...uploadedAttachments.map((attachment) =>
             fileRefBlock({
-              fileId: attachment.file.id,
-              url: attachment.file.url,
+              sha256: attachment.file.sha256,
               mimeType: attachment.file.mimeType,
-              originalName: attachment.file.originalName,
+              name: attachment.file.originalName,
               sizeBytes: attachment.file.sizeBytes,
               category: attachment.file.contentKind,
             })

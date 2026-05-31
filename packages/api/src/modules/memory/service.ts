@@ -137,13 +137,12 @@ type MemoryPartRow = {
   memory_item_id: string
   part_type: string
   text_value?: string | null
-  file_id?: string | null
+  ref_path?: string | null
+  ref_sha256?: string | null
   json_value?: unknown
   mime_type?: string | null
   name?: string | null
   metadata?: Record<string, unknown> | string | null
-  original_name?: string | null
-  file_mime_type?: string | null
   size_bytes?: number | null
 }
 
@@ -617,19 +616,16 @@ async function loadMemoryItemsFromRows(rows: MemoryRow[]) {
   const memoryIds = rows.map((row) => row.id)
   const partsResult = await db
     .selectFrom("memory_item_parts as mip")
-    .leftJoin("files as f", "f.id", "mip.file_id")
     .select([
       "mip.memory_item_id",
       "mip.part_type",
       "mip.text_value",
-      "mip.file_id",
+      "mip.ref_path",
+      "mip.ref_sha256",
       "mip.json_value",
       "mip.mime_type",
       "mip.name",
       "mip.metadata",
-      "f.original_name",
-      "f.mime_type as file_mime_type",
-      "f.size_bytes",
     ])
     .where("mip.memory_item_id", "in", memoryIds)
     .orderBy("mip.memory_item_id", "asc")
@@ -1006,7 +1002,8 @@ async function insertMemoryParts(
         ordinal,
         part_type: part.type,
         text_value: part.type === "text" ? part.text || "" : null,
-        file_id: part.type === "file_ref" ? part.fileId || null : null,
+        ref_path: part.type === "file_ref" ? (part.refPath ?? null) : null,
+        ref_sha256: part.type === "file_ref" ? (part.refSha256 ?? null) : null,
         json_value:
           part.type === "json"
             ? sql`${JSON.stringify(part.json ?? {})}::jsonb`

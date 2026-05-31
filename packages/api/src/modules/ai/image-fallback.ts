@@ -2,7 +2,7 @@ import type { CanonicalContentBlock } from "@synapse/shared"
 import { createRequire } from "module"
 import { mkdir } from "node:fs/promises"
 import { config } from "../../config/index.js"
-import { readFileBufferById } from "../files/service.js"
+import { readContentBufferBySha } from "../files/service.js"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
 type ImageFileBlock = FileRefBlock & { category: "image" }
@@ -152,7 +152,7 @@ async function transcribeImageWithTesseract(
 
   try {
     await mkdir(config.imageFallback.tesseractCachePath, { recursive: true })
-    const inputBuffer = await readFileBufferById(block.fileId)
+    const inputBuffer = await readContentBufferBySha(block.sha256)
     if (!inputBuffer) {
       return {
         ok: false,
@@ -200,7 +200,7 @@ async function transcribeImageWithTesseract(
 }
 
 async function getOcrResult(block: ImageFileBlock): Promise<ImageOcrResult> {
-  const cacheKey = `${config.imageFallback.provider}:${config.imageFallback.tesseractLangs}:${block.fileId}`
+  const cacheKey = `${config.imageFallback.provider}:${config.imageFallback.tesseractLangs}:${block.sha256}`
   let pending = ocrCache.get(cacheKey)
   if (!pending) {
     pending = transcribeImageWithTesseract(block)
@@ -210,15 +210,14 @@ async function getOcrResult(block: ImageFileBlock): Promise<ImageOcrResult> {
 }
 
 export async function extractImageOcrText(
-  fileId: string
+  sha256: string
 ): Promise<ImageOcrResult> {
   return getOcrResult({
-    id: `file-${fileId}`,
+    id: `file-${sha256.slice(0, 12)}`,
     type: "file_ref",
-    fileId,
-    url: "",
+    sha256,
     mimeType: "image/*",
-    originalName: "image",
+    name: "image",
     sizeBytes: 0,
     category: "image",
   })
@@ -229,7 +228,7 @@ export async function buildImageFallbackContext(
   reason: string
 ): Promise<string> {
   const ocr = await getOcrResult(block)
-  const fileRef = `<FileRef id="${block.fileId}"/>`
+  const fileRef = `<FileRef id="${block.sha256}"/>`
   const lines = [
     `[Image fallback] ${reason} The platform ran a local OCR pass with the default tesseract.js pipeline before building this request.`,
     `Original image FileRef: ${fileRef}`,

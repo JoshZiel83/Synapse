@@ -77,7 +77,7 @@ function blocksToPromptText(blocks: ActorDoc["content"]): string {
     .map((block: ActorDoc["content"][number]) => {
       if (block.type === "text") return block.text
       if (block.type === "mention") return formatMentionText(block)
-      return `[File reference: ${block.originalName} (${block.category}) <FileRef id="${block.fileId}"/>]`
+      return `[File reference: ${block.name} (${block.category}) at ${block.path ?? `sha256:${block.sha256}`}]`
     })
     .join("\n")
     .trim()
@@ -95,7 +95,7 @@ function summarizeDoc(doc: ActorDoc, maxLength = 160): string {
     ): block is Extract<ActorDoc["content"][number], { type: "file_ref" }> =>
       block.type === "file_ref"
   )
-  return file ? `Attached file: ${file.originalName}` : ""
+  return file ? `Attached file: ${file.name}` : ""
 }
 
 function renderDocSections(

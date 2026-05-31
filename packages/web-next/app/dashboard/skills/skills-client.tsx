@@ -329,7 +329,7 @@ function skillDescriptionText(description?: CanonicalContentBlock | null) {
   if (description.type === "mention") {
     return `@${description.mention.name || "Unknown"}`
   }
-  return description.originalName || extractText([description])
+  return description.name || extractText([description])
 }
 
 function ensureSingleDescriptionBlock(blocks: CanonicalContentBlock[]) {

@@ -4,13 +4,13 @@ import { type CanonicalContentBlock } from "@synapse/shared"
 import { FileAudio, FileText, Film, ImageIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
-import { cn, resolveFileUrl } from "@/lib/utils"
+import { cn, resolveContentUrl } from "@/lib/utils"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
 type MentionBlock = Extract<CanonicalContentBlock, { type: "mention" }>
 
 function FilePreview({ file }: { file: FileRefBlock }) {
-  const fileUrl = resolveFileUrl(file.url)
+  const fileUrl = resolveContentUrl(file.sha256)
 
   if (file.category === "image") {
     return (
@@ -23,7 +23,7 @@ function FilePreview({ file }: { file: FileRefBlock }) {
         {fileUrl ? (
           <img
             src={fileUrl}
-            alt={file.originalName}
+            alt={file.name}
             className="aspect-[16/10] w-full object-cover"
           />
         ) : (
@@ -34,7 +34,7 @@ function FilePreview({ file }: { file: FileRefBlock }) {
         <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-medium text-foreground">
-              {file.originalName}
+              {file.name}
             </div>
             <div className="text-xs text-muted-foreground">{file.mimeType}</div>
           </div>
@@ -61,7 +61,7 @@ function FilePreview({ file }: { file: FileRefBlock }) {
         <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-medium text-foreground">
-              {file.originalName}
+              {file.name}
             </div>
             <div className="text-xs text-muted-foreground">{file.mimeType}</div>
           </div>
@@ -80,7 +80,7 @@ function FilePreview({ file }: { file: FileRefBlock }) {
           </div>
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium text-foreground">
-              {file.originalName}
+              {file.name}
             </div>
             <div className="text-xs text-muted-foreground">{file.mimeType}</div>
           </div>
@@ -103,7 +103,7 @@ function FilePreview({ file }: { file: FileRefBlock }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-foreground">
-          {file.originalName}
+          {file.name}
         </div>
         <div className="text-xs text-muted-foreground">{file.mimeType}</div>
       </div>

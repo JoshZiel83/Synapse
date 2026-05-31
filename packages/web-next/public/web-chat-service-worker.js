@@ -1047,10 +1047,10 @@
     return {
       id: typeof input.id === "string" && input.id.trim().length > 0 ? input.id : createCanonicalContentBlockId("file"),
       type: "file_ref",
-      fileId: input.fileId,
-      url: input.url,
+      sha256: input.sha256,
+      ...input.path !== void 0 ? { path: input.path } : {},
       mimeType: input.mimeType,
-      originalName: input.originalName,
+      name: input.name,
       sizeBytes: input.sizeBytes,
       category: input.category
     };
@@ -1093,7 +1093,7 @@
       }
       if (block.type === "file_ref") {
         const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes);
-        if (typeof block.fileId !== "string" || typeof block.url !== "string" || typeof block.mimeType !== "string" || typeof block.originalName !== "string" || sizeBytes === null || block.category !== "image" && block.category !== "audio" && block.category !== "video" && block.category !== "document") {
+        if (typeof block.sha256 !== "string" || block.path !== void 0 && typeof block.path !== "string" || typeof block.mimeType !== "string" || typeof block.name !== "string" || sizeBytes === null || block.category !== "image" && block.category !== "audio" && block.category !== "video" && block.category !== "document") {
           continue;
         }
         normalized.push(fileRefBlock({
