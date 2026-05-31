@@ -50,6 +50,12 @@ export interface SpawnSandboxRuntimeParams {
   serverOrigin: string
   /** Enable the delete tool (default true for a sandbox). */
   enableDelete?: boolean
+  /**
+   * Confine every commandline invocation in a bwrap jail (--cmd-sandbox). Set
+   * when the host supports bwrap; when false the device exposes no confined
+   * commandline (fail-closed — the platform also withholds the commandline grant).
+   */
+  confineCommands?: boolean
   /** Human title for the paired device. */
   title?: string
 }
@@ -157,6 +163,7 @@ export function createLocalHostProvider(opts?: {
         `--fs-helper=${params.fsHelperPath}`,
         "--fs-enable-write",
         ...(params.enableDelete === false ? [] : ["--fs-enable-delete"]),
+        ...(params.confineCommands ? ["--cmd-sandbox"] : []),
         // The sandbox uses the Postgres snapshot DAG, not the helper's legacy
         // per-write history. Disable history but keep write tools visible.
         "--fs-disable-history",

@@ -239,6 +239,7 @@ export async function provisionSandbox(
       fsRoot: sandboxRoot,
       fsHelperPath,
       serverOrigin: config.app.baseUrl,
+      confineCommands: commandlineEnabled,
       title: `Sandbox ${sessionId.slice(0, 8)}`,
     }
     const paired = await hostProvider.pair(spawnParams)

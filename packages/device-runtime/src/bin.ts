@@ -209,6 +209,14 @@ async function main() {
           process.env.SYNAPSE_DEVICE_FS_ALLOW_UNVERSIONED_WRITE,
         false
       )
+      // --cmd-sandbox: confine every commandline invocation in a bwrap jail
+      // rooted at the fs-root (no network, host FS unreachable outside the
+      // mount points). Set by the platform's sandbox provisioner. Linux-only.
+      const cmdSandbox = isOn(
+        getFlag(args.flags, "cmd-sandbox") ??
+          process.env.SYNAPSE_DEVICE_CMD_SANDBOX,
+        false
+      )
       const fsDisableLiveSearch = isOn(
         getFlag(args.flags, "fs-disable-live-search") ??
           process.env.SYNAPSE_DEVICE_FS_DISABLE_LIVE_SEARCH,
@@ -302,12 +310,10 @@ async function main() {
       // and run use the SAME --bundled-toolchain-dir / --toolchain-manifest
       // defaults; ToolchainManager.resolve hits whatever install-bundles
       // populated earlier.
-      const { detectTerminalEnvironment } = await import(
-        "./terminal/environment.js"
-      )
-      const { createToolchainManager } = await import(
-        "./terminal/toolchain-manager.js"
-      )
+      const { detectTerminalEnvironment } =
+        await import("./terminal/environment.js")
+      const { createToolchainManager } =
+        await import("./terminal/toolchain-manager.js")
       const { defaultPathResolver } = await import("./terminal/environment.js")
       const environment = await detectTerminalEnvironment()
       const manifestPath =
@@ -368,7 +374,11 @@ async function main() {
           helperRpcTimeoutMs: fsHelperRpcTimeoutMs,
           indexIgnore: fsIndexIgnore,
         }),
-        createCommandlineBuiltin({ environment, toolchainManager }),
+        createCommandlineBuiltin({
+          environment,
+          toolchainManager,
+          sandboxRoot: cmdSandbox ? fsRoot : undefined,
+        }),
       ]
       const cuaHelperPath =
         getFlag(args.flags, "cua-helper") ??
