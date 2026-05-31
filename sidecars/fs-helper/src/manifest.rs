@@ -660,12 +660,18 @@ pub struct DirSyncResult {
     pub new_base_manifest_sha256: String,
 }
 
-/// Every locally-dirty FILE entry whose path is within the conflict path's
-/// subtree (the path itself, or a descendant, or — for the tree case — a path
-/// the conflict path descends into). Used to sidecar-preserve local work before
-/// head-wins overwrites/removes the live path. Only file entries are returned
-/// (we can materialize a file's bytes from CAS; dirs/symlinks aren't bytes).
-fn dirty_files_in_subtree<'a>(
+/// Every locally-dirty preservable entry whose path is within the conflict
+/// path's subtree (the path itself, a descendant, or — for the tree case — a
+/// path the conflict path descends into). Used to sidecar-preserve local work
+/// before head-wins overwrites/removes the live path.
+///
+/// FILES (bytes from CAS) and SYMLINKS (a target string) are preservable and
+/// returned. Empty DIRECTORIES are NOT returned: a dir carries no recoverable
+/// content of its own (any dirty file/symlink under it is returned in its own
+/// right), so an agent-created empty dir that head replaces is the one case
+/// where nothing is sidecar'd — the conflict path is still reported as deferred
+/// so the agent re-reads the live path. (round-8 #3)
+fn dirty_preservable_in_subtree<'a>(
     working: &'a Manifest,
     local_dirty: &std::collections::BTreeSet<String>,
     conflict_path: &str,
@@ -675,11 +681,9 @@ fn dirty_files_in_subtree<'a>(
         if !paths_overlap(conflict_path, q) {
             continue;
         }
-        if let Some(e) = working.entries.get(q) {
-            if e.kind == EntryKind::File {
-                if let Some((k, v)) = working.entries.get_key_value(q) {
-                    out.push((k, v));
-                }
+        if let Some((k, v)) = working.entries.get_key_value(q) {
+            if matches!(v.kind, EntryKind::File | EntryKind::Symlink) {
+                out.push((k, v));
             }
         }
     }
@@ -744,27 +748,42 @@ pub fn dir_sync(
             // HEAD WINS in the live tree (resolves the round-4 dead-end): apply
             // HEAD to the live path now (so working == head there, base can
             // advance, and the agent's reconciled re-edit commits cleanly), and
-            // FIRST preserve every locally-dirty FILE in the affected subtree at
-            // a readable sidecar so nothing is lost — including the tree/delete
-            // case (incoming deletes /dir while the agent edited /dir/x.txt:
-            // applying head removes /dir, so /dir/x.txt must be sidecar'd first).
+            // FIRST preserve every locally-dirty FILE/SYMLINK in the affected
+            // subtree at a readable sidecar so nothing is lost — including the
+            // tree/delete case (incoming deletes /dir while the agent edited
+            // /dir/x.txt: applying head removes /dir, so /dir/x.txt must be
+            // sidecar'd first).
             for (dirty_path, dirty_entry) in
-                dirty_files_in_subtree(&working, &local_dirty, p)
+                dirty_preservable_in_subtree(&working, &local_dirty, p)
             {
                 if !sidecar_done.insert(dirty_path.clone()) {
                     // Already sidecar'd under an earlier overlapping conflict path.
                     continue;
                 }
                 let sidecar_vfs = format!("/{CONFLICTS_DIRNAME}{dirty_path}");
-                // Best-effort: a sidecar write failure must not fail refresh.
-                if apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(dirty_entry))
-                    .is_ok()
-                {
-                    conflict_sidecars.push(ConflictSidecar {
-                        original: dirty_path.clone(),
-                        sidecar: sidecar_vfs,
-                    });
-                }
+                // The .synapse-conflicts namespace is helper-owned scratch
+                // (never scanned/committed, agent-READable but not its to corrupt):
+                // proactively clear any non-directory an agent may have left along
+                // the sidecar's parent chain so create_dir_all can't be wedged
+                // (round-8 #1 defense-in-depth). Clobbering is safe here precisely
+                // because nothing in this namespace is recoverable content.
+                ensure_conflicts_parent_dirs(dir, &sidecar_vfs)?;
+                // The sidecar write MUST succeed before we let head overwrite or
+                // delete the live path below — the head apply ALWAYS destroys the
+                // local copy, so a swallowed sidecar failure would be guaranteed
+                // data loss. Propagate the error: dir_sync fails, the caller
+                // leaves base unadvanced, and the next turn retries (round-8 #1).
+                apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(dirty_entry))
+                    .map_err(|e| {
+                        RpcError::Internal(format!(
+                            "failed to preserve local copy of {dirty_path} at \
+                             conflict sidecar {sidecar_vfs}: {e}"
+                        ))
+                    })?;
+                conflict_sidecars.push(ConflictSidecar {
+                    original: dirty_path.clone(),
+                    sidecar: sidecar_vfs,
+                });
             }
             // Overwrite the live path with head's version (or remove it if head
             // deleted it). Any dirty subtree files were sidecar'd just above.
@@ -786,6 +805,80 @@ pub fn dir_sync(
     })
 }
 
+/// Ensure every parent directory of a sidecar path (under the helper-owned
+/// `.synapse-conflicts` scratch namespace) exists AS A DIRECTORY, clobbering any
+/// file/symlink an agent may have left in the way. This namespace is never
+/// scanned into a snapshot and holds no recoverable content, so clobbering is
+/// safe — and it guarantees the subsequent sidecar write can't be permanently
+/// wedged by a corrupted scratch tree (round-8 #1 defense-in-depth). Only paths
+/// strictly under `.synapse-conflicts` are touched.
+///
+/// Race-tolerant by design: the live dir is mounted into a RUNNING sandbox, so
+/// the sandbox process can concurrently create/remove scratch entries between
+/// our stat and our act. Benign races (AlreadyExists on create, NotFound on
+/// remove) must NOT fail the refresh — we only propagate if, after our attempt,
+/// the slot is still not a usable directory (round-8 follow-up: avoid
+/// over-throwing on a condition that already resolved itself).
+fn ensure_conflicts_parent_dirs(dir: &Path, sidecar_vfs: &str) -> Result<(), RpcError> {
+    debug_assert!(sidecar_vfs.starts_with(&format!("/{CONFLICTS_DIRNAME}/")));
+    let segs: Vec<&str> = sidecar_vfs
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    // The last segment is the sidecar file/symlink itself — only its ANCESTORS
+    // must be directories.
+    let mut cur = dir.to_path_buf();
+    for seg in segs.iter().take(segs.len().saturating_sub(1)) {
+        cur.push(seg);
+        // If a non-directory occupies the slot, remove it (NotFound = a
+        // concurrent actor already cleared it → fine).
+        if let Ok(m) = cur.symlink_metadata() {
+            if !m.file_type().is_dir() {
+                match fs::remove_file(&cur) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(RpcError::Internal(format!(
+                            "clearing non-dir at conflict scratch {}: {e}",
+                            cur.display()
+                        )))
+                    }
+                }
+            }
+        }
+        // create_dir_all is idempotent (AlreadyExists-tolerant) and handles a
+        // concurrent creator. Re-check the final kind so a concurrent actor that
+        // re-placed a NON-dir is still caught.
+        match fs::create_dir_all(&cur) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                return Err(RpcError::Internal(format!(
+                    "creating conflict scratch dir {}: {e}",
+                    cur.display()
+                )))
+            }
+        }
+        match cur.symlink_metadata() {
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(RpcError::Internal(format!(
+                    "conflict scratch slot {} is not a directory after prepare",
+                    cur.display()
+                )))
+            }
+            Err(e) => {
+                return Err(RpcError::Internal(format!(
+                    "stat conflict scratch dir {} after prepare: {e}",
+                    cur.display()
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply a single path's target entry into the live dir: materialize the
 /// file/dir/symlink, or remove it (when `entry` is None = deleted in head).
 fn apply_entry_to_dir(
@@ -797,12 +890,49 @@ fn apply_entry_to_dir(
     let host = vfs_to_host(dir, vfs);
     match entry {
         None => {
-            // Deleted in head. Remove whatever is there.
-            if let Ok(meta) = host.symlink_metadata() {
-                if meta.file_type().is_dir() {
-                    let _ = fs::remove_dir_all(&host);
-                } else {
-                    let _ = fs::remove_file(&host);
+            // Deleted in head. Remove whatever is there. "Already gone" is
+            // success, but a REAL removal error (perms/IO) MUST propagate: if it
+            // were swallowed, live != head while the caller advances base, and
+            // the next commit would treat the residual live path as a fresh local
+            // edit and RESURRECT content head had deleted (round-8 #2).
+            //
+            // NotFound = already gone. NotADirectory (ENOTDIR) = an ancestor is a
+            // non-dir, and ELOOP (raw 40, a symlink loop in an ancestor) = the
+            // path can't be resolved — in all of these the path definitionally
+            // can't exist as a real entry, so it's also "gone". (ENOTDIR arises
+            // legitimately when an earlier incoming change in the same sync
+            // replaced an ancestor dir with a file, then a deeper descendant
+            // delete is processed.) ELOOP's ErrorKind (FilesystemLoop) is still
+            // unstable on this toolchain, so match the raw errno.
+            const ELOOP: i32 = 40;
+            let already_gone = |e: &std::io::Error| {
+                matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) || e.raw_os_error() == Some(ELOOP)
+            };
+            match host.symlink_metadata() {
+                Err(e) if already_gone(&e) => {}
+                Err(e) => {
+                    return Err(RpcError::Internal(format!(
+                        "stat for delete {vfs}: {e}"
+                    )))
+                }
+                Ok(meta) => {
+                    let res = if meta.file_type().is_dir() {
+                        fs::remove_dir_all(&host)
+                    } else {
+                        fs::remove_file(&host)
+                    };
+                    match res {
+                        Ok(()) => {}
+                        Err(e) if already_gone(&e) => {}
+                        Err(e) => {
+                            return Err(RpcError::Internal(format!(
+                                "remove {vfs}: {e}"
+                            )))
+                        }
+                    }
                 }
             }
         }
@@ -1058,5 +1188,48 @@ mod tests {
         assert!(res.merged.entries.contains_key("/dir/b"));
         assert!(res.merged.entries.contains_key("/dir"));
         assert!(!res.merged.entries.contains_key("/dir/a"));
+    }
+
+    #[test]
+    fn apply_entry_delete_missing_is_ok_but_real_error_propagates() {
+        // round-8 #2: deleting an already-absent path is success (idempotent),
+        // but a genuine removal failure must propagate (not be swallowed) —
+        // otherwise live != head while the caller advances base, resurrecting
+        // head-deleted content on the next commit.
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = BlobStore::open(&tmp.path().join("cas")).unwrap();
+        let dir = tmp.path().join("live");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // (a) deleting a non-existent path → Ok.
+        assert!(apply_entry_to_dir(&cas, &dir, "/ghost.txt", None).is_ok());
+
+        // (b) a real removal error propagates. Make a file inside a read-only
+        // parent dir so unlink fails with EACCES/EPERM.
+        use std::os::unix::fs::PermissionsExt;
+        let sub = dir.join("ro");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("victim.txt"), "x").unwrap();
+        let mut perm = std::fs::metadata(&sub).unwrap().permissions();
+        perm.set_mode(0o555); // r-x: cannot unlink children
+        std::fs::set_permissions(&sub, perm).unwrap();
+
+        let res = apply_entry_to_dir(&cas, &dir, "/ro/victim.txt", None);
+
+        // Restore perms so tempdir cleanup works regardless of assertion.
+        let mut perm2 = std::fs::metadata(&sub).unwrap().permissions();
+        perm2.set_mode(0o755);
+        std::fs::set_permissions(&sub, perm2).unwrap();
+
+        // root (uid 0) bypasses DAC perms, so the unlink may actually succeed in
+        // a root test sandbox. Only assert the propagation contract when the
+        // removal genuinely failed (non-root); never accept a SILENT swallow.
+        if res.is_ok() {
+            assert!(
+                !sub.join("victim.txt").exists(),
+                "delete reported Ok but the file is still there (swallowed error)"
+            );
+        }
+        // If it failed, that's the propagation we want — nothing more to assert.
     }
 }

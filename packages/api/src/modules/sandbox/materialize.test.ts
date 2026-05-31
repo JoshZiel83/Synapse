@@ -148,3 +148,95 @@ test(
     )
   }
 )
+
+test(
+  "materialize.ts: post-commit reconcile brings live to committed manifest + sidecars the loser",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    // This is exactly what commitOneMount.reconcileLiveDir does after a
+    // CONFLICTING turn-end commit (round-7 #A, hardened round-8 #1): scan_commit
+    // produced a merged manifest that kept HEAD on the conflicting path, but the
+    // live dir still holds the agent's loser L. reconcile = syncDir(from=base,
+    // to=committedManifest) must (a) overwrite the live path with head's bytes
+    // and (b) preserve L at a sidecar — so live == committed and advancing base
+    // is safe (no next-turn silent overwrite).
+    const work = mkdtempSync(join(tmpdir(), "synapse-reconcile-"))
+
+    // base: x.txt = "A".
+    const base = join(work, "base")
+    mkdirSync(base, { recursive: true })
+    writeFileSync(join(base, "x.txt"), "A")
+    const baseCommit = await scanCommitDir({ dir: base })
+
+    // head: x.txt = "B" (a concurrent writer's commit).
+    const head = join(work, "head")
+    mkdirSync(head, { recursive: true })
+    writeFileSync(join(head, "x.txt"), "B")
+    const headCommit = await scanCommitDir({ dir: head })
+
+    // live: materialized base, agent locally edits x.txt = "L" (conflict).
+    const live = join(work, "live")
+    mkdirSync(live, { recursive: true })
+    await materializeSnapshot({
+      manifestSha256: baseCommit.manifest_sha256,
+      targetDir: live,
+    })
+    writeFileSync(join(live, "x.txt"), "L")
+
+    // scan_commit with base + latest=head → conflict, merged keeps head ("B").
+    const committed = await scanCommitDir({
+      dir: live,
+      baseManifestSha256: baseCommit.manifest_sha256,
+      latestManifestSha256: headCommit.manifest_sha256,
+    })
+    assert.deepEqual(
+      committed.conflict_paths,
+      ["/x.txt"],
+      "x.txt is a commit conflict"
+    )
+    // CRITICAL: at this point the live dir STILL holds "L" — scan_commit doesn't
+    // touch it. Without reconcile, advancing base here would silently lose B.
+    assert.equal(readFileSync(join(live, "x.txt"), "utf8"), "L")
+
+    // reconcile: syncDir(from=base, to=committedManifest).
+    const reconcile = await syncDir({
+      dir: live,
+      baseManifestSha256: baseCommit.manifest_sha256,
+      toManifestSha256: committed.manifest_sha256,
+    })
+
+    // live now holds head's "B" (so base==committed is safe to advance)…
+    assert.equal(
+      readFileSync(join(live, "x.txt"), "utf8"),
+      "B",
+      "live reconciled to committed (head) value"
+    )
+    // …and the agent's loser "L" is preserved at the sidecar (not lost).
+    const sidecar = join(live, ".synapse-conflicts", "x.txt")
+    assert.ok(existsSync(sidecar), "loser preserved at sidecar")
+    assert.equal(readFileSync(sidecar, "utf8"), "L")
+    assert.ok(
+      reconcile.conflict_sidecars.some((c) => c.original === "/x.txt"),
+      "reconcile reports the sidecar so the caller can tell the agent"
+    )
+
+    // Proof the reconcile closed the silent-overwrite window: a fresh
+    // scan_commit of the live dir against base=committed now sees NO conflict
+    // (live == committed), so the next turn won't re-derive or overwrite.
+    const after = await scanCommitDir({
+      dir: live,
+      baseManifestSha256: committed.manifest_sha256,
+      latestManifestSha256: committed.manifest_sha256,
+    })
+    assert.equal(
+      after.conflict_paths.length,
+      0,
+      "after reconcile, live==committed → no residual conflict"
+    )
+    assert.equal(
+      after.manifest_sha256,
+      committed.manifest_sha256,
+      "live now equals the committed manifest exactly"
+    )
+  }
+)

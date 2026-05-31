@@ -553,10 +553,22 @@ export function startSessionThinkingWorker() {
         // (at-least-once delivery — see below), so remember whether we surfaced
         // any this turn.
         let surfacedPendingCommitConflicts = false
+        // Subpaths whose turn-start refresh FAILED (helper threw) — their live
+        // dir is partially synced + base unadvanced. Skip committing them at
+        // turn-end so a half-synced tree isn't snapshotted; next turn re-runs the
+        // refresh from the same base and self-heals (round-8 follow-up).
+        let refreshFailedSubpaths = new Set<string>()
         if (sandboxEnabled) {
           try {
             await provisionSandbox(sessionId)
             const refresh = await refreshSpaces(sessionId)
+            // Record any spaces whose refresh FAILED so turn-end commit skips
+            // them (their live tree is half-synced; committing it could entangle
+            // this turn's edits with partially-applied head bytes). Next turn
+            // re-runs the refresh from the same base and self-heals.
+            refreshFailedSubpaths = new Set(
+              Object.keys(refresh.syncFailuresBySubpath)
+            )
             // Commit conflicts recorded by a PREVIOUS turn's turn-end commit
             // (which ran after the actor already replied). READ but do NOT clear
             // yet — clearing happens post-actorThink so a crash before the model
@@ -566,6 +578,9 @@ export function startSessionThinkingWorker() {
 
             const refreshEntries = Object.entries(
               refresh.deferredConflictsBySubpath
+            )
+            const syncFailureEntries = Object.entries(
+              refresh.syncFailuresBySubpath
             )
             const commitEntries = Object.entries(pendingCommitConflicts)
             const refreshLines = refreshEntries.map(
@@ -600,7 +615,11 @@ export function startSessionThinkingWorker() {
                 })
             )
 
-            if (refreshLines.length > 0 || commitLines.length > 0) {
+            if (
+              refreshLines.length > 0 ||
+              commitLines.length > 0 ||
+              syncFailureEntries.length > 0
+            ) {
               if (refreshLines.length > 0) {
                 console.warn(
                   `[session-thinking] sandbox refresh conflicts for ${sessionId}: ${refreshLines.join("; ")}`
@@ -611,14 +630,21 @@ export function startSessionThinkingWorker() {
                   `[session-thinking] sandbox prior-turn commit conflicts for ${sessionId}: ${commitLines.join("; ")}`
                 )
               }
+              if (syncFailureEntries.length > 0) {
+                console.warn(
+                  `[session-thinking] sandbox refresh sync failures for ${sessionId}: ${syncFailureEntries
+                    .map(([sp, msg]) => `/${sp}: ${msg}`)
+                    .join("; ")}`
+                )
+              }
               const sections: string[] = []
               if (refreshEntries.length > 0) {
                 const sidecarNote =
                   sidecarPairs.length > 0
-                    ? ` Your pre-conflict copy of each conflicting FILE was preserved at a sidecar (read it, reconcile with the live/head version, write the merged result back to the original path — it will then commit cleanly): ${sidecarPairs.join("; ")}.`
+                    ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar (read it, reconcile with the live/head version, write the merged result back to the original path — it will then commit cleanly): ${sidecarPairs.join("; ")}.`
                     : ""
                 const noSidecarNote = hasUncoveredRefreshConflict
-                  ? " For directory/deletion conflicts there is no sidecar — re-read the live path (it now holds the other writer's version)."
+                  ? " Some conflict paths have NO sidecar (only the sidecars listed above are actual preserved local copies) — for any conflict path without a listed sidecar, re-read the live path: it now holds the other writer's version."
                   : ""
                 sections.push(
                   `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}.${sidecarNote}${noSidecarNote}`
@@ -633,12 +659,23 @@ export function startSessionThinkingWorker() {
                   .map((s) => `${s.original} → ${s.sidecar}`)
                 const commitSidecarNote =
                   commitSidecarPairs.length > 0
-                    ? ` Your pre-conflict copy of each affected FILE was preserved at a sidecar — read it, reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
+                    ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar — read it, reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
                     : ""
                 sections.push(
                   `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote} Re-read each path and re-apply your change if it's still needed.`
                 )
                 surfacedPendingCommitConflicts = true
+              }
+              if (syncFailureEntries.length > 0) {
+                // round-8 follow-up: a space failed to merge in the latest head
+                // this turn. Its view may be STALE and it will NOT be committed
+                // at turn-end (avoids snapshotting a half-synced tree); the
+                // platform retries the merge next turn.
+                sections.push(
+                  `These spaces could NOT be refreshed to the latest version this turn and may show a STALE view; do not rely on them being current, and avoid large edits there until they recover: ${syncFailureEntries
+                    .map(([sp]) => `/${sp}`)
+                    .join(", ")}.`
+                )
               }
               sandboxConflictNotice = {
                 kind: "system_notice",
@@ -649,6 +686,7 @@ export function startSessionThinkingWorker() {
                 metadata: {
                   refreshConflicts: refresh.deferredConflictsBySubpath,
                   priorCommitConflicts: pendingCommitConflicts,
+                  refreshSyncFailures: refresh.syncFailuresBySubpath,
                 },
               }
             }
@@ -902,10 +940,26 @@ export function startSessionThinkingWorker() {
           // Best-effort: a commit failure must not abort action execution.
           if (sandboxEnabled) {
             try {
-              const commit = await commitSpaces(sessionId, [
-                "conversation",
-                "actor",
-              ])
+              // Skip spaces whose turn-start refresh FAILED: their live tree is
+              // half-synced (base unadvanced), so committing now could entangle
+              // this turn's edits with partially-applied head bytes. They
+              // self-heal on the next turn's refresh (round-8 follow-up).
+              const commitSubpaths = (
+                ["conversation", "actor"] as const
+              ).filter((sp) => !refreshFailedSubpaths.has(sp))
+              if (commitSubpaths.length === 0) {
+                console.warn(
+                  `[session-thinking] skipping turn-end commit for ${sessionId}: all multi-writer spaces failed to refresh this turn`
+                )
+              }
+              const commit =
+                commitSubpaths.length > 0
+                  ? await commitSpaces(sessionId, [...commitSubpaths])
+                  : {
+                      snapshotIdBySubpath: {},
+                      conflictsBySubpath: {},
+                      sidecarsBySubpath: {},
+                    }
               // Surface per-file commit conflicts (a path this session changed
               // that another writer committed first — head kept, local dropped)
               // so they aren't silently swallowed.

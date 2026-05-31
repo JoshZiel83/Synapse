@@ -2082,6 +2082,219 @@ fn dir_sync_multilevel_overlap_sidecars_each_local_file_once() {
 }
 
 #[test]
+fn dir_sync_preserves_dirty_local_symlink_under_tree_conflict() {
+    // round-8 #3: a locally-added/modified SYMLINK under a head-deleted subtree
+    // must be sidecar'd too (not just regular files) — the manifest supports
+    // symlinks and they carry recoverable content (the target string).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: /dir/keep.txt.
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(base_dir.join("dir")).unwrap();
+    std::fs::write(base_dir.join("dir/keep.txt"), "k").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head: /dir deleted entirely.
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("other.txt"), "o").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live: materialize base, agent ADDS a symlink /dir/link -> ./keep.txt.
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::os::unix::fs::symlink("keep.txt", live.join("dir/link")).unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    // head wins: /dir is gone from the live tree.
+    assert!(!live.join("dir").exists(), "head-delete not applied: {r}");
+    // the agent's symlink is preserved at the sidecar (as a symlink).
+    let sidecar = live.join(".synapse-conflicts/dir/link");
+    let meta = std::fs::symlink_metadata(&sidecar)
+        .unwrap_or_else(|e| panic!("symlink sidecar missing ({e}): {r}"));
+    assert!(meta.file_type().is_symlink(), "sidecar is not a symlink: {r}");
+    assert_eq!(std::fs::read_link(&sidecar).unwrap().to_str().unwrap(), "keep.txt");
+    let sidecars = r["result"]["conflict_sidecars"].as_array().unwrap();
+    assert!(
+        sidecars
+            .iter()
+            .any(|c| c["original"].as_str() == Some("/dir/link")),
+        "symlink sidecar not reported: {r}"
+    );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_sidecar_write_clobbers_corrupted_conflicts_namespace() {
+    // round-8 #1 defense-in-depth: if an agent left a non-directory occupying
+    // the .synapse-conflicts scratch namespace, the sidecar write must NOT be
+    // wedged — the helper owns that namespace and may clobber it. The local
+    // file MUST still be preserved (never silently lost).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: /dir/x.txt.
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(base_dir.join("dir")).unwrap();
+    std::fs::write(base_dir.join("dir/x.txt"), "v0").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head: /dir deleted.
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("other.txt"), "o").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live: materialize base, agent edits /dir/x.txt AND leaves a stray FILE at
+    // the scratch namespace root (.synapse-conflicts) that would block mkdir.
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("dir/x.txt"), "my-edit").unwrap();
+    std::fs::write(live.join(".synapse-conflicts"), "agent garbage").unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    // The sync must succeed (not error) and the local edit must be preserved.
+    assert!(r.get("error").is_none(), "dir_sync errored: {r}");
+    let sidecar = live.join(".synapse-conflicts/dir/x.txt");
+    assert_eq!(
+        std::fs::read(&sidecar).unwrap(),
+        b"my-edit",
+        "local edit not preserved through corrupted scratch namespace: {r}"
+    );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_sidecar_tolerates_preexisting_conflicts_dir() {
+    // round-8 follow-up: a PRE-EXISTING .synapse-conflicts directory (the common
+    // case after a prior conflict, or a concurrent sandbox creation) must NOT
+    // make the sidecar prepare over-throw on EEXIST. The sync must succeed and
+    // preserve the local edit.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(base_dir.join("dir")).unwrap();
+    std::fs::write(base_dir.join("dir/x.txt"), "v0").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("other.txt"), "o").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("dir/x.txt"), "my-edit").unwrap();
+    // Pre-create the full scratch dir chain (simulates a prior conflict / a
+    // concurrent creator) so create_dir would hit EEXIST.
+    std::fs::create_dir_all(live.join(".synapse-conflicts/dir")).unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    assert!(r.get("error").is_none(), "dir_sync over-threw on EEXIST: {r}");
+    assert_eq!(
+        std::fs::read(live.join(".synapse-conflicts/dir/x.txt")).unwrap(),
+        b"my-edit",
+        "local edit not preserved with a pre-existing scratch dir: {r}"
+    );
+    helper.stop();
+}
+
+#[test]
 fn dir_sync_conflict_then_reconcile_commits_cleanly() {
     // The round-4 dead-end regression: after a conflict (head wins in the live
     // tree + base advances to head), the agent reconciles by writing a NEW
