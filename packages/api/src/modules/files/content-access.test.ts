@@ -1029,3 +1029,109 @@ test("contentAccessResolver: scope=A memory space is NOT owner-readable from ?co
     )
   })
 })
+
+test("contentAccessResolver: context-archive ref is narrowed by ?conv=", async () => {
+  await withTestDb(async (db) => {
+    const SHA_AR = "ar".repeat(32)
+    const user = await db
+      .insertInto("users")
+      .values({ email: `${rid()}@ar`, name: "u", password_hash: "x" })
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const ws = await db
+      .insertInto("workspaces")
+      .values({ owner_id: user.id, slug: `ws-${rid()}`, name: "ar ws" })
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const member = await db
+      .insertInto("workspace_members")
+      .values({
+        workspace_id: ws.id,
+        user_id: user.id,
+        trust_level: "member",
+      } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const memberSubject = await upsertAccessSubject(db as any, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      memberId: member.id,
+    })
+    async function convWithMember() {
+      const conv = await db
+        .insertInto("conversations")
+        .values({ workspace_id: ws.id, kind: "group", title: "t" } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conv.id,
+          subject_id: memberSubject,
+          role_key: "member",
+          state: "active",
+        } as any)
+        .execute()
+      return conv.id as string
+    }
+    const convA = await convWithMember()
+    const convB = await convWithMember()
+    // An archive in conversation A referencing SHA_AR.
+    const point = await db
+      .insertInto("context_archive_points")
+      .values({
+        conversation_id: convA,
+        chain_scope: "shared",
+        covers_until_sequence: 0,
+      } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    const frame = await db
+      .insertInto("context_archive_frames")
+      .values({
+        archive_point_id: point.id,
+        ordinal: 0,
+        role: "assistant",
+        frame_type: "message",
+      } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
+    await db
+      .insertInto("content_blobs")
+      .values({ sha256: SHA_AR, size_bytes: 3, backend: "local_cas" } as any)
+      .onConflict((oc: any) => oc.doNothing())
+      .execute()
+    await db
+      .insertInto("context_archive_frame_parts")
+      .values({
+        archive_frame_id: frame.id,
+        ordinal: 0,
+        part_type: "file_ref",
+        ref_sha256: SHA_AR,
+        mime_type: "image/png",
+        name: "a.png",
+      } as any)
+      .execute()
+
+    // From conv A → allowed.
+    assert.equal(
+      await canUserAccessContent(SHA_AR, user.id as string, {
+        dbh: db,
+        conversationId: convA,
+      }),
+      true
+    )
+    // From conv B → the archive belongs to A, so ?conv=B must NOT authorize it.
+    assert.equal(
+      await canUserAccessContent(SHA_AR, user.id as string, {
+        dbh: db,
+        conversationId: convB,
+      }),
+      false
+    )
+    // No ?conv= context → falls back to active-participant (user is in A) → allowed.
+    assert.equal(
+      await canUserAccessContent(SHA_AR, user.id as string, { dbh: db }),
+      true
+    )
+  })
+})

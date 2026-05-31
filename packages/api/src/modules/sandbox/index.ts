@@ -10,7 +10,8 @@ export {
   commitSpaces,
   teardownSandbox,
   recoverFailedSandboxMounts,
-  takePendingCommitConflicts,
+  peekPendingCommitConflicts,
+  clearPendingCommitConflicts,
   SandboxServiceError,
   type ProvisionSandboxOptions,
   type CommitResult,
@@ -19,6 +20,7 @@ export {
 } from "./service.js"
 export {
   isSandboxCommandlineAvailable,
+  CONFLICT_SIDECAR_PREFIX,
   type SandboxProvisionResult,
 } from "./model.js"
 export {

@@ -24,7 +24,9 @@ import {
   refreshSpaces,
   commitSpaces,
   teardownSandbox,
-  takePendingCommitConflicts,
+  peekPendingCommitConflicts,
+  clearPendingCommitConflicts,
+  CONFLICT_SIDECAR_PREFIX,
 } from "../modules/sandbox/index.js"
 import { config } from "../config/index.js"
 import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
@@ -548,26 +550,43 @@ export function startSessionThinkingWorker() {
         // reflects other writers' new commits this turn, and (b) any merge
         // conflict is injected as a system notice the agent actually sees.
         let sandboxConflictNotice: CanonicalContextItem | null = null
+        // Pending commit conflicts are cleared only AFTER actorThink succeeds
+        // (at-least-once delivery — see below), so remember whether we surfaced
+        // any this turn.
+        let surfacedPendingCommitConflicts = false
         if (sandboxEnabled) {
           try {
             await provisionSandbox(sessionId)
             const refresh = await refreshSpaces(sessionId)
             // Commit conflicts recorded by a PREVIOUS turn's turn-end commit
-            // (which ran after the actor already replied) — surfaced now, once.
+            // (which ran after the actor already replied). READ but do NOT clear
+            // yet — clearing happens post-actorThink so a crash before the model
+            // sees the notice doesn't drop it.
             const pendingCommitConflicts =
-              await takePendingCommitConflicts(sessionId)
+              await peekPendingCommitConflicts(sessionId)
 
-            const refreshLines = Object.entries(
+            // Per-mount sidecar path: a conflict path P under mount /<sub> has
+            // its preserved-local sidecar at /<sub>/.synapse-conflicts/<P>.
+            const sidecarFor = (subpath: string, p: string) =>
+              `/${subpath}${CONFLICT_SIDECAR_PREFIX}${p}`
+
+            const refreshEntries = Object.entries(
               refresh.deferredConflictsBySubpath
-            ).map(([sp, paths]) => `/${sp}: ${paths.join(", ")}`)
-            const commitLines = Object.entries(pendingCommitConflicts).map(
-              ([sp, paths]) => `/${sp}: ${paths.join(", ")}`
+            )
+            const commitEntries = Object.entries(pendingCommitConflicts)
+            const refreshLines = refreshEntries.map(
+              ([sp, paths]) =>
+                `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
+            )
+            const commitLines = commitEntries.map(
+              ([sp, paths]) =>
+                `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
             )
 
             if (refreshLines.length > 0 || commitLines.length > 0) {
               if (refreshLines.length > 0) {
                 console.warn(
-                  `[session-thinking] sandbox refresh deferred conflicts for ${sessionId}: ${refreshLines.join("; ")}`
+                  `[session-thinking] sandbox refresh conflicts for ${sessionId}: ${refreshLines.join("; ")}`
                 )
               }
               if (commitLines.length > 0) {
@@ -575,17 +594,24 @@ export function startSessionThinkingWorker() {
                   `[session-thinking] sandbox prior-turn commit conflicts for ${sessionId}: ${commitLines.join("; ")}`
                 )
               }
-              // Surface to the AGENT, not just the log.
               const sections: string[] = []
-              if (refreshLines.length > 0) {
+              if (refreshEntries.length > 0) {
+                // Build an accurate per-file sidecar map; only file conflicts
+                // have a sidecar (dir/delete/kind conflicts don't).
+                const sidecars = refreshEntries
+                  .flatMap(([sp, paths]) =>
+                    paths.map((p) => `/${sp}${p} → ${sidecarFor(sp, p)}`)
+                  )
+                  .join("; ")
                 sections.push(
-                  `Another writer changed these paths while you were editing them, so your in-progress local copy was kept in place and their change was NOT merged in (${refreshLines.join("; ")}). Their current version of each is at /.synapse-conflicts/<that-path> — read it, reconcile with your local copy, then save the merged result.`
+                  `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}. Your pre-conflict version of any FILE conflict was preserved at its conflict sidecar so nothing is lost — read both, reconcile, and write the merged result back to the original path (it will commit cleanly). Sidecars (file conflicts only; directory/delete conflicts have none — just re-read the live path): ${sidecars}.`
                 )
               }
-              if (commitLines.length > 0) {
+              if (commitEntries.length > 0) {
                 sections.push(
                   `Your previous turn's save to these paths LOST to a concurrent writer and was NOT persisted (${commitLines.join("; ")}); the current saved version is the other writer's. Re-read each path and re-apply your change if it's still needed.`
                 )
+                surfacedPendingCommitConflicts = true
               }
               sandboxConflictNotice = {
                 kind: "system_notice",
@@ -828,6 +854,19 @@ export function startSessionThinkingWorker() {
                   : undefined,
             }
           )
+
+          // actorThink returned: the model has now consumed the conflict notice
+          // that was injected into its context window. Clear the persisted
+          // pending commit conflicts ONLY now (at-least-once delivery — if the
+          // job had crashed before here, the next turn would re-surface them).
+          if (sandboxEnabled && surfacedPendingCommitConflicts) {
+            await clearPendingCommitConflicts(sessionId).catch((err) =>
+              console.error(
+                `[session-thinking] failed to clear pending commit conflicts for ${sessionId}:`,
+                err
+              )
+            )
+          }
         } finally {
           clearInterval(lockRefreshInterval)
           // Turn-end: commit the multi-writer spaces (/conversation, /actor) so

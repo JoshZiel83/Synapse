@@ -391,6 +391,13 @@ async function hasReadableMemoryRef(
     }
   }
 
+  // context-archive frames are conversation-scoped: readable by an active
+  // workspace_member participant of the frame's conversation. When a ?conv=
+  // context is supplied we ALSO require the archive's conversation to BE that
+  // conversation — consistent with the rest of the resolver's "?conv= narrows
+  // to the current conversation context" model, so a conversation-A archive ref
+  // can't be authorized through a request bound to conversation B. Without
+  // ?conv= we fall back to any-active-participant (e.g. a direct content link).
   const archiveRef = await dbh
     .selectFrom("context_archive_frame_parts as cap")
     .innerJoin(
@@ -414,6 +421,9 @@ async function hasReadableMemoryRef(
     .where("cap.ref_sha256", "=", sha256)
     .where("wm.user_id", "=", userId)
     .where("cp.state", "=", "active")
+    .$if(Boolean(currentConversationId), (qb) =>
+      qb.where("cpt.conversation_id", "=", currentConversationId as string)
+    )
     .limit(1)
     .executeTakeFirst()
   return Boolean(archiveRef)

@@ -1892,15 +1892,18 @@ fn dir_sync_defers_conflict_on_same_path_local_and_incoming() {
         .map(|p| p.as_str().unwrap().to_string())
         .collect();
     assert_eq!(deferred, vec!["/x.txt".to_string()], "{r}");
-    // local version is preserved (not clobbered by head).
-    assert_eq!(std::fs::read(live.join("x.txt")).unwrap(), b"local");
-    // the INCOMING (head) version is written to a readable conflict sidecar so
-    // the agent can reconcile.
+    // HEAD WINS: the live path now holds head's version (so a later commit sees
+    // working==head and the agent's reconciled re-edit commits cleanly, instead
+    // of being re-judged a conflict).
+    assert_eq!(std::fs::read(live.join("x.txt")).unwrap(), b"head");
+    // The agent's pre-conflict LOCAL version is preserved at the conflict
+    // sidecar so its work isn't lost.
     let sidecar = live.join(".synapse-conflicts").join("x.txt");
     assert!(sidecar.is_file(), "conflict sidecar not written: {r}");
-    assert_eq!(std::fs::read(&sidecar).unwrap(), b"head");
-    // the sidecar must NOT be committed: a scan of the live dir excludes the
-    // .synapse-conflicts namespace.
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"local");
+    // The sidecar must NOT be committed: a scan of the live dir excludes the
+    // .synapse-conflicts namespace. Also: the live tree now matches head, so the
+    // scan finds no local change (committing here would be a no-op).
     let scan = helper.call(
         5,
         "fs.manifest.scan_commit",
@@ -1916,6 +1919,103 @@ fn dir_sync_defers_conflict_on_same_path_local_and_incoming() {
         !paths.iter().any(|p| p.starts_with("/.synapse-conflicts")),
         "conflict sidecar leaked into the committed manifest: {paths:?}"
     );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_conflict_then_reconcile_commits_cleanly() {
+    // The round-4 dead-end regression: after a conflict (head wins in the live
+    // tree + base advances to head), the agent reconciles by writing a NEW
+    // merged value, and that re-edit must commit WITHOUT being re-judged a
+    // conflict against the same head.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    std::fs::write(base_dir.join("x.txt"), "A").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head changed x.txt to B.
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("x.txt"), "B").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live = materialized base, then agent edits x.txt to "local" (conflict).
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("x.txt"), "local").unwrap();
+
+    // refresh from base→head: head wins (live x.txt becomes "B"), local kept at
+    // the sidecar. The caller advances base to head.
+    helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    assert_eq!(std::fs::read(live.join("x.txt")).unwrap(), b"B");
+
+    // Agent reconciles: writes the merged value "C".
+    std::fs::write(live.join("x.txt"), "C").unwrap();
+
+    // Commit with base=head (advanced) and latest=head → C is a clean local
+    // change on head, NOT a conflict; the committed manifest holds "C".
+    let commit = helper.call(
+        5,
+        "fs.manifest.scan_commit",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": head_sha,
+            "latest_manifest_sha256": head_sha,
+        }),
+    );
+    let conflicts: Vec<String> = commit["result"]["conflict_paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        conflicts.is_empty(),
+        "reconciled re-edit must NOT re-conflict: {commit}"
+    );
+    let committed = commit["result"]["manifest_sha256"].as_str().unwrap();
+    // Re-materialize the committed manifest and confirm it holds "C".
+    let out = tmp.path().join("out");
+    helper.call(
+        6,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": committed, "target_dir": out.to_str().unwrap() }),
+    );
+    assert_eq!(std::fs::read(out.join("x.txt")).unwrap(), b"C");
     helper.stop();
 }
 

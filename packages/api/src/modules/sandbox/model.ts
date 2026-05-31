@@ -2,6 +2,16 @@
 
 import { execFileSync } from "node:child_process"
 
+/**
+ * Conflict-sidecar path prefix WITHIN a mount. On a refresh conflict, dir_sync
+ * preserves the agent's pre-conflict local FILE version at
+ * `<mountRoot>/.synapse-conflicts/<relpath>`. As an agent-visible VFS path that
+ * is `/<mount-subpath>/.synapse-conflicts/<relpath>` — NOT a root-level
+ * `/.synapse-conflicts/...` (which isn't a granted mount). Must match
+ * CONFLICTS_DIRNAME in sidecars/fs-helper/src/manifest.rs.
+ */
+export const CONFLICT_SIDECAR_PREFIX = "/.synapse-conflicts"
+
 export interface SandboxProvisionResult {
   sessionId: string
   /** The sandbox FS root; its children are the materialized mount points. */

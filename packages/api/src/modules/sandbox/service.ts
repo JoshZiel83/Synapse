@@ -411,18 +411,15 @@ export async function refreshSpaces(
     })
     if (sync.deferred_conflicts.length > 0) {
       deferredConflictsBySubpath[mount.mount_subpath] = sync.deferred_conflicts
-      // Do NOT advance base on conflict. Keeping the pre-refresh base means the
-      // next commit runs a real 3-way merge (base / working / head) via
-      // scan_commit, which KEEPS HEAD for the contested paths (never clobbers
-      // the other writer) and re-reports the conflict. If we advanced base to
-      // head here, the next commit would diff working-vs-head and treat the
-      // agent's kept-local copy as a fresh edit on head — silently overwriting
-      // the concurrent change. The head version is also written to
-      // /.synapse-conflicts/<path> by dir_sync so the agent can reconcile.
-      continue
     }
-    // No conflicts: safe to advance base to the synced-in head so the next
-    // commit doesn't treat the just-merged incoming as local dirt.
+    // ALWAYS advance base to the synced-in head. dir_sync resolves conflicts
+    // HEAD-WINS in the live tree (head applied to the live path; the agent's
+    // pre-conflict local copy preserved at the conflict sidecar), so after sync
+    // working == head for every incoming path. Advancing base to head therefore
+    // (a) lets the agent's reconciled re-edit commit cleanly (no spurious
+    // re-conflict against the same head — the round-4 dead-end), and (b) never
+    // silently overwrites the concurrent change, because on conflict the live
+    // path already holds head, not the agent's stale local copy.
     await updateFileMount(pool, mount.id, { baseSnapshotId: head })
   }
   return { deferredConflictsBySubpath }
@@ -498,10 +495,13 @@ async function recordPendingCommitConflicts(
 }
 
 /**
- * Read + clear any commit conflicts stashed by a previous turn's teardown/commit.
- * Called at turn-start so the conflict surfaces exactly once, on the next turn.
+ * Read (WITHOUT clearing) any commit conflicts stashed by a previous turn's
+ * teardown/commit. At-least-once delivery: the caller surfaces these to the
+ * agent, then calls clearPendingCommitConflicts ONLY after the model has
+ * actually consumed them (post-actorThink), so a crash in between re-delivers
+ * rather than drops the notice.
  */
-export async function takePendingCommitConflicts(
+export async function peekPendingCommitConflicts(
   sessionId: string
 ): Promise<Record<string, string[]>> {
   const row = await db
@@ -513,7 +513,13 @@ export async function takePendingCommitConflicts(
   const pending = state[PENDING_CONFLICTS_KEY] as
     | Record<string, string[]>
     | undefined
-  if (!pending || Object.keys(pending).length === 0) return {}
+  return pending && Object.keys(pending).length > 0 ? pending : {}
+}
+
+/** Clear the stashed commit conflicts (after the agent has consumed them). */
+export async function clearPendingCommitConflicts(
+  sessionId: string
+): Promise<void> {
   await db
     .updateTable("sessions")
     .set({
@@ -521,7 +527,6 @@ export async function takePendingCommitConflicts(
     } as never)
     .where("id", "=", sessionId)
     .execute()
-  return pending
 }
 
 async function commitOneMount(

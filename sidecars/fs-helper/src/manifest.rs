@@ -629,26 +629,33 @@ pub fn three_way_merge(
 /// Result of `dir_sync`: how the live dir was reconciled toward a new head.
 #[derive(Debug)]
 pub struct DirSyncResult {
-    /// Paths whose incoming (head) version was applied into the live dir.
+    /// Paths whose incoming (head) version was applied into the live dir
+    /// without conflict (no local edit).
     pub applied: Vec<String>,
-    /// Paths where a local uncommitted change collided with an incoming
-    /// change; left untouched locally, reported for the agent.
+    /// Paths where a local uncommitted change collided with an incoming change.
+    /// HEAD WINS: head's version is applied to the live path and the agent's
+    /// pre-conflict local version is preserved at
+    /// /.synapse-conflicts/<path> (file conflicts only). Reported so the caller
+    /// can tell the agent to reconcile + re-apply.
     pub deferred_conflicts: Vec<String>,
-    /// The manifest the live dir's base should advance to (= `to`), so the
-    /// caller can update file_mounts.base_snapshot_id (prevents the next
-    /// commit from treating the just-synced incoming as a local change).
+    /// The manifest the live dir's base should advance to (= `to`), stored in
+    /// CAS. The caller ALWAYS advances file_mounts.base_snapshot_id to this —
+    /// since head won every conflict, working == head for all incoming paths, so
+    /// a later commit sees no spurious conflict and the agent's reconciled
+    /// re-edit commits cleanly.
     pub new_base_manifest_sha256: String,
 }
 
 /// Three-way directory sync (refresh): merge the changes between `from`
-/// (the dir's current base) and `to` (the new head) INTO the live `dir`,
-/// preserving local uncommitted edits.
+/// (the dir's current base) and `to` (the new head) INTO the live `dir`.
 ///   - For each incoming change P (to vs from):
-///       * if P is NOT locally dirty (working == from at P) → apply head's
-///         version into the live dir (applied).
+///       * if P is NOT locally dirty → apply head's version (applied).
 ///       * if P IS locally dirty AND the local value differs from head →
-///         leave local untouched, record deferred_conflict.
-///       * tree/kind overlap with a local dirty path → deferred_conflict.
+///         CONFLICT: preserve the agent's local file at the conflict sidecar,
+///         then apply head's version to the live path (head wins), record
+///         deferred_conflict.
+///       * tree/kind overlap with a local dirty path → conflict; head wins on
+///         the incoming path, the non-overlapping local edit survives.
 /// Returns which paths were applied + deferred, and the new base manifest
 /// sha (always `to`'s manifest sha, stored in CAS).
 pub fn dir_sync(
@@ -685,18 +692,27 @@ pub fn dir_sync(
 
         if collides {
             deferred.push(p.clone());
-            // Write the incoming (head) version to a readable conflict sidecar
-            // so the agent can SEE what the other writer committed and reconcile
-            // — the live copy is intentionally left as the agent's local edit.
-            // Only file entries get a byte sidecar; dir/kind conflicts are just
-            // reported (the agent re-reads the live tree).
-            if let Some(te) = to_entry {
-                if te.kind == EntryKind::File {
+            // HEAD WINS in the live tree (resolves the round-4 dead-end): if we
+            // kept the agent's local copy here and didn't advance base, a later
+            // commit would re-judge the agent's *reconciled* result a conflict
+            // against head and discard it — making "reconcile and save"
+            // impossible. Instead we apply HEAD to the live path now (so the
+            // working tree == head for this path, base can advance, and the
+            // agent's next edit commits cleanly), and preserve the agent's
+            // pre-conflict LOCAL version at a readable sidecar so its work isn't
+            // lost. Only file entries get a byte sidecar (we can materialize the
+            // local file's content from CAS); dir/delete/kind conflicts have no
+            // sidecar — the agent re-reads the live tree (now head's version).
+            if let Some(we) = working_entry {
+                if we.kind == EntryKind::File {
                     let sidecar_vfs = format!("/{CONFLICTS_DIRNAME}{p}");
                     // Best-effort: a sidecar write failure must not fail refresh.
-                    let _ = apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(te));
+                    let _ = apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(we));
                 }
             }
+            // Overwrite the live path with head's version (or remove it if head
+            // deleted it).
+            apply_entry_to_dir(cas, dir, p, to_entry)?;
             continue;
         }
 
