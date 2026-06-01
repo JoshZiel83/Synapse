@@ -1,4 +1,5 @@
 import { ToolDefinition } from "@synapse/shared"
+import { createParser } from "eventsource-parser"
 
 interface JsonRpcRequest {
   jsonrpc: "2.0"
@@ -149,37 +150,48 @@ export class McpHttpClient {
     response: Response,
     expectedId: number
   ): Promise<unknown> {
+    // Properly parse the SSE stream rather than scanning for the last `data:`
+    // line: a single event's data can span multiple `data:` lines (folded with
+    // newlines), and a stream can carry several events — we want the JSON-RPC
+    // message whose id matches this request. eventsource-parser handles the
+    // framing (multi-line data, optional space, CRLF, comments).
     const text = await response.text()
-    const lines = text.split("\n")
-    let lastData = ""
+    const events: string[] = []
+    const parser = createParser({
+      onEvent: (event) => {
+        events.push(event.data)
+      },
+    })
+    parser.feed(text)
 
-    for (const line of lines) {
-      if (line.startsWith("data:")) {
-        // SSE spec: space after colon is optional
-        const payload = line.slice(5)
-        lastData = payload.startsWith(" ") ? payload.slice(1) : payload
+    let fallback: unknown
+    let sawData = false
+    for (const data of events) {
+      if (!data) continue
+      sawData = true
+      let json: JsonRpcResponse
+      try {
+        json = JSON.parse(data) as JsonRpcResponse
+      } catch {
+        // Non-JSON event payload — remember as a last-resort raw fallback.
+        fallback = data
+        continue
       }
-    }
-
-    if (!lastData) {
-      throw new Error("No data in SSE response")
-    }
-
-    try {
-      const json = JSON.parse(lastData) as JsonRpcResponse
+      if (json.id !== expectedId) continue
       if (json.error) {
         throw new Error(
           `MCP RPC error ${json.error.code}: ${json.error.message}`
         )
       }
       return json.result
-    } catch (e) {
-      if (e instanceof SyntaxError) {
-        // If we can't parse as JSON-RPC, return the raw text content
-        return lastData
-      }
-      throw e
     }
+
+    if (!sawData) {
+      throw new Error("No data in SSE response")
+    }
+    // No event matched our id; return the raw payload of the last event as the
+    // previous implementation did (best-effort for non-JSON-RPC servers).
+    return fallback ?? ""
   }
 
   async initialize(): Promise<{
