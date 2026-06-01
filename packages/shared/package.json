@@ -56,6 +56,10 @@
       "types": "./dist/chat-queue/index.d.ts",
       "default": "./dist/chat-queue/index.js"
     },
+    "./pinyin": {
+      "types": "./dist/pinyin/index.d.ts",
+      "default": "./dist/pinyin/index.js"
+    },
     "./access/policies": {
       "types": "./dist/access/policies/index.d.ts",
       "default": "./dist/access/policies/index.js"

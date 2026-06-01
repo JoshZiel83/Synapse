@@ -146,3 +146,14 @@ mutations), home-tab actors fetch, workspace-entity-picker-screen. Migrate incre
   button needing maintainVisibleContentPosition, interleaved footer ActorActivityBubble nodes in a
   non-inverted list). FlashList scrollToEnd is unreliable with variable heights; converting safely
   needs careful manual testing on device with no integration tests. Left on ScrollView; tracked.
+
+## Phase 10.5 note (alphabet list -> FlashList + shared pinyin)
+
+- New @synapse/shared/pinyin (pure, off-barrel): getAlphabetInitial / comparePinyin /
+  PINYIN_INITIAL_BOUNDARIES / ALPHABET_RAIL. 5 tsx --test cases pinning only ASCII / "#" / empty
+  paths + asserting representative hanzi land on a real rail letter (ICU-data-independent).
+  shared suite 130 -> 135 green.
+- alphabet-indexed-entity-list.tsx rewritten on FlashList: flattened header/item rows, getItemType
+  recycling, stickyHeaderIndices sticky headers, rail drives scrollToIndex (thin PanResponder maps
+  touch-Y -> letter), pinyin bucketing imported from @shared/pinyin. Domain pinyin table preserved
+  (now in shared, tested).
