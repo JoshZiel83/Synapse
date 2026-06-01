@@ -44,6 +44,10 @@
       "types": "./dist/datetime/index.d.ts",
       "default": "./dist/datetime/index.js"
     },
+    "./chat-socket": {
+      "types": "./dist/chat-socket/index.d.ts",
+      "default": "./dist/chat-socket/index.js"
+    },
     "./access/policies": {
       "types": "./dist/access/policies/index.d.ts",
       "default": "./dist/access/policies/index.js"
