@@ -57,6 +57,7 @@ import {
   markTurnWakeupsDropped,
   markTurnWakeupsProcessed,
   publishSessionRuntime,
+  restoreTurnWakeupsToPending,
 } from "../modules/session/runtime.js"
 import { createTurn, updateTurnStatus } from "../modules/execution/service.js"
 import {
@@ -214,6 +215,11 @@ export function startSessionThinkingWorker() {
       let thinkingActorName = "Unknown"
       let requeueAfterUnlock = false
       let requeueTrigger = trigger
+      // Set true by the lock-refresh interval if we lose the session lock
+      // mid-turn. Hoisted to handler scope so the catch block can branch on it
+      // (the cooperative abort surfaces as a generic TurnInterruptedError, so
+      // the error TYPE alone can't tell us the turn was aborted for lock loss).
+      let lockLost = false
       let currentStatusText: string | undefined
       let currentPhase: ThinkingPhase | "error" = "thinking"
       let threadConversationId: string | undefined
@@ -668,7 +674,6 @@ export function startSessionThinkingWorker() {
           activeTurnId: turn.id,
         })
 
-        let lockLost = false
         const lockRefreshInterval = setInterval(
           async () => {
             try {
@@ -900,8 +905,12 @@ export function startSessionThinkingWorker() {
         }
       } catch (err: any) {
         const errorMessage = err?.message || "Unknown error"
-        const turnInterrupted = isTurnInterruptedError(err)
-        const lockLostError = isSessionLockLostError(err)
+        // Branch on the hoisted lockLost flag, NOT the error type: the
+        // cooperative abort surfaces as a generic TurnInterruptedError, so the
+        // type alone would misroute a lock-loss into the normal interrupt path
+        // (which mutates session status / requeues as if WE still own it).
+        const lockLostError = lockLost || isSessionLockLostError(err)
+        const turnInterrupted = !lockLostError && isTurnInterruptedError(err)
         if (!turnInterrupted && !lockLostError) {
           log.error({ err }, `Session ${sessionId} failed: ${errorMessage}`)
         } else if (lockLostError) {
@@ -911,6 +920,45 @@ export function startSessionThinkingWorker() {
 
         // A lost lock or an interrupt cancels (not fails) the turn.
         const cancelled = turnInterrupted || lockLostError
+
+        // Lock lost: another worker now owns this session. RESTORE this turn's
+        // attached wakeups to `pending` (dropping them would silently lose
+        // user-triggered wakeups — the new owner only reads `pending`), mark the
+        // turn cancelled, and requeue so a worker re-claims the session (the
+        // Redis lock guarantees only one actually runs). Do NOT write a terminal
+        // session status — that's the new owner's call.
+        if (lockLostError) {
+          if (turn?.id) {
+            await runCleanupStep(
+              `restore wakeups for turn ${turn.id} (lock lost)`,
+              () => restoreTurnWakeupsToPending(turn.id)
+            )
+            await runCleanupStep(`mark turn ${turn.id} cancelled`, () =>
+              updateTurnStatus(turn.id, "cancelled", {
+                metadata: { errorMessage },
+              })
+            )
+          }
+          // Requeue if there are now-pending wakeups to handle, so the session
+          // doesn't sit idle with unprocessed user messages.
+          const pendingAfterRestore = await getPendingWakeupCount(
+            sessionId
+          ).catch(() => 0)
+          if (pendingAfterRestore > 0) {
+            requeueAfterUnlock = true
+            requeueTrigger = "system_interrupt"
+          }
+          await runCleanupStep(
+            `shutdown MCP tools for session ${sessionId}`,
+            () => mcpTools.shutdown()
+          )
+          return {
+            success: false,
+            reason: "session lock lost",
+            requeued: requeueAfterUnlock,
+          }
+        }
+
         if (turn?.id) {
           await runCleanupStep(`drop wakeups for turn ${turn.id}`, () =>
             markTurnWakeupsDropped(turn.id)
@@ -922,17 +970,6 @@ export function startSessionThinkingWorker() {
                 metadata: { errorMessage },
               })
           )
-        }
-
-        // Lock lost: the new owner now drives this session. Clean up our turn
-        // (done above) but do NOT touch session status or requeue — that's the
-        // new owner's responsibility. Then bail.
-        if (lockLostError) {
-          await runCleanupStep(
-            `shutdown MCP tools for session ${sessionId}`,
-            () => mcpTools.shutdown()
-          )
-          return { success: false, reason: "session lock lost" }
         }
 
         if (turnInterrupted) {

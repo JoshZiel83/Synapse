@@ -1198,6 +1198,25 @@ export async function markTurnWakeupsDropped(turnId: string) {
     .execute()
 }
 
+/**
+ * Reverse attachPendingWakeupsToTurn: flip this turn's `attached` wakeups back
+ * to `pending` so another worker can re-claim them. Used when a turn is aborted
+ * WITHOUT having processed its wakeups (e.g. the worker lost the session lock
+ * mid-turn) — dropping them would silently lose user-triggered wakeups.
+ */
+export async function restoreTurnWakeupsToPending(turnId: string) {
+  await db
+    .updateTable("session_wakeups")
+    .set({
+      status: "pending",
+      turn_id: null,
+      attached_at: null,
+    })
+    .where("turn_id", "=", turnId)
+    .where("status", "=", "attached")
+    .execute()
+}
+
 export async function getPendingWakeupCount(sessionId: string) {
   const row = await db
     .selectFrom("session_wakeups")
