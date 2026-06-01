@@ -34,6 +34,12 @@
  */
 
 import crypto from "node:crypto"
+import {
+  acquireLock,
+  renewLock,
+  releaseLock,
+  type LockRedisLike,
+} from "../../../infrastructure/redis/lock.js"
 
 /**
  * Default TTL. Long enough to span a typical multi-step actor turn
@@ -59,26 +65,11 @@ function buildKey(input: StatusClaimKey): string {
 export const STATUS_CLAIM_INSTANCE_ID = `${process.pid}:${crypto.randomUUID()}`
 
 /**
- * Subset of the ioredis client surface this module needs. Keeping it
- * minimal lets tests pass a small fake without dragging in ioredis
- * types or a real Redis connection.
+ * Subset of the ioredis client surface this module needs. It is exactly the
+ * lock helper's client surface (SET NX PX + eval), re-exported under this name
+ * for the existing callers/tests.
  */
-export interface ClaimRedisLike {
-  set(
-    key: string,
-    value: string,
-    px: "PX",
-    ttlMs: number,
-    nx: "NX"
-  ): Promise<"OK" | null>
-  eval(
-    script: string,
-    numKeys: 1,
-    key: string,
-    arg1: string,
-    arg2?: string
-  ): Promise<unknown>
-}
+export type ClaimRedisLike = LockRedisLike
 
 export interface StatusClaimClient {
   acquire(input: StatusClaimKey): Promise<string | null>
@@ -98,45 +89,21 @@ export function createStatusClaimClient(
 
   return {
     async acquire(input) {
-      const token = `${instanceId}:${crypto.randomUUID()}`
-      const result = await backend.set(
+      const lock = await acquireLock(
+        backend,
         buildKey(input),
-        token,
-        "PX",
         ttlMs,
-        "NX"
+        instanceId
       )
-      return result === "OK" ? token : null
+      return lock?.token ?? null
     },
 
     async renew(input, token) {
-      const result = await backend.eval(
-        `if redis.call("GET", KEYS[1]) == ARGV[1]
-           then
-             return redis.call("PEXPIRE", KEYS[1], ARGV[2])
-           else
-             return 0
-           end`,
-        1,
-        buildKey(input),
-        token,
-        String(ttlMs)
-      )
-      return Number(result) === 1
+      return renewLock(backend, { key: buildKey(input), token }, ttlMs)
     },
 
     async release(input, token) {
-      await backend.eval(
-        `if redis.call("GET", KEYS[1]) == ARGV[1]
-           then
-             return redis.call("DEL", KEYS[1])
-           else
-             return 0
-           end`,
-        1,
-        buildKey(input),
-        token
-      )
+      await releaseLock(backend, { key: buildKey(input), token })
     },
   }
 }

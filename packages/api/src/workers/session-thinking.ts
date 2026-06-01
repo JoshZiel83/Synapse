@@ -1,5 +1,11 @@
 import { Worker } from "bullmq"
 import { redis } from "../infrastructure/redis/index.js"
+import {
+  acquireLock,
+  renewLock,
+  releaseLock,
+  type AcquiredLock,
+} from "../infrastructure/redis/lock.js"
 import { db, type TableInsert } from "../infrastructure/database/kysely.js"
 import { emitEvent } from "../infrastructure/events/index.js"
 import {
@@ -162,12 +168,10 @@ export function startSessionThinkingWorker() {
       const sessionLockKey = `${REDIS_CHANNELS.SESSION_LOCK_PREFIX}${sessionId}`
       const actorSessionsKey = `${REDIS_CHANNELS.ACTOR_SESSIONS_PREFIX}${actorId}`
 
-      const acquired = await redis.set(
+      const acquired = await acquireLock(
+        redis,
         sessionLockKey,
-        job.id!,
-        "PX",
-        SESSION_LOCK_TTL,
-        "NX"
+        SESSION_LOCK_TTL
       )
       if (!acquired) {
         console.log(
@@ -175,6 +179,7 @@ export function startSessionThinkingWorker() {
         )
         return { success: false, reason: "session locked" }
       }
+      const sessionLock: AcquiredLock = acquired
 
       const currentCount = await redis.incr(actorSessionsKey)
       await redis.pexpire(actorSessionsKey, SESSION_LOCK_TTL * 2)
@@ -182,7 +187,7 @@ export function startSessionThinkingWorker() {
       const maxSessions = await getActorMaxSessions(actorId)
       if (currentCount > maxSessions) {
         await redis.decr(actorSessionsKey)
-        await redis.del(sessionLockKey)
+        await releaseLock(redis, sessionLock)
         throw new Error(
           `Actor ${actorId} concurrent limit (${maxSessions}) reached, will retry`
         )
@@ -649,7 +654,10 @@ export function startSessionThinkingWorker() {
         const lockRefreshInterval = setInterval(
           async () => {
             try {
-              await redis.pexpire(sessionLockKey, SESSION_LOCK_TTL)
+              // Fenced refresh: only extend the TTL while we still hold the
+              // lock token. A bare PEXPIRE could resurrect a lock another
+              // worker has since taken over.
+              await renewLock(redis, sessionLock, SESSION_LOCK_TTL)
             } catch {
               // ignore
             }
@@ -1012,7 +1020,7 @@ export function startSessionThinkingWorker() {
 
         throw err
       } finally {
-        await redis.del(sessionLockKey)
+        await releaseLock(redis, sessionLock)
         await redis.decr(actorSessionsKey)
         if (requeueAfterUnlock) {
           await sessionThinkingQueue.add("think", {

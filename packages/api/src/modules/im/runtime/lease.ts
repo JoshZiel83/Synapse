@@ -8,6 +8,11 @@
 
 import crypto from "node:crypto"
 import { redis } from "../../../infrastructure/redis/index.js"
+import {
+  acquireLock,
+  renewLock,
+  releaseLock,
+} from "../../../infrastructure/redis/lock.js"
 
 export const RUNTIME_LEASE_TTL_MS = 30_000
 
@@ -25,49 +30,29 @@ function key(accountId: string): string {
 export async function acquireTransportRuntimeLease(
   accountId: string
 ): Promise<string | null> {
-  const leaseToken = `${RUNTIME_MANAGER_INSTANCE_ID}:${accountId}:${crypto.randomUUID()}`
-  const result = await redis.set(
+  const lock = await acquireLock(
+    redis,
     key(accountId),
-    leaseToken,
-    "PX",
     RUNTIME_LEASE_TTL_MS,
-    "NX"
+    `${RUNTIME_MANAGER_INSTANCE_ID}:${accountId}`
   )
-  return result === "OK" ? leaseToken : null
+  return lock?.token ?? null
 }
 
 export async function renewTransportRuntimeLease(
   accountId: string,
   leaseToken: string
 ): Promise<boolean> {
-  const result = await redis.eval(
-    `if redis.call("GET", KEYS[1]) == ARGV[1]
-       then
-         return redis.call("PEXPIRE", KEYS[1], ARGV[2])
-       else
-         return 0
-       end`,
-    1,
-    key(accountId),
-    leaseToken,
-    String(RUNTIME_LEASE_TTL_MS)
+  return renewLock(
+    redis,
+    { key: key(accountId), token: leaseToken },
+    RUNTIME_LEASE_TTL_MS
   )
-  return Number(result) === 1
 }
 
 export async function releaseTransportRuntimeLease(
   accountId: string,
   leaseToken: string
 ): Promise<void> {
-  await redis.eval(
-    `if redis.call("GET", KEYS[1]) == ARGV[1]
-       then
-         return redis.call("DEL", KEYS[1])
-       else
-         return 0
-       end`,
-    1,
-    key(accountId),
-    leaseToken
-  )
+  await releaseLock(redis, { key: key(accountId), token: leaseToken })
 }
