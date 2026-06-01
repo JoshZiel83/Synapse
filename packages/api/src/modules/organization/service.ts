@@ -33,11 +33,11 @@ import {
   type MarketplaceVersionStatus,
   type UUID,
 } from "@synapse/shared"
-import { transaction } from "../../infrastructure/database/index.js"
+import { CompiledQuery } from "kysely"
 import {
   db,
-  executeSql,
-  executeSqlOn,
+  withDbTransaction,
+  type Executor,
 } from "../../infrastructure/database/kysely.js"
 import { createConversationEvent } from "../chat/service.js"
 import { getFileUrlById } from "../files/service.js"
@@ -45,7 +45,7 @@ import {
   listAuthorizedResourceIds,
   type AccessSubject,
 } from "../access/service.js"
-import { setAccessPolicyOn } from "../access/default-access-policy.js"
+import { setAccessPolicy } from "../access/default-access-policy.js"
 
 type QueryRow = pg.QueryResultRow
 type QueryResultLike<T extends QueryRow> = { rows: T[] }
@@ -823,12 +823,20 @@ function buildActorVersionDelta(
 }
 
 async function runQuery<T extends QueryRow>(text: string, params?: unknown[]) {
-  return executeSql<T>(text, params)
+  return runnerFor(db)<T>(text, params)
 }
 
-function clientQuery(client: pg.PoolClient): QueryRunner {
+/**
+ * Adapt an {@link Executor} (the top-level `db` or a transaction) to the
+ * `(text, params) => { rows }` runner convention used throughout this module.
+ * Routes raw SQL through Kysely's `CompiledQuery.raw` so the same statement
+ * runs on whichever executor (pool or trx) the caller holds.
+ */
+function runnerFor(executor: Executor): QueryRunner {
   return async <T extends QueryRow>(text: string, params?: unknown[]) =>
-    executeSqlOn<T>(client, text, params)
+    executor.executeQuery<T>(
+      CompiledQuery.raw(text, params ? [...params] : [])
+    ) as Promise<QueryResultLike<T>>
 }
 
 async function loadActorDocsMap(
@@ -1061,8 +1069,8 @@ export async function createActor(input: {
   const docs = sortDocs(normalizeActorDocs(input.docs || []))
   const specialties = sanitizeSpecialties(input.specialties)
 
-  const result = await transaction(async (client) => {
-    const runner = clientQuery(client)
+  const result = await withDbTransaction(async (trx) => {
+    const runner = runnerFor(trx)
     await ensureParentActor(
       input.workspaceId,
       input.parentId,
@@ -1070,8 +1078,7 @@ export async function createActor(input: {
       runner
     )
 
-    const actorResult = await executeSqlOn<{ id: string }>(
-      client,
+    const actorResult = await runner<{ id: string }>(
       `INSERT INTO actors (
          workspace_id,
          name,
@@ -1108,7 +1115,7 @@ export async function createActor(input: {
     // default to workspace-open by writing a `source='default_open'`
     // workspace-scoped binding so the evaluator and the contact-hub UI both
     // see them as accessible to all members.
-    await setAccessPolicyOn(client, {
+    await setAccessPolicy(trx, {
       resourceType: "actor",
       resourceId: actorId,
       workspaceId: input.workspaceId,
@@ -1116,8 +1123,7 @@ export async function createActor(input: {
       createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
     })
 
-    const versionResult = await executeSqlOn<{ id: string }>(
-      client,
+    const versionResult = await runner<{ id: string }>(
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1153,8 +1159,7 @@ export async function createActor(input: {
     const actorVersionId = versionResult.rows[0]!.id
 
     for (const doc of docs) {
-      await executeSqlOn(
-        client,
+      await runner(
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1284,8 +1289,8 @@ export async function updateActor(
 
   const nextVersion = currentActor.currentVersion + 1
 
-  await transaction(async (client) => {
-    const runner = clientQuery(client)
+  await withDbTransaction(async (trx) => {
+    const runner = runnerFor(trx)
     await ensureParentActor(
       workspaceId,
       nextDefinition.parentId || null,
@@ -1293,8 +1298,7 @@ export async function updateActor(
       runner
     )
 
-    const versionResult = await executeSqlOn<{ id: string }>(
-      client,
+    const versionResult = await runner<{ id: string }>(
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1343,8 +1347,7 @@ export async function updateActor(
     const actorVersionId = versionResult.rows[0]!.id
 
     for (const doc of nextDefinition.docs) {
-      await executeSqlOn(
-        client,
+      await runner(
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1365,8 +1368,7 @@ export async function updateActor(
       )
     }
 
-    await executeSqlOn(
-      client,
+    await runner(
       `UPDATE actors
       SET name = $2,
            role = $3,
@@ -1408,9 +1410,9 @@ export async function deleteActor(
   actorId: UUID,
   workspaceId: UUID
 ): Promise<boolean> {
-  const result = await transaction(async (client) => {
-    const existing = await executeSqlOn<{ id: string }>(
-      client,
+  const result = await withDbTransaction(async (trx) => {
+    const runner = runnerFor(trx)
+    const existing = await runner<{ id: string }>(
       `SELECT id
        FROM actors
        WHERE id = $1
@@ -1422,8 +1424,7 @@ export async function deleteActor(
       return { deleted: false }
     }
 
-    await executeSqlOn(
-      client,
+    await runner(
       `DELETE FROM actors
        WHERE id = $1
          AND workspace_id = $2`,
@@ -1506,8 +1507,8 @@ export async function installActorPackage(input: {
   const actorTitle = input.title ?? packageActor.title
   const syncMode = input.syncMode || "notify"
 
-  const result = await transaction(async (client) => {
-    const runner = clientQuery(client)
+  const result = await withDbTransaction(async (trx) => {
+    const runner = runnerFor(trx)
     await ensureParentActor(
       input.workspaceId,
       input.parentId || null,
@@ -1515,8 +1516,7 @@ export async function installActorPackage(input: {
       runner
     )
 
-    const actorResult = await executeSqlOn<{ id: string }>(
-      client,
+    const actorResult = await runner<{ id: string }>(
       `INSERT INTO actors (
          workspace_id,
          name,
@@ -1551,7 +1551,7 @@ export async function installActorPackage(input: {
 
     // P2 contract: write default workspace-open binding so the package's
     // synthesized actors are reachable to all members by default.
-    await setAccessPolicyOn(client, {
+    await setAccessPolicy(trx, {
       resourceType: "actor",
       resourceId: actorId,
       workspaceId: input.workspaceId,
@@ -1559,8 +1559,7 @@ export async function installActorPackage(input: {
       createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
     })
 
-    const versionResult = await executeSqlOn<{ id: string }>(
-      client,
+    const versionResult = await runner<{ id: string }>(
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1596,8 +1595,7 @@ export async function installActorPackage(input: {
     const actorVersionId = versionResult.rows[0]!.id
 
     for (const doc of packageActor.docs) {
-      await executeSqlOn(
-        client,
+      await runner(
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1618,8 +1616,7 @@ export async function installActorPackage(input: {
       )
     }
 
-    await executeSqlOn(
-      client,
+    await runner(
       `INSERT INTO actor_source_refs (
          actor_id,
          source_catalog_item_id,
@@ -1636,8 +1633,7 @@ export async function installActorPackage(input: {
       ]
     )
 
-    await executeSqlOn(
-      client,
+    await runner(
       `UPDATE catalog_items
        SET download_count = download_count + 1,
            updated_at = NOW()
