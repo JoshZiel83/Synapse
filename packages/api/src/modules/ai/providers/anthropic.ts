@@ -10,6 +10,7 @@ import type {
 } from "@synapse/shared"
 import {
   extractText,
+  formatBytes,
   formatMentionText,
   formatStructuredContentForProvider,
   textBlock,
@@ -48,12 +49,6 @@ const SUPPORTED_IMAGE_FORMATS = new Set([
 
 // Anthropic API enforces 5 MB per base64 image/document
 const BASE64_THRESHOLD = 5 * 1024 * 1024
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 function buildAnthropicToolAlias(
   rawName: string,

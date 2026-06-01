@@ -35,8 +35,10 @@ import {
   maskAllowsConversationType,
   normalizeCanonicalContentBlocks,
   nowISO,
+  parseJsonObject,
   resolveAutomationOccurrenceDisplay,
   resolveNarrowedConversationTypeMask,
+  slugify,
   workspaceRef,
 } from "@synapse/shared"
 import {
@@ -464,23 +466,6 @@ export interface ProcessAutomationExecutionResult {
 
 const AUTOMATION_SCHEDULER_INTERVAL_MS = 15_000
 const MAX_SCHEDULER_BATCH_SIZE = 50
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>)
-        : {}
-    } catch {
-      return {}
-    }
-  }
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {}
-}
 
 function normalizeContentBlocks(value: unknown): CanonicalContentBlock[] {
   if (!Array.isArray(value)) return []
@@ -1232,13 +1217,7 @@ async function validateAutomationEventSourceProvider(
 }
 
 function slugifyAutomationEventSourceKey(value: string) {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ".")
-    .replace(/^\.+|\.+$/g, "")
-    .slice(0, 96)
-  return slug || "source"
+  return slugify(value, { separator: ".", maxLength: 96, fallback: "source" })
 }
 
 async function allocateAutomationEventSourceKey(params: {

@@ -1,5 +1,6 @@
 import {
   extractText,
+  parseJsonObject,
   textBlocks,
   type CanonicalContentBlock,
   type TaskNoticeStatus,
@@ -133,21 +134,6 @@ function toIsoString(value: string | Date | null | undefined) {
 function toDate(value: string | null | undefined) {
   if (!value) return null
   return new Date(value)
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>)
-        : {}
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
 function mapToolCallTaskRow(

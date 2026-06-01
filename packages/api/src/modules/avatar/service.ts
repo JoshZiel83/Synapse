@@ -2,6 +2,7 @@ import { createAvatar } from "@dicebear/core"
 import { pixelArt } from "@dicebear/collection"
 import {
   FILE_ORIGIN_SYSTEMS,
+  slugify,
   type SystemGeneratedFileOriginSystem,
 } from "@synapse/shared"
 import {
@@ -150,13 +151,7 @@ const DEFAULT_USER_AVATAR_THEME: PixelArtAvatarTheme = {
 }
 
 function sanitizeFileStem(value: string) {
-  const cleaned = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
-  return cleaned || "avatar"
+  return slugify(value, { fallback: "avatar" })
 }
 
 function trimOptionalString(value?: string) {

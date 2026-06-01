@@ -9,6 +9,7 @@ import type {
 } from "@synapse/shared"
 import {
   extractText,
+  formatBytes,
   formatMentionText,
   formatStructuredContentForProvider,
   textBlock,
@@ -41,12 +42,6 @@ const SUPPORTED_IMAGE_FORMATS = new Set([
 
 // OpenAI enforces 20 MB per image
 const BASE64_THRESHOLD = 20 * 1024 * 1024
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 async function ensureSupportedFormat(
   buffer: Buffer,

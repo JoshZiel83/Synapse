@@ -4,6 +4,7 @@ import type {
   FileParseOutputView,
   FileParseRunView,
 } from "@synapse/shared/types"
+import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import { fileParsingQueue } from "../../workers/queues.js"
 import { extractImageOcrText } from "../ai/image-fallback.js"
@@ -79,23 +80,6 @@ function toIsoString(value: string | Date | null | undefined): string {
   if (typeof value === "string") return value
   if (value instanceof Date) return value.toISOString()
   return new Date(0).toISOString()
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
-  if (!value) return undefined
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : undefined
-    } catch {
-      return undefined
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined
 }
 
 function isTextLikeMimeType(mimeType: string): boolean {

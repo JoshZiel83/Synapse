@@ -3,6 +3,7 @@ import { extname } from "node:path"
 import yaml from "js-yaml"
 import {
   normalizeCanonicalContentBlocks,
+  slugify,
   textBlocks,
   textBlock,
   type CanonicalContentBlock,
@@ -93,13 +94,7 @@ function firstSummaryParagraph(markdown: string) {
 }
 
 export function normalizeSkillCommandName(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64)
+  return slugify(value, { maxLength: 64 })
 }
 
 export function normalizeSkillFilePath(input: string) {

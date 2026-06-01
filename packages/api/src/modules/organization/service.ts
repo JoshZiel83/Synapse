@@ -5,6 +5,7 @@ import {
   GROUP_CONVERSATION_KIND,
   normalizeActorDocs,
   normalizeCanonicalContentBlocks,
+  parseJsonObject,
   RELATIONSHIP_ACCESS_POLICY,
   summarizeActorDoc,
   summarizeActorForPrompt,
@@ -280,18 +281,6 @@ const ACTOR_PACKAGE_SELECT = `
   WHERE item.item_kind = 'actor_template'
     AND item.is_active = TRUE
 `
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {}
-}
 
 function parseJsonArray<T>(value: unknown): T[] {
   if (!value) return []

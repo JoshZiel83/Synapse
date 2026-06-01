@@ -11,6 +11,7 @@ import {
   REUSE_SCOPES,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
+  slugify,
   subjectScopeLabel,
   workspaceMemberRef,
   workspaceRef,
@@ -348,13 +349,7 @@ export class McpPluginError extends Error {
 }
 
 function sanitizeSlug(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120)
+  return slugify(value, { maxLength: 120 })
 }
 
 function asObject(value: unknown): JsonObject {

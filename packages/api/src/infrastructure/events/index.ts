@@ -1,6 +1,6 @@
 import type { EventType, SystemEvent } from "@synapse/shared"
 import { sql } from "kysely"
-import { REDIS_CHANNELS } from "@synapse/shared"
+import { REDIS_CHANNELS, parseJsonObject } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { query, transaction } from "../database/index.js"
 import {
@@ -56,21 +56,6 @@ function isTransactionalRealtimeEventType(
   return TRANSACTIONAL_REALTIME_EVENT_TYPES.has(
     type as TransactionalRealtimeEventType
   )
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>)
-        : {}
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
 function eventTimestampToIso(value: string | Date) {

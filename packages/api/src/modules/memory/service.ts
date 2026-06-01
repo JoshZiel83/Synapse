@@ -16,6 +16,7 @@ import {
   extractText,
   MEMORY_PERMISSION,
   normalizeCanonicalContentBlocks,
+  parseJsonObject,
   SUBJECT_KIND,
   textBlocks,
 } from "@synapse/shared"
@@ -180,18 +181,6 @@ const MEMORY_RECALL_QUERY_MAX_CHARS = 1_200
 const MEMORY_LEXICAL_TOKEN_LIMIT = 24
 const MEMORY_LEXICAL_QUERY_MAX_CHARS = 512
 const MEMORY_RRF_K = 60
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>
-    } catch {
-      return {}
-    }
-  }
-  return value as Record<string, unknown>
-}
 
 function toIsoString(value: string | Date | null | undefined) {
   if (!value) return undefined

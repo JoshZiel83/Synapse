@@ -42,6 +42,19 @@ export function nowISO(): string {
   return new Date().toISOString()
 }
 
+/**
+ * Human-readable byte size with binary (1024) units: "512 B", "1.5 KB",
+ * "2.0 MB". Consolidates the byte-for-byte-identical formatBytes copied across
+ * the AI providers. NOTE: kept as binary "KB"/"MB" (not SI "kB") on purpose —
+ * this string is embedded in prompts the model reads, so the exact format must
+ * not drift (which is why pretty-bytes is deliberately not used).
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export const GROUP_CONVERSATION_KIND = CONVERSATION_KIND.GROUP
 export const DIRECT_CONVERSATION_KIND = CONVERSATION_KIND.DIRECT
 export const THREAD_CONVERSATION_KINDS = [
@@ -376,3 +389,8 @@ export type { RedactOptions } from "./redact.js"
 
 export { computeBackoff } from "./backoff.js"
 export type { ComputeBackoffOptions } from "./backoff.js"
+
+export { slugify } from "./slug.js"
+export type { SlugifyOptions } from "./slug.js"
+
+export { parseJsonObject, parseJsonObjectOrUndefined } from "./json.js"

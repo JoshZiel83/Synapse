@@ -7,10 +7,12 @@ import {
   conversationRef,
   maskAllowsConversationTypeKey,
   normalizeConversationTypeMask,
+  parseJsonObject,
   remoteAgentRef,
   resolveConversationTypeKey,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
+  slugify,
   subjectScopeLabel,
   workspaceMemberRef,
   workspaceRef,
@@ -541,13 +543,7 @@ export class SkillError extends Error {
 }
 
 function sanitizeSlug(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120)
+  return slugify(value, { maxLength: 120 })
 }
 
 function normalizePath(assetPath: string) {
@@ -715,21 +711,6 @@ function normalizeScopeTarget(input: {
         `Unsupported skill scope: ${String(input.useScope)}`
       )
   }
-}
-
-function parseJsonObject(value: unknown): JsonObject {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as JsonObject
-    } catch {
-      return {}
-    }
-  }
-
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {}
 }
 
 function parseJsonArray<T>(value: unknown): T[] {
