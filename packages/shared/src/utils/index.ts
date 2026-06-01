@@ -17,17 +17,11 @@ import type {
 import { WORK_ITEM_TRANSITIONS } from "../types/index.js"
 
 export function generateId(): string {
-  const cryptoRef = globalThis as typeof globalThis & {
-    crypto?: {
-      randomUUID?: () => string
-    }
-  }
-
-  if (typeof cryptoRef.crypto?.randomUUID === "function") {
-    return cryptoRef.crypto.randomUUID()
-  }
-
-  return `id_${Math.random().toString(36).slice(2)}_${Date.now()}`
+  // crypto.randomUUID is available in every runtime this ships to (Node 18+,
+  // all modern browsers, RN/Hermes with the polyfill). No Math.random
+  // fallback — that produced non-UUID, low-entropy ids and only ever ran in
+  // ancient environments we don't support.
+  return globalThis.crypto.randomUUID()
 }
 
 export function isValidTransition(

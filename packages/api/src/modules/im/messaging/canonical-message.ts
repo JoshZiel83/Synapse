@@ -210,7 +210,7 @@ export function serializeCanonicalMessage(message: CanonicalMessage): {
 }
 
 function clonePart(part: CanonicalPart): CanonicalPart {
-  return JSON.parse(JSON.stringify(part)) as CanonicalPart
+  return structuredClone(part)
 }
 
 /**

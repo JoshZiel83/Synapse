@@ -4746,26 +4746,11 @@ export type ChatSocketEvent<
 
 // ============ Content Helpers ============
 
-function getRandomUUIDFactory() {
-  const cryptoRef = globalThis as typeof globalThis & {
-    crypto?: {
-      randomUUID?: () => string
-    }
-  }
-
-  if (typeof cryptoRef.crypto?.randomUUID === "function") {
-    return cryptoRef.crypto.randomUUID.bind(cryptoRef.crypto)
-  }
-
-  return null
-}
-
-export function createCanonicalContentBlockId(prefix = "block"): UUID {
-  const randomUUID = getRandomUUIDFactory()
-  if (randomUUID) {
-    return randomUUID()
-  }
-  return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now()}`
+export function createCanonicalContentBlockId(_prefix = "block"): UUID {
+  // crypto.randomUUID is available in every runtime this ships to. The prefix
+  // arg is retained for call-site readability but no longer affects the id (a
+  // real UUID has no prefix); it previously only fed a Math.random fallback.
+  return globalThis.crypto.randomUUID()
 }
 
 export function textBlock(text: string, id?: UUID): CanonicalTextBlock {
@@ -5056,11 +5041,7 @@ export function canonicalToolResult(input: {
 }
 
 function createActorDocId(): UUID {
-  const randomUUID = getRandomUUIDFactory()
-  if (randomUUID) {
-    return randomUUID()
-  }
-  return `doc_${Math.random().toString(36).slice(2)}_${Date.now()}`
+  return globalThis.crypto.randomUUID()
 }
 
 export const SECRETARY_DEFAULT_NAME = "统筹秘书 / Command Secretary"

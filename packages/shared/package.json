@@ -48,6 +48,7 @@
   ],
   "dependencies": {
     "@synapse/device-protocol": "0.1.0",
+    "fast-deep-equal": "^3.1.3",
     "tldts": "^6.1.86",
     "zod": "4.3.6"
   },

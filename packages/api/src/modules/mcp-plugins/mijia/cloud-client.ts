@@ -90,7 +90,7 @@ function buildTimezoneCookies() {
 }
 
 function cloneAuthState(state: MijiaAuthState): MijiaAuthState {
-  return JSON.parse(JSON.stringify(state)) as MijiaAuthState
+  return structuredClone(state)
 }
 
 type CacheEntry<T> = {

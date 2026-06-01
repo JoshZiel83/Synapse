@@ -800,11 +800,7 @@ function buildAuthCandidates(token: string) {
 }
 
 function base64UrlEncode(value: string) {
-  return Buffer.from(value, "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "")
+  return Buffer.from(value, "utf8").toString("base64url")
 }
 
 function signAminerJwt(input: {

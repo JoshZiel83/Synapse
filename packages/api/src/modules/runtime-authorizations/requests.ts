@@ -9,6 +9,7 @@ import { textBlocks } from "@synapse/shared"
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import { sleep } from "../../infrastructure/async/index.js"
+import { randomUUID } from "node:crypto"
 import { authorizeAction } from "../access/service.js"
 import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js"
 import { listConversationParticipants } from "../chat/service.js"
@@ -270,7 +271,7 @@ async function hasNewUserFacingConversationMessage(
 }
 
 export function buildRuntimeAuthorizationRetryNonce() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36)
+  return randomUUID()
 }
 
 export async function createRuntimeAuthorizationRequest(

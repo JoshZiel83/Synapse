@@ -2,6 +2,7 @@ import type {
   CanonicalContentBlock,
   ConversationReplyRef,
 } from "../types/index.js"
+import deepEqual from "fast-deep-equal"
 
 export const CHAT_QUEUE_DB_NAME = "synapse-chat-queue"
 export const CHAT_QUEUE_DB_VERSION = 1
@@ -140,7 +141,7 @@ export function sameStoredChatQueueState(
   left: StoredChatQueueState,
   right: StoredChatQueueState
 ) {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return deepEqual(left, right)
 }
 
 function latestIsoTimestamp(
@@ -155,7 +156,7 @@ function latestIsoTimestamp(
 }
 
 function sameStoredEntry(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return deepEqual(left, right)
 }
 
 export function mergeStoredQueueTransition(
@@ -256,7 +257,7 @@ export interface ChatQueueStateLike {
 }
 
 function sameEntry(left: unknown, right: unknown) {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+  return deepEqual(left ?? null, right ?? null)
 }
 
 export function mergeQueueStateForSave<T extends ChatQueueStateLike>(

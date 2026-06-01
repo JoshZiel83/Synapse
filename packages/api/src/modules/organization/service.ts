@@ -1,4 +1,5 @@
 import type pg from "pg"
+import deepEqual from "fast-deep-equal"
 import {
   extractText,
   GROUP_CONVERSATION_KIND,
@@ -310,7 +311,7 @@ function arraysEqual(left: string[], right: string[]) {
 }
 
 function jsonEqual(left: unknown, right: unknown) {
-  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {})
+  return deepEqual(left ?? {}, right ?? {})
 }
 
 function sortDocs(docs: ActorDoc[]) {
