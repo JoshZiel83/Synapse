@@ -73,6 +73,14 @@ import { createLogger } from "../infrastructure/logger/index.js"
 
 const log = createLogger("session-thinking")
 
+/**
+ * Delay before re-attempting a session whose lock was held by another worker
+ * while wakeups were still pending. Long enough to let a normal turn's
+ * post-model side-effects finish, short enough that a user's queued message
+ * isn't left waiting noticeably.
+ */
+const LOCK_CONTENDED_RETRY_DELAY_MS = 2_000
+
 type ThinkingPhase = "thinking" | "tool"
 
 function deriveThinkingPhase(status: string): ThinkingPhase {
@@ -194,6 +202,37 @@ export function startSessionThinkingWorker() {
         SESSION_LOCK_TTL
       )
       if (!acquired) {
+        // Another worker holds the lock. Normally fine — that worker drives the
+        // session. But if there are PENDING wakeups, we must guarantee a future
+        // driver: the current owner may have already read 0 pending (and be
+        // heading to idle) before these wakeups were enqueued/restored. Without
+        // a retry the wakeups would be stranded (these jobs are added with no
+        // BullMQ attempts, so returning here = job done, no retry). Re-enqueue a
+        // DELAYED job so it re-claims after the current owner releases.
+        const pending = await getPendingWakeupCount(sessionId).catch(() => 0)
+        if (pending > 0) {
+          log.info(
+            `Session ${sessionId} locked but ${pending} wakeup(s) pending; ` +
+              `re-enqueuing a delayed retry`
+          )
+          await sessionThinkingQueue
+            .add(
+              "think",
+              { sessionId, actorId, workspaceId, trigger, userId },
+              { delay: LOCK_CONTENDED_RETRY_DELAY_MS }
+            )
+            .catch((err: unknown) => {
+              log.error(
+                { err },
+                `failed to re-enqueue delayed retry for locked session ${sessionId}`
+              )
+            })
+          return {
+            success: false,
+            reason: "session locked",
+            retryScheduled: true,
+          }
+        }
         log.info(`Session ${sessionId} is already being processed, skipping`)
         return { success: false, reason: "session locked" }
       }
@@ -220,6 +259,13 @@ export function startSessionThinkingWorker() {
       // (the cooperative abort surfaces as a generic TurnInterruptedError, so
       // the error TYPE alone can't tell us the turn was aborted for lock loss).
       let lockLost = false
+      // Fenced lock-renew timer. Hoisted to handler scope and cleared in the
+      // OUTER finally so renewal covers the WHOLE critical section — not just
+      // actorThink, but executeActorActions + message persistence + turn/wakeup
+      // status + runtime/audit emits — until the lock is released. Otherwise a
+      // long side-effect phase could outlast the TTL and let another worker
+      // concurrently take over the session.
+      let lockRefreshInterval: ReturnType<typeof setInterval> | undefined
       let currentStatusText: string | undefined
       let currentPhase: ThinkingPhase | "error" = "thinking"
       let threadConversationId: string | undefined
@@ -674,7 +720,7 @@ export function startSessionThinkingWorker() {
           activeTurnId: turn.id,
         })
 
-        const lockRefreshInterval = setInterval(
+        lockRefreshInterval = setInterval(
           async () => {
             try {
               // Fenced refresh: only extend the TTL while we still hold the
@@ -704,85 +750,79 @@ export function startSessionThinkingWorker() {
 
         let result
 
-        try {
-          await emitThinkingStatus("Calling AI model...")
+        await emitThinkingStatus("Calling AI model...")
 
-          result = await actorThink(
-            actor,
-            contextWindow,
-            undefined,
-            resolvedModelPlan,
-            workspaceId,
-            {
-              sessionId,
-              turnId: turn.id,
-              collaborationMode:
-                session.collaborationMode ||
-                session.collaboration_mode ||
-                "default",
-              conversationId: session.conversation_id,
-              conversationKind: session.conversation_kind,
-              isImConversation: session.isImConversation,
-              conversationParticipants: participantEntries,
-              userId,
-              availableSkills,
-              onStatus: emitThinkingStatus,
-              mcpTools: mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
-              mcpExecutor: mcpTools.executor,
-              mcpVersion: mcpTools.mcpVersion,
-              mcpRefresh: mcpTools.refresh,
-              mcpSetTurnId: mcpTools.setTurnId,
-              shouldAbortTurn: async () =>
-                lockLost ||
-                (await hasPendingInterrupt(
-                  sessionId,
-                  "remote_control_terminated"
-                )),
-              system,
-              refreshCollaborationContext: async () => {
-                const refreshedSession = await getSession(sessionId)
-                if (refreshedSession) {
-                  session = refreshedSession
-                }
-                return {
-                  collaborationMode:
-                    session?.collaborationMode ||
-                    session?.collaboration_mode ||
-                    "default",
-                  system: session ? buildSystemPrompt(session) : system,
-                }
-              },
-              checkNewMessages:
-                conversationId && actorParticipantId
-                  ? async () => {
-                      const update = await loadNewContextItems({
-                        conversationId,
-                        participantId: actorParticipantId!,
-                        actorId,
-                        sinceSequence: lastKnownConversationSequence,
+        result = await actorThink(
+          actor,
+          contextWindow,
+          undefined,
+          resolvedModelPlan,
+          workspaceId,
+          {
+            sessionId,
+            turnId: turn.id,
+            collaborationMode:
+              session.collaborationMode ||
+              session.collaboration_mode ||
+              "default",
+            conversationId: session.conversation_id,
+            conversationKind: session.conversation_kind,
+            isImConversation: session.isImConversation,
+            conversationParticipants: participantEntries,
+            userId,
+            availableSkills,
+            onStatus: emitThinkingStatus,
+            mcpTools: mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
+            mcpExecutor: mcpTools.executor,
+            mcpVersion: mcpTools.mcpVersion,
+            mcpRefresh: mcpTools.refresh,
+            mcpSetTurnId: mcpTools.setTurnId,
+            shouldAbortTurn: async () =>
+              lockLost ||
+              (await hasPendingInterrupt(
+                sessionId,
+                "remote_control_terminated"
+              )),
+            system,
+            refreshCollaborationContext: async () => {
+              const refreshedSession = await getSession(sessionId)
+              if (refreshedSession) {
+                session = refreshedSession
+              }
+              return {
+                collaborationMode:
+                  session?.collaborationMode ||
+                  session?.collaboration_mode ||
+                  "default",
+                system: session ? buildSystemPrompt(session) : system,
+              }
+            },
+            checkNewMessages:
+              conversationId && actorParticipantId
+                ? async () => {
+                    const update = await loadNewContextItems({
+                      conversationId,
+                      participantId: actorParticipantId!,
+                      actorId,
+                      sinceSequence: lastKnownConversationSequence,
+                    })
+                    lastKnownConversationSequence = update.maxSequence
+                    if (update.items.length > 0) {
+                      await attachPendingWakeupsToTurn(sessionId, turn.id)
+                      await publishSessionRuntime(workspaceId, sessionId, {
+                        laneState: "running",
+                        health: "ok",
+                        phase:
+                          currentPhase === "error" ? "thinking" : currentPhase,
+                        statusText: currentStatusText,
+                        activeTurnId: turn.id,
                       })
-                      lastKnownConversationSequence = update.maxSequence
-                      if (update.items.length > 0) {
-                        await attachPendingWakeupsToTurn(sessionId, turn.id)
-                        await publishSessionRuntime(workspaceId, sessionId, {
-                          laneState: "running",
-                          health: "ok",
-                          phase:
-                            currentPhase === "error"
-                              ? "thinking"
-                              : currentPhase,
-                          statusText: currentStatusText,
-                          activeTurnId: turn.id,
-                        })
-                      }
-                      return update.items.length > 0 ? update.items : null
                     }
-                  : undefined,
-            }
-          )
-        } finally {
-          clearInterval(lockRefreshInterval)
-        }
+                    return update.items.length > 0 ? update.items : null
+                  }
+                : undefined,
+          }
+        )
 
         // If we lost the session lock mid-turn, another worker now owns this
         // session. Throw BEFORE applying any side-effects (actions, message
@@ -1113,6 +1153,9 @@ export function startSessionThinkingWorker() {
 
         throw err
       } finally {
+        // Stop renewing the lock only now — after ALL side-effects are done —
+        // so the fenced renew covered the whole critical section.
+        if (lockRefreshInterval) clearInterval(lockRefreshInterval)
         await releaseLock(redis, sessionLock)
         await redis.decr(actorSessionsKey)
         if (requeueAfterUnlock) {
