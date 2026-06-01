@@ -13,12 +13,15 @@ const log = createLogger("crypto")
 /**
  * Sensitive-field encryption at rest (MCP plugin configs, IM credentials, …).
  *
- * Envelope format (versioned): `enc:v2:<saltHex>:<ivHex>:<tagHex>:<ctHex>`
+ * Envelope format (versioned): `enc:v2:<ivHex>:<tagHex>:<ctHex>`
  *
- *   - v2 derives the AES-256 key with scrypt over a per-value random salt, so
- *     the same passphrase never produces the same key twice and there is a
- *     real KDF work factor (the previous scheme used a salt-less single-round
- *     SHA-256, which is not a KDF).
+ *   - The AES-256 key is derived ONCE per process with scrypt over the master
+ *     passphrase + a fixed application salt, then memoized. scrypt is expensive
+ *     (~250ms) BY DESIGN, so we must not run it per encrypt/decrypt on the
+ *     request path — deriving once and reusing the key is the standard
+ *     master-key + per-message-nonce envelope pattern.
+ *   - Semantic security comes from a fresh random 96-bit IV per value (GCM),
+ *     not from a per-value KDF salt.
  *   - The version tag lets us evolve the scheme later without ambiguity.
  *
  * The passphrase comes from MCP_ENCRYPTION_KEY (preferred) or APP_SECRET. In
@@ -28,10 +31,15 @@ const log = createLogger("crypto")
  */
 const ALGORITHM = "aes-256-gcm"
 const IV_LENGTH = 12 // 96-bit nonce, the GCM standard
-const SALT_LENGTH = 16
 const AUTH_TAG_LENGTH = 16
 const KEY_LENGTH = 32 // AES-256
 const SCRYPT_PARAMS = { N: 1 << 15, r: 8, p: 1 } as const
+// Fixed application salt for the master-key derivation. A salt's job in a KDF
+// is to make identical inputs derive different keys across contexts; for a
+// single server-side master passphrase a constant app salt is the norm (this
+// is not per-user password hashing). It must stay stable or existing
+// ciphertext becomes undecryptable.
+const APP_KDF_SALT = Buffer.from("synapse:mcp-secret-encryption:v2", "utf8")
 
 const ENCRYPTED_PREFIX = "enc:"
 const ENVELOPE_VERSION = "v2"
@@ -73,20 +81,27 @@ function getPassphrase(): string {
   return cachedPassphrase
 }
 
-function deriveKey(salt: Buffer): Buffer {
-  return scryptSync(getPassphrase(), salt, KEY_LENGTH, {
+/**
+ * The AES key, derived once and memoized. The expensive scrypt KDF runs on the
+ * FIRST encrypt/decrypt only, never per call.
+ */
+let cachedKey: Buffer | null = null
+
+function getKey(): Buffer {
+  if (cachedKey !== null) return cachedKey
+  cachedKey = scryptSync(getPassphrase(), APP_KDF_SALT, KEY_LENGTH, {
     N: SCRYPT_PARAMS.N,
     r: SCRYPT_PARAMS.r,
     p: SCRYPT_PARAMS.p,
     // scrypt's default maxmem (32MiB) is too small for N=2^15; raise it.
     maxmem: 128 * 1024 * 1024,
   })
+  return cachedKey
 }
 
 export function encrypt(plaintext: string): string {
-  const salt = randomBytes(SALT_LENGTH)
   const iv = randomBytes(IV_LENGTH)
-  const key = deriveKey(salt)
+  const key = getKey()
 
   const cipher = createCipheriv(ALGORITHM, key, iv, {
     authTagLength: AUTH_TAG_LENGTH,
@@ -99,7 +114,6 @@ export function encrypt(plaintext: string): string {
 
   return [
     `${ENCRYPTED_PREFIX}${ENVELOPE_VERSION}`, // "enc:v2"
-    salt.toString("hex"),
     iv.toString("hex"),
     authTag.toString("hex"),
     ciphertext.toString("hex"),
@@ -116,15 +130,14 @@ export function decrypt(encryptedValue: string): string {
   }
 
   const parts = encryptedValue.slice(V2_PREFIX.length).split(":")
-  if (parts.length !== 4) {
+  if (parts.length !== 3) {
     throw new Error("Invalid encrypted value format")
   }
-  const [saltHex, ivHex, authTagHex, ciphertextHex] = parts
-  const salt = Buffer.from(saltHex, "hex")
+  const [ivHex, authTagHex, ciphertextHex] = parts
   const iv = Buffer.from(ivHex, "hex")
   const authTag = Buffer.from(authTagHex, "hex")
   const ciphertext = Buffer.from(ciphertextHex, "hex")
-  const key = deriveKey(salt)
+  const key = getKey()
 
   const decipher = createDecipheriv(ALGORITHM, key, iv, {
     authTagLength: AUTH_TAG_LENGTH,

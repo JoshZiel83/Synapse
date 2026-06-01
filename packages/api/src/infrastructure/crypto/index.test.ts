@@ -21,7 +21,7 @@ test("envelope is versioned (enc:v2:) and recognized as encrypted", () => {
   assert.equal(isEncrypted("plain"), false)
 })
 
-test("same plaintext encrypts to different ciphertext (random salt+iv)", () => {
+test("same plaintext encrypts to different ciphertext (random iv)", () => {
   const a = encrypt("same")
   const b = encrypt("same")
   assert.notEqual(a, b)
