@@ -631,8 +631,10 @@ export async function downloadToBufferWithLimit(
           )
         }
         currentUrl = new URL(location, currentUrl).toString()
-        // Drain body so the connection can be reused
-        await res.arrayBuffer().catch(() => undefined)
+        // Discard the redirect body WITHOUT buffering it — a malicious server
+        // could attach a huge body to a 3xx to blow past maxBytes if we read
+        // it. cancel() frees the stream/connection without reading bytes.
+        await res.body?.cancel().catch(() => undefined)
         continue
       }
       break

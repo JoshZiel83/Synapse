@@ -157,6 +157,49 @@ test("downloadToBufferWithLimit: allowedHosts re-validates after redirect", asyn
   }
 })
 
+test("downloadToBufferWithLimit: a huge redirect body is not buffered against maxBytes", async () => {
+  let target: Server | undefined
+  let redirector: Server | undefined
+  try {
+    target = createServer((_req, res) => {
+      res.statusCode = 200
+      res.end("ok") // small final body, within maxBytes
+    })
+    await new Promise<void>((resolve) =>
+      target!.listen(0, "127.0.0.1", resolve)
+    )
+    const targetAddr = target.address()
+    if (!targetAddr || typeof targetAddr === "string")
+      throw new Error("no addr")
+    const targetUrl = `http://127.0.0.1:${targetAddr.port}/final`
+
+    // Redirector attaches a body MUCH larger than maxBytes to the 302. The
+    // download must discard it (cancel, not buffer) and succeed on the small
+    // final body — proving the redirect body never counts against / overflows
+    // maxBytes.
+    redirector = createServer((_req, res) => {
+      res.statusCode = 302
+      res.setHeader("Location", targetUrl)
+      res.end(Buffer.alloc(5 * 1024 * 1024)) // 5 MiB redirect body
+    })
+    await new Promise<void>((resolve) =>
+      redirector!.listen(0, "127.0.0.1", resolve)
+    )
+    const redirAddr = redirector.address()
+    if (!redirAddr || typeof redirAddr === "string") throw new Error("no addr")
+
+    const result = await downloadToBufferWithLimit({
+      url: `http://127.0.0.1:${redirAddr.port}/r`,
+      maxBytes: 10, // tiny cap; only the final 2-byte body must fit
+      allowPrivateHosts: true,
+    })
+    assert.equal(result.buffer.toString(), "ok")
+  } finally {
+    if (target) await new Promise<void>((r) => target!.close(() => r()))
+    if (redirector) await new Promise<void>((r) => redirector!.close(() => r()))
+  }
+})
+
 test("downloadToBufferWithLimit: aborts on timeout", async () => {
   await withServer(
     (_req, _res) => {
