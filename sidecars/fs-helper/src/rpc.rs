@@ -242,6 +242,22 @@ pub struct ManifestCleanupInput {
     pub paths: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SidecarRestoreInput {
+    /// Absolute host path of the live mount root to restore the sidecar into.
+    pub dir: String,
+    /// The mount-relative sidecar VFS leaf (e.g. /.synapse-conflicts/<hash>).
+    pub sidecar_vfs: String,
+    /// "file" or "symlink".
+    pub kind: String,
+    /// CAS sha for a file sidecar (its bytes are already in CAS).
+    #[serde(default)]
+    pub content_sha: Option<String>,
+    /// Symlink target for a symlink sidecar.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
 // ─────────────────────────── outputs ─────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -421,6 +437,10 @@ pub struct ConflictSidecar {
     pub original: String,
     pub sidecar: String,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

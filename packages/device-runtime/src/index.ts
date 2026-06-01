@@ -75,4 +75,5 @@ export type {
   DirSyncResult,
   ConflictSidecar,
   ManifestCleanupInput,
+  SidecarRestoreInput,
 } from "./builtins/fs-helper-types.js"

@@ -642,6 +642,13 @@ pub struct ConflictSidecar {
     /// recover the link target — a raw symlink sidecar would be unreadable via
     /// the O_NOFOLLOW fs tools, round-10 #3).
     pub kind: String,
+    /// CAS sha256 of the preserved content for a FILE sidecar (the bytes are
+    /// already in CAS), so the caller can re-materialize the sidecar after a
+    /// teardown that deleted the live dir (round-11 #1). None for a symlink.
+    pub content_sha: Option<String>,
+    /// Symlink target for a SYMLINK sidecar (round-11 #1 recovery payload). None
+    /// for a file.
+    pub target: Option<String>,
 }
 
 /// Result of `dir_sync`: how the live dir was reconciled toward a new head.
@@ -821,6 +828,18 @@ pub fn dir_sync(
                     original: dirty_path.clone(),
                     sidecar: sidecar_vfs,
                     kind,
+                    // CAS-durable recovery payload (round-11 #1): file → its CAS
+                    // sha (bytes already ingested); symlink → its target string.
+                    content_sha: if dirty_entry.kind == EntryKind::File {
+                        dirty_entry.sha256.clone()
+                    } else {
+                        None
+                    },
+                    target: if dirty_entry.kind == EntryKind::Symlink {
+                        dirty_entry.target.clone()
+                    } else {
+                        None
+                    },
                 });
             }
             // Overwrite the live path with head's version (or remove it if head
@@ -895,6 +914,47 @@ fn content_discriminator(entry: &ManifestEntry) -> String {
         // Dirs are never sidecar'd (no recoverable content); defensive default.
         EntryKind::Dir => "dir".to_string(),
     }
+}
+
+/// Re-materialize a conflict sidecar into `dir` from its DURABLE recovery payload
+/// (round-11 #1), after a teardown deleted the prior live dir. A "file" sidecar
+/// is rebuilt from its CAS `content_sha`; a "symlink" sidecar from its `target`.
+/// Builds a synthetic ManifestEntry and reuses `write_sidecar` so the on-disk
+/// form is byte-identical to the original. `sidecar_vfs` is the same flat hashed
+/// leaf the caller recorded, so the agent-visible path resolves again.
+pub fn restore_sidecar(
+    cas: &BlobStore,
+    dir: &Path,
+    sidecar_vfs: &str,
+    kind: &str,
+    content_sha: Option<&str>,
+    target: Option<&str>,
+) -> Result<(), RpcError> {
+    let entry = match kind {
+        "symlink" => ManifestEntry {
+            path: sidecar_vfs.to_string(),
+            kind: EntryKind::Symlink,
+            sha256: None,
+            mode: 0o777,
+            size: None,
+            target: Some(target.unwrap_or("").to_string()),
+        },
+        "file" => ManifestEntry {
+            path: sidecar_vfs.to_string(),
+            kind: EntryKind::File,
+            sha256: Some(content_sha.unwrap_or("").to_string()),
+            mode: 0o600,
+            size: None,
+            target: None,
+        },
+        other => {
+            return Err(RpcError::InvalidParams(format!(
+                "restore_sidecar: unknown kind {other}"
+            )))
+        }
+    };
+    write_sidecar(cas, dir, sidecar_vfs, &entry)?;
+    Ok(())
 }
 
 /// Write a preserved local entry to its sidecar leaf and return the sidecar

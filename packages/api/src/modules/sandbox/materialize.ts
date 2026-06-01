@@ -163,3 +163,29 @@ export async function cleanupDirs(paths: string[]): Promise<void> {
   const ctx = helperContext()
   await withOneShotFsHelper(ctx, (helper) => helper.manifestCleanup({ paths }))
 }
+
+/**
+ * Re-materialize a conflict sidecar from its durable recovery payload (round-11
+ * #1) into the live mount dir, after a teardown deleted the prior live dir.
+ * `sidecarVfs` is the mount-relative leaf (e.g. /.synapse-conflicts/<hash>); the
+ * file bytes come from CAS via `contentSha`, or a symlink's `target` is rewrapped
+ * as JSON. Idempotent (overwrites its own leaf).
+ */
+export async function restoreSidecar(input: {
+  dir: string
+  sidecarVfs: string
+  kind: string
+  contentSha?: string
+  target?: string
+}): Promise<void> {
+  const ctx = helperContext()
+  await withOneShotFsHelper(ctx, (helper) =>
+    helper.sidecarRestore({
+      dir: input.dir,
+      sidecar_vfs: input.sidecarVfs,
+      kind: input.kind,
+      content_sha: input.contentSha,
+      target: input.target,
+    })
+  )
+}

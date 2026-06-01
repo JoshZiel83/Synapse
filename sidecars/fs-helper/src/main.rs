@@ -466,6 +466,7 @@ async fn dispatch(
         "fs.manifest.scan_commit" => manifest_scan_commit(&state, params).await,
         "fs.dir.sync" => dir_sync(&state, params).await,
         "fs.manifest.cleanup" => manifest_cleanup(&state, params).await,
+        "fs.sidecar.restore" => sidecar_restore(&state, params).await,
         other => Err(RpcError::MethodNotFound(other.to_string())),
     }
 }
@@ -589,6 +590,8 @@ async fn dir_sync(state: &Arc<State>, params: Value) -> Result<Value, RpcError> 
                 original: c.original,
                 sidecar: c.sidecar,
                 kind: c.kind,
+                content_sha: c.content_sha,
+                target: c.target,
             })
             .collect(),
         incomplete: res.incomplete,
@@ -613,6 +616,24 @@ async fn manifest_cleanup(
             }
         }
     }
+    Ok(Value::Object(Map::new()))
+}
+
+async fn sidecar_restore(
+    state: &Arc<State>,
+    params: Value,
+) -> Result<Value, RpcError> {
+    let input: rpc::SidecarRestoreInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    manifest::restore_sidecar(
+        &cas,
+        std::path::Path::new(&input.dir),
+        &input.sidecar_vfs,
+        &input.kind,
+        input.content_sha.as_deref(),
+        input.target.as_deref(),
+    )?;
     Ok(Value::Object(Map::new()))
 }
 

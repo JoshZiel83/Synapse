@@ -25,6 +25,7 @@ import type {
   ManifestMaterializeInput,
   ManifestScanCommitInput,
   ManifestScanCommitResult,
+  SidecarRestoreInput,
 } from "./fs-helper-types.js"
 
 export interface OneShotFsHelperOptions {
@@ -192,6 +193,9 @@ export class OneShotFsHelper {
   }
   manifestCleanup(input: ManifestCleanupInput): Promise<void> {
     return this.request("fs.manifest.cleanup", input)
+  }
+  sidecarRestore(input: SidecarRestoreInput): Promise<void> {
+    return this.request("fs.sidecar.restore", input)
   }
 
   /** Flush stdin (signals EOF → graceful exit) and wait for the child. */

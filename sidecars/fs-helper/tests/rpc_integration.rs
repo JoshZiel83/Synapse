@@ -2338,6 +2338,80 @@ fn dir_sync_preserves_dirty_local_symlink_under_tree_conflict() {
 }
 
 #[test]
+fn sidecar_restore_rebuilds_file_and_symlink_after_teardown() {
+    // round-11 #1: after a teardown deletes the live dir, the durable pending
+    // notice still points at /.synapse-conflicts/<hash>. fs.sidecar.restore must
+    // rebuild the sidecar leaf from its CAS payload (file bytes by content_sha;
+    // symlink target as readable JSON) into a FRESH live dir.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // Put a file's bytes into CAS (simulating the scan that ingested them).
+    let src = tmp.path().join("payload.txt");
+    std::fs::write(&src, "preserved-bytes").unwrap();
+    let content_sha = helper.call(
+        1,
+        "fs.cas.put",
+        serde_json::json!({ "path": src.to_str().unwrap() }),
+    )["result"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A FRESH live dir (the old one was deleted by teardown).
+    let live = tmp.path().join("fresh-live");
+    std::fs::create_dir_all(&live).unwrap();
+
+    // Restore a FILE sidecar from CAS.
+    let r1 = helper.call(
+        2,
+        "fs.sidecar.restore",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "sidecar_vfs": "/.synapse-conflicts/filehash",
+            "kind": "file",
+            "content_sha": content_sha,
+        }),
+    );
+    assert!(r1.get("error").is_none(), "file restore errored: {r1}");
+    assert_eq!(
+        std::fs::read(live.join(".synapse-conflicts/filehash")).unwrap(),
+        b"preserved-bytes",
+        "file sidecar bytes not restored from CAS"
+    );
+
+    // Restore a SYMLINK sidecar from its target (as readable JSON regular file).
+    let r2 = helper.call(
+        3,
+        "fs.sidecar.restore",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "sidecar_vfs": "/.synapse-conflicts/linkhash",
+            "kind": "symlink",
+            "target": "../some/target",
+        }),
+    );
+    assert!(r2.get("error").is_none(), "symlink restore errored: {r2}");
+    let body =
+        std::fs::read_to_string(live.join(".synapse-conflicts/linkhash")).unwrap();
+    assert!(
+        body.contains("\"kind\":\"symlink\"")
+            && body.contains("\"target\":\"../some/target\""),
+        "symlink sidecar JSON not restored: {body}"
+    );
+    // It is a readable regular file (not a raw symlink).
+    let meta = std::fs::symlink_metadata(live.join(".synapse-conflicts/linkhash"))
+        .unwrap();
+    assert!(meta.file_type().is_file(), "restored symlink sidecar must be a file");
+    helper.stop();
+}
+
+#[test]
 fn dir_sync_sidecar_write_clobbers_corrupted_conflicts_namespace() {
     // round-8 #1 defense-in-depth: if an agent left a non-directory occupying
     // the .synapse-conflicts scratch namespace, the sidecar write must NOT be

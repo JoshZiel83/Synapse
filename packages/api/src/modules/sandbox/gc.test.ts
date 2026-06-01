@@ -189,3 +189,99 @@ test(
     })
   }
 )
+
+test(
+  "gc.ts: a pending conflict-sidecar content blob is kept reachable (round-11 follow-up)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const { sessionId } = await seed(db)
+
+      // Ingest a blob that is NOT in any snapshot/part/asset — it exists only as
+      // the agent's preserved LOSER copy referenced by a pending conflict notice.
+      const work = mkdtempSync(join(tmpdir(), "synapse-gc-pending-"))
+      mkdirSync(work, { recursive: true })
+      const loserBytes = `loser-${rid()}`
+      writeFileSync(join(work, "loser.txt"), loserBytes)
+      const scan = await scanCommitDir({ dir: work })
+      const loserSha =
+        scan.entries.find((e) => e.path === "/loser.txt")?.sha256 ?? ""
+      assert.ok(loserSha, "loser blob ingested into CAS")
+
+      // Stash it as a pending COMMIT conflict sidecar on the session (the only
+      // reference to the blob anywhere).
+      await client.query(
+        `UPDATE sessions
+           SET collaboration_state = jsonb_build_object(
+             '_sandboxPendingCommitConflicts',
+             $2::jsonb
+           )
+         WHERE id = $1`,
+        [
+          sessionId,
+          JSON.stringify({
+            actor: {
+              paths: ["/loser.txt"],
+              sidecars: [
+                {
+                  original: "/actor/loser.txt",
+                  sidecar: "/actor/.synapse-conflicts/h",
+                  kind: "file",
+                  contentSha: loserSha,
+                },
+              ],
+            },
+          }),
+        ]
+      )
+
+      // Dry-run GC over the test txn: the pending sidecar blob MUST be reachable
+      // (else a real sweep after the grace window would reap it, breaking the
+      // round-11 re-materialize).
+      const result = await runContentGc({ dryRun: true, dbh: client })
+      assert.ok(
+        result.reachableCount >= 1,
+        "pending sidecar blob marked reachable"
+      )
+
+      // Prove it's specifically the loser blob: a refresh-store pending sidecar
+      // is also collected.
+      await client.query(
+        `UPDATE sessions
+           SET collaboration_state = collaboration_state || jsonb_build_object(
+             '_sandboxPendingRefreshConflicts',
+             $2::jsonb
+           )
+         WHERE id = $1`,
+        [
+          sessionId,
+          JSON.stringify({
+            deferredConflictsBySubpath: { conversation: ["/r.txt"] },
+            sidecarsBySubpath: {
+              conversation: [
+                {
+                  original: "/conversation/r.txt",
+                  sidecar: "/conversation/.synapse-conflicts/h2",
+                  kind: "file",
+                  contentSha: loserSha,
+                },
+                // symlink sidecars carry NO content blob → must be ignored.
+                {
+                  original: "/conversation/link",
+                  sidecar: "/conversation/.synapse-conflicts/h3",
+                  kind: "symlink",
+                  target: "../x",
+                },
+              ],
+            },
+          }),
+        ]
+      )
+      const result2 = await runContentGc({ dryRun: true, dbh: client })
+      assert.ok(
+        result2.reachableCount >= 1,
+        "both stores' file sidecar blobs collected; symlink sidecar ignored"
+      )
+    })
+  }
+)

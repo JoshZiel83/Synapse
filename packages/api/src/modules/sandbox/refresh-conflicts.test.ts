@@ -297,3 +297,106 @@ test(
     })
   }
 )
+
+test(
+  "refreshSpaces: a persist failure leaves base UNADVANCED (round-11 #2 atomicity)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const { workspaceId, actorId, sessionId } = await seed(db)
+      const work = mkdtempSync(join(tmpdir(), "synapse-r11atom-"))
+      const baseDir = join(work, "base")
+      mkdirSync(baseDir, { recursive: true })
+      const baseScan = await scanCommitDir({ dir: baseDir })
+      await ensureContentBlob(client, {
+        sha256: baseScan.manifest_sha256,
+        sizeBytes: 0,
+      })
+      const space = await ensureFileSpace(client, {
+        workspaceId,
+        owner: actorRef(actorId),
+      })
+      const baseSnap = await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: null,
+        manifestSha256: baseScan.manifest_sha256,
+        entryCount: baseScan.entry_count,
+        totalBytes: baseScan.total_bytes,
+      })
+      const headDir = join(work, "head")
+      mkdirSync(headDir, { recursive: true })
+      const headScan = await scanCommitDir({ dir: headDir })
+      await ensureContentBlob(client, {
+        sha256: headScan.manifest_sha256,
+        sizeBytes: 0,
+      })
+      await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: baseSnap.id,
+        manifestSha256: headScan.manifest_sha256,
+        entryCount: headScan.entry_count,
+        totalBytes: headScan.total_bytes,
+      })
+      const liveDir = join(work, "actor")
+      mkdirSync(liveDir, { recursive: true })
+      await insertFileMount(client, {
+        workspaceId,
+        sessionId,
+        fileSpaceId: space.id,
+        mountSubpath: "actor",
+        baseSnapshotId: baseSnap.id,
+        materializedDir: liveDir,
+      })
+      await client.query(
+        `UPDATE file_mounts SET status = 'active' WHERE session_id = $1`,
+        [sessionId]
+      )
+
+      // Inject a sync reporting a conflict, but a runInTx that FAILS — modeling a
+      // persist failure. Because persist + base-advance are now ONE transaction
+      // (round-11 #2), the failure must leave base UNADVANCED so head!=base
+      // self-heals next turn (instead of silently dropping the durable notice).
+      const depsOverride: Partial<RefreshDeps> = {
+        dbh: client as unknown as RefreshDeps["dbh"],
+        runInTx: async () => {
+          throw new Error("simulated persist failure")
+        },
+        sync: async () => ({
+          applied: [],
+          deferred_conflicts: ["/x.txt"],
+          conflict_sidecars: [
+            {
+              original: "/x.txt",
+              sidecar: "/.synapse-conflicts/h1",
+              kind: "file",
+              content_sha: "abc",
+            },
+          ],
+          new_base_manifest_sha256: headScan.manifest_sha256,
+        }),
+      }
+
+      const result = await refreshSpaces(sessionId, depsOverride)
+      // The mount is reported as a sync failure (not silently advanced).
+      assert.ok(
+        result.syncFailuresBySubpath.actor,
+        "persist failure surfaced as a sync failure"
+      )
+
+      // THE KEY ASSERTION (round-11 #2): base must NOT have advanced — the
+      // base-advance was in the same (failed) txn as the persist, so it rolled
+      // back. head != base → next turn re-runs the sync.
+      const mountRow = await client.query(
+        `SELECT base_snapshot_id FROM file_mounts WHERE session_id = $1`,
+        [sessionId]
+      )
+      assert.equal(
+        mountRow.rows[0]?.base_snapshot_id,
+        baseSnap.id,
+        "base must stay at the OLD base when the pending persist failed"
+      )
+    })
+  }
+)

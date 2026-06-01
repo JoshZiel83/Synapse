@@ -252,6 +252,13 @@ export interface ConflictSidecar {
    * — a raw symlink sidecar would be unreadable via the O_NOFOLLOW fs tools).
    */
   kind: string
+  /**
+   * CAS sha256 of the preserved bytes for a "file" sidecar (round-11 #1), so the
+   * caller can re-materialize it after a teardown that deleted the live dir.
+   */
+  content_sha?: string
+  /** Symlink target for a "symlink" sidecar (round-11 #1 recovery payload). */
+  target?: string
 }
 export interface DirSyncResult {
   applied: string[]
@@ -278,4 +285,19 @@ export interface DirSyncResult {
 export interface ManifestCleanupInput {
   /** Absolute host paths (scratch dirs) to remove. */
   paths: string[]
+}
+
+/** Re-materialize a conflict sidecar from its durable recovery payload after a
+ * teardown deleted the prior live dir (round-11 #1). */
+export interface SidecarRestoreInput {
+  /** Absolute host path of the live mount root to restore the sidecar into. */
+  dir: string
+  /** The mount-relative sidecar VFS leaf (e.g. /.synapse-conflicts/<hash>). */
+  sidecar_vfs: string
+  /** "file" or "symlink". */
+  kind: string
+  /** CAS sha for a file sidecar (its bytes are already in CAS). */
+  content_sha?: string
+  /** Symlink target for a symlink sidecar. */
+  target?: string
 }

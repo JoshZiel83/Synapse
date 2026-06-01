@@ -13,6 +13,12 @@
 //   2. Every *_parts.ref_sha256 across conversation/tool_result/memory/
 //      context_archive parts (historical message/memory/context file refs).
 //   3. Every file_assets.content_sha256 (entity assets by content).
+//   4. Every PENDING conflict-sidecar content_sha in sessions.collaboration_state
+//      (_sandboxPendingCommitConflicts + _sandboxPendingRefreshConflicts). A
+//      conflict sidecar preserves the agent's LOSER copy (head won the path), so
+//      that blob is NEVER in a snapshot/part/asset — its only reference is the
+//      pending notice. Without this root, GC would reap it after the grace
+//      window and the round-11 re-materialize would fail (round-11 follow-up).
 //
 // Anything not transitively reachable from those is unreferenced and deleted.
 // The sweep runs in the fs-helper (fs.cas.gc) which deletes blobs whose sha is
@@ -90,6 +96,14 @@ export async function runContentGc(
     if (a.content_sha256) reachable.add(a.content_sha256)
   }
 
+  // 4. Pending conflict-sidecar content blobs (round-11 follow-up). These are
+  // the agent's preserved LOSER copies, reachable ONLY via the pending notice
+  // (never a snapshot, since head won). Keep them alive so the next provision
+  // can re-materialize the sidecar from CAS.
+  for (const sha of await collectPendingSidecarShas(dbh)) {
+    reachable.add(sha)
+  }
+
   let deletedCount = 0
   if (!opts.dryRun) {
     deletedCount = await gcCas(Array.from(reachable), opts.graceSecs)
@@ -100,5 +114,64 @@ export async function runContentGc(
     manifestsExpanded,
     manifestsUnreadable,
     deletedCount,
+  }
+}
+
+const PENDING_COMMIT_KEY = "_sandboxPendingCommitConflicts"
+const PENDING_REFRESH_KEY = "_sandboxPendingRefreshConflicts"
+
+/**
+ * Collect every file-kind conflict-sidecar content_sha stashed in any session's
+ * collaboration_state (both the commit and refresh pending stores). These blobs
+ * preserve the agent's losing pre-conflict copy and are not referenced by any
+ * snapshot/part/asset (round-11 follow-up), so GC must treat them as roots.
+ * Tolerant of shape drift: only string contentSha on kind!="symlink" entries.
+ */
+async function collectPendingSidecarShas(
+  dbh: QueryExecutor
+): Promise<Set<string>> {
+  const out = new Set<string>()
+  // Only sessions that actually carry a pending store (keeps the scan cheap).
+  const rows = await executeSqlOn<{ collaboration_state: unknown }>(
+    dbh,
+    `SELECT collaboration_state FROM sessions
+       WHERE collaboration_state ? $1 OR collaboration_state ? $2`,
+    [PENDING_COMMIT_KEY, PENDING_REFRESH_KEY]
+  )
+  for (const row of rows.rows) {
+    const state = (row.collaboration_state ?? {}) as Record<string, unknown>
+    // Commit store: { subpath: { paths, sidecars: [{contentSha,kind}] } }
+    collectFromSidecarMap(
+      out,
+      (state[PENDING_COMMIT_KEY] as Record<string, unknown>) ?? {},
+      (v) => (v as { sidecars?: unknown })?.sidecars
+    )
+    // Refresh store: { sidecarsBySubpath: { subpath: [{contentSha,kind}] } }
+    const refresh = (state[PENDING_REFRESH_KEY] ?? {}) as {
+      sidecarsBySubpath?: unknown
+    }
+    collectFromSidecarMap(
+      out,
+      (refresh.sidecarsBySubpath as Record<string, unknown>) ?? {},
+      (v) => v
+    )
+  }
+  return out
+}
+
+/** Pull contentSha off every file-kind sidecar in a per-subpath map. */
+function collectFromSidecarMap(
+  out: Set<string>,
+  bySubpath: Record<string, unknown>,
+  pickSidecars: (entry: unknown) => unknown
+): void {
+  for (const entry of Object.values(bySubpath)) {
+    const sidecars = pickSidecars(entry)
+    if (!Array.isArray(sidecars)) continue
+    for (const s of sidecars) {
+      const ref = s as { kind?: unknown; contentSha?: unknown }
+      if (ref?.kind === "symlink") continue
+      if (typeof ref?.contentSha === "string") out.add(ref.contentSha)
+    }
   }
 }
