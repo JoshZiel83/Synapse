@@ -1,6 +1,7 @@
 import Feather from "@expo/vector-icons/Feather"
 import { useRouter } from "expo-router"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { CONTACT_TARGET_TYPE } from "@shared"
 import {
   Modal,
@@ -27,9 +28,10 @@ import {
 } from "@/components/ui"
 import { useScanLauncher } from "@/hooks/use-scan-launcher"
 import { api } from "@/lib/api"
+import { qk } from "@/lib/query-keys"
 import { useWorkspace } from "@/providers/workspace-provider"
 import { theme } from "@/theme/tokens"
-import type { ContactHubEntryView, ContactHubResponse } from "@/types/api"
+import type { ContactHubEntryView } from "@/types/api"
 
 const CONTACT_FILTER = {
   ALL: "all",
@@ -77,43 +79,26 @@ export default function ContactsTabScreen() {
   const router = useRouter()
   const { openScan, permissionSheet } = useScanLauncher("relationship")
   const { workspaceId } = useWorkspace()
-  const [hub, setHub] = useState<ContactHubResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<ContactFilter>(CONTACT_FILTER.ALL)
   const [filterMenuOpen, setFilterMenuOpen] = useState(false)
 
-  async function loadHub(isRefreshing = false) {
-    if (!workspaceId) {
-      setHub(null)
-      setLoading(false)
-      setRefreshing(false)
-      return
-    }
+  const hubQuery = useQuery({
+    queryKey: workspaceId
+      ? qk.contactHub(workspaceId)
+      : ["contact-hub", "disabled"],
+    queryFn: () => api.getContactHub(workspaceId!),
+    enabled: !!workspaceId,
+  })
 
-    if (isRefreshing) {
-      setRefreshing(true)
-    } else {
-      setLoading(true)
-    }
-
-    try {
-      setHub(await api.getContactHub(workspaceId))
-      setError(null)
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "联系人加载失败。"
-      )
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
-  }
-
-  useEffect(() => {
-    void loadHub()
-  }, [workspaceId])
+  const hub = hubQuery.data ?? null
+  const loading = hubQuery.isPending && !!workspaceId
+  const refreshing = hubQuery.isFetching && !hubQuery.isPending
+  const error = hubQuery.error
+    ? hubQuery.error instanceof Error
+      ? hubQuery.error.message
+      : "联系人加载失败。"
+    : null
+  const loadHub = () => hubQuery.refetch()
 
   const filteredEntries = useMemo(() => {
     const all = [
@@ -228,7 +213,7 @@ export default function ContactsTabScreen() {
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
-                onRefresh={() => void loadHub(true)}
+                onRefresh={() => void loadHub()}
               />
             }
             headerContent={

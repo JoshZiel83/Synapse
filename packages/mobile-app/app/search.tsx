@@ -1,6 +1,7 @@
 import Feather from "@expo/vector-icons/Feather"
 import { useRouter } from "expo-router"
-import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import { useDeferredValue, useMemo, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import {
   CONTACT_TARGET_TYPE,
   CONVERSATION_KIND,
@@ -19,12 +20,12 @@ import {
   SectionTitleRow,
 } from "@/components/ui"
 import { api } from "@/lib/api"
+import { qk } from "@/lib/query-keys"
 import { useChat } from "@/providers/chat-provider"
 import { useWorkspace } from "@/providers/workspace-provider"
 import { theme } from "@/theme/tokens"
 import type {
   ContactHubEntryView,
-  ContactHubResponse,
   IdentitySearchMatchView,
   IdentitySearchResponse,
 } from "@/types/api"
@@ -87,75 +88,52 @@ export default function GlobalSearchScreen() {
   const { workspaceId } = useWorkspace()
   const { conversations } = useChat()
   const [query, setQuery] = useState("")
-  const [loading, setLoading] = useState(true)
-  const [hub, setHub] = useState<ContactHubResponse | null>(null)
-  const [identityResults, setIdentityResults] =
-    useState<IdentitySearchResponse | null>(null)
-  const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null)
 
   const deferredQuery = useDeferredValue(query.trim().toLowerCase())
 
-  useEffect(() => {
-    if (!workspaceId) {
-      setLoading(false)
-      return
+  const hubQuery = useQuery({
+    queryKey: workspaceId
+      ? qk.contactHub(workspaceId)
+      : ["contact-hub", "disabled"],
+    queryFn: () => api.getContactHub(workspaceId!),
+    enabled: !!workspaceId,
+  })
+  const hub = hubQuery.data ?? null
+  const loading = hubQuery.isPending && !!workspaceId
+
+  const identityQuery = useQuery({
+    queryKey:
+      workspaceId && deferredQuery
+        ? qk.identitySearch(workspaceId, deferredQuery)
+        : ["identity-search", "disabled"],
+    queryFn: () => api.searchIdentity(workspaceId!, deferredQuery),
+    enabled: !!workspaceId && !!deferredQuery,
+    placeholderData: (prev) => prev, // keep prior results while typing
+  })
+
+  const identityResults: IdentitySearchResponse | null =
+    !workspaceId || !deferredQuery ? null : (identityQuery.data ?? null)
+
+  const friendIdMessage = useMemo<string | null>(() => {
+    if (!workspaceId || !deferredQuery) return null
+    if (identityQuery.error) {
+      return identityQuery.error instanceof Error
+        ? identityQuery.error.message
+        : "搜索好友 ID 失败。"
     }
-
-    let active = true
-    setLoading(true)
-    void Promise.all([api.getContactHub(workspaceId)])
-      .then(([hubResponse]) => {
-        if (!active) return
-        setHub(hubResponse)
-      })
-      .finally(() => {
-        if (active) {
-          setLoading(false)
-        }
-      })
-
-    return () => {
-      active = false
+    const result = identityQuery.data
+    if (!result) return null
+    if (result.outcome === IDENTITY_SEARCH_OUTCOME.INVALID) {
+      return "好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。"
     }
-  }, [workspaceId])
-
-  useEffect(() => {
-    if (!workspaceId || !deferredQuery) {
-      setIdentityResults(null)
-      setFriendIdMessage(null)
-      return
+    if (result.outcome === IDENTITY_SEARCH_OUTCOME.NOT_FOUND) {
+      return "没有匹配的好友 ID。"
     }
-
-    let active = true
-    void api
-      .searchIdentity(workspaceId, deferredQuery)
-      .then((result) => {
-        if (!active) return
-        setIdentityResults(result)
-        if (result.outcome === IDENTITY_SEARCH_OUTCOME.INVALID) {
-          setFriendIdMessage(
-            "好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。"
-          )
-        } else if (result.outcome === IDENTITY_SEARCH_OUTCOME.NOT_FOUND) {
-          setFriendIdMessage("没有匹配的好友 ID。")
-        } else if (result.outcome === IDENTITY_SEARCH_OUTCOME.SELF) {
-          setFriendIdMessage("这是你自己的好友 ID。")
-        } else {
-          setFriendIdMessage(null)
-        }
-      })
-      .catch((error) => {
-        if (!active) return
-        setIdentityResults(null)
-        setFriendIdMessage(
-          error instanceof Error ? error.message : "搜索好友 ID 失败。"
-        )
-      })
-
-    return () => {
-      active = false
+    if (result.outcome === IDENTITY_SEARCH_OUTCOME.SELF) {
+      return "这是你自己的好友 ID。"
     }
-  }, [deferredQuery, workspaceId])
+    return null
+  }, [workspaceId, deferredQuery, identityQuery.data, identityQuery.error])
 
   const matchedConversations = useMemo(
     () =>

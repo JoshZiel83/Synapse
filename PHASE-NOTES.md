@@ -119,3 +119,16 @@ single tested source of truth in shared, consumed by mobile.
   already proves the barrel is zod-free today); only the flush helper uses the subpath.
 - Verification order followed: build:chat-worker (both) + commit regenerated bundles, THEN
   npm test (regression) — 8/8, no zod in bundles.
+
+## Phase 9 note (react-query on mobile)
+
+- Added @tanstack/react-query 5.100 to mobile (separate install; react 19.1 peer OK; no zod).
+- src/providers/query-provider.tsx (lazy-init client, ApiError-aware retry) mounted at the top of
+  AppProviders (above Session/Workspace/Chat).
+- src/lib/query-keys.ts (workspace-rooted factory).
+- Migrated pilots: contacts-tab-screen (simple read), search.tsx (contact-hub + identity-search
+  keyed query with placeholderData=keep-previous for search-as-you-type).
+- ChatRuntime/chat realtime store intentionally NOT behind react-query (live mutable store).
+
+DEFERRED (mechanical, same recipe): discover.tsx, contacts/requests.tsx (has approve/reject
+mutations), home-tab actors fetch, workspace-entity-picker-screen. Migrate incrementally.
