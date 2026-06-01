@@ -38,6 +38,7 @@ import {
   materializeSnapshot,
   scanCommitDir,
   syncDir,
+  applyHeadForConflicts,
   resolveFsHelperPath,
   cleanupDirs,
   restoreSidecar,
@@ -204,6 +205,9 @@ export async function provisionSandbox(
       deviceId,
       commandlineEnabled,
       mountIds: existing.map((m) => m.id),
+      // Already provisioned earlier this session — sidecars were restored on the
+      // first provision; nothing to re-restore here.
+      sidecarRestoreOk: true,
     }
   }
 
@@ -245,12 +249,22 @@ export async function provisionSandbox(
   // /<subpath>/.synapse-conflicts/<hash>. Rebuild each from its CAS payload
   // (file bytes by content_sha; symlink target as JSON) so the agent-visible
   // sidecar path resolves again and the preserved copy isn't orphaned.
-  await restorePendingSidecars(sessionId, mounts).catch((err) =>
+  //
+  // R12-3: if ANY sidecar failed to restore, surface it (sidecarRestoreOk=false)
+  // so the worker does NOT clear the pending store after actorThink — the
+  // unrestored copy stays retryable on the next provision rather than being
+  // consumed against a path that doesn't exist.
+  let sidecarRestoreOk = true
+  try {
+    const restore = await restorePendingSidecars(sessionId, mounts)
+    sidecarRestoreOk = restore.ok
+  } catch (err) {
+    sidecarRestoreOk = false
     console.error(
       `[sandbox] failed to restore pending sidecars for ${sessionId}:`,
       err
     )
-  )
+  }
 
   // Hoisted so the catch can tear down whatever was created.
   let pairedDeviceId: string | null = null
@@ -326,6 +340,7 @@ export async function provisionSandbox(
       deviceId: paired.deviceId,
       commandlineEnabled,
       mountIds: mounts.map((m) => m.id),
+      sidecarRestoreOk,
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -400,7 +415,15 @@ export interface RefreshDeps {
     dir: string
     baseManifestSha256?: string
     toManifestSha256: string
+    deferConflictApply?: boolean
   }) => Promise<DirSyncResult>
+  /** Phase 2 of a deferred refresh (R12-1): apply head at the conflict paths
+   * after the pending record is durably persisted. */
+  applyHead: (input: {
+    dir: string
+    toManifestSha256: string
+    paths: string[]
+  }) => Promise<void>
 }
 
 function defaultRefreshDeps(): RefreshDeps {
@@ -408,6 +431,7 @@ function defaultRefreshDeps(): RefreshDeps {
     dbh: pool,
     runInTx: (fn) => transaction(fn as never) as never,
     sync: syncDir,
+    applyHead: applyHeadForConflicts,
   }
 }
 
@@ -455,10 +479,18 @@ export async function refreshSpaces(
         ? await getSnapshotManifestSha(deps.dbh, mount.base_snapshot_id)
         : null
 
+      // R12-1: DEFER the head-overwrite of conflicting live paths. The sync
+      // writes the recoverable sidecars + applies non-conflicting incoming
+      // changes, but leaves each conflicting live path holding the agent's copy.
+      // We then durably persist the pending record, apply head, and only then
+      // advance base — so a failure before the live path is overwritten leaves
+      // working != head and the next turn re-derives the conflict (no silent
+      // loss of the notice).
       const sync = await deps.sync({
         dir: mount.materialized_dir,
         baseManifestSha256: baseManifest ?? undefined,
         toManifestSha256: headManifest,
+        deferConflictApply: true,
       })
       if (sync.deferred_conflicts.length > 0) {
         deferredConflictsBySubpath[mount.mount_subpath] =
@@ -497,26 +529,20 @@ export async function refreshSpaces(
         )
         continue
       }
-      // Advance base to the synced-in head ONLY after a successful sync.
-      // dir_sync resolves conflicts HEAD-WINS in the live tree (head applied to
-      // the live path; the agent's pre-conflict local copy preserved at the
-      // conflict sidecar), so after sync working == head for every incoming
-      // path. Advancing base to head therefore (a) lets the agent's reconciled
-      // re-edit commit cleanly (no spurious re-conflict against the same head —
-      // the round-4 dead-end), and (b) never silently overwrites the concurrent
-      // change, because on conflict the live path already holds head, not the
-      // agent's stale local copy.
-      //
-      // ATOMICITY (round-11 #2): if this mount produced a conflict/sidecar, the
-      // base advance and the durable pending-conflict record MUST be one
-      // indivisible transaction. Otherwise a persist failure after base already
-      // advanced would mean head==base next turn (no re-report) while the
-      // sidecar is orphaned — silently degrading the round-10 durable delivery.
-      // Coupling them means a persist failure rolls back the base advance, so
-      // head!=base and the next turn re-runs the sync + re-records.
+      // R12-1 ordering (durable BEFORE destructive): for a conflicted mount,
+      //   (1) persist the pending record durably (the notice + sidecar pointers),
+      //   (2) apply head to the conflict live paths (now safe — record is durable),
+      //   (3) advance base.
+      // A failure at (1) leaves base unadvanced AND the live conflict path still
+      // the agent's copy → next turn re-derives the conflict. A failure at (2)
+      // leaves base unadvanced + record durable → next turn re-derives and
+      // re-applies. A failure at (3) leaves live==head but base==old → next turn
+      // re-syncs (working==head, no new conflict) and advances base; idempotent.
+      // Non-conflicting incoming changes were already applied by the sync above.
       if (sync.deferred_conflicts.length > 0 || mountSidecars.length > 0) {
-        await deps.runInTx(async (txq) => {
-          await recordPendingRefreshConflictsOn(txq, sessionId, {
+        // (1) durable record FIRST.
+        await deps.runInTx((txq) =>
+          recordPendingRefreshConflictsOn(txq, sessionId, {
             deferredConflictsBySubpath:
               sync.deferred_conflicts.length > 0
                 ? { [mount.mount_subpath]: sync.deferred_conflicts }
@@ -526,10 +552,20 @@ export async function refreshSpaces(
                 ? { [mount.mount_subpath]: mountSidecars }
                 : {},
           })
-          await updateFileMount(txq, mount.id, { baseSnapshotId: head })
-        })
+        )
+        // (2) NOW overwrite the conflicting live paths with head.
+        if (sync.deferred_conflicts.length > 0) {
+          await deps.applyHead({
+            dir: mount.materialized_dir,
+            toManifestSha256: headManifest,
+            paths: sync.deferred_conflicts,
+          })
+        }
+        // (3) advance base last.
+        await updateFileMount(deps.dbh, mount.id, { baseSnapshotId: head })
       } else {
-        // No conflict on this mount → nothing to persist; just advance base.
+        // No conflict on this mount → the sync already applied everything; just
+        // advance base.
         await updateFileMount(deps.dbh, mount.id, { baseSnapshotId: head })
       }
     } catch (err) {
@@ -737,18 +773,21 @@ export async function commitSpaces(
   // session so the NEXT turn surfaces it as a notice (the agent's local change
   // to those paths lost to the concurrent head — it must redo/reconcile, and its
   // pre-conflict copy is preserved at the recorded sidecar).
+  //
+  // R12-2: a persist failure here MUST NOT be swallowed. If it were, commitSpaces
+  // would return success, teardown would see commitOk and DELETE the sandbox live
+  // dir — but the DB has no sidecar pointer, so the preserved loser copy (live
+  // dir + the would-be pending notice) is lost with no way for the agent to learn
+  // or recover it. Propagating the error makes teardown's commit fail-closed:
+  // it PRESERVES the live dir (marks the mount 'failed') for recovery, and the
+  // CAS blob stays GC-protected only while the pending record exists — but here
+  // we keep the on-disk copy precisely because the record didn't land.
   if (Object.keys(out.conflictsBySubpath).length > 0) {
     const pending: Record<string, PendingCommitConflict> = {}
     for (const [sub, paths] of Object.entries(out.conflictsBySubpath)) {
       pending[sub] = { paths, sidecars: out.sidecarsBySubpath[sub] ?? [] }
     }
-    await recordPendingCommitConflicts(sessionId, pending, deps.runInTx).catch(
-      (err) =>
-        console.error(
-          `[sandbox] failed to persist commit conflicts for ${sessionId}:`,
-          err
-        )
-    )
+    await recordPendingCommitConflicts(sessionId, pending, deps.runInTx)
   }
   return out
 }
@@ -1080,7 +1119,7 @@ export async function clearPendingRefreshConflicts(
 async function restorePendingSidecars(
   sessionId: string,
   mounts: FileMountRow[]
-): Promise<void> {
+): Promise<{ ok: boolean; failedSidecars: string[] }> {
   return restorePendingSidecarsImpl(sessionId, mounts, {
     peekCommit: peekPendingCommitConflicts,
     peekRefresh: peekPendingRefreshConflicts,
@@ -1106,13 +1145,13 @@ export async function restorePendingSidecarsImpl(
       >
     >
   }
-): Promise<void> {
+): Promise<{ ok: boolean; failedSidecars: string[] }> {
   const dirBySubpath = new Map<string, string>()
   for (const m of mounts) {
     if (m.materialized_dir)
       dirBySubpath.set(m.mount_subpath, m.materialized_dir)
   }
-  if (dirBySubpath.size === 0) return
+  if (dirBySubpath.size === 0) return { ok: true, failedSidecars: [] }
 
   const commit = await deps.peekCommit(sessionId)
   const refresh = await deps.peekRefresh(sessionId)
@@ -1120,31 +1159,42 @@ export async function restorePendingSidecarsImpl(
     ...Object.values(commit).flatMap((c) => c.sidecars),
     ...Object.values(refresh.sidecarsBySubpath).flat(),
   ]
-  if (allRefs.length === 0) return
+  if (allRefs.length === 0) return { ok: true, failedSidecars: [] }
 
   // Dedup by sidecar leaf (the same preserved copy may appear in both stores or
   // multiple subpath entries); restore each once.
   const seen = new Set<string>()
+  const failedSidecars: string[] = []
   for (const ref of allRefs) {
     if (seen.has(ref.sidecar)) continue
     seen.add(ref.sidecar)
     // ref.sidecar = /<subpath>/.synapse-conflicts/<hash>; route to that mount
     // and strip the subpath to get the mount-relative leaf.
     const m = /^\/([^/]+)(\/.*)$/.exec(ref.sidecar)
-    if (!m) continue
+    if (!m) {
+      failedSidecars.push(ref.sidecar)
+      continue
+    }
     const [, subpath, leaf] = m
     const dir = dirBySubpath.get(subpath)
-    if (!dir) continue
+    if (!dir) {
+      // No live mount for this subpath this provision — can't restore now; keep
+      // it retryable (R12-3 fail-closed) rather than treating it as delivered.
+      failedSidecars.push(ref.sidecar)
+      continue
+    }
     if (ref.kind === "file" && !ref.contentSha) {
       console.warn(
         `[sandbox] cannot restore file sidecar ${ref.sidecar} (no contentSha — pre-round-11 record); skipping`
       )
+      failedSidecars.push(ref.sidecar)
       continue
     }
     if (ref.kind === "symlink" && ref.target === undefined) {
       console.warn(
         `[sandbox] cannot restore symlink sidecar ${ref.sidecar} (no target); skipping`
       )
+      failedSidecars.push(ref.sidecar)
       continue
     }
     try {
@@ -1157,8 +1207,10 @@ export async function restorePendingSidecarsImpl(
       })
     } catch (err) {
       console.error(`[sandbox] failed to restore sidecar ${ref.sidecar}:`, err)
+      failedSidecars.push(ref.sidecar)
     }
   }
+  return { ok: failedSidecars.length === 0, failedSidecars }
 }
 
 async function commitOneMount(

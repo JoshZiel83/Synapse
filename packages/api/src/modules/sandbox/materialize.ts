@@ -126,6 +126,9 @@ export async function syncDir(input: {
   dir: string
   baseManifestSha256?: string
   toManifestSha256: string
+  /** R12-1: defer the head-overwrite of conflict paths to applyHeadForConflicts
+   * so the caller can durably persist the pending record first. */
+  deferConflictApply?: boolean
 }): Promise<DirSyncResult> {
   const ctx = helperContext()
   return withOneShotFsHelper(ctx, (helper) =>
@@ -133,6 +136,28 @@ export async function syncDir(input: {
       dir: input.dir,
       base_manifest_sha256: input.baseManifestSha256,
       to_manifest_sha256: input.toManifestSha256,
+      defer_conflict_apply: input.deferConflictApply,
+    })
+  )
+}
+
+/**
+ * Phase 2 of a deferred refresh (R12-1): overwrite the live conflict `paths`
+ * with head AFTER the pending record is durably persisted. Until this runs the
+ * conflict paths hold the agent's copy, so a persist failure self-heals.
+ */
+export async function applyHeadForConflicts(input: {
+  dir: string
+  toManifestSha256: string
+  paths: string[]
+}): Promise<void> {
+  if (input.paths.length === 0) return
+  const ctx = helperContext()
+  await withOneShotFsHelper(ctx, (helper) =>
+    helper.dirApplyHead({
+      dir: input.dir,
+      to_manifest_sha256: input.toManifestSha256,
+      paths: input.paths,
     })
   )
 }

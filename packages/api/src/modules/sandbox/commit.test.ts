@@ -513,3 +513,91 @@ async function mountId(
   )
   return r.rows[0].id as string
 }
+
+test(
+  "commitSpaces: a commit-conflict pending PERSIST failure rejects (R12-2 — teardown must preserve the live dir)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const { workspaceId, actorId, conversationId, sessionId } = await seed(db)
+
+      // runInTx succeeds for the snapshot-append txn but THROWS on the pending
+      // conflict record (the 2nd runInTx call). This models the durable persist
+      // failing after the snapshot committed + base advanced.
+      let txCount = 0
+      const depsBase: Partial<CommitDeps> = {
+        dbh: client as unknown as CommitDeps["dbh"],
+        runInTx: async (fn) => {
+          txCount += 1
+          if (txCount >= 2) throw new Error("simulated pending-persist failure")
+          return fn(client as unknown as CommitDeps["dbh"])
+        },
+        loadCtx: async () => ({ workspaceId, conversationId, actorId }),
+      }
+
+      const work = mkdtempSync(join(tmpdir(), "synapse-r12-2-"))
+      const baseDir = join(work, "base")
+      mkdirSync(baseDir, { recursive: true })
+      writeFileSync(join(baseDir, "x.txt"), "A")
+      const baseScan = await scanCommitDir({ dir: baseDir })
+      await ingest(client, baseScan)
+      const space = await ensureFileSpace(client, {
+        workspaceId,
+        owner: actorRef(actorId),
+      })
+      const baseSnap = await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: null,
+        manifestSha256: baseScan.manifest_sha256,
+        entryCount: baseScan.entry_count,
+        totalBytes: baseScan.total_bytes,
+      })
+      const headDir = join(work, "head")
+      mkdirSync(headDir, { recursive: true })
+      writeFileSync(join(headDir, "x.txt"), "B")
+      const headScan = await scanCommitDir({ dir: headDir })
+      await ingest(client, headScan)
+      await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: baseSnap.id,
+        manifestSha256: headScan.manifest_sha256,
+        entryCount: headScan.entry_count,
+        totalBytes: headScan.total_bytes,
+      })
+      // live: base + a clean local add y.txt (so merged != latest → snapshot
+      // append branch runs the FIRST runInTx) AND x.txt conflict (→ pending).
+      const liveDir = join(work, "actor")
+      mkdirSync(liveDir, { recursive: true })
+      await materializeSnapshot({
+        manifestSha256: baseScan.manifest_sha256,
+        targetDir: liveDir,
+      })
+      writeFileSync(join(liveDir, "x.txt"), "L")
+      writeFileSync(join(liveDir, "y.txt"), "Y")
+      await insertFileMount(client, {
+        workspaceId,
+        sessionId,
+        fileSpaceId: space.id,
+        mountSubpath: "actor",
+        baseSnapshotId: baseSnap.id,
+        materializedDir: liveDir,
+      })
+      await updateFileMount(client, await mountId(client, sessionId), {
+        status: "active",
+      })
+
+      // R12-2: the persist failure MUST propagate (reject) — so teardown sees
+      // commitOk=false and preserves the live dir instead of deleting it.
+      await assert.rejects(
+        commitSpaces(sessionId, ["actor"], {
+          ...depsBase,
+          reconcile: async () => ({ ok: true, sidecars: [] }),
+        }),
+        /pending-persist failure/,
+        "commitSpaces must reject when the pending-conflict persist fails"
+      )
+    })
+  }
+)

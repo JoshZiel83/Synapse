@@ -240,6 +240,20 @@ export interface DirSyncInput {
   base_manifest_sha256?: string
   /** The new head manifest to merge toward. */
   to_manifest_sha256: string
+  /**
+   * R12-1: when true, write sidecars + apply non-conflicting incoming changes
+   * but DEFER overwriting the conflicting live paths with head. The caller
+   * persists the pending record durably, then calls dirApplyHead to finish — so
+   * a persist failure leaves the agent's copy at the live path (working != head)
+   * and next turn re-derives the conflict (no silent loss).
+   */
+  defer_conflict_apply?: boolean
+}
+/** Phase-2 of a deferred refresh (R12-1): apply head at the conflict paths. */
+export interface DirApplyHeadInput {
+  dir: string
+  to_manifest_sha256: string
+  paths: string[]
 }
 /** A preserved local file from a conflict: original VFS path → sidecar path. */
 export interface ConflictSidecar {

@@ -20,6 +20,7 @@ import type {
   CasPutInput,
   CasPutResult,
   DirSyncInput,
+  DirApplyHeadInput,
   DirSyncResult,
   ManifestCleanupInput,
   ManifestMaterializeInput,
@@ -190,6 +191,9 @@ export class OneShotFsHelper {
   }
   dirSync(input: DirSyncInput): Promise<DirSyncResult> {
     return this.request("fs.dir.sync", input)
+  }
+  dirApplyHead(input: DirApplyHeadInput): Promise<void> {
+    return this.request("fs.dir.apply_head", input)
   }
   manifestCleanup(input: ManifestCleanupInput): Promise<void> {
     return this.request("fs.manifest.cleanup", input)

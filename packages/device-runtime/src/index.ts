@@ -72,6 +72,7 @@ export type {
   ManifestEntryWire,
   ManifestEntryKind,
   DirSyncInput,
+  DirApplyHeadInput,
   DirSyncResult,
   ConflictSidecar,
   ManifestCleanupInput,

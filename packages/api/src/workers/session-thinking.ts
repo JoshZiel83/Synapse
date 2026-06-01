@@ -564,9 +564,15 @@ export function startSessionThinkingWorker() {
         // Whether we surfaced persisted refresh conflicts this turn (cleared only
         // after actorThink returns — at-least-once delivery, round-10 #1).
         let surfacedPendingRefreshConflicts = false
+        // R12-3: if a pending sidecar failed to re-materialize this provision,
+        // do NOT clear the pending stores after actorThink — keep them retryable
+        // next provision instead of consuming a notice whose sidecar path is
+        // missing.
+        let sidecarRestoreOk = true
         if (sandboxEnabled) {
           try {
-            await provisionSandbox(sessionId)
+            const provision = await provisionSandbox(sessionId)
+            sidecarRestoreOk = provision.sidecarRestoreOk
             const refresh = await refreshSpaces(sessionId)
             // Record any spaces whose refresh FAILED so turn-end commit skips
             // them (their live tree is half-synced; committing it could entangle
@@ -992,7 +998,16 @@ export function startSessionThinkingWorker() {
           // that was injected into its context window. Clear the persisted
           // pending commit conflicts ONLY now (at-least-once delivery — if the
           // job had crashed before here, the next turn would re-surface them).
-          if (sandboxEnabled && surfacedPendingCommitConflicts) {
+          //
+          // R12-3: do NOT clear if a sidecar failed to re-materialize this
+          // provision — the agent couldn't actually read the preserved copy, so
+          // keep the pending record for a retry on the next provision rather than
+          // consuming a notice that pointed at a missing path.
+          if (
+            sandboxEnabled &&
+            sidecarRestoreOk &&
+            surfacedPendingCommitConflicts
+          ) {
             await clearPendingCommitConflicts(sessionId).catch((err) =>
               console.error(
                 `[session-thinking] failed to clear pending commit conflicts for ${sessionId}:`,
@@ -1001,8 +1016,13 @@ export function startSessionThinkingWorker() {
             )
           }
           // Same at-least-once contract for refresh conflicts (round-10 #1):
-          // clear the persisted refresh notice ONLY after the model consumed it.
-          if (sandboxEnabled && surfacedPendingRefreshConflicts) {
+          // clear the persisted refresh notice ONLY after the model consumed it
+          // AND every sidecar was restorable (R12-3).
+          if (
+            sandboxEnabled &&
+            sidecarRestoreOk &&
+            surfacedPendingRefreshConflicts
+          ) {
             await clearPendingRefreshConflicts(sessionId).catch((err) =>
               console.error(
                 `[session-thinking] failed to clear pending refresh conflicts for ${sessionId}:`,

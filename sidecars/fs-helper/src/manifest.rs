@@ -731,6 +731,7 @@ pub fn dir_sync(
     dir: &Path,
     from: &Manifest,
     to: &Manifest,
+    defer_conflict_apply: bool,
 ) -> Result<DirSyncResult, RpcError> {
     // Scan the live working tree so we know which paths are locally dirty.
     let (working, _new) = scan_dir(cas, dir)?;
@@ -844,9 +845,19 @@ pub fn dir_sync(
             }
             // Overwrite the live path with head's version (or remove it if head
             // deleted it). Any dirty subtree files were sidecar'd just above.
-            if let Err(e) = apply_entry_to_dir(cas, dir, p, to_entry) {
-                incomplete = Some(format!("applying head to {p}: {e}"));
-                break 'outer;
+            //
+            // R12-1: when `defer_conflict_apply` is set, SKIP this head-apply for
+            // the conflicting path. The caller will durably persist the pending
+            // record FIRST, then call apply_head_for_conflicts to overwrite the
+            // live path. This keeps the agent's copy at the live path until the
+            // record is committed — so if the persist fails, working != head and
+            // next turn re-derives the conflict (no silent loss). The sidecar is
+            // already written (recoverable) regardless.
+            if !defer_conflict_apply {
+                if let Err(e) = apply_entry_to_dir(cas, dir, p, to_entry) {
+                    incomplete = Some(format!("applying head to {p}: {e}"));
+                    break 'outer;
+                }
             }
             continue;
         }
@@ -879,6 +890,26 @@ pub fn dir_sync(
         incomplete: None,
         new_base_manifest_sha256: new_base,
     })
+}
+
+/// Phase 2 of a deferred refresh (R12-1): overwrite the live conflict `paths`
+/// with head's version (`to`), AFTER the caller has durably persisted the
+/// pending record. Until this runs the conflict paths still hold the agent's
+/// copy, so a persist failure self-heals (next turn re-derives the conflict).
+/// The sidecars were already written in the dir_sync phase. Best-effort per
+/// path is NOT acceptable here — a failure is returned so the caller leaves base
+/// unadvanced and retries (the pending record is already durable, so no loss).
+pub fn apply_head_for_conflicts(
+    cas: &BlobStore,
+    dir: &Path,
+    to: &Manifest,
+    paths: &[String],
+) -> Result<(), RpcError> {
+    for p in paths {
+        let to_entry = to.entries.get(p);
+        apply_entry_to_dir(cas, dir, p, to_entry)?;
+    }
+    Ok(())
 }
 
 /// Collision-free sidecar VFS path for a dirty original path (round-9 #1,

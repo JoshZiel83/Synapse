@@ -20,6 +20,14 @@ export interface SandboxProvisionResult {
   /** Whether the commandline (bwrap-confined) tool was authorized. */
   commandlineEnabled: boolean
   mountIds: string[]
+  /**
+   * Whether every durable pending conflict sidecar was successfully
+   * re-materialized into the fresh live dirs (round-11 #1 / R12-3). false = at
+   * least one sidecar could not be restored; the caller must NOT clear the
+   * pending store after actorThink (keep it retryable next provision) and should
+   * not promise the agent it can read that sidecar.
+   */
+  sidecarRestoreOk: boolean
 }
 
 let cachedSandboxCommandlineAvailable: boolean | null = null

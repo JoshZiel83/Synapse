@@ -143,3 +143,47 @@ test(
     )
   }
 )
+
+test(
+  "restorePendingSidecars: a sidecar that cannot be restored returns ok=false (R12-3 fail-closed)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    const work = mkdtempSync(join(tmpdir(), "synapse-r12-3-"))
+    const liveActor = join(work, "fresh", "actor")
+    mkdirSync(liveActor, { recursive: true })
+
+    // A pending file sidecar with NO contentSha (e.g. a pre-round-11 record, or a
+    // record whose blob is gone) cannot be re-materialized.
+    const pendingCommit: Record<string, PendingCommitConflict> = {
+      actor: {
+        paths: ["/x.txt"],
+        sidecars: [
+          {
+            original: "/actor/x.txt",
+            sidecar: "/actor/.synapse-conflicts/h1",
+            kind: "file",
+            // contentSha intentionally omitted
+          },
+        ],
+      },
+    }
+    const emptyRefresh: Pick<
+      PendingRefreshConflicts,
+      "deferredConflictsBySubpath" | "sidecarsBySubpath"
+    > = { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
+
+    const result = await restorePendingSidecarsImpl(
+      "sess-irrelevant",
+      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      {
+        peekCommit: async () => pendingCommit,
+        peekRefresh: async () => emptyRefresh,
+      }
+    )
+
+    // R12-3: the unrestorable sidecar is reported as failed → ok=false, so the
+    // worker keeps the pending record (does NOT clear it after actorThink).
+    assert.equal(result.ok, false, "restore reports failure")
+    assert.deepEqual(result.failedSidecars, ["/actor/.synapse-conflicts/h1"])
+  }
+)

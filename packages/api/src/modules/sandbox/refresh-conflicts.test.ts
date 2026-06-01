@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { actorRef } from "@synapse/shared"
@@ -12,7 +12,11 @@ import {
   appendSnapshot,
   ensureContentBlob,
 } from "./space.js"
-import { scanCommitDir, resolveFsHelperPath } from "./materialize.js"
+import {
+  scanCommitDir,
+  resolveFsHelperPath,
+  materializeSnapshot,
+} from "./materialize.js"
 import {
   refreshSpaces,
   mergePendingRefreshConflicts,
@@ -396,6 +400,127 @@ test(
         mountRow.rows[0]?.base_snapshot_id,
         baseSnap.id,
         "base must stay at the OLD base when the pending persist failed"
+      )
+    })
+  }
+)
+
+test(
+  "refreshSpaces: persist failure leaves the live conflict path as the agent's copy (R12-1 deferred apply)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    await withTestDbAndClient(async ({ db, client }) => {
+      const { workspaceId, actorId, sessionId } = await seed(db)
+      const work = mkdtempSync(join(tmpdir(), "synapse-r12defer-"))
+
+      // base: x.txt = "base"
+      const baseDir = join(work, "base")
+      mkdirSync(baseDir, { recursive: true })
+      writeFileSync(join(baseDir, "x.txt"), "base")
+      const baseScan = await scanCommitDir({ dir: baseDir })
+      await ensureContentBlob(client, {
+        sha256: baseScan.manifest_sha256,
+        sizeBytes: 0,
+      })
+      for (const b of baseScan.new_blobs)
+        await ensureContentBlob(client, { sha256: b, sizeBytes: 0 })
+      const space = await ensureFileSpace(client, {
+        workspaceId,
+        owner: actorRef(actorId),
+      })
+      const baseSnap = await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: null,
+        manifestSha256: baseScan.manifest_sha256,
+        entryCount: baseScan.entry_count,
+        totalBytes: baseScan.total_bytes,
+      })
+
+      // head: x.txt = "head" (concurrent writer)
+      const headDir = join(work, "head")
+      mkdirSync(headDir, { recursive: true })
+      writeFileSync(join(headDir, "x.txt"), "head")
+      const headScan = await scanCommitDir({ dir: headDir })
+      await ensureContentBlob(client, {
+        sha256: headScan.manifest_sha256,
+        sizeBytes: 0,
+      })
+      for (const b of headScan.new_blobs)
+        await ensureContentBlob(client, { sha256: b, sizeBytes: 0 })
+      await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: baseSnap.id,
+        manifestSha256: headScan.manifest_sha256,
+        entryCount: headScan.entry_count,
+        totalBytes: headScan.total_bytes,
+      })
+
+      // live: materialize base, then the agent locally edits x.txt = "local".
+      const liveDir = join(work, "actor")
+      mkdirSync(liveDir, { recursive: true })
+      await materializeSnapshot({
+        manifestSha256: baseScan.manifest_sha256,
+        targetDir: liveDir,
+      })
+      writeFileSync(join(liveDir, "x.txt"), "local")
+      await insertFileMount(client, {
+        workspaceId,
+        sessionId,
+        fileSpaceId: space.id,
+        mountSubpath: "actor",
+        baseSnapshotId: baseSnap.id,
+        materializedDir: liveDir,
+      })
+      await client.query(
+        `UPDATE file_mounts SET status = 'active' WHERE session_id = $1`,
+        [sessionId]
+      )
+
+      // Real sync (writes the sidecar, DEFERS the head overwrite), but the
+      // durable persist (step 1) FAILS. applyHead must never run.
+      let applyHeadCalled = false
+      const result = await refreshSpaces(sessionId, {
+        dbh: client as never,
+        runInTx: async () => {
+          throw new Error("simulated persist failure")
+        },
+        applyHead: async () => {
+          applyHeadCalled = true
+        },
+      })
+
+      assert.ok(
+        result.syncFailuresBySubpath.actor,
+        "persist failure surfaced as a sync failure"
+      )
+      assert.equal(
+        applyHeadCalled,
+        false,
+        "head was NOT applied after persist failed"
+      )
+
+      // THE KEY ASSERTION (R12-1): the live conflict path still holds the AGENT's
+      // copy (not head), so next turn working != head re-derives the conflict —
+      // the notice is not silently lost even though it wasn't persisted.
+      assert.equal(
+        readFileSync(join(liveDir, "x.txt"), "utf8"),
+        "local",
+        "live conflict path must still be the agent's copy when persist failed"
+      )
+      // And base did not advance.
+      const mountRow = await client.query(
+        `SELECT base_snapshot_id FROM file_mounts WHERE session_id = $1`,
+        [sessionId]
+      )
+      assert.equal(mountRow.rows[0]?.base_snapshot_id, baseSnap.id)
+
+      // The sidecar WAS written (recoverable) even though the live path wasn't
+      // overwritten — the agent's copy is preserved both in-place and at sidecar.
+      assert.ok(
+        result.sidecarsBySubpath.actor?.length,
+        "sidecar written despite deferred head apply"
       )
     })
   }

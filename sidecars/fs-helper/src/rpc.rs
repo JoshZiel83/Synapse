@@ -234,6 +234,23 @@ pub struct DirSyncInput {
     pub base_manifest_sha256: Option<String>,
     /// The new head manifest to merge toward.
     pub to_manifest_sha256: String,
+    /// R12-1: when true, write sidecars + apply non-conflicting incoming changes
+    /// but DEFER overwriting the conflicting live paths with head. The caller
+    /// durably persists the pending record, then calls fs.dir.apply_head to
+    /// finish. Defaults false (legacy one-shot apply).
+    #[serde(default)]
+    pub defer_conflict_apply: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirApplyHeadInput {
+    /// Absolute host path of the live working directory.
+    pub dir: String,
+    /// The head manifest whose values to apply at the conflict paths.
+    pub to_manifest_sha256: String,
+    /// The conflict paths (deferred_conflicts from the dir_sync phase) to
+    /// overwrite with head now that the pending record is durable.
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -465,6 +465,7 @@ async fn dispatch(
         "fs.manifest.materialize" => manifest_materialize(&state, params).await,
         "fs.manifest.scan_commit" => manifest_scan_commit(&state, params).await,
         "fs.dir.sync" => dir_sync(&state, params).await,
+        "fs.dir.apply_head" => dir_apply_head(&state, params).await,
         "fs.manifest.cleanup" => manifest_cleanup(&state, params).await,
         "fs.sidecar.restore" => sidecar_restore(&state, params).await,
         other => Err(RpcError::MethodNotFound(other.to_string())),
@@ -579,7 +580,13 @@ async fn dir_sync(state: &Arc<State>, params: Value) -> Result<Value, RpcError> 
     let cas = cas_lock(state).await?;
     let from = manifest::Manifest::load(&cas, input.base_manifest_sha256.as_deref())?;
     let to = manifest::Manifest::load(&cas, Some(&input.to_manifest_sha256))?;
-    let res = manifest::dir_sync(&cas, std::path::Path::new(&input.dir), &from, &to)?;
+    let res = manifest::dir_sync(
+        &cas,
+        std::path::Path::new(&input.dir),
+        &from,
+        &to,
+        input.defer_conflict_apply,
+    )?;
     Ok(serde_json::to_value(rpc::DirSyncResult {
         applied: res.applied,
         deferred_conflicts: res.deferred_conflicts,
@@ -598,6 +605,23 @@ async fn dir_sync(state: &Arc<State>, params: Value) -> Result<Value, RpcError> 
         new_base_manifest_sha256: res.new_base_manifest_sha256,
     })
     .unwrap())
+}
+
+async fn dir_apply_head(
+    state: &Arc<State>,
+    params: Value,
+) -> Result<Value, RpcError> {
+    let input: rpc::DirApplyHeadInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    let to = manifest::Manifest::load(&cas, Some(&input.to_manifest_sha256))?;
+    manifest::apply_head_for_conflicts(
+        &cas,
+        std::path::Path::new(&input.dir),
+        &to,
+        &input.paths,
+    )?;
+    Ok(Value::Object(Map::new()))
 }
 
 async fn manifest_cleanup(
