@@ -1,36 +1,38 @@
-name: synapse-int-test
+name: ${INT_PROJECT_NAME:-synapse-int-test}
 
 # Production-style API container — runs the real Dockerfile.api image
 # against the isolated test postgres/redis. Used to satisfy
 # AGENTS.md §Backend "rebuild + healthcheck" gate after backend changes,
 # without touching the host's production `synapse-api` container.
 #
-# Reuses the test postgres/redis container names (synapse-int-postgres-test /
-# synapse-int-redis-test) by hostname inside the project's network. Bring up
-# the test stack first via scripts/up.sh.
+# Per-worktree isolated: project name + the published API host port are derived
+# by scripts/lib.sh ($INT_PROJECT_NAME / $INT_PROD_API_PORT). It reaches the
+# test postgres/redis by their compose SERVICE names (postgres-test/redis-test)
+# on the project network — those are DNS names, not host ports, so they do NOT
+# change with the per-worktree port offset. Bring up the base stack first.
 #
-# Usage:
+# Usage (ports/project come from lib.sh — source up.sh first, or pass INT_* env):
 #   bash packages/api/tests/integration/scripts/up.sh
-#   docker compose -p synapse-int-test \
+#   source packages/api/tests/integration/scripts/lib.sh up
+#   docker compose -p "$INT_PROJECT_NAME" \
 #     -f packages/api/tests/integration/docker-compose.test.yaml \
 #     -f packages/api/tests/integration/docker-compose.prod.yaml \
 #     up -d --build api
-#   curl -sS http://127.0.0.1:38001/api/v1/health
+#   curl -sS "http://127.0.0.1:${INT_PROD_API_PORT}/api/v1/health"
 
 services:
   api:
     build:
       context: ../../../..
       dockerfile: infrastructure/Dockerfile.api
-    container_name: synapse-int-api
-    restart: unless-stopped
+    restart: "no"
     environment:
       DATABASE_URL: postgresql://synapse:test_password@postgres-test:5432/synapse_test
       REDIS_URL: redis://redis-test:6379
       JWT_SECRET: int_test_jwt_secret_do_not_use_in_prod
       JWT_REFRESH_SECRET: int_test_jwt_refresh_secret_do_not_use_in_prod
-      APP_BASE_URL: http://127.0.0.1:38001
-      BASE_URL: http://127.0.0.1:38001
+      APP_BASE_URL: http://127.0.0.1:${INT_PROD_API_PORT:-38001}
+      BASE_URL: http://127.0.0.1:${INT_PROD_API_PORT:-38001}
       NODE_ENV: production
       PORT: "3001"
       HOST: "0.0.0.0"
@@ -39,7 +41,7 @@ services:
       MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: "false"
       MEMORY_MODEL_CACHE_DIR: /app/storage/models/memory
     ports:
-      - "127.0.0.1:38001:3001"
+      - "127.0.0.1:${INT_PROD_API_PORT:-38001}:3001"
     volumes:
       - api_storage_int:/app/storage
     depends_on:

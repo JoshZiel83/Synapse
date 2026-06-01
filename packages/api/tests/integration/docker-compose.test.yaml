@@ -1,8 +1,14 @@
-name: synapse-int-test
+name: ${INT_PROJECT_NAME:-synapse-int-test}
 
-# Isolated postgres+redis for the API integration test suite. Ports are
-# NOT the production defaults (5432/6379) — they're 55433/56380 so this
-# stack can coexist with a running production deployment on the same host.
+# Isolated postgres+redis for the API integration test suite.
+#
+# Per-worktree isolated: the compose project name and host ports are derived
+# from the worktree path by scripts/lib.sh (deterministic offset + conflict
+# probing), so multiple worktrees can run their own stacks concurrently without
+# colliding. The ${INT_*_PORT} values are injected by up.sh / run-test.sh; the
+# `:-` defaults below only apply if you run `docker compose` by hand without
+# sourcing lib.sh. Container names are NOT pinned — `-p $INT_PROJECT_NAME` plus
+# compose labels (com.docker.compose.project) namespace everything.
 #
 # Run via:
 #   bash packages/api/tests/integration/scripts/up.sh
@@ -11,14 +17,13 @@ name: synapse-int-test
 services:
   postgres-test:
     image: pgvector/pgvector:pg16
-    container_name: synapse-int-postgres-test
-    restart: unless-stopped
+    restart: "no"
     environment:
       POSTGRES_USER: synapse
       POSTGRES_PASSWORD: test_password
       POSTGRES_DB: synapse_test
     ports:
-      - "127.0.0.1:55433:5432"
+      - "127.0.0.1:${INT_PG_PORT:-55433}:5432"
     volumes:
       - pgdata_int_test:/var/lib/postgresql/data
     healthcheck:
@@ -29,14 +34,13 @@ services:
 
   redis-test:
     image: redis:7-alpine
-    container_name: synapse-int-redis-test
-    restart: unless-stopped
+    restart: "no"
     command:
       - redis-server
       - --appendonly
       - "yes"
     ports:
-      - "127.0.0.1:56380:6379"
+      - "127.0.0.1:${INT_REDIS_PORT:-56380}:6379"
     volumes:
       - redisdata_int_test:/data
     healthcheck:

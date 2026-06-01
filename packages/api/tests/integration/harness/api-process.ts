@@ -10,8 +10,20 @@ import { fileURLToPath } from "node:url"
 const __dirname = fileURLToPath(new URL(".", import.meta.url))
 const WORKTREE_ROOT = join(__dirname, "../../../../..")
 
-export const TEST_API_PORT = 38091
 export const TEST_API_HOST = "127.0.0.1"
+// Per-worktree API port: derived from BASE_URL (run-test.sh exports
+// http://127.0.0.1:${INT_API_PORT}); falls back to the legacy 38091 only when
+// run outside the wrapper.
+function deriveApiPort(): number {
+  try {
+    const p = Number.parseInt(new URL(process.env.BASE_URL ?? "").port, 10)
+    if (Number.isFinite(p) && p > 0) return p
+  } catch {
+    // fall through to default
+  }
+  return 38091
+}
+export const TEST_API_PORT = deriveApiPort()
 export const TEST_API_BASE_URL = `http://${TEST_API_HOST}:${TEST_API_PORT}`
 
 export interface ApiHandle {
