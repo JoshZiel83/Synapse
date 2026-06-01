@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
+import { LRUCache } from "lru-cache"
 import { config } from "../../config/index.js"
 import { readFileBufferById } from "../files/service.js"
 
@@ -17,7 +18,12 @@ interface AudioTranscriptResult {
   error?: string
 }
 
-const transcriptCache = new Map<string, Promise<AudioTranscriptResult>>()
+// Bounded, TTL'd cache (was an unbounded Map). Caches the in-flight Promise so
+// concurrent callers for the same key share one transcription run.
+const transcriptCache = new LRUCache<string, Promise<AudioTranscriptResult>>({
+  max: 500,
+  ttl: 60 * 60 * 1000, // 1h
+})
 const localRequire = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
 const warnedMessages = new Set<string>()

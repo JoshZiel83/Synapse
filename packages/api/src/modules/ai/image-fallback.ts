@@ -3,6 +3,7 @@ import { createRequire } from "module"
 import { mkdir } from "node:fs/promises"
 import { config } from "../../config/index.js"
 import { withTimeout } from "../../infrastructure/async/index.js"
+import { LRUCache } from "lru-cache"
 import { readFileBufferById } from "../files/service.js"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
@@ -33,7 +34,14 @@ type TesseractModule = {
   ): Promise<TesseractWorker>
 }
 
-const ocrCache = new Map<string, Promise<ImageOcrResult>>()
+// Bounded, TTL'd cache for OCR results (was an unbounded Map that grew for the
+// process lifetime, each entry holding up to ~4000 chars of OCR text). lru-cache
+// caps both count and age. We cache the in-flight Promise so concurrent callers
+// for the same key share one OCR run (single-flight).
+const ocrCache = new LRUCache<string, Promise<ImageOcrResult>>({
+  max: 500,
+  ttl: 60 * 60 * 1000, // 1h
+})
 const localRequire = createRequire(import.meta.url)
 const warnedMessages = new Set<string>()
 
