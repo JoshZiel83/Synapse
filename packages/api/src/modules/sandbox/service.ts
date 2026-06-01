@@ -674,6 +674,27 @@ export interface ConflictSidecarRef {
   target?: string
 }
 
+/**
+ * Whether a sidecar ref is INTRINSICALLY unrecoverable from its own shape — i.e.
+ * the durable record lacks the payload needed to ever rebuild it, regardless of
+ * mount state or transient fs conditions:
+ *   - a "file" sidecar with no contentSha (pre-round-11 / corrupt: the CAS
+ *     pointer is gone), or
+ *   - a "symlink" sidecar with no target.
+ * Such a ref is PERMANENT in BOTH the normal restore loop and the fail-closed
+ * "unknown" partition path, so the agent is never told a corrupt copy "will be
+ * retried". A bad sidecar PATH (unparseable) is also permanent but is detected
+ * during the restore routing (it needs the regex), not here. Shared by
+ * restorePendingSidecarsImpl and partitionSidecars so the two never disagree.
+ */
+export function isSidecarPayloadIrrecoverable(
+  ref: ConflictSidecarRef
+): boolean {
+  if (ref.kind === "file") return !ref.contentSha
+  if (ref.kind === "symlink") return ref.target === undefined
+  return false
+}
+
 /** Per-subpath pending commit conflicts: the lost paths + their sidecars. */
 export interface PendingCommitConflict {
   paths: string[]
@@ -1269,7 +1290,7 @@ export async function restorePendingSidecarsImpl(
     }
     if (ref.kind === "file" && !ref.contentSha) {
       // The durable record lacks the CAS pointer (pre-round-11 / corrupt) — the
-      // bytes can never be rebuilt. PERMANENT.
+      // bytes can never be rebuilt. PERMANENT (see isSidecarPayloadIrrecoverable).
       console.warn(
         `[sandbox] cannot restore file sidecar ${ref.sidecar} (no contentSha — pre-round-11/corrupt record); skipping permanently`
       )
@@ -1277,7 +1298,8 @@ export async function restorePendingSidecarsImpl(
       continue
     }
     if (ref.kind === "symlink" && ref.target === undefined) {
-      // The durable record lacks the symlink target — cannot rebuild. PERMANENT.
+      // The durable record lacks the symlink target — cannot rebuild. PERMANENT
+      // (see isSidecarPayloadIrrecoverable).
       console.warn(
         `[sandbox] cannot restore symlink sidecar ${ref.sidecar} (no target — corrupt record); skipping permanently`
       )

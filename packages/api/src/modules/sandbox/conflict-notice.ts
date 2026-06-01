@@ -18,6 +18,7 @@
 // permanently-unrestored and renders each, so the worker and its tests share one
 // source of truth.
 
+import { isSidecarPayloadIrrecoverable } from "./service.js"
 import type { ConflictSidecarRef } from "./service.js"
 import type { SidecarRestoreFailureReason } from "./model.js"
 
@@ -38,8 +39,14 @@ export interface PartitionedSidecars {
  * `restoreStatusUnknown` (P2 fail-closed): set when the provision reported the
  * restore as NOT-ok but produced NO per-sidecar list (e.g. the failure-
  * collection itself threw). In that case we cannot trust that any sidecar was
- * restored, so EVERY sidecar is treated as transiently unrestored — none gets a
- * "read it", and the caller blocks clearing the pending store.
+ * restored, so none is presented as readable. But we DON'T blindly call them all
+ * transient: a ref that is intrinsically unrecoverable by its own shape (file
+ * with no contentSha, symlink with no target — `isSidecarPayloadIrrecoverable`)
+ * is still PERMANENT, exactly as the normal restore path would classify it (P3
+ * truthfulness — never tell the agent a corrupt copy "will be retried"). Only
+ * refs that COULD plausibly restore later are bucketed transient. The caller
+ * blocks clearing the pending store whenever any transient OR the unknown flag is
+ * set, so a permanent-only unknown turn still doesn't lose a transient notice.
  */
 export function partitionSidecars(
   sidecars: ConflictSidecarRef[],
@@ -51,8 +58,11 @@ export function partitionSidecars(
   const permanent: ConflictSidecarRef[] = []
   for (const s of sidecars) {
     if (restoreStatusUnknown) {
-      // Fail-closed: status unknown → assume not on disk, retryable.
-      transient.push(s)
+      // Fail-closed: status unknown → never "restored". Classify by shape first
+      // so an intrinsically-corrupt ref is still permanent (not over-promised as
+      // retryable); everything else is transient (assume not on disk, retryable).
+      if (isSidecarPayloadIrrecoverable(s)) permanent.push(s)
+      else transient.push(s)
       continue
     }
     const reason = failedReasons.get(s.sidecar)

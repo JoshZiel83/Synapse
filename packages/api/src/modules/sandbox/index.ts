@@ -14,6 +14,7 @@ export {
   clearPendingCommitConflicts,
   peekPendingRefreshConflicts,
   clearPendingRefreshConflicts,
+  isSidecarPayloadIrrecoverable,
   mergePendingRefreshConflicts,
   SandboxServiceError,
   type ProvisionSandboxOptions,

@@ -79,20 +79,32 @@ test("partitionSidecars: empty failed-map → everything restored", () => {
   assert.equal(permanent.length, 0)
 })
 
-test("partitionSidecars: restoreStatusUnknown forces ALL sidecars transient (P2 fail-closed)", () => {
-  // Even with an empty failed-map (which would normally mean 'all restored'),
-  // an unknown restore status must NOT present any sidecar as readable.
+test("partitionSidecars: restoreStatusUnknown buckets well-formed refs transient but keeps shape-corrupt refs permanent (P3 truthfulness)", () => {
+  // Unknown restore status must NOT present any well-formed sidecar as readable
+  // (→ transient, retryable). But a ref that is intrinsically unrecoverable by
+  // shape (file with no contentSha) must STILL be permanent — never over-promised
+  // as "will be retried".
+  const corruptSymlink: ConflictSidecarRef = {
+    original: "/actor/badlink",
+    sidecar: "/actor/.synapse-conflicts/h4",
+    kind: "symlink",
+    // no target — corrupt
+  }
   const { restored, transient, permanent } = partitionSidecars(
-    [fileRef, symlinkRef, corruptRef],
+    [fileRef, symlinkRef, corruptRef, corruptSymlink],
     reasons([]),
     true
   )
   assert.equal(restored.length, 0, "nothing is presented as restored")
-  assert.equal(permanent.length, 0, "nothing is presented as permanent")
   assert.deepEqual(
     transient.map((s) => s.sidecar).sort(),
-    [fileRef.sidecar, symlinkRef.sidecar, corruptRef.sidecar].sort(),
-    "every sidecar is bucketed transient (retryable, no 'read it')"
+    [fileRef.sidecar, symlinkRef.sidecar].sort(),
+    "well-formed refs are transient (retryable, no 'read it')"
+  )
+  assert.deepEqual(
+    permanent.map((s) => s.sidecar).sort(),
+    [corruptRef.sidecar, corruptSymlink.sidecar].sort(),
+    "shape-corrupt refs stay permanent even when restore status is unknown"
   )
 })
 
