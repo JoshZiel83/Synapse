@@ -7,14 +7,13 @@ import type {
   PluginAuthValueSource,
   PluginConfigFieldDefinition,
 } from "@synapse/shared"
-import { sql } from "kysely"
+import { CompiledQuery, sql } from "kysely"
 import { config } from "../../config/index.js"
 import {
   decrypt,
   decryptSensitiveFields,
   encrypt,
 } from "../../infrastructure/crypto/index.js"
-import { query } from "../../infrastructure/database/index.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
 import {
   normalizeMijiaLocale,
@@ -39,6 +38,15 @@ type QueryRunner = <T extends pg.QueryResultRow = any>(
   text: string,
   params?: any[]
 ) => Promise<{ rows: T[] }>
+
+/** Default {@link QueryRunner} backed by the top-level Kysely db. */
+const dbRunner: QueryRunner = <T extends pg.QueryResultRow = any>(
+  text: string,
+  params?: any[]
+) =>
+  db
+    .executeQuery<T>(CompiledQuery.raw(text, params ?? []))
+    .then((r) => ({ rows: r.rows as T[] }))
 
 type PluginAuthSessionRow = {
   id: string
@@ -1824,7 +1832,7 @@ export async function attachAuthConnectionsToConfig(input: {
   authSessionIds?: Record<string, string>
   run?: QueryRunner
 }) {
-  const run = input.run || (query as QueryRunner)
+  const run = input.run || dbRunner
   const result: Record<string, unknown> = { ...(input.configData || {}) }
   const authSessionIds = input.authSessionIds || {}
   const bindingMap = new Map(

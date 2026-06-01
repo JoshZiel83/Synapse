@@ -29,14 +29,16 @@
  * delivery AFTER the tx commits.
  */
 
-import { sql } from "kysely"
+import { CompiledQuery, sql } from "kysely"
 import {
   INTERACTION_REQUEST_KIND,
   type RuntimeAuthorizationPreset,
 } from "@synapse/shared"
-import type { PoolClient } from "pg"
-import { db, executeSqlOn } from "../infrastructure/database/kysely.js"
-import { transaction } from "../infrastructure/database/index.js"
+import {
+  db,
+  withDbTransaction,
+  type Executor,
+} from "../infrastructure/database/kysely.js"
 import {
   mintActionToken,
   sweepExpiredActionTokens,
@@ -64,6 +66,18 @@ const TICK_INTERVAL_MS = 5_000
 const BATCH_SIZE = 10
 const MAX_ATTEMPTS = 5
 const TOKEN_SWEEP_EVERY_TICKS = 60 // ≈ every 5 min
+
+/** Run raw SQL (text+params) on the transaction/db executor. */
+async function runOn<T = any>(
+  executor: Executor,
+  text: string,
+  params: readonly unknown[] = []
+): Promise<{ rows: T[]; rowCount?: number | null }> {
+  const result = await executor.executeQuery<T>(
+    CompiledQuery.raw(text, [...params])
+  )
+  return { rows: result.rows as T[] }
+}
 
 /**
  * Why this list and not a more general gate: the projection layer is the
@@ -174,8 +188,8 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
 
   // One outer tx per batch; FOR UPDATE SKIP LOCKED gives us isolation
   // across worker replicas.
-  await transaction(async (client) => {
-    const result = await executeSqlOn<PendingRow>(
+  await withDbTransaction(async (client) => {
+    const result = await runOn<PendingRow>(
       client,
       `
         SELECT id, interaction_request_id, workspace_id, conversation_id,
@@ -241,7 +255,7 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
  * picked up by the worker before the link row is visible.
  */
 async function processOne(
-  client: PoolClient,
+  client: Executor,
   row: PendingRow,
   linkIdsToEnqueue: string[]
 ): Promise<"projected" | "skipped" | "failed"> {
@@ -254,7 +268,7 @@ async function processOne(
   }
 
   // Verify the interaction is still pending + not expired.
-  const lockedInteraction = await executeSqlOn<{
+  const lockedInteraction = await runOn<{
     id: string
     status: string
     expires_at: string | Date | null
@@ -365,7 +379,7 @@ async function processOne(
   let savepointFailed = false
   let savepointError: string | null = null
   try {
-    await executeSqlOn(client, "SAVEPOINT projection_business", [])
+    await runOn(client, "SAVEPOINT projection_business", [])
     const mintedOptions = await mintOptionsAndTokens(client, {
       interactionRequestId: interaction.id,
       interactionExpiresAt: interaction.expiresAt,
@@ -410,20 +424,16 @@ async function processOne(
     })
     await markRowProjected(client, row.id, persisted.id)
     projectionLinkId = persisted.id
-    await executeSqlOn(client, "RELEASE SAVEPOINT projection_business", [])
+    await runOn(client, "RELEASE SAVEPOINT projection_business", [])
   } catch (err) {
     savepointFailed = true
     savepointError = errorMessage(err)
-    await executeSqlOn(
-      client,
-      "ROLLBACK TO SAVEPOINT projection_business",
-      []
-    ).catch(() => undefined)
-    await executeSqlOn(
-      client,
-      "RELEASE SAVEPOINT projection_business",
-      []
-    ).catch(() => undefined)
+    await runOn(client, "ROLLBACK TO SAVEPOINT projection_business", []).catch(
+      () => undefined
+    )
+    await runOn(client, "RELEASE SAVEPOINT projection_business", []).catch(
+      () => undefined
+    )
   }
 
   if (savepointFailed) {
@@ -441,11 +451,11 @@ async function processOne(
 }
 
 async function markRowProjected(
-  client: PoolClient,
+  client: Executor,
   rowId: string,
   linkId: string
 ): Promise<void> {
-  await executeSqlOn(
+  await runOn(
     client,
     `
       UPDATE interaction_transport_projections
@@ -460,11 +470,11 @@ async function markRowProjected(
 }
 
 async function skipRow(
-  client: PoolClient,
+  client: Executor,
   rowId: string,
   error: string
 ): Promise<void> {
-  await executeSqlOn(
+  await runOn(
     client,
     `
       UPDATE interaction_transport_projections
@@ -478,13 +488,13 @@ async function skipRow(
 }
 
 async function bumpAttemptsOnRow(
-  client: PoolClient,
+  client: Executor,
   row: PendingRow,
   error: string
 ): Promise<void> {
   const nextAttempts = row.attempts + 1
   if (nextAttempts >= MAX_ATTEMPTS) {
-    await executeSqlOn(
+    await runOn(
       client,
       `
         UPDATE interaction_transport_projections
@@ -500,7 +510,7 @@ async function bumpAttemptsOnRow(
   }
   // Exponential backoff: 5s, 30s, 2min, 10min, 30min
   const backoffSeconds = [5, 30, 120, 600, 1800][Math.min(nextAttempts - 1, 4)]
-  await executeSqlOn(
+  await runOn(
     client,
     `
       UPDATE interaction_transport_projections
@@ -531,7 +541,7 @@ interface MintedOption {
  * decoder uses the token to recover the full payload server-side).
  */
 async function mintOptionsAndTokens(
-  client: PoolClient,
+  client: Executor,
   params: {
     interactionRequestId: string
     interactionExpiresAt?: string | Date | null

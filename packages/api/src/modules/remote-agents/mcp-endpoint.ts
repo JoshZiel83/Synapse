@@ -17,7 +17,7 @@ import {
 } from "./service.js"
 import { requireRemoteAgentConversationAccess } from "../chat/service.js"
 import { sql } from "kysely"
-import { db, executeSql } from "../../infrastructure/database/kysely.js"
+import { db } from "../../infrastructure/database/kysely.js"
 import { projectToolsForPrincipal } from "../capability-projection/index.js"
 
 type ActiveTransport = {
@@ -470,7 +470,7 @@ export async function handleRemoteAgentMcpRequest(
   }
   try {
     await requireRemoteAgentConversationAccess(
-      { query: (text: string, values?: any[]) => executeSql(text, values) },
+      db,
       request.params.conversationId,
       request.params.remoteAgentId
     )
