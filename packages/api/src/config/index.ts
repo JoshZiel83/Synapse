@@ -1,11 +1,16 @@
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { config as loadEnv } from "dotenv"
+import { z } from "zod"
 import {
   getDefaultModelBaseUrl,
   getDefaultModelEngineKind,
   getDefaultModelName,
 } from "@synapse/shared"
+
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("config")
 
 for (const candidate of [
   resolve(process.cwd(), ".env"),
@@ -16,27 +21,159 @@ for (const candidate of [
   break
 }
 
-const configuredAiProvider = process.env.AI_PROVIDER || ""
-const configuredAiEngineKind =
-  process.env.AI_ENGINE_KIND ||
-  (configuredAiProvider ? getDefaultModelEngineKind(configuredAiProvider) : "")
+/**
+ * Validated environment schema.
+ *
+ * Every value the app reads from process.env goes through here so that:
+ *   - numbers are real numbers in sane ranges (a typo'd PORT=abc fails at
+ *     startup instead of becoming NaN deep in the request path),
+ *   - defaults live in exactly one place,
+ *   - a misconfiguration is reported as one aggregated, readable error.
+ *
+ * Defaults are preserved exactly from the previous hand-rolled config so this
+ * is a behaviour-preserving change — we validate and coerce, we do not newly
+ * require values that used to be optional.
+ *
+ * `withDefault(schema, def)` reproduces the old `process.env.X || "def"`
+ * semantics precisely: a MISSING *or EMPTY* var falls back to the default
+ * before coercion+validation (a bare zod .default()/.prefault() would let an
+ * empty string through to coercion and turn "" into NaN/0).
+ */
+function withDefault<T extends z.ZodType>(schema: T, def: string) {
+  return z.preprocess((v) => (v === undefined || v === "" ? def : v), schema)
+}
 
-function readEnvList(name: string) {
-  return (process.env[name] || "")
+const port = z.coerce.number().int().min(1).max(65535)
+const positiveInt = z.coerce.number().int().positive()
+const nonNegativeInt = z.coerce.number().int().min(0)
+const unitFloat = z.coerce.number().min(0).max(1)
+const positiveFloat = z.coerce.number().positive()
+
+const envSchema = z.object({
+  PORT: withDefault(port, "3001"),
+  HOST: withDefault(z.string().min(1), "0.0.0.0"),
+  NODE_ENV: withDefault(
+    z.enum(["development", "production", "test"]),
+    "development"
+  ),
+
+  APP_BASE_URL: z.string().optional(),
+  NEXT_PUBLIC_APP_URL: z.string().optional(),
+  NEXT_PUBLIC_SITE_URL: z.string().optional(),
+
+  PUBLIC_NPM_REGISTRY_URL: withDefault(z.string(), ""),
+
+  DATABASE_URL: withDefault(
+    z.string().min(1),
+    "postgresql://synapse:password@localhost:5432/synapse"
+  ),
+  REDIS_URL: withDefault(z.string().min(1), "redis://localhost:6379"),
+
+  REALTIME_OUTBOX_BATCH_SIZE: withDefault(positiveInt, "100"),
+  REALTIME_OUTBOX_POLL_MS: withDefault(positiveInt, "500"),
+  REALTIME_OUTBOX_RETENTION_HOURS: withDefault(nonNegativeInt, "24"),
+  REALTIME_OUTBOX_GC_INTERVAL_MS: withDefault(positiveInt, "60000"),
+
+  ASR_PROVIDER: withDefault(z.string().min(1), "volcengine"),
+  VOLCENGINE_ASR_APP_ID: withDefault(z.string(), ""),
+  VOLCENGINE_ASR_ACCESS_TOKEN: withDefault(z.string(), ""),
+  VOLCENGINE_ASR_SECRET_KEY: withDefault(z.string(), ""),
+  VOLCENGINE_ASR_RESOURCE_ID: withDefault(
+    z.string().min(1),
+    "volc.seedasr.sauc.duration"
+  ),
+  VOLCENGINE_ASR_WS_URL: withDefault(
+    z.string().min(1),
+    "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+  ),
+  VOLCENGINE_ASR_MAX_CONCURRENCY: withDefault(positiveInt, "3"),
+  VOLCENGINE_ASR_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
+  VOLCENGINE_ASR_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+
+  IM_RUNTIME_MANAGER_ENABLED: z.string().optional(),
+
+  SKILL_GITHUB_RAW_PROXY_PREFIXES: z.string().optional(),
+  SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS: z.string().optional(),
+
+  AI_PROVIDER: withDefault(z.string(), ""),
+  AI_ENGINE_KIND: z.string().optional(),
+  AI_API_KEY: withDefault(z.string(), ""),
+  AI_BASE_URL: z.string().optional(),
+  AI_MODEL: z.string().optional(),
+  MODEL_NAME: z.string().optional(),
+  AI_MAX_TOKENS: withDefault(positiveInt, "4096"),
+
+  AUDIO_FALLBACK_PROVIDER: withDefault(z.string().min(1), "sherpa-onnx"),
+  SHERPA_ONNX_CONFIG_JSON: withDefault(z.string(), ""),
+  SHERPA_ONNX_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+
+  IMAGE_FALLBACK_PROVIDER: withDefault(z.string().min(1), "tesseract"),
+  TESSERACT_LANGS: withDefault(z.string().min(1), "eng"),
+  TESSERACT_LANG_PATH: withDefault(z.string(), ""),
+  TESSERACT_CACHE_PATH: withDefault(
+    z.string().min(1),
+    "/tmp/synapse-tesseract-cache"
+  ),
+  TESSERACT_TIMEOUT_MS: withDefault(positiveInt, "20000"),
+
+  MEMORY_RECALL_LIMIT: withDefault(positiveInt, "6"),
+  MEMORY_SEARCH_CANDIDATE_LIMIT: withDefault(positiveInt, "40"),
+  MEMORY_RECALL_TOP_K: positiveInt.optional(),
+  MEMORY_EMBEDDING_MODEL_ID: withDefault(
+    z.string().min(1),
+    "Xenova/multilingual-e5-small"
+  ),
+  MEMORY_MODEL_CACHE_DIR: z.string().optional(),
+  MEMORY_EMBED_BATCH_SIZE: withDefault(positiveInt, "12"),
+  MEMORY_INDEX_QUEUE_CONCURRENCY: withDefault(positiveInt, "2"),
+  MEMORY_QUERY_EMBED_CACHE_TTL_SEC: withDefault(nonNegativeInt, "86400"),
+  MEMORY_MMR_LAMBDA: withDefault(unitFloat, "0.8"),
+  MEMORY_MMR_CANDIDATE_MULTIPLIER: withDefault(positiveInt, "4"),
+  MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS: withDefault(positiveFloat, "30"),
+  MEMORY_SUMMARY_DECAY_FLOOR: withDefault(unitFloat, "0.35"),
+  MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: z.string().optional(),
+
+  PLATFORM_ADMIN_EMAILS: withDefault(z.string(), ""),
+
+  LOG_LEVEL: z.string().optional(),
+})
+
+function loadEnvOrExit(): z.infer<typeof envSchema> {
+  const parsed = envSchema.safeParse(process.env)
+  if (parsed.success) return parsed.data
+
+  const issues = parsed.error.issues
+    .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)
+    .join("\n")
+  log.fatal(`Invalid environment configuration:\n${issues}`)
+  // Configuration errors are unrecoverable — refuse to start with bad config
+  // rather than limp along with NaN/undefined values deep in the request path.
+  process.exit(1)
+}
+
+const env = loadEnvOrExit()
+
+function splitList(value: string | undefined): string[] {
+  return (value || "")
     .split(/[\n,]/g)
-    .map((value) => value.trim())
+    .map((entry) => entry.trim())
     .filter(Boolean)
 }
 
+const configuredAiProvider = env.AI_PROVIDER
+const configuredAiEngineKind =
+  env.AI_ENGINE_KIND ||
+  (configuredAiProvider ? getDefaultModelEngineKind(configuredAiProvider) : "")
+
 export const config = {
-  port: parseInt(process.env.PORT || "3001"),
-  host: process.env.HOST || "0.0.0.0",
-  nodeEnv: process.env.NODE_ENV || "development",
+  port: env.PORT,
+  host: env.HOST,
+  nodeEnv: env.NODE_ENV,
   app: {
     baseUrl:
-      process.env.APP_BASE_URL ||
-      process.env.NEXT_PUBLIC_APP_URL ||
-      process.env.NEXT_PUBLIC_SITE_URL ||
+      env.APP_BASE_URL ||
+      env.NEXT_PUBLIC_APP_URL ||
+      env.NEXT_PUBLIC_SITE_URL ||
       "http://localhost:3001",
   },
   remoteAgent: {
@@ -47,134 +184,102 @@ export const config = {
     // separate from the publish-side NPM_REGISTRY for exactly that
     // reason. Empty string = omit the --registry flag (user is expected
     // to have configured @synapse:registry in their own ~/.npmrc).
-    npmRegistryUrl: process.env.PUBLIC_NPM_REGISTRY_URL || "",
+    npmRegistryUrl: env.PUBLIC_NPM_REGISTRY_URL,
   },
   database: {
-    url:
-      process.env.DATABASE_URL ||
-      "postgresql://synapse:password@localhost:5432/synapse",
+    url: env.DATABASE_URL,
   },
   redis: {
-    url: process.env.REDIS_URL || "redis://localhost:6379",
+    url: env.REDIS_URL,
   },
   realtime: {
-    outboxBatchSize: parseInt(process.env.REALTIME_OUTBOX_BATCH_SIZE || "100"),
-    outboxPollMs: parseInt(process.env.REALTIME_OUTBOX_POLL_MS || "500"),
+    outboxBatchSize: env.REALTIME_OUTBOX_BATCH_SIZE,
+    outboxPollMs: env.REALTIME_OUTBOX_POLL_MS,
     // How long to keep dispatched outbox rows for ops debugging
     // before GC sweeps them. Default 24h matches the plan's
     // verification window. Set to 0 to delete-on-dispatch (no debug
     // window). 'failed' rows are NEVER GC'd regardless of retention
     // because the dispatcher still retries them — see
     // gcRealtimeEventOutbox in infrastructure/events/index.ts.
-    outboxRetentionHours: parseInt(
-      process.env.REALTIME_OUTBOX_RETENTION_HOURS || "24"
-    ),
+    outboxRetentionHours: env.REALTIME_OUTBOX_RETENTION_HOURS,
     // How often the dispatcher loop runs the GC sweep. 1 minute is
     // fine — GC just trims stale rows; missing a window doesn't lose
     // events.
-    outboxGcIntervalMs: parseInt(
-      process.env.REALTIME_OUTBOX_GC_INTERVAL_MS || "60000"
-    ),
+    outboxGcIntervalMs: env.REALTIME_OUTBOX_GC_INTERVAL_MS,
   },
   asr: {
-    provider: process.env.ASR_PROVIDER || "volcengine",
+    provider: env.ASR_PROVIDER,
     volcengine: {
-      appId: process.env.VOLCENGINE_ASR_APP_ID || "",
-      accessToken: process.env.VOLCENGINE_ASR_ACCESS_TOKEN || "",
-      secretKey: process.env.VOLCENGINE_ASR_SECRET_KEY || "",
-      resourceId:
-        process.env.VOLCENGINE_ASR_RESOURCE_ID || "volc.seedasr.sauc.duration",
-      wsUrl:
-        process.env.VOLCENGINE_ASR_WS_URL ||
-        "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async",
-      maxConcurrency: parseInt(
-        process.env.VOLCENGINE_ASR_MAX_CONCURRENCY || "3"
-      ),
-      connectTimeoutMs: parseInt(
-        process.env.VOLCENGINE_ASR_CONNECT_TIMEOUT_MS || "10000"
-      ),
-      idleTimeoutMs: parseInt(
-        process.env.VOLCENGINE_ASR_IDLE_TIMEOUT_MS || "15000"
-      ),
+      appId: env.VOLCENGINE_ASR_APP_ID,
+      accessToken: env.VOLCENGINE_ASR_ACCESS_TOKEN,
+      secretKey: env.VOLCENGINE_ASR_SECRET_KEY,
+      resourceId: env.VOLCENGINE_ASR_RESOURCE_ID,
+      wsUrl: env.VOLCENGINE_ASR_WS_URL,
+      maxConcurrency: env.VOLCENGINE_ASR_MAX_CONCURRENCY,
+      connectTimeoutMs: env.VOLCENGINE_ASR_CONNECT_TIMEOUT_MS,
+      idleTimeoutMs: env.VOLCENGINE_ASR_IDLE_TIMEOUT_MS,
     },
   },
   im: {
-    runtimeManagerEnabled: process.env.IM_RUNTIME_MANAGER_ENABLED !== "false",
+    runtimeManagerEnabled: env.IM_RUNTIME_MANAGER_ENABLED !== "false",
   },
   skills: {
     import: {
-      githubRawProxyPrefixes: readEnvList("SKILL_GITHUB_RAW_PROXY_PREFIXES"),
-      clawhubDownloadProxyOrigins: readEnvList(
-        "SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS"
+      githubRawProxyPrefixes: splitList(env.SKILL_GITHUB_RAW_PROXY_PREFIXES),
+      clawhubDownloadProxyOrigins: splitList(
+        env.SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS
       ),
     },
   },
   ai: {
     provider: configuredAiProvider,
     engineKind: configuredAiEngineKind,
-    apiKey: process.env.AI_API_KEY || "",
+    apiKey: env.AI_API_KEY,
     baseUrl:
-      process.env.AI_BASE_URL ||
+      env.AI_BASE_URL ||
       (configuredAiProvider
         ? getDefaultModelBaseUrl(configuredAiProvider)
         : ""),
     model:
-      process.env.AI_MODEL ||
-      process.env.MODEL_NAME ||
+      env.AI_MODEL ||
+      env.MODEL_NAME ||
       (configuredAiProvider
         ? getDefaultModelName(configuredAiProvider, configuredAiEngineKind)
         : ""),
-    maxTokens: parseInt(process.env.AI_MAX_TOKENS || "4096"),
+    maxTokens: env.AI_MAX_TOKENS,
   },
   audioFallback: {
-    provider: process.env.AUDIO_FALLBACK_PROVIDER || "sherpa-onnx",
-    sherpaOnnxConfigJson: process.env.SHERPA_ONNX_CONFIG_JSON || "",
-    timeoutMs: parseInt(process.env.SHERPA_ONNX_TIMEOUT_MS || "15000"),
+    provider: env.AUDIO_FALLBACK_PROVIDER,
+    sherpaOnnxConfigJson: env.SHERPA_ONNX_CONFIG_JSON,
+    timeoutMs: env.SHERPA_ONNX_TIMEOUT_MS,
   },
   imageFallback: {
-    provider: process.env.IMAGE_FALLBACK_PROVIDER || "tesseract",
-    tesseractLangs: process.env.TESSERACT_LANGS || "eng",
-    tesseractLangPath: process.env.TESSERACT_LANG_PATH || "",
-    tesseractCachePath:
-      process.env.TESSERACT_CACHE_PATH || "/tmp/synapse-tesseract-cache",
-    timeoutMs: parseInt(process.env.TESSERACT_TIMEOUT_MS || "20000"),
+    provider: env.IMAGE_FALLBACK_PROVIDER,
+    tesseractLangs: env.TESSERACT_LANGS,
+    tesseractLangPath: env.TESSERACT_LANG_PATH,
+    tesseractCachePath: env.TESSERACT_CACHE_PATH,
+    timeoutMs: env.TESSERACT_TIMEOUT_MS,
   },
   memory: {
-    recallLimit: parseInt(process.env.MEMORY_RECALL_LIMIT || "6"),
-    searchCandidateLimit: parseInt(
-      process.env.MEMORY_SEARCH_CANDIDATE_LIMIT || "40"
-    ),
-    topK: parseInt(
-      process.env.MEMORY_RECALL_TOP_K || process.env.MEMORY_RECALL_LIMIT || "6"
-    ),
-    modelId:
-      process.env.MEMORY_EMBEDDING_MODEL_ID || "Xenova/multilingual-e5-small",
+    recallLimit: env.MEMORY_RECALL_LIMIT,
+    searchCandidateLimit: env.MEMORY_SEARCH_CANDIDATE_LIMIT,
+    topK: env.MEMORY_RECALL_TOP_K ?? env.MEMORY_RECALL_LIMIT,
+    modelId: env.MEMORY_EMBEDDING_MODEL_ID,
     modelCacheDir:
-      process.env.MEMORY_MODEL_CACHE_DIR ||
+      env.MEMORY_MODEL_CACHE_DIR ||
       resolve(process.cwd(), "storage/models/memory"),
-    embedBatchSize: parseInt(process.env.MEMORY_EMBED_BATCH_SIZE || "12"),
-    indexQueueConcurrency: parseInt(
-      process.env.MEMORY_INDEX_QUEUE_CONCURRENCY || "2"
-    ),
-    queryEmbedCacheTtlSec: parseInt(
-      process.env.MEMORY_QUERY_EMBED_CACHE_TTL_SEC || "86400"
-    ),
-    mmrLambda: parseFloat(process.env.MEMORY_MMR_LAMBDA || "0.8"),
-    mmrCandidateMultiplier: parseInt(
-      process.env.MEMORY_MMR_CANDIDATE_MULTIPLIER || "4"
-    ),
-    summaryDecayHalfLifeDays: parseFloat(
-      process.env.MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS || "30"
-    ),
-    summaryDecayFloor: parseFloat(
-      process.env.MEMORY_SUMMARY_DECAY_FLOOR || "0.35"
-    ),
+    embedBatchSize: env.MEMORY_EMBED_BATCH_SIZE,
+    indexQueueConcurrency: env.MEMORY_INDEX_QUEUE_CONCURRENCY,
+    queryEmbedCacheTtlSec: env.MEMORY_QUERY_EMBED_CACHE_TTL_SEC,
+    mmrLambda: env.MEMORY_MMR_LAMBDA,
+    mmrCandidateMultiplier: env.MEMORY_MMR_CANDIDATE_MULTIPLIER,
+    summaryDecayHalfLifeDays: env.MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS,
+    summaryDecayFloor: env.MEMORY_SUMMARY_DECAY_FLOOR,
     allowRuntimeModelDownload:
-      process.env.MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD === "true",
+      env.MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD === "true",
   },
   platform: {
-    adminEmails: (process.env.PLATFORM_ADMIN_EMAILS || "")
-      .split(",")
+    adminEmails: env.PLATFORM_ADMIN_EMAILS.split(",")
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
   },
