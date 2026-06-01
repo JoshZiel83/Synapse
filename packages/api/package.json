@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "guard:db": "node scripts/guard-db-paradigm.mjs",
+    "pretest": "npm run guard:db",
     "test": "tsx --test --test-force-exit \"src/**/*.test.ts\"",
     "test:integration": "bash tests/integration/scripts/run-all.sh",
     "test:integration:llm-smoke": "bash tests/integration/scripts/run-test.sh tests/integration/manual/llm-smoke.test.ts",
