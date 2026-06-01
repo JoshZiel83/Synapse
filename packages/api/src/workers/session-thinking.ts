@@ -649,15 +649,30 @@ export function startSessionThinkingWorker() {
           activeTurnId: turn.id,
         })
 
+        let lockLost = false
         const lockRefreshInterval = setInterval(
           async () => {
             try {
               // Fenced refresh: only extend the TTL while we still hold the
               // lock token. A bare PEXPIRE could resurrect a lock another
               // worker has since taken over.
-              await renewLock(redis, sessionLock, SESSION_LOCK_TTL)
+              const stillHeld = await renewLock(
+                redis,
+                sessionLock,
+                SESSION_LOCK_TTL
+              )
+              if (!stillHeld) {
+                // We lost the lock (TTL lapsed and another worker took over, or
+                // it was force-released). Stop this turn cooperatively so we
+                // don't double-execute actions / send messages / emit events as
+                // a second worker runs the same session.
+                lockLost = true
+                log.warn(`lost session lock for ${sessionId}; aborting turn`)
+              }
             } catch {
-              // ignore
+              // Treat a renew error as a lost lock too — safer to bail than to
+              // keep acting while unsure we still hold it.
+              lockLost = true
             }
           },
           Math.floor(SESSION_LOCK_TTL / 2)
@@ -693,8 +708,12 @@ export function startSessionThinkingWorker() {
               mcpVersion: mcpTools.mcpVersion,
               mcpRefresh: mcpTools.refresh,
               mcpSetTurnId: mcpTools.setTurnId,
-              shouldAbortTurn: () =>
-                hasPendingInterrupt(sessionId, "remote_control_terminated"),
+              shouldAbortTurn: async () =>
+                lockLost ||
+                (await hasPendingInterrupt(
+                  sessionId,
+                  "remote_control_terminated"
+                )),
               system,
               refreshCollaborationContext: async () => {
                 const refreshedSession = await getSession(sessionId)
@@ -739,6 +758,16 @@ export function startSessionThinkingWorker() {
           )
         } finally {
           clearInterval(lockRefreshInterval)
+        }
+
+        // If we lost the session lock mid-turn, another worker now owns this
+        // session. Bail BEFORE applying any side-effects (actions, message
+        // persistence, runtime events) so we don't double-act with that worker.
+        if (lockLost) {
+          log.warn(
+            `session lock for ${sessionId} lost mid-turn; discarding turn result without side-effects`
+          )
+          return { success: false, reason: "session lock lost" }
         }
 
         await executeActorActions(workspaceId, actorId, result.actions, {
