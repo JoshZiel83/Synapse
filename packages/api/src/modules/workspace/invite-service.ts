@@ -1,12 +1,6 @@
 import crypto from "node:crypto"
-import type pg from "pg"
 import type { WorkspaceInvitesTrustLevel } from "../../infrastructure/database/generated/db.js"
-import { query, transaction } from "../../infrastructure/database/index.js"
-import {
-  db,
-  executeCompiledQuery,
-  executeTakeFirst,
-} from "../../infrastructure/database/kysely.js"
+import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
 import { assignOfficialChiefActorPreference } from "./service.js"
 
@@ -72,28 +66,23 @@ export async function getInviteByToken(token: string) {
 }
 
 export async function redeemInvite(token: string, userId: string) {
-  const result = await transaction(async (client: pg.PoolClient) => {
-    const runner = { query: client.query.bind(client) as typeof query }
+  const result = await withDbTransaction(async (trx) => {
     // Lock the invite row
-    const invite = await executeTakeFirst<any>(
-      runner,
-      db
-        .selectFrom("workspace_invites")
-        .selectAll()
-        .where("token", "=", token)
-        .forUpdate()
-    )
+    const invite = await trx
+      .selectFrom("workspace_invites")
+      .selectAll()
+      .where("token", "=", token)
+      .forUpdate()
+      .executeTakeFirst()
     if (!invite) {
       throw new Error("Invite not found")
     }
 
-    const workspace = await executeTakeFirst<{ name: string }>(
-      runner,
-      db
-        .selectFrom("workspaces")
-        .select("name")
-        .where("id", "=", invite.workspace_id)
-    )
+    const workspace = await trx
+      .selectFrom("workspaces")
+      .select("name")
+      .where("id", "=", invite.workspace_id)
+      .executeTakeFirst()
 
     if (invite.is_revoked) {
       throw new Error("Invite has been revoked")
@@ -106,50 +95,44 @@ export async function redeemInvite(token: string, userId: string) {
     }
 
     // Check if already a member
-    const memberCheck = await executeTakeFirst<{ id: string }>(
-      runner,
-      db
-        .selectFrom("workspace_members")
-        .select("id")
-        .where("workspace_id", "=", invite.workspace_id)
-        .where("user_id", "=", userId)
-    )
+    const memberCheck = await trx
+      .selectFrom("workspace_members")
+      .select("id")
+      .where("workspace_id", "=", invite.workspace_id)
+      .where("user_id", "=", userId)
+      .executeTakeFirst()
     if (memberCheck) {
       throw new Error("Already a member of this workspace")
     }
 
     // Add as member
-    const memberRow = await executeTakeFirst<{ id: string }>(
-      runner,
-      db
-        .insertInto("workspace_members")
-        .values({
-          workspace_id: invite.workspace_id,
-          user_id: userId,
-          trust_level: invite.trust_level,
-        })
-        .returning("id")
-    )
+    const memberRow = await trx
+      .insertInto("workspace_members")
+      .values({
+        workspace_id: invite.workspace_id,
+        user_id: userId,
+        trust_level: invite.trust_level,
+      })
+      .returning("id")
+      .executeTakeFirst()
     if (!memberRow) {
       throw new Error("Failed to create workspace member")
     }
 
     await assignOfficialChiefActorPreference(
-      client,
+      trx,
       invite.workspace_id,
       memberRow.id
     )
 
     // Increment use count
-    await executeCompiledQuery(
-      runner,
-      db
-        .updateTable("workspace_invites")
-        .set({
-          use_count: sql`use_count + 1`,
-        })
-        .where("id", "=", invite.id)
-    )
+    await trx
+      .updateTable("workspace_invites")
+      .set({
+        use_count: sql`use_count + 1`,
+      })
+      .where("id", "=", invite.id)
+      .execute()
 
     return {
       workspaceId: invite.workspace_id,

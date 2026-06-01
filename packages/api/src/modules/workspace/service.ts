@@ -1,10 +1,8 @@
 import crypto from "node:crypto"
-import type pg from "pg"
-import { query, transaction } from "../../infrastructure/database/index.js"
 import {
   db,
-  executeCompiledQuery,
-  executeTakeFirst,
+  withDbTransaction,
+  type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js"
@@ -20,7 +18,7 @@ import {
   type WorkspaceChiefActorPreference,
 } from "@synapse/shared"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
-import { setAccessPolicyOn } from "../access/default-access-policy.js"
+import { setAccessPolicy } from "../access/default-access-policy.js"
 import type {
   WorkspaceAccessBindingsAccessKey,
   WorkspaceMembersTrustLevel,
@@ -109,21 +107,6 @@ const OFFICIAL_CHIEF_ACTOR_CONFIG_JSON = JSON.stringify(
   OFFICIAL_CHIEF_ACTOR_CONFIG
 )
 
-type OfficialActorTemplateRow = {
-  package_id: string
-  package_slug: string
-  version_id: string
-  actor_role: ActorRole
-  actor_name: string
-  actor_avatar_file_id: string | null
-  actor_avatar_emoji: string | null
-  actor_title: string
-  actor_can_represent_user: boolean
-  actor_docs: ActorDocInput[] | string | null
-  actor_specialties: string[] | null
-  actor_config: Record<string, unknown> | string | null
-}
-
 type LoadedOfficialActorTemplate = {
   packageId: string
   packageSlug: string
@@ -170,49 +153,42 @@ function withOfficialChiefActorConfig(
 }
 
 async function findOfficialChiefActorId(
-  client: pg.PoolClient,
+  executor: Executor,
   workspaceId: string
 ) {
-  const runner = { query: client.query.bind(client) as typeof query }
-  const result = await executeTakeFirst<{ id: string }>(
-    runner,
-    db
-      .selectFrom("actors as a")
-      .leftJoin(
-        "actor_source_refs as source_ref",
-        "source_ref.actor_id",
-        "a.id"
-      )
-      .leftJoin(
-        "catalog_items as item",
-        "item.id",
-        "source_ref.source_catalog_item_id"
-      )
-      .select("a.id")
-      .where("a.workspace_id", "=", workspaceId)
-      .where("a.is_active", "=", true)
-      .where((eb) =>
-        eb.or([
-          sql<boolean>`a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb`,
-          eb.and([
-            eb("item.workspace_id", "is", null),
-            eb("item.item_kind", "=", "actor_template"),
-            eb("item.slug", "=", DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG),
-          ]),
-        ])
-      )
-      .orderBy(
-        sql`case when a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb then 0 else 1 end`
-      )
-      .orderBy("a.created_at", "asc")
-      .limit(1)
-  )
+  const result = await executor
+    .selectFrom("actors as a")
+    .leftJoin("actor_source_refs as source_ref", "source_ref.actor_id", "a.id")
+    .leftJoin(
+      "catalog_items as item",
+      "item.id",
+      "source_ref.source_catalog_item_id"
+    )
+    .select("a.id")
+    .where("a.workspace_id", "=", workspaceId)
+    .where("a.is_active", "=", true)
+    .where((eb) =>
+      eb.or([
+        sql<boolean>`a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb`,
+        eb.and([
+          eb("item.workspace_id", "is", null),
+          eb("item.item_kind", "=", "actor_template"),
+          eb("item.slug", "=", DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG),
+        ]),
+      ])
+    )
+    .orderBy(
+      sql`case when a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb then 0 else 1 end`
+    )
+    .orderBy("a.created_at", "asc")
+    .limit(1)
+    .executeTakeFirst()
 
   return result?.id ?? null
 }
 
 export async function assignOfficialChiefActorPreference(
-  client: pg.PoolClient,
+  executor: Executor,
   workspaceId: string,
   workspaceMemberId: string,
   actorId?: string | null
@@ -220,35 +196,32 @@ export async function assignOfficialChiefActorPreference(
   const chiefActorId =
     typeof actorId === "string" && actorId.trim().length > 0
       ? actorId
-      : await findOfficialChiefActorId(client, workspaceId)
+      : await findOfficialChiefActorId(executor, workspaceId)
 
   if (!chiefActorId) {
     return null
   }
 
-  const runner = { query: client.query.bind(client) as typeof query }
-  await executeCompiledQuery(
-    runner,
-    db
-      .insertInto("workspace_member_preferences")
-      .values({
-        workspace_member_id: workspaceMemberId,
+  await executor
+    .insertInto("workspace_member_preferences")
+    .values({
+      workspace_member_id: workspaceMemberId,
+      chief_actor_id: chiefActorId,
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .onConflict((oc) =>
+      oc.column("workspace_member_id").doUpdateSet({
         chief_actor_id: chiefActorId,
-        created_at: sql`NOW()`,
         updated_at: sql`NOW()`,
       })
-      .onConflict((oc) =>
-        oc.column("workspace_member_id").doUpdateSet({
-          chief_actor_id: chiefActorId,
-          updated_at: sql`NOW()`,
-        })
-      )
-  )
+    )
+    .execute()
 
   return chiefActorId
 }
 
-function parseStoredActorDocs(value: ActorDocInput[] | string | null) {
+function parseStoredActorDocs(value: unknown) {
   const docsValue =
     typeof value === "string" ? (JSON.parse(value) as unknown) : value
   return normalizeActorDocs(
@@ -256,9 +229,10 @@ function parseStoredActorDocs(value: ActorDocInput[] | string | null) {
   )
 }
 
-function isOfficialChiefTemplate(
-  row: Pick<OfficialActorTemplateRow, "package_slug" | "actor_config">
-) {
+function isOfficialChiefTemplate(row: {
+  package_slug: string
+  actor_config: unknown
+}) {
   const config = parseJsonObject(row.actor_config)
   return (
     config.is_chief_actor === true ||
@@ -267,54 +241,51 @@ function isOfficialChiefTemplate(
 }
 
 async function loadOfficialActorTemplates(
-  client: pg.PoolClient
+  executor: Executor
 ): Promise<LoadedOfficialActorTemplate[]> {
-  const runner = { query: client.query.bind(client) as typeof query }
-  const result = await executeCompiledQuery<OfficialActorTemplateRow>(
-    runner,
-    db
-      .selectFrom("catalog_items as item")
-      .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
-      .innerJoin(
-        "catalog_versions as version",
-        "version.id",
-        "item.latest_version_id"
-      )
-      .innerJoin(
-        "actor_template_version_specs as spec",
-        "spec.catalog_version_id",
-        "version.id"
-      )
-      .select([
-        "item.id as package_id",
-        "item.slug as package_slug",
-        "version.id as version_id",
-        "spec.role as actor_role",
-        "spec.name as actor_name",
-        "spec.avatar_file_id as actor_avatar_file_id",
-        "spec.avatar_emoji as actor_avatar_emoji",
-        "spec.title as actor_title",
-        "spec.can_represent_user as actor_can_represent_user",
-        "spec.docs as actor_docs",
-        "spec.specialties as actor_specialties",
-        "spec.config as actor_config",
-      ])
-      .where("publisher.slug", "=", OFFICIAL_ACTOR_PUBLISHER_SLUG)
-      .where("item.workspace_id", "is", null)
-      .where("item.item_kind", "=", "actor_template")
-      .where("item.is_active", "=", true)
-      .orderBy(
-        sql`case when spec.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb or item.slug = ${DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG} then 0 else 1 end`
-      )
-      .orderBy("item.created_at", "asc")
-      .orderBy("item.slug", "asc")
-  )
+  const rows = await executor
+    .selectFrom("catalog_items as item")
+    .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
+    .innerJoin(
+      "catalog_versions as version",
+      "version.id",
+      "item.latest_version_id"
+    )
+    .innerJoin(
+      "actor_template_version_specs as spec",
+      "spec.catalog_version_id",
+      "version.id"
+    )
+    .select([
+      "item.id as package_id",
+      "item.slug as package_slug",
+      "version.id as version_id",
+      "spec.role as actor_role",
+      "spec.name as actor_name",
+      "spec.avatar_file_id as actor_avatar_file_id",
+      "spec.avatar_emoji as actor_avatar_emoji",
+      "spec.title as actor_title",
+      "spec.can_represent_user as actor_can_represent_user",
+      "spec.docs as actor_docs",
+      "spec.specialties as actor_specialties",
+      "spec.config as actor_config",
+    ])
+    .where("publisher.slug", "=", OFFICIAL_ACTOR_PUBLISHER_SLUG)
+    .where("item.workspace_id", "is", null)
+    .where("item.item_kind", "=", "actor_template")
+    .where("item.is_active", "=", true)
+    .orderBy(
+      sql`case when spec.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb or item.slug = ${DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG} then 0 else 1 end`
+    )
+    .orderBy("item.created_at", "asc")
+    .orderBy("item.slug", "asc")
+    .execute()
 
-  if (result.rows.length === 0) {
+  if (rows.length === 0) {
     throw new Error("Official actor templates are missing.")
   }
 
-  return result.rows.map((row) => {
+  return rows.map((row) => {
     const isChiefActor = isOfficialChiefTemplate(row)
     return {
       packageId: row.package_id,
@@ -342,80 +313,73 @@ async function loadOfficialActorTemplates(
 export async function createWorkspace(input: CreateWorkspaceInput) {
   const slug = generateSlug(input.name)
 
-  const result = await transaction(async (client: pg.PoolClient) => {
-    const runner = { query: client.query.bind(client) as typeof query }
+  const result = await withDbTransaction(async (trx) => {
     // 1. Create workspace
-    const workspace = await executeTakeFirst<Record<string, unknown>>(
-      runner,
-      db
-        .insertInto("workspaces")
-        .values({
-          name: input.name,
-          slug,
-          description: input.description ?? null,
-          owner_id: input.userId,
-        })
-        .returningAll()
-    )
+    const workspace = await trx
+      .insertInto("workspaces")
+      .values({
+        name: input.name,
+        slug,
+        description: input.description ?? null,
+        owner_id: input.userId,
+      })
+      .returningAll()
+      .executeTakeFirst()
     if (!workspace) {
       throw new Error("Failed to create workspace.")
     }
 
     // 2. Add creator as admin member; owner is derived from workspaces.owner_id.
-    const creatorMember = await executeTakeFirst<Record<string, unknown>>(
-      runner,
-      db
-        .insertInto("workspace_members")
-        .values({
-          workspace_id: String(workspace.id),
-          user_id: input.userId,
-          trust_level: "admin",
-        })
-        .returningAll()
-    )
+    const creatorMember = await trx
+      .insertInto("workspace_members")
+      .values({
+        workspace_id: String(workspace.id),
+        user_id: input.userId,
+        trust_level: "admin",
+      })
+      .returningAll()
+      .executeTakeFirst()
     if (!creatorMember) {
       throw new Error("Failed to create workspace member.")
     }
 
     await seedWorkspaceCapabilityConversationTypePolicies(
-      client,
+      trx,
       String(workspace.id)
     )
 
-    const officialActorTemplates = await loadOfficialActorTemplates(client)
+    const officialActorTemplates = await loadOfficialActorTemplates(trx)
     const installedActors: Array<{
       actorRow: Record<string, unknown>
       template: LoadedOfficialActorTemplate
     }> = []
 
     for (const template of officialActorTemplates) {
-      const actorRow = await executeTakeFirst<Record<string, unknown>>(
-        runner,
-        db
-          .insertInto("actors")
-          .values({
-            workspace_id: String(workspace.id),
-            name: template.actorName,
-            role: template.actorRole,
-            title: template.actorTitle,
-            avatar_file_id: template.actorAvatarFileId || null,
-            avatar_emoji: template.actorAvatarEmoji || null,
-            parent_id: null,
-            can_represent_user: template.canRepresentUser,
-            specialties: template.actorSpecialties,
-            config: template.actorConfig as TableInsert<"actors">["config"],
-            current_version: 1,
-            created_by_workspace_member_id: String(creatorMember.id),
-          })
-          .returningAll()
-      )
+      const actorRow = await trx
+        .insertInto("actors")
+        .values({
+          workspace_id: String(workspace.id),
+          name: template.actorName,
+          role: template.actorRole,
+          title: template.actorTitle,
+          avatar_file_id: template.actorAvatarFileId || null,
+          avatar_emoji: template.actorAvatarEmoji || null,
+          parent_id: null,
+          can_represent_user: template.canRepresentUser,
+          specialties: template.actorSpecialties,
+          config: template.actorConfig as TableInsert<"actors">["config"],
+          current_version: 1,
+          created_by_workspace_member_id: String(creatorMember.id),
+        })
+        .returningAll()
+        .executeTakeFirst()
       if (!actorRow) {
         throw new Error(`Failed to install actor ${template.actorName}`)
       }
 
       // P2 contract: bootstrap actors are workspace-open by default — write
       // the binding instead of relying on the legacy access_policy column.
-      await setAccessPolicyOn(runner, {
+      await setAccessPolicy(trx, {
         resourceType: "actor",
         resourceId: String(actorRow.id),
         workspaceId: String(workspace.id),
@@ -423,25 +387,23 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
         createdByWorkspaceMemberId: String(creatorMember.id),
       })
 
-      const actorVersionResult = await executeTakeFirst<{ id: string }>(
-        runner,
-        db
-          .insertInto("actor_versions")
-          .values({
-            actor_id: String(actorRow.id),
-            version: 1,
-            name: template.actorName,
-            role: template.actorRole,
-            title: template.actorTitle,
-            parent_id: null,
-            can_represent_user: template.canRepresentUser,
-            specialties: template.actorSpecialties,
-            config:
-              template.actorConfig as TableInsert<"actor_versions">["config"],
-            created_by_workspace_member_id: String(creatorMember.id),
-          })
-          .returning("id")
-      )
+      const actorVersionResult = await trx
+        .insertInto("actor_versions")
+        .values({
+          actor_id: String(actorRow.id),
+          version: 1,
+          name: template.actorName,
+          role: template.actorRole,
+          title: template.actorTitle,
+          parent_id: null,
+          can_represent_user: template.canRepresentUser,
+          specialties: template.actorSpecialties,
+          config:
+            template.actorConfig as TableInsert<"actor_versions">["config"],
+          created_by_workspace_member_id: String(creatorMember.id),
+        })
+        .returning("id")
+        .executeTakeFirst()
       if (!actorVersionResult) {
         throw new Error(
           `Failed to create actor version for ${template.actorName}`
@@ -450,9 +412,9 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       const actorVersionId = actorVersionResult.id
 
       for (const doc of template.actorDocs) {
-        await executeCompiledQuery(
-          runner,
-          db.insertInto("actor_version_docs").values({
+        await trx
+          .insertInto("actor_version_docs")
+          .values({
             actor_version_id: actorVersionId,
             doc_key: doc.key,
             title: doc.title,
@@ -460,19 +422,19 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
             priority: doc.priority,
             content_blocks: sql`${JSON.stringify(doc.content)}::jsonb`,
           })
-        )
+          .execute()
       }
 
-      await executeCompiledQuery(
-        runner,
-        db.insertInto("actor_source_refs").values({
+      await trx
+        .insertInto("actor_source_refs")
+        .values({
           actor_id: String(actorRow.id),
           source_catalog_item_id: template.packageId,
           source_catalog_version_id: template.versionId,
           sync_mode: "notify",
           baseline_actor_version: 1,
         })
-      )
+        .execute()
 
       installedActors.push({
         actorRow,
@@ -489,7 +451,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       installedActors[0]!
 
     await assignOfficialChiefActorPreference(
-      client,
+      trx,
       String(workspace.id),
       String(creatorMember.id),
       String(chiefActor.actorRow.id)
@@ -523,13 +485,11 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
   const sortedTemplateIds = [...result.installedTemplatePackageIds].sort()
   for (const templateId of sortedTemplateIds) {
     try {
-      await query(
-        `UPDATE catalog_items
-            SET download_count = download_count + 1,
-                updated_at = NOW()
-          WHERE id = $1`,
-        [templateId]
-      )
+      await sql`
+        UPDATE catalog_items
+           SET download_count = download_count + 1,
+               updated_at = NOW()
+         WHERE id = ${templateId}`.execute(db)
     } catch (err) {
       console.warn(
         `[workspace.createWorkspace] best-effort download_count bump failed for catalog_item ${templateId}:`,
@@ -695,27 +655,24 @@ export async function checkMembership(workspaceId: string, userId: string) {
 }
 
 export async function addMember(input: AddMemberInput) {
-  const result = await transaction(async (client: pg.PoolClient) => {
-    const runner = { query: client.query.bind(client) as typeof query }
-    const memberRow = await executeTakeFirst(
-      runner,
-      db
-        .insertInto("workspace_members")
-        .values({
-          workspace_id: input.workspaceId,
-          user_id: input.userId,
-          trust_level: input.trustLevel,
-        })
-        .onConflict((oc) => oc.columns(["workspace_id", "user_id"]).doNothing())
-        .returningAll()
-    )
+  const result = await withDbTransaction(async (trx) => {
+    const memberRow = await trx
+      .insertInto("workspace_members")
+      .values({
+        workspace_id: input.workspaceId,
+        user_id: input.userId,
+        trust_level: input.trustLevel,
+      })
+      .onConflict((oc) => oc.columns(["workspace_id", "user_id"]).doNothing())
+      .returningAll()
+      .executeTakeFirst()
 
     if (!memberRow) {
       return null
     }
 
     await assignOfficialChiefActorPreference(
-      client,
+      trx,
       input.workspaceId,
       String(memberRow.id)
     )
