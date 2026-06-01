@@ -1,5 +1,7 @@
 import { lookup } from "node:dns/promises"
+import { lookup as lookupCb } from "node:dns"
 import ipaddr from "ipaddr.js"
+import { Agent, type Dispatcher } from "undici"
 
 /**
  * SSRF protection for server-initiated downloads (inbound media ingest, etc.).
@@ -49,16 +51,27 @@ function isBlockedAddress(addr: ipaddr.IPv4 | ipaddr.IPv6): boolean {
   return false
 }
 
+/** True if a literal IP string is a safe, public address. */
+function isPublicAddress(address: string): boolean {
+  if (!ipaddr.isValid(address)) return false
+  return !isBlockedAddress(ipaddr.parse(address))
+}
+
 /**
  * Throws if `hostname` is — or resolves to — a non-public address. Accepts a
  * bare hostname or an IP literal. Performs a DNS lookup (all records) for
  * names; checks the literal directly for IPs.
+ *
+ * NOTE: this is a pre-flight check. On its own it has a TOCTOU/DNS-rebinding
+ * gap (the name could resolve differently when fetch later connects). Pair it
+ * with `ssrfSafeDispatcher` (below), which re-validates the address the socket
+ * actually connects to, to close that window.
  */
 export async function assertPublicHost(hostname: string): Promise<void> {
   const host = hostname.toLowerCase()
 
   if (ipaddr.isValid(host)) {
-    if (isBlockedAddress(ipaddr.parse(host))) {
+    if (!isPublicAddress(host)) {
       throw new Error(`blocked non-public address: ${host}`)
     }
     return
@@ -81,4 +94,58 @@ export async function assertPublicHost(hostname: string): Promise<void> {
       )
     }
   }
+}
+
+/**
+ * An undici dispatcher (usable as fetch's `dispatcher`) whose DNS resolution
+ * REJECTS any resolved address that is not public. Because the validation runs
+ * inside the connect-time lookup, the address that passes the check is the same
+ * one the socket connects to — closing the DNS-rebinding / TOCTOU window that a
+ * pre-flight `assertPublicHost` alone leaves open.
+ *
+ * Created lazily and shared (one connection pool). `allowPrivate` returns a
+ * plain Agent with normal DNS for trusted/internal/test downloads.
+ */
+let cachedSafeDispatcher: Agent | null = null
+let cachedPlainDispatcher: Agent | null = null
+
+export function ssrfSafeDispatcher(allowPrivate = false): Dispatcher {
+  if (allowPrivate) {
+    cachedPlainDispatcher ??= new Agent()
+    return cachedPlainDispatcher
+  }
+  cachedSafeDispatcher ??= new Agent({
+    connect: {
+      lookup: (hostname, options, callback) => {
+        lookupCb(hostname, { ...options, all: true }, (err, addresses) => {
+          if (err) {
+            callback(err, "", 0)
+            return
+          }
+          const list = Array.isArray(addresses)
+            ? addresses
+            : [{ address: addresses as unknown as string, family: 4 }]
+          for (const entry of list) {
+            if (!isPublicAddress(entry.address)) {
+              callback(
+                new Error(
+                  `SSRF: refusing to connect to non-public address ${entry.address} (${hostname})`
+                ),
+                "",
+                0
+              )
+              return
+            }
+          }
+          // Hand undici the validated address set; the family arg is ignored
+          // when `all` results are returned via the array form.
+          callback(
+            null,
+            list.map((e) => ({ address: e.address, family: e.family }))
+          )
+        })
+      },
+    },
+  })
+  return cachedSafeDispatcher
 }

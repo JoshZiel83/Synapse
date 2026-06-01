@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { createServer, type Server } from "node:http"
-import { downloadToBufferWithLimit } from "./index.js"
+import { downloadToBuffer, downloadToBufferWithLimit } from "./index.js"
 
 async function withServer(
   handler: (
@@ -191,6 +191,46 @@ test("downloadToBufferWithLimit: blocks a private/loopback host by default (SSRF
         () =>
           downloadToBufferWithLimit({ url: `${baseUrl}/x`, maxBytes: 1000 }),
         /non-public address/
+      )
+    }
+  )
+})
+
+test("downloadToBuffer (general entry) enforces SSRF by default", async () => {
+  await withServer(
+    (_req, res) => {
+      res.statusCode = 200
+      res.end("nope")
+    },
+    async (baseUrl) => {
+      // baseUrl is 127.0.0.1 — the generic entry must reject it (it now
+      // delegates to the hardened path with the SSRF check always on).
+      await assert.rejects(
+        () => downloadToBuffer(`${baseUrl}/x`),
+        /non-public address/
+      )
+    }
+  )
+})
+
+test("SSRF pin: a hostname resolving to loopback is blocked at connect", async () => {
+  await withServer(
+    (_req, res) => {
+      res.statusCode = 200
+      res.end("nope")
+    },
+    async (baseUrl) => {
+      // Use the hostname form "localhost" (resolves to 127.0.0.1). Even though
+      // the URL string isn't a literal IP, the connect-time lookup validation
+      // (and the pre-flight check) must reject it.
+      const port = new URL(baseUrl).port
+      await assert.rejects(
+        () =>
+          downloadToBufferWithLimit({
+            url: `http://localhost:${port}/x`,
+            maxBytes: 1000,
+          }),
+        /non-public|SSRF/
       )
     }
   )

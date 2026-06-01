@@ -3,7 +3,7 @@ import os from "node:os"
 import fs from "node:fs/promises"
 import crypto from "node:crypto"
 import type { FileStorageBackend } from "@synapse/shared/types"
-import { assertPublicHost } from "./ssrf.js"
+import { assertPublicHost, ssrfSafeDispatcher } from "./ssrf.js"
 import { createLogger } from "../logger/index.js"
 
 const log = createLogger("storage")
@@ -447,7 +447,20 @@ export async function readAsBase64(storedName: string): Promise<string> {
   return buf.toString("base64")
 }
 
-/** Download a remote URL into memory, resolving MIME type and fallback filename. */
+/**
+ * Default hard cap for the generic `downloadToBuffer` entry (50 MiB). Callers
+ * that need a different cap should use `downloadToBufferWithLimit` directly.
+ */
+const DEFAULT_DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024
+
+/**
+ * Download a remote URL into memory, resolving MIME type and fallback filename.
+ *
+ * SSRF- and OOM-safe: it delegates to `downloadToBufferWithLimit`, so it always
+ * runs the SSRF host check (rejecting private/loopback/link-local targets and
+ * pinning the validated IP) and always streams with a size cap. Remote-supplied
+ * URLs (MCP/Zhipu results, IM media) flow through here safely.
+ */
 export async function downloadToBuffer(
   url: string,
   originalName?: string
@@ -457,31 +470,11 @@ export async function downloadToBuffer(
   sizeBytes: number
   originalName: string
 }> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 60000)
-
-  try {
-    const res = await fetch(url, { signal: controller.signal })
-    if (!res.ok)
-      throw new Error(
-        `Failed to download file: ${res.status} ${res.statusText}`
-      )
-
-    const contentType = res.headers.get("content-type")
-
-    if (!originalName) {
-      // Try to extract from URL path
-      const urlPath = new URL(url).pathname
-      originalName = path.basename(urlPath) || "download"
-    }
-
-    const arrayBuf = await res.arrayBuffer()
-    const buffer = Buffer.from(arrayBuf)
-    const mimeType = await resolveBufferMimeType(buffer, contentType)
-    return { buffer, mimeType, sizeBytes: buffer.length, originalName }
-  } finally {
-    clearTimeout(timeout)
-  }
+  return downloadToBufferWithLimit({
+    url,
+    originalName,
+    maxBytes: DEFAULT_DOWNLOAD_MAX_BYTES,
+  })
 }
 
 /** Download a remote URL, save to disk, return metadata */
@@ -612,6 +605,9 @@ export async function downloadToBufferWithLimit(
 
   let currentUrl = url
   let res: Response | undefined
+  // Pin the SSRF-validated IP to the actual connection (closes the DNS-
+  // rebinding window between the pre-flight assertPublicHost and connect).
+  const dispatcher = ssrfSafeDispatcher(allowPrivateHosts === true)
 
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
@@ -619,7 +615,8 @@ export async function downloadToBufferWithLimit(
       res = await fetch(currentUrl, {
         signal: controller.signal,
         redirect: "manual",
-      })
+        dispatcher,
+      } as RequestInit & { dispatcher: typeof dispatcher })
       // Manual redirect handling: only follow if explicit Location header
       if (res.status >= 300 && res.status < 400) {
         const location = res.headers.get("location")
