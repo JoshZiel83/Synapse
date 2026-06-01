@@ -236,3 +236,74 @@ test("createEmptyCanonicalChatState yields empty maps", () => {
   assert.deepEqual(state.itemsByConversationId, {})
   assert.deepEqual(state.outbox, {})
 })
+
+// --- outbox transitions ----------------------------------------------------
+
+import {
+  createEmptyCanonicalChatState as emptyState,
+  markOutboxAttemptStarted,
+  markOutboxDelivered,
+  markOutboxFailed,
+} from "./index.js"
+
+function stateWithOutbox(clientMessageId: string, conversationId = "c1") {
+  const s = emptyState("ws1")
+  s.conversations = [view({ conversationId })]
+  s.itemsByConversationId = { [conversationId]: [] }
+  s.outbox = {
+    [clientMessageId]: {
+      clientMessageId,
+      conversationId,
+      contentBlocks: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      optimisticSequence: 1,
+      status: "sending",
+      attemptCount: 0,
+    },
+  }
+  return s
+}
+
+test("markOutboxAttemptStarted bumps attemptCount + lastAttemptAt deterministically", () => {
+  const s = stateWithOutbox("m1")
+  const next = markOutboxAttemptStarted(s, "m1", "2026-02-02T00:00:00.000Z")
+  assert.equal(next.outbox.m1!.attemptCount, 1)
+  assert.equal(next.outbox.m1!.lastAttemptAt, "2026-02-02T00:00:00.000Z")
+  // unknown id -> same reference
+  assert.equal(markOutboxAttemptStarted(s, "nope", "x"), s)
+})
+
+test("markOutboxDelivered removes the entry, merges the item, updates lastItem", () => {
+  const s = stateWithOutbox("m1")
+  const serverItem = item({
+    id: "srv1",
+    sequence: 10,
+    clientMessageId: "m1",
+    content: "hi",
+  })
+  const next = markOutboxDelivered(s, "m1", serverItem)
+  assert.equal(next.outbox.m1, undefined)
+  assert.deepEqual(
+    next.itemsByConversationId.c1!.map((i) => i.id),
+    ["srv1"]
+  )
+  assert.equal(next.conversations[0]!.lastItem?.itemId, "srv1")
+  assert.equal(next.conversations[0]!.updatedAt, serverItem.createdAt)
+})
+
+test("markOutboxFailed sets retrying + firstFailedAt (sticky) + error", () => {
+  const s = stateWithOutbox("m1")
+  const failed = markOutboxFailed(s, "m1", "2026-03-03T00:00:00.000Z", "boom")
+  assert.equal(failed.outbox.m1!.status, "retrying")
+  assert.equal(failed.outbox.m1!.firstFailedAt, "2026-03-03T00:00:00.000Z")
+  assert.equal(failed.outbox.m1!.lastErrorMessage, "boom")
+  // firstFailedAt is sticky across subsequent failures
+  const again = markOutboxFailed(
+    failed,
+    "m1",
+    "2026-03-04T00:00:00.000Z",
+    "boom2"
+  )
+  assert.equal(again.outbox.m1!.firstFailedAt, "2026-03-03T00:00:00.000Z")
+  assert.equal(again.outbox.m1!.lastErrorMessage, "boom2")
+})

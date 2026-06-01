@@ -82,3 +82,24 @@ DEFERRED (tracked continuation — recipe proven, mechanical per-form work): aut
 model-group-dialog, actor-editor-sheet, memory-editor-page, plugin steps, etc. Each: define a zod
 schema, useForm({resolver: standardSchemaResolver(schema)}), wrap inputs in Controller, surface
 errors via FieldError. Migrate incrementally.
+
+## Phase 7 scope note (chat reducer + outbox transitions)
+
+Added PURE outbox state-machine transitions + conversation helpers to @synapse/shared/chat-state:
+
+- markOutboxAttemptStarted / markOutboxDelivered / markOutboxFailed (clock + server item + error
+  injected; no API, no platform) — extracted from the byte-parallel flush loops in mobile
+  chat-runtime.ts and web chat-store.ts.
+- updateConversationInState, buildItemPreviewText, toConversationLastItem.
+- 3 new tsx --test cases (deterministic now; firstFailedAt sticky; delivered merges+updates lastItem);
+  shared suite 127 -> 130 green.
+- Wired mobile chat-runtime.ts to consume shared clearDeliveredOutbox + shouldIncrementUnreadCount
+  (deleted local dupes).
+
+DEFERRED (intentional, risk-bounded): the mobile/web flush LOOPS still call the class/zustand
+shell (updateSnapshotForWorkspace / set) rather than being rewritten to thread the markOutbox\*
+transitions, and web's chat-store leaf helpers are not yet repointed to shared. The pure transitions
+are extracted, tested, and ready for incremental adoption; rewriting the live flush loops + web store
+wholesale is high-risk on the chat data path with no integration tests, so it is staged rather than
+done in one pass. Net Tier-2 win delivered: the chat merge/sort/upsert/outbox/unread logic now has a
+single tested source of truth in shared, consumed by mobile.

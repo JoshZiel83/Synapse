@@ -18,14 +18,17 @@
  * barrel (keeps the service-worker-reachable barrel surface tight).
  */
 
-import type {
-  ChatConversationItem,
-  ChatConversationView,
+import {
+  extractText,
+  summarizeConversationEvent,
+  type ChatConversationItem,
+  type ChatConversationView,
 } from "../types/index.js"
 import type {
   PendingConversationRead,
   PendingOutboxMessage,
 } from "../chat-queue/index.js"
+import { CONVERSATION_ITEM_TYPE } from "../constants/enums.js"
 
 /** Per-conversation load/read bookkeeping (mirrors mobile ChatConversationMeta). */
 export interface CanonicalChatConversationMeta {
@@ -209,4 +212,162 @@ export function nextOptimisticSequence(
     }
   }
   return max + 1
+}
+
+// ---------------------------------------------------------------------------
+// Conversation-list helpers + preview text (pure; shared with both clients).
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply `updater` to the conversation with `conversationId`, then re-sort the
+ * conversation list. No-op (same reference) if the conversation is absent.
+ * Mirrors mobile `updateConversationInSnapshot`.
+ */
+export function updateConversationInState<
+  S extends {
+    conversations: ChatConversationView[]
+  },
+>(
+  state: S,
+  conversationId: string,
+  updater: (c: ChatConversationView) => ChatConversationView
+): S {
+  const current = state.conversations.find(
+    (conversation) => conversation.conversationId === conversationId
+  )
+  if (!current) return state
+  return {
+    ...state,
+    conversations: upsertChatConversation(
+      state.conversations,
+      updater(current)
+    ),
+  }
+}
+
+/** Derive a conversation-list preview string for an item. Mirrors mobile `buildPreviewTextFromItem`. */
+export function buildItemPreviewText(
+  item: ChatConversationItem | undefined
+): string {
+  if (!item) return ""
+
+  const text = extractText(item.contentBlocks).trim()
+  if (text) return text
+
+  if (item.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
+    return summarizeConversationEvent(item.subtype, item.eventPayload)
+  }
+  if (item.itemType === CONVERSATION_ITEM_TYPE.MESSAGE) {
+    return "Attachment"
+  }
+  return `[${item.subtype}]`
+}
+
+/** Build the `lastItem` summary a ChatConversationView carries, from a full item. */
+export function toConversationLastItem(
+  item: ChatConversationItem
+): NonNullable<ChatConversationView["lastItem"]> {
+  return {
+    itemId: item.id,
+    sequence: item.sequence,
+    itemType: item.itemType,
+    subtype: item.subtype,
+    previewText: buildItemPreviewText(item),
+    authorParticipantId: item.authorParticipantId,
+    author: item.author,
+    createdAt: item.createdAt,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pure outbox state-machine TRANSITIONS.
+//
+// The network call + clock live in each frontend's shell; these functions take
+// the prior state plus injected values (now, server item, error) and return the
+// next state. Extracted from the byte-parallel flush loops in mobile
+// chat-runtime.ts and web chat-store.ts.
+// ---------------------------------------------------------------------------
+
+/** Mark an outbox entry as having started a send attempt (bumps attemptCount + lastAttemptAt). */
+export function markOutboxAttemptStarted<S extends CanonicalChatState>(
+  state: S,
+  clientMessageId: string,
+  nowIso: string
+): S {
+  const entry = state.outbox[clientMessageId]
+  if (!entry) return state
+  return {
+    ...state,
+    outbox: {
+      ...state.outbox,
+      [clientMessageId]: {
+        ...entry,
+        attemptCount: entry.attemptCount + 1,
+        lastAttemptAt: nowIso,
+      },
+    },
+  }
+}
+
+/**
+ * Mark an outbox entry as delivered: remove it from the outbox, merge the
+ * server item into the conversation's loaded items (if the conversation has
+ * items loaded), and refresh the conversation's lastItem/updatedAt.
+ */
+export function markOutboxDelivered<S extends CanonicalChatState>(
+  state: S,
+  clientMessageId: string,
+  serverItem: ChatConversationItem
+): S {
+  const entry = state.outbox[clientMessageId]
+  if (!entry) return state
+
+  const nextOutbox = { ...state.outbox }
+  delete nextOutbox[clientMessageId]
+
+  const conversationId = entry.conversationId
+  const nextItems = mergeChatItems(
+    state.itemsByConversationId[conversationId] ?? [],
+    [serverItem]
+  )
+
+  return updateConversationInState(
+    {
+      ...state,
+      outbox: nextOutbox,
+      itemsByConversationId: {
+        ...state.itemsByConversationId,
+        [conversationId]: nextItems,
+      },
+    },
+    conversationId,
+    (conversation) => ({
+      ...conversation,
+      updatedAt: serverItem.createdAt,
+      lastItem: toConversationLastItem(serverItem),
+    })
+  )
+}
+
+/** Mark an outbox entry as failed: status -> "retrying", record firstFailedAt + error. */
+export function markOutboxFailed<S extends CanonicalChatState>(
+  state: S,
+  clientMessageId: string,
+  nowIso: string,
+  errorMessage: string
+): S {
+  const entry = state.outbox[clientMessageId]
+  if (!entry) return state
+  return {
+    ...state,
+    outbox: {
+      ...state.outbox,
+      [clientMessageId]: {
+        ...entry,
+        status: "retrying",
+        firstFailedAt: entry.firstFailedAt ?? nowIso,
+        lastErrorMessage: errorMessage,
+      },
+    },
+  }
 }
