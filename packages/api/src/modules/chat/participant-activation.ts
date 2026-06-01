@@ -76,8 +76,8 @@ export async function activateConversationParticipant(params: {
   displayName?: string
   actorJoinVersionId?: string
   metadata?: Record<string, unknown>
-  // Required when participantType === "external": the transport address that
-  // identifies this external person (used to mint the first-class subject).
+  // Required for external participants: the transport address that identifies
+  // this external person (used to mint the first-class subject).
   transportAddressId?: string
   initiator?: ParticipantInitiator
   recordJoinEvent?: boolean

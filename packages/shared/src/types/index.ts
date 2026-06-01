@@ -4878,10 +4878,16 @@ export function isCanonicalContentBlock(
   if (block.type === "file_ref") {
     const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes)
     return (
-      typeof block.fileId === "string" &&
-      typeof block.url === "string" &&
+      // Redesigned FileRefBlock (file-service refactor): sha256 is the always-
+      // present content identity; path is optional (present only for live
+      // mounted spaces); name replaces originalName; fileId/url were dropped.
+      // MUST mirror normalizeCanonicalContentBlocks' file_ref validation below,
+      // else this guard (used as a strict filter in chat/event-registry.ts and
+      // chat/message-content.ts) would reject every block fileRefBlock() emits.
+      typeof block.sha256 === "string" &&
+      (block.path === undefined || typeof block.path === "string") &&
       typeof block.mimeType === "string" &&
-      typeof block.originalName === "string" &&
+      typeof block.name === "string" &&
       sizeBytes !== null &&
       (block.category === "image" ||
         block.category === "audio" ||
