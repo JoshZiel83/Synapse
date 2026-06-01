@@ -276,3 +276,93 @@ test(
     ])
   }
 )
+
+test(
+  "restorePendingSidecars: a sidecar with an unknown/corrupt kind is PERMANENT (fs-helper rejects it)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    const work = mkdtempSync(join(tmpdir(), "synapse-perm-kind-"))
+    const liveActor = join(work, "fresh", "actor")
+    mkdirSync(liveActor, { recursive: true })
+
+    // A record with kind="dir" (or any non-file/non-symlink value) is corrupt —
+    // fs-helper's restore only handles file/symlink, so this can never be
+    // rebuilt. It must be PERMANENT, NOT transient (no "will be retried").
+    const pendingCommit: Record<string, PendingCommitConflict> = {
+      actor: {
+        paths: ["/d"],
+        sidecars: [
+          {
+            original: "/actor/d",
+            sidecar: "/actor/.synapse-conflicts/dk",
+            kind: "dir",
+            contentSha: "a".repeat(64),
+          },
+        ],
+      },
+    }
+    const emptyRefresh: Pick<
+      PendingRefreshConflicts,
+      "deferredConflictsBySubpath" | "sidecarsBySubpath"
+    > = { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
+
+    const result = await restorePendingSidecarsImpl(
+      "sess-irrelevant",
+      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      {
+        peekCommit: async () => pendingCommit,
+        peekRefresh: async () => emptyRefresh,
+      }
+    )
+
+    assert.equal(result.ok, false)
+    assert.deepEqual(result.failedSidecars, [
+      { sidecar: "/actor/.synapse-conflicts/dk", reason: "permanent" },
+    ])
+  }
+)
+
+test(
+  "restorePendingSidecars: a shape-corrupt ref is PERMANENT even when its subpath has NO live mount (mount-independent)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    const work = mkdtempSync(join(tmpdir(), "synapse-perm-nomount-"))
+    const liveActor = join(work, "fresh", "actor")
+    mkdirSync(liveActor, { recursive: true })
+
+    // The corrupt ref lives under /conversation, which is NOT mounted this
+    // provision. Shape-irrecoverability is mount-independent, so it must be
+    // PERMANENT — not transient just because the mount is inactive.
+    const pendingCommit: Record<string, PendingCommitConflict> = {
+      conversation: {
+        paths: ["/x.txt"],
+        sidecars: [
+          {
+            original: "/conversation/x.txt",
+            sidecar: "/conversation/.synapse-conflicts/cx",
+            kind: "file",
+            // no contentSha → shape-corrupt
+          },
+        ],
+      },
+    }
+    const emptyRefresh: Pick<
+      PendingRefreshConflicts,
+      "deferredConflictsBySubpath" | "sidecarsBySubpath"
+    > = { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
+
+    const result = await restorePendingSidecarsImpl(
+      "sess-irrelevant",
+      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      {
+        peekCommit: async () => pendingCommit,
+        peekRefresh: async () => emptyRefresh,
+      }
+    )
+
+    assert.equal(result.ok, false)
+    assert.deepEqual(result.failedSidecars, [
+      { sidecar: "/conversation/.synapse-conflicts/cx", reason: "permanent" },
+    ])
+  }
+)

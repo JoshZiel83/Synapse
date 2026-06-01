@@ -90,8 +90,14 @@ test("partitionSidecars: restoreStatusUnknown buckets well-formed refs transient
     kind: "symlink",
     // no target — corrupt
   }
+  const corruptKind: ConflictSidecarRef = {
+    original: "/actor/d",
+    sidecar: "/actor/.synapse-conflicts/h5",
+    kind: "dir", // unknown/corrupt kind — unrestorable regardless of payload
+    contentSha: "abc",
+  }
   const { restored, transient, permanent } = partitionSidecars(
-    [fileRef, symlinkRef, corruptRef, corruptSymlink],
+    [fileRef, symlinkRef, corruptRef, corruptSymlink, corruptKind],
     reasons([]),
     true
   )
@@ -103,8 +109,8 @@ test("partitionSidecars: restoreStatusUnknown buckets well-formed refs transient
   )
   assert.deepEqual(
     permanent.map((s) => s.sidecar).sort(),
-    [corruptRef.sidecar, corruptSymlink.sidecar].sort(),
-    "shape-corrupt refs stay permanent even when restore status is unknown"
+    [corruptRef.sidecar, corruptSymlink.sidecar, corruptKind.sidecar].sort(),
+    "shape-corrupt refs (missing payload OR unknown kind) stay permanent even when status is unknown"
   )
 })
 

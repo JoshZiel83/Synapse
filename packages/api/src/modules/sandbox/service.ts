@@ -679,8 +679,11 @@ export interface ConflictSidecarRef {
  * the durable record lacks the payload needed to ever rebuild it, regardless of
  * mount state or transient fs conditions:
  *   - a "file" sidecar with no contentSha (pre-round-11 / corrupt: the CAS
- *     pointer is gone), or
- *   - a "symlink" sidecar with no target.
+ *     pointer is gone),
+ *   - a "symlink" sidecar with no target, or
+ *   - any OTHER kind (a corrupt record: only "file"/"symlink" are restorable;
+ *     fs-helper's restore rejects an unknown kind with InvalidParams, so it can
+ *     never be rebuilt — treat it as permanent here too, not retryable).
  * Such a ref is PERMANENT in BOTH the normal restore loop and the fail-closed
  * "unknown" partition path, so the agent is never told a corrupt copy "will be
  * retried". A bad sidecar PATH (unparseable) is also permanent but is detected
@@ -692,7 +695,8 @@ export function isSidecarPayloadIrrecoverable(
 ): boolean {
   if (ref.kind === "file") return !ref.contentSha
   if (ref.kind === "symlink") return ref.target === undefined
-  return false
+  // Unknown/corrupt kind — unrestorable by fs-helper, so permanently lost.
+  return true
 }
 
 /** Per-subpath pending commit conflicts: the lost paths + their sidecars. */
@@ -1280,30 +1284,28 @@ export async function restorePendingSidecarsImpl(
       continue
     }
     const [, subpath, leaf] = m
+    // Shape-irrecoverability is mount-INDEPENDENT, so check it BEFORE the live-
+    // mount check: a ref whose own record can never rebuild (file with no
+    // contentSha, symlink with no target, or an unknown/corrupt kind) is
+    // PERMANENT regardless of whether its subpath is mounted this provision.
+    // Checking it first keeps this loop in lockstep with partitionSidecars'
+    // unknown-mode classification (both via isSidecarPayloadIrrecoverable), so a
+    // corrupt ref is never reported transient just because its mount happens to
+    // be inactive this turn.
+    if (isSidecarPayloadIrrecoverable(ref)) {
+      console.warn(
+        `[sandbox] cannot restore sidecar ${ref.sidecar} (kind=${ref.kind}, ` +
+          `irrecoverable record — missing payload or unknown kind); skipping permanently`
+      )
+      fail(ref.sidecar, "permanent")
+      continue
+    }
     const dir = dirBySubpath.get(subpath)
     if (!dir) {
       // No live mount for this subpath this provision — can't restore now, but a
       // LATER provision (with this mount active) can; keep it retryable (R12-3
       // fail-closed) rather than treating it as delivered. TRANSIENT.
       fail(ref.sidecar, "transient")
-      continue
-    }
-    if (ref.kind === "file" && !ref.contentSha) {
-      // The durable record lacks the CAS pointer (pre-round-11 / corrupt) — the
-      // bytes can never be rebuilt. PERMANENT (see isSidecarPayloadIrrecoverable).
-      console.warn(
-        `[sandbox] cannot restore file sidecar ${ref.sidecar} (no contentSha — pre-round-11/corrupt record); skipping permanently`
-      )
-      fail(ref.sidecar, "permanent")
-      continue
-    }
-    if (ref.kind === "symlink" && ref.target === undefined) {
-      // The durable record lacks the symlink target — cannot rebuild. PERMANENT
-      // (see isSidecarPayloadIrrecoverable).
-      console.warn(
-        `[sandbox] cannot restore symlink sidecar ${ref.sidecar} (no target — corrupt record); skipping permanently`
-      )
-      fail(ref.sidecar, "permanent")
       continue
     }
     try {
