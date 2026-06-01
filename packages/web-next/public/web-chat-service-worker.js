@@ -236,6 +236,153 @@
     }
   }));
 
+  // ../shared/dist/chat-queue/index.js
+  var CHAT_QUEUE_DB_NAME = "synapse-chat-queue";
+  var CHAT_QUEUE_DB_VERSION = 1;
+  var CHAT_QUEUE_STATE_STORE = "workspace_queue_states";
+  var CHAT_QUEUE_BROADCAST_CHANNEL = "synapse-chat-queue";
+  var CHAT_SERVICE_WORKER_SYNC_TAG = "synapse-chat-sync";
+  var CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-chat-periodic-sync";
+  function createEmptyStoredChatQueueState(workspaceId) {
+    return {
+      version: 3,
+      workspaceId,
+      inboxCursor: 0,
+      pendingReads: {},
+      outbox: {}
+    };
+  }
+  function isUuidLike(value) {
+    if (typeof value !== "string")
+      return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  }
+  function normalizeStoredChatQueueState(workspaceId, value) {
+    if (!value || typeof value !== "object") {
+      return createEmptyStoredChatQueueState(workspaceId);
+    }
+    const snapshot = value;
+    if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
+      return createEmptyStoredChatQueueState(workspaceId);
+    }
+    const pendingReads = snapshot.pendingReads && typeof snapshot.pendingReads === "object" ? Object.fromEntries(Object.entries(snapshot.pendingReads).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string"))) : {};
+    const outbox = snapshot.outbox && typeof snapshot.outbox === "object" ? Object.fromEntries(Object.entries(snapshot.outbox).filter(([, entry]) => Boolean(entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string"))) : {};
+    return {
+      version: 3,
+      workspaceId,
+      workspaceMemberId: typeof snapshot.workspaceMemberId === "string" ? snapshot.workspaceMemberId : void 0,
+      clientInstanceId: isUuidLike(snapshot.clientInstanceId) ? snapshot.clientInstanceId : void 0,
+      inboxCursor: typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
+      lastBootstrappedAt: typeof snapshot.lastBootstrappedAt === "string" ? snapshot.lastBootstrappedAt : void 0,
+      pendingReads,
+      outbox
+    };
+  }
+  function sameStoredChatQueueState(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  function latestIsoTimestamp(currentValue, nextValue) {
+    if (!currentValue)
+      return nextValue;
+    if (!nextValue)
+      return currentValue;
+    return new Date(currentValue).getTime() >= new Date(nextValue).getTime() ? currentValue : nextValue;
+  }
+  function sameStoredEntry(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  function mergeStoredQueueTransition(currentState, previousState, nextState) {
+    const nextWorkspaceState = currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId ? createEmptyStoredChatQueueState(nextState.workspaceId) : currentState.workspaceId === nextState.workspaceId ? currentState : createEmptyStoredChatQueueState(nextState.workspaceId);
+    const previousOutbox = previousState?.outbox ?? {};
+    const previousPendingReads = previousState?.pendingReads ?? {};
+    const nextOutbox = { ...nextWorkspaceState.outbox };
+    const nextPendingReads = { ...nextWorkspaceState.pendingReads };
+    for (const clientMessageId of Object.keys(previousOutbox)) {
+      if (!(clientMessageId in nextState.outbox)) {
+        delete nextOutbox[clientMessageId];
+      }
+    }
+    for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
+      if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
+        nextOutbox[clientMessageId] = entry;
+      }
+    }
+    for (const conversationId of Object.keys(previousPendingReads)) {
+      if (!(conversationId in nextState.pendingReads)) {
+        const currentEntry = nextPendingReads[conversationId];
+        const previousEntry = previousPendingReads[conversationId];
+        if (currentEntry && previousEntry && currentEntry.readUpToSequence > previousEntry.readUpToSequence) {
+          continue;
+        }
+        delete nextPendingReads[conversationId];
+      }
+    }
+    for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
+      if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
+        nextPendingReads[conversationId] = entry;
+      }
+    }
+    return {
+      ...nextWorkspaceState,
+      workspaceId: nextState.workspaceId,
+      workspaceMemberId: nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
+      clientInstanceId: nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
+      inboxCursor: Math.max(nextWorkspaceState.inboxCursor, nextState.inboxCursor),
+      lastBootstrappedAt: latestIsoTimestamp(nextWorkspaceState.lastBootstrappedAt, nextState.lastBootstrappedAt),
+      pendingReads: nextPendingReads,
+      outbox: nextOutbox
+    };
+  }
+  async function flushOutboxQueue(state, deps) {
+    if (!state.clientInstanceId) {
+      return state;
+    }
+    let next = state;
+    const entries = Object.values(state.outbox).sort((left, right) => left.optimisticSequence - right.optimisticSequence);
+    for (const entry of entries) {
+      const currentEntry = next.outbox[entry.clientMessageId];
+      if (!currentEntry) {
+        continue;
+      }
+      next = {
+        ...next,
+        outbox: {
+          ...next.outbox,
+          [entry.clientMessageId]: {
+            ...currentEntry,
+            attemptCount: (currentEntry.attemptCount || 0) + 1,
+            lastAttemptAt: deps.now()
+          }
+        }
+      };
+      try {
+        await deps.send(entry);
+        const nextOutbox = { ...next.outbox };
+        delete nextOutbox[entry.clientMessageId];
+        next = { ...next, outbox: nextOutbox };
+      } catch (error) {
+        const failedEntry = next.outbox[entry.clientMessageId];
+        if (!failedEntry) {
+          break;
+        }
+        next = {
+          ...next,
+          outbox: {
+            ...next.outbox,
+            [entry.clientMessageId]: {
+              ...failedEntry,
+              status: "retrying",
+              firstFailedAt: failedEntry.firstFailedAt || deps.now(),
+              lastErrorMessage: error instanceof Error ? error.message : deps.failureMessage ?? "Failed to send message"
+            }
+          }
+        };
+        break;
+      }
+    }
+    return next;
+  }
+
   // ../device-protocol/dist/enums.js
   var DEVICE_MCP_ERROR_CODES = [
     "tool_definition_changed",
@@ -1904,104 +2051,6 @@
   // ../shared/dist/access/subject.js
   var platformRef = { kind: SUBJECT_KIND.PLATFORM };
 
-  // ../shared/dist/chat-queue/index.js
-  var CHAT_QUEUE_DB_NAME = "synapse-chat-queue";
-  var CHAT_QUEUE_DB_VERSION = 1;
-  var CHAT_QUEUE_STATE_STORE = "workspace_queue_states";
-  var CHAT_QUEUE_BROADCAST_CHANNEL = "synapse-chat-queue";
-  var CHAT_SERVICE_WORKER_SYNC_TAG = "synapse-chat-sync";
-  var CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-chat-periodic-sync";
-  function createEmptyStoredChatQueueState(workspaceId) {
-    return {
-      version: 3,
-      workspaceId,
-      inboxCursor: 0,
-      pendingReads: {},
-      outbox: {}
-    };
-  }
-  function isUuidLike(value) {
-    if (typeof value !== "string")
-      return false;
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-  }
-  function normalizeStoredChatQueueState(workspaceId, value) {
-    if (!value || typeof value !== "object") {
-      return createEmptyStoredChatQueueState(workspaceId);
-    }
-    const snapshot = value;
-    if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
-      return createEmptyStoredChatQueueState(workspaceId);
-    }
-    const pendingReads = snapshot.pendingReads && typeof snapshot.pendingReads === "object" ? Object.fromEntries(Object.entries(snapshot.pendingReads).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string"))) : {};
-    const outbox = snapshot.outbox && typeof snapshot.outbox === "object" ? Object.fromEntries(Object.entries(snapshot.outbox).filter(([, entry]) => Boolean(entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string"))) : {};
-    return {
-      version: 3,
-      workspaceId,
-      workspaceMemberId: typeof snapshot.workspaceMemberId === "string" ? snapshot.workspaceMemberId : void 0,
-      clientInstanceId: isUuidLike(snapshot.clientInstanceId) ? snapshot.clientInstanceId : void 0,
-      inboxCursor: typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
-      lastBootstrappedAt: typeof snapshot.lastBootstrappedAt === "string" ? snapshot.lastBootstrappedAt : void 0,
-      pendingReads,
-      outbox
-    };
-  }
-  function sameStoredChatQueueState(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-  function latestIsoTimestamp(currentValue, nextValue) {
-    if (!currentValue)
-      return nextValue;
-    if (!nextValue)
-      return currentValue;
-    return new Date(currentValue).getTime() >= new Date(nextValue).getTime() ? currentValue : nextValue;
-  }
-  function sameStoredEntry(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-  function mergeStoredQueueTransition(currentState, previousState, nextState) {
-    const nextWorkspaceState = currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId ? createEmptyStoredChatQueueState(nextState.workspaceId) : currentState.workspaceId === nextState.workspaceId ? currentState : createEmptyStoredChatQueueState(nextState.workspaceId);
-    const previousOutbox = previousState?.outbox ?? {};
-    const previousPendingReads = previousState?.pendingReads ?? {};
-    const nextOutbox = { ...nextWorkspaceState.outbox };
-    const nextPendingReads = { ...nextWorkspaceState.pendingReads };
-    for (const clientMessageId of Object.keys(previousOutbox)) {
-      if (!(clientMessageId in nextState.outbox)) {
-        delete nextOutbox[clientMessageId];
-      }
-    }
-    for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
-      if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
-        nextOutbox[clientMessageId] = entry;
-      }
-    }
-    for (const conversationId of Object.keys(previousPendingReads)) {
-      if (!(conversationId in nextState.pendingReads)) {
-        const currentEntry = nextPendingReads[conversationId];
-        const previousEntry = previousPendingReads[conversationId];
-        if (currentEntry && previousEntry && currentEntry.readUpToSequence > previousEntry.readUpToSequence) {
-          continue;
-        }
-        delete nextPendingReads[conversationId];
-      }
-    }
-    for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
-      if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
-        nextPendingReads[conversationId] = entry;
-      }
-    }
-    return {
-      ...nextWorkspaceState,
-      workspaceId: nextState.workspaceId,
-      workspaceMemberId: nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
-      clientInstanceId: nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
-      inboxCursor: Math.max(nextWorkspaceState.inboxCursor, nextState.inboxCursor),
-      lastBootstrappedAt: latestIsoTimestamp(nextWorkspaceState.lastBootstrappedAt, nextState.lastBootstrappedAt),
-      pendingReads: nextPendingReads,
-      outbox: nextOutbox
-    };
-  }
-
   // lib/chat-persistence.ts
   var queueDbPromise = null;
   function getQueueDatabase() {
@@ -2179,30 +2228,10 @@
     return next;
   }
   async function flushOutbox(auth, snapshot) {
-    if (!snapshot.clientInstanceId) {
-      return snapshot;
-    }
-    let next = snapshot;
-    const entries = Object.values(snapshot.outbox).sort(
-      (left, right) => left.optimisticSequence - right.optimisticSequence
-    );
-    for (const entry of entries) {
-      const currentEntry = next.outbox[entry.clientMessageId];
-      if (!currentEntry) {
-        continue;
-      }
-      next = {
-        ...next,
-        outbox: {
-          ...next.outbox,
-          [entry.clientMessageId]: {
-            ...currentEntry,
-            attemptCount: (currentEntry.attemptCount || 0) + 1,
-            lastAttemptAt: (/* @__PURE__ */ new Date()).toISOString()
-          }
-        }
-      };
-      try {
+    return flushOutboxQueue(snapshot, {
+      now: () => (/* @__PURE__ */ new Date()).toISOString(),
+      failureMessage: "Failed to send message",
+      send: async (entry) => {
         await fetchJson(
           auth,
           `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
@@ -2216,33 +2245,8 @@
             })
           }
         );
-        const nextOutbox = { ...next.outbox };
-        delete nextOutbox[entry.clientMessageId];
-        next = {
-          ...next,
-          outbox: nextOutbox
-        };
-      } catch (error) {
-        const failedEntry = next.outbox[entry.clientMessageId];
-        if (!failedEntry) {
-          break;
-        }
-        next = {
-          ...next,
-          outbox: {
-            ...next.outbox,
-            [entry.clientMessageId]: {
-              ...failedEntry,
-              status: "retrying",
-              firstFailedAt: failedEntry.firstFailedAt || (/* @__PURE__ */ new Date()).toISOString(),
-              lastErrorMessage: error instanceof Error ? error.message : "Failed to send message"
-            }
-          }
-        };
-        break;
       }
-    }
-    return next;
+    });
   }
   async function broadcast(message) {
     try {

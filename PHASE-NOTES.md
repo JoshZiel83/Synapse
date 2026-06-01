@@ -103,3 +103,19 @@ are extracted, tested, and ready for incremental adoption; rewriting the live fl
 wholesale is high-risk on the chat data path with no integration tests, so it is staged rather than
 done in one pass. Net Tier-2 win delivered: the chat merge/sort/upsert/outbox/unread logic now has a
 single tested source of truth in shared, consumed by mobile.
+
+## Phase 8 note (shared SW flush helper)
+
+- Added flushOutboxQueue(state, {send, now, failureMessage}) to @synapse/shared/chat-queue —
+  the near-verbatim SW outbox flush loop (optimisticSequence order; attempt bump; success delete;
+  failure -> retrying + sticky firstFailedAt + break). Platform bits (fetch transport, clock,
+  locale error string) injected.
+- Both SWs (web-chat-service-worker.ts, mobile chat-service-worker.ts) now call flushOutboxQueue
+  via the @synapse/shared/chat-queue (web) / @shared/chat-queue (mobile) subpath, replacing their
+  duplicated loops (~75 lines each removed).
+- GOTCHA: the api regression suite (sw-constants-shared.test.ts) asserts CHAT*QUEUE*\* CONSTANTS are
+  imported from the bare barrel "@synapse/shared"/"@shared" in chat-persistence.ts /
+  chat-web-queue-storage.ts. So those CONSTANT imports stay on the barrel (the zod-no-leak test
+  already proves the barrel is zod-free today); only the flush helper uses the subpath.
+- Verification order followed: build:chat-worker (both) + commit regenerated bundles, THEN
+  npm test (regression) — 8/8, no zod in bundles.

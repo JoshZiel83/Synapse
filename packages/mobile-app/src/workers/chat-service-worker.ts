@@ -8,7 +8,7 @@ import {
   saveStoredChatWorkspaceQueueState,
   type MobileChatWorkerAuthContext,
 } from "../lib/chat-web-queue-storage"
-import { mergeQueueStateForSave } from "@shared"
+import { flushOutboxQueue, mergeQueueStateForSave } from "@shared/chat-queue"
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
   CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
@@ -197,34 +197,10 @@ async function flushOutbox(
   auth: MobileChatWorkerAuthContext,
   queueState: ReturnType<typeof createEmptyStoredChatWorkspaceQueueState>
 ) {
-  if (!queueState.clientInstanceId) {
-    return queueState
-  }
-
-  let next = queueState
-  const entries = Object.values(queueState.outbox).sort(
-    (left, right) => left.optimisticSequence - right.optimisticSequence
-  )
-
-  for (const entry of entries) {
-    if (!next.outbox[entry.clientMessageId]) {
-      continue
-    }
-
-    next = {
-      ...next,
-      outbox: {
-        ...next.outbox,
-        [entry.clientMessageId]: {
-          ...next.outbox[entry.clientMessageId],
-          attemptCount:
-            (next.outbox[entry.clientMessageId].attemptCount || 0) + 1,
-          lastAttemptAt: new Date().toISOString(),
-        },
-      },
-    }
-
-    try {
+  return flushOutboxQueue(queueState, {
+    now: () => new Date().toISOString(),
+    failureMessage: "发送失败",
+    send: async (entry) => {
       await fetchJson(
         auth,
         `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
@@ -238,38 +214,8 @@ async function flushOutbox(
           }),
         }
       )
-
-      const nextOutbox = { ...next.outbox }
-      delete nextOutbox[entry.clientMessageId]
-      next = {
-        ...next,
-        outbox: nextOutbox,
-      }
-    } catch (error) {
-      const currentEntry = next.outbox[entry.clientMessageId]
-      if (!currentEntry) {
-        break
-      }
-
-      next = {
-        ...next,
-        outbox: {
-          ...next.outbox,
-          [entry.clientMessageId]: {
-            ...currentEntry,
-            status: "retrying",
-            firstFailedAt:
-              currentEntry.firstFailedAt || new Date().toISOString(),
-            lastErrorMessage:
-              error instanceof Error ? error.message : "发送失败",
-          },
-        },
-      }
-      break
-    }
-  }
-
-  return next
+    },
+  })
 }
 
 async function broadcast(message: ChatWorkerBroadcast) {

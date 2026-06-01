@@ -1957,6 +1957,55 @@
     }
     return next;
   }
+  async function flushOutboxQueue(state, deps) {
+    if (!state.clientInstanceId) {
+      return state;
+    }
+    let next = state;
+    const entries = Object.values(state.outbox).sort((left, right) => left.optimisticSequence - right.optimisticSequence);
+    for (const entry of entries) {
+      const currentEntry = next.outbox[entry.clientMessageId];
+      if (!currentEntry) {
+        continue;
+      }
+      next = {
+        ...next,
+        outbox: {
+          ...next.outbox,
+          [entry.clientMessageId]: {
+            ...currentEntry,
+            attemptCount: (currentEntry.attemptCount || 0) + 1,
+            lastAttemptAt: deps.now()
+          }
+        }
+      };
+      try {
+        await deps.send(entry);
+        const nextOutbox = { ...next.outbox };
+        delete nextOutbox[entry.clientMessageId];
+        next = { ...next, outbox: nextOutbox };
+      } catch (error) {
+        const failedEntry = next.outbox[entry.clientMessageId];
+        if (!failedEntry) {
+          break;
+        }
+        next = {
+          ...next,
+          outbox: {
+            ...next.outbox,
+            [entry.clientMessageId]: {
+              ...failedEntry,
+              status: "retrying",
+              firstFailedAt: failedEntry.firstFailedAt || deps.now(),
+              lastErrorMessage: error instanceof Error ? error.message : deps.failureMessage ?? "Failed to send message"
+            }
+          }
+        };
+        break;
+      }
+    }
+    return next;
+  }
 
   // src/lib/chat-web-queue-storage.ts
   var CHAT_WEB_QUEUE_DB_NAME = CHAT_QUEUE_DB_NAME;
@@ -2197,29 +2246,10 @@
     return next;
   }
   async function flushOutbox(auth, queueState) {
-    if (!queueState.clientInstanceId) {
-      return queueState;
-    }
-    let next = queueState;
-    const entries = Object.values(queueState.outbox).sort(
-      (left, right) => left.optimisticSequence - right.optimisticSequence
-    );
-    for (const entry of entries) {
-      if (!next.outbox[entry.clientMessageId]) {
-        continue;
-      }
-      next = {
-        ...next,
-        outbox: {
-          ...next.outbox,
-          [entry.clientMessageId]: {
-            ...next.outbox[entry.clientMessageId],
-            attemptCount: (next.outbox[entry.clientMessageId].attemptCount || 0) + 1,
-            lastAttemptAt: (/* @__PURE__ */ new Date()).toISOString()
-          }
-        }
-      };
-      try {
+    return flushOutboxQueue(queueState, {
+      now: () => (/* @__PURE__ */ new Date()).toISOString(),
+      failureMessage: "发送失败",
+      send: async (entry) => {
         await fetchJson(
           auth,
           `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
@@ -2233,33 +2263,8 @@
             })
           }
         );
-        const nextOutbox = { ...next.outbox };
-        delete nextOutbox[entry.clientMessageId];
-        next = {
-          ...next,
-          outbox: nextOutbox
-        };
-      } catch (error) {
-        const currentEntry = next.outbox[entry.clientMessageId];
-        if (!currentEntry) {
-          break;
-        }
-        next = {
-          ...next,
-          outbox: {
-            ...next.outbox,
-            [entry.clientMessageId]: {
-              ...currentEntry,
-              status: "retrying",
-              firstFailedAt: currentEntry.firstFailedAt || (/* @__PURE__ */ new Date()).toISOString(),
-              lastErrorMessage: error instanceof Error ? error.message : "发送失败"
-            }
-          }
-        };
-        break;
       }
-    }
-    return next;
+    });
   }
   async function broadcast(message) {
     try {
