@@ -78,6 +78,26 @@ export function asExecutor(value: AnyExecutor): Executor {
 }
 
 /**
+ * Map a Kysely {@link QueryResult} to the `{ rows, rowCount }` shape the
+ * AnyExecutor bridges expose. Kysely surfaces the affected-row count for
+ * insert/update/delete as `numAffectedRows` (a bigint) and leaves it undefined
+ * for selects; normalize it to `number | null` so consumers that check
+ * `result.rowCount` behave identically on the Kysely and bare-pg paths.
+ */
+function toBridgeResult<T>(result: {
+  rows: readonly T[]
+  numAffectedRows?: bigint
+}): { rows: T[]; rowCount: number | null } {
+  return {
+    rows: result.rows as T[],
+    rowCount:
+      result.numAffectedRows === undefined
+        ? null
+        : Number(result.numAffectedRows),
+  }
+}
+
+/**
  * Run a Kysely-built statement on either an {@link Executor} (native path) or a
  * bare {@link QueryExecutor} (compile → raw query). Transitional bridge for the
  * access-layer `*On` helpers; prefer `executor.executeQuery(builder)` directly
@@ -88,8 +108,7 @@ export async function runCompilable<T = any>(
   statement: import("kysely").RawBuilder<T>
 ): Promise<{ rows: T[]; rowCount?: number | null }> {
   if (isKyselyExecutor(executor)) {
-    const result = await statement.execute(executor)
-    return { rows: result.rows as T[] }
+    return toBridgeResult<T>(await statement.execute(executor))
   }
   // Compilation is executor-agnostic — produce SQL+params with the global db
   // then run on the bare pg client.
@@ -112,8 +131,7 @@ export async function runBuilder<T = any>(
   builder: import("kysely").Compilable<T>
 ): Promise<{ rows: T[]; rowCount?: number | null }> {
   if (isKyselyExecutor(executor)) {
-    const result = await executor.executeQuery(builder)
-    return { rows: result.rows as T[] }
+    return toBridgeResult<T>(await executor.executeQuery(builder))
   }
   return executeCompiledQuery<T>(executor, builder)
 }
@@ -139,10 +157,10 @@ export async function withDbTransaction<T>(
 /**
  * Internal: compile a Kysely statement and run it through a bare
  * {@link QueryExecutor} (pg client). Used only by {@link runBuilder} for the
- * legacy-pg-client branch of the AnyExecutor bridge. Not for direct use —
- * prefer `statement.execute(executor)` / `runBuilder(executor, statement)`.
+ * legacy-pg-client branch of the AnyExecutor bridge. Not exported — prefer
+ * `statement.execute(executor)` / `runBuilder(executor, statement)`.
  */
-export async function executeCompiledQuery<T = any>(
+async function executeCompiledQuery<T = any>(
   queryable: QueryExecutor,
   statement: CompilableStatement
 ): Promise<{ rows: T[]; rowCount?: number | null }> {

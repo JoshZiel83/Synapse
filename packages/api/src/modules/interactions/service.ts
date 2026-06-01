@@ -84,7 +84,13 @@ async function runOn<T = any>(
     const result = await executor.executeQuery<T>(
       CompiledQuery.raw(text, [...params])
     )
-    return { rows: result.rows as T[] }
+    return {
+      rows: result.rows as T[],
+      rowCount:
+        result.numAffectedRows === undefined
+          ? null
+          : Number(result.numAffectedRows),
+    }
   }
   return executor.query(text, [...params] as any[]) as Promise<{
     rows: T[]
@@ -110,7 +116,13 @@ async function runCompiledOn<T = any>(
 ): Promise<{ rows: T[]; rowCount?: number | null }> {
   if (!executor || isKyselyExecutor(executor)) {
     const result = await (executor ?? db).executeQuery(compiled)
-    return { rows: result.rows as T[] }
+    return {
+      rows: result.rows as T[],
+      rowCount:
+        result.numAffectedRows === undefined
+          ? null
+          : Number(result.numAffectedRows),
+    }
   }
   return executor.query(compiled.sql, [
     ...compiled.parameters,
