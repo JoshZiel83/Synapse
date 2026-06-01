@@ -33,17 +33,19 @@ import type {
   RuntimeBindingScope,
   ScopedSubjectTarget,
 } from "@synapse/shared"
-import { sql, type RawBuilder } from "kysely"
+import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import {
   encryptSensitiveFields,
   isEncrypted,
 } from "../../infrastructure/crypto/index.js"
-import { query, transaction } from "../../infrastructure/database/index.js"
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import {
   db,
-  executeCompiledQuery,
-  executeTakeFirst,
+  isKyselyExecutor,
+  runBuilder,
+  takeFirstOn,
+  withDbTransaction,
+  type AnyExecutor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
@@ -133,6 +135,20 @@ type QueryRunner = <T extends QueryRow>(
   text: string,
   params?: unknown[]
 ) => Promise<QueryResultLike<T>>
+
+/** Build a {@link QueryRunner} backed by an {@link AnyExecutor} (db/trx/pg client). */
+function runnerFn(executor: AnyExecutor): QueryRunner {
+  return <T extends QueryRow>(text: string, params?: unknown[]) =>
+    isKyselyExecutor(executor)
+      ? (executor
+          .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
+          .then((r) => ({ rows: r.rows as T[] })) as Promise<
+          QueryResultLike<T>
+        >)
+      : (executor.query(text, (params ?? []) as any[]) as Promise<
+          QueryResultLike<T>
+        >)
+}
 
 type JsonObject = Record<string, unknown>
 type JsonArray = unknown[]
@@ -1720,8 +1736,8 @@ export async function createPlugin(data: {
     reason?: string
   }
 }) {
-  const itemId = await transaction(async (client) => {
-    const run = client.query.bind(client) as QueryRunner
+  const itemId = await withDbTransaction(async (client) => {
+    const run = runnerFn(client)
     const catalogItemId = await ensureCatalogItem(run, data)
     await upsertPluginVersion(run, catalogItemId, data)
     await assignPluginCategories(run, catalogItemId, data.categorySlugs || [])
@@ -1910,7 +1926,7 @@ export async function installPluginUnified(data: {
     }
   }
 
-  const result = await transaction(async (client) => {
+  const result = await withDbTransaction(async (client) => {
     const catalogRow = await getPluginCatalogRowByItemId(plugin.id)
     const catalogVersionId = catalogRow?.version_id
     if (!catalogVersionId) {
@@ -1930,7 +1946,7 @@ export async function installPluginUnified(data: {
         workspaceMemberId: target.workspaceMemberId,
       })
     )
-    const insertedInstallation = await executeTakeFirst<{ id: string }>(
+    const insertedInstallation = await takeFirstOn<{ id: string }>(
       client,
       db
         .insertInto("plugin_installations")
@@ -1962,18 +1978,15 @@ export async function installPluginUnified(data: {
       authBindings: plugin.auth_bindings || [],
       configData: resolvedConfigBase,
       authSessionIds: data.authSessionIds,
-      run: client.query.bind(client) as QueryRunner,
+      run: runnerFn(client),
     })
-    await validateResolvedConfigForInstall(
-      resolvedConfig,
-      client.query.bind(client) as QueryRunner
-    )
+    await validateResolvedConfigForInstall(resolvedConfig, runnerFn(client))
     const encryptedConfig = encryptSensitiveFields(
       resolvedConfig,
       plugin.config_schema || {}
     )
 
-    await executeCompiledQuery(
+    await runBuilder(
       client,
       db
         .updateTable("plugin_installations")
@@ -2000,7 +2013,7 @@ export async function installPluginUnified(data: {
       createdByWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
       reason: plugin.authorization?.reason || null,
     })
-    await executeCompiledQuery(
+    await runBuilder(
       client,
       db.insertInto("plugin_source_refs").values({
         installation_id: installationId,
@@ -2010,7 +2023,7 @@ export async function installPluginUnified(data: {
       })
     )
 
-    await executeCompiledQuery(
+    await runBuilder(
       client,
       db
         .updateTable("catalog_items")
@@ -2049,13 +2062,13 @@ export async function uninstallPluginUnified(installId: string) {
   if (!installation) {
     throw new McpPluginError(404, "Installation not found")
   }
-  await transaction(async (client) => {
+  await withDbTransaction(async (client) => {
     await hardDeleteBindingsForResourceOn(client, {
       resourceType: "plugin_installation",
       resourceId: installId,
     })
 
-    await executeCompiledQuery(
+    await runBuilder(
       client,
       db.deleteFrom("plugin_installations").where("id", "=", installId)
     )
@@ -2238,8 +2251,8 @@ export async function updateInstallation(
     }
   }
 
-  await transaction(async (client) => {
-    const run = client.query.bind(client) as QueryRunner
+  await withDbTransaction(async (client) => {
+    const run = runnerFn(client)
 
     const resolvedConfig =
       data.configData || data.authSessionIds
@@ -2470,7 +2483,7 @@ export async function grantPluginInstallationAccess(input: {
     )
   }
 
-  const result = await transaction(async (client) => {
+  const result = await withDbTransaction(async (client) => {
     const inserted = await insertAccessBindingReturningRowOn(client, {
       workspaceId: input.workspaceId,
       resourceType: "plugin_installation",
