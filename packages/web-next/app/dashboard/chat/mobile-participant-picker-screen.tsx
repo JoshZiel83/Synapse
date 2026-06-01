@@ -4,7 +4,7 @@ import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import { ArrowLeft, AtSign, Check, Search } from "lucide-react"
 
-import type { MentionableParticipant } from "@/app/dashboard/chat/chat-mentions-input"
+import type { MentionableParticipant } from "@/app/dashboard/chat/participant-types"
 import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
