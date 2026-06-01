@@ -1,3 +1,6 @@
+// Ensure .env is applied before we read LOG_LEVEL/NODE_ENV below. (ESM runs
+// this imported side-effect before the rest of this module evaluates.)
+import "../env-bootstrap.js"
 import pino from "pino"
 
 /**

@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs"
+// Load .env FIRST (before the logger or this schema read process.env). This is
+// a side-effect import and is intentionally placed above the others.
+import "../infrastructure/env-bootstrap.js"
 import { resolve } from "node:path"
-import { config as loadEnv } from "dotenv"
 import { z } from "zod"
 import {
   getDefaultModelBaseUrl,
@@ -11,15 +12,6 @@ import {
 import { createLogger } from "../infrastructure/logger/index.js"
 
 const log = createLogger("config")
-
-for (const candidate of [
-  resolve(process.cwd(), ".env"),
-  resolve(process.cwd(), "../../.env"),
-]) {
-  if (!existsSync(candidate)) continue
-  loadEnv({ path: candidate })
-  break
-}
 
 /**
  * Validated environment schema.
@@ -49,13 +41,25 @@ const nonNegativeInt = z.coerce.number().int().min(0)
 const unitFloat = z.coerce.number().min(0).max(1)
 const positiveFloat = z.coerce.number().positive()
 
+/**
+ * An optional positive int that treats a MISSING *or EMPTY* var as "unset"
+ * (undefined) rather than coercing "" → 0 → validation failure. Matches the
+ * old `process.env.X ? parseInt(X) : fallback` semantics for optional knobs.
+ */
+function optionalPositiveInt() {
+  return z.preprocess(
+    (v) => (v === undefined || v === "" ? undefined : v),
+    positiveInt.optional()
+  )
+}
+
 const envSchema = z.object({
   PORT: withDefault(port, "3001"),
   HOST: withDefault(z.string().min(1), "0.0.0.0"),
-  NODE_ENV: withDefault(
-    z.enum(["development", "production", "test"]),
-    "development"
-  ),
+  // Not an enum: deployments use values beyond development/production/test
+  // (e.g. "staging"), and rejecting those would block startup. Consumers that
+  // care about a specific mode compare the string themselves.
+  NODE_ENV: withDefault(z.string().min(1), "development"),
 
   APP_BASE_URL: z.string().optional(),
   NEXT_PUBLIC_APP_URL: z.string().optional(),
@@ -118,7 +122,7 @@ const envSchema = z.object({
 
   MEMORY_RECALL_LIMIT: withDefault(positiveInt, "6"),
   MEMORY_SEARCH_CANDIDATE_LIMIT: withDefault(positiveInt, "40"),
-  MEMORY_RECALL_TOP_K: positiveInt.optional(),
+  MEMORY_RECALL_TOP_K: optionalPositiveInt(),
   MEMORY_EMBEDDING_MODEL_ID: withDefault(
     z.string().min(1),
     "Xenova/multilingual-e5-small"

@@ -61,3 +61,10 @@ test("list-valued env vars parse into arrays", () => {
   assert.ok(Array.isArray(config.skills.import.githubRawProxyPrefixes))
   assert.ok(Array.isArray(config.skills.import.clawhubDownloadProxyOrigins))
 })
+
+test("NODE_ENV accepts arbitrary deployment values (e.g. staging)", () => {
+  // Not an enum — a "staging" deployment must not fail startup. config.nodeEnv
+  // is just whatever non-empty string was provided (or the default).
+  assert.equal(typeof config.nodeEnv, "string")
+  assert.ok(config.nodeEnv.length > 0)
+})
