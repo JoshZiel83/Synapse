@@ -19,8 +19,8 @@
  *     fresh projection attempt.
  */
 
-import type { PoolClient } from "pg"
-import { executeSqlOn } from "../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
+import type { Executor } from "../../infrastructure/database/kysely.js"
 
 export interface UpsertProjectionParams {
   interactionRequestId: string
@@ -36,30 +36,26 @@ export interface UpsertProjectionParams {
  * binding_created_or_replaced event to re-open.
  */
 export async function upsertInteractionTransportProjection(
-  client: PoolClient,
+  executor: Executor,
   params: UpsertProjectionParams
 ): Promise<void> {
-  await executeSqlOn(
-    client,
-    `
-      INSERT INTO interaction_transport_projections (
-        interaction_request_id, workspace_id, conversation_id, status
-      )
-      VALUES ($1, $2, $3, 'pending')
-      ON CONFLICT (interaction_request_id) DO UPDATE
-        SET status = 'pending',
-            next_attempt_at = NOW(),
-            attempts = 0,
-            error = NULL,
-            transport_message_link_id = NULL,
-            updated_at = NOW()
-        WHERE interaction_transport_projections.status = 'skipped'
-          AND interaction_transport_projections.error IN (
-            'no_binding',
-            'outbound_disabled',
-            'webhook_inbound_unavailable'
-          )
-    `,
-    [params.interactionRequestId, params.workspaceId, params.conversationId]
-  )
+  await sql`
+    INSERT INTO interaction_transport_projections (
+      interaction_request_id, workspace_id, conversation_id, status
+    )
+    VALUES (${params.interactionRequestId}, ${params.workspaceId}, ${params.conversationId}, 'pending')
+    ON CONFLICT (interaction_request_id) DO UPDATE
+      SET status = 'pending',
+          next_attempt_at = NOW(),
+          attempts = 0,
+          error = NULL,
+          transport_message_link_id = NULL,
+          updated_at = NOW()
+      WHERE interaction_transport_projections.status = 'skipped'
+        AND interaction_transport_projections.error IN (
+          'no_binding',
+          'outbound_disabled',
+          'webhook_inbound_unavailable'
+        )
+  `.execute(executor)
 }
