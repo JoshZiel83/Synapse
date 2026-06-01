@@ -199,15 +199,36 @@ export async function provisionSandbox(
         .executeTakeFirst()
       commandlineEnabled = Boolean(cmd)
     }
+    // P1/P2: do NOT hardcode sidecarRestoreOk=true on the fast path. A prior
+    // provision this session may have failed to restore some sidecars (e.g. the
+    // mount for a sidecar's subpath wasn't active yet, or a transient fs error)
+    // while still marking the OTHER mounts active — so this fast path would
+    // otherwise report "all restored" and let the worker clear a pending notice
+    // whose on-disk copy never came back. Re-attempt the restore every provision:
+    // it's idempotent and a cheap no-op when the pending stores are empty (a
+    // single peek of collaboration_state), and self-heals once the needed mount
+    // is active. Surface the real ok + failed leaves.
+    let sidecarRestoreOk = true
+    let failedSidecars: string[] = []
+    try {
+      const restore = await restorePendingSidecars(sessionId, existing)
+      sidecarRestoreOk = restore.ok
+      failedSidecars = restore.failedSidecars
+    } catch (err) {
+      sidecarRestoreOk = false
+      console.error(
+        `[sandbox] failed to restore pending sidecars (fast path) for ${sessionId}:`,
+        err
+      )
+    }
     return {
       sessionId,
       sandboxRoot: sandboxRootFor(sessionId),
       deviceId,
       commandlineEnabled,
       mountIds: existing.map((m) => m.id),
-      // Already provisioned earlier this session — sidecars were restored on the
-      // first provision; nothing to re-restore here.
-      sidecarRestoreOk: true,
+      sidecarRestoreOk,
+      failedSidecars,
     }
   }
 
@@ -255,9 +276,11 @@ export async function provisionSandbox(
   // unrestored copy stays retryable on the next provision rather than being
   // consumed against a path that doesn't exist.
   let sidecarRestoreOk = true
+  let failedSidecars: string[] = []
   try {
     const restore = await restorePendingSidecars(sessionId, mounts)
     sidecarRestoreOk = restore.ok
+    failedSidecars = restore.failedSidecars
   } catch (err) {
     sidecarRestoreOk = false
     console.error(
@@ -341,6 +364,7 @@ export async function provisionSandbox(
       commandlineEnabled,
       mountIds: mounts.map((m) => m.id),
       sidecarRestoreOk,
+      failedSidecars,
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -668,12 +692,22 @@ export interface CommitDeps {
    */
   loadCtx: (sessionId: string) => Promise<SessionContext | null>
   /**
-   * Reconcile the live dir to a committed manifest (head-wins + sidecar losers).
-   * Returns `{ ok, sidecars }`: `ok` = the live dir is fully == committed (safe
-   * to advance base); `sidecars` = every preserved copy written, surfaced to the
-   * agent EVEN WHEN ok=false (round-9 #2: a sidecar written before a mid-way
-   * failure must not be orphaned). When ok=false the caller MUST NOT advance base
-   * (round-7 #A self-heal). Default drives the real fs-helper via syncDir.
+   * Reconcile the live dir to a committed manifest (head-wins + sidecar losers),
+   * DEFERRING the destructive head-overwrite of the conflicting live paths so the
+   * caller can durably persist the pending record FIRST (P1 durable-before-
+   * destructive, mirroring refresh's R12-1).
+   *
+   * Returns `{ ok, sidecars, deferredConflicts }`: `ok` = the reconcile applied
+   * cleanly up to (but not including) the deferred conflict overwrites — i.e. the
+   * non-conflicting incoming bytes landed and every loser was sidecar'd, so once
+   * the record is durable the caller may safely apply head + advance base.
+   * `sidecars` = every preserved copy written, surfaced to the agent EVEN WHEN
+   * ok=false (round-9 #2: a sidecar written before a mid-way failure must not be
+   * orphaned). `deferredConflicts` = the live paths still holding the agent's
+   * pre-conflict copy (NOT yet overwritten with head) — the caller passes these
+   * to `applyHead` AFTER persisting. When ok=false the caller MUST NOT apply head
+   * or advance base (round-7 #A self-heal). Default drives the real fs-helper via
+   * syncDir with deferConflictApply.
    */
   reconcile: (
     mount: FileMountRow,
@@ -683,7 +717,20 @@ export interface CommitDeps {
   ) => Promise<{
     ok: boolean
     sidecars: ConflictSidecarRef[]
+    deferredConflicts: string[]
   }>
+  /**
+   * Phase 2 of a deferred commit reconcile (P1): overwrite the live conflict
+   * `paths` with the committed manifest's version AFTER the pending record is
+   * durably persisted. Until this runs the conflict paths hold the agent's copy,
+   * so a persist failure self-heals (next turn re-derives the conflict). Default
+   * drives the real fs-helper via applyHeadForConflicts.
+   */
+  applyHead: (
+    mount: FileMountRow,
+    committedManifestSha: string,
+    paths: string[]
+  ) => Promise<void>
 }
 
 function defaultCommitDeps(): CommitDeps {
@@ -697,12 +744,20 @@ function defaultCommitDeps(): CommitDeps {
       committedManifestSha,
       hadConflicts
     ) => {
-      if (!hadConflicts) return { ok: true, sidecars: [] }
+      if (!hadConflicts)
+        return { ok: true, sidecars: [], deferredConflicts: [] }
       try {
+        // P1: DEFER the head-overwrite of the conflict live paths. The sync
+        // writes the recoverable sidecars + applies non-conflicting incoming
+        // bytes, but leaves each conflicting live path holding the agent's copy.
+        // The caller persists the pending record, THEN calls applyHead, THEN
+        // advances base — so a persist failure leaves working != committed and
+        // the next turn re-derives the conflict (no silent loss).
         const res = await syncDir({
           dir: mount.materialized_dir!,
           baseManifestSha256: baseManifestSha ?? undefined,
           toManifestSha256: committedManifestSha,
+          deferConflictApply: true,
         })
         const sidecars = res.conflict_sidecars.map((c) => ({
           original: `/${mount.mount_subpath}${c.original}`,
@@ -713,20 +768,28 @@ function defaultCommitDeps(): CommitDeps {
         }))
         if (res.incomplete) {
           // Partial reconcile: surface the sidecars written so far, but signal
-          // NOT-ok so the caller leaves base unadvanced (round-9 #2 + round-7 #A).
+          // NOT-ok so the caller leaves base unadvanced (round-9 #2 + round-7 #A)
+          // and never applies head.
           console.error(
             `[sandbox] post-commit reconcile incomplete for mount ${mount.id}: ${res.incomplete}`
           )
-          return { ok: false, sidecars }
+          return { ok: false, sidecars, deferredConflicts: [] }
         }
-        return { ok: true, sidecars }
+        return { ok: true, sidecars, deferredConflicts: res.deferred_conflicts }
       } catch (err) {
         console.error(
           `[sandbox] post-commit reconcile failed for mount ${mount.id}:`,
           err
         )
-        return { ok: false, sidecars: [] }
+        return { ok: false, sidecars: [], deferredConflicts: [] }
       }
+    },
+    applyHead: async (mount, committedManifestSha, paths) => {
+      await applyHeadForConflicts({
+        dir: mount.materialized_dir!,
+        toManifestSha256: committedManifestSha,
+        paths,
+      })
     },
   }
 }
@@ -768,27 +831,15 @@ export async function commitSpaces(
       out.sidecarsBySubpath[mount.mount_subpath] = result.sidecars
     }
   }
-  // Persist commit conflicts durably: turn-end commit runs AFTER the actor has
-  // already replied, so the conflict can't be fixed this turn. Stash it on the
-  // session so the NEXT turn surfaces it as a notice (the agent's local change
-  // to those paths lost to the concurrent head — it must redo/reconcile, and its
-  // pre-conflict copy is preserved at the recorded sidecar).
-  //
-  // R12-2: a persist failure here MUST NOT be swallowed. If it were, commitSpaces
-  // would return success, teardown would see commitOk and DELETE the sandbox live
-  // dir — but the DB has no sidecar pointer, so the preserved loser copy (live
-  // dir + the would-be pending notice) is lost with no way for the agent to learn
-  // or recover it. Propagating the error makes teardown's commit fail-closed:
-  // it PRESERVES the live dir (marks the mount 'failed') for recovery, and the
-  // CAS blob stays GC-protected only while the pending record exists — but here
-  // we keep the on-disk copy precisely because the record didn't land.
-  if (Object.keys(out.conflictsBySubpath).length > 0) {
-    const pending: Record<string, PendingCommitConflict> = {}
-    for (const [sub, paths] of Object.entries(out.conflictsBySubpath)) {
-      pending[sub] = { paths, sidecars: out.sidecarsBySubpath[sub] ?? [] }
-    }
-    await recordPendingCommitConflicts(sessionId, pending, deps.runInTx)
-  }
+  // P1: the pending commit conflict is now persisted PER-MOUNT inside
+  // commitOneMount — BEFORE the destructive head-overwrite of the deferred
+  // conflict live paths and the base-advance (durable-before-destructive,
+  // mirroring refresh's R12-1). So there is no longer an end-of-commitSpaces
+  // persist here: doing it after reconcile already overwrote the live loser +
+  // advanced base would re-open the very gap this fix closes (a persist failure
+  // after base advanced silently loses the notice, since next turn head==base).
+  // A persist failure inside commitOneMount propagates out of this function, so
+  // teardown's commit still fail-closes and preserves the live dir (R12-2).
   return out
 }
 
@@ -1257,11 +1308,14 @@ async function commitOneMount(
   // the committed manifest (head-wins) and sidecar the local losers — exactly
   // like refresh — so live == committed and base-advance is safe.
   //
-  // deps.reconcile returns { ok, sidecars }: `sidecars` = every preserved copy
-  // written (mount-subpath-prefixed, so the caller can tell the agent where its
-  // pre-conflict copy is — round-7 #C + round-9 #2: surfaced EVEN when ok=false);
-  // `ok=false` = the reconcile did not fully bring the live dir to committed, so
-  // the caller MUST NOT advance base — leaving head!=base lets next turn's
+  // deps.reconcile returns { ok, sidecars, deferredConflicts }: `sidecars` =
+  // every preserved copy written (mount-subpath-prefixed, so the caller can tell
+  // the agent where its pre-conflict copy is — round-7 #C + round-9 #2: surfaced
+  // EVEN when ok=false); `deferredConflicts` = the live paths still holding the
+  // agent's copy (NOT yet overwritten with head — P1 durable-before-destructive),
+  // passed to deps.applyHead AFTER the pending record is persisted; `ok=false` =
+  // the reconcile did not fully bring the live dir to committed, so the caller
+  // MUST NOT apply head or advance base — leaving head!=base lets next turn's
   // refresh re-run the reconcile and self-heal, whereas advancing base now would
   // re-open the round-6 #1 silent-overwrite bug (round-7 #A).
   const reconcileLiveDir = (committedManifestSha: string) =>
@@ -1278,14 +1332,35 @@ async function commitOneMount(
   // latest so the next commit doesn't re-derive the same conflict (and doesn't
   // overwrite head with the stale local copy).
   if (latestManifest && scan.manifest_sha256 === latestManifest) {
-    const { ok, sidecars } = await reconcileLiveDir(latestManifest)
+    const { ok, sidecars, deferredConflicts } =
+      await reconcileLiveDir(latestManifest)
+    // P1 durable-before-destructive (mirrors refresh R12-1):
+    //   (1) persist the pending notice + sidecar pointers FIRST — whenever there
+    //       were conflicts, even if the reconcile did not fully apply (ok=false):
+    //       the agent's loser blob is reachable ONLY via this record (a GC root),
+    //       and the notice must survive (at-least-once). A persist failure
+    //       propagates so teardown fail-closes + preserves the live dir (R12-2).
+    //   (2) only if ok: overwrite the deferred conflict live paths with head, then
+    //       (3) advance base. While the live path still holds the agent's copy a
+    //       persist/apply failure self-heals (working != head → next turn
+    //       re-derives the conflict; no silent loss).
+    if (scan.conflict_paths.length > 0) {
+      await recordPendingCommitConflicts(
+        sessionId,
+        { [mount.mount_subpath]: { paths: scan.conflict_paths, sidecars } },
+        deps.runInTx
+      )
+    }
     if (!ok) {
-      // Reconcile not fully applied → do NOT advance base. Next turn's refresh
-      // (head!=base) re-runs the reconcile and self-heals; advancing now would
-      // let the stale local loser silently overwrite head on the following
-      // commit (round-7 #A). Still return the partial sidecars so the agent is
-      // told where its preserved copies are (round-9 #2).
+      // Reconcile not fully applied → do NOT apply head or advance base. Next
+      // turn's refresh (head!=base) re-runs the reconcile and self-heals;
+      // advancing now would let the stale local loser silently overwrite head on
+      // the following commit (round-7 #A). The pending record (persisted above)
+      // keeps the notice + sidecar blob alive for the retry (round-9 #2).
       return { snapshotId: null, conflicts: scan.conflict_paths, sidecars }
+    }
+    if (deferredConflicts.length > 0) {
+      await deps.applyHead(mount, latestManifest, deferredConflicts)
     }
     if (latestSnapshotId && mount.base_snapshot_id !== latestSnapshotId) {
       await updateFileMount(deps.dbh, mount.id, {
@@ -1319,25 +1394,47 @@ async function commitOneMount(
       })
     })
     // Reconcile the live dir to the committed manifest (head-wins + sidecar the
-    // losers) BEFORE advancing base, so the next turn never overwrites head with
-    // a stale local copy. (No-op → ok with [] when there were no conflicts.)
-    const { ok, sidecars } = await reconcileLiveDir(scan.manifest_sha256)
+    // losers), DEFERRING the destructive conflict overwrite, BEFORE advancing
+    // base — so the next turn never overwrites head with a stale local copy.
+    // (No-op → ok with [] when there were no conflicts.)
+    const { ok, sidecars, deferredConflicts } = await reconcileLiveDir(
+      scan.manifest_sha256
+    )
+    // The snapshot DID commit (head advanced to snapshot.id) — record it for
+    // audit up-front so it's durable regardless of what the reconcile/persist do.
+    await updateFileMount(deps.dbh, mount.id, {
+      resultSnapshotId: snapshot.id,
+    })
+    // P1 durable-before-destructive (mirrors refresh R12-1):
+    //   (1) persist the pending notice + sidecar pointers FIRST — whenever there
+    //       were conflicts, even when the reconcile did not fully apply (ok=false):
+    //       the loser blob is reachable ONLY via this record (a GC root) and the
+    //       notice must survive (at-least-once). A persist failure propagates so
+    //       teardown fail-closes + preserves the live dir (R12-2).
+    //   (2) only if ok: overwrite the deferred conflict live paths with the
+    //       committed version, then (3) advance base. While the live path holds the
+    //       agent's copy a persist/apply failure self-heals next turn.
+    if (scan.conflict_paths.length > 0) {
+      await recordPendingCommitConflicts(
+        sessionId,
+        { [mount.mount_subpath]: { paths: scan.conflict_paths, sidecars } },
+        deps.runInTx
+      )
+    }
     if (!ok) {
-      // Reconcile not fully applied AFTER the snapshot committed (head advanced
-      // to snapshot.id). Record the result snapshot for audit but do NOT advance
-      // base — next turn's refresh (head=snapshot.id != base=old) re-runs the
-      // reconcile and self-heals. Advancing base here would re-open round-6 #1
-      // (the stale local loser would silently overwrite head) (round-7 #A). Still
-      // return the partial sidecars so the agent learns where its copies are
-      // (round-9 #2).
-      await updateFileMount(deps.dbh, mount.id, {
-        resultSnapshotId: snapshot.id,
-      })
+      // Reconcile not fully applied AFTER the snapshot committed. Do NOT apply
+      // head or advance base — next turn's refresh (head=snapshot.id != base=old)
+      // re-runs the reconcile and self-heals. Advancing base here would re-open
+      // round-6 #1 (the stale local loser would silently overwrite head)
+      // (round-7 #A). The partial sidecars are surfaced + persisted above.
       return {
         snapshotId: snapshot.id,
         conflicts: scan.conflict_paths,
         sidecars,
       }
+    }
+    if (deferredConflicts.length > 0) {
+      await deps.applyHead(mount, scan.manifest_sha256, deferredConflicts)
     }
     // Advance the mount base to the snapshot we just produced.
     await updateFileMount(deps.dbh, mount.id, {

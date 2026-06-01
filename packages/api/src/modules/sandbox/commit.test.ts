@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs"
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { actorRef } from "@synapse/shared"
@@ -195,6 +195,7 @@ test(
           assert.equal(hadConflicts, true, "the commit must be a conflict")
           return {
             ok: false,
+            deferredConflicts: [],
             sidecars: [
               {
                 original: "/actor/x.txt",
@@ -320,6 +321,7 @@ test(
         ...depsBase,
         reconcile: async () => ({
           ok: true,
+          deferredConflicts: [],
           sidecars: [
             {
               original: "/actor/x.txt",
@@ -443,6 +445,7 @@ test(
           assert.equal(hadConflicts, true, "must be a conflict commit")
           return {
             ok: false,
+            deferredConflicts: [],
             sidecars: [
               {
                 original: "/actor/x.txt",
@@ -593,11 +596,219 @@ test(
       await assert.rejects(
         commitSpaces(sessionId, ["actor"], {
           ...depsBase,
-          reconcile: async () => ({ ok: true, sidecars: [] }),
+          reconcile: async () => ({
+            ok: true,
+            sidecars: [],
+            deferredConflicts: [],
+          }),
         }),
         /pending-persist failure/,
         "commitSpaces must reject when the pending-conflict persist fails"
       )
+    })
+  }
+)
+
+test(
+  "commitSpaces: P1 durable-before-destructive — a real conflict persists the pending record BEFORE overwriting the live loser + advancing base",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    // Drives the DEFAULT reconcile/applyHead (real fs-helper, deferred apply): the
+    // commit conflict's loser must be persisted to collaboration_state BEFORE the
+    // live path is overwritten with head and base advances. We force the persist
+    // (recordPendingCommitConflicts' runInTx) to fail and assert the live loser is
+    // STILL on disk + base unadvanced — proving the persist precedes the
+    // destructive head-apply (so a persist failure self-heals next turn).
+    await withTestDbAndClient(async ({ db, client }) => {
+      const { workspaceId, actorId, conversationId, sessionId } = await seed(db)
+
+      const work = mkdtempSync(join(tmpdir(), "synapse-p1-defer-"))
+      // base x.txt=A
+      const baseDir = join(work, "base")
+      mkdirSync(baseDir, { recursive: true })
+      writeFileSync(join(baseDir, "x.txt"), "A")
+      const baseScan = await scanCommitDir({ dir: baseDir })
+      await ingest(client, baseScan)
+      const space = await ensureFileSpace(client, {
+        workspaceId,
+        owner: actorRef(actorId),
+      })
+      const baseSnap = await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: null,
+        manifestSha256: baseScan.manifest_sha256,
+        entryCount: baseScan.entry_count,
+        totalBytes: baseScan.total_bytes,
+      })
+      // head x.txt=B (concurrent writer) → equals-latest branch (merged==latest).
+      const headDir = join(work, "head")
+      mkdirSync(headDir, { recursive: true })
+      writeFileSync(join(headDir, "x.txt"), "B")
+      const headScan = await scanCommitDir({ dir: headDir })
+      await ingest(client, headScan)
+      await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: baseSnap.id,
+        manifestSha256: headScan.manifest_sha256,
+        entryCount: headScan.entry_count,
+        totalBytes: headScan.total_bytes,
+      })
+      // live: materialize base, agent edits x.txt=L (conflict vs head B).
+      const liveDir = join(work, "actor")
+      mkdirSync(liveDir, { recursive: true })
+      await materializeSnapshot({
+        manifestSha256: baseScan.manifest_sha256,
+        targetDir: liveDir,
+      })
+      writeFileSync(join(liveDir, "x.txt"), "L")
+      await insertFileMount(client, {
+        workspaceId,
+        sessionId,
+        fileSpaceId: space.id,
+        mountSubpath: "actor",
+        baseSnapshotId: baseSnap.id,
+        materializedDir: liveDir,
+      })
+      await updateFileMount(client, await mountId(client, sessionId), {
+        status: "active",
+      })
+
+      // DEFAULT reconcile + applyHead (real helper). runInTx FAILS — modeling the
+      // pending-record persist failing. Because persist precedes applyHead, the
+      // live loser must survive + base must not advance.
+      await assert.rejects(
+        commitSpaces(sessionId, ["actor"], {
+          dbh: client as unknown as CommitDeps["dbh"],
+          runInTx: async () => {
+            throw new Error("simulated pending-persist failure")
+          },
+          loadCtx: async () => ({ workspaceId, conversationId, actorId }),
+        }),
+        /pending-persist failure/,
+        "persist failure propagates"
+      )
+
+      // THE KEY ASSERTION (P1): the live conflict path STILL holds the agent's
+      // loser "L" (head was NOT applied — persist precedes the destructive apply),
+      // so next turn working != head re-derives the conflict (no silent loss).
+      assert.equal(
+        readFileSync(join(liveDir, "x.txt"), "utf8"),
+        "L",
+        "live loser must survive when the pending persist failed (apply is deferred)"
+      )
+      // base did not advance.
+      const mounts = await getActiveMountsForSession(client, sessionId)
+      const actorMount = mounts.find((m) => m.mount_subpath === "actor")!
+      assert.equal(
+        actorMount.base_snapshot_id,
+        baseSnap.id,
+        "base must stay at the OLD base when the pending persist failed"
+      )
+    })
+  }
+)
+
+test(
+  "commitSpaces: P1 — a SUCCESSFUL conflict commit (default helper) persists pending, overwrites the live loser with head, and advances base",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    // The happy path of the deferred-apply ordering: persist succeeds, so applyHead
+    // runs (live path → head "B") and base advances to latest. Proves the deferred
+    // overwrite is actually applied once the record is durable.
+    await withTestDbAndClient(async ({ db, client }) => {
+      const { workspaceId, actorId, conversationId, sessionId } = await seed(db)
+
+      const work = mkdtempSync(join(tmpdir(), "synapse-p1-ok-"))
+      const baseDir = join(work, "base")
+      mkdirSync(baseDir, { recursive: true })
+      writeFileSync(join(baseDir, "x.txt"), "A")
+      const baseScan = await scanCommitDir({ dir: baseDir })
+      await ingest(client, baseScan)
+      const space = await ensureFileSpace(client, {
+        workspaceId,
+        owner: actorRef(actorId),
+      })
+      const baseSnap = await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: null,
+        manifestSha256: baseScan.manifest_sha256,
+        entryCount: baseScan.entry_count,
+        totalBytes: baseScan.total_bytes,
+      })
+      const headDir = join(work, "head")
+      mkdirSync(headDir, { recursive: true })
+      writeFileSync(join(headDir, "x.txt"), "B")
+      const headScan = await scanCommitDir({ dir: headDir })
+      await ingest(client, headScan)
+      const headSnap = await appendSnapshot(client, {
+        workspaceId,
+        fileSpaceId: space.id,
+        expectedParentSnapshotId: baseSnap.id,
+        manifestSha256: headScan.manifest_sha256,
+        entryCount: headScan.entry_count,
+        totalBytes: headScan.total_bytes,
+      })
+      const liveDir = join(work, "actor")
+      mkdirSync(liveDir, { recursive: true })
+      await materializeSnapshot({
+        manifestSha256: baseScan.manifest_sha256,
+        targetDir: liveDir,
+      })
+      writeFileSync(join(liveDir, "x.txt"), "L")
+      await insertFileMount(client, {
+        workspaceId,
+        sessionId,
+        fileSpaceId: space.id,
+        mountSubpath: "actor",
+        baseSnapshotId: baseSnap.id,
+        materializedDir: liveDir,
+      })
+      await updateFileMount(client, await mountId(client, sessionId), {
+        status: "active",
+      })
+
+      // DEFAULT reconcile + applyHead + a real (passthrough) runInTx.
+      const result = await commitSpaces(sessionId, ["actor"], {
+        dbh: client as unknown as CommitDeps["dbh"],
+        runInTx: async (fn) => fn(client as unknown as CommitDeps["dbh"]),
+        loadCtx: async () => ({ workspaceId, conversationId, actorId }),
+      })
+
+      assert.ok(
+        result.conflictsBySubpath.actor?.includes("/x.txt"),
+        "x.txt reported as a commit conflict"
+      )
+      // applyHead ran → live path now holds head "B" (the loser was overwritten).
+      assert.equal(
+        readFileSync(join(liveDir, "x.txt"), "utf8"),
+        "B",
+        "live path overwritten with head after the pending record persisted"
+      )
+      // The agent's loser is preserved at a sidecar (so it isn't lost).
+      const sc = result.sidecarsBySubpath.actor?.[0]
+      assert.equal(sc?.original, "/actor/x.txt", "loser preserved at a sidecar")
+      assert.ok(sc?.contentSha, "sidecar carries the CAS-durable content sha")
+      // base advanced to latest (equals-latest branch).
+      const mounts = await getActiveMountsForSession(client, sessionId)
+      const actorMount = mounts.find((m) => m.mount_subpath === "actor")!
+      assert.equal(
+        actorMount.base_snapshot_id,
+        headSnap.id,
+        "base advanced to head once the live dir == committed"
+      )
+      // The pending conflict was durably recorded with its sidecar.
+      const stateRow = await client.query(
+        `SELECT collaboration_state FROM sessions WHERE id = $1`,
+        [sessionId]
+      )
+      const pending = (stateRow.rows[0]?.collaboration_state ?? {})[
+        "_sandboxPendingCommitConflicts"
+      ]
+      assert.deepEqual(pending?.actor?.paths, ["/x.txt"])
+      assert.equal(pending?.actor?.sidecars?.[0]?.original, "/actor/x.txt")
     })
   }
 )

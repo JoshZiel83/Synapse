@@ -28,6 +28,14 @@ export interface SandboxProvisionResult {
    * not promise the agent it can read that sidecar.
    */
   sidecarRestoreOk: boolean
+  /**
+   * The agent-visible sidecar VFS paths that could NOT be restored this provision
+   * (P2). The bytes are safe in CAS (file sidecars) or recorded (symlink targets),
+   * but the on-disk leaf does not currently exist — so the notice must NOT tell
+   * the agent to "read it"; instead it says the copy is preserved and will be
+   * retried next turn. Empty when sidecarRestoreOk is true.
+   */
+  failedSidecars: string[]
 }
 
 let cachedSandboxCommandlineAvailable: boolean | null = null

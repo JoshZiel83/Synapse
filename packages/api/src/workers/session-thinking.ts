@@ -30,6 +30,11 @@ import {
   clearPendingRefreshConflicts,
   mergePendingRefreshConflicts,
 } from "../modules/sandbox/index.js"
+import {
+  partitionSidecars,
+  formatRestoredPair,
+  unrestoredSidecarSentence,
+} from "../modules/sandbox/conflict-notice.js"
 import { config } from "../config/index.js"
 import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
 import {
@@ -569,10 +574,16 @@ export function startSessionThinkingWorker() {
         // next provision instead of consuming a notice whose sidecar path is
         // missing.
         let sidecarRestoreOk = true
+        // P2: agent-visible sidecar paths that could NOT be restored this
+        // provision — the preserved bytes are safe (CAS / recorded target) but the
+        // on-disk leaf isn't present, so the notice must not tell the agent to
+        // "read it"; it says the copy is preserved + will be retried next turn.
+        let failedSidecarSet = new Set<string>()
         if (sandboxEnabled) {
           try {
             const provision = await provisionSandbox(sessionId)
             sidecarRestoreOk = provision.sidecarRestoreOk
+            failedSidecarSet = new Set(provision.failedSidecars)
             const refresh = await refreshSpaces(sessionId)
             // Record any spaces whose refresh FAILED so turn-end commit skips
             // them (their live tree is half-synced; committing it could entangle
@@ -644,11 +655,14 @@ export function startSessionThinkingWorker() {
             const refreshSidecars = Object.values(
               displayRefresh.sidecarsBySubpath
             ).flat()
-            const sidecarPairs = refreshSidecars.map((s) =>
-              s.kind === "symlink"
-                ? `${s.original} → ${s.sidecar} (symlink target, read as JSON)`
-                : `${s.original} → ${s.sidecar}`
-            )
+            // P2: split restored (the leaf exists, "read it") from unrestored
+            // (failed to re-materialize this provision — bytes safe in CAS, leaf
+            // absent, so do NOT say "read it"; promise a retry next turn).
+            const {
+              restored: restoredRefreshSidecars,
+              unrestored: unrestoredRefreshSidecars,
+            } = partitionSidecars(refreshSidecars, failedSidecarSet)
+            const sidecarPairs = restoredRefreshSidecars.map(formatRestoredPair)
             // Per-path coverage (round-7 #D), restricted to fully-synced subpaths:
             // a deferred conflict path is "covered" iff some sidecar's original IS
             // that path or sits under it.
@@ -709,23 +723,43 @@ export function startSessionThinkingWorker() {
                   `Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar (read it — file sidecars hold the bytes verbatim, symlink sidecars hold JSON {"kind":"symlink","target":...} — reconcile with the live/head version, then write the merged result back to the original path): ${sidecarPairs.join("; ")}.`
                 )
               }
+              // P2: any sidecar that FAILED to re-materialize this provision is
+              // listed separately WITHOUT a "read it" instruction — the on-disk
+              // leaf isn't present yet (the preserved bytes are safe and will be
+              // restored on a later provision). Telling the agent to read a path
+              // that doesn't exist would be a lie / waste a tool call.
+              const unrestoredRefreshSentence = unrestoredSidecarSentence(
+                unrestoredRefreshSidecars
+              )
+              if (unrestoredRefreshSentence) {
+                sections.push(unrestoredRefreshSentence)
+              }
               if (commitEntries.length > 0) {
                 // round-7 #C: the post-commit reconcile preserved the agent's
                 // pre-conflict copy at a sidecar — point at it instead of
-                // claiming the work was simply lost.
-                const commitSidecarPairs = commitEntries
-                  .flatMap(([, c]) => c.sidecars)
-                  .map((s) =>
-                    s.kind === "symlink"
-                      ? `${s.original} → ${s.sidecar} (symlink target, read as JSON)`
-                      : `${s.original} → ${s.sidecar}`
-                  )
+                // claiming the work was simply lost. P2: split restored ("read
+                // it") from unrestored (leaf absent this provision).
+                const commitSidecars = commitEntries.flatMap(
+                  ([, c]) => c.sidecars
+                )
+                const {
+                  restored: restoredCommitSidecars,
+                  unrestored: unrestoredCommitSidecars,
+                } = partitionSidecars(commitSidecars, failedSidecarSet)
+                const commitSidecarPairs =
+                  restoredCommitSidecars.map(formatRestoredPair)
                 const commitSidecarNote =
                   commitSidecarPairs.length > 0
                     ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar — read it (symlink sidecars hold JSON metadata), reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
                     : ""
+                const unrestoredCommitSentence = unrestoredSidecarSentence(
+                  unrestoredCommitSidecars
+                )
+                const unrestoredCommitNote = unrestoredCommitSentence
+                  ? ` ${unrestoredCommitSentence}`
+                  : ""
                 sections.push(
-                  `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote} Re-read each path and re-apply your change if it's still needed.`
+                  `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote}${unrestoredCommitNote} Re-read each path and re-apply your change if it's still needed.`
                 )
                 surfacedPendingCommitConflicts = true
               }

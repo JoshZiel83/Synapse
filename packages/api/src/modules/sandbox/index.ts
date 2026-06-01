@@ -48,3 +48,10 @@ export {
   type SpawnSandboxRuntimeParams,
 } from "./host-provider.js"
 export { runContentGc, type GcResult } from "./gc.js"
+export {
+  partitionSidecars,
+  formatRestoredPair,
+  formatUnrestoredPair,
+  unrestoredSidecarSentence,
+  type PartitionedSidecars,
+} from "./conflict-notice.js"
