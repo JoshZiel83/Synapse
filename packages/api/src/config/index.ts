@@ -53,94 +53,115 @@ function optionalPositiveInt() {
   )
 }
 
-const envSchema = z.object({
-  PORT: withDefault(port, "3001"),
-  HOST: withDefault(z.string().min(1), "0.0.0.0"),
-  // Not an enum: deployments use values beyond development/production/test
-  // (e.g. "staging"), and rejecting those would block startup. Consumers that
-  // care about a specific mode compare the string themselves.
-  NODE_ENV: withDefault(z.string().min(1), "development"),
+const envSchema = z
+  .object({
+    PORT: withDefault(port, "3001"),
+    HOST: withDefault(z.string().min(1), "0.0.0.0"),
+    // Not an enum: deployments use values beyond development/production/test
+    // (e.g. "staging"), and rejecting those would block startup. Consumers that
+    // care about a specific mode compare the string themselves.
+    NODE_ENV: withDefault(z.string().min(1), "development"),
 
-  APP_BASE_URL: z.string().optional(),
-  NEXT_PUBLIC_APP_URL: z.string().optional(),
-  NEXT_PUBLIC_SITE_URL: z.string().optional(),
+    APP_BASE_URL: z.string().optional(),
+    NEXT_PUBLIC_APP_URL: z.string().optional(),
+    NEXT_PUBLIC_SITE_URL: z.string().optional(),
 
-  PUBLIC_NPM_REGISTRY_URL: withDefault(z.string(), ""),
+    PUBLIC_NPM_REGISTRY_URL: withDefault(z.string(), ""),
 
-  DATABASE_URL: withDefault(
-    z.string().min(1),
-    "postgresql://synapse:password@localhost:5432/synapse"
-  ),
-  REDIS_URL: withDefault(z.string().min(1), "redis://localhost:6379"),
+    DATABASE_URL: withDefault(
+      z.string().min(1),
+      "postgresql://synapse:password@localhost:5432/synapse"
+    ),
+    REDIS_URL: withDefault(z.string().min(1), "redis://localhost:6379"),
 
-  REALTIME_OUTBOX_BATCH_SIZE: withDefault(positiveInt, "100"),
-  REALTIME_OUTBOX_POLL_MS: withDefault(positiveInt, "500"),
-  REALTIME_OUTBOX_RETENTION_HOURS: withDefault(nonNegativeInt, "24"),
-  REALTIME_OUTBOX_GC_INTERVAL_MS: withDefault(positiveInt, "60000"),
+    REALTIME_OUTBOX_BATCH_SIZE: withDefault(positiveInt, "100"),
+    REALTIME_OUTBOX_POLL_MS: withDefault(positiveInt, "500"),
+    REALTIME_OUTBOX_RETENTION_HOURS: withDefault(nonNegativeInt, "24"),
+    REALTIME_OUTBOX_GC_INTERVAL_MS: withDefault(positiveInt, "60000"),
 
-  ASR_PROVIDER: withDefault(z.string().min(1), "volcengine"),
-  VOLCENGINE_ASR_APP_ID: withDefault(z.string(), ""),
-  VOLCENGINE_ASR_ACCESS_TOKEN: withDefault(z.string(), ""),
-  VOLCENGINE_ASR_SECRET_KEY: withDefault(z.string(), ""),
-  VOLCENGINE_ASR_RESOURCE_ID: withDefault(
-    z.string().min(1),
-    "volc.seedasr.sauc.duration"
-  ),
-  VOLCENGINE_ASR_WS_URL: withDefault(
-    z.string().min(1),
-    "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
-  ),
-  VOLCENGINE_ASR_MAX_CONCURRENCY: withDefault(positiveInt, "3"),
-  VOLCENGINE_ASR_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
-  VOLCENGINE_ASR_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+    ASR_PROVIDER: withDefault(z.string().min(1), "volcengine"),
+    VOLCENGINE_ASR_APP_ID: withDefault(z.string(), ""),
+    VOLCENGINE_ASR_ACCESS_TOKEN: withDefault(z.string(), ""),
+    VOLCENGINE_ASR_SECRET_KEY: withDefault(z.string(), ""),
+    VOLCENGINE_ASR_RESOURCE_ID: withDefault(
+      z.string().min(1),
+      "volc.seedasr.sauc.duration"
+    ),
+    VOLCENGINE_ASR_WS_URL: withDefault(
+      z.string().min(1),
+      "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+    ),
+    VOLCENGINE_ASR_MAX_CONCURRENCY: withDefault(positiveInt, "3"),
+    VOLCENGINE_ASR_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
+    VOLCENGINE_ASR_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
 
-  IM_RUNTIME_MANAGER_ENABLED: z.string().optional(),
+    IM_RUNTIME_MANAGER_ENABLED: z.string().optional(),
 
-  SKILL_GITHUB_RAW_PROXY_PREFIXES: z.string().optional(),
-  SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS: z.string().optional(),
+    SKILL_GITHUB_RAW_PROXY_PREFIXES: z.string().optional(),
+    SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS: z.string().optional(),
 
-  AI_PROVIDER: withDefault(z.string(), ""),
-  AI_ENGINE_KIND: z.string().optional(),
-  AI_API_KEY: withDefault(z.string(), ""),
-  AI_BASE_URL: z.string().optional(),
-  AI_MODEL: z.string().optional(),
-  MODEL_NAME: z.string().optional(),
-  AI_MAX_TOKENS: withDefault(positiveInt, "4096"),
+    AI_PROVIDER: withDefault(z.string(), ""),
+    AI_ENGINE_KIND: z.string().optional(),
+    AI_API_KEY: withDefault(z.string(), ""),
+    AI_BASE_URL: z.string().optional(),
+    AI_MODEL: z.string().optional(),
+    MODEL_NAME: z.string().optional(),
+    AI_MAX_TOKENS: withDefault(positiveInt, "4096"),
 
-  AUDIO_FALLBACK_PROVIDER: withDefault(z.string().min(1), "sherpa-onnx"),
-  SHERPA_ONNX_CONFIG_JSON: withDefault(z.string(), ""),
-  SHERPA_ONNX_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+    AUDIO_FALLBACK_PROVIDER: withDefault(z.string().min(1), "sherpa-onnx"),
+    SHERPA_ONNX_CONFIG_JSON: withDefault(z.string(), ""),
+    SHERPA_ONNX_TIMEOUT_MS: withDefault(positiveInt, "15000"),
 
-  IMAGE_FALLBACK_PROVIDER: withDefault(z.string().min(1), "tesseract"),
-  TESSERACT_LANGS: withDefault(z.string().min(1), "eng"),
-  TESSERACT_LANG_PATH: withDefault(z.string(), ""),
-  TESSERACT_CACHE_PATH: withDefault(
-    z.string().min(1),
-    "/tmp/synapse-tesseract-cache"
-  ),
-  TESSERACT_TIMEOUT_MS: withDefault(positiveInt, "20000"),
+    IMAGE_FALLBACK_PROVIDER: withDefault(z.string().min(1), "tesseract"),
+    TESSERACT_LANGS: withDefault(z.string().min(1), "eng"),
+    TESSERACT_LANG_PATH: withDefault(z.string(), ""),
+    TESSERACT_CACHE_PATH: withDefault(
+      z.string().min(1),
+      "/tmp/synapse-tesseract-cache"
+    ),
+    TESSERACT_TIMEOUT_MS: withDefault(positiveInt, "20000"),
 
-  MEMORY_RECALL_LIMIT: withDefault(positiveInt, "6"),
-  MEMORY_SEARCH_CANDIDATE_LIMIT: withDefault(positiveInt, "40"),
-  MEMORY_RECALL_TOP_K: optionalPositiveInt(),
-  MEMORY_EMBEDDING_MODEL_ID: withDefault(
-    z.string().min(1),
-    "Xenova/multilingual-e5-small"
-  ),
-  MEMORY_MODEL_CACHE_DIR: z.string().optional(),
-  MEMORY_EMBED_BATCH_SIZE: withDefault(positiveInt, "12"),
-  MEMORY_INDEX_QUEUE_CONCURRENCY: withDefault(positiveInt, "2"),
-  MEMORY_QUERY_EMBED_CACHE_TTL_SEC: withDefault(nonNegativeInt, "86400"),
-  MEMORY_MMR_LAMBDA: withDefault(unitFloat, "0.8"),
-  MEMORY_MMR_CANDIDATE_MULTIPLIER: withDefault(positiveInt, "4"),
-  MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS: withDefault(positiveFloat, "30"),
-  MEMORY_SUMMARY_DECAY_FLOOR: withDefault(unitFloat, "0.35"),
-  MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: z.string().optional(),
+    MEMORY_RECALL_LIMIT: withDefault(positiveInt, "6"),
+    MEMORY_SEARCH_CANDIDATE_LIMIT: withDefault(positiveInt, "40"),
+    MEMORY_RECALL_TOP_K: optionalPositiveInt(),
+    MEMORY_EMBEDDING_MODEL_ID: withDefault(
+      z.string().min(1),
+      "Xenova/multilingual-e5-small"
+    ),
+    MEMORY_MODEL_CACHE_DIR: z.string().optional(),
+    MEMORY_EMBED_BATCH_SIZE: withDefault(positiveInt, "12"),
+    MEMORY_INDEX_QUEUE_CONCURRENCY: withDefault(positiveInt, "2"),
+    MEMORY_QUERY_EMBED_CACHE_TTL_SEC: withDefault(nonNegativeInt, "86400"),
+    MEMORY_MMR_LAMBDA: withDefault(unitFloat, "0.8"),
+    MEMORY_MMR_CANDIDATE_MULTIPLIER: withDefault(positiveInt, "4"),
+    MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS: withDefault(positiveFloat, "30"),
+    MEMORY_SUMMARY_DECAY_FLOOR: withDefault(unitFloat, "0.35"),
+    MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: z.string().optional(),
 
-  PLATFORM_ADMIN_EMAILS: withDefault(z.string(), ""),
+    PLATFORM_ADMIN_EMAILS: withDefault(z.string(), ""),
 
-  LOG_LEVEL: z.string().optional(),
-})
+    LOG_LEVEL: z.string().optional(),
+
+    // Secret-at-rest master passphrase (crypto/index.ts). Required in production
+    // so a missing key fails at STARTUP — not on the first encrypt/decrypt.
+    MCP_ENCRYPTION_KEY: z.string().optional(),
+    APP_SECRET: z.string().optional(),
+  })
+  .superRefine((env, ctx) => {
+    if (
+      env.NODE_ENV === "production" &&
+      !env.MCP_ENCRYPTION_KEY &&
+      !env.APP_SECRET
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["MCP_ENCRYPTION_KEY"],
+        message:
+          "MCP_ENCRYPTION_KEY (or APP_SECRET) is required in production to " +
+          "encrypt sensitive plugin/IM credentials at rest",
+      })
+    }
+  })
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
   const parsed = envSchema.safeParse(process.env)
