@@ -588,6 +588,7 @@ async fn dir_sync(state: &Arc<State>, params: Value) -> Result<Value, RpcError> 
             .map(|c| rpc::ConflictSidecar {
                 original: c.original,
                 sidecar: c.sidecar,
+                kind: c.kind,
             })
             .collect(),
         incomplete: res.incomplete,

@@ -9,7 +9,7 @@ import { normalizePendingConflicts, mergePendingConflicts } from "./service.js"
  * must still surface after upgrade (round-7 #C changed the storage shape).
  */
 
-test("normalizePendingConflicts: current shape passes through", () => {
+test("normalizePendingConflicts: current shape passes through (kind defaulted)", () => {
   const cur = {
     conversation: {
       paths: ["/a.txt", "/b.txt"],
@@ -17,6 +17,7 @@ test("normalizePendingConflicts: current shape passes through", () => {
         {
           original: "/conversation/a.txt",
           sidecar: "/conversation/.synapse-conflicts/a.txt",
+          kind: "file",
         },
       ],
     },
@@ -45,7 +46,7 @@ test("normalizePendingConflicts: null/garbage → empty object", () => {
 test("normalizePendingConflicts: partial/malformed entries are defaulted", () => {
   const mixed = {
     a: { paths: ["/x"] }, // missing sidecars
-    b: { sidecars: [{ original: "/b/y", sidecar: "/b/.synapse-conflicts/y" }] }, // missing paths
+    b: { sidecars: [{ original: "/b/y", sidecar: "/b/.synapse-conflicts/y" }] }, // missing paths + sidecar kind
     c: {}, // both missing
     d: { paths: "not-an-array", sidecars: "nope" }, // wrong types
   }
@@ -54,7 +55,15 @@ test("normalizePendingConflicts: partial/malformed entries are defaulted", () =>
     a: { paths: ["/x"], sidecars: [] },
     b: {
       paths: [],
-      sidecars: [{ original: "/b/y", sidecar: "/b/.synapse-conflicts/y" }],
+      // a pre-round-10 sidecar (no kind) defaults to "file" (it was always
+      // a readable file before symlink sidecars existed).
+      sidecars: [
+        {
+          original: "/b/y",
+          sidecar: "/b/.synapse-conflicts/y",
+          kind: "file",
+        },
+      ],
     },
     c: { paths: [], sidecars: [] },
     d: { paths: [], sidecars: [] },
@@ -94,14 +103,19 @@ test("mergePendingConflicts: same subpath unions + dedups paths (no clobber)", (
   ])
 })
 
-test("mergePendingConflicts: sidecars dedup by original (latest wins)", () => {
+test("mergePendingConflicts: same-original distinct sidecars BOTH survive (round-10 #2)", () => {
+  // Round-10 #2: two unconsumed conflicts on the SAME original have DISTINCT
+  // sidecar leaves (content discriminator); both recovery copies must persist.
+  // Dedup is by SIDECAR path, so a re-record of the SAME sidecar is idempotent
+  // but a new distinct sidecar for the same original is kept.
   const prev = {
     conversation: {
       paths: ["/a.txt"],
       sidecars: [
         {
           original: "/conversation/a.txt",
-          sidecar: "/conversation/.synapse-conflicts/a.txt",
+          sidecar: "/conversation/.synapse-conflicts/hash1",
+          kind: "file",
         },
       ],
     },
@@ -110,21 +124,31 @@ test("mergePendingConflicts: sidecars dedup by original (latest wins)", () => {
     conversation: {
       paths: ["/a.txt"],
       sidecars: [
-        // same original, (hypothetically) different sidecar → latest kept, no dup
+        // SAME sidecar leaf → idempotent (deduped).
         {
           original: "/conversation/a.txt",
-          sidecar: "/conversation/.synapse-conflicts/a.txt",
+          sidecar: "/conversation/.synapse-conflicts/hash1",
+          kind: "file",
         },
+        // SAME original, DIFFERENT content → distinct leaf → must be KEPT.
         {
-          original: "/conversation/d.txt",
-          sidecar: "/conversation/.synapse-conflicts/d.txt",
+          original: "/conversation/a.txt",
+          sidecar: "/conversation/.synapse-conflicts/hash2",
+          kind: "file",
         },
       ],
     },
   })
-  assert.equal(out.conversation.sidecars.length, 2, "deduped by original")
-  const originals = out.conversation.sidecars.map((s) => s.original).sort()
-  assert.deepEqual(originals, ["/conversation/a.txt", "/conversation/d.txt"])
+  assert.equal(
+    out.conversation.sidecars.length,
+    2,
+    "two distinct sidecar leaves for the same original both survive"
+  )
+  const leaves = out.conversation.sidecars.map((s) => s.sidecar).sort()
+  assert.deepEqual(leaves, [
+    "/conversation/.synapse-conflicts/hash1",
+    "/conversation/.synapse-conflicts/hash2",
+  ])
 })
 
 test("mergePendingConflicts: empty prev returns the incoming verbatim", () => {

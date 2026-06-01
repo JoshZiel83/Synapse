@@ -636,6 +636,12 @@ pub fn three_way_merge(
 pub struct ConflictSidecar {
     pub original: String,
     pub sidecar: String,
+    /// What the sidecar leaf holds: "file" = the preserved bytes verbatim
+    /// (agent reads them directly); "symlink" = a small JSON metadata regular
+    /// file `{"kind":"symlink","target":"…"}` (the agent reads the JSON to
+    /// recover the link target — a raw symlink sidecar would be unreadable via
+    /// the O_NOFOLLOW fs tools, round-10 #3).
+    pub kind: String,
 }
 
 /// Result of `dir_sync`: how the live dir was reconciled toward a new head.
@@ -775,17 +781,15 @@ pub fn dir_sync(
                     // Already sidecar'd under an earlier overlapping conflict path.
                     continue;
                 }
-                // Collision-free sidecar storage: a FLAT leaf named by the hash
-                // of the original VFS path, directly under .synapse-conflicts
-                // (round-9 #1). Mirroring the original tree (/.synapse-conflicts
-                // {dirty_path}) collides — a file sidecar /foo and a deeper
-                // /foo/bar.txt cannot coexist, and "preparing" one would DELETE
-                // the other recovery copy. A flat hashed leaf has no nesting, so
-                // there is no file-vs-dir collision, and re-preserving the same
-                // original overwrites only its own prior copy (idempotent). The
-                // returned {original, sidecar} carries the real original path for
-                // the agent.
-                let sidecar_vfs = sidecar_path_for(dirty_path);
+                // Collision-free sidecar storage: a FLAT leaf under
+                // .synapse-conflicts named by hash(original + content) (round-9
+                // #1 + round-10 #2). Flat = no file-vs-dir collision; the content
+                // discriminator means two SEPARATE unconsumed conflicts on the
+                // same original with different content don't overwrite each other.
+                // The returned {original, sidecar, kind} carries the real path +
+                // how to read the leaf for the agent.
+                let disc = content_discriminator(dirty_entry);
+                let sidecar_vfs = sidecar_path_for(dirty_path, &disc);
                 // Ensure the single .synapse-conflicts dir exists (helper-owned
                 // scratch, never scanned/committed); clobber a non-dir an agent
                 // may have left at that one slot.
@@ -800,20 +804,23 @@ pub fn dir_sync(
                 // local copy, so a swallowed sidecar failure would be guaranteed
                 // data loss. On failure STOP (leave the live path intact): the
                 // caller won't advance base and the next turn retries (round-8 #1).
-                if let Err(e) =
-                    apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(dirty_entry))
+                let kind = match write_sidecar(cas, dir, &sidecar_vfs, dirty_entry)
                 {
-                    incomplete = Some(format!(
-                        "failed to preserve local copy of {dirty_path} at \
-                         conflict sidecar {sidecar_vfs}: {e}"
-                    ));
-                    break 'outer;
-                }
+                    Ok(k) => k,
+                    Err(e) => {
+                        incomplete = Some(format!(
+                            "failed to preserve local copy of {dirty_path} at \
+                             conflict sidecar {sidecar_vfs}: {e}"
+                        ));
+                        break 'outer;
+                    }
+                };
                 // Sidecar bytes are on disk → record it so the caller surfaces it
                 // EVEN IF a later path fails (round-9 #2: never orphan a sidecar).
                 conflict_sidecars.push(ConflictSidecar {
                     original: dirty_path.clone(),
                     sidecar: sidecar_vfs,
+                    kind,
                 });
             }
             // Overwrite the live path with head's version (or remove it if head
@@ -855,19 +862,102 @@ pub fn dir_sync(
     })
 }
 
-/// Collision-free sidecar VFS path for a dirty original path (round-9 #1). A
-/// FLAT leaf named by the hex sha256 of the original VFS path, directly under
-/// `.synapse-conflicts`. Because every sidecar is a direct child of the scratch
-/// root (never nested), no two sidecars can ever collide as file-vs-directory,
-/// and re-preserving the same original overwrites only its own prior copy. The
-/// human-readable original path travels separately in the returned
-/// `ConflictSidecar.original`, so the flat hashed name loses no information the
-/// agent needs.
-fn sidecar_path_for(original_vfs: &str) -> String {
+/// Collision-free sidecar VFS path for a dirty original path (round-9 #1,
+/// round-10 #2). A FLAT leaf under `.synapse-conflicts` named by the hex sha256
+/// of the original VFS path COMBINED WITH a content discriminator. The original
+/// hash keeps the leaf flat (no nesting → no file-vs-dir collision), and the
+/// content discriminator means two SEPARATE unconsumed conflicts on the SAME
+/// original with DIFFERENT preserved content land on DIFFERENT leaves — so a
+/// later conflict can't silently overwrite an earlier, not-yet-consumed recovery
+/// copy. Same original + same content = same leaf (idempotent re-preserve). The
+/// human-readable original travels separately in `ConflictSidecar.original`.
+fn sidecar_path_for(original_vfs: &str, content_disc: &str) -> String {
     let mut h = Sha256::new();
     h.update(original_vfs.as_bytes());
+    h.update(b"\0");
+    h.update(content_disc.as_bytes());
     let hex = hex::encode(h.finalize());
     format!("/{CONFLICTS_DIRNAME}/{hex}")
+}
+
+/// Content discriminator for a preservable entry: its content sha256 for a file,
+/// or a hash of its target for a symlink. Distinguishes two unconsumed conflicts
+/// on the same original path (round-10 #2).
+fn content_discriminator(entry: &ManifestEntry) -> String {
+    match entry.kind {
+        EntryKind::File => entry.sha256.clone().unwrap_or_default(),
+        EntryKind::Symlink => {
+            let mut h = Sha256::new();
+            h.update(b"symlink\0");
+            h.update(entry.target.as_deref().unwrap_or("").as_bytes());
+            hex::encode(h.finalize())
+        }
+        // Dirs are never sidecar'd (no recoverable content); defensive default.
+        EntryKind::Dir => "dir".to_string(),
+    }
+}
+
+/// Write a preserved local entry to its sidecar leaf and return the sidecar
+/// "kind" string for the agent notice. A FILE is written verbatim (the agent
+/// reads its bytes). A SYMLINK is written as a small JSON metadata REGULAR FILE
+/// `{"kind":"symlink","target":"…"}` rather than a raw symlink, because the
+/// agent's fs tools open with O_NOFOLLOW and `fs_stat` exposes no target — a raw
+/// symlink sidecar would be unreadable, so "read it" would be a lie (round-10
+/// #3). The JSON form is plain-readable via `fs_read`.
+fn write_sidecar(
+    cas: &BlobStore,
+    dir: &Path,
+    sidecar_vfs: &str,
+    entry: &ManifestEntry,
+) -> Result<String, RpcError> {
+    match entry.kind {
+        EntryKind::Symlink => {
+            let target = entry.target.as_deref().unwrap_or("");
+            // Minimal hand-rolled JSON (target may contain quotes/backslashes).
+            let body = format!(
+                "{{\"kind\":\"symlink\",\"target\":{}}}\n",
+                json_string(target)
+            );
+            let host = vfs_to_host(dir, sidecar_vfs);
+            if let Some(parent) = host.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            prepare_dest_for_kind(&host, EntryKind::File)?;
+            fs::write(&host, body)?;
+            set_mode(&host, 0o600)?;
+            Ok("symlink".to_string())
+        }
+        EntryKind::File => {
+            apply_entry_to_dir(cas, dir, sidecar_vfs, Some(entry))?;
+            Ok("file".to_string())
+        }
+        EntryKind::Dir => {
+            // Never reached (dirs aren't preservable), but keep total.
+            apply_entry_to_dir(cas, dir, sidecar_vfs, Some(entry))?;
+            Ok("dir".to_string())
+        }
+    }
+}
+
+/// Encode a string as a JSON string literal (quotes + the control/escape set).
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Ensure the single `.synapse-conflicts` scratch root exists AS A DIRECTORY,

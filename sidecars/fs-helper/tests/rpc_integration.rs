@@ -2181,6 +2181,79 @@ fn dir_sync_sidecars_are_collision_free_for_overlapping_names() {
 }
 
 #[test]
+fn dir_sync_same_path_two_conflicts_keep_distinct_sidecars() {
+    // round-10 #2: two SEPARATE unconsumed conflicts on the SAME original path
+    // with DIFFERENT local content must land on DIFFERENT sidecar leaves — a
+    // later conflict must not overwrite the earlier, not-yet-consumed recovery
+    // copy. (Same original + same content would idempotently reuse one leaf.)
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: x.txt = "base".
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    std::fs::write(base_dir.join("x.txt"), "base").unwrap();
+    let base_sha = helper.call(1, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+
+    // head 1: x.txt = "H1".
+    let h1_dir = tmp.path().join("h1");
+    std::fs::create_dir_all(&h1_dir).unwrap();
+    std::fs::write(h1_dir.join("x.txt"), "H1").unwrap();
+    let h1_sha = helper.call(2, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": h1_dir.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+
+    // live: materialize base; agent edits x.txt = "L1" → conflict #1 vs H1.
+    let live = tmp.path().join("live");
+    helper.call(3, "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }));
+    std::fs::write(live.join("x.txt"), "L1").unwrap();
+    let r1 = helper.call(4, "fs.dir.sync", serde_json::json!({
+        "dir": live.to_str().unwrap(),
+        "base_manifest_sha256": base_sha,
+        "to_manifest_sha256": h1_sha,
+    }));
+    let sc1 = sidecar_host_for(&live, &r1, "/x.txt")
+        .unwrap_or_else(|| panic!("conflict #1 sidecar not reported: {r1}"));
+    assert_eq!(std::fs::read(&sc1).unwrap(), b"L1");
+
+    // Round 2 (base now H1): agent edits x.txt = "L2" → conflict #2 vs head H2.
+    // The first sidecar (L1) was never consumed and MUST still survive.
+    let h2_dir = tmp.path().join("h2");
+    std::fs::create_dir_all(&h2_dir).unwrap();
+    std::fs::write(h2_dir.join("x.txt"), "H2").unwrap();
+    let h2_sha = helper.call(5, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": h2_dir.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+    std::fs::write(live.join("x.txt"), "L2").unwrap();
+    let r2 = helper.call(6, "fs.dir.sync", serde_json::json!({
+        "dir": live.to_str().unwrap(),
+        "base_manifest_sha256": h1_sha,
+        "to_manifest_sha256": h2_sha,
+    }));
+    let sc2 = sidecar_host_for(&live, &r2, "/x.txt")
+        .unwrap_or_else(|| panic!("conflict #2 sidecar not reported: {r2}"));
+    assert_eq!(std::fs::read(&sc2).unwrap(), b"L2");
+
+    // THE KEY ASSERTION (round-10 #2): distinct leaves; the FIRST unconsumed
+    // recovery copy (L1) is STILL intact after the second conflict.
+    assert_ne!(sc1, sc2, "same-path conflicts collided onto one sidecar leaf");
+    assert_eq!(
+        std::fs::read(&sc1).unwrap(),
+        b"L1",
+        "the earlier unconsumed recovery copy was overwritten by a later conflict"
+    );
+    helper.stop();
+}
+
+#[test]
 fn dir_sync_preserves_dirty_local_symlink_under_tree_conflict() {
     // round-8 #3: a locally-added/modified SYMLINK under a head-deleted subtree
     // must be sidecar'd too (not just regular files) — the manifest supports
@@ -2239,13 +2312,28 @@ fn dir_sync_preserves_dirty_local_symlink_under_tree_conflict() {
     );
     // head wins: /dir is gone from the live tree.
     assert!(!live.join("dir").exists(), "head-delete not applied: {r}");
-    // the agent's symlink is preserved at the sidecar (as a symlink).
-    let sidecar = sidecar_host_for(&live, &r, "/dir/link")
+    // round-10 #3: the symlink sidecar is stored as an AGENT-READABLE JSON
+    // regular file (NOT a raw symlink, which the O_NOFOLLOW fs tools can't read),
+    // and the result reports kind="symlink".
+    let entry = r["result"]["conflict_sidecars"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["original"].as_str() == Some("/dir/link"))
         .unwrap_or_else(|| panic!("symlink sidecar not reported: {r}"));
+    assert_eq!(entry["kind"].as_str(), Some("symlink"), "kind tag: {r}");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/link").unwrap();
     let meta = std::fs::symlink_metadata(&sidecar)
         .unwrap_or_else(|e| panic!("symlink sidecar missing ({e}): {r}"));
-    assert!(meta.file_type().is_symlink(), "sidecar is not a symlink: {r}");
-    assert_eq!(std::fs::read_link(&sidecar).unwrap().to_str().unwrap(), "keep.txt");
+    assert!(
+        meta.file_type().is_file(),
+        "symlink sidecar must be a readable regular file, not a raw symlink: {r}"
+    );
+    let body = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(
+        body.contains("\"kind\":\"symlink\"") && body.contains("\"target\":\"keep.txt\""),
+        "symlink sidecar JSON missing kind/target: {body}"
+    );
     helper.stop();
 }
 

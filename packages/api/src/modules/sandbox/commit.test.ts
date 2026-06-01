@@ -199,6 +199,7 @@ test(
               {
                 original: "/actor/x.txt",
                 sidecar: "/actor/.synapse-conflicts/deadbeef",
+                kind: "file",
               },
             ],
           }
@@ -240,6 +241,7 @@ test(
           {
             original: "/actor/x.txt",
             sidecar: "/actor/.synapse-conflicts/deadbeef",
+            kind: "file",
           },
         ],
         "partial sidecar from a failed reconcile must still be surfaced"
@@ -322,6 +324,7 @@ test(
             {
               original: "/actor/x.txt",
               sidecar: "/actor/.synapse-conflicts/deadbeef",
+              kind: "file",
             },
           ],
         }),
@@ -444,6 +447,7 @@ test(
               {
                 original: "/actor/x.txt",
                 sidecar: "/actor/.synapse-conflicts/cafe",
+                kind: "file",
               },
             ],
           }

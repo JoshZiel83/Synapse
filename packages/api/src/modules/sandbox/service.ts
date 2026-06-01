@@ -41,6 +41,7 @@ import {
   resolveFsHelperPath,
   cleanupDirs,
 } from "./materialize.js"
+import type { DirSyncResult } from "@synapse/device-runtime"
 import {
   createLocalHostProvider,
   type HostProvider,
@@ -375,6 +376,28 @@ async function waitForCatalog(
 }
 
 /**
+ * Test seam for refreshSpaces (mirrors CommitDeps). Defaults bind to production
+ * globals; a test injects a pinned executor + matching runInTx + a stub sync.
+ */
+export interface RefreshDeps {
+  dbh: QueryExecutor
+  runInTx: <T>(fn: (tx: QueryExecutor) => Promise<T>) => Promise<T>
+  sync: (input: {
+    dir: string
+    baseManifestSha256?: string
+    toManifestSha256: string
+  }) => Promise<DirSyncResult>
+}
+
+function defaultRefreshDeps(): RefreshDeps {
+  return {
+    dbh: pool,
+    runInTx: (fn) => transaction(fn as never) as never,
+    sync: syncDir,
+  }
+}
+
+/**
  * Turn-start refresh: 3-way merge each multi-writer space's (/conversation,
  * /actor) new head into the live dir without unmounting, then advance the
  * mount's base_snapshot_id to the merged-in head. /actor-conversation is single
@@ -394,34 +417,31 @@ async function waitForCatalog(
  * never discards the already-computed conflict notices of a space that refreshed
  * cleanly (round-8 follow-up + round-9 #2).
  */
-export async function refreshSpaces(sessionId: string): Promise<{
-  deferredConflictsBySubpath: Record<string, string[]>
-  sidecarsBySubpath: Record<string, { original: string; sidecar: string }[]>
-  syncFailuresBySubpath: Record<string, string>
-}> {
-  const mounts = await getActiveMountsForSession(pool, sessionId)
+export async function refreshSpaces(
+  sessionId: string,
+  depsOverride?: Partial<RefreshDeps>
+): Promise<PendingRefreshConflicts> {
+  const deps: RefreshDeps = { ...defaultRefreshDeps(), ...depsOverride }
+  const mounts = await getActiveMountsForSession(deps.dbh, sessionId)
   const deferredConflictsBySubpath: Record<string, string[]> = {}
-  const sidecarsBySubpath: Record<
-    string,
-    { original: string; sidecar: string }[]
-  > = {}
+  const sidecarsBySubpath: Record<string, ConflictSidecarRef[]> = {}
   const syncFailuresBySubpath: Record<string, string> = {}
   for (const mount of mounts) {
     if (mount.mount_subpath === "actor-conversation") continue
     if (!mount.materialized_dir) continue
 
     try {
-      const space = await getFileSpace(pool, mount.file_space_id)
+      const space = await getFileSpace(deps.dbh, mount.file_space_id)
       const head = space?.current_snapshot_id ?? null
       if (!head || head === mount.base_snapshot_id) continue // nothing new
 
-      const headManifest = await getSnapshotManifestSha(pool, head)
+      const headManifest = await getSnapshotManifestSha(deps.dbh, head)
       if (!headManifest) continue
       const baseManifest = mount.base_snapshot_id
-        ? await getSnapshotManifestSha(pool, mount.base_snapshot_id)
+        ? await getSnapshotManifestSha(deps.dbh, mount.base_snapshot_id)
         : null
 
-      const sync = await syncDir({
+      const sync = await deps.sync({
         dir: mount.materialized_dir,
         baseManifestSha256: baseManifest ?? undefined,
         toManifestSha256: headManifest,
@@ -434,12 +454,14 @@ export async function refreshSpaces(sessionId: string): Promise<{
       // sync stopped early (round-9 #2). The Rust paths are mount-relative
       // (original = the real tree path, sidecar = a flat hashed leaf under
       // .synapse-conflicts); prefix both with the mount subpath to make them
-      // agent-visible.
+      // agent-visible. `kind` distinguishes a readable-bytes file sidecar from a
+      // readable-JSON symlink sidecar (round-10 #3).
       if (sync.conflict_sidecars.length > 0) {
         sidecarsBySubpath[mount.mount_subpath] = sync.conflict_sidecars.map(
           (c) => ({
             original: `/${mount.mount_subpath}${c.original}`,
             sidecar: `/${mount.mount_subpath}${c.sidecar}`,
+            kind: c.kind,
           })
         )
       }
@@ -465,7 +487,7 @@ export async function refreshSpaces(sessionId: string): Promise<{
       // the round-4 dead-end), and (b) never silently overwrites the concurrent
       // change, because on conflict the live path already holds head, not the
       // agent's stale local copy.
-      await updateFileMount(pool, mount.id, { baseSnapshotId: head })
+      await updateFileMount(deps.dbh, mount.id, { baseSnapshotId: head })
     } catch (err) {
       // The helper threw outright (e.g. an RPC/spawn error before any partial
       // result) — the live dir may be partially synced and base is NOT advanced.
@@ -481,11 +503,34 @@ export async function refreshSpaces(sessionId: string): Promise<{
       )
     }
   }
-  return {
+  const result: PendingRefreshConflicts = {
     deferredConflictsBySubpath,
     sidecarsBySubpath,
     syncFailuresBySubpath,
   }
+  // Persist durably for at-least-once delivery (round-10 #1): refresh already
+  // moved live→head + advanced base for resolved conflicts, so if this turn is
+  // interrupted before the actor consumes the notice, next turn would NOT
+  // re-report it (head==base) and the sidecar would be orphaned. Stash it (merged
+  // with any still-undelivered refresh conflicts) so the next turn re-surfaces it;
+  // the worker clears it only after actorThink returns. syncFailures are NOT
+  // persisted — they self-heal next turn (head!=base → refresh re-runs).
+  if (
+    Object.keys(deferredConflictsBySubpath).length > 0 ||
+    Object.keys(sidecarsBySubpath).length > 0
+  ) {
+    await recordPendingRefreshConflicts(
+      sessionId,
+      { deferredConflictsBySubpath, sidecarsBySubpath },
+      deps.runInTx
+    ).catch((err) =>
+      console.error(
+        `[sandbox] failed to persist refresh conflicts for ${sessionId}:`,
+        err
+      )
+    )
+  }
+  return result
 }
 
 export interface CommitResult {
@@ -495,23 +540,43 @@ export interface CommitResult {
   conflictsBySubpath: Record<string, string[]>
   /**
    * subpath → sidecars the post-commit reconcile preserved (original VFS path →
-   * sidecar path). The agent's pre-conflict copy of each lost file lives here,
-   * so the next-turn notice can point at it instead of claiming the work was
-   * simply lost (round-7 #C).
+   * sidecar path + kind). The agent's pre-conflict copy of each lost file lives
+   * here, so the next-turn notice can point at it instead of claiming the work
+   * was simply lost (round-7 #C).
    */
-  sidecarsBySubpath: Record<string, { original: string; sidecar: string }[]>
+  sidecarsBySubpath: Record<string, ConflictSidecarRef[]>
 }
 
 /** A conflicting file whose pre-conflict local copy was preserved at a sidecar. */
 export interface ConflictSidecarRef {
   original: string
   sidecar: string
+  /** "file" = readable bytes; "symlink" = readable JSON metadata (round-10 #3). */
+  kind: string
 }
 
 /** Per-subpath pending commit conflicts: the lost paths + their sidecars. */
 export interface PendingCommitConflict {
   paths: string[]
   sidecars: ConflictSidecarRef[]
+}
+
+/**
+ * Durable refresh-conflict state for at-least-once delivery (round-10 #1).
+ * refreshSpaces head-wins-resolves conflicts (live path → head, agent's copy →
+ * sidecar) and advances base at TURN START — but if the turn is interrupted
+ * after that and before the actor consumes the notice, next turn head==base so
+ * refresh won't re-report it, and the sidecar becomes an unknown recovery file.
+ * So refresh conflicts are persisted on the session (like commit conflicts) and
+ * cleared only after actorThink returns.
+ */
+export interface PendingRefreshConflicts {
+  /** subpath → deferred conflict paths (head won the live path). */
+  deferredConflictsBySubpath: Record<string, string[]>
+  /** subpath → sidecars preserving the agent's pre-conflict copies. */
+  sidecarsBySubpath: Record<string, ConflictSidecarRef[]>
+  /** subpath → reason the refresh could not fully sync (stale/half-synced view). */
+  syncFailuresBySubpath: Record<string, string>
 }
 
 /**
@@ -548,7 +613,7 @@ export interface CommitDeps {
     hadConflicts: boolean
   ) => Promise<{
     ok: boolean
-    sidecars: { original: string; sidecar: string }[]
+    sidecars: ConflictSidecarRef[]
   }>
 }
 
@@ -573,6 +638,7 @@ function defaultCommitDeps(): CommitDeps {
         const sidecars = res.conflict_sidecars.map((c) => ({
           original: `/${mount.mount_subpath}${c.original}`,
           sidecar: `/${mount.mount_subpath}${c.sidecar}`,
+          kind: c.kind,
         }))
         if (res.incomplete) {
           // Partial reconcile: surface the sidecars written so far, but signal
@@ -656,10 +722,12 @@ const PENDING_CONFLICTS_KEY = "_sandboxPendingCommitConflicts"
 
 /**
  * Pure union of an existing pending-conflict map with newly-recorded conflicts:
- * per subpath, dedup paths (Set) and dedup sidecars by original path (a
- * re-occurring conflict keeps the latest sidecar location — they share the
- * deterministic prefix anyway). Extracted for unit coverage; the DB read +
- * FOR UPDATE wrapper lives in recordPendingCommitConflicts.
+ * per subpath, dedup paths (Set) and dedup sidecars by SIDECAR path (not by
+ * original): a second unconsumed conflict on the same original now lands on a
+ * DISTINCT sidecar leaf (round-10 #2 content discriminator), and BOTH preserved
+ * copies must persist until consumed — so we key on the unique sidecar path, not
+ * the original (which would drop the earlier copy). Extracted for unit coverage;
+ * the DB read + FOR UPDATE wrapper lives in recordPendingCommitConflicts.
  */
 export function mergePendingConflicts(
   prev: Record<string, PendingCommitConflict>,
@@ -671,11 +739,11 @@ export function mergePendingConflicts(
     const paths = Array.from(
       new Set([...existingEntry.paths, ...incoming.paths])
     )
-    const byOriginal = new Map<string, ConflictSidecarRef>()
+    const bySidecar = new Map<string, ConflictSidecarRef>()
     for (const s of [...existingEntry.sidecars, ...incoming.sidecars]) {
-      byOriginal.set(s.original, s)
+      bySidecar.set(s.sidecar, s)
     }
-    merged[sub] = { paths, sidecars: Array.from(byOriginal.values()) }
+    merged[sub] = { paths, sidecars: Array.from(bySidecar.values()) }
   }
   return merged
 }
@@ -735,12 +803,27 @@ export function normalizePendingConflicts(
       out[sub] = {
         paths: Array.isArray(v.paths) ? (v.paths as string[]) : [],
         sidecars: Array.isArray(v.sidecars)
-          ? (v.sidecars as ConflictSidecarRef[])
+          ? (v.sidecars as unknown[]).map(normalizeSidecarRef)
           : [],
       }
     }
   }
   return out
+}
+
+/** Coerce a stored sidecar ref, defaulting a missing `kind` to "file" (a
+ * pre-round-10 sidecar was always a readable file). */
+function normalizeSidecarRef(raw: unknown): ConflictSidecarRef {
+  const v = (raw ?? {}) as {
+    original?: unknown
+    sidecar?: unknown
+    kind?: unknown
+  }
+  return {
+    original: typeof v.original === "string" ? v.original : "",
+    sidecar: typeof v.sidecar === "string" ? v.sidecar : "",
+    kind: typeof v.kind === "string" ? v.kind : "file",
+  }
 }
 
 /**
@@ -776,6 +859,159 @@ export async function clearPendingCommitConflicts(
     .execute()
 }
 
+const PENDING_REFRESH_KEY = "_sandboxPendingRefreshConflicts"
+
+/**
+ * Pure union of an existing pending-refresh map with newly-recorded refresh
+ * conflicts: per subpath, dedup deferred paths (Set) and dedup sidecars by
+ * SIDECAR path (round-10 #2 — two unconsumed conflicts on the same original have
+ * distinct leaves and both must persist). syncFailures are NOT carried in the
+ * durable store (they self-heal next turn). Exported for unit coverage.
+ */
+export function mergePendingRefreshConflicts(
+  prev: Pick<
+    PendingRefreshConflicts,
+    "deferredConflictsBySubpath" | "sidecarsBySubpath"
+  >,
+  incoming: Pick<
+    PendingRefreshConflicts,
+    "deferredConflictsBySubpath" | "sidecarsBySubpath"
+  >
+): Pick<
+  PendingRefreshConflicts,
+  "deferredConflictsBySubpath" | "sidecarsBySubpath"
+> {
+  const deferredConflictsBySubpath: Record<string, string[]> = {
+    ...prev.deferredConflictsBySubpath,
+  }
+  for (const [sub, paths] of Object.entries(
+    incoming.deferredConflictsBySubpath
+  )) {
+    deferredConflictsBySubpath[sub] = Array.from(
+      new Set([...(deferredConflictsBySubpath[sub] ?? []), ...paths])
+    )
+  }
+  const sidecarsBySubpath: Record<string, ConflictSidecarRef[]> = {
+    ...prev.sidecarsBySubpath,
+  }
+  for (const [sub, refs] of Object.entries(incoming.sidecarsBySubpath)) {
+    const bySidecar = new Map<string, ConflictSidecarRef>()
+    for (const s of [...(sidecarsBySubpath[sub] ?? []), ...refs]) {
+      bySidecar.set(s.sidecar, s)
+    }
+    sidecarsBySubpath[sub] = Array.from(bySidecar.values())
+  }
+  return { deferredConflictsBySubpath, sidecarsBySubpath }
+}
+
+/** Coerce the stored pending-refresh blob into the current shape. */
+export function normalizePendingRefresh(
+  raw: unknown
+): Pick<
+  PendingRefreshConflicts,
+  "deferredConflictsBySubpath" | "sidecarsBySubpath"
+> {
+  const v = (raw ?? {}) as {
+    deferredConflictsBySubpath?: unknown
+    sidecarsBySubpath?: unknown
+  }
+  const deferredConflictsBySubpath: Record<string, string[]> = {}
+  if (
+    v.deferredConflictsBySubpath &&
+    typeof v.deferredConflictsBySubpath === "object"
+  ) {
+    for (const [sub, paths] of Object.entries(
+      v.deferredConflictsBySubpath as Record<string, unknown>
+    )) {
+      if (Array.isArray(paths))
+        deferredConflictsBySubpath[sub] = paths as string[]
+    }
+  }
+  const sidecarsBySubpath: Record<string, ConflictSidecarRef[]> = {}
+  if (v.sidecarsBySubpath && typeof v.sidecarsBySubpath === "object") {
+    for (const [sub, refs] of Object.entries(
+      v.sidecarsBySubpath as Record<string, unknown>
+    )) {
+      if (Array.isArray(refs))
+        sidecarsBySubpath[sub] = (refs as unknown[]).map(normalizeSidecarRef)
+    }
+  }
+  return { deferredConflictsBySubpath, sidecarsBySubpath }
+}
+
+/**
+ * Persist refresh conflicts (deferred paths + sidecars) for at-least-once
+ * delivery (round-10 #1), MERGING with any still-undelivered ones. syncFailures
+ * are deliberately excluded — they self-heal (next turn head!=base re-runs the
+ * sync) so persisting them would re-warn forever.
+ */
+async function recordPendingRefreshConflicts(
+  sessionId: string,
+  incoming: Pick<
+    PendingRefreshConflicts,
+    "deferredConflictsBySubpath" | "sidecarsBySubpath"
+  >,
+  runInTx: <T>(fn: (tx: QueryExecutor) => Promise<T>) => Promise<T> = (fn) =>
+    transaction(fn as never) as never
+): Promise<void> {
+  await runInTx(async (txq) => {
+    const existing = await txq.query(
+      `SELECT collaboration_state FROM sessions WHERE id = $1 FOR UPDATE`,
+      [sessionId]
+    )
+    const state = (existing.rows[0]?.collaboration_state ?? {}) as Record<
+      string,
+      unknown
+    >
+    const prev = normalizePendingRefresh(state[PENDING_REFRESH_KEY])
+    const merged = mergePendingRefreshConflicts(prev, incoming)
+    await txq.query(
+      `UPDATE sessions
+       SET collaboration_state =
+         COALESCE(collaboration_state, '{}'::jsonb)
+         || jsonb_build_object($2::text, $3::jsonb)
+       WHERE id = $1`,
+      [sessionId, PENDING_REFRESH_KEY, JSON.stringify(merged)]
+    )
+  })
+}
+
+/**
+ * Read (WITHOUT clearing) refresh conflicts stashed by a previous turn whose
+ * notice the actor may not have consumed (at-least-once delivery, round-10 #1).
+ * Returns the persisted deferred paths + sidecars (NOT syncFailures — those are
+ * recomputed fresh each turn). The caller clears only after actorThink returns.
+ */
+export async function peekPendingRefreshConflicts(
+  sessionId: string
+): Promise<
+  Pick<
+    PendingRefreshConflicts,
+    "deferredConflictsBySubpath" | "sidecarsBySubpath"
+  >
+> {
+  const row = await db
+    .selectFrom("sessions")
+    .select("collaboration_state")
+    .where("id", "=", sessionId)
+    .executeTakeFirst()
+  const state = (row?.collaboration_state ?? {}) as Record<string, unknown>
+  return normalizePendingRefresh(state[PENDING_REFRESH_KEY])
+}
+
+/** Clear the stashed refresh conflicts (after the agent has consumed them). */
+export async function clearPendingRefreshConflicts(
+  sessionId: string
+): Promise<void> {
+  await db
+    .updateTable("sessions")
+    .set({
+      collaboration_state: sql`COALESCE(collaboration_state, '{}'::jsonb) - ${PENDING_REFRESH_KEY}::text`,
+    } as never)
+    .where("id", "=", sessionId)
+    .execute()
+}
+
 async function commitOneMount(
   workspaceId: string,
   sessionId: string,
@@ -785,7 +1021,7 @@ async function commitOneMount(
 ): Promise<{
   snapshotId: string | null
   conflicts: string[]
-  sidecars: { original: string; sidecar: string }[]
+  sidecars: ConflictSidecarRef[]
 }> {
   if (attempt > 3) {
     throw new SandboxServiceError(

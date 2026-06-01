@@ -245,6 +245,13 @@ export interface DirSyncInput {
 export interface ConflictSidecar {
   original: string
   sidecar: string
+  /**
+   * What the sidecar leaf holds: "file" = the preserved bytes verbatim (read
+   * directly); "symlink" = a small JSON metadata regular file
+   * `{"kind":"symlink","target":"…"}` (read the JSON to recover the link target
+   * — a raw symlink sidecar would be unreadable via the O_NOFOLLOW fs tools).
+   */
+  kind: string
 }
 export interface DirSyncResult {
   applied: string[]

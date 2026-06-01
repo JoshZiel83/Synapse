@@ -420,6 +420,7 @@ pub struct ManifestScanCommitResult {
 pub struct ConflictSidecar {
     pub original: String,
     pub sidecar: String,
+    pub kind: String,
 }
 
 #[derive(Debug, Serialize)]

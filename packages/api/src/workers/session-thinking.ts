@@ -26,6 +26,9 @@ import {
   teardownSandbox,
   peekPendingCommitConflicts,
   clearPendingCommitConflicts,
+  peekPendingRefreshConflicts,
+  clearPendingRefreshConflicts,
+  mergePendingRefreshConflicts,
 } from "../modules/sandbox/index.js"
 import { config } from "../config/index.js"
 import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
@@ -558,6 +561,9 @@ export function startSessionThinkingWorker() {
         // turn-end so a half-synced tree isn't snapshotted; next turn re-runs the
         // refresh from the same base and self-heals (round-8 follow-up).
         let refreshFailedSubpaths = new Set<string>()
+        // Whether we surfaced persisted refresh conflicts this turn (cleared only
+        // after actorThink returns — at-least-once delivery, round-10 #1).
+        let surfacedPendingRefreshConflicts = false
         if (sandboxEnabled) {
           try {
             await provisionSandbox(sessionId)
@@ -575,15 +581,45 @@ export function startSessionThinkingWorker() {
             // sees the notice doesn't drop it.
             const pendingCommitConflicts =
               await peekPendingCommitConflicts(sessionId)
+            // Refresh conflicts persisted across turns for at-least-once delivery
+            // (round-10 #1). refreshSpaces already stashed THIS turn's conflicts;
+            // peek returns them merged with any still-undelivered from a prior
+            // interrupted turn. UNION with this turn's in-memory result too, so a
+            // swallowed persist failure (base may already have advanced for synced
+            // subpaths) can't drop this turn's conflict from the notice. Cleared
+            // only after actorThink returns.
+            const persistedRefresh =
+              await peekPendingRefreshConflicts(sessionId)
+            const displayRefresh = mergePendingRefreshConflicts(
+              persistedRefresh,
+              {
+                deferredConflictsBySubpath: refresh.deferredConflictsBySubpath,
+                sidecarsBySubpath: refresh.sidecarsBySubpath,
+              }
+            )
 
             const refreshEntries = Object.entries(
-              refresh.deferredConflictsBySubpath
+              displayRefresh.deferredConflictsBySubpath
             )
+            // Subpaths that did NOT fully sync THIS turn — for them we must not
+            // promise "head LIVES at the path" (round-10 #4: the live path may be
+            // only half-synced). Their conflicts/sidecars are still surfaced, but
+            // under a "view may be half-synced" caveat below.
             const syncFailureEntries = Object.entries(
               refresh.syncFailuresBySubpath
             )
+            const failedSet = new Set(syncFailureEntries.map(([sp]) => sp))
             const commitEntries = Object.entries(pendingCommitConflicts)
-            const refreshLines = refreshEntries.map(
+            // Head-wins refresh lines cover ONLY subpaths that fully synced (head
+            // genuinely LIVES at the path). Incomplete subpaths get the
+            // half-synced caveat instead (round-10 #4).
+            const syncedRefreshEntries = refreshEntries.filter(
+              ([sp]) => !failedSet.has(sp)
+            )
+            const incompleteRefreshEntries = refreshEntries.filter(([sp]) =>
+              failedSet.has(sp)
+            )
+            const refreshLines = syncedRefreshEntries.map(
               ([sp, paths]) =>
                 `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
             )
@@ -591,21 +627,27 @@ export function startSessionThinkingWorker() {
               ([sp, c]) =>
                 `/${sp}: ${c.paths.map((p) => `/${sp}${p}`).join(", ")}`
             )
-            // The sidecars fs-helper actually wrote on REFRESH (file conflicts
-            // only; dir/delete/kind conflicts have none). Already mount-prefixed
-            // + deduped per file by the service layer (round-7 #B).
+            // Sidecars to surface = the merged refresh sidecars (persisted ∪ this
+            // turn, round-10 #1). `kind` distinguishes a readable-bytes file
+            // sidecar from a readable-JSON symlink sidecar (round-10 #3). These
+            // are ALWAYS listed when present — independent of whether their
+            // subpath fully synced — so an incomplete subpath's preserved copy is
+            // never orphaned before the persisted store is cleared (round-10
+            // follow-up: the sidecar listing must not hide behind the head-wins
+            // line).
             const refreshSidecars = Object.values(
-              refresh.sidecarsBySubpath
+              displayRefresh.sidecarsBySubpath
             ).flat()
-            const sidecarPairs = refreshSidecars.map(
-              (s) => `${s.original} → ${s.sidecar}`
+            const sidecarPairs = refreshSidecars.map((s) =>
+              s.kind === "symlink"
+                ? `${s.original} → ${s.sidecar} (symlink target, read as JSON)`
+                : `${s.original} → ${s.sidecar}`
             )
-            // Per-path coverage (round-7 #D): a deferred conflict path is
-            // "covered" iff some sidecar's original IS that path or sits under it.
-            // Don't infer coverage from counts — a single tree conflict can fan
-            // out to many sidecars (or zero), so a count compare mislabels.
+            // Per-path coverage (round-7 #D), restricted to fully-synced subpaths:
+            // a deferred conflict path is "covered" iff some sidecar's original IS
+            // that path or sits under it.
             const sidecarOriginals = refreshSidecars.map((s) => s.original)
-            const hasUncoveredRefreshConflict = refreshEntries.some(
+            const hasUncoveredRefreshConflict = syncedRefreshEntries.some(
               ([sp, paths]) =>
                 paths.some((p) => {
                   const abs = `/${sp}${p}`
@@ -614,11 +656,16 @@ export function startSessionThinkingWorker() {
                   )
                 })
             )
+            // We surfaced (and may clear) persisted refresh conflicts iff there
+            // were any deferred paths OR any sidecars to show.
+            surfacedPendingRefreshConflicts =
+              refreshEntries.length > 0 || refreshSidecars.length > 0
 
             if (
               refreshLines.length > 0 ||
               commitLines.length > 0 ||
-              syncFailureEntries.length > 0
+              syncFailureEntries.length > 0 ||
+              surfacedPendingRefreshConflicts
             ) {
               if (refreshLines.length > 0) {
                 console.warn(
@@ -638,16 +685,22 @@ export function startSessionThinkingWorker() {
                 )
               }
               const sections: string[] = []
-              if (refreshEntries.length > 0) {
-                const sidecarNote =
-                  sidecarPairs.length > 0
-                    ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar (read it, reconcile with the live/head version, write the merged result back to the original path — it will then commit cleanly): ${sidecarPairs.join("; ")}.`
-                    : ""
+              if (refreshLines.length > 0) {
                 const noSidecarNote = hasUncoveredRefreshConflict
-                  ? " Some conflict paths have NO sidecar (only the sidecars listed above are actual preserved local copies) — for any conflict path without a listed sidecar, re-read the live path: it now holds the other writer's version."
+                  ? " Some conflict paths have NO sidecar — for any conflict path without a listed sidecar (below), re-read the live path: it now holds the other writer's version."
                   : ""
                 sections.push(
-                  `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}.${sidecarNote}${noSidecarNote}`
+                  `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}.${noSidecarNote}`
+                )
+              }
+              // The preserved-copy listing is its OWN sentence, emitted whenever
+              // ANY refresh sidecar exists — even if every conflicting subpath was
+              // incomplete this turn (so refreshLines is empty). This guarantees a
+              // preserved copy is named before the persisted store is cleared
+              // post-actorThink (round-10 follow-up: no orphaned sidecar).
+              if (sidecarPairs.length > 0) {
+                sections.push(
+                  `Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar (read it — file sidecars hold the bytes verbatim, symlink sidecars hold JSON {"kind":"symlink","target":...} — reconcile with the live/head version, then write the merged result back to the original path): ${sidecarPairs.join("; ")}.`
                 )
               }
               if (commitEntries.length > 0) {
@@ -656,10 +709,14 @@ export function startSessionThinkingWorker() {
                 // claiming the work was simply lost.
                 const commitSidecarPairs = commitEntries
                   .flatMap(([, c]) => c.sidecars)
-                  .map((s) => `${s.original} → ${s.sidecar}`)
+                  .map((s) =>
+                    s.kind === "symlink"
+                      ? `${s.original} → ${s.sidecar} (symlink target, read as JSON)`
+                      : `${s.original} → ${s.sidecar}`
+                  )
                 const commitSidecarNote =
                   commitSidecarPairs.length > 0
-                    ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar — read it, reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
+                    ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar — read it (symlink sidecars hold JSON metadata), reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
                     : ""
                 sections.push(
                   `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote} Re-read each path and re-apply your change if it's still needed.`
@@ -667,14 +724,25 @@ export function startSessionThinkingWorker() {
                 surfacedPendingCommitConflicts = true
               }
               if (syncFailureEntries.length > 0) {
-                // round-8 follow-up: a space failed to merge in the latest head
-                // this turn. Its view may be STALE and it will NOT be committed
-                // at turn-end (avoids snapshotting a half-synced tree); the
-                // platform retries the merge next turn.
+                // round-8 follow-up + round-10 #4: a space failed to FULLY merge
+                // in the latest head this turn. Its view may be HALF-SYNCED — head
+                // is NOT guaranteed to be at the path — and it will NOT be
+                // committed at turn-end (avoids snapshotting a half-synced tree);
+                // the platform retries the merge next turn. Any conflict paths +
+                // sidecars already preserved for it ARE listed above and remain
+                // valid; surface those paths here too so the agent re-reads them.
+                const incompleteLines = incompleteRefreshEntries.map(
+                  ([sp, paths]) =>
+                    `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
+                )
+                const incompletePathsNote =
+                  incompleteLines.length > 0
+                    ? ` Conflicting paths there (re-read carefully; your preserved copies are in the sidecar list above): ${incompleteLines.join("; ")}.`
+                    : ""
                 sections.push(
-                  `These spaces could NOT be refreshed to the latest version this turn and may show a STALE view; do not rely on them being current, and avoid large edits there until they recover: ${syncFailureEntries
+                  `These spaces could NOT be fully refreshed to the latest version this turn and may show a HALF-SYNCED view — do NOT assume the other writer's version is at the path there; re-read carefully and avoid large edits until they recover: ${syncFailureEntries
                     .map(([sp]) => `/${sp}`)
-                    .join(", ")}.`
+                    .join(", ")}.${incompletePathsNote}`
                 )
               }
               sandboxConflictNotice = {
@@ -684,7 +752,7 @@ export function startSessionThinkingWorker() {
                 surface: "internal",
                 parts: textBlocks(`File merge conflict. ${sections.join(" ")}`),
                 metadata: {
-                  refreshConflicts: refresh.deferredConflictsBySubpath,
+                  refreshConflicts: displayRefresh.deferredConflictsBySubpath,
                   priorCommitConflicts: pendingCommitConflicts,
                   refreshSyncFailures: refresh.syncFailuresBySubpath,
                 },
@@ -928,6 +996,16 @@ export function startSessionThinkingWorker() {
             await clearPendingCommitConflicts(sessionId).catch((err) =>
               console.error(
                 `[session-thinking] failed to clear pending commit conflicts for ${sessionId}:`,
+                err
+              )
+            )
+          }
+          // Same at-least-once contract for refresh conflicts (round-10 #1):
+          // clear the persisted refresh notice ONLY after the model consumed it.
+          if (sandboxEnabled && surfacedPendingRefreshConflicts) {
+            await clearPendingRefreshConflicts(sessionId).catch((err) =>
+              console.error(
+                `[session-thinking] failed to clear pending refresh conflicts for ${sessionId}:`,
                 err
               )
             )
