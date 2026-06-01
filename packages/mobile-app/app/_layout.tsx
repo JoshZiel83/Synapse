@@ -8,6 +8,7 @@ import { StatusBar } from "expo-status-bar"
 import { useEffect } from "react"
 import "react-native-reanimated"
 import "react-native-url-polyfill/auto"
+import "../global.css"
 
 import "@/lib/chat-background-task"
 import { AppProviders } from "@/providers/app-providers"

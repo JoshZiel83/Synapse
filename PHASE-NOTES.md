@@ -185,3 +185,26 @@ mutations), home-tab actors fetch, workspace-entity-picker-screen. Migrate incre
     that must be verified on-device (getting it wrong silently breaks math/emoji rendering). The CDN
     path works today (only breaks fully offline). Tracked for a device-tested follow-up. Note katex
     CSS is pinned to 0.16.44 matching the installed katex dep.
+
+## Phase 13 note (NativeWind v4 + dark mode)
+
+- 13a DONE (config spike, fully verified): nativewind 4.2.4 + tailwindcss 3.4.19 installed in mobile
+  (reanimated 4.1.7 peer already present). Created babel.config.js (preset-expo jsxImportSource:
+  nativewind + nativewind/babel), tailwind.config.js (nativewind preset, darkMode:"class", content
+  globs for app/+src/, Expo DOM components intentionally excluded), global.css, nativewind-env.d.ts.
+  WRAPPED the existing metro.config.js with withNativeWind PRESERVING watchFolders/blockList/
+  nodeModulesPaths (the workspace resolver). Imported ../global.css in app/\_layout.tsx; added
+  nativewind-env.d.ts to tsconfig.
+  ACCEPTANCE PASSED: mobile typecheck PASS; `expo export --platform web` bundles ALL routes with the
+  NativeWind transform active and @synapse/shared/@shared resolving through the wrapped Metro config
+  (the riskiest config step is proven end-to-end).
+- 13b DONE: tailwind.config.js derives the color palette from src/theme/tokens.ts and adds a dark
+  variant (color.DEFAULT / color.dark) so `dark:` utilities are available. The StyleSheet `theme`
+  object remains the source of truth during migration (compatibility — both coexist).
+- 13c/13d DEFERRED (tracked): converting the 675-line ui.tsx primitives + ~24 themed screens from
+  StyleSheet(theme.colors.\*) to className/`dark:`, and wiring navigation theme + StatusBar to
+  useColorScheme. This is a large visual surface with NO automated visual/integration tests;
+  doing it blind risks regressing the entire mobile UI. The toolchain is in place and proven, so
+  this is now safe incremental per-file work that MUST be verified on-device in light + dark. Recipe:
+  replace StyleSheet color refs with className="bg-surface dark:bg-surface-dark text-text
+  dark:text-text-dark ..." per component; flip navigationTheme.dark + StatusBar via useColorScheme.
