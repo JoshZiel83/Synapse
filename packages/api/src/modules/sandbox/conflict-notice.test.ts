@@ -79,6 +79,23 @@ test("partitionSidecars: empty failed-map → everything restored", () => {
   assert.equal(permanent.length, 0)
 })
 
+test("partitionSidecars: restoreStatusUnknown forces ALL sidecars transient (P2 fail-closed)", () => {
+  // Even with an empty failed-map (which would normally mean 'all restored'),
+  // an unknown restore status must NOT present any sidecar as readable.
+  const { restored, transient, permanent } = partitionSidecars(
+    [fileRef, symlinkRef, corruptRef],
+    reasons([]),
+    true
+  )
+  assert.equal(restored.length, 0, "nothing is presented as restored")
+  assert.equal(permanent.length, 0, "nothing is presented as permanent")
+  assert.deepEqual(
+    transient.map((s) => s.sidecar).sort(),
+    [fileRef.sidecar, symlinkRef.sidecar, corruptRef.sidecar].sort(),
+    "every sidecar is bucketed transient (retryable, no 'read it')"
+  )
+})
+
 test("formatRestoredPair: file uses arrow, symlink annotates JSON", () => {
   assert.equal(
     formatRestoredPair(fileRef),
@@ -104,7 +121,7 @@ test("transientUnrestoredSentence: empty list → empty string (safe to concat)"
   assert.equal(transientUnrestoredSentence([]), "")
 })
 
-test("transientUnrestoredSentence: lists paths, forbids reading, PROMISES a later restore", () => {
+test("transientUnrestoredSentence: lists paths, forbids reading, promises a RETRY (not a guaranteed restore)", () => {
   const sentence = transientUnrestoredSentence([fileRef, symlinkRef])
   assert.ok(
     sentence.includes("could NOT be") && sentence.includes("re-materialized"),
@@ -115,8 +132,12 @@ test("transientUnrestoredSentence: lists paths, forbids reading, PROMISES a late
     "explicitly tells the agent NOT to read the missing sidecar path"
   )
   assert.ok(
-    /later turn will restore/i.test(sentence),
-    "promises a later-turn restore for a transient failure"
+    /will be retried on a later turn/i.test(sentence),
+    "promises a retry next turn for a transient failure"
+  )
+  assert.ok(
+    !/later turn will restore it|will be restored/i.test(sentence),
+    "must NOT over-promise a guaranteed restore (transient = retry, not certain)"
   )
   assert.ok(
     sentence.includes("/actor/x.txt") && sentence.includes("/actor/link"),

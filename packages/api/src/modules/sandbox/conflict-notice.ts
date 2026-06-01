@@ -34,15 +34,27 @@ export interface PartitionedSidecars {
  * Split `sidecars` by their restore status. `failedReasons` maps an
  * agent-visible sidecar path to WHY it failed this provision (from
  * provisionSandbox); a sidecar absent from the map is treated as restored.
+ *
+ * `restoreStatusUnknown` (P2 fail-closed): set when the provision reported the
+ * restore as NOT-ok but produced NO per-sidecar list (e.g. the failure-
+ * collection itself threw). In that case we cannot trust that any sidecar was
+ * restored, so EVERY sidecar is treated as transiently unrestored — none gets a
+ * "read it", and the caller blocks clearing the pending store.
  */
 export function partitionSidecars(
   sidecars: ConflictSidecarRef[],
-  failedReasons: ReadonlyMap<string, SidecarRestoreFailureReason>
+  failedReasons: ReadonlyMap<string, SidecarRestoreFailureReason>,
+  restoreStatusUnknown = false
 ): PartitionedSidecars {
   const restored: ConflictSidecarRef[] = []
   const transient: ConflictSidecarRef[] = []
   const permanent: ConflictSidecarRef[] = []
   for (const s of sidecars) {
+    if (restoreStatusUnknown) {
+      // Fail-closed: status unknown → assume not on disk, retryable.
+      transient.push(s)
+      continue
+    }
     const reason = failedReasons.get(s.sidecar)
     if (reason === undefined) restored.push(s)
     else if (reason === "permanent") permanent.push(s)
@@ -65,9 +77,11 @@ export function formatUnrestoredPair(s: ConflictSidecarRef): string {
 
 /**
  * The standalone sentence for sidecars that failed restore TRANSIENTLY — the
- * payload is safe and a later turn may restore it. Returns "" when there are
- * none (so the caller can concatenate freely). Deliberately omits any "read"
- * instruction: the leaf isn't present yet.
+ * payload is safe and a later turn MAY restore it (no guarantee: transient
+ * covers a temporary fs write error or a not-yet-active mount, which is retried
+ * but not certain to succeed). Returns "" when there are none (so the caller can
+ * concatenate freely). Deliberately omits any "read" instruction: the leaf isn't
+ * present yet.
  */
 export function transientUnrestoredSentence(
   transient: ConflictSidecarRef[]
@@ -77,8 +91,8 @@ export function transientUnrestoredSentence(
   return (
     `Your pre-conflict copy of these paths is preserved but could NOT be ` +
     `re-materialized on disk this turn (do NOT try to read the sidecar path ` +
-    `yet — it is not present; the bytes are safe and a later turn will restore ` +
-    `it): ${pairs}.`
+    `yet — it is not present; the bytes are safe and a restore will be retried ` +
+    `on a later turn): ${pairs}.`
   )
 }
 

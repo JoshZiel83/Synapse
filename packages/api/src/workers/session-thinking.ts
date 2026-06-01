@@ -580,6 +580,13 @@ export function startSessionThinkingWorker() {
         // store is cleared — otherwise the agent would re-receive the same dead
         // notice every turn forever (the blob is unprotectable regardless).
         let hasTransientSidecarFailure = false
+        // P2 fail-closed: provision reported restore NOT-ok but produced an EMPTY
+        // failed-sidecar list (the failure-collection in provisionSandbox itself
+        // threw). We then cannot trust that any sidecar made it to disk, so every
+        // pending sidecar must be treated as (transiently) unrestored — none gets
+        // a "read it" and the pending store is NOT cleared. Distinct from the
+        // normal case where an empty failed list means "all restored".
+        let restoreStatusUnknown = false
         // P2/P3: agent-visible sidecar path → WHY it failed restore this
         // provision ("transient" = retry later; "permanent" = unrecoverable).
         // The notice uses this to avoid "read it" for missing paths and to word
@@ -595,11 +602,17 @@ export function startSessionThinkingWorker() {
             failedSidecarReasons = new Map(
               provision.failedSidecars.map((f) => [f.sidecar, f.reason])
             )
-            // Only TRANSIENT failures block clearing the pending store (they may
-            // restore later). Permanent failures are delivered once then cleared.
-            hasTransientSidecarFailure = provision.failedSidecars.some(
-              (f) => f.reason === "transient"
-            )
+            // P2 fail-closed: ok=false with no per-sidecar detail → unknown.
+            restoreStatusUnknown =
+              !provision.sidecarRestoreOk &&
+              provision.failedSidecars.length === 0
+            // Block clearing the pending store when ANY sidecar may still need a
+            // retry: a transient per-sidecar failure, OR the unknown state above
+            // (we can't prove any sidecar was delivered). Permanent failures do
+            // NOT block (delivered once then cleared).
+            hasTransientSidecarFailure =
+              restoreStatusUnknown ||
+              provision.failedSidecars.some((f) => f.reason === "transient")
             const refresh = await refreshSpaces(sessionId)
             // Record any spaces whose refresh FAILED so turn-end commit skips
             // them (their live tree is half-synced; committing it could entangle
@@ -678,7 +691,11 @@ export function startSessionThinkingWorker() {
               restored: restoredRefreshSidecars,
               transient: transientRefreshSidecars,
               permanent: permanentRefreshSidecars,
-            } = partitionSidecars(refreshSidecars, failedSidecarReasons)
+            } = partitionSidecars(
+              refreshSidecars,
+              failedSidecarReasons,
+              restoreStatusUnknown
+            )
             const sidecarPairs = restoredRefreshSidecars.map(formatRestoredPair)
             // Per-path coverage (round-7 #D), restricted to fully-synced subpaths:
             // a deferred conflict path is "covered" iff some sidecar's original IS
@@ -768,7 +785,11 @@ export function startSessionThinkingWorker() {
                   restored: restoredCommitSidecars,
                   transient: transientCommitSidecars,
                   permanent: permanentCommitSidecars,
-                } = partitionSidecars(commitSidecars, failedSidecarReasons)
+                } = partitionSidecars(
+                  commitSidecars,
+                  failedSidecarReasons,
+                  restoreStatusUnknown
+                )
                 const commitSidecarPairs =
                   restoredCommitSidecars.map(formatRestoredPair)
                 const commitSidecarNote =
