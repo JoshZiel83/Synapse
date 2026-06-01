@@ -133,9 +133,6 @@ export const searchFeature: SubFeature = {
     if (userId && userId.length >= 6 && userId.length <= 128)
       body.user_id = userId
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 60000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/web_search`, {
         method: "POST",
@@ -144,7 +141,7 @@ export const searchFeature: SubFeature = {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: AbortSignal.timeout(60000),
       })
 
       if (!response.ok) {
@@ -211,8 +208,6 @@ export const searchFeature: SubFeature = {
       return textBlocks(sections.join("\n\n"))
     } catch (error) {
       throw normalizeZhipuTransportError("网络搜索 API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }

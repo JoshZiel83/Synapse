@@ -886,9 +886,6 @@ async function fetchAminer(
   let lastError: unknown
 
   for (const authValue of buildAuthCandidates(token)) {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), timeoutMs)
-
     try {
       const response = await fetch(url, {
         method: spec.method,
@@ -902,7 +899,7 @@ async function fetchAminer(
           spec.method === "POST"
             ? JSON.stringify(request.body || {})
             : undefined,
-        signal: controller.signal,
+        signal: AbortSignal.timeout(timeoutMs),
       })
       const text = await response.text()
       const parsed = parseJsonMaybe(text)
@@ -974,12 +971,10 @@ async function fetchAminer(
       ) {
         continue
       }
-      if (error instanceof Error && controller.signal.aborted) {
+      if (error instanceof Error && error.name === "TimeoutError") {
         throw new Error(`AMiner ${spec.name} timed out after ${timeoutMs} ms.`)
       }
       throw error
-    } finally {
-      clearTimeout(timeout)
     }
   }
 

@@ -129,9 +129,6 @@ export const ocrFeature: SubFeature = {
       form.append("probability", String(input.probability))
     }
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 120000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/files/ocr`, {
         method: "POST",
@@ -139,7 +136,7 @@ export const ocrFeature: SubFeature = {
           Authorization: `Bearer ${apiKey}`,
         },
         body: form,
-        signal: controller.signal,
+        signal: AbortSignal.timeout(120000),
       })
 
       if (!response.ok) {
@@ -183,8 +180,6 @@ export const ocrFeature: SubFeature = {
       )
     } catch (error) {
       throw normalizeZhipuTransportError("OCR 服务 API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }

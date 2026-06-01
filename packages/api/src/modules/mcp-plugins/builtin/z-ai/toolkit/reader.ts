@@ -101,9 +101,6 @@ export const readerFeature: SubFeature = {
     if (RETURN_FORMATS.includes(input.returnFormat as string))
       body.return_format = input.returnFormat
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 60000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/reader`, {
         method: "POST",
@@ -112,7 +109,7 @@ export const readerFeature: SubFeature = {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: AbortSignal.timeout(60000),
       })
 
       if (!response.ok) {
@@ -156,8 +153,6 @@ export const readerFeature: SubFeature = {
       return textBlocks(sections.join("\n\n"))
     } catch (error) {
       throw normalizeZhipuTransportError("网页阅读 API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }

@@ -103,9 +103,6 @@ export const layoutParsingFeature: SubFeature = {
     if (userId && userId.length >= 6 && userId.length <= 128)
       body.user_id = userId
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 180000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/layout_parsing`, {
         method: "POST",
@@ -114,7 +111,7 @@ export const layoutParsingFeature: SubFeature = {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: AbortSignal.timeout(180000),
       })
 
       if (!response.ok) {
@@ -190,8 +187,6 @@ export const layoutParsingFeature: SubFeature = {
       return output
     } catch (error) {
       throw normalizeZhipuTransportError("版面解析 API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }

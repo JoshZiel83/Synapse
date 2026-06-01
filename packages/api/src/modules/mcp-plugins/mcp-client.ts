@@ -92,7 +92,6 @@ export class McpHttpClient {
     }
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30000)
     this.activeRequests.add(controller)
 
     try {
@@ -100,7 +99,10 @@ export class McpHttpClient {
         method: "POST",
         headers,
         body: JSON.stringify(request),
-        signal: controller.signal,
+        signal: AbortSignal.any([
+          AbortSignal.timeout(30000),
+          controller.signal,
+        ]),
       })
 
       // Track session ID from response
@@ -139,7 +141,6 @@ export class McpHttpClient {
       }
       throw error
     } finally {
-      clearTimeout(timeout)
       this.activeRequests.delete(controller)
     }
   }
@@ -218,17 +219,11 @@ export class McpHttpClient {
           ...this.headers,
           "Mcp-Session-Id": this.sessionId,
         }
-        const controller = new AbortController()
-        const timeout = setTimeout(() => controller.abort(), 3000)
-        try {
-          await fetch(this.endpoint, {
-            method: "DELETE",
-            headers,
-            signal: controller.signal,
-          }).catch(() => {}) // Best-effort
-        } finally {
-          clearTimeout(timeout)
-        }
+        await fetch(this.endpoint, {
+          method: "DELETE",
+          headers,
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {}) // Best-effort
       }
     } finally {
       this.initialized = false

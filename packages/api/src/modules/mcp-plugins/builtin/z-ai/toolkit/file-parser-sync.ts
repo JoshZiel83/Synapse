@@ -150,9 +150,6 @@ export const fileParserSyncFeature: SubFeature = {
     form.append("tool_type", "prime-sync")
     form.append("file_type", fileType)
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 180000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/files/parser/sync`, {
         method: "POST",
@@ -160,7 +157,7 @@ export const fileParserSyncFeature: SubFeature = {
           Authorization: `Bearer ${apiKey}`,
         },
         body: form,
-        signal: controller.signal,
+        signal: AbortSignal.timeout(180000),
       })
 
       if (!response.ok) {
@@ -208,8 +205,6 @@ export const fileParserSyncFeature: SubFeature = {
       return output
     } catch (error) {
       throw normalizeZhipuTransportError("文件解析(同步) API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }

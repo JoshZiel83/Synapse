@@ -133,9 +133,6 @@ export const imageGenFeature: SubFeature = {
     )
       body.user_id = input.userId
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 120000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/images/generations`, {
         method: "POST",
@@ -144,7 +141,7 @@ export const imageGenFeature: SubFeature = {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: AbortSignal.timeout(120000),
       })
 
       if (!response.ok) {
@@ -183,8 +180,6 @@ export const imageGenFeature: SubFeature = {
       ]
     } catch (error) {
       throw normalizeZhipuTransportError("图像生成 API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }
