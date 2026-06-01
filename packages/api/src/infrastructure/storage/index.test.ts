@@ -4,8 +4,11 @@ import { createServer, type Server } from "node:http"
 import { downloadToBufferWithLimit } from "./index.js"
 
 async function withServer(
-  handler: (req: import("http").IncomingMessage, res: import("http").ServerResponse) => void,
-  body: (baseUrl: string) => Promise<void>,
+  handler: (
+    req: import("http").IncomingMessage,
+    res: import("http").ServerResponse
+  ) => void,
+  body: (baseUrl: string) => Promise<void>
 ): Promise<void> {
   const server: Server = createServer(handler)
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -22,7 +25,7 @@ async function withServer(
 test("downloadToBufferWithLimit: rejects when maxBytes <= 0", async () => {
   await assert.rejects(
     () => downloadToBufferWithLimit({ url: "http://x/", maxBytes: 0 }),
-    /maxBytes/,
+    /maxBytes/
   )
 })
 
@@ -36,10 +39,15 @@ test("downloadToBufferWithLimit: enforces Content-Length precheck", async () => 
     },
     async (baseUrl) => {
       await assert.rejects(
-        () => downloadToBufferWithLimit({ url: `${baseUrl}/big`, maxBytes: 500 }),
-        /declared size/,
+        () =>
+          downloadToBufferWithLimit({
+            url: `${baseUrl}/big`,
+            maxBytes: 500,
+            allowPrivateHosts: true,
+          }),
+        /declared size/
       )
-    },
+    }
   )
 })
 
@@ -62,10 +70,11 @@ test("downloadToBufferWithLimit: streams + aborts when body exceeds maxBytes (no
           downloadToBufferWithLimit({
             url: `${baseUrl}/stream`,
             maxBytes: 500,
+            allowPrivateHosts: true,
           }),
-        /exceeded maxBytes/,
+        /exceeded maxBytes/
       )
-    },
+    }
   )
 })
 
@@ -80,10 +89,11 @@ test("downloadToBufferWithLimit: succeeds when body fits", async () => {
       const result = await downloadToBufferWithLimit({
         url: `${baseUrl}/ok`,
         maxBytes: 100,
+        allowPrivateHosts: true,
       })
       assert.equal(result.buffer.toString(), "hello")
       assert.equal(result.sizeBytes, 5)
-    },
+    }
   )
 })
 
@@ -95,7 +105,7 @@ test("downloadToBufferWithLimit: allowedHosts enforces initial URL host", async 
         maxBytes: 1000,
         allowedHosts: ["cdn.qq.example"],
       }),
-    /not in allowedHosts/,
+    /not in allowedHosts/
   )
 })
 
@@ -110,10 +120,11 @@ test("downloadToBufferWithLimit: allowedHosts re-validates after redirect", asyn
       res.end("ok")
     })
     await new Promise<void>((resolve) =>
-      target!.listen(0, "127.0.0.1", resolve),
+      target!.listen(0, "127.0.0.1", resolve)
     )
     const targetAddr = target.address()
-    if (!targetAddr || typeof targetAddr === "string") throw new Error("no addr")
+    if (!targetAddr || typeof targetAddr === "string")
+      throw new Error("no addr")
     const targetUrl = `http://127.0.0.1:${targetAddr.port}/final`
 
     // Redirector — sends 302 to target
@@ -123,7 +134,7 @@ test("downloadToBufferWithLimit: allowedHosts re-validates after redirect", asyn
       res.end()
     })
     await new Promise<void>((resolve) =>
-      redirector!.listen(0, "127.0.0.1", resolve),
+      redirector!.listen(0, "127.0.0.1", resolve)
     )
     const redirAddr = redirector.address()
     if (!redirAddr || typeof redirAddr === "string") throw new Error("no addr")
@@ -136,8 +147,9 @@ test("downloadToBufferWithLimit: allowedHosts re-validates after redirect", asyn
           url: `http://127.0.0.1:${redirAddr.port}/r`,
           maxBytes: 1000,
           allowedHosts: ["evil.example.com"],
+          allowPrivateHosts: true,
         }),
-      /not in allowedHosts/,
+      /not in allowedHosts/
     )
   } finally {
     if (target) await new Promise<void>((r) => target!.close(() => r()))
@@ -157,10 +169,29 @@ test("downloadToBufferWithLimit: aborts on timeout", async () => {
             url: `${baseUrl}/hang`,
             maxBytes: 1000,
             timeoutMs: 80,
+            allowPrivateHosts: true,
           }),
         // node-fetch / undici raise an AbortError on signal abort
-        (err: Error) => /abort|timeout|operation/i.test(err.message),
+        (err: Error) => /abort|timeout|operation/i.test(err.message)
       )
+    }
+  )
+})
+
+test("downloadToBufferWithLimit: blocks a private/loopback host by default (SSRF)", async () => {
+  await withServer(
+    (_req, res) => {
+      res.statusCode = 200
+      res.end("should-never-be-read")
     },
+    async (baseUrl) => {
+      // No allowPrivateHosts → the loopback target must be rejected before any
+      // request is made.
+      await assert.rejects(
+        () =>
+          downloadToBufferWithLimit({ url: `${baseUrl}/x`, maxBytes: 1000 }),
+        /non-public address/
+      )
+    }
   )
 })
