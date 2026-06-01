@@ -2,6 +2,7 @@ import { execSync, spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import path from "node:path"
 import process from "node:process"
+import { createInterface } from "node:readline"
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk"
 // codex app-server protocol v2 typed schema. Regenerate after bumping the local
 // `codex` binary with:
@@ -112,12 +113,6 @@ function safeJsonParse<T = unknown>(value: string): T | null {
   }
 }
 
-function splitLines(buffer: string) {
-  const parts = buffer.split(/\r?\n/)
-  const remainder = parts.pop() ?? ""
-  return { lines: parts, remainder }
-}
-
 function writeJsonLine(processRef: ChildProcess | null, payload: unknown) {
   if (!processRef?.stdin?.writable) return false
   processRef.stdin.write(`${JSON.stringify(payload)}\n`)
@@ -212,7 +207,6 @@ class CodexAgentSession implements AgentSession {
     string,
     (decision: PermissionDecision) => void
   >()
-  private stdoutBuffer = ""
   private readonly eventQueue = new EventQueue()
   private currentPrompt: string
 
@@ -235,12 +229,14 @@ class CodexAgentSession implements AgentSession {
 
   attach(child: ChildProcess) {
     this.child = child
-    child.stdout?.on("data", (chunk: Buffer | string) => {
-      this.stdoutBuffer += String(chunk)
-      const { lines, remainder } = splitLines(this.stdoutBuffer)
-      this.stdoutBuffer = remainder
-      for (const line of lines) this.handleStdoutLine(line)
-    })
+    if (child.stdout) {
+      // readline buffers across chunk boundaries with an internal
+      // StringDecoder, so a multi-byte UTF-8 sequence split across two data
+      // events is decoded correctly (the old String(chunk) buffering corrupted
+      // it). Same pattern the device-runtime sidecar already uses.
+      const rl = createInterface({ input: child.stdout })
+      rl.on("line", (line) => this.handleStdoutLine(line))
+    }
     child.once("exit", (code, signal) => {
       this.eventQueue.push({
         kind: "error",
