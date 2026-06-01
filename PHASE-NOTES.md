@@ -157,3 +157,18 @@ mutations), home-tab actors fetch, workspace-entity-picker-screen. Migrate incre
   recycling, stickyHeaderIndices sticky headers, rail drives scrollToIndex (thin PanResponder maps
   touch-Y -> letter), pinyin bucketing imported from @shared/pinyin. Domain pinyin table preserved
   (now in shared, tested).
+
+## Phase 11 note (web landing scroll-snap + react-virtual)
+
+- 11a DONE: replaced the 212-line wheel-hijack snap engine with native CSS scroll-snap.
+  globals.css: html.landing-snap-root { scroll-snap-type: y mandatory } + .landing-snap-section
+  { scroll-snap-align: start; scroll-snap-stop: always }, gated to the same
+  (min-width:1024)(pointer:fine)(min-height:1000) viewport and DISABLED under
+  prefers-reduced-motion. landing-snap-scroll-controller.tsx slimmed 212 -> 90 LOC: now only
+  toggles the landing-snap-root class on <html> and keeps an ArrowUp/ArrowDown keyboard-nav island
+  (CSS snap doesn't cover keyboard). Wheel-hijack (an a11y hazard) removed.
+- 11b DEFERRED (web chat list virtualization, @tanstack/react-virtual on conversation-chat.tsx):
+  same risk profile as mobile 10b — load-older prepend scroll-anchoring (scrollHeight-delta math),
+  auto-scroll-to-bottom, jump button, footer ActorActivityBubble nodes, bottom sentinel. Variable-
+  height prepend anchoring is the single riskiest item in the plan; no integration tests. Not
+  installed/started; tracked for a focused, manually-tested follow-up.
