@@ -1,8 +1,10 @@
 import {
   executeTakeFirst,
   db as defaultDb,
+  runBuilder,
 } from "../../infrastructure/database/kysely.js"
 import type {
+  AnyExecutor,
   KyselyDb,
   QueryExecutor,
   TableInsert,
@@ -78,7 +80,7 @@ export async function buildResourceAccessBindingInsertValues(
  * `pg.PoolClient`-compatible variant of `buildResourceAccessBindingInsertValues`.
  */
 export async function buildResourceAccessBindingInsertValuesOn(
-  client: QueryExecutor,
+  client: AnyExecutor,
   input: {
     workspaceId: string
     resourceType: AccessBindableResourceType
@@ -125,17 +127,18 @@ export async function buildResourceAccessBindingInsertValuesOn(
 import type { AccessBindingRow } from "./bindings.js"
 
 export async function insertAccessBindingReturningIdOn(
-  client: QueryExecutor,
+  client: AnyExecutor,
   params: Parameters<typeof buildResourceAccessBindingInsertValuesOn>[1]
 ): Promise<string> {
   const values = await buildResourceAccessBindingInsertValuesOn(client, params)
-  const inserted = await executeTakeFirst<{ id: string }>(
+  const result = await runBuilder<{ id: string }>(
     client,
     defaultDb
       .insertInto("resource_access_bindings")
       .values(values)
       .returning("id")
   )
+  const inserted = result.rows[0]
   if (!inserted) {
     throw new Error("Failed to insert resource_access_bindings row")
   }
@@ -143,17 +146,18 @@ export async function insertAccessBindingReturningIdOn(
 }
 
 export async function insertAccessBindingReturningRowOn(
-  client: QueryExecutor,
+  client: AnyExecutor,
   params: Parameters<typeof buildResourceAccessBindingInsertValuesOn>[1]
 ): Promise<AccessBindingRow> {
   const values = await buildResourceAccessBindingInsertValuesOn(client, params)
-  const inserted = await executeTakeFirst<AccessBindingRow>(
+  const result = await runBuilder<AccessBindingRow>(
     client,
     defaultDb
       .insertInto("resource_access_bindings")
       .values(values)
       .returningAll()
   )
+  const inserted = result.rows[0]
   if (!inserted) {
     throw new Error("Failed to insert resource_access_bindings row")
   }

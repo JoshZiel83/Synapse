@@ -1,5 +1,11 @@
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
-import type { KyselyDb } from "../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
+import type {
+  AnyExecutor,
+  Executor,
+  KyselyDb,
+} from "../../infrastructure/database/kysely.js"
+import { runCompilable } from "../../infrastructure/database/kysely.js"
 import type { PermissionSubject } from "./evaluator.js"
 import {
   upsertAccessSubject,
@@ -360,7 +366,7 @@ export async function buildRuntimePrincipalContext(
  *    + active-participant guards see uncommitted writes from the surrounding
  *    transaction (critical for approval flows that just upserted the
  *    interaction row in the same client).
- *  - calls `upsertAccessSubjectOn(client, ...)` (pg-form upsert) so the
+ *  - calls `upsertAccessSubject(executor, ...)` (pg-form upsert) so the
  *    subject rows it mints are visible to the same transaction.
  *  - uses raw SQL for the membership / participant lookups so we don't
  *    open a parallel Kysely connection.
@@ -369,7 +375,7 @@ export async function buildRuntimePrincipalContext(
  * via the shared `isPrincipalWorkspaceBound` helper.
  */
 export async function buildRuntimePrincipalContextOn(
-  client: import("../../infrastructure/events/index.js").Queryable,
+  executor: AnyExecutor,
   params: {
     principal: SubjectRef
     workspaceId: string
@@ -378,20 +384,20 @@ export async function buildRuntimePrincipalContextOn(
   }
 ): Promise<RuntimePrincipalContext> {
   await assertPrincipalBelongsToWorkspaceOn(
-    client,
+    executor,
     params.principal,
     params.workspaceId
   )
 
   const principalSubjectId = await upsertAccessSubjectOn(
-    client,
+    executor,
     params.principal
   )
   const runtimeSubjectIds: string[] = [principalSubjectId]
   const runtimeScopeSubjectIds: string[] = []
 
   if (isPrincipalWorkspaceBound(params.principal)) {
-    const workspaceSubjectId = await upsertAccessSubjectOn(client, {
+    const workspaceSubjectId = await upsertAccessSubjectOn(executor, {
       kind: SUBJECT_KIND.WORKSPACE,
       workspaceId: params.workspaceId,
     })
@@ -401,14 +407,15 @@ export async function buildRuntimePrincipalContextOn(
 
   let activeConversationSubjectId: string | undefined
   if (params.conversationId) {
-    const activeRow = await client.query(
-      `SELECT id FROM conversation_participants
-         WHERE conversation_id = $1 AND subject_id = $2 AND state = 'active'
-         LIMIT 1`,
-      [params.conversationId, principalSubjectId]
+    const activeRow = await runCompilable(
+      executor,
+      sql<{ id: string }>`
+        SELECT id FROM conversation_participants
+        WHERE conversation_id = ${params.conversationId} AND subject_id = ${principalSubjectId} AND state = 'active'
+        LIMIT 1`
     )
     if (activeRow.rows.length > 0) {
-      const convSubjectId = await upsertAccessSubjectOn(client, {
+      const convSubjectId = await upsertAccessSubjectOn(executor, {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: params.conversationId,
       })
@@ -419,9 +426,10 @@ export async function buildRuntimePrincipalContextOn(
   }
 
   if (params.delegatedWorkspaceMemberId) {
-    const memberRow = await client.query(
-      `SELECT workspace_id FROM workspace_members WHERE id = $1 LIMIT 1`,
-      [params.delegatedWorkspaceMemberId]
+    const memberRow = await runCompilable(
+      executor,
+      sql<{ workspace_id: string }>`
+        SELECT workspace_id FROM workspace_members WHERE id = ${params.delegatedWorkspaceMemberId} LIMIT 1`
     )
     if (memberRow.rows.length === 0) {
       throw new Error(
@@ -433,7 +441,7 @@ export async function buildRuntimePrincipalContextOn(
         `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} belongs to workspace ${memberRow.rows[0].workspace_id}, not ${params.workspaceId}`
       )
     }
-    const memberSubjectId = await upsertAccessSubjectOn(client, {
+    const memberSubjectId = await upsertAccessSubjectOn(executor, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
       memberId: params.delegatedWorkspaceMemberId,
     })
@@ -451,7 +459,7 @@ export async function buildRuntimePrincipalContextOn(
 }
 
 async function assertPrincipalBelongsToWorkspaceOn(
-  client: import("../../infrastructure/events/index.js").Queryable,
+  executor: AnyExecutor,
   principal: SubjectRef,
   workspaceId: string
 ): Promise<void> {
@@ -464,9 +472,10 @@ async function assertPrincipalBelongsToWorkspaceOn(
       }
       return
     case SUBJECT_KIND.WORKSPACE_MEMBER: {
-      const row = await client.query(
-        `SELECT workspace_id FROM workspace_members WHERE id = $1 LIMIT 1`,
-        [principal.memberId]
+      const row = await runCompilable(
+        executor,
+        sql<{ workspace_id: string }>`
+          SELECT workspace_id FROM workspace_members WHERE id = ${principal.memberId} LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
         throw new Error(
@@ -476,9 +485,10 @@ async function assertPrincipalBelongsToWorkspaceOn(
       return
     }
     case SUBJECT_KIND.ACTOR: {
-      const row = await client.query(
-        `SELECT workspace_id FROM actors WHERE id = $1 LIMIT 1`,
-        [principal.actorId]
+      const row = await runCompilable(
+        executor,
+        sql<{ workspace_id: string }>`
+          SELECT workspace_id FROM actors WHERE id = ${principal.actorId} LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
         throw new Error(
@@ -488,9 +498,10 @@ async function assertPrincipalBelongsToWorkspaceOn(
       return
     }
     case SUBJECT_KIND.REMOTE_AGENT: {
-      const row = await client.query(
-        `SELECT workspace_id FROM remote_agents WHERE id = $1 LIMIT 1`,
-        [principal.remoteAgentId]
+      const row = await runCompilable(
+        executor,
+        sql<{ workspace_id: string }>`
+          SELECT workspace_id FROM remote_agents WHERE id = ${principal.remoteAgentId} LIMIT 1`
       )
       if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
         throw new Error(

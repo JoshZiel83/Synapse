@@ -15,11 +15,15 @@
 
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import type {
+  AnyExecutor,
   KyselyDb,
   QueryExecutor,
   TableRow,
 } from "../../infrastructure/database/kysely.js"
-import { executeSqlOn } from "../../infrastructure/database/kysely.js"
+import {
+  executeSqlOn,
+  isKyselyExecutor,
+} from "../../infrastructure/database/kysely.js"
 
 export type AccessSubjectRow = TableRow<"access_subjects">
 
@@ -319,9 +323,12 @@ export async function loadAccessSubject(
  * checks happen on the same pg client" plan).
  */
 export async function loadAccessSubjectOn(
-  client: import("../../infrastructure/events/index.js").Queryable,
+  client: AnyExecutor,
   subjectId: string
 ): Promise<SubjectRef | null> {
+  if (isKyselyExecutor(client)) {
+    return loadAccessSubject(client, subjectId)
+  }
   const result = await client.query(
     `SELECT id, kind, workspace_id, workspace_member_id, actor_id, remote_agent_id,
             conversation_id, user_id, transport_address_id
@@ -404,9 +411,12 @@ export async function findAccessSubjectId(
  * `KyselyDb` and crashes at runtime when called with a raw `PoolClient`.
  */
 export async function findAccessSubjectIdOn(
-  client: QueryExecutor,
+  client: AnyExecutor,
   ref: SubjectRef
 ): Promise<string | null> {
+  if (isKyselyExecutor(client)) {
+    return findAccessSubjectId(client, ref)
+  }
   const columns = subjectColumnsRaw(ref)
   const where = whereClauseFor(ref)
   const result = await executeSqlOn<{ id: string }>(
@@ -423,9 +433,12 @@ export async function findAccessSubjectIdOn(
  * rolls back atomically with the binding insert that consumes the returned id.
  */
 export async function upsertAccessSubjectOn(
-  client: QueryExecutor,
+  client: AnyExecutor,
   ref: SubjectRef
 ): Promise<string> {
+  if (isKyselyExecutor(client)) {
+    return upsertAccessSubject(client, ref)
+  }
   const columns = subjectColumnsRaw(ref)
   const where = whereClauseFor(ref)
   const lookupResult = await executeSqlOn<{ id: string }>(
