@@ -38,3 +38,14 @@ test("accepts a public IPv4 literal", async () => {
 test("accepts a public IPv6 literal", async () => {
   await assert.doesNotReject(() => assertPublicHost("2606:4700:4700::1111"))
 })
+
+test("accepts a BRACKETED public IPv6 literal (URL.hostname form)", async () => {
+  // new URL("http://[2606:..]/").hostname === "[2606:..]" — must not fall to
+  // DNS lookup and be wrongly rejected.
+  await assert.doesNotReject(() => assertPublicHost("[2606:4700:4700::1111]"))
+})
+
+test("rejects a bracketed IPv6 loopback/link-local", async () => {
+  await assert.rejects(() => assertPublicHost("[::1]"), /non-public/)
+  await assert.rejects(() => assertPublicHost("[fe80::1]"), /non-public/)
+})

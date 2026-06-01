@@ -57,6 +57,11 @@ function isPublicAddress(address: string): boolean {
   return !isBlockedAddress(ipaddr.parse(address))
 }
 
+/** Strip the surrounding brackets URL.hostname puts around IPv6 literals. */
+function stripIpv6Brackets(host: string): string {
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host
+}
+
 /**
  * Throws if `hostname` is — or resolves to — a non-public address. Accepts a
  * bare hostname or an IP literal. Performs a DNS lookup (all records) for
@@ -68,7 +73,10 @@ function isPublicAddress(address: string): boolean {
  * actually connects to, to close that window.
  */
 export async function assertPublicHost(hostname: string): Promise<void> {
-  const host = hostname.toLowerCase()
+  // URL.hostname wraps IPv6 literals in brackets ("[2606:...]"); strip them so
+  // the value is a bare IP that ipaddr can parse — otherwise a public IPv6
+  // literal URL would fall through to DNS lookup and be wrongly rejected.
+  const host = stripIpv6Brackets(hostname.toLowerCase())
 
   if (ipaddr.isValid(host)) {
     if (!isPublicAddress(host)) {
