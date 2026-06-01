@@ -1,40 +1,63 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
-// config/index.ts validates process.env at import time and exits on failure.
-// Here we only assert the happy-path shape/defaults/coercion are preserved
-// (range/format rejection is covered by the schema itself; exercising the
-// process.exit(1) path would kill the test runner).
+// config/index.ts validates process.env at import time. These assertions must
+// hold regardless of whether a local .env overrides individual values, so we
+// check TYPES, COERCION, and INVARIANTS — not specific default literals that an
+// env file is allowed to override (e.g. HOST, NODE_ENV, provider names).
 const { config } = await import("./index.js")
 
-test("numeric env values are coerced to numbers with the documented defaults", () => {
-  assert.equal(typeof config.port, "number")
-  assert.equal(config.port, 3001)
-  assert.equal(config.realtime.outboxBatchSize, 100)
-  assert.equal(config.realtime.outboxPollMs, 500)
-  assert.equal(config.asr.volcengine.maxConcurrency, 3)
-  assert.equal(config.ai.maxTokens, 4096)
-  assert.equal(config.memory.embedBatchSize, 12)
+test("numeric env values are coerced to real numbers (not NaN/strings)", () => {
+  for (const n of [
+    config.port,
+    config.realtime.outboxBatchSize,
+    config.realtime.outboxPollMs,
+    config.realtime.outboxRetentionHours,
+    config.asr.volcengine.maxConcurrency,
+    config.ai.maxTokens,
+    config.memory.embedBatchSize,
+    config.memory.recallLimit,
+  ]) {
+    assert.equal(typeof n, "number")
+    assert.ok(Number.isFinite(n), `expected finite number, got ${n}`)
+  }
 })
 
-test("float env values coerce to floats", () => {
-  assert.equal(config.memory.mmrLambda, 0.8)
-  assert.equal(config.memory.summaryDecayFloor, 0.35)
-  assert.equal(config.memory.summaryDecayHalfLifeDays, 30)
+test("float env values coerce to finite numbers in range", () => {
+  assert.equal(typeof config.memory.mmrLambda, "number")
+  assert.ok(config.memory.mmrLambda >= 0 && config.memory.mmrLambda <= 1)
+  assert.ok(Number.isFinite(config.memory.summaryDecayHalfLifeDays))
+  assert.ok(
+    config.memory.summaryDecayFloor >= 0 && config.memory.summaryDecayFloor <= 1
+  )
 })
 
-test("string defaults are preserved", () => {
-  assert.equal(config.host, "0.0.0.0")
-  assert.equal(config.nodeEnv, "development")
-  assert.equal(config.asr.provider, "volcengine")
-  assert.equal(config.imageFallback.provider, "tesseract")
+test("string config values are non-empty strings", () => {
+  for (const s of [
+    config.host,
+    config.nodeEnv,
+    config.asr.provider,
+    config.imageFallback.provider,
+    config.database.url,
+    config.redis.url,
+  ]) {
+    assert.equal(typeof s, "string")
+    assert.ok(s.length > 0)
+  }
 })
 
-test("memory.topK falls back to recallLimit when unset", () => {
-  assert.equal(config.memory.topK, config.memory.recallLimit)
+test("memory.topK falls back to recallLimit when MEMORY_RECALL_TOP_K is unset", () => {
+  // Only meaningful when the env doesn't set MEMORY_RECALL_TOP_K explicitly.
+  if (
+    process.env.MEMORY_RECALL_TOP_K === undefined ||
+    process.env.MEMORY_RECALL_TOP_K === ""
+  ) {
+    assert.equal(config.memory.topK, config.memory.recallLimit)
+  }
 })
 
 test("list-valued env vars parse into arrays", () => {
   assert.ok(Array.isArray(config.platform.adminEmails))
   assert.ok(Array.isArray(config.skills.import.githubRawProxyPrefixes))
+  assert.ok(Array.isArray(config.skills.import.clawhubDownloadProxyOrigins))
 })
