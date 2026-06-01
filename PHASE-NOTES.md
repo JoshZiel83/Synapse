@@ -42,3 +42,26 @@
   instead of the previously-committed `// ../../node_modules/idb/...` (comment-only, behavior identical).
 - Committed the regenerated packages/mobile-app/public/chat-service-worker.js so the
   SW regenerate-no-diff regression passes against the current install topology.
+
+## Phase 5 scope note (react-query mutations + polling)
+
+Migrated to useQuery/invalidateQueries/optimistic setQueryData (covering every pattern):
+
+- devices, audit, remote-agents (Phase 4 reads)
+- event-sources (read + invalidate-on-mutate, selected-item + occurrences)
+- triggers (same shape as event-sources)
+- memory-browser (3-source parallel read + optimistic patchMemories via setQueryData)
+
+DEFERRED (tracked continuation — pattern is proven, remaining work is mechanical repetition
+with higher per-file risk; not done to avoid destabilizing auth/dialog/chat flows in one pass):
+
+- ~34 more useEffect+api data-loaders: settings/_ (model-group-_, invite-management,
+  access-management, actor-_), plugins/_ (install-dialog, \*-step, installations), contacts/
+  contact-hub-client, dashboard-home, remote-agents/[id] detail pages, im/page, devices/[deviceId].
+  Each follows the proven useQuery + invalidateQueries recipe; migrate incrementally.
+- 4 polling loops INTENTIONALLY LEFT on their hand-rolled recursive setTimeout:
+  web-qr-login-panel (auth!), sidebar-weixin-binding, im/page (dingtalk device-flow),
+  plugins/install-dialog (per-field OAuth pollers). These are auth/OAuth-critical with
+  interlocking finalize/dialog state; react-query refetchInterval is a marginal win there and
+  the regression risk is high. Convert later with dedicated testing. (Per plan: "convert with
+  care or leave last".)

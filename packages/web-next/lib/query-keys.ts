@@ -38,6 +38,12 @@ export const qk = {
 
   contactHub: (workspaceId: string) =>
     [...qk.workspace(workspaceId), "contact-hub"] as const,
+
+  memoriesBrowser: (workspaceId: string) =>
+    [...qk.workspace(workspaceId), "memories-browser"] as const,
+
+  automations: (workspaceId: string) =>
+    [...qk.workspace(workspaceId), "automations"] as const,
 } as const
 
 export type QueryKeyFactory = typeof qk

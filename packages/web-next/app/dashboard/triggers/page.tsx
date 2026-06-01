@@ -2,6 +2,8 @@
 
 import Link from "next/link"
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { qk } from "@/lib/query-keys"
 import type { AutomationExecution, AutomationRule } from "@synapse/shared"
 import {
   describeAutomationDelivery,
@@ -100,11 +102,8 @@ function executionOccurrenceSummary(execution: AutomationExecution) {
 
 export default function TriggersPage() {
   const { workspaceId, workspaceName } = useWorkspace()
-  const [rules, setRules] = useState<AutomationRule[]>([])
-  const [executions, setExecutions] = useState<AutomationExecution[]>([])
+  const queryClient = useQueryClient()
   const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null)
-  const [loadingRules, setLoadingRules] = useState(true)
-  const [loadingExecutions, setLoadingExecutions] = useState(false)
   const [savingRule, setSavingRule] = useState(false)
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<"all" | TriggerStatus>("all")
@@ -113,63 +112,49 @@ export default function TriggersPage() {
   )
   const deferredSearch = useDeferredValue(search)
 
-  async function loadRules() {
-    if (!workspaceId) return
+  const rulesQuery = useQuery({
+    queryKey: workspaceId
+      ? qk.automations(workspaceId)
+      : ["automations", "disabled"],
+    queryFn: () => api.getAutomations(workspaceId!),
+    enabled: !!workspaceId,
+  })
+  const rules = useMemo(() => rulesQuery.data ?? [], [rulesQuery.data])
+  const loadingRules = rulesQuery.isPending && !!workspaceId
 
-    setLoadingRules(true)
-    try {
-      const nextRules = await api.getAutomations(workspaceId)
-      setRules(nextRules)
-      setSelectedRuleId((currentId) => {
-        if (currentId && nextRules.some((rule) => rule.id === currentId)) {
-          return currentId
-        }
-        return nextRules[0]?.id || null
-      })
-    } catch (error) {
-      console.error("Failed to load automations:", error)
-      toast.error(
-        error instanceof Error ? error.message : "Failed to load triggers"
-      )
-    } finally {
-      setLoadingRules(false)
-    }
+  const executionsQuery = useQuery({
+    queryKey:
+      workspaceId && selectedRuleId
+        ? [...qk.automations(workspaceId), selectedRuleId, "executions"]
+        : ["automation-executions", "disabled"],
+    queryFn: () => api.getAutomationExecutions(workspaceId!, selectedRuleId!),
+    enabled: !!workspaceId && !!selectedRuleId,
+  })
+  const executions = executionsQuery.data ?? []
+  const loadingExecutions = executionsQuery.isPending && !!selectedRuleId
+
+  const reloadRules = () => {
+    if (!workspaceId) return
+    return queryClient.invalidateQueries({
+      queryKey: qk.automations(workspaceId),
+    })
+  }
+  const reloadExecutions = (ruleId: string) => {
+    if (!workspaceId) return
+    return queryClient.invalidateQueries({
+      queryKey: [...qk.automations(workspaceId), ruleId, "executions"],
+    })
   }
 
-  async function loadExecutions(ruleId: string) {
-    if (!workspaceId) return
-
-    setLoadingExecutions(true)
-    try {
-      const nextExecutions = await api.getAutomationExecutions(
-        workspaceId,
-        ruleId
-      )
-      setExecutions(nextExecutions)
-    } catch (error) {
-      console.error("Failed to load automation executions:", error)
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Failed to load trigger history"
-      )
-      setExecutions([])
-    } finally {
-      setLoadingExecutions(false)
-    }
-  }
-
+  // Keep a valid selection as the rule list changes.
   useEffect(() => {
-    void loadRules()
-  }, [workspaceId])
-
-  useEffect(() => {
-    if (!selectedRuleId) {
-      setExecutions([])
-      return
-    }
-    void loadExecutions(selectedRuleId)
-  }, [selectedRuleId, workspaceId])
+    setSelectedRuleId((currentId) => {
+      if (currentId && rules.some((rule) => rule.id === currentId)) {
+        return currentId
+      }
+      return rules[0]?.id || null
+    })
+  }, [rules])
 
   const filteredRules = useMemo(() => {
     const keyword = deferredSearch.trim().toLowerCase()
@@ -241,9 +226,9 @@ export default function TriggersPage() {
     try {
       await api.updateAutomation(workspaceId, rule.id, { status })
       toast.success(`Trigger marked ${status}`)
-      await loadRules()
+      await reloadRules()
       if (selectedRuleId === rule.id) {
-        await loadExecutions(rule.id)
+        await reloadExecutions(rule.id)
       }
     } catch (error) {
       console.error("Failed to update trigger status:", error)
@@ -267,7 +252,7 @@ export default function TriggersPage() {
     try {
       await api.deleteAutomation(workspaceId, rule.id)
       toast.success("Trigger deleted")
-      await loadRules()
+      await reloadRules()
     } catch (error) {
       console.error("Failed to delete trigger:", error)
       toast.error(
@@ -302,7 +287,7 @@ export default function TriggersPage() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => void loadRules()}
+            onClick={() => void reloadRules()}
             disabled={loadingRules}
           >
             <RefreshCw
@@ -668,7 +653,7 @@ export default function TriggersPage() {
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => void loadExecutions(selectedRule.id)}
+                      onClick={() => void reloadExecutions(selectedRule.id)}
                       disabled={loadingExecutions}
                     >
                       <RefreshCw
