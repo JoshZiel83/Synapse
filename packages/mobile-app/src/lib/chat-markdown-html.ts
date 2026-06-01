@@ -1,5 +1,5 @@
 import MarkdownIt from "markdown-it"
-import markdownItKatex from "markdown-it-katex"
+import markdownItKatex from "@vscode/markdown-it-katex"
 
 const markdown = MarkdownIt({
   html: false,
@@ -7,7 +7,7 @@ const markdown = MarkdownIt({
   breaks: true,
 })
 
-markdown.use(markdownItKatex as never)
+markdown.use(markdownItKatex)
 
 function renderCodeBlock(language: string, content: string) {
   const className = language

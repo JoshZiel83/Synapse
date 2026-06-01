@@ -172,3 +172,16 @@ mutations), home-tab actors fetch, workspace-entity-picker-screen. Migrate incre
   auto-scroll-to-bottom, jump button, footer ActorActivityBubble nodes, bottom sentinel. Variable-
   height prepend anchoring is the single riskiest item in the plan; no integration tests. Not
   installed/started; tracked for a focused, manually-tested follow-up.
+
+## Phase 12 note (mobile katex swap + local assets)
+
+- 12a DONE: markdown-it-katex@2.0.3 (deprecated, ~9 yrs stale, needed a hand-written .d.ts shim)
+  -> @vscode/markdown-it-katex@1.1.2 (maintained; ships its own types). chat-markdown-html.ts import
+  swapped (default export, no `as never` cast); deleted src/types/markdown-it-katex.d.ts; removed the
+  old dep. Mobile typecheck PASS.
+- 12b DEFERRED (CDN -> local KaTeX CSS/fonts + twemoji assets in chat-markdown-dom.tsx /
+  file-preview-dom.tsx): these are Expo DOM (`"use dom"`) WebView components; serving katex.min.css
+  - its fonts and twemoji SVGs from a local origin inside the webview is fiddly asset-pipeline work
+    that must be verified on-device (getting it wrong silently breaks math/emoji rendering). The CDN
+    path works today (only breaks fully offline). Tracked for a device-tested follow-up. Note katex
+    CSS is pinned to 0.16.44 matching the installed katex dep.
