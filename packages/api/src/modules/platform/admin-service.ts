@@ -1,11 +1,6 @@
 import { config } from "../../config/index.js"
 import type { PlatformAccessBindingsAccessKey } from "../../infrastructure/database/generated/db.js"
-import { query, transaction } from "../../infrastructure/database/index.js"
-import {
-  db,
-  executeCompiledQuery,
-  executeTakeFirst,
-} from "../../infrastructure/database/kysely.js"
+import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
 import { getFileUrlById } from "../files/service.js"
 
@@ -215,40 +210,34 @@ export async function syncConfiguredPlatformAdmins() {
 
   const matchedUserIds = matchedUsersResult.rows.map((row) => row.id)
 
-  await transaction(async (client) => {
+  await withDbTransaction(async (trx) => {
     if (matchedUserIds.length === 0) {
-      await executeCompiledQuery(
-        client,
-        db
-          .deleteFrom("platform_access_bindings")
-          .where("source", "=", "config")
-          .where("access_key", "=", "super_admin")
-      )
-      return
-    }
-
-    await executeCompiledQuery(
-      client,
-      db
+      await trx
         .deleteFrom("platform_access_bindings")
         .where("source", "=", "config")
         .where("access_key", "=", "super_admin")
-        .where("user_id", "not in", matchedUserIds)
-    )
-    await executeCompiledQuery(
-      client,
-      db
-        .insertInto("platform_access_bindings")
-        .values(
-          matchedUserIds.map((userId) => ({
-            user_id: userId,
-            access_key: "super_admin",
-            source: "config",
-            assigned_by_user_id: null,
-          }))
-        )
-        .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
-    )
+        .execute()
+      return
+    }
+
+    await trx
+      .deleteFrom("platform_access_bindings")
+      .where("source", "=", "config")
+      .where("access_key", "=", "super_admin")
+      .where("user_id", "not in", matchedUserIds)
+      .execute()
+    await trx
+      .insertInto("platform_access_bindings")
+      .values(
+        matchedUserIds.map((userId) => ({
+          user_id: userId,
+          access_key: "super_admin" as const,
+          source: "config" as const,
+          assigned_by_user_id: null,
+        }))
+      )
+      .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
+      .execute()
   })
   const platformAdminCount = await db
     .selectFrom("platform_access_bindings")

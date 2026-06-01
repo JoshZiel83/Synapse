@@ -8,11 +8,9 @@ import type {
   ResolvedModelConfig,
 } from "@synapse/shared"
 import { getModelBranchStateMode } from "@synapse/shared"
-import { query, transaction } from "../../infrastructure/database/index.js"
 import {
   db,
-  executeCompiledQuery,
-  executeTakeFirst,
+  withDbTransaction,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
@@ -428,19 +426,32 @@ export async function saveEngineBranchState(
 ): Promise<EngineBranchState | undefined> {
   if (!branch) return undefined
 
-  return transaction(async (client) => {
-    const runner = { query: client.query.bind(client) as typeof query }
-    const branchResult = await executeTakeFirst(
-      runner,
-      db
-        .insertInto("session_engine_branches")
-        .values({
-          id: branch.branchId,
-          session_id: branch.sessionId,
+  return withDbTransaction(async (trx) => {
+    const branchResult = await trx
+      .insertInto("session_engine_branches")
+      .values({
+        id: branch.branchId,
+        session_id: branch.sessionId,
+        conversation_id: branch.conversationId || null,
+        provider_type: branch.providerType,
+        engine_kind: branch.engineKind,
+        binding_key: branch.bindingKey,
+        last_shared_sequence: branch.cursor.sharedSequence || 0,
+        last_private_sequence: branch.cursor.privateSequence || 0,
+        applied_item_keys: branch.cursor.appliedItemIds || [],
+        native_state: (branch.nativeState ||
+          {}) as TableInsert<"session_engine_branches">["native_state"],
+        metadata: (branch.metadata ||
+          {}) as TableInsert<"session_engine_branches">["metadata"],
+        status: "active",
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .onConflict((oc) =>
+        oc.columns(["session_id", "binding_key"]).doUpdateSet({
           conversation_id: branch.conversationId || null,
           provider_type: branch.providerType,
           engine_kind: branch.engineKind,
-          binding_key: branch.bindingKey,
           last_shared_sequence: branch.cursor.sharedSequence || 0,
           last_private_sequence: branch.cursor.privateSequence || 0,
           applied_item_keys: branch.cursor.appliedItemIds || [],
@@ -449,36 +460,20 @@ export async function saveEngineBranchState(
           metadata: (branch.metadata ||
             {}) as TableInsert<"session_engine_branches">["metadata"],
           status: "active",
-          created_at: sql`NOW()`,
           updated_at: sql`NOW()`,
         })
-        .onConflict((oc) =>
-          oc.columns(["session_id", "binding_key"]).doUpdateSet({
-            conversation_id: branch.conversationId || null,
-            provider_type: branch.providerType,
-            engine_kind: branch.engineKind,
-            last_shared_sequence: branch.cursor.sharedSequence || 0,
-            last_private_sequence: branch.cursor.privateSequence || 0,
-            applied_item_keys: branch.cursor.appliedItemIds || [],
-            native_state: (branch.nativeState ||
-              {}) as TableInsert<"session_engine_branches">["native_state"],
-            metadata: (branch.metadata ||
-              {}) as TableInsert<"session_engine_branches">["metadata"],
-            status: "active",
-            updated_at: sql`NOW()`,
-          })
-        )
-        .returningAll()
-    )
+      )
+      .returningAll()
+      .executeTakeFirst()
     if (!branchResult) {
       throw new Error("Failed to persist engine branch")
     }
 
     const persisted = rowToBranchState(branchResult as Record<string, unknown>)
 
-    await executeCompiledQuery(
-      runner,
-      db.insertInto("engine_branch_checkpoints").values({
+    await trx
+      .insertInto("engine_branch_checkpoints")
+      .values({
         branch_id: persisted.branchId,
         session_id: persisted.sessionId,
         conversation_id: persisted.conversationId || null,
@@ -495,7 +490,7 @@ export async function saveEngineBranchState(
           {}) as TableInsert<"engine_branch_checkpoints">["metadata"],
         created_at: sql`NOW()`,
       })
-    )
+      .execute()
 
     return persisted
   })
