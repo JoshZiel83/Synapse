@@ -675,24 +675,37 @@ export interface ConflictSidecarRef {
 }
 
 /**
+ * Routable sidecar VFS path: `/<subpath>/<rest>` (e.g.
+ * `/actor/.synapse-conflicts/<hash>`). The restore routes by this — the first
+ * segment is the mount subpath, the remainder is the mount-relative leaf. A
+ * sidecar string that does NOT match can never resolve to a mount, so it is
+ * intrinsically unrecoverable. Shared by the restore loop (for routing) and the
+ * permanence predicate (for classification) so the two never disagree.
+ */
+export const SIDECAR_ROUTE_RE = /^\/([^/]+)(\/.*)$/
+
+/**
  * Whether a sidecar ref is INTRINSICALLY unrecoverable from its own shape — i.e.
- * the durable record lacks the payload needed to ever rebuild it, regardless of
- * mount state or transient fs conditions:
+ * the durable record can never be rebuilt, regardless of mount state or transient
+ * fs conditions. Three mount-independent reasons:
  *   - a "file" sidecar with no contentSha (pre-round-11 / corrupt: the CAS
  *     pointer is gone),
- *   - a "symlink" sidecar with no target, or
+ *   - a "symlink" sidecar with no target,
  *   - any OTHER kind (a corrupt record: only "file"/"symlink" are restorable;
- *     fs-helper's restore rejects an unknown kind with InvalidParams, so it can
- *     never be rebuilt — treat it as permanent here too, not retryable).
+ *     fs-helper's restore rejects an unknown kind with InvalidParams), or
+ *   - a sidecar PATH that doesn't route to a mount (doesn't match
+ *     SIDECAR_ROUTE_RE, e.g. "" or "actor/..." with no leading slash) — it can
+ *     never resolve to a live dir, so it's permanently lost no matter what.
  * Such a ref is PERMANENT in BOTH the normal restore loop and the fail-closed
  * "unknown" partition path, so the agent is never told a corrupt copy "will be
- * retried". A bad sidecar PATH (unparseable) is also permanent but is detected
- * during the restore routing (it needs the regex), not here. Shared by
- * restorePendingSidecarsImpl and partitionSidecars so the two never disagree.
+ * retried". Shared by restorePendingSidecarsImpl and partitionSidecars so the two
+ * never disagree.
  */
 export function isSidecarPayloadIrrecoverable(
   ref: ConflictSidecarRef
 ): boolean {
+  // Unroutable path → can never reach a mount, permanently lost.
+  if (!SIDECAR_ROUTE_RE.test(ref.sidecar)) return true
   if (ref.kind === "file") return !ref.contentSha
   if (ref.kind === "symlink") return ref.target === undefined
   // Unknown/corrupt kind — unrestorable by fs-helper, so permanently lost.
@@ -1275,31 +1288,26 @@ export async function restorePendingSidecarsImpl(
   for (const ref of allRefs) {
     if (seen.has(ref.sidecar)) continue
     seen.add(ref.sidecar)
-    // ref.sidecar = /<subpath>/.synapse-conflicts/<hash>; route to that mount
-    // and strip the subpath to get the mount-relative leaf.
-    const m = /^\/([^/]+)(\/.*)$/.exec(ref.sidecar)
-    if (!m) {
-      // Unparseable sidecar path — the record can never resolve to a mount.
-      fail(ref.sidecar, "permanent")
-      continue
-    }
-    const [, subpath, leaf] = m
-    // Shape-irrecoverability is mount-INDEPENDENT, so check it BEFORE the live-
-    // mount check: a ref whose own record can never rebuild (file with no
-    // contentSha, symlink with no target, or an unknown/corrupt kind) is
-    // PERMANENT regardless of whether its subpath is mounted this provision.
-    // Checking it first keeps this loop in lockstep with partitionSidecars'
-    // unknown-mode classification (both via isSidecarPayloadIrrecoverable), so a
-    // corrupt ref is never reported transient just because its mount happens to
-    // be inactive this turn.
+    // Intrinsic (mount-INDEPENDENT) unrecoverability FIRST: a ref whose own
+    // record can never rebuild — missing payload, unknown kind, OR an unroutable
+    // sidecar path — is PERMANENT regardless of mount state. Checking it up front
+    // (via the shared predicate, the same one partitionSidecars uses) keeps the
+    // two in exact lockstep: a corrupt ref is never reported transient just
+    // because its mount happens to be inactive, and the unknown-mode partition
+    // and this loop classify identically.
     if (isSidecarPayloadIrrecoverable(ref)) {
       console.warn(
-        `[sandbox] cannot restore sidecar ${ref.sidecar} (kind=${ref.kind}, ` +
-          `irrecoverable record — missing payload or unknown kind); skipping permanently`
+        `[sandbox] cannot restore sidecar ${JSON.stringify(ref.sidecar)} ` +
+          `(kind=${ref.kind}, irrecoverable record — missing payload, unknown ` +
+          `kind, or unroutable path); skipping permanently`
       )
       fail(ref.sidecar, "permanent")
       continue
     }
+    // Route to the mount: predicate guarantees the path matches, so extract the
+    // subpath + mount-relative leaf. ref.sidecar = /<subpath>/.synapse-conflicts/<hash>.
+    const m = SIDECAR_ROUTE_RE.exec(ref.sidecar)!
+    const [, subpath, leaf] = m
     const dir = dirBySubpath.get(subpath)
     if (!dir) {
       // No live mount for this subpath this provision — can't restore now, but a

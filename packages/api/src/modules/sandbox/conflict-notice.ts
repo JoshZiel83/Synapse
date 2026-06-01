@@ -41,12 +41,13 @@ export interface PartitionedSidecars {
  * collection itself threw). In that case we cannot trust that any sidecar was
  * restored, so none is presented as readable. But we DON'T blindly call them all
  * transient: a ref that is intrinsically unrecoverable by its own shape (file
- * with no contentSha, symlink with no target — `isSidecarPayloadIrrecoverable`)
- * is still PERMANENT, exactly as the normal restore path would classify it (P3
- * truthfulness — never tell the agent a corrupt copy "will be retried"). Only
- * refs that COULD plausibly restore later are bucketed transient. The caller
- * blocks clearing the pending store whenever any transient OR the unknown flag is
- * set, so a permanent-only unknown turn still doesn't lose a transient notice.
+ * with no contentSha, symlink with no target, unknown/corrupt kind, or an
+ * unroutable sidecar path — `isSidecarPayloadIrrecoverable`) is still PERMANENT,
+ * exactly as the normal restore path would classify it (P3 truthfulness — never
+ * tell the agent a corrupt copy "will be retried"). Only refs that COULD
+ * plausibly restore later are bucketed transient. The caller blocks clearing the
+ * pending store whenever any transient OR the unknown flag is set, so a
+ * permanent-only unknown turn still doesn't lose a transient notice.
  */
 export function partitionSidecars(
   sidecars: ConflictSidecarRef[],

@@ -96,8 +96,14 @@ test("partitionSidecars: restoreStatusUnknown buckets well-formed refs transient
     kind: "dir", // unknown/corrupt kind — unrestorable regardless of payload
     contentSha: "abc",
   }
+  const corruptPath: ConflictSidecarRef = {
+    original: "/actor/p.txt",
+    sidecar: "actor/.synapse-conflicts/h6", // no leading slash → unroutable
+    kind: "file",
+    contentSha: "abc",
+  }
   const { restored, transient, permanent } = partitionSidecars(
-    [fileRef, symlinkRef, corruptRef, corruptSymlink, corruptKind],
+    [fileRef, symlinkRef, corruptRef, corruptSymlink, corruptKind, corruptPath],
     reasons([]),
     true
   )
@@ -109,8 +115,13 @@ test("partitionSidecars: restoreStatusUnknown buckets well-formed refs transient
   )
   assert.deepEqual(
     permanent.map((s) => s.sidecar).sort(),
-    [corruptRef.sidecar, corruptSymlink.sidecar, corruptKind.sidecar].sort(),
-    "shape-corrupt refs (missing payload OR unknown kind) stay permanent even when status is unknown"
+    [
+      corruptRef.sidecar,
+      corruptSymlink.sidecar,
+      corruptKind.sidecar,
+      corruptPath.sidecar,
+    ].sort(),
+    "shape-corrupt refs (missing payload, unknown kind, OR unroutable path) stay permanent even when status is unknown"
   )
 })
 

@@ -366,3 +366,48 @@ test(
     ])
   }
 )
+
+test(
+  "restorePendingSidecars: a sidecar with an UNROUTABLE path is PERMANENT even with a valid payload",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    const work = mkdtempSync(join(tmpdir(), "synapse-perm-path-"))
+    const liveActor = join(work, "fresh", "actor")
+    mkdirSync(liveActor, { recursive: true })
+
+    // The record has a complete file payload (kind+contentSha) but a corrupt
+    // sidecar PATH that can't route to any mount (no leading slash). It can never
+    // resolve to a live dir → PERMANENT, not transient.
+    const pendingCommit: Record<string, PendingCommitConflict> = {
+      actor: {
+        paths: ["/x.txt"],
+        sidecars: [
+          {
+            original: "/actor/x.txt",
+            sidecar: "actor/.synapse-conflicts/bad", // no leading slash → unroutable
+            kind: "file",
+            contentSha: "a".repeat(64),
+          },
+        ],
+      },
+    }
+    const emptyRefresh: Pick<
+      PendingRefreshConflicts,
+      "deferredConflictsBySubpath" | "sidecarsBySubpath"
+    > = { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
+
+    const result = await restorePendingSidecarsImpl(
+      "sess-irrelevant",
+      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      {
+        peekCommit: async () => pendingCommit,
+        peekRefresh: async () => emptyRefresh,
+      }
+    )
+
+    assert.equal(result.ok, false)
+    assert.deepEqual(result.failedSidecars, [
+      { sidecar: "actor/.synapse-conflicts/bad", reason: "permanent" },
+    ])
+  }
+)
