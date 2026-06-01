@@ -34,6 +34,7 @@ import { subjectScopeLabel } from "@synapse/shared"
 import { sql, type Selectable } from "kysely"
 import type { ZodIssue } from "zod"
 import {
+  asExecutor,
   db,
   isKyselyExecutor,
   runBuilder,
@@ -48,10 +49,7 @@ import {
   BrowserGrantPolicyError,
   normalizeBrowserGrantPolicy,
 } from "@synapse/shared/access/policies"
-import {
-  upsertAccessSubject,
-  upsertAccessSubjectOn,
-} from "../access/subject-registry.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   assertNoDeviceToolRevisionDrift,
   beginDeviceOperationOn,
@@ -589,14 +587,12 @@ export async function createRuntimeAuthorizationGrant(
   }
   const grantSpec = normalizeGrantSpecForInsert(parsedPolicy)
 
-  if (executor && isKyselyExecutor(executor)) {
-    return createGrantInKyselyTx(executor, params, grantSpec)
-  }
-
-  // pg QueryExecutor path (interactions approval). Use upsertAccessSubjectOn /
-  // compiled SQL — single connection, atomic with the caller's pg transaction.
   if (executor) {
-    return createGrantOnQx(executor, params, grantSpec)
+    // Every production caller threads a Kysely executor (interactions approval
+    // runs inside withDbTransaction → Transaction<Database>; the manual
+    // endpoint passes none). asExecutor throws if a bare pg client ever slips
+    // through, rather than silently writing on the wrong connection.
+    return createGrantInKyselyTx(asExecutor(executor), params, grantSpec)
   }
 
   // No transaction: normalize to a fresh Kysely transaction so we still run
@@ -654,68 +650,6 @@ async function createGrantInKyselyTx(
     .where("g.id", "=", inserted.id)
     .limit(1)
     .executeTakeFirst()
-  if (!row) {
-    throw new Error("Failed to re-fetch inserted runtime authorization grant")
-  }
-  const candidate = rowToCandidate(row)
-  if (!candidate.policyValidationResult.ok) {
-    throw new InvalidGrantSubjectRowError(
-      `freshly-inserted grant ${inserted.id} fails policy validation: ${candidate.policyValidationResult.failure.kind}`
-    )
-  }
-  return mapRuntimeAuthorizationGrantCandidate(
-    candidate,
-    candidate.policyValidationResult.parsed
-  )
-}
-
-async function createGrantOnQx(
-  qx: AnyExecutor,
-  params: CreateRuntimeAuthorizationGrantParams,
-  grantSpec: SharedRuntimeAuthorizationGrantSpec
-): Promise<RuntimeAuthorizationGrantRecord> {
-  const subjectId = await upsertAccessSubjectOn(qx, params.subject)
-  const scopeSubjectId = params.scope
-    ? await upsertAccessSubjectOn(qx, params.scope)
-    : null
-  const insertStatement = db
-    .insertInto("runtime_authorization_grants")
-    .values({
-      workspace_id: params.workspaceId,
-      device_id: params.deviceId,
-      device_capability_id: params.deviceCapabilityId,
-      device_exposure_id: params.deviceExposureId,
-      subject_id: subjectId,
-      scope_subject_id: scopeSubjectId,
-      created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
-      source_interaction_id: params.sourceInteractionId || null,
-      source_task_id: params.sourceTaskId || null,
-      retention: params.retention,
-      status: "active",
-      policy:
-        grantSpec as unknown as TableInsert<"runtime_authorization_grants">["policy"],
-      source_retry_nonce: params.sourceRetryNonce || null,
-      source_runtime_session_id: params.sourceRuntimeSessionId || null,
-      source_request_args: (params.sourceRequestArgs ||
-        {}) as TableInsert<"runtime_authorization_grants">["source_request_args"],
-    })
-    .returning("id")
-  const inserted = await takeFirstOn<{ id: string }>(qx, insertStatement)
-  if (!inserted) {
-    throw new Error("Failed to create runtime authorization grant")
-  }
-  const selectStatement = db
-    .selectFrom("runtime_authorization_grants as g")
-    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "g.scope_subject_id"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
-    .where("g.id", "=", inserted.id)
-    .limit(1)
-  const row = await takeFirstOn<any>(qx, selectStatement)
   if (!row) {
     throw new Error("Failed to re-fetch inserted runtime authorization grant")
   }
