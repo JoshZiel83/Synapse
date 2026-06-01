@@ -21,7 +21,7 @@ const validFileRefBlock: CanonicalContentBlock = {
   type: "file_ref",
   id: "block-2",
   sha256: "a".repeat(64),
-  path: "/conversation/img.png",
+  path: "/conversation/00000000-0000-4000-8000-000000000001/img.png",
   mimeType: "image/png",
   name: "img.png",
   sizeBytes: 64,

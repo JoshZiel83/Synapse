@@ -18,8 +18,8 @@ import type { CanonicalContentBlock } from "@synapse/shared"
 const validFileRef: CanonicalContentBlock = {
   type: "file_ref",
   id: "block-1",
-  sha256: "b".repeat(64),
-  path: "/conversation/chart.png",
+  sha256: "a".repeat(64),
+  path: "/conversation/00000000-0000-4000-8000-000000000001/chart.png",
   mimeType: "image/png",
   name: "chart.png",
   sizeBytes: 1024,
@@ -40,7 +40,9 @@ test("automation_notice with messageBlocks preserves file_ref through timeline r
   assert.equal(blocks.length, 2)
   assert.equal(blocks[0].type, "text")
   assert.equal(blocks[1].type, "file_ref")
-  assert.equal((blocks[1] as any).sha256, validFileRef.sha256)
+  if (blocks[1].type === "file_ref") {
+    assert.equal(blocks[1].sha256, validFileRef.sha256)
+  }
 })
 
 test("automation_notice with messageBlocks preserves file_ref through context render", () => {
@@ -64,7 +66,9 @@ test("task_notice with messageBlocks preserves file_ref through both render path
   } as any)
   assert.equal(tl.length, 1)
   assert.equal(tl[0].type, "file_ref")
-  assert.equal((tl[0] as any).sha256, validFileRef.sha256)
+  if (tl[0].type === "file_ref") {
+    assert.equal(tl[0].sha256, validFileRef.sha256)
+  }
   assert.equal(ctx?.length, 1)
   assert.equal(ctx?.[0].type, "file_ref")
 })
@@ -95,5 +99,7 @@ test("event payload where messageBlocks is one valid + several garbage filters c
   } as any)
   assert.equal(blocks.length, 1)
   assert.equal(blocks[0].type, "file_ref")
-  assert.equal((blocks[0] as any).sha256, validFileRef.sha256)
+  if (blocks[0].type === "file_ref") {
+    assert.equal(blocks[0].sha256, validFileRef.sha256)
+  }
 })

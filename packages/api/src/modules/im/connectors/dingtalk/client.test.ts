@@ -68,7 +68,7 @@ function makeMockFetch(
 ) {
   const calls: FetchCall[] = []
   const fn = async (
-    input: RequestInfo | URL,
+    input: Parameters<typeof globalThis.fetch>[0],
     init?: RequestInit
   ): Promise<Response> => {
     const headers: Record<string, string> = {}

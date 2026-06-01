@@ -1,7 +1,8 @@
 // Database harness for integration tests.
-// Connects to the worktree-isolated test postgres on 127.0.0.1:55433,
-// drops/recreates the database, runs the existing bootstrap.ts to apply
-// schema, then seeds a minimal user + workspace + member + auth session.
+// Connects to this worktree's isolated test postgres (host + port derived per
+// worktree by scripts/lib.sh and passed in via DATABASE_URL), drops/recreates
+// the database, runs the existing bootstrap.ts to apply schema, then seeds a
+// minimal user + workspace + member + auth session.
 
 import crypto from "node:crypto"
 import path from "node:path"
@@ -12,13 +13,32 @@ import pg from "pg"
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const WORKTREE_ROOT = path.resolve(__dirname, "../../../../..")
 
-export const TEST_PG_HOST = "127.0.0.1"
-export const TEST_PG_PORT = 55433
+// Only host + port are dynamic (per-worktree). User / password / database name
+// are fixed values — keeping them constant avoids any escaping concern in
+// buildDatabaseUrl() and in the `DROP DATABASE "..."` identifier (the DB name
+// is a controlled literal, never user input).
+let _dbUrl: URL
+try {
+  _dbUrl = new URL(
+    process.env.DATABASE_URL ??
+      "postgresql://synapse:test_password@127.0.0.1:55433/synapse_test"
+  )
+} catch {
+  throw new Error(
+    "Invalid DATABASE_URL — run integration tests via tests/integration/scripts/run-test.sh"
+  )
+}
+
+export const TEST_PG_HOST = _dbUrl.hostname || "127.0.0.1"
+export const TEST_PG_PORT = Number.parseInt(_dbUrl.port || "55433", 10)
+if (!Number.isFinite(TEST_PG_PORT)) {
+  throw new Error(`DATABASE_URL port is not a number: "${_dbUrl.port}"`)
+}
 export const TEST_PG_USER = "synapse"
 export const TEST_PG_PASSWORD = "test_password"
 export const TEST_PG_ADMIN_DB = "postgres"
 export const TEST_PG_DB = "synapse_test"
-export const TEST_REDIS_URL = "redis://127.0.0.1:56380"
+export const TEST_REDIS_URL = process.env.REDIS_URL ?? "redis://127.0.0.1:56380"
 
 export function buildDatabaseUrl(db = TEST_PG_DB) {
   return `postgresql://${TEST_PG_USER}:${TEST_PG_PASSWORD}@${TEST_PG_HOST}:${TEST_PG_PORT}/${db}`
@@ -92,6 +112,22 @@ async function withTestClient<T>(
 }
 
 export async function resetDb(): Promise<void> {
+  // Safety guardrails for the most destructive operation in the suite
+  // (DROP/CREATE DATABASE). Enforced here so EVERY caller is covered, including
+  // test files that don't carry the per-file run guard. The sentinel proves we
+  // were launched via run-test.sh, and the port floor refuses anything pointing
+  // at a non-test stack (production pg is 5432; test bands start at 55000).
+  if (process.env.SYNAPSE_INT_TEST !== "1") {
+    throw new Error(
+      "resetDb() refused: SYNAPSE_INT_TEST!=1 — run via tests/integration/scripts/run-test.sh"
+    )
+  }
+  if (TEST_PG_PORT < 50000) {
+    throw new Error(
+      `resetDb() refused: DATABASE_URL port ${TEST_PG_PORT} is not a per-worktree test stack port`
+    )
+  }
+
   await withAdminClient(async (client) => {
     // Terminate any leftover connections to the test DB before dropping.
     await client.query(

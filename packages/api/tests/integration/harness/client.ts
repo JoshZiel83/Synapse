@@ -4,7 +4,7 @@
 // These were previously part of packages/api/test/integration/setup.ts and
 // resolved the API base URL from $STAGING_API_URL. The new isolated
 // harness drops staging entirely: callers pass the URL from
-// spawnApi(...).baseUrl ("http://127.0.0.1:38091") + "/api/v1".
+// spawnApi(...).baseUrl (the per-worktree http://127.0.0.1:$INT_API_PORT) + "/api/v1".
 
 import { randomBytes } from "node:crypto"
 

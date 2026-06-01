@@ -13,13 +13,10 @@
 // **MUST be run via scripts/run-test.sh** — see comment in
 // origin-propagation.test.ts for why.
 
-if (
-  !process.env.DATABASE_URL ||
-  !process.env.DATABASE_URL.includes(":55433/")
-) {
+if (process.env.SYNAPSE_INT_TEST !== "1") {
   throw new Error(
     "memory-context-no-session.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh " +
-      "(DATABASE_URL must point at the worktree-isolated test postgres on 127.0.0.1:55433)."
+      "(it sets SYNAPSE_INT_TEST=1 plus the per-worktree DATABASE_URL/REDIS_URL)."
   )
 }
 

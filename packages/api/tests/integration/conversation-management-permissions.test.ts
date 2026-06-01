@@ -11,10 +11,7 @@
  * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-if (
-  !process.env.DATABASE_URL ||
-  !process.env.DATABASE_URL.includes(":55433/")
-) {
+if (process.env.SYNAPSE_INT_TEST !== "1") {
   throw new Error(
     "conversation-management-permissions.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
   )
@@ -22,7 +19,7 @@ if (
 
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
-import { randomBytes } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import {
   setupChatStack,
   teardownChatStack,
@@ -32,10 +29,7 @@ import {
   type ChatStack,
 } from "./harness/index.js"
 
-const uuid = () =>
-  ([8, 4, 4, 4, 12] as const)
-    .map((len) => randomBytes(len / 2).toString("hex"))
-    .join("-")
+const uuid = () => randomUUID()
 
 let stack: ChatStack | undefined
 

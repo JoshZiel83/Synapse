@@ -242,10 +242,10 @@ test("buildSessionContextItems: interrupt with contentBlocks uses them verbatim"
   const fileRefBlock: CanonicalContentBlock = {
     type: "file_ref",
     id: "block-1",
-    fileId: "00000000-0000-4000-8000-000000000001",
-    url: "/files/00000000-0000-4000-8000-000000000001",
+    sha256: "0000000000000000000000000000000000000000000000000000000000000001",
+    path: "/files/x.png",
     mimeType: "image/png",
-    originalName: "x.png",
+    name: "x.png",
     sizeBytes: 64,
     category: "image",
   }
