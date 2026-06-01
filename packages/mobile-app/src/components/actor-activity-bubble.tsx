@@ -128,7 +128,7 @@ function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
           <View key={block.id} style={styles.inlineBlock}>
             <Feather name="file" size={12} color={theme.colors.textMuted} />
             <Text numberOfLines={1} style={styles.inlineBlockText}>
-              {block.originalName}
+              {block.name}
             </Text>
           </View>
         )

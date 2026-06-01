@@ -102,6 +102,31 @@ const SAMPLES: { name: string; value: unknown; valid: boolean }[] = [
     },
     valid: false,
   },
+  // ─── sandbox branch ───
+  {
+    name: "sandbox bare",
+    value: {
+      executor: "sandbox",
+    },
+    valid: true,
+  },
+  {
+    name: "sandbox with working_directory + allowed_env",
+    value: {
+      executor: "sandbox",
+      working_directory: "/conversation",
+      allowed_env: ["PATH", "HOME"],
+    },
+    valid: true,
+  },
+  {
+    name: "sandbox with wrong-typed working_directory",
+    value: {
+      executor: "sandbox",
+      working_directory: 123, // must be a string
+    },
+    valid: false,
+  },
   // ─── invalid root ───
   {
     name: "unknown executor",

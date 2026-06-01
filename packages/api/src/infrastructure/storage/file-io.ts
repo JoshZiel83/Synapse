@@ -5,10 +5,10 @@ import {
   getStableFileUrl,
   getStableFullFileUrl,
   normalizeOriginalNameForMimeType,
-  readStoredBlobAsBase64,
-  readStoredBlobAsBuffer,
+  putBufferCas,
+  readCasBlob,
+  readCasBlobBase64,
   resolveBufferMimeType,
-  storeBufferInBackend,
 } from './index.js';
 import {
   mimeToFileContentKind,
@@ -56,37 +56,39 @@ async function createStoredFile(
     params.originalName,
     resolvedMimeType,
   );
-  const storedBlob = await storeBufferInBackend({
-    backend: params.backend || 'local_fs',
-    buffer: params.buffer,
-    originalName: normalizedOriginalName,
-    mimeType: resolvedMimeType,
-  });
+  // Content-address the bytes (sha256 dedup). Same sha = one physical blob.
+  const blobRef = await putBufferCas(params.buffer);
   const contentKind = mimeToFileContentKind(resolvedMimeType);
 
   const record = await db.transaction().execute(async (trx) => {
-    const blob = await trx
-      .insertInto('file_blobs')
+    // Upsert the content_blobs row (sha256 PK). ON CONFLICT DO NOTHING: a
+    // dedup hit means the row already exists with identical content.
+    await trx
+      .insertInto('content_blobs')
       .values({
-        backend: storedBlob.backend,
-        storage_key: storedBlob.storageKey,
-        bucket: storedBlob.bucket,
-        locator_json: toJsonObject(storedBlob.locator),
+        sha256: blobRef.sha256,
+        size_bytes: String(blobRef.sizeBytes),
+        backend: 'local_cas',
+        locator_json: toJsonObject({}),
       })
-      .returning(['id', 'backend', 'storage_key', 'bucket', 'locator_json', 'created_at'])
-      .executeTakeFirstOrThrow();
+      .onConflict((oc) => oc.column('sha256').doNothing())
+      .execute();
 
-    const file = await trx
-      .insertInto('files')
+    const asset = await trx
+      .insertInto('file_assets')
       .values({
         workspace_id: params.workspaceId,
-        uploader_user_id: params.uploaderUserId,
+        content_sha256: blobRef.sha256,
         original_name: normalizedOriginalName,
         mime_type: resolvedMimeType,
         content_kind: contentKind,
-        size_bytes: String(storedBlob.sizeBytes),
-        sha256: storedBlob.sha256,
-        blob_id: blob.id,
+        size_bytes: String(blobRef.sizeBytes),
+        uploader_user_id: params.uploaderUserId,
+        initiator_actor_id: params.origin.initiatorActorId ?? null,
+        source_family: params.origin.family,
+        source_system: params.origin.system,
+        parent_asset_id: params.origin.parentFileId ?? null,
+        details_json: toJsonObject(normalizeDetails(params.origin.details)),
       })
       .returning([
         'id',
@@ -96,52 +98,30 @@ async function createStoredFile(
         'mime_type',
         'content_kind',
         'size_bytes',
-        'sha256',
+        'content_sha256',
         'created_at',
       ])
       .executeTakeFirstOrThrow();
 
-    await trx
-      .insertInto('file_origins')
-      .values({
-        file_id: file.id,
-        source_family: params.origin.family,
-        source_system: params.origin.system,
-        initiator_user_id: params.origin.initiatorUserId ?? null,
-        initiator_actor_id: params.origin.initiatorActorId ?? null,
-        provider_key: params.origin.providerKey ?? null,
-        plugin_id: params.origin.pluginId ?? null,
-        parent_file_id: params.origin.parentFileId ?? null,
-        external_resource_key: params.origin.externalResourceKey ?? null,
-        details_json: toJsonObject(normalizeDetails(params.origin.details)),
-      })
-      .execute();
-
     return {
-      id: file.id,
-      workspaceId: file.workspace_id,
-      uploaderUserId: file.uploader_user_id,
-      originalName: file.original_name,
-      url: getStableFileUrl(file.id),
-      fullUrl: getStableFullFileUrl(file.id),
-      mimeType: file.mime_type,
-      contentKind: file.content_kind,
-      sizeBytes: Number(file.size_bytes),
-      sha256: file.sha256,
-      storageBackend: blob.backend,
+      id: asset.id,
+      assetId: asset.id,
+      workspaceId: asset.workspace_id,
+      uploaderUserId: asset.uploader_user_id,
+      originalName: asset.original_name,
+      url: getStableFileUrl(asset.id),
+      fullUrl: getStableFullFileUrl(asset.id),
+      mimeType: asset.mime_type,
+      contentKind: asset.content_kind,
+      sizeBytes: Number(asset.size_bytes),
+      sha256: asset.content_sha256,
+      storageBackend: 'local_cas' as FileStorageBackend,
       originSummary: toFileOriginSummary(params.origin),
       createdAt:
-        file.created_at instanceof Date
-          ? file.created_at.toISOString()
-          : String(file.created_at),
-      blobId: blob.id,
-      storageKey: blob.storage_key,
-      bucket: blob.bucket,
-      locator:
-        blob.locator_json && typeof blob.locator_json === 'object'
-          ? (blob.locator_json as Record<string, unknown>)
-          : {},
-    };
+        asset.created_at instanceof Date
+          ? asset.created_at.toISOString()
+          : String(asset.created_at),
+    } satisfies StoredFileRecord;
   });
 
   void import('../../modules/files/parse-service.js')
@@ -159,22 +139,12 @@ async function createStoredFile(
   return record;
 }
 
-export async function fileToBase64(record: Pick<FileRecord, 'storageBackend' | 'storageKey' | 'bucket' | 'locator'>): Promise<string> {
-  return readStoredBlobAsBase64({
-    backend: record.storageBackend,
-    storageKey: record.storageKey,
-    bucket: record.bucket,
-    locator: record.locator,
-  });
+export async function fileToBase64(record: Pick<FileRecord, 'sha256'>): Promise<string> {
+  return readCasBlobBase64(record.sha256);
 }
 
-export async function fileToBuffer(record: Pick<FileRecord, 'storageBackend' | 'storageKey' | 'bucket' | 'locator'>): Promise<Buffer> {
-  return readStoredBlobAsBuffer({
-    backend: record.storageBackend,
-    storageKey: record.storageKey,
-    bucket: record.bucket,
-    locator: record.locator,
-  });
+export async function fileToBuffer(record: Pick<FileRecord, 'sha256'>): Promise<Buffer> {
+  return readCasBlob(record.sha256);
 }
 
 export async function saveFromUrl(
@@ -183,7 +153,7 @@ export async function saveFromUrl(
   uploaderUserId: string | null,
   originalName: string | undefined,
   origin: FileOriginInput,
-  backend: FileStorageBackend = 'local_fs',
+  backend: FileStorageBackend = 'local_cas',
 ): Promise<FileRecord> {
   const downloaded = await downloadToBuffer(url, originalName);
   return createStoredFile({
@@ -204,7 +174,7 @@ export async function saveFromBase64(
   workspaceId: string | null,
   uploaderUserId: string | null,
   origin: FileOriginInput,
-  backend: FileStorageBackend = 'local_fs',
+  backend: FileStorageBackend = 'local_cas',
 ): Promise<FileRecord> {
   return createStoredFile({
     buffer: Buffer.from(base64, 'base64'),
@@ -224,7 +194,7 @@ export async function saveFromBuffer(
   workspaceId: string | null,
   uploaderUserId: string | null,
   origin: FileOriginInput,
-  backend: FileStorageBackend = 'local_fs',
+  backend: FileStorageBackend = 'local_cas',
 ): Promise<FileRecord> {
   return createStoredFile({
     buffer,

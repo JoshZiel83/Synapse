@@ -76,10 +76,9 @@ function makeStorage() {
     toFileRefBlock: (rec: any): CanonicalContentBlock => ({
       type: "file_ref",
       id: `block-${rec.id}`,
-      fileId: rec.id,
-      url: `/files/${rec.id}`,
+      sha256: rec.sha256,
       mimeType: rec.mimeType,
-      originalName: rec.originalName,
+      name: rec.originalName,
       sizeBytes: rec.sizeBytes,
       category: rec.mimeType.startsWith("image/")
         ? "image"
@@ -206,7 +205,7 @@ test("resource(blob) → file_ref preserving original name", async () => {
     { workspaceId: "ws", origin: TEST_ORIGIN, storage }
   )
   assert.equal(result[0].type, "file_ref")
-  assert.equal((result[0] as any).originalName, "alpha.png")
+  assert.equal((result[0] as any).name, "alpha.png")
 })
 
 test("resource with only uri → text block of uri", async () => {
@@ -223,10 +222,10 @@ test("pre-canonical file_ref passes through normalizer", async () => {
     [
       {
         type: "file_ref",
-        fileId: "00000000-0000-4000-8000-000000000000",
-        url: "/files/00000000-0000-4000-8000-000000000000",
+        sha256: "a".repeat(64),
+        path: "/conversation/report.pdf",
         mimeType: "application/pdf",
-        originalName: "report.pdf",
+        name: "report.pdf",
         sizeBytes: 1024,
         category: "document",
       },
@@ -235,10 +234,7 @@ test("pre-canonical file_ref passes through normalizer", async () => {
   )
   assert.equal(result.length, 1)
   assert.equal(result[0].type, "file_ref")
-  assert.equal(
-    (result[0] as any).fileId,
-    "00000000-0000-4000-8000-000000000000"
-  )
+  assert.equal((result[0] as any).sha256, "a".repeat(64))
 })
 
 test("mixed content preserves order", async () => {

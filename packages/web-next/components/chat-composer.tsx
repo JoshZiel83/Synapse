@@ -1114,10 +1114,9 @@ export default function ChatComposer({
       const mimeType = uploaded.mimeType || attachment.file.type
 
       return fileRefBlock({
-        fileId: uploaded.id,
-        url: uploaded.url,
+        sha256: uploaded.sha256,
         mimeType,
-        originalName: uploaded.originalName || attachment.file.name,
+        name: uploaded.originalName || attachment.file.name,
         sizeBytes: uploaded.sizeBytes || attachment.file.size,
         category: mimeType.startsWith("image/")
           ? "image"

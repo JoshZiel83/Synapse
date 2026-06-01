@@ -11,8 +11,20 @@ import type { FileStorageBackend } from '@synapse/shared/types';
 // tree or stale hardcoded paths.
 export const STORAGE_DIR =
   process.env.STORAGE_DIR || path.join(os.tmpdir(), 'synapse-storage');
+// Shared content-addressed store root. The file-service refactor stores all
+// blobs content-addressed (blobs/<aa>/<sha256>), the SAME layout the Rust
+// fs-helper uses, so in topology A the API and the sandbox helpers share one
+// CAS volume (env CONTENT_STORE_DIR overrides; defaults under STORAGE_DIR).
+export const CONTENT_STORE_DIR =
+  process.env.CONTENT_STORE_DIR || path.join(STORAGE_DIR, 'cas');
 export const FILE_URL_PREFIX = '/files/';
-const BASE_URL = (process.env.BASE_URL || 'http://localhost:3001').replace(/\/+$/, '');
+// Content-addressed read endpoint: GET /api/v1/content/<sha256>. Distinct from
+// /files/<assetId> (entity assets by id). file_ref blocks render by sha. Mounted
+// under /api/v1 so it rides the same proxy every other API route uses (Next dev
+// rewrite of /api/v1/* + prod nginx location /api/); a bare /content/ would not
+// be proxied.
+export const CONTENT_URL_PREFIX = '/api/v1/content/';
+export const BASE_URL = (process.env.BASE_URL || 'http://localhost:3001').replace(/\/+$/, '');
 const MIME_ALIASES: Record<string, string> = {
   'image/jpg': 'image/jpeg',
   'audio/mp3': 'audio/mpeg',
@@ -62,34 +74,6 @@ const SHARP_FORMAT_MIME_TYPES: Record<string, string> = {
   tiff: 'image/tiff',
   webp: 'image/webp',
 };
-
-export interface StoredFileBlob {
-  backend: FileStorageBackend;
-  storageKey: string;
-  bucket: string | null;
-  locator: Record<string, unknown>;
-  sizeBytes: number;
-  sha256: string;
-}
-
-export interface FileStorageReadTarget {
-  backend: FileStorageBackend;
-  storageKey: string;
-  bucket?: string | null;
-  locator?: Record<string, unknown>;
-}
-
-export interface FileStorageDriver {
-  readonly backend: FileStorageBackend;
-  ensureReady(): Promise<void>;
-  putBuffer(
-    buffer: Buffer,
-    originalName: string,
-    mimeType: string,
-  ): Promise<StoredFileBlob>;
-  readBuffer(target: FileStorageReadTarget): Promise<Buffer>;
-  readBase64(target: FileStorageReadTarget): Promise<string>;
-}
 
 /** Ensure the root storage directory exists */
 export async function ensureStorageDir(): Promise<void> {
@@ -295,69 +279,74 @@ export function resolveLocalStoragePath(storageKey: string): string {
   return path.join(STORAGE_DIR, storageKey);
 }
 
-const localFsDriver: FileStorageDriver = {
-  backend: 'local_fs',
+// ─────────────────────── content-addressed store ─────────────────────────────
+// <CONTENT_STORE_DIR>/blobs/<aa>/<sha256> — identical layout to the Rust
+// fs-helper BlobStore (which does cas_dir.join("blobs").join(<aa>).join(sha)),
+// so a topology-A deployment shares one CAS volume: blobs the sandbox helper
+// writes are readable here and vice-versa.
+function casBlobPath(sha256: string): string {
+  return path.join(CONTENT_STORE_DIR, "blobs", sha256.slice(0, 2), sha256);
+}
 
-  async ensureReady(): Promise<void> {
-    await ensureStorageDir();
-  },
+export interface ContentBlobRef {
+  sha256: string;
+  sizeBytes: number;
+  /** true if the blob already existed (dedup hit) */
+  dedup: boolean;
+}
 
-  async putBuffer(
-    buffer: Buffer,
-    originalName: string,
-    mimeType: string,
-  ): Promise<StoredFileBlob> {
-    const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, mimeType);
-    return {
-      backend: 'local_fs',
-      storageKey: storedName,
-      bucket: null,
-      locator: { storageKey: storedName },
-      sizeBytes,
-      sha256: sha256Hex(buffer),
-    };
-  },
-
-  async readBuffer(target: FileStorageReadTarget): Promise<Buffer> {
-    return readAsBuffer(target.storageKey);
-  },
-
-  async readBase64(target: FileStorageReadTarget): Promise<string> {
-    return readAsBase64(target.storageKey);
-  },
-};
-
-export function getFileStorageDriver(
-  backend: FileStorageBackend = 'local_fs',
-): FileStorageDriver {
-  if (backend !== 'local_fs') {
-    throw new Error(`Unsupported file storage backend: ${backend}`);
+/**
+ * Store a buffer in the content-addressed store. Atomic (tmp + rename) and
+ * deduplicating: if the sha256 already exists, no rewrite happens and
+ * dedup=true. This is the API-side ContentStore writer (the Rust fs-helper
+ * is the sandbox-side one; both target the same CAS dir in topology A).
+ */
+export async function putBufferCas(buffer: Buffer): Promise<ContentBlobRef> {
+  const sha256 = sha256Hex(buffer);
+  const finalPath = casBlobPath(sha256);
+  try {
+    const stat = await fs.stat(finalPath);
+    return { sha256, sizeBytes: stat.size, dedup: true };
+  } catch {
+    /* not present — write it */
   }
-
-  return localFsDriver;
+  await fs.mkdir(path.dirname(finalPath), { recursive: true });
+  const tmpPath = `${finalPath}.incoming.${crypto.randomUUID()}`;
+  await fs.writeFile(tmpPath, buffer, { mode: 0o600 });
+  try {
+    await fs.rename(tmpPath, finalPath);
+  } catch (err) {
+    // Lost a race with a concurrent writer of the same sha — that's fine,
+    // the content is identical. Clean up our tmp and treat as dedup.
+    await fs.rm(tmpPath, { force: true }).catch(() => {});
+    try {
+      const stat = await fs.stat(finalPath);
+      return { sha256, sizeBytes: stat.size, dedup: true };
+    } catch {
+      throw err;
+    }
+  }
+  return { sha256, sizeBytes: buffer.length, dedup: false };
 }
 
-export async function storeBufferInBackend(params: {
-  backend?: FileStorageBackend;
-  buffer: Buffer;
-  originalName: string;
-  mimeType: string;
-}): Promise<StoredFileBlob> {
-  const driver = getFileStorageDriver(params.backend || 'local_fs');
-  await driver.ensureReady();
-  return driver.putBuffer(params.buffer, params.originalName, params.mimeType);
+/** True if a content blob with this sha256 is present. */
+export async function casBlobExists(sha256: string): Promise<boolean> {
+  try {
+    await fs.access(casBlobPath(sha256));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-export async function readStoredBlobAsBuffer(
-  target: FileStorageReadTarget,
-): Promise<Buffer> {
-  return getFileStorageDriver(target.backend).readBuffer(target);
+/** Read a content blob's bytes by sha256. */
+export async function readCasBlob(sha256: string): Promise<Buffer> {
+  return fs.readFile(casBlobPath(sha256));
 }
 
-export async function readStoredBlobAsBase64(
-  target: FileStorageReadTarget,
-): Promise<string> {
-  return getFileStorageDriver(target.backend).readBase64(target);
+/** Read a content blob as base64 by sha256. */
+export async function readCasBlobBase64(sha256: string): Promise<string> {
+  return (await readCasBlob(sha256)).toString('base64');
 }
 
 /** Relative URL: /files/YYYY/MM/DD/uuid.ext */

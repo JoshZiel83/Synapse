@@ -21,7 +21,7 @@ import {
   XCircle,
 } from "lucide-react"
 import { api } from "@/lib/api"
-import { cn, resolveFileUrl } from "@/lib/utils"
+import { cn, resolveContentUrl } from "@/lib/utils"
 import type { ConversationMember } from "@/stores/chat-store"
 import {
   runtimePhaseToBadgePhase,
@@ -129,13 +129,13 @@ function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
         return (
           <a
             key={block.id}
-            href={resolveFileUrl(block.url)}
+            href={resolveContentUrl(block.sha256)}
             target="_blank"
             rel="noreferrer"
             className="inline-flex w-fit items-center gap-2 rounded-2xl border border-border bg-background px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/40 hover:text-primary"
           >
             <FileIcon className="size-3.5" />
-            <span className="truncate">{block.originalName}</span>
+            <span className="truncate">{block.name}</span>
           </a>
         )
       })}

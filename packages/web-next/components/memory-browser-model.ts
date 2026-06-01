@@ -167,8 +167,8 @@ export function summarizeMemory(memory: Memory) {
   const fileBlock = memory.contentBlocks.find(
     (block) => block.type === "file_ref"
   )
-  if (fileBlock?.originalName) {
-    return fileBlock.originalName
+  if (fileBlock?.name) {
+    return fileBlock.name
   }
 
   return "Untitled memory"
@@ -360,13 +360,11 @@ export function buildMemoryMovePayloadFromPreset(
   preset: MemoryFolderPreset,
   currentWorkspaceMemberId: string,
   workspaceId: string
-):
-  | {
-      owner: { kind: string; [k: string]: unknown }
-      scope?: { kind: string; [k: string]: unknown }
-      namespaceKey?: string
-    }
-  | null {
+): {
+  owner: { kind: string; [k: string]: unknown }
+  scope?: { kind: string; [k: string]: unknown }
+  namespaceKey?: string
+} | null {
   switch (preset.spaceType) {
     case "workspace_shared":
       return { owner: { kind: "workspace", workspaceId } }

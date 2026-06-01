@@ -165,7 +165,11 @@ export type DeviceToolsStatus = "active" | "hidden" | "removed";
 
 export type EngineBranchCheckpointsCheckpointKind = "compaction" | "snapshot";
 
+export type FileAccessGrantsStatus = "active" | "revoked" | "superseded";
+
 export type FileContentKind = "audio" | "document" | "image" | "video";
+
+export type FileMountStatus = "active" | "closed" | "committing" | "failed" | "provisioning";
 
 export type FileOriginFamily = "actor_output" | "external_import" | "model_output" | "package_import" | "platform_asset" | "system_generated" | "tool_output" | "user_upload";
 
@@ -173,7 +177,9 @@ export type FileParseOutputKind = "derived_file" | "structured_json" | "text";
 
 export type FileParseRunStatus = "failed" | "pending" | "running" | "skipped" | "succeeded";
 
-export type FileStorageBackend = "local_fs";
+export type FilePermission = "admin" | "read" | "write";
+
+export type FileSnapshotReason = "gc_root" | "import" | "manual" | "session_commit";
 
 export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
@@ -783,9 +789,16 @@ export interface ChatPushTokens {
   workspace_member_id: string;
 }
 
+export interface ContentBlobs {
+  backend: Generated<string>;
+  created_at: Generated<Timestamp>;
+  locator_json: Generated<Json>;
+  sha256: string;
+  size_bytes: Int8;
+}
+
 export interface ContextArchiveFrameParts {
   archive_frame_id: string;
-  file_id: string | null;
   id: Generated<string>;
   json_value: Json | null;
   metadata: Generated<Json | null>;
@@ -793,6 +806,8 @@ export interface ContextArchiveFrameParts {
   name: string | null;
   ordinal: number;
   part_type: ContextArchiveFramePartsPartType;
+  ref_path: string | null;
+  ref_sha256: string | null;
   text_value: string | null;
 }
 
@@ -883,7 +898,6 @@ export interface ConversationItemMentions {
 }
 
 export interface ConversationItemParts {
-  file_id: string | null;
   id: Generated<string>;
   item_id: string;
   json_value: Json | null;
@@ -892,6 +906,8 @@ export interface ConversationItemParts {
   name: string | null;
   ordinal: number;
   part_type: ConversationItemPartsPartType;
+  ref_path: string | null;
+  ref_sha256: string | null;
   text_value: string | null;
 }
 
@@ -1272,32 +1288,65 @@ export interface EntityAccessRequests {
   workspace_id: string;
 }
 
-export interface FileBlobs {
-  backend: FileStorageBackend;
-  bucket: string | null;
-  created_at: Generated<Timestamp | null>;
+export interface FileAccessGrants {
+  created_at: Generated<Timestamp>;
+  created_by_workspace_member_id: string | null;
+  file_asset_id: string | null;
+  file_space_id: string;
   id: Generated<string>;
-  locator_json: Generated<Json>;
-  storage_key: string;
+  permissions: ArrayType<FilePermission>;
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source: string | null;
+  source_interaction_id: string | null;
+  status: Generated<FileAccessGrantsStatus>;
+  subject_id: string;
+  superseded_at: Timestamp | null;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
 }
 
-export interface FileOrigins {
-  created_at: Generated<Timestamp | null>;
+export interface FileAssets {
+  content_kind: FileContentKind;
+  content_sha256: string;
+  created_at: Generated<Timestamp>;
   details_json: Generated<Json>;
-  external_resource_key: string | null;
-  file_id: string;
+  id: Generated<string>;
   initiator_actor_id: string | null;
-  initiator_user_id: string | null;
-  parent_file_id: string | null;
-  plugin_id: string | null;
-  provider_key: string | null;
+  mime_type: string;
+  original_name: string;
+  parent_asset_id: string | null;
+  size_bytes: Int8;
   source_family: FileOriginFamily;
   source_system: string;
+  updated_at: Generated<Timestamp>;
+  uploader_user_id: string | null;
+  workspace_id: string | null;
+}
+
+export interface FileMounts {
+  base_snapshot_id: string | null;
+  closed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  device_id: string | null;
+  error_message: string | null;
+  file_space_id: string;
+  host_pid: number | null;
+  id: Generated<string>;
+  materialized_dir: string | null;
+  mount_subpath: string;
+  pairing_session_id: string | null;
+  refresh_policy: Generated<string>;
+  result_snapshot_id: string | null;
+  session_id: string;
+  status: Generated<FileMountStatus>;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
 }
 
 export interface FileParseOutputs {
   created_at: Generated<Timestamp | null>;
-  derived_file_id: string | null;
+  derived_asset_id: string | null;
   id: Generated<string>;
   is_primary: Generated<boolean>;
   output_kind: FileParseOutputKind;
@@ -1308,10 +1357,10 @@ export interface FileParseOutputs {
 }
 
 export interface FileParseRuns {
+  asset_id: string;
   created_at: Generated<Timestamp | null>;
   error_code: string | null;
   error_message: string | null;
-  file_id: string;
   finished_at: Timestamp | null;
   id: Generated<string>;
   metadata: Generated<Json>;
@@ -1323,17 +1372,29 @@ export interface FileParseRuns {
   trigger: string;
 }
 
-export interface Files {
-  blob_id: string;
-  content_kind: FileContentKind;
-  created_at: Generated<Timestamp | null>;
+export interface FileSnapshots {
+  created_at: Generated<Timestamp>;
+  created_by_session_id: string | null;
+  entry_count: Generated<number>;
+  file_space_id: string;
   id: Generated<string>;
-  mime_type: string;
-  original_name: string;
-  sha256: string;
-  size_bytes: Int8;
-  uploader_user_id: string | null;
-  workspace_id: string | null;
+  manifest_sha256: string;
+  parent_snapshot_id: string | null;
+  reason: Generated<FileSnapshotReason>;
+  total_bytes: Generated<Int8>;
+  version: Int8;
+  workspace_id: string;
+}
+
+export interface FileSpaces {
+  created_at: Generated<Timestamp>;
+  current_snapshot_id: string | null;
+  id: Generated<string>;
+  namespace_key: Generated<string>;
+  owner_subject_id: string;
+  scope_subject_id: string | null;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
 }
 
 export interface InstalledSkills {
@@ -1484,7 +1545,6 @@ export interface MemoryItemChunks {
 }
 
 export interface MemoryItemParts {
-  file_id: string | null;
   id: Generated<string>;
   json_value: Json | null;
   memory_item_id: string;
@@ -1493,6 +1553,8 @@ export interface MemoryItemParts {
   name: string | null;
   ordinal: number;
   part_type: MemoryItemPartsPartType;
+  ref_path: string | null;
+  ref_sha256: string | null;
   text_value: string | null;
 }
 
@@ -2007,12 +2069,6 @@ export interface RuntimeEvents {
   workspace_id: string | null;
 }
 
-export interface SchemaMigrations {
-  applied_at: Generated<Timestamp>;
-  description: Generated<string>;
-  version: string;
-}
-
 export interface SessionContextStates {
   active_private_archive_point_id: string | null;
   session_id: string;
@@ -2244,7 +2300,6 @@ export interface ToolExecutionAttempts {
 }
 
 export interface ToolResultParts {
-  file_id: string | null;
   id: Generated<string>;
   json_value: Json | null;
   metadata: Generated<Json | null>;
@@ -2252,6 +2307,8 @@ export interface ToolResultParts {
   name: string | null;
   ordinal: number;
   part_type: ToolResultPartsPartType;
+  ref_path: string | null;
+  ref_sha256: string | null;
   text_value: string | null;
   tool_result_id: string;
 }
@@ -2504,6 +2561,7 @@ export interface DB {
   chat_client_instances: ChatClientInstances;
   chat_conversation_create_requests: ChatConversationCreateRequests;
   chat_push_tokens: ChatPushTokens;
+  content_blobs: ContentBlobs;
   context_archive_frame_parts: ContextArchiveFrameParts;
   context_archive_frames: ContextArchiveFrames;
   context_archive_points: ContextArchivePoints;
@@ -2541,11 +2599,13 @@ export interface DB {
   direct_conversation_bindings: DirectConversationBindings;
   engine_branch_checkpoints: EngineBranchCheckpoints;
   entity_access_requests: EntityAccessRequests;
-  file_blobs: FileBlobs;
-  file_origins: FileOrigins;
+  file_access_grants: FileAccessGrants;
+  file_assets: FileAssets;
+  file_mounts: FileMounts;
   file_parse_outputs: FileParseOutputs;
   file_parse_runs: FileParseRuns;
-  files: Files;
+  file_snapshots: FileSnapshots;
+  file_spaces: FileSpaces;
   installed_skills: InstalledSkills;
   interaction_action_tokens: InteractionActionTokens;
   interaction_plan_approval_requests: InteractionPlanApprovalRequests;
@@ -2591,7 +2651,6 @@ export interface DB {
   resource_access_bindings: ResourceAccessBindings;
   runtime_authorization_grants: RuntimeAuthorizationGrants;
   runtime_events: RuntimeEvents;
-  schema_migrations: SchemaMigrations;
   session_context_states: SessionContextStates;
   session_engine_branches: SessionEngineBranches;
   session_interrupts: SessionInterrupts;

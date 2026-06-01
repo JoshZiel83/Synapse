@@ -583,7 +583,11 @@ export async function getWorkspaceChiefActorPreference(
         .onRef("a.workspace_id", "=", "wm.workspace_id")
         .on("a.is_active", "=", true)
     )
-    .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+    .leftJoin(
+      "file_assets as avatar_file",
+      "avatar_file.id",
+      "a.avatar_file_id"
+    )
     .select([
       "wm.workspace_id",
       "wm.user_id",

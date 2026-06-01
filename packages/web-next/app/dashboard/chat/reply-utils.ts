@@ -27,7 +27,7 @@ function summarizeFileCategories(blocks: CanonicalContentBlock[]) {
       case "audio":
         return "Audio"
       default:
-        return file.originalName || "Attachment"
+        return file.name || "Attachment"
     }
   }
 

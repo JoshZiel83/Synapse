@@ -118,8 +118,9 @@ function compileBodyBlocks(
     compiled.push(
       toXmlTextBlock(
         selfClosingXmlTag("file-ref", {
-          fileId: part.fileId,
-          name: part.originalName,
+          sha256: part.sha256,
+          ...(part.path ? { path: part.path } : {}),
+          name: part.name,
           category: part.category,
           mimeType: part.mimeType,
         })
