@@ -18,21 +18,7 @@ import {
 } from "./client.js"
 import { clearSyncBuf, getSyncBuf, setSyncBuf } from "./cursor-store.js"
 import { normalizeWeixinMessage, type WeixinMessage } from "./normalize.js"
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => resolve(), ms)
-    if (!signal) return
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer)
-        reject(new Error("aborted"))
-      },
-      { once: true }
-    )
-  })
-}
+import { sleep } from "../../../../infrastructure/async/index.js"
 
 function envelopeFromNormalized(
   normalized: ReturnType<typeof normalizeWeixinMessage>,

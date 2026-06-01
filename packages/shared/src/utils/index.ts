@@ -379,3 +379,6 @@ export function buildMobileScanUrl(params: {
 
 export { redactSecrets } from "./redact.js"
 export type { RedactOptions } from "./redact.js"
+
+export { computeBackoff } from "./backoff.js"
+export type { ComputeBackoffOptions } from "./backoff.js"

@@ -22,6 +22,7 @@ import {
 } from "./infrastructure/events/index.js"
 import { auditMiddleware } from "./infrastructure/middleware/audit.js"
 import { beginShutdown } from "./infrastructure/shutdown/state.js"
+import { withTimeout } from "./infrastructure/async/index.js"
 import { ensureStorageDir } from "./infrastructure/storage/index.js"
 import {
   setupWebSocket,
@@ -321,27 +322,11 @@ async function main() {
     console.log("[im] Transport runtime manager disabled on this instance")
   }
 
-  const waitWithTimeout = async (
+  const waitWithTimeout = (
     label: string,
     promise: Promise<unknown>,
     ms: number
-  ) => {
-    let timer: NodeJS.Timeout | null = null
-    try {
-      await Promise.race([
-        promise,
-        new Promise((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(`${label} timed out after ${ms}ms`)),
-            ms
-          )
-          timer.unref()
-        }),
-      ])
-    } finally {
-      if (timer) clearTimeout(timer)
-    }
-  }
+  ) => withTimeout(promise, ms, label)
 
   let shutdownStarted = false
   const gracefulShutdown = async (signal: string) => {

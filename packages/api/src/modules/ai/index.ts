@@ -42,6 +42,10 @@ import type { SessionCollaborationMode } from "@synapse/shared/types"
 import { randomUUID } from "crypto"
 import { config } from "../../config/index.js"
 import {
+  sleep,
+  withTimeout as withTimeoutBase,
+} from "../../infrastructure/async/index.js"
+import {
   createAIProvider,
   type AIProvider,
   type AIProviderConfig,
@@ -194,27 +198,11 @@ function classifyModelError(error: unknown): string {
 
 async function delay(ms: number) {
   if (ms <= 0) return
-  await new Promise((resolve) => setTimeout(resolve, ms))
+  await sleep(ms)
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise
-  let timer: NodeJS.Timeout | null = null
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(new Error(`Model attempt timed out after ${timeoutMs}ms`)),
-          timeoutMs
-        )
-        timer.unref?.()
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  return withTimeoutBase(promise, timeoutMs, "Model attempt")
 }
 
 function effectiveAttemptPolicy(

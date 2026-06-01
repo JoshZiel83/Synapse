@@ -2,6 +2,7 @@ import type { CanonicalContentBlock } from "@synapse/shared"
 import { createRequire } from "module"
 import { mkdir } from "node:fs/promises"
 import { config } from "../../config/index.js"
+import { withTimeout } from "../../infrastructure/async/index.js"
 import { readFileBufferById } from "../files/service.js"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
@@ -107,27 +108,6 @@ async function prepareImageForOcr(buffer: Buffer): Promise<Buffer> {
       `sharp failed to normalize image input for OCR; falling back to original bytes. ${err?.message || "unknown error"}`
     )
     return buffer
-  }
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string
-): Promise<T> {
-  let timer: NodeJS.Timeout | null = null
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-          timeoutMs
-        )
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
   }
 }
 

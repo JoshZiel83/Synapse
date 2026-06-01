@@ -84,7 +84,9 @@
  */
 
 import { DWClient, TOPIC_ROBOT, type DWClientDownStream } from "dingtalk-stream"
+import { computeBackoff } from "@synapse/shared"
 import type { TransportAccountSummary } from "@synapse/shared/types"
+import { sleep } from "../../../../infrastructure/async/index.js"
 import type {
   AccountStartContext,
   InboundEnvelope,
@@ -236,12 +238,13 @@ export async function startDingtalkAccount(
   ctx.signal.addEventListener("abort", onCtxAbort, { once: true })
 
   function backoffDelay(): number {
-    const exp = Math.min(
-      BACKOFF_MAX_MS,
-      BACKOFF_BASE_MS * Math.pow(2, attempts)
-    )
-    const jitter = Math.random() * BACKOFF_JITTER_MS
-    return exp + jitter
+    return computeBackoff(attempts, {
+      baseMs: BACKOFF_BASE_MS,
+      maxMs: BACKOFF_MAX_MS,
+      minMs: 0,
+      jitterMode: "additive",
+      jitterMs: BACKOFF_JITTER_MS,
+    })
   }
 
   function handleInbound(
@@ -556,24 +559,6 @@ export function defaultClientFactory(config: {
     autoReconnect: false,
   } as ConstructorParameters<typeof DWClient>[0])
   return client as unknown as MinimalDWClient
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve()
-      return
-    }
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort)
-      resolve()
-    }, ms)
-    function onAbort(): void {
-      clearTimeout(t)
-      resolve()
-    }
-    signal.addEventListener("abort", onAbort, { once: true })
-  })
 }
 
 // Helper used by the public TransportConnector.startAccount adapter so

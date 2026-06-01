@@ -8,6 +8,7 @@ import type {
 import { textBlocks } from "@synapse/shared"
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
+import { sleep } from "../../infrastructure/async/index.js"
 import { authorizeAction } from "../access/service.js"
 import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js"
 import { listConversationParticipants } from "../chat/service.js"
@@ -162,10 +163,6 @@ export type RuntimeAuthorizationWaitResult<T> =
       status: "superseded" | "rejected" | "cancelled" | "expired"
       interaction: InteractionRequestSummary | null
     }
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
 
 function buildWaitingSummary(deviceDisplayName?: string) {
   return `Waiting for a user to authorize ${deviceDisplayName?.trim() || "the device"}.`
