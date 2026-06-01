@@ -132,3 +132,17 @@ single tested source of truth in shared, consumed by mobile.
 
 DEFERRED (mechanical, same recipe): discover.tsx, contacts/requests.tsx (has approve/reject
 mutations), home-tab actors fetch, workspace-entity-picker-screen. Migrate incrementally.
+
+## Phase 10 note (FlashList)
+
+- Added @shopify/flash-list 2.0.2 (expo install; SDK 54 compatible, Expo Go OK).
+- 10a DONE: inbox virtualized. conversation-list.tsx now exports:
+  - ConversationListView — FlashList that OWNS the scroll (header/empty/refresh injected)
+  - ConversationList — back-compat: maxItems -> capped non-scrolling stack (home, 3 items);
+    otherwise FlashList. home-tab (maxItems=3) unchanged; chats-tab uses ConversationListView,
+    removed its wrapping ScrollView so FlashList owns scrolling.
+- 10b DEFERRED (chat message list app/chat/[conversationId].tsx): behavior-dense + chat-critical
+  (scrollRef.scrollToEnd, appendedAtTail auto-scroll, onScroll at-bottom mark-read, load-older
+  button needing maintainVisibleContentPosition, interleaved footer ActorActivityBubble nodes in a
+  non-inverted list). FlashList scrollToEnd is unreliable with variable heights; converting safely
+  needs careful manual testing on device with no integration tests. Left on ScrollView; tracked.
