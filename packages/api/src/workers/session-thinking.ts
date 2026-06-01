@@ -160,6 +160,25 @@ function isTurnInterruptedError(error: unknown) {
   return error instanceof Error && error.name === "TurnInterruptedError"
 }
 
+/**
+ * Thrown when this worker loses the session lock mid-turn (TTL lapsed and
+ * another worker took over, or the lock was force-released). We throw rather
+ * than return so the normal catch-block cleanup runs (drop attached wakeups,
+ * mark the running turn cancelled) — otherwise the session would be left with a
+ * dangling `running` turn + attached wakeups until external recovery. We do NOT
+ * touch session status or requeue: the new lock owner now drives the session.
+ */
+class SessionLockLostError extends Error {
+  constructor(sessionId: string) {
+    super(`session lock for ${sessionId} lost mid-turn`)
+    this.name = "SessionLockLostError"
+  }
+}
+
+function isSessionLockLostError(error: unknown) {
+  return error instanceof Error && error.name === "SessionLockLostError"
+}
+
 export function startSessionThinkingWorker() {
   const worker = new Worker(
     QUEUE_NAMES.SESSION_THINKING,
@@ -761,13 +780,12 @@ export function startSessionThinkingWorker() {
         }
 
         // If we lost the session lock mid-turn, another worker now owns this
-        // session. Bail BEFORE applying any side-effects (actions, message
+        // session. Throw BEFORE applying any side-effects (actions, message
         // persistence, runtime events) so we don't double-act with that worker.
+        // Throwing (vs returning) routes through the catch cleanup so the
+        // running turn + attached wakeups don't leak.
         if (lockLost) {
-          log.warn(
-            `session lock for ${sessionId} lost mid-turn; discarding turn result without side-effects`
-          )
-          return { success: false, reason: "session lock lost" }
+          throw new SessionLockLostError(sessionId)
         }
 
         await executeActorActions(workspaceId, actorId, result.actions, {
@@ -883,24 +901,38 @@ export function startSessionThinkingWorker() {
       } catch (err: any) {
         const errorMessage = err?.message || "Unknown error"
         const turnInterrupted = isTurnInterruptedError(err)
-        if (!turnInterrupted) {
+        const lockLostError = isSessionLockLostError(err)
+        if (!turnInterrupted && !lockLostError) {
           log.error({ err }, `Session ${sessionId} failed: ${errorMessage}`)
+        } else if (lockLostError) {
+          log.warn(`Session ${sessionId} turn aborted: lock lost mid-turn`)
         }
         const failedSession = await getSession(sessionId).catch(() => null)
 
+        // A lost lock or an interrupt cancels (not fails) the turn.
+        const cancelled = turnInterrupted || lockLostError
         if (turn?.id) {
           await runCleanupStep(`drop wakeups for turn ${turn.id}`, () =>
             markTurnWakeupsDropped(turn.id)
           )
           await runCleanupStep(
-            `mark turn ${turn.id} ${turnInterrupted ? "cancelled" : "failed"}`,
+            `mark turn ${turn.id} ${cancelled ? "cancelled" : "failed"}`,
             () =>
-              updateTurnStatus(
-                turn.id,
-                turnInterrupted ? "cancelled" : "failed",
-                { metadata: { errorMessage } }
-              )
+              updateTurnStatus(turn.id, cancelled ? "cancelled" : "failed", {
+                metadata: { errorMessage },
+              })
           )
+        }
+
+        // Lock lost: the new owner now drives this session. Clean up our turn
+        // (done above) but do NOT touch session status or requeue — that's the
+        // new owner's responsibility. Then bail.
+        if (lockLostError) {
+          await runCleanupStep(
+            `shutdown MCP tools for session ${sessionId}`,
+            () => mcpTools.shutdown()
+          )
+          return { success: false, reason: "session lock lost" }
         }
 
         if (turnInterrupted) {
