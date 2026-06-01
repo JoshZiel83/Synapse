@@ -1,7 +1,8 @@
 // Spawn the API in-process by tsx, listening on a worktree-private port.
 // The API picks up env vars at startup; we wait for /api/v1/health.
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { spawn, type ChildProcessByStdio } from "node:child_process"
+import type { Readable } from "node:stream"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -27,7 +28,7 @@ export const TEST_API_PORT = deriveApiPort()
 export const TEST_API_BASE_URL = `http://${TEST_API_HOST}:${TEST_API_PORT}`
 
 export interface ApiHandle {
-  proc: ChildProcessWithoutNullStreams
+  proc: ChildProcessByStdio<null, Readable, Readable>
   port: number
   baseUrl: string
   storageDir: string

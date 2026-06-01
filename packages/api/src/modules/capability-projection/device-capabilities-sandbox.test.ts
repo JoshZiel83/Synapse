@@ -183,7 +183,7 @@ test("addDeviceCapabilitiesForTarget is additive; revoke is targeted", async () 
     )
     const dupCount = await db
       .selectFrom("resource_access_bindings")
-      .select((eb: any) => eb.fn.countAll().as("c"))
+      .select((eb) => eb.fn.countAll<string>().as("c"))
       .where("workspace_id", "=", s.workspaceId)
       .where("device_capability_id", "=", s.sandboxCap1)
       .where("status", "=", "active")

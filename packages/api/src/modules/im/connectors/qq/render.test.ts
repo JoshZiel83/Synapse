@@ -22,7 +22,10 @@ test("planQqSends: system_marker keeps a label so the message isn't silent", () 
   ])
   const plan = planQqSends(msg)
   assert.equal(plan.length, 1)
-  assert.equal(plan[0].content, "see: [图片]")
+  assert.equal(plan[0].kind, "text")
+  if (plan[0].kind === "text") {
+    assert.equal(plan[0].content, "see: [图片]")
+  }
 })
 
 test("planQqSends: quote part becomes leading > preview", () => {
@@ -34,7 +37,10 @@ test("planQqSends: quote part becomes leading > preview", () => {
     { type: "text", text: "follow-up" },
   ])
   const plan = planQqSends(msg)
-  assert.equal(plan[0].content, "> earlier line follow-up")
+  assert.equal(plan[0].kind, "text")
+  if (plan[0].kind === "text") {
+    assert.equal(plan[0].content, "> earlier line follow-up")
+  }
 })
 
 test("planQqSends: media parts produce a media plan item (Stage 5)", () => {

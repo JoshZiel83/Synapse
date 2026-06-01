@@ -222,7 +222,7 @@ test("Origin survives all 5 ToolResultOrigin kinds through the JSONB column", as
       parts: [{ type: "text", text: `probe ${origin.kind}` }],
       metadata: { origin },
     })
-    const rows = await client.query<{ metadata: any }>(
+    const rows: pg.QueryResult<{ metadata: any }> = await client.query(
       "SELECT metadata FROM tool_results WHERE tool_call_id = $1",
       [toolCallId]
     )

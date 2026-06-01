@@ -156,7 +156,11 @@ test("mergePendingConflicts: empty prev returns the incoming verbatim", () => {
     actor: {
       paths: ["/x"],
       sidecars: [
-        { original: "/actor/x", sidecar: "/actor/.synapse-conflicts/x" },
+        {
+          original: "/actor/x",
+          sidecar: "/actor/.synapse-conflicts/x",
+          kind: "file",
+        },
       ],
     },
   }
