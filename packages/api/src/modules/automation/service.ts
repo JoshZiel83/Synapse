@@ -1422,10 +1422,8 @@ function automationEventSourceGrantApplies(params: {
     case "workspace":
       return (
         ((subject as { workspaceId: string }).workspaceId || null) ===
-          ((params.conversation.workspace_id as
-            | string
-            | null
-            | undefined) || null) ||
+          ((params.conversation.workspace_id as string | null | undefined) ||
+            null) ||
         ((subject as { workspaceId: string }).workspaceId || null) ===
           (params.row.workspace_id || null)
       )

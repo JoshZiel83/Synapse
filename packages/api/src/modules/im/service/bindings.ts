@@ -215,9 +215,7 @@ export async function upsertConversationTransportBinding(params: {
     throw new Error("Conversation not found")
   }
   if (conversationRow.workspace_id !== params.workspaceId) {
-    throw new Error(
-      "Conversation does not belong to the binding's workspace"
-    )
+    throw new Error("Conversation does not belong to the binding's workspace")
   }
 
   // Friendly guard mirroring the DB trigger tg_binding_account_consistency:
@@ -228,11 +226,7 @@ export async function upsertConversationTransportBinding(params: {
   const conflictingExternal = await db
     .selectFrom("conversation_participants as cp")
     .innerJoin("access_subjects as asx", "asx.id", "cp.subject_id")
-    .innerJoin(
-      "transport_addresses as ta",
-      "ta.id",
-      "asx.transport_address_id"
-    )
+    .innerJoin("transport_addresses as ta", "ta.id", "asx.transport_address_id")
     .select("cp.id")
     .where("cp.conversation_id", "=", params.conversationId)
     .where("asx.kind", "=", "external")

@@ -93,7 +93,7 @@ import {
  * - `conversation` — transcript-side jobs with no actor in play. Per
  *   Decision 8, this principal does NOT inherit the workspace subject:
  *   `subject=workspace` device grants stay invisible to bridged
- *   conversation participants (IM bridges, virtual chats).
+ *   conversation participants (IM bridges, IM-bridged chats).
  * - `remote_agent` — reverse MCP caller bridged into a conversation.
  *   Same active-participant guard as `actor`.
  * - `workspace_member` — dashboard introspection; never used for

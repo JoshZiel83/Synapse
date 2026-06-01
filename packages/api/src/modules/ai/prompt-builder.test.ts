@@ -132,7 +132,7 @@ test("buildActorPrompt rejects plan mode in group conversations", () => {
         undefined,
         "plan_drafting"
       ),
-    /Plan mode is only available in private conversations/i
+    /Plan mode is only available in direct conversations/i
   )
 })
 

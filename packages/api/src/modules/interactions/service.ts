@@ -3651,7 +3651,7 @@ export async function resolveInteractionRequest(
         }
         if (isGroupConversationKind(sessionRow.conversation_kind)) {
           throw new Error(
-            "Plan mode is only available in private conversations."
+            "Plan mode is only available in direct conversations."
           )
         }
         if (

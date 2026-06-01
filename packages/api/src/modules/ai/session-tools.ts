@@ -266,7 +266,7 @@ function buildSendToDefinition(params: {
     const peerName = params.otherParticipants[0]!.name
     return {
       name: "send_to",
-      description: `Send a visible message to the other participant in this private thread. The recipient is implicit. Current peer: ${rosterDesc}.`,
+      description: `Send a visible message to the other participant in this direct thread. The recipient is implicit. Current peer: ${rosterDesc}.`,
       parameters: {
         type: "object",
         properties: {
@@ -282,11 +282,11 @@ function buildSendToDefinition(params: {
           },
           replyToRef: {
             type: "string",
-            description: buildReplyToRefUsageGuidance("private"),
+            description: buildReplyToRefUsageGuidance("direct"),
           },
           message: {
             type: "string",
-            description: `The visible message content sent in this private thread with ${peerName}. Prefer inline <mention participantId="..."/>. You may also use <mention name="${peerName}"/> when the name is unique in the roster. Mention only when the sentence itself explicitly points to a participant.`,
+            description: `The visible message content sent in this direct thread with ${peerName}. Prefer inline <mention participantId="..."/>. You may also use <mention name="${peerName}"/> when the name is unique in the roster. Mention only when the sentence itself explicitly points to a participant.`,
           },
         },
         required: ["intent", "summary", "message"],
@@ -522,10 +522,10 @@ function resolveHumanInteractionTarget(params: {
   candidates: UserInteractionCandidate[]
 }) {
   const requestedParticipantId = params.requestedParticipantId?.trim() || ""
-  const isPrivateConversation =
+  const isDirectConversation =
     params.conversationKind === "direct" && params.candidates.length === 1
 
-  if (isPrivateConversation) {
+  if (isDirectConversation) {
     const implicitCandidate = params.candidates[0] || null
     if (!implicitCandidate) {
       return {
@@ -539,7 +539,7 @@ function resolveHumanInteractionTarget(params: {
     ) {
       return {
         candidate: null,
-        error: `targetParticipantId must be omitted or set to ${implicitCandidate.participantId} in a private conversation.`,
+        error: `targetParticipantId must be omitted or set to ${implicitCandidate.participantId} in a direct conversation.`,
       }
     }
     return { candidate: implicitCandidate, error: null }
@@ -1389,7 +1389,7 @@ export function registerCallableToolPlugins(): void {
           targetParticipantId: {
             type: "string",
             description:
-              "Required in group conversations. Omit in a private conversation with one user.",
+              "Required in group conversations. Omit in a direct conversation with one user.",
           },
           title: {
             type: "string",
@@ -1460,7 +1460,7 @@ export function registerCallableToolPlugins(): void {
       if (candidates.length === 0) {
         return { active: false, definition: null as any }
       }
-      const isPrivateConversation =
+      const isDirectConversation =
         getToolContextConversationKind(ctx) === "direct" &&
         candidates.length === 1
       const candidateDirectory = buildUserInteractionDirectory(candidates)
@@ -1468,9 +1468,9 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "request_user_input",
-          description: isPrivateConversation
+          description: isDirectConversation
             ? buildRequestUserInputToolDescription({
-                kind: "private",
+                kind: "direct",
                 recipientLabel: candidates[0]!.label,
               })
             : buildRequestUserInputToolDescription({
@@ -1480,7 +1480,7 @@ export function registerCallableToolPlugins(): void {
           parameters: {
             type: "object",
             properties: {
-              ...(isPrivateConversation
+              ...(isDirectConversation
                 ? {}
                 : {
                     targetParticipantId: {
@@ -1873,7 +1873,7 @@ export function registerCallableToolPlugins(): void {
           targetParticipantId: {
             type: "string",
             description:
-              "Required in group conversations. Omit in a private conversation with one user.",
+              "Required in group conversations. Omit in a direct conversation with one user.",
           },
           title: {
             type: "string",
@@ -1926,7 +1926,7 @@ export function registerCallableToolPlugins(): void {
       if (candidates.length === 0) {
         return { active: false, definition: null as any }
       }
-      const isPrivateConversation =
+      const isDirectConversation =
         getToolContextConversationKind(ctx) === "direct" &&
         candidates.length === 1
       const candidateDirectory = buildUserInteractionDirectory(candidates)
@@ -1934,9 +1934,9 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "exit_plan_mode",
-          description: isPrivateConversation
+          description: isDirectConversation
             ? buildExitPlanModeToolDescription({
-                kind: "private",
+                kind: "direct",
                 recipientLabel: candidates[0]!.label,
               })
             : buildExitPlanModeToolDescription({
@@ -1946,7 +1946,7 @@ export function registerCallableToolPlugins(): void {
           parameters: {
             type: "object",
             properties: {
-              ...(isPrivateConversation
+              ...(isDirectConversation
                 ? {}
                 : {
                     targetParticipantId: {

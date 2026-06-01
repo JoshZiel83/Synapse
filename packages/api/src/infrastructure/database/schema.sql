@@ -1773,8 +1773,10 @@ CREATE TABLE conversation_participants (
   -- (workspace_member / actor / remote_agent / external), derived at read time
   -- via subjectKindToParticipantType. There is no denormalized participant_type
   -- column; tg_conversation_participant_validate enforces that subject_id refers
-  -- to one of those four kinds (and, for internal conversations, the matching
-  -- workspace). External participants carry a first-class, cross-conversation
+  -- to one of those four kinds, and that the subject's workspace matches the
+  -- conversation's (every conversation is workspace-scoped; external subjects are
+  -- additionally restricted to IM conversations matching the binding account).
+  -- External participants carry a first-class, cross-conversation
   -- access_subjects row keyed by transport_address_id.
   subject_id UUID NOT NULL,
   actor_join_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,

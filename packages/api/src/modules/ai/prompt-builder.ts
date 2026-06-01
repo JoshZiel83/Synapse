@@ -308,7 +308,7 @@ export function buildActorPrompt(
     isGroupConversationKind(conversationKind) &&
     isPlanCollaborationMode(collaborationMode)
   ) {
-    throw new Error("Plan mode is only available in private conversations.")
+    throw new Error("Plan mode is only available in direct conversations.")
   }
 
   if (
@@ -396,7 +396,7 @@ export function buildActorPrompt(
         `Parameters:\n` +
         `- \`intent\`: \`reply\` when you are replying with information or a result; \`request\` when you are delegating, asking, or requesting action\n` +
         `- \`summary\`: a short structured summary of what you replied with or what you want the other participant to do; this is used for UI rendering\n` +
-        `- ${buildReplyToRefUsageGuidance("private")}\n` +
+        `- ${buildReplyToRefUsageGuidance("direct")}\n` +
         `- \`message\`: your visible message content\n` +
         `- The recipient is implicit. In this direct thread, \`send_to\` goes directly to ${exampleRecipient} or whoever is currently the other participant.\n` +
         `- Prefer \`<mention participantId="..."/>\`. You may also use \`<mention name="${exampleRecipient}"/>\` when the roster name is unique.\n` +

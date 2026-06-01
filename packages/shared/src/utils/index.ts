@@ -226,7 +226,10 @@ export function maskAllowsConversationType(
   kind: string | null | undefined,
   isIm: boolean
 ): boolean {
-  return maskAllowsConversationTypeKey(mask, resolveConversationTypeKey(kind, isIm))
+  return maskAllowsConversationTypeKey(
+    mask,
+    resolveConversationTypeKey(kind, isIm)
+  )
 }
 
 export function resolveThreadSemantics(params: {

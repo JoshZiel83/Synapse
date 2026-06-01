@@ -1,6 +1,7 @@
 {
   "name": "@synapse/device-runtime-bundles-win32-x64",
   "version": "0.1.0",
+  "private": true,
   "description": "Pre-staged Synapse device toolchain archives for win32-x64. Companion sidecar to @synapse/device-runtime.",
   "publishConfig": {
     "os": [
@@ -13,5 +14,8 @@
   "files": [
     "bundles",
     "README.md"
-  ]
+  ],
+  "scripts": {
+    "prepublishOnly": "node ../../scripts/sidecar-publish-guard.mjs"
+  }
 }

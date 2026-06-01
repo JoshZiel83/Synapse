@@ -55,3 +55,7 @@ relay/internal/commandlinebundle/assets/sp/
 .refer/
 .workbuddy/
 .synapse-relay-vms/
+
+# Verdaccio private-registry credentials (commit only the *.example files)
+infra/verdaccio/.env
+infra/verdaccio/htpasswd

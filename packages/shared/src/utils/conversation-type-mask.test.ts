@@ -44,12 +44,7 @@ test("resolveConversationTypeBit: matches the bit table", () => {
 
 // maskAllowsConversationTypeKey: the pure key form
 test("maskAllowsConversationTypeKey: ALL allows every key", () => {
-  for (const key of [
-    "direct",
-    "group",
-    "im_direct",
-    "im_group",
-  ] as const) {
+  for (const key of ["direct", "group", "im_direct", "im_group"] as const) {
     assert.equal(
       maskAllowsConversationTypeKey(CONVERSATION_TYPE_MASK_PRESETS.ALL, key),
       true
@@ -116,11 +111,7 @@ test("maskAllowsConversationType: wrapper resolves key then checks", () => {
 
 test("maskAllowsConversationType: missing/unknown kind -> false", () => {
   assert.equal(
-    maskAllowsConversationType(
-      CONVERSATION_TYPE_MASK_PRESETS.ALL,
-      null,
-      false
-    ),
+    maskAllowsConversationType(CONVERSATION_TYPE_MASK_PRESETS.ALL, null, false),
     false
   )
   assert.equal(
@@ -136,24 +127,31 @@ test("maskAllowsConversationType: missing/unknown kind -> false", () => {
 // mask bookkeeping
 test("ALL preset is 15 (four keys) and DEFAULT equals ALL", () => {
   assert.equal(CONVERSATION_TYPE_MASK_PRESETS.ALL, 0b1111)
-  assert.equal(DEFAULT_CONVERSATION_TYPE_MASK, CONVERSATION_TYPE_MASK_PRESETS.ALL)
+  assert.equal(
+    DEFAULT_CONVERSATION_TYPE_MASK,
+    CONVERSATION_TYPE_MASK_PRESETS.ALL
+  )
 })
 
 test("normalizeConversationTypeMask: rejects out-of-range, falls back", () => {
   // bit 16 (old 'virtual') is no longer valid -> fall back to default
-  assert.equal(normalizeConversationTypeMask(16), DEFAULT_CONVERSATION_TYPE_MASK)
-  assert.equal(normalizeConversationTypeMask(31), DEFAULT_CONVERSATION_TYPE_MASK)
+  assert.equal(
+    normalizeConversationTypeMask(16),
+    DEFAULT_CONVERSATION_TYPE_MASK
+  )
+  assert.equal(
+    normalizeConversationTypeMask(31),
+    DEFAULT_CONVERSATION_TYPE_MASK
+  )
   assert.equal(normalizeConversationTypeMask(0), DEFAULT_CONVERSATION_TYPE_MASK)
   assert.equal(normalizeConversationTypeMask(0b0101), 0b0101)
 })
 
 test("conversationTypeMaskToKeys: decodes a mask into its keys", () => {
-  assert.deepEqual(conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL), [
-    "direct",
-    "group",
-    "im_direct",
-    "im_group",
-  ])
+  assert.deepEqual(
+    conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL),
+    ["direct", "group", "im_direct", "im_group"]
+  )
   assert.deepEqual(
     conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.IM_ONLY),
     ["im_direct", "im_group"]

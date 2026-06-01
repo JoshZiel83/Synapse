@@ -46,6 +46,16 @@ export const config = {
     enabled:
       (process.env.SYNAPSE_SANDBOX_ENABLED || "").toLowerCase() === "true",
   },
+  remoteAgent: {
+    // The npm registry URL embedded in the daemon install command shown
+    // on the dashboard. This is the EXTERNAL-reachable URL the end
+    // user's machine will hit — it must NOT be an internal/publish-side
+    // address (e.g. http://verdaccio:4873 inside Docker/K8s). Kept
+    // separate from the publish-side NPM_REGISTRY for exactly that
+    // reason. Empty string = omit the --registry flag (user is expected
+    // to have configured @synapse:registry in their own ~/.npmrc).
+    npmRegistryUrl: process.env.PUBLIC_NPM_REGISTRY_URL || "",
+  },
   database: {
     url:
       process.env.DATABASE_URL ||

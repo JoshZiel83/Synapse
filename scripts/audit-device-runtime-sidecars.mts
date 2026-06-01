@@ -174,9 +174,19 @@ for (const key of SIDECAR_PLATFORM_KEYS) {
       `${pkgName}: sidecar package.json version is "${sidecarPkg.version}" but main pkg is "${expectedVersion}". Bump in lockstep.`
     )
   }
-  if (sidecarPkg.private === true) {
+  // Sidecars MUST be `private: true` in source. This is the npm-enforced
+  // block against a direct `npm publish -w <sidecar>` — unlike the
+  // prepublishOnly guard (sidecar-publish-guard.mjs), `private: true`
+  // cannot be bypassed with `--ignore-scripts`. A direct publish would
+  // ship the package WITHOUT top-level os/cpu (those live only under
+  // publishConfig until the wrapper hoists them), so every consumer would
+  // download all six sidecars. The sanctioned path
+  // (scripts/publish-device-runtime-sidecars.sh) strips `private` in its
+  // staging jq, so the wrapper can still publish. `private: true` does NOT
+  // block the dev-time workspace install (it only blocks publish).
+  if (sidecarPkg.private !== true) {
     errors.push(
-      `${pkgName}: \`"private": true\` would block \`npm publish\` — remove it (the publish wrapper hoists publishConfig.os/cpu to top-level so the registry filter still restricts who installs).`
+      `${pkgName}: must set \`"private": true\` so \`npm publish -w <sidecar>\` (even with --ignore-scripts) is refused by npm itself; the publish wrapper strips it in staging. Without it a direct publish ships an unfiltered sidecar (no top-level os/cpu) and consumers download all six.`
     )
   }
   // npm 9 errors EBADPLATFORM on workspace deps with TOP-LEVEL os/cpu

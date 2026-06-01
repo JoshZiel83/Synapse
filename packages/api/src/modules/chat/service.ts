@@ -1654,7 +1654,7 @@ async function requireConversationAccess(
 
 /**
  * Same as requireConversationAccess + asserts the viewer has management
- * rights (kind != "private" AND role_key in ('owner','admin')). Throws
+ * rights (kind != "direct" AND role_key in ('owner','admin')). Throws
  * 403 conversation_manage_denied otherwise. Used by PATCH conversation,
  * POST participants, DELETE participants.
  */
@@ -1672,7 +1672,7 @@ async function requireConversationManagement(
     throw createChatError(
       403,
       "conversation_manage_denied",
-      "Private conversations cannot be managed"
+      "Direct conversations cannot be managed"
     )
   }
   const roleKey = access.participant.role_key

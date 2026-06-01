@@ -1,10 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import {
-  actorRef,
-  workspaceMemberRef,
-  type SubjectRef,
-} from "@synapse/shared"
+import { actorRef, workspaceMemberRef, type SubjectRef } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { authorizePermission, type AccessSubject } from "../access/service.js"
@@ -263,11 +259,7 @@ test(
       // we're asserting the authorize semantics the route relies on,
       // not exercising the move SQL).
       const targetActor = await newActor(db, wsId)
-      const targetSpace = await newPrivateSpace(
-        db,
-        wsId,
-        actorRef(targetActor)
-      )
+      const targetSpace = await newPrivateSpace(db, wsId, actorRef(targetActor))
       // Place a hypothetical item AT THE TARGET so we can ask "could
       // the caller read a member of this target after a move?" — same
       // shape as the post-move read check in the controller.
@@ -300,8 +292,16 @@ test(
         runtimeSubjectIds: ctx.runtimeSubjectIds,
         runtimeScopeSubjectIds: ctx.runtimeScopeSubjectIds,
       })
-      assert.equal(srcRead, true, "owner reads their own workspace_member space")
-      assert.equal(srcDelete, true, "owner deletes their own workspace_member space")
+      assert.equal(
+        srcRead,
+        true,
+        "owner reads their own workspace_member space"
+      )
+      assert.equal(
+        srcDelete,
+        true,
+        "owner deletes their own workspace_member space"
+      )
 
       // Target side: caller has write (via the round-5 curation path —
       // memory_admin can author seed content into an actor's private
