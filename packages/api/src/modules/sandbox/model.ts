@@ -12,6 +12,29 @@ import { execFileSync } from "node:child_process"
  */
 export const CONFLICT_SIDECAR_PREFIX = "/.synapse-conflicts"
 
+/**
+ * Why a pending conflict sidecar could not be re-materialized on a provision.
+ * Drives the agent notice wording (P3): a transient failure may self-heal, a
+ * permanent one never will, so they must not make the same promise.
+ */
+export type SidecarRestoreFailureReason = "transient" | "permanent"
+
+export interface SidecarRestoreFailure {
+  /** Agent-visible sidecar VFS path that could not be re-materialized. */
+  sidecar: string
+  /**
+   * "transient" = may succeed on a LATER provision — the preserved bytes are
+   * safe (file bytes in CAS, symlink target recorded) but couldn't be written
+   * this turn (no live mount for the subpath yet, or a transient fs error). The
+   * notice may promise a retry.
+   * "permanent" = the durable record itself LACKS the payload needed to rebuild
+   * the sidecar (a pre-round-11 / corrupt record: no contentSha for a file, no
+   * target for a symlink, or an unparseable sidecar path). It will NEVER restore;
+   * the notice must NOT promise a retry.
+   */
+  reason: SidecarRestoreFailureReason
+}
+
 export interface SandboxProvisionResult {
   sessionId: string
   /** The sandbox FS root; its children are the materialized mount points. */
@@ -29,13 +52,13 @@ export interface SandboxProvisionResult {
    */
   sidecarRestoreOk: boolean
   /**
-   * The agent-visible sidecar VFS paths that could NOT be restored this provision
-   * (P2). The bytes are safe in CAS (file sidecars) or recorded (symlink targets),
-   * but the on-disk leaf does not currently exist — so the notice must NOT tell
-   * the agent to "read it"; instead it says the copy is preserved and will be
-   * retried next turn. Empty when sidecarRestoreOk is true.
+   * The pending conflict sidecars that could NOT be re-materialized this
+   * provision, each tagged with WHY (P2/P3). The notice lists these WITHOUT a
+   * "read it" instruction; "transient" ones promise a later-turn retry while
+   * "permanent" ones (missing/corrupt payload) do not. Empty when
+   * sidecarRestoreOk is true.
    */
-  failedSidecars: string[]
+  failedSidecars: SidecarRestoreFailure[]
 }
 
 let cachedSandboxCommandlineAvailable: boolean | null = null

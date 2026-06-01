@@ -28,6 +28,8 @@ export {
   isSandboxCommandlineAvailable,
   CONFLICT_SIDECAR_PREFIX,
   type SandboxProvisionResult,
+  type SidecarRestoreFailure,
+  type SidecarRestoreFailureReason,
 } from "./model.js"
 export {
   ensureFileSpace,
@@ -52,6 +54,7 @@ export {
   partitionSidecars,
   formatRestoredPair,
   formatUnrestoredPair,
-  unrestoredSidecarSentence,
+  transientUnrestoredSentence,
+  permanentUnrestoredSentence,
   type PartitionedSidecars,
 } from "./conflict-notice.js"

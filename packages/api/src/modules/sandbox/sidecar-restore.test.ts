@@ -182,8 +182,97 @@ test(
     )
 
     // R12-3: the unrestorable sidecar is reported as failed → ok=false, so the
-    // worker keeps the pending record (does NOT clear it after actorThink).
+    // worker keeps the pending record (does NOT clear it after actorThink). P3:
+    // a missing-contentSha record can NEVER restore → reason "permanent".
     assert.equal(result.ok, false, "restore reports failure")
-    assert.deepEqual(result.failedSidecars, ["/actor/.synapse-conflicts/h1"])
+    assert.deepEqual(result.failedSidecars, [
+      { sidecar: "/actor/.synapse-conflicts/h1", reason: "permanent" },
+    ])
+  }
+)
+
+test(
+  "restorePendingSidecars: a sidecar whose subpath has no live mount this provision is TRANSIENT (P2/P3 retryable)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    const work = mkdtempSync(join(tmpdir(), "synapse-transient-"))
+    const liveActor = join(work, "fresh", "actor")
+    mkdirSync(liveActor, { recursive: true })
+
+    // The pending sidecar lives under /conversation, but only /actor is mounted
+    // this provision. The payload (contentSha) is present, so a LATER provision
+    // with /conversation active can restore it → reason must be "transient".
+    const pendingCommit: Record<string, PendingCommitConflict> = {
+      conversation: {
+        paths: ["/y.txt"],
+        sidecars: [
+          {
+            original: "/conversation/y.txt",
+            sidecar: "/conversation/.synapse-conflicts/cv1",
+            kind: "file",
+            contentSha: "a".repeat(64),
+          },
+        ],
+      },
+    }
+    const emptyRefresh: Pick<
+      PendingRefreshConflicts,
+      "deferredConflictsBySubpath" | "sidecarsBySubpath"
+    > = { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
+
+    const result = await restorePendingSidecarsImpl(
+      "sess-irrelevant",
+      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      {
+        peekCommit: async () => pendingCommit,
+        peekRefresh: async () => emptyRefresh,
+      }
+    )
+
+    assert.equal(result.ok, false, "restore reports failure")
+    assert.deepEqual(result.failedSidecars, [
+      { sidecar: "/conversation/.synapse-conflicts/cv1", reason: "transient" },
+    ])
+  }
+)
+
+test(
+  "restorePendingSidecars: a symlink sidecar missing its target is PERMANENT",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    const work = mkdtempSync(join(tmpdir(), "synapse-perm-symlink-"))
+    const liveConv = join(work, "fresh", "conversation")
+    mkdirSync(liveConv, { recursive: true })
+
+    const refresh: Pick<
+      PendingRefreshConflicts,
+      "deferredConflictsBySubpath" | "sidecarsBySubpath"
+    > = {
+      deferredConflictsBySubpath: { conversation: ["/link"] },
+      sidecarsBySubpath: {
+        conversation: [
+          {
+            original: "/conversation/link",
+            sidecar: "/conversation/.synapse-conflicts/lh",
+            kind: "symlink",
+            // target intentionally omitted → unrecoverable
+          },
+        ],
+      },
+    }
+
+    const result = await restorePendingSidecarsImpl(
+      "sess-irrelevant",
+      [{ mount_subpath: "conversation", materialized_dir: liveConv }],
+      {
+        peekCommit: async () => ({}),
+        peekRefresh: async () => refresh,
+      }
+    )
+
+    assert.equal(result.ok, false)
+    assert.deepEqual(result.failedSidecars, [
+      { sidecar: "/conversation/.synapse-conflicts/lh", reason: "permanent" },
+    ])
   }
 )

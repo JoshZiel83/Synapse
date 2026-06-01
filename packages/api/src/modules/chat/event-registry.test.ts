@@ -20,10 +20,10 @@ const validTextBlock: CanonicalContentBlock = {
 const validFileRefBlock: CanonicalContentBlock = {
   type: "file_ref",
   id: "block-2",
-  fileId: "00000000-0000-4000-8000-000000000001",
-  url: "/files/00000000-0000-4000-8000-000000000001",
+  sha256: "a".repeat(64),
+  path: "/conversation/img.png",
   mimeType: "image/png",
-  originalName: "img.png",
+  name: "img.png",
   sizeBytes: 64,
   category: "image",
 }

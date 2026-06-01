@@ -57,6 +57,8 @@ import {
 import {
   isSandboxCommandlineAvailable,
   type SandboxProvisionResult,
+  type SidecarRestoreFailure,
+  type SidecarRestoreFailureReason,
 } from "./model.js"
 
 export class SandboxServiceError extends Error {
@@ -209,17 +211,33 @@ export async function provisionSandbox(
     // single peek of collaboration_state), and self-heals once the needed mount
     // is active. Surface the real ok + failed leaves.
     let sidecarRestoreOk = true
-    let failedSidecars: string[] = []
+    let failedSidecars: SidecarRestoreFailure[] = []
     try {
       const restore = await restorePendingSidecars(sessionId, existing)
       sidecarRestoreOk = restore.ok
       failedSidecars = restore.failedSidecars
     } catch (err) {
+      // P2: a WHOLE-restore exception (e.g. a DB read in the peek path threw)
+      // never populated the per-sidecar list. If we returned an empty
+      // failedSidecars with ok=false, the worker — which partitions purely by the
+      // failed set — would treat every pending sidecar as restored and tell the
+      // agent to "read it" against a path that may not exist. Pessimistically
+      // mark ALL pending sidecars as (transiently) unrestored so none is
+      // presented as readable. Best-effort: if even this collection throws, fall
+      // back to an empty list but keep ok=false.
       sidecarRestoreOk = false
       console.error(
         `[sandbox] failed to restore pending sidecars (fast path) for ${sessionId}:`,
         err
       )
+      failedSidecars = await collectAllPendingSidecarPaths(sessionId)
+        .then((paths) =>
+          paths.map((sidecar) => ({
+            sidecar,
+            reason: "transient" as const,
+          }))
+        )
+        .catch(() => [])
     }
     return {
       sessionId,
@@ -276,17 +294,25 @@ export async function provisionSandbox(
   // unrestored copy stays retryable on the next provision rather than being
   // consumed against a path that doesn't exist.
   let sidecarRestoreOk = true
-  let failedSidecars: string[] = []
+  let failedSidecars: SidecarRestoreFailure[] = []
   try {
     const restore = await restorePendingSidecars(sessionId, mounts)
     sidecarRestoreOk = restore.ok
     failedSidecars = restore.failedSidecars
   } catch (err) {
+    // P2: same fail-closed reasoning as the fast path — a whole-restore
+    // exception leaves the per-sidecar list empty, so pessimistically mark every
+    // pending sidecar unrestored so the worker never tells the agent to read one.
     sidecarRestoreOk = false
     console.error(
       `[sandbox] failed to restore pending sidecars for ${sessionId}:`,
       err
     )
+    failedSidecars = await collectAllPendingSidecarPaths(sessionId)
+      .then((paths) =>
+        paths.map((sidecar) => ({ sidecar, reason: "transient" as const }))
+      )
+      .catch(() => [])
   }
 
   // Hoisted so the catch can tear down whatever was created.
@@ -1170,7 +1196,7 @@ export async function clearPendingRefreshConflicts(
 async function restorePendingSidecars(
   sessionId: string,
   mounts: FileMountRow[]
-): Promise<{ ok: boolean; failedSidecars: string[] }> {
+): Promise<{ ok: boolean; failedSidecars: SidecarRestoreFailure[] }> {
   return restorePendingSidecarsImpl(sessionId, mounts, {
     peekCommit: peekPendingCommitConflicts,
     peekRefresh: peekPendingRefreshConflicts,
@@ -1196,14 +1222,17 @@ export async function restorePendingSidecarsImpl(
       >
     >
   }
-): Promise<{ ok: boolean; failedSidecars: string[] }> {
+): Promise<{ ok: boolean; failedSidecars: SidecarRestoreFailure[] }> {
   const dirBySubpath = new Map<string, string>()
   for (const m of mounts) {
     if (m.materialized_dir)
       dirBySubpath.set(m.mount_subpath, m.materialized_dir)
   }
-  if (dirBySubpath.size === 0) return { ok: true, failedSidecars: [] }
 
+  // Collect EVERY pending sidecar ref up front (deduped by leaf). Even if there
+  // are no live mount dirs this provision we must know the full set so a
+  // whole-restore failure can mark them all unrestored (P2) rather than silently
+  // treating them as delivered.
   const commit = await deps.peekCommit(sessionId)
   const refresh = await deps.peekRefresh(sessionId)
   const allRefs: ConflictSidecarRef[] = [
@@ -1215,7 +1244,9 @@ export async function restorePendingSidecarsImpl(
   // Dedup by sidecar leaf (the same preserved copy may appear in both stores or
   // multiple subpath entries); restore each once.
   const seen = new Set<string>()
-  const failedSidecars: string[] = []
+  const failedSidecars: SidecarRestoreFailure[] = []
+  const fail = (sidecar: string, reason: SidecarRestoreFailureReason) =>
+    failedSidecars.push({ sidecar, reason })
   for (const ref of allRefs) {
     if (seen.has(ref.sidecar)) continue
     seen.add(ref.sidecar)
@@ -1223,29 +1254,34 @@ export async function restorePendingSidecarsImpl(
     // and strip the subpath to get the mount-relative leaf.
     const m = /^\/([^/]+)(\/.*)$/.exec(ref.sidecar)
     if (!m) {
-      failedSidecars.push(ref.sidecar)
+      // Unparseable sidecar path — the record can never resolve to a mount.
+      fail(ref.sidecar, "permanent")
       continue
     }
     const [, subpath, leaf] = m
     const dir = dirBySubpath.get(subpath)
     if (!dir) {
-      // No live mount for this subpath this provision — can't restore now; keep
-      // it retryable (R12-3 fail-closed) rather than treating it as delivered.
-      failedSidecars.push(ref.sidecar)
+      // No live mount for this subpath this provision — can't restore now, but a
+      // LATER provision (with this mount active) can; keep it retryable (R12-3
+      // fail-closed) rather than treating it as delivered. TRANSIENT.
+      fail(ref.sidecar, "transient")
       continue
     }
     if (ref.kind === "file" && !ref.contentSha) {
+      // The durable record lacks the CAS pointer (pre-round-11 / corrupt) — the
+      // bytes can never be rebuilt. PERMANENT.
       console.warn(
-        `[sandbox] cannot restore file sidecar ${ref.sidecar} (no contentSha — pre-round-11 record); skipping`
+        `[sandbox] cannot restore file sidecar ${ref.sidecar} (no contentSha — pre-round-11/corrupt record); skipping permanently`
       )
-      failedSidecars.push(ref.sidecar)
+      fail(ref.sidecar, "permanent")
       continue
     }
     if (ref.kind === "symlink" && ref.target === undefined) {
+      // The durable record lacks the symlink target — cannot rebuild. PERMANENT.
       console.warn(
-        `[sandbox] cannot restore symlink sidecar ${ref.sidecar} (no target); skipping`
+        `[sandbox] cannot restore symlink sidecar ${ref.sidecar} (no target — corrupt record); skipping permanently`
       )
-      failedSidecars.push(ref.sidecar)
+      fail(ref.sidecar, "permanent")
       continue
     }
     try {
@@ -1257,11 +1293,33 @@ export async function restorePendingSidecarsImpl(
         target: ref.target,
       })
     } catch (err) {
+      // A write/IO error — the payload exists, so a retry next provision may
+      // succeed. TRANSIENT.
       console.error(`[sandbox] failed to restore sidecar ${ref.sidecar}:`, err)
-      failedSidecars.push(ref.sidecar)
+      fail(ref.sidecar, "transient")
     }
   }
   return { ok: failedSidecars.length === 0, failedSidecars }
+}
+
+/**
+ * Every pending conflict sidecar VFS path on the session (commit + refresh,
+ * deduped). Used to fail-closed (P2): when restorePendingSidecars throws as a
+ * whole — so the per-sidecar failure list never populated — provisionSandbox
+ * marks ALL of these as transiently unrestored, so the worker never tells the
+ * agent to "read" a sidecar whose restore status is actually unknown.
+ */
+async function collectAllPendingSidecarPaths(
+  sessionId: string
+): Promise<string[]> {
+  const commit = await peekPendingCommitConflicts(sessionId)
+  const refresh = await peekPendingRefreshConflicts(sessionId)
+  const seen = new Set<string>()
+  for (const c of Object.values(commit))
+    for (const s of c.sidecars) seen.add(s.sidecar)
+  for (const arr of Object.values(refresh.sidecarsBySubpath))
+    for (const s of arr) seen.add(s.sidecar)
+  return Array.from(seen)
 }
 
 async function commitOneMount(

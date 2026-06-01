@@ -33,8 +33,10 @@ import {
 import {
   partitionSidecars,
   formatRestoredPair,
-  unrestoredSidecarSentence,
+  transientUnrestoredSentence,
+  permanentUnrestoredSentence,
 } from "../modules/sandbox/conflict-notice.js"
+import type { SidecarRestoreFailureReason } from "../modules/sandbox/model.js"
 import { config } from "../config/index.js"
 import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
 import {
@@ -569,21 +571,35 @@ export function startSessionThinkingWorker() {
         // Whether we surfaced persisted refresh conflicts this turn (cleared only
         // after actorThink returns — at-least-once delivery, round-10 #1).
         let surfacedPendingRefreshConflicts = false
-        // R12-3: if a pending sidecar failed to re-materialize this provision,
-        // do NOT clear the pending stores after actorThink — keep them retryable
-        // next provision instead of consuming a notice whose sidecar path is
-        // missing.
-        let sidecarRestoreOk = true
-        // P2: agent-visible sidecar paths that could NOT be restored this
-        // provision — the preserved bytes are safe (CAS / recorded target) but the
-        // on-disk leaf isn't present, so the notice must not tell the agent to
-        // "read it"; it says the copy is preserved + will be retried next turn.
-        let failedSidecarSet = new Set<string>()
+        // R12-3 / P3: whether a pending sidecar failed restore in a way that is
+        // still RETRYABLE (transient). Only a transient failure should block
+        // clearing the pending store after actorThink — a transient sidecar's
+        // copy may re-materialize on a later provision, so keep the notice alive.
+        // A PERMANENT failure (corrupt/missing payload) will NEVER restore, so
+        // its notice is delivered once (the unrecoverable wording) and then the
+        // store is cleared — otherwise the agent would re-receive the same dead
+        // notice every turn forever (the blob is unprotectable regardless).
+        let hasTransientSidecarFailure = false
+        // P2/P3: agent-visible sidecar path → WHY it failed restore this
+        // provision ("transient" = retry later; "permanent" = unrecoverable).
+        // The notice uses this to avoid "read it" for missing paths and to word
+        // transient vs permanent failures differently. Absent from the map =
+        // restored (readable).
+        let failedSidecarReasons = new Map<
+          string,
+          SidecarRestoreFailureReason
+        >()
         if (sandboxEnabled) {
           try {
             const provision = await provisionSandbox(sessionId)
-            sidecarRestoreOk = provision.sidecarRestoreOk
-            failedSidecarSet = new Set(provision.failedSidecars)
+            failedSidecarReasons = new Map(
+              provision.failedSidecars.map((f) => [f.sidecar, f.reason])
+            )
+            // Only TRANSIENT failures block clearing the pending store (they may
+            // restore later). Permanent failures are delivered once then cleared.
+            hasTransientSidecarFailure = provision.failedSidecars.some(
+              (f) => f.reason === "transient"
+            )
             const refresh = await refreshSpaces(sessionId)
             // Record any spaces whose refresh FAILED so turn-end commit skips
             // them (their live tree is half-synced; committing it could entangle
@@ -655,13 +671,14 @@ export function startSessionThinkingWorker() {
             const refreshSidecars = Object.values(
               displayRefresh.sidecarsBySubpath
             ).flat()
-            // P2: split restored (the leaf exists, "read it") from unrestored
-            // (failed to re-materialize this provision — bytes safe in CAS, leaf
-            // absent, so do NOT say "read it"; promise a retry next turn).
+            // P2/P3: split restored (leaf exists, "read it") from unrestored,
+            // and unrestored further into transient (retry later) vs permanent
+            // (unrecoverable). Failed sidecars never get a "read it".
             const {
               restored: restoredRefreshSidecars,
-              unrestored: unrestoredRefreshSidecars,
-            } = partitionSidecars(refreshSidecars, failedSidecarSet)
+              transient: transientRefreshSidecars,
+              permanent: permanentRefreshSidecars,
+            } = partitionSidecars(refreshSidecars, failedSidecarReasons)
             const sidecarPairs = restoredRefreshSidecars.map(formatRestoredPair)
             // Per-path coverage (round-7 #D), restricted to fully-synced subpaths:
             // a deferred conflict path is "covered" iff some sidecar's original IS
@@ -723,41 +740,54 @@ export function startSessionThinkingWorker() {
                   `Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar (read it — file sidecars hold the bytes verbatim, symlink sidecars hold JSON {"kind":"symlink","target":...} — reconcile with the live/head version, then write the merged result back to the original path): ${sidecarPairs.join("; ")}.`
                 )
               }
-              // P2: any sidecar that FAILED to re-materialize this provision is
-              // listed separately WITHOUT a "read it" instruction — the on-disk
-              // leaf isn't present yet (the preserved bytes are safe and will be
-              // restored on a later provision). Telling the agent to read a path
-              // that doesn't exist would be a lie / waste a tool call.
-              const unrestoredRefreshSentence = unrestoredSidecarSentence(
-                unrestoredRefreshSidecars
+              // P2/P3: sidecars that FAILED to re-materialize are listed WITHOUT
+              // a "read it" — transient ones promise a later-turn restore,
+              // permanent ones (corrupt/missing payload) are flagged as
+              // unrecoverable so the agent redoes the work instead of waiting.
+              const transientRefreshSentence = transientUnrestoredSentence(
+                transientRefreshSidecars
               )
-              if (unrestoredRefreshSentence) {
-                sections.push(unrestoredRefreshSentence)
+              if (transientRefreshSentence) {
+                sections.push(transientRefreshSentence)
+              }
+              const permanentRefreshSentence = permanentUnrestoredSentence(
+                permanentRefreshSidecars
+              )
+              if (permanentRefreshSentence) {
+                sections.push(permanentRefreshSentence)
               }
               if (commitEntries.length > 0) {
                 // round-7 #C: the post-commit reconcile preserved the agent's
                 // pre-conflict copy at a sidecar — point at it instead of
-                // claiming the work was simply lost. P2: split restored ("read
-                // it") from unrestored (leaf absent this provision).
+                // claiming the work was simply lost. P2/P3: split restored ("read
+                // it") from transient (retry later) and permanent (unrecoverable).
                 const commitSidecars = commitEntries.flatMap(
                   ([, c]) => c.sidecars
                 )
                 const {
                   restored: restoredCommitSidecars,
-                  unrestored: unrestoredCommitSidecars,
-                } = partitionSidecars(commitSidecars, failedSidecarSet)
+                  transient: transientCommitSidecars,
+                  permanent: permanentCommitSidecars,
+                } = partitionSidecars(commitSidecars, failedSidecarReasons)
                 const commitSidecarPairs =
                   restoredCommitSidecars.map(formatRestoredPair)
                 const commitSidecarNote =
                   commitSidecarPairs.length > 0
                     ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar — read it (symlink sidecars hold JSON metadata), reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
                     : ""
-                const unrestoredCommitSentence = unrestoredSidecarSentence(
-                  unrestoredCommitSidecars
+                const transientCommitSentence = transientUnrestoredSentence(
+                  transientCommitSidecars
                 )
-                const unrestoredCommitNote = unrestoredCommitSentence
-                  ? ` ${unrestoredCommitSentence}`
-                  : ""
+                const permanentCommitSentence = permanentUnrestoredSentence(
+                  permanentCommitSidecars
+                )
+                const unrestoredCommitNote = [
+                  transientCommitSentence,
+                  permanentCommitSentence,
+                ]
+                  .filter(Boolean)
+                  .map((s) => ` ${s}`)
+                  .join("")
                 sections.push(
                   `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote}${unrestoredCommitNote} Re-read each path and re-apply your change if it's still needed.`
                 )
@@ -1033,13 +1063,15 @@ export function startSessionThinkingWorker() {
           // pending commit conflicts ONLY now (at-least-once delivery — if the
           // job had crashed before here, the next turn would re-surface them).
           //
-          // R12-3: do NOT clear if a sidecar failed to re-materialize this
-          // provision — the agent couldn't actually read the preserved copy, so
-          // keep the pending record for a retry on the next provision rather than
-          // consuming a notice that pointed at a missing path.
+          // R12-3 / P3: do NOT clear if a sidecar failed restore TRANSIENTLY
+          // this provision — the agent couldn't read the preserved copy and it
+          // may re-materialize next provision, so keep the record retryable. A
+          // PERMANENT failure does NOT block clearing: it can never restore, so
+          // we deliver the (unrecoverable) notice once and then clear, instead of
+          // re-surfacing a dead notice every turn forever.
           if (
             sandboxEnabled &&
-            sidecarRestoreOk &&
+            !hasTransientSidecarFailure &&
             surfacedPendingCommitConflicts
           ) {
             await clearPendingCommitConflicts(sessionId).catch((err) =>
@@ -1051,10 +1083,10 @@ export function startSessionThinkingWorker() {
           }
           // Same at-least-once contract for refresh conflicts (round-10 #1):
           // clear the persisted refresh notice ONLY after the model consumed it
-          // AND every sidecar was restorable (R12-3).
+          // AND no sidecar failed TRANSIENTLY (R12-3 / P3).
           if (
             sandboxEnabled &&
-            sidecarRestoreOk &&
+            !hasTransientSidecarFailure &&
             surfacedPendingRefreshConflicts
           ) {
             await clearPendingRefreshConflicts(sessionId).catch((err) =>

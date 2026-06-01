@@ -3,38 +3,52 @@
 // A conflict sidecar preserves the agent's pre-conflict ("loser") copy of a path
 // that head won. After a teardown deletes the live dir, the sidecar is
 // re-materialized on the next provision from its CAS-durable payload — but that
-// restore can FAIL (the mount for its subpath isn't active yet, a transient fs
-// error, or a pre-round-11 record with no contentSha). When it fails the on-disk
-// leaf is ABSENT even though the bytes are safe, so the notice must NOT tell the
-// agent to "read it" (P2) — that would point at a missing path. This module
-// splits a sidecar list into restored (readable) vs unrestored (preserved but
-// not on disk) and renders each, so both the worker and its tests share one
+// restore can FAIL. When it fails the on-disk leaf is ABSENT even though (for a
+// transient failure) the bytes are safe, so the notice must NOT tell the agent to
+// "read it" (P2) — that would point at a missing path. Failures come in two
+// flavours (P3):
+//   - transient: the payload exists (file bytes in CAS, symlink target recorded)
+//     but couldn't be written this provision (no live mount for the subpath yet,
+//     or a transient fs error). A later turn may restore it → promise a retry.
+//   - permanent: the durable record itself lacks the payload (pre-round-11 /
+//     corrupt: no contentSha / no target / unparseable path). It will NEVER
+//     restore → must NOT promise a retry; tell the agent the copy is unrecoverable.
+//
+// This module splits a sidecar list into restored / transiently-unrestored /
+// permanently-unrestored and renders each, so the worker and its tests share one
 // source of truth.
 
 import type { ConflictSidecarRef } from "./service.js"
+import type { SidecarRestoreFailureReason } from "./model.js"
 
 export interface PartitionedSidecars {
   /** Sidecars whose on-disk leaf exists this provision — safe to tell the agent to read. */
   restored: ConflictSidecarRef[]
-  /** Sidecars that could NOT be re-materialized this provision — bytes safe, leaf absent. */
-  unrestored: ConflictSidecarRef[]
+  /** Failed but recoverable later — payload safe, leaf absent this provision. */
+  transient: ConflictSidecarRef[]
+  /** Failed permanently — the durable record can never rebuild the sidecar. */
+  permanent: ConflictSidecarRef[]
 }
 
 /**
- * Split `sidecars` by whether their agent-visible sidecar path is in
- * `failedSidecars` (the set provisionSandbox reported as not-restored this turn).
+ * Split `sidecars` by their restore status. `failedReasons` maps an
+ * agent-visible sidecar path to WHY it failed this provision (from
+ * provisionSandbox); a sidecar absent from the map is treated as restored.
  */
 export function partitionSidecars(
   sidecars: ConflictSidecarRef[],
-  failedSidecars: ReadonlySet<string>
+  failedReasons: ReadonlyMap<string, SidecarRestoreFailureReason>
 ): PartitionedSidecars {
   const restored: ConflictSidecarRef[] = []
-  const unrestored: ConflictSidecarRef[] = []
+  const transient: ConflictSidecarRef[] = []
+  const permanent: ConflictSidecarRef[] = []
   for (const s of sidecars) {
-    if (failedSidecars.has(s.sidecar)) unrestored.push(s)
-    else restored.push(s)
+    const reason = failedReasons.get(s.sidecar)
+    if (reason === undefined) restored.push(s)
+    else if (reason === "permanent") permanent.push(s)
+    else transient.push(s)
   }
-  return { restored, unrestored }
+  return { restored, transient, permanent }
 }
 
 /** "original → sidecar" (symlinks annotated as JSON), for a RESTORED sidecar. */
@@ -50,20 +64,38 @@ export function formatUnrestoredPair(s: ConflictSidecarRef): string {
 }
 
 /**
- * The standalone sentence naming sidecars the agent could NOT re-materialize this
- * turn. Returns "" when there are none (so the caller can concatenate freely).
- * Deliberately omits any "read" instruction: the leaf isn't present; the bytes
- * are safe and will be restored on a later turn.
+ * The standalone sentence for sidecars that failed restore TRANSIENTLY — the
+ * payload is safe and a later turn may restore it. Returns "" when there are
+ * none (so the caller can concatenate freely). Deliberately omits any "read"
+ * instruction: the leaf isn't present yet.
  */
-export function unrestoredSidecarSentence(
-  unrestored: ConflictSidecarRef[]
+export function transientUnrestoredSentence(
+  transient: ConflictSidecarRef[]
 ): string {
-  if (unrestored.length === 0) return ""
-  const pairs = unrestored.map(formatUnrestoredPair).join("; ")
+  if (transient.length === 0) return ""
+  const pairs = transient.map(formatUnrestoredPair).join("; ")
   return (
     `Your pre-conflict copy of these paths is preserved but could NOT be ` +
     `re-materialized on disk this turn (do NOT try to read the sidecar path ` +
-    `yet — it is not present; the bytes are safe and will be restored on a ` +
-    `later turn): ${pairs}.`
+    `yet — it is not present; the bytes are safe and a later turn will restore ` +
+    `it): ${pairs}.`
+  )
+}
+
+/**
+ * The standalone sentence for sidecars that failed restore PERMANENTLY — the
+ * durable record lacks the payload, so the copy is UNRECOVERABLE (it will never
+ * come back). Returns "" when there are none. Makes NO retry promise.
+ */
+export function permanentUnrestoredSentence(
+  permanent: ConflictSidecarRef[]
+): string {
+  if (permanent.length === 0) return ""
+  const paths = permanent.map((s) => s.original).join("; ")
+  return (
+    `Your pre-conflict copy of these paths is UNRECOVERABLE — the saved record ` +
+    `is incomplete/corrupt and cannot be restored (do NOT try to read the ` +
+    `sidecar path; it will not come back). Treat your earlier change to these ` +
+    `paths as lost and redo it from the current version if still needed: ${paths}.`
   )
 }
