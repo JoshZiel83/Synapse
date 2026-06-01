@@ -2,16 +2,21 @@ import type { EventType, SystemEvent } from "@synapse/shared"
 import { sql } from "kysely"
 import { REDIS_CHANNELS } from "@synapse/shared"
 import { config } from "../../config/index.js"
-import { query, transaction } from "../database/index.js"
 import {
   db,
-  executeCompiledQuery,
-  executeCompiledSql,
+  runBuilder,
+  withDbTransaction,
+  type AnyExecutor,
   type TableInsert,
   type TableRow,
 } from "../database/kysely.js"
 import { redisPub, redisSub } from "../redis/index.js"
 
+/**
+ * @deprecated Legacy bare query interface still threaded by chat/interactions
+ * during the Kysely-convergence transition. New code should use
+ * {@link AnyExecutor}. Removed once chat/interactions migrate.
+ */
 export type Queryable = {
   query: (
     text: string,
@@ -91,8 +96,8 @@ async function wait(ms: number) {
 }
 
 async function claimPendingRealtimeOutboxEntries(limit: number) {
-  return transaction(async (client) => {
-    const compiled = sql<RealtimeEventOutboxRow[]>`
+  return withDbTransaction(async (trx) => {
+    const result = await sql<RealtimeEventOutboxRow>`
       WITH claimed AS (
         SELECT id
         FROM realtime_event_outbox
@@ -116,11 +121,7 @@ async function claimPendingRealtimeOutboxEntries(limit: number) {
                 reo.recipient_workspace_member_id,
                 reo.payload,
                 reo.event_timestamp
-    `.compile(db)
-    const result = await executeCompiledSql<RealtimeEventOutboxRow>(
-      client,
-      compiled
-    )
+    `.execute(trx)
 
     return result.rows
   })
@@ -213,7 +214,7 @@ export async function enqueueTransactionalEventDeliveries(
     return
   }
 
-  await executeCompiledQuery(
+  await runBuilder(
     queryable,
     db.insertInto("realtime_event_outbox").values(
       recipients.map((recipient) => ({
@@ -303,15 +304,16 @@ export async function gcRealtimeEventOutbox(
   // One DELETE statement on the pool — no need for an explicit
   // transaction. Indexed on (status, available_at, created_at) so the
   // status filter is cheap.
-  const result = await query(
-    `
-      DELETE FROM realtime_event_outbox
-       WHERE status = 'dispatched'
-         AND updated_at < NOW() - ($1 || ' hours')::interval
-    `,
-    [String(retentionHours)]
-  )
-  return result.rowCount ?? 0
+  const result = await db
+    .deleteFrom("realtime_event_outbox")
+    .where("status", "=", "dispatched")
+    .where(
+      "updated_at",
+      "<",
+      sql<Date>`NOW() - (${String(retentionHours)} || ' hours')::interval`
+    )
+    .executeTakeFirst()
+  return Number(result.numDeletedRows ?? 0)
 }
 
 async function runRealtimeOutboxDispatcherLoop() {
