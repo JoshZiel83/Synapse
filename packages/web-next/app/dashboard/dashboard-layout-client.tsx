@@ -6,6 +6,7 @@ import { buildLoginRedirect } from "@/lib/auth"
 import { WorkspaceLoadingScreen } from "@/components/workspace-loading-screen"
 import { ChatSyncClient } from "@/components/chat-sync-client"
 import { useAuthStore } from "@/stores/auth-store"
+import { useLogout } from "@/hooks/use-logout"
 import { WorkspaceProvider, useWorkspace } from "./workspace-provider"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -65,7 +66,7 @@ function DashboardInner({ children }: { children: ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
   const user = useAuthStore((state) => state.user)
-  const logout = useAuthStore((state) => state.logout)
+  const logout = useLogout()
   const isFullPaneRoute =
     pathname.startsWith("/dashboard/chat") ||
     pathname.startsWith("/dashboard/contacts") ||

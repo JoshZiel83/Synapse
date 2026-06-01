@@ -4,6 +4,7 @@ import { Manrope, Space_Grotesk } from "next/font/google"
 import "./globals.css"
 
 import { ThemeProvider } from "@/components/theme-provider"
+import { QueryProvider } from "@/components/query-provider"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AuthStoreProvider } from "@/stores/auth-store"
@@ -77,17 +78,19 @@ export default function RootLayout({
     >
       <body className="min-h-screen bg-background text-foreground">
         <AuthStoreProvider>
-          <ThemeProvider
-            attribute="class"
-            defaultTheme="system"
-            enableSystem
-            disableTransitionOnChange
-          >
-            <TooltipProvider>
-              {children}
-              <Toaster />
-            </TooltipProvider>
-          </ThemeProvider>
+          <QueryProvider>
+            <ThemeProvider
+              attribute="class"
+              defaultTheme="system"
+              enableSystem
+              disableTransitionOnChange
+            >
+              <TooltipProvider>
+                {children}
+                <Toaster />
+              </TooltipProvider>
+            </ThemeProvider>
+          </QueryProvider>
         </AuthStoreProvider>
       </body>
     </html>

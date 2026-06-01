@@ -1,59 +1,48 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { Loader2, Plus, ServerCog } from "lucide-react"
+import { useQuery, useMutation } from "@tanstack/react-query"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
+import { qk } from "@/lib/query-keys"
 import { Button } from "@/components/ui/button"
-import type {
-  DevicePairingTicketView,
-  DeviceSummaryView,
-} from "@/lib/device-views"
+import type { DevicePairingTicketView } from "@/lib/device-views"
 
 export default function DevicesIndexPage() {
   const { workspaceId } = useWorkspace()
-  const [devices, setDevices] = useState<DeviceSummaryView[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [pairingTicket, setPairingTicket] =
     useState<DevicePairingTicketView | null>(null)
-  const [pairingInProgress, setPairingInProgress] = useState(false)
 
-  useEffect(() => {
-    if (!workspaceId) return
-    let cancelled = false
-    api
-      .listDevices(workspaceId)
-      .then((res) => {
-        if (cancelled) return
-        setDevices(res.devices)
-      })
-      .catch((err: Error) => {
-        if (cancelled) return
-        setError(err.message)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [workspaceId])
+  const devicesQuery = useQuery({
+    queryKey: workspaceId ? qk.devices(workspaceId) : ["devices", "disabled"],
+    queryFn: () => api.listDevices(workspaceId!),
+    enabled: !!workspaceId,
+    select: (res) => res.devices,
+  })
+  const devices = devicesQuery.data ?? null
 
-  async function startPairing() {
-    if (!workspaceId || pairingInProgress) return
-    setPairingInProgress(true)
-    setError(null)
-    try {
-      const ticket = await api.startDevicePairingSession(workspaceId, {
+  const pairingMutation = useMutation({
+    mutationFn: () =>
+      api.startDevicePairingSession(workspaceId!, {
         mode: "local_qr",
         title: "Local Device",
-      })
-      setPairingTicket(ticket)
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setPairingInProgress(false)
-    }
+      }),
+    onSuccess: (ticket) => setPairingTicket(ticket),
+  })
+
+  function startPairing() {
+    if (!workspaceId || pairingMutation.isPending) return
+    pairingMutation.mutate()
   }
+
+  const error =
+    (devicesQuery.error as Error | null)?.message ??
+    (pairingMutation.error as Error | null)?.message ??
+    null
+  const pairingInProgress = pairingMutation.isPending
 
   return (
     <div className="space-y-6 p-6">

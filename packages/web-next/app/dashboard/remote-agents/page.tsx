@@ -1,7 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import { useDeferredValue, useMemo, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Bot, Copy, Plus, RefreshCcw, SquareTerminal } from "lucide-react"
 
 import { useWorkspace } from "../workspace-provider"
@@ -14,6 +15,7 @@ import type {
   RemoteAgentView,
 } from "@/lib/api"
 import { api } from "@/lib/api"
+import { qk } from "@/lib/query-keys"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -144,13 +146,8 @@ const emptyAgentDraft: CreateAgentDraft = {
 
 export default function RemoteAgentsPage() {
   const { workspaceId } = useWorkspace()
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
-  const [machines, setMachines] = useState<
-    Awaited<ReturnType<typeof api.getRemoteAgentMachines>>["machines"]
-  >([])
-  const [agents, setAgents] = useState<RemoteAgentView[]>([])
   const [machineDialogOpen, setMachineDialogOpen] = useState(false)
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [creatingMachine, setCreatingMachine] = useState(false)
@@ -162,35 +159,39 @@ export default function RemoteAgentsPage() {
     useState<RemoteAgentMachinePairingSessionView | null>(null)
   const deferredSearch = useDeferredValue(search.trim().toLowerCase())
 
-  async function loadConsole(showLoading = true) {
+  const machinesQuery = useQuery({
+    queryKey: workspaceId
+      ? qk.remoteAgentMachines(workspaceId)
+      : ["remote-agent-machines", "disabled"],
+    queryFn: () => api.getRemoteAgentMachines(workspaceId!),
+    enabled: !!workspaceId,
+    select: (res) => res.machines,
+  })
+  const agentsQuery = useQuery({
+    queryKey: workspaceId
+      ? qk.remoteAgents(workspaceId)
+      : ["remote-agents", "disabled"],
+    queryFn: () => api.getRemoteAgents(workspaceId!),
+    enabled: !!workspaceId,
+    select: (res) => res.remoteAgents,
+  })
+
+  const machines = machinesQuery.data ?? []
+  const agents = agentsQuery.data ?? []
+  const loading =
+    (machinesQuery.isPending || agentsQuery.isPending) && !!workspaceId
+  const refreshing = machinesQuery.isFetching || agentsQuery.isFetching
+
+  // Refetch both lists (replaces the old loadConsole(false) manual reload).
+  const reloadConsole = () => {
     if (!workspaceId) return
-    if (showLoading) {
-      setLoading(true)
-    } else {
-      setRefreshing(true)
-    }
-
-    try {
-      const [machinesResponse, agentsResponse] = await Promise.all([
-        api.getRemoteAgentMachines(workspaceId),
-        api.getRemoteAgents(workspaceId),
-      ])
-      setMachines(machinesResponse.machines)
-      setAgents(agentsResponse.remoteAgents)
-    } catch (error) {
-      console.error("Failed to load remote agents:", error)
-      toast.error(
-        error instanceof Error ? error.message : "Failed to load remote agents"
-      )
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
+    void queryClient.invalidateQueries({
+      queryKey: qk.remoteAgentMachines(workspaceId),
+    })
+    void queryClient.invalidateQueries({
+      queryKey: qk.remoteAgents(workspaceId),
+    })
   }
-
-  useEffect(() => {
-    void loadConsole()
-  }, [workspaceId])
 
   const filteredMachines = useMemo(() => {
     if (!deferredSearch) return machines
@@ -238,7 +239,7 @@ export default function RemoteAgentsPage() {
       setPairingResult(result)
       setMachineDialogOpen(false)
       setMachineDraft(emptyMachineDraft)
-      await loadConsole(false)
+      reloadConsole()
       toast.success("Remote machine created")
     } catch (error) {
       toast.error(
@@ -263,7 +264,7 @@ export default function RemoteAgentsPage() {
       })
       setAgentDialogOpen(false)
       setAgentDraft(emptyAgentDraft)
-      await loadConsole(false)
+      reloadConsole()
       toast.success("Remote agent created")
       window.location.href = `/dashboard/remote-agents/agents/${result.remoteAgent.id}`
     } catch (error) {
@@ -295,7 +296,7 @@ export default function RemoteAgentsPage() {
               <Button
                 variant="outline"
                 className="rounded-full"
-                onClick={() => void loadConsole(false)}
+                onClick={() => reloadConsole()}
                 disabled={refreshing}
               >
                 <RefreshCcw className="mr-2 size-4" />

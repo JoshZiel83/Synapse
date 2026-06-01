@@ -11,6 +11,7 @@ import {
 } from "react"
 import { api } from "@/lib/api"
 import { ConnectorMetadataProvider } from "@/lib/im-connector-metadata"
+import { useClearWorkspaceQueries } from "@/hooks/use-logout"
 
 interface WorkspaceInfo {
   id: string
@@ -64,6 +65,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [needsOnboarding, setNeedsOnboarding] = useState(false)
   const [loading, setLoading] = useState(true)
   const initialLoadPendingRef = useRef(true)
+  const clearWorkspaceQueries = useClearWorkspaceQueries()
 
   const loadWorkspaces = useCallback(async () => {
     setLoading(true)
@@ -111,6 +113,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [loadWorkspaces])
 
   const handleSetWorkspaceId = (id: string) => {
+    // Switching workspaces: drop the previous workspace's cached queries so its
+    // data can't bleed into the next one.
+    if (workspaceId && workspaceId !== id) {
+      clearWorkspaceQueries(workspaceId)
+    }
     const ws = workspaces.find((w) => w.id === id)
     setWorkspaceId(id)
     setWorkspaceName(ws?.name ?? null)
