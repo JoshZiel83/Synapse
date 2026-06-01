@@ -65,3 +65,20 @@ with higher per-file risk; not done to avoid destabilizing auth/dialog/chat flow
   interlocking finalize/dialog state; react-query refetchInterval is a marginal win there and
   the regression risk is high. Convert later with dedicated testing. (Per plan: "convert with
   care or leave last".)
+
+## Phase 6 scope note (react-hook-form + zod)
+
+- Added react-hook-form 7.77 + @hookform/resolvers 5.4 to web-next.
+- KEY GOTCHA: @hookform/resolvers v5 `zodResolver` has a TYPE-LEVEL skew with zod 4.3.6
+  (expects a different zod internal version) -> use `standardSchemaResolver` from
+  `@hookform/resolvers/standard-schema` instead. zod 4 implements Standard Schema (`~standard`),
+  so this is the clean, version-agnostic resolver. THIS IS THE CANONICAL PATTERN for all forms.
+- Reusable bindings added at components/ui/form.tsx (Form/FormField/useFormFieldError) layered
+  over the existing shadcn Field primitives (FieldError already takes Array<{message}>).
+- Migrated: login-form (pilot), signup-form (shows cross-field zod .refine for password match).
+
+DEFERRED (tracked continuation — recipe proven, mechanical per-form work): automation-rule-editor
+(907 lines, single draft object + shared builder — the stress test), model-item-dialog,
+model-group-dialog, actor-editor-sheet, memory-editor-page, plugin steps, etc. Each: define a zod
+schema, useForm({resolver: standardSchemaResolver(schema)}), wrap inputs in Controller, surface
+errors via FieldError. Migrate incrementally.
