@@ -16,7 +16,8 @@ import {
   sendRemoteAgentConversationMessage,
 } from "./service.js"
 import { requireRemoteAgentConversationAccess } from "../chat/service.js"
-import { executeSql } from "../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
+import { db, executeSql } from "../../infrastructure/database/kysely.js"
 import { projectToolsForPrincipal } from "../capability-projection/index.js"
 
 type ActiveTransport = {
@@ -179,16 +180,13 @@ function registerImTools(params: {
         beforeSequence,
         limit,
       })
-      const deliveryRows = await executeSql<{ id: string; item_id: string }>(
-        `
+      const deliveryRows = await sql<{ id: string; item_id: string }>`
           SELECT delivery.id, delivery.item_id
           FROM remote_agent_message_deliveries delivery
-          WHERE delivery.remote_agent_id = $1
-            AND delivery.conversation_id = $2
+          WHERE delivery.remote_agent_id = ${params.remoteAgentId}
+            AND delivery.conversation_id = ${params.conversationId}
             AND delivery.status = 'pending'
-        `,
-        [params.remoteAgentId, params.conversationId]
-      )
+        `.execute(db)
       const itemIds = new Set(
         result.items
           .map((item) =>
@@ -428,17 +426,15 @@ async function loadConversationTypeFacts(conversationId: string): Promise<{
   kind: "direct" | "group"
   isIm: boolean
 } | null> {
-  const result = await executeSql<{
+  const result = await sql<{
     kind: "direct" | "group"
     is_im: boolean
-  }>(
-    `SELECT kind, EXISTS (
-       SELECT 1 FROM conversation_transport_bindings b
-       WHERE b.conversation_id = conversations.id
-     ) AS is_im
-     FROM conversations WHERE id = $1 LIMIT 1`,
-    [conversationId]
-  )
+  }>`
+    SELECT kind, EXISTS (
+      SELECT 1 FROM conversation_transport_bindings b
+      WHERE b.conversation_id = conversations.id
+    ) AS is_im
+    FROM conversations WHERE id = ${conversationId} LIMIT 1`.execute(db)
   const row = result.rows[0]
   if (!row) {
     return null

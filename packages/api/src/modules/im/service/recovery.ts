@@ -22,7 +22,6 @@
  *     the link snapshot.
  */
 
-import type { PoolClient } from "pg"
 import { sql } from "kysely"
 import type {
   DatabaseTransaction,
@@ -30,7 +29,6 @@ import type {
 } from "../../../infrastructure/database/kysely.js"
 import {
   db,
-  executeSqlOn,
   type TableUpdate,
 } from "../../../infrastructure/database/kysely.js"
 import {
@@ -276,8 +274,7 @@ export interface RecoverySummary {
 
 /**
  * Re-arm skipped projection rows in response to a state-change event.
- * Kysely-tx flavored; the binding upsert path uses
- * `*ViaClient` for pg.PoolClient transactions.
+ * Kysely-tx flavored (`exec` is the top-level db or a transaction).
  */
 export async function recoverSkippedProjectionsForRecoveryEvent(
   exec: DbOrTx,
@@ -338,86 +335,6 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
           AND p.error = ANY (${reasons}::text[])
         RETURNING p.id
       `.execute(exec)
-      return { rearmedProjections: result.rows.length }
-    }
-  }
-}
-
-/**
- * PoolClient-flavored variant — same semantics as above but driven
- * from a pg.PoolClient transaction (the binding upsert path).
- */
-export async function recoverSkippedProjectionsForRecoveryEventViaClient(
-  client: PoolClient,
-  event: SkippedRecoveryEvent
-): Promise<RecoverySummary> {
-  const reasons = reasonsForEvent(event.kind)
-  switch (event.kind) {
-    case "config_webhook_confirmed":
-    case "connection_mode_changed_to_long_connection":
-    case "account_status_activated": {
-      const result = await executeSqlOn<{ id: string }>(
-        client,
-        `
-          UPDATE interaction_transport_projections p
-          SET status = 'pending',
-              next_attempt_at = NOW(),
-              attempts = 0,
-              error = NULL,
-              transport_message_link_id = NULL,
-              updated_at = NOW()
-          FROM conversation_transport_bindings ctb
-          WHERE ctb.conversation_id = p.conversation_id
-            AND ctb.transport_account_id = $1
-            AND p.status = 'skipped'
-            AND p.error = ANY ($2::text[])
-          RETURNING p.id
-        `,
-        [event.transportAccountId, reasons]
-      )
-      return { rearmedProjections: result.rows.length }
-    }
-    case "outbound_re_enabled": {
-      const result = await executeSqlOn<{ id: string }>(
-        client,
-        `
-          UPDATE interaction_transport_projections p
-          SET status = 'pending',
-              next_attempt_at = NOW(),
-              attempts = 0,
-              error = NULL,
-              transport_message_link_id = NULL,
-              updated_at = NOW()
-          FROM conversation_transport_bindings ctb
-          WHERE ctb.conversation_id = p.conversation_id
-            AND ctb.transport_account_id = $1
-            AND ctb.transport_endpoint_id = $2
-            AND p.status = 'skipped'
-            AND p.error = ANY ($3::text[])
-          RETURNING p.id
-        `,
-        [event.transportAccountId, event.transportEndpointId, reasons]
-      )
-      return { rearmedProjections: result.rows.length }
-    }
-    case "binding_created_or_replaced": {
-      const result = await executeSqlOn<{ id: string }>(
-        client,
-        `
-          UPDATE interaction_transport_projections p
-          SET status = 'pending',
-              next_attempt_at = NOW(),
-              attempts = 0,
-              error = NULL,
-              transport_message_link_id = NULL,
-              updated_at = NOW()
-          WHERE p.conversation_id = $1
-            AND p.status = 'skipped'
-            AND p.error = ANY ($2::text[])
-          RETURNING p.id
-        `,
-        [event.conversationId, reasons]
-      )
       return { rearmedProjections: result.rows.length }
     }
   }

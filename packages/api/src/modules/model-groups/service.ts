@@ -7,7 +7,6 @@ import type {
   ModelGroupsOwnerType,
   ModelGroupsRoutingStrategy,
 } from "../../infrastructure/database/generated/db.js"
-import { query } from "../../infrastructure/database/index.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
 import type { ModelGroupGrantScope } from "@synapse/shared/types"

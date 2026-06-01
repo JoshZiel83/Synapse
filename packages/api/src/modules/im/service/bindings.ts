@@ -8,11 +8,9 @@
  */
 
 import { sql } from "kysely"
-import { transaction } from "../../../infrastructure/database/index.js"
 import {
   db,
-  executeCompiledQuery,
-  executeTakeFirst,
+  withDbTransaction,
   type KyselyDb,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
@@ -24,10 +22,7 @@ import type {
 } from "@synapse/shared/types"
 import { assertSupportedEndpointType } from "../connectors/index.js"
 import { tryGetConnector } from "../connectors/registry.js"
-import {
-  recoverSkippedProjectionsForRecoveryEvent,
-  recoverSkippedProjectionsForRecoveryEventViaClient,
-} from "./recovery.js"
+import { recoverSkippedProjectionsForRecoveryEvent } from "./recovery.js"
 import {
   normalizeAccountRow,
   normalizeBindingRow,
@@ -276,79 +271,73 @@ export async function upsertConversationTransportBinding(params: {
       ? { ...baseMetadata, ...defaults.metadata }
       : baseMetadata
 
-  await transaction(async (client) => {
-    const endpointRow = await executeTakeFirst<{ id: string }>(
-      client,
-      db
-        .insertInto("transport_endpoints")
-        .values({
-          id: uuidv4(),
-          transport_account_id: params.transportAccountId,
-          endpoint_type: params.endpointType,
-          external_id: params.endpointExternalId.trim(),
-          parent_external_id: params.parentExternalId?.trim() || null,
-          display_name: params.endpointDisplayName?.trim() || null,
-          metadata: (params.metadata ||
-            {}) as TableInsert<"transport_endpoints">["metadata"],
-          created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
-        })
-        .onConflict((oc) =>
-          oc
-            .columns(["transport_account_id", "endpoint_type", "external_id"])
-            .doUpdateSet({
-              parent_external_id: sql`excluded.parent_external_id`,
-              display_name: sql`COALESCE(excluded.display_name, transport_endpoints.display_name)`,
-              metadata: sql`transport_endpoints.metadata || excluded.metadata`,
-              updated_at: sql`NOW()`,
-            })
-        )
-        .returning("id")
-    )
+  await withDbTransaction(async (trx) => {
+    const endpointRow = await trx
+      .insertInto("transport_endpoints")
+      .values({
+        id: uuidv4(),
+        transport_account_id: params.transportAccountId,
+        endpoint_type: params.endpointType,
+        external_id: params.endpointExternalId.trim(),
+        parent_external_id: params.parentExternalId?.trim() || null,
+        display_name: params.endpointDisplayName?.trim() || null,
+        metadata: (params.metadata ||
+          {}) as TableInsert<"transport_endpoints">["metadata"],
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .onConflict((oc) =>
+        oc
+          .columns(["transport_account_id", "endpoint_type", "external_id"])
+          .doUpdateSet({
+            parent_external_id: sql`excluded.parent_external_id`,
+            display_name: sql`COALESCE(excluded.display_name, transport_endpoints.display_name)`,
+            metadata: sql`transport_endpoints.metadata || excluded.metadata`,
+            updated_at: sql`NOW()`,
+          })
+      )
+      .returning("id")
+      .executeTakeFirst()
     const endpointId = endpointRow?.id
     if (!endpointId) {
       throw new Error("Failed to upsert transport endpoint")
     }
 
-    await executeCompiledQuery(
-      client,
-      db
-        .insertInto("conversation_transport_bindings")
-        .values({
-          id: uuidv4(),
-          workspace_id: params.workspaceId,
-          conversation_id: params.conversationId,
-          transport_account_id: params.transportAccountId,
-          transport_endpoint_id: endpointId,
-          outbound_enabled: effectiveOutboundEnabled,
-          inbound_actor_mode: inboundActorMode,
-          inbound_actor_id: inboundActorId,
-          metadata:
-            effectiveMetadata as TableInsert<"conversation_transport_bindings">["metadata"],
-          created_at: sql`NOW()`,
+    await trx
+      .insertInto("conversation_transport_bindings")
+      .values({
+        id: uuidv4(),
+        workspace_id: params.workspaceId,
+        conversation_id: params.conversationId,
+        transport_account_id: params.transportAccountId,
+        transport_endpoint_id: endpointId,
+        outbound_enabled: effectiveOutboundEnabled,
+        inbound_actor_mode: inboundActorMode,
+        inbound_actor_id: inboundActorId,
+        metadata:
+          effectiveMetadata as TableInsert<"conversation_transport_bindings">["metadata"],
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .onConflict((oc) =>
+        oc.column("conversation_id").doUpdateSet({
+          transport_account_id: sql`excluded.transport_account_id`,
+          transport_endpoint_id: sql`excluded.transport_endpoint_id`,
+          outbound_enabled: sql`excluded.outbound_enabled`,
+          inbound_actor_mode: sql`excluded.inbound_actor_mode`,
+          inbound_actor_id: sql`excluded.inbound_actor_id`,
+          metadata: sql`excluded.metadata`,
           updated_at: sql`NOW()`,
         })
-        .onConflict((oc) =>
-          oc.column("conversation_id").doUpdateSet({
-            transport_account_id: sql`excluded.transport_account_id`,
-            transport_endpoint_id: sql`excluded.transport_endpoint_id`,
-            outbound_enabled: sql`excluded.outbound_enabled`,
-            inbound_actor_mode: sql`excluded.inbound_actor_mode`,
-            inbound_actor_id: sql`excluded.inbound_actor_id`,
-            metadata: sql`excluded.metadata`,
-            updated_at: sql`NOW()`,
-          })
-        )
-    )
+      )
+      .execute()
 
     // Recovery: a fresh / replaced binding may resolve projections that
     // were previously skipped for any of the recoverable reasons
     // (no_binding / not_supported_in_v1 / outbound_disabled /
     // webhook_inbound_unavailable). Fire in the same tx so the create +
-    // re-arm commit together. `client` here is a pg.PoolClient (see
-    // `transaction(async (client) => ...)` above) so we use the
-    // PoolClient-flavored variant of the helper.
-    await recoverSkippedProjectionsForRecoveryEventViaClient(client, {
+    // re-arm commit together.
+    await recoverSkippedProjectionsForRecoveryEvent(trx, {
       kind: "binding_created_or_replaced",
       conversationId: params.conversationId,
       transportAccountId: params.transportAccountId,

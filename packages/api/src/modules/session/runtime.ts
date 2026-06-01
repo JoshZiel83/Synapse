@@ -1,6 +1,9 @@
 import { redis } from "../../infrastructure/redis/index.js"
-import { query } from "../../infrastructure/database/index.js"
-import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
+import {
+  db,
+  type TableInsert,
+  type TableRow,
+} from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { sessionThinkingQueue } from "../../workers/queues.js"
 import {
@@ -1016,12 +1019,11 @@ export async function enqueueSessionWakeup(params: {
     throw new Error(`Session ${params.sessionId} is closed`)
   }
 
-  let created: any
+  let created: TableRow<"session_wakeups"> | undefined
   let reusedExistingWakeup = false
 
   if (params.sourceItemId) {
-    const insertResult = await query(
-      `
+    const insertResult = await sql<TableRow<"session_wakeups">>`
         INSERT INTO session_wakeups (
           id,
           session_id,
@@ -1039,45 +1041,39 @@ export async function enqueueSessionWakeup(params: {
           metadata
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13::jsonb
+          ${crypto.randomUUID()},
+          ${params.sessionId},
+          ${params.sourceType},
+          ${params.sourceItemId},
+          ${params.sourceSessionId || null},
+          ${params.sourceParticipantType || null},
+          ${params.sourceParticipantId || null},
+          ${params.sourceName || null},
+          ${params.summary},
+          ${params.reasonText || null},
+          ${params.automationExecutionId || null},
+          ${params.automationOccurrenceId || null},
+          'pending',
+          ${JSON.stringify(params.metadata || {})}::jsonb
         )
         ON CONFLICT (session_id, source_type, source_item_id)
         WHERE source_item_id IS NOT NULL
         DO NOTHING
         RETURNING *
-      `,
-      [
-        crypto.randomUUID(),
-        params.sessionId,
-        params.sourceType,
-        params.sourceItemId,
-        params.sourceSessionId || null,
-        params.sourceParticipantType || null,
-        params.sourceParticipantId || null,
-        params.sourceName || null,
-        params.summary,
-        params.reasonText || null,
-        params.automationExecutionId || null,
-        params.automationOccurrenceId || null,
-        JSON.stringify(params.metadata || {}),
-      ]
-    )
+      `.execute(db)
     created = insertResult.rows[0]
 
     if (!created) {
-      const existing = await query(
-        `
-          SELECT *
-          FROM session_wakeups
-          WHERE session_id = $1
-            AND source_type = $2
-            AND source_item_id = $3
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-        [params.sessionId, params.sourceType, params.sourceItemId]
-      )
-      created = existing.rows[0]
+      const existing = await db
+        .selectFrom("session_wakeups")
+        .selectAll()
+        .where("session_id", "=", params.sessionId)
+        .where("source_type", "=", params.sourceType)
+        .where("source_item_id", "=", params.sourceItemId)
+        .orderBy("created_at", "desc")
+        .limit(1)
+        .execute()
+      created = existing[0]
       reusedExistingWakeup = Boolean(created)
     }
   } else {
