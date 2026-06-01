@@ -1,0 +1,71 @@
+# Verdaccio config for the Synapse private npm registry.
+#
+# Goal: external end users can `npm install` @synapse/* anonymously (no
+# token), while only authenticated publishers can push. Third-party deps
+# are proxied + cached from npmjs so installs work (and can run offline
+# once warmed), but NOBODY can publish a third-party package name into
+# this registry (prevents shadow/cache-poisoning of zod/ws/etc.).
+#
+# See docs/install-private-registry.md and the plan for rationale.
+
+storage: /verdaccio/storage
+
+auth:
+  htpasswd:
+    file: /verdaccio/conf/htpasswd
+    # -1 disables self-service signup via `npm adduser`; only users that
+    # already exist in htpasswd (pre-seeded by an operator) can log in
+    # and publish. This is what keeps publish locked down.
+    max_users: -1
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    # Cache proxied tarballs locally so transitive deps (zod, tldts, ws,
+    # @modelcontextprotocol/sdk, @anthropic-ai/*, semver, tar, unzipper,
+    # trash, ...) are served from this registry after the first fetch —
+    # the basis for the offline/air-gapped story.
+    cache: true
+
+# Rule order matters: the FIRST matching block wins, so the most
+# specific `@synapse/*` rule must come before the catch-all `@*/*` /
+# `**` rules.
+packages:
+  "@synapse/*":
+    # $all matches everyone, logged in or not. (Do NOT use $anonymous:
+    # per the Verdaccio authentication docs, a logged-in user does NOT
+    # retain $anonymous, so $anonymous would lock authenticated
+    # publishers/CI/internal machines out of installing.)
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+    # No `proxy:` here on purpose — @synapse/* is local-only and must
+    # never fall through to npmjs (neither on install nor on an
+    # accidental publish).
+
+  "@*/*":
+    # Scoped third-party (e.g. @anthropic-ai/*, @modelcontextprotocol/*):
+    # read + proxy/cache from npmjs, but publish is DENIED for everyone.
+    # An empty `publish:` field is the documented way to deny the action
+    # ("$nobody" is not a real built-in group). This prevents a
+    # publisher account from shadowing a real scoped dependency.
+    access: $all
+    publish:
+    proxy: npmjs
+
+  "**":
+    # Unscoped third-party (zod, ws, tldts, semver, tar, ...): same as
+    # above — read + proxy, publish denied for everyone.
+    access: $all
+    publish:
+    proxy: npmjs
+
+# linux-x64 sidecar tarball is ~154 MB; npm publish base64-encodes the
+# tarball into the JSON request body (~4/3 overhead) → ~205 MB request.
+# Default max_body_size (10mb) would reject it. 512mb leaves headroom.
+max_body_size: 512mb
+
+# Listen on all interfaces inside the container; the host maps the port.
+listen: 0.0.0.0:4873
+
+log: { type: stdout, format: pretty, level: http }

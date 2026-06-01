@@ -1,8 +1,10 @@
 {
   "name": "@synapse/shared",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -36,12 +38,16 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "dev": "tsc --watch",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "prepublishOnly": "node ../../scripts/prepublish-guard.mjs"
   },
+  "files": [
+    "dist"
+  ],
   "dependencies": {
-    "@synapse/device-protocol": "*",
+    "@synapse/device-protocol": "0.1.0",
     "tldts": "^6.1.86",
     "zod": "4.3.6"
   },

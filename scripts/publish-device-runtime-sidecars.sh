@@ -23,7 +23,15 @@
 # Usage (run from repo root):
 #   bash scripts/publish-device-runtime-sidecars.sh [--dry-run]
 #
-# Honors NPM_PUBLISH_FLAGS (e.g. `--tag=next`).
+# Registry: the destination is taken from $NPM_REGISTRY (required) and
+# pinned internally with `--registry`; it is NEVER taken from ambient npm
+# config, because the staging dir lives under /tmp and would not see the
+# repo-root .npmrc @synapse:registry mapping. A publish to public
+# npmjs/yarnpkg is refused outright.
+#
+# Honors NPM_PUBLISH_FLAGS for extra flags (e.g. `--tag=next`), but a
+# `--registry` inside it is REFUSED (npm's last-wins would let it override
+# the pinned private registry).
 
 set -euo pipefail
 
@@ -96,8 +104,63 @@ if [[ -n "$LIST_PLATFORMS" ]]; then
   exit 0
 fi
 
+# --- registry guard (publish + dry-run only; --list-platforms exited above) ---
+# These six are the largest, most sensitive packages; never let them slip
+# to the wrong registry on a missing/foot-gun flag. The destination is
+# taken from $NPM_REGISTRY and pinned with --registry AND
+# --@synapse:registry below — NOT from ambient npm config.
+: "${NPM_REGISTRY:?NPM_REGISTRY must be set (the private registry URL); refusing to publish sidecars}"
+case "$NPM_REGISTRY" in
+  *registry.npmjs.org*|*registry.npmjs.com*|*registry.yarnpkg.com*)
+    echo "ERROR: NPM_REGISTRY ($NPM_REGISTRY) points at public npm; sidecars are private. Refusing." >&2
+    exit 2
+    ;;
+esac
+if [[ "${NPM_PUBLISH_FLAGS:-}" == *"--registry"* || "${NPM_PUBLISH_FLAGS:-}" == *"registry="* ]]; then
+  echo "ERROR: NPM_PUBLISH_FLAGS must not contain --registry/registry= (it would override the pinned \$NPM_REGISTRY). Refusing." >&2
+  exit 2
+fi
+if [[ "${NPM_PUBLISH_FLAGS:-}" == *"ignore-scripts"* ]]; then
+  echo "ERROR: NPM_PUBLISH_FLAGS must not contain --ignore-scripts (it would skip the sidecar publish guard). Refusing." >&2
+  exit 2
+fi
+# For SCOPED packages, the @synapse:registry mapping in an operator's
+# ~/.npmrc / global npmrc OVERRIDES a plain --registry flag. Detect a
+# stray scope mapping that points at public npm and warn — we always
+# override it with --@synapse:registry below, but a poisoned npmrc is a
+# real foot-gun worth surfacing.
+AMBIENT_SCOPE_REG="$(npm config get @synapse:registry 2>/dev/null || true)"
+case "$AMBIENT_SCOPE_REG" in
+  *registry.npmjs.org*|*registry.npmjs.com*|*registry.yarnpkg.com*)
+    echo "WARNING: ambient @synapse:registry resolves to public npm ($AMBIENT_SCOPE_REG); overriding with --@synapse:registry=$NPM_REGISTRY for this publish — but fix your ~/.npmrc." >&2
+    ;;
+esac
+
 echo "Found ${#PLATFORMS[@]} sidecar(s): ${PLATFORMS[*]}"
 echo
+
+# Build a CONTROLLED userconfig that carries the AUTH token (and, as a
+# belt-and-suspenders, registry pins) for the publish. We START from the
+# operator's existing userconfig (so the auth token for the target host is
+# preserved) and APPEND registry/scope pins LAST (last-assignment wins
+# within one npmrc file). NOTE: the AUTHORITATIVE destination control is
+# NOT this userconfig — it is the cmdline `--@synapse:registry=` flag on
+# the publish below (cmdline beats every npmrc layer; for a scoped package
+# that is the value npm routes on). This userconfig is for auth + an
+# extra layer; the publish also runs from a NEUTRAL dir so no project
+# .npmrc can outrank it.
+CTRL_NPMRC="$(mktemp)"
+trap 'rm -f "$CTRL_NPMRC"' EXIT
+# Seed from the operator's userconfig if set/exists (preserves auth).
+SRC_USERCONFIG="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+if [[ -f "$SRC_USERCONFIG" ]]; then
+  cp "$SRC_USERCONFIG" "$CTRL_NPMRC"
+fi
+{
+  echo ""
+  echo "registry=$NPM_REGISTRY"
+  echo "@synapse:registry=$NPM_REGISTRY"
+} >> "$CTRL_NPMRC"
 
 for plat in "${PLATFORMS[@]}"; do
   src="$ROOT/packages/device-runtime-bundles-$plat"
@@ -106,22 +169,57 @@ for plat in "${PLATFORMS[@]}"; do
     continue
   fi
   staging="$(mktemp -d)"
-  trap 'rm -rf "$staging"' EXIT
   # Copy package contents (just the files needed for the npm tarball).
   cp -r "$src/." "$staging/"
   # Hoist publishConfig.os / publishConfig.cpu to top-level so the
-  # registry filter actually fires on consumers' `npm install`.
+  # registry filter actually fires on consumers' `npm install`. Also
+  # strip `.scripts` (the prepublishOnly guard only blocks a direct
+  # `npm publish -w <sidecar>`; the staged copy is the sanctioned path and
+  # ships clean) and `.private` (the source is `private: true` so npm
+  # itself refuses a direct publish even under --ignore-scripts; the
+  # staged copy must drop it so the wrapper CAN publish).
   jq '
     .os = (.publishConfig.os // empty)
     | .cpu = (.publishConfig.cpu // empty)
     | del(.publishConfig.os, .publishConfig.cpu)
     | if (.publishConfig | length) == 0 then del(.publishConfig) else . end
+    | del(.scripts)
+    | del(.private)
   ' "$src/package.json" > "$staging/package.json"
   echo "==> publishing $plat from staging $staging"
   diff -u "$src/package.json" "$staging/package.json" || true
-  ( cd "$staging" && npm publish $DRY_RUN ${NPM_PUBLISH_FLAGS:-} )
-  rm -rf "$staging"
-  trap - EXIT
+  # Pack to a tarball FIRST, then publish the tarball. npm's in-publish
+  # re-pack path round-trips these very large (100-200MB) archives through
+  # the cacache and can fail with TAR_BAD_ARCHIVE on a flaky/slow upload;
+  # publishing a pre-built tgz avoids that.
+  (
+    cd "$staging" &&
+      SYNAPSE_SIDECAR_PUBLISH_OK=1 npm pack >/dev/null
+  )
+  TGZ="$(ls "$staging"/*.tgz | head -1)"
+  if [[ -z "$TGZ" ]]; then
+    echo "ERROR: pack produced no tarball for $plat" >&2
+    rm -rf "$staging"
+    exit 1
+  fi
+  TGZ="$(cd "$staging" && pwd)/$(basename "$TGZ")" # absolute path
+  # Publish from a NEUTRAL dir (no project .npmrc) so config precedence is
+  # cmdline > userconfig. The destination is forced on the CMDLINE with the
+  # `=` form of --@synapse:registry (highest precedence; for a SCOPED
+  # package this is the value npm actually routes on, and it beats any
+  # ambient scope mapping incl. a project/user .npmrc — verified). The
+  # controlled userconfig carries only the AUTH token. A bare --registry is
+  # kept for the unscoped fallback but is inert for scoped resolution.
+  pubdir="$(mktemp -d)"
+  (
+    cd "$pubdir" &&
+      SYNAPSE_SIDECAR_PUBLISH_OK=1 \
+        npm publish "$TGZ" $DRY_RUN ${NPM_PUBLISH_FLAGS:-} \
+          --userconfig "$CTRL_NPMRC" \
+          --registry="$NPM_REGISTRY" \
+          --@synapse:registry="$NPM_REGISTRY"
+  )
+  rm -rf "$staging" "$pubdir"
 done
 
 echo

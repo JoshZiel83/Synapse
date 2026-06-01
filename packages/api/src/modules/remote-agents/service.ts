@@ -21,6 +21,7 @@ import {
   type RemoteAgentView,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
+import { buildDaemonCommand as buildDaemonCommandImpl } from "./daemon-command.js"
 import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
@@ -102,7 +103,11 @@ function hashMachineApiKey(apiKey: string) {
 }
 
 function buildDaemonCommand(apiKey: string) {
-  return `npx @synapse/remote-agent-daemon --server-url ${config.app.baseUrl} --api-key ${apiKey}`
+  return buildDaemonCommandImpl({
+    serverUrl: config.app.baseUrl,
+    apiKey,
+    npmRegistryUrl: config.remoteAgent.npmRegistryUrl,
+  })
 }
 
 function safeSend(connection: MachineConnection, payload: unknown) {
