@@ -238,6 +238,20 @@ function looksLikeMp4Family(buffer: Buffer): string | null {
   const brand = buffer.subarray(8, 12).toString("ascii")
   if (brand.startsWith("M4A")) return "audio/mp4"
   if (brand === "qt  ") return "video/quicktime"
+  // HEIF/HEIC and AVIF are also ISO-BMFF (ftyp) containers — detect their
+  // brands so the magic-byte sniffer matches the MIME tables that already
+  // advertise image/heif and image/avif (previously these fell through to
+  // video/mp4).
+  if (brand === "avif" || brand === "avis") return "image/avif"
+  if (
+    brand === "heic" ||
+    brand === "heix" ||
+    brand === "heif" ||
+    brand === "mif1" ||
+    brand === "msf1"
+  ) {
+    return "image/heif"
+  }
   return "video/mp4"
 }
 
