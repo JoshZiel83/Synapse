@@ -10,6 +10,9 @@ import {
   enqueueAutomationExecutionJobs,
 } from "./queues.js"
 import { registerWorker } from "./registry.js"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("automation-scheduler")
 
 export async function ensureAutomationSchedulerJob() {
   await automationSchedulerQueue.add(
@@ -37,7 +40,7 @@ export function startAutomationSchedulerWorker() {
   )
 
   worker.on("failed", (job, err) => {
-    console.error(`Automation scheduler job ${job?.id} failed:`, err.message)
+    log.error({ err }, `Automation scheduler job ${job?.id} failed`)
   })
 
   registerWorker(worker)

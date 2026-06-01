@@ -46,6 +46,7 @@ import { sql, type SqlBool } from "kysely"
 import { db } from "../../../infrastructure/database/kysely.js"
 import { onEvent } from "../../../infrastructure/events/index.js"
 import { redis } from "../../../infrastructure/redis/index.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
 import {
   getTransportAccountById,
   loadTransportEmojiReactions,
@@ -74,6 +75,8 @@ import {
 // The claim itself is per-(account, externalMessageId), so a single
 // client is enough.
 const statusClaim = createStatusClaimClient(redis as unknown as ClaimRedisLike)
+
+const log = createLogger("im.status")
 
 interface ActiveStatusSession {
   reaction: StatusReactionController
@@ -410,12 +413,15 @@ async function ensureControllersForSession(input: {
     // early actor.thinking starvation case, expected), because the turn
     // had no trigger item (autonomous / actor-initiated), or because the
     // trigger item existed but had no inbound IM link (non-IM trigger).
-    console.warn("[im:status] fallback inbound-link used", {
-      sessionId: input.sessionId,
-      conversationId: input.conversationId,
-      externalMessageId: decision.link.externalMessageId,
-      reason: decision.reason,
-    })
+    log.warn(
+      {
+        sessionId: input.sessionId,
+        conversationId: input.conversationId,
+        externalMessageId: decision.link.externalMessageId,
+        reason: decision.reason,
+      },
+      "[im:status] fallback inbound-link used"
+    )
   }
   if (decision.kind === "none" || !decision.link) {
     return null
@@ -476,7 +482,7 @@ async function ensureControllersForSession(input: {
       externalMessageId,
     })
   } catch (err) {
-    console.warn("[im:status] failed to load persisted reactions:", err)
+    log.warn({ err }, "[im:status] failed to load persisted reactions")
   }
 
   const reactionAdapter = connector.createStatusReactionAdapter({
@@ -492,7 +498,7 @@ async function ensureControllersForSession(input: {
         externalMessageId,
         reactionIdsByEmoji,
       }).catch((err) => {
-        console.warn("[im:status] failed to save reactions:", err)
+        log.warn({ err }, "[im:status] failed to save reactions")
       })
     },
   })
@@ -516,9 +522,9 @@ async function ensureControllersForSession(input: {
   const reactionController = createStatusReactionController({
     adapter: reactionAdapter,
     onError: (err) => {
-      console.error(
-        `[im:status] reaction adapter error for session=${input.sessionId}:`,
-        err
+      log.error(
+        { err },
+        `[im:status] reaction adapter error for session=${input.sessionId}`
       )
     },
   })
@@ -548,9 +554,9 @@ async function ensureControllersForSession(input: {
     adapter: typingUnwrapped?.adapter ?? null,
     config: typingUnwrapped?.config,
     onError: (err) => {
-      console.error(
-        `[im:status] typing adapter error for session=${input.sessionId}:`,
-        err
+      log.error(
+        { err },
+        `[im:status] typing adapter error for session=${input.sessionId}`
       )
     },
   })

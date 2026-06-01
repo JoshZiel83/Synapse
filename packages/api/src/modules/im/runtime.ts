@@ -1,5 +1,6 @@
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import { emitEvent } from "../../infrastructure/events/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { redis } from "../../infrastructure/redis/index.js"
 import { tryGetConnector } from "./connectors/registry.js"
 import {
@@ -21,6 +22,8 @@ import {
 const RUNTIME_RECONCILE_INTERVAL_MS = 15_000
 let reconcileTimer: NodeJS.Timeout | null = null
 let reconcilePromise: Promise<void> | null = null
+
+const log = createLogger("im.runtime")
 
 function waitForAbort(signal: AbortSignal) {
   if (signal.aborted) {
@@ -50,14 +53,13 @@ async function startRuntimeForAccount(
         logger: {
           debug: () => {},
           info: (msg, fields) =>
-            console.log(`[im:${account.transportKind}] ${msg}`, fields || ""),
+            log.info(fields ?? {}, `[im:${account.transportKind}] ${msg}`),
           warn: (msg, fields) =>
-            console.warn(`[im:${account.transportKind}] ${msg}`, fields || ""),
+            log.warn(fields ?? {}, `[im:${account.transportKind}] ${msg}`),
           error: (msg, err, fields) =>
-            console.error(
-              `[im:${account.transportKind}] ${msg}`,
-              err,
-              fields || ""
+            log.error(
+              { err, ...(fields ?? {}) },
+              `[im:${account.transportKind}] ${msg}`
             ),
         },
       })
@@ -71,7 +73,7 @@ async function startRuntimeForAccount(
 
     // No connector registered — log and exit. Reached only if a new
     // TRANSPORT_KIND lands in the enum without a corresponding connector.
-    console.warn(
+    log.warn(
       `[im] no TransportConnector for transport_kind=${account.transportKind}`
     )
   }
@@ -79,9 +81,9 @@ async function startRuntimeForAccount(
   const promise = run()
     .catch((error) => {
       if (!abortController.signal.aborted) {
-        console.error(
-          `[im] Transport runtime crashed for account ${account.id}:`,
-          error
+        log.error(
+          { err: error },
+          `[im] Transport runtime crashed for account ${account.id}`
         )
       }
     })
@@ -133,9 +135,9 @@ async function reconcileTransportRuntimesOnce() {
       !(await renewTransportRuntimeLease(accountId, handle.leaseToken))
     if (shouldStop) {
       await handle.stop().catch((error) => {
-        console.error(
-          `[im] Failed to stop runtime for account ${accountId}:`,
-          error
+        log.error(
+          { err: error },
+          `[im] Failed to stop runtime for account ${accountId}`
         )
       })
     }
@@ -170,7 +172,7 @@ export async function startTransportRuntimeManager() {
   if (reconcileTimer) return
   reconcileTimer = setInterval(() => {
     void reconcileTransportRuntimes().catch((error) => {
-      console.error("[im] Transport runtime reconcile failed:", error)
+      log.error({ err: error }, "[im] Transport runtime reconcile failed")
     })
   }, RUNTIME_RECONCILE_INTERVAL_MS)
   reconcileTimer.unref()

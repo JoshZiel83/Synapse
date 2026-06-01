@@ -7,6 +7,7 @@ import path from "node:path"
 import { promisify } from "node:util"
 import { LRUCache } from "lru-cache"
 import { config } from "../../config/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { readFileBufferById } from "../files/service.js"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
@@ -27,6 +28,7 @@ const transcriptCache = new LRUCache<string, Promise<AudioTranscriptResult>>({
 const localRequire = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
 const warnedMessages = new Set<string>()
+const log = createLogger("ai.audio-fallback")
 
 type SherpaOnnxModule = {
   OfflineRecognizer: new (config: Record<string, unknown>) => {
@@ -59,7 +61,7 @@ let recognizerPromise: Promise<InstanceType<
 function warnOnce(message: string): void {
   if (warnedMessages.has(message)) return
   warnedMessages.add(message)
-  console.warn(`[audio-fallback] ${message}`)
+  log.warn(`[audio-fallback] ${message}`)
 }
 
 function normalizeTranscript(text: string): string {

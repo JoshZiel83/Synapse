@@ -1,8 +1,11 @@
 import pg from "pg"
 import { config } from "../../config/index.js"
+import { createLogger } from "../logger/index.js"
 import type { DatabaseTable } from "./db-types.js"
 
 const { Pool } = pg
+
+const log = createLogger("database")
 
 export const pool = new Pool({
   connectionString: config.database.url,
@@ -287,11 +290,14 @@ function logQueryFailure(
   err: unknown
 ) {
   const message = err instanceof Error ? err.message : String(err)
-  console.error("[db.query] failed:", {
-    message,
-    sql: text.replace(/\s+/g, " ").trim(),
-    params: summarizeParams(params),
-  })
+  log.error(
+    {
+      message,
+      sql: text.replace(/\s+/g, " ").trim(),
+      params: summarizeParams(params),
+    },
+    "[db.query] failed"
+  )
 }
 
 export async function query<T extends pg.QueryResultRow = any>(
@@ -325,10 +331,13 @@ export async function transaction<T>(
         if (typeof text === "string") {
           logQueryFailure(text, Array.isArray(params) ? params : undefined, err)
         } else {
-          console.error("[db.query] failed:", {
-            message: err instanceof Error ? err.message : String(err),
-            config: text,
-          })
+          log.error(
+            {
+              message: err instanceof Error ? err.message : String(err),
+              config: text,
+            },
+            "[db.query] failed"
+          )
         }
         throw err
       }

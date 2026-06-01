@@ -1,5 +1,5 @@
-import { db } from '../database/kysely.js';
-import type { FileStorageBackend } from '@synapse/shared/types';
+import { db } from "../database/kysely.js"
+import type { FileStorageBackend } from "@synapse/shared/types"
 import {
   downloadToBuffer,
   getStableFileUrl,
@@ -9,75 +9,91 @@ import {
   readStoredBlobAsBuffer,
   resolveBufferMimeType,
   storeBufferInBackend,
-} from './index.js';
+} from "./index.js"
 import {
   mimeToFileContentKind,
   toFileOriginSummary,
   type FileOriginInput,
   type StoredFileRecord,
-} from '../../modules/files/model.js';
+} from "../../modules/files/model.js"
+import { createLogger } from "../logger/index.js"
 
-export type FileRecord = StoredFileRecord;
+const log = createLogger("file-io")
+
+export type FileRecord = StoredFileRecord
 
 type CreateStoredFileParams = {
-  buffer: Buffer;
-  originalName: string;
-  mimeType: string;
-  workspaceId: string | null;
-  uploaderUserId: string | null;
-  origin: FileOriginInput;
-  backend?: FileStorageBackend;
-};
-
-function toJsonObject(value: Record<string, unknown>): any {
-  return value as any;
+  buffer: Buffer
+  originalName: string
+  mimeType: string
+  workspaceId: string | null
+  uploaderUserId: string | null
+  origin: FileOriginInput
+  backend?: FileStorageBackend
 }
 
-function assertExplicitOrigin(origin: FileOriginInput | undefined): asserts origin is FileOriginInput {
+function toJsonObject(value: Record<string, unknown>): any {
+  return value as any
+}
+
+function assertExplicitOrigin(
+  origin: FileOriginInput | undefined
+): asserts origin is FileOriginInput {
   if (!origin?.family || !origin.system) {
-    throw new Error('File origin is required and must include family plus system.');
+    throw new Error(
+      "File origin is required and must include family plus system."
+    )
   }
 }
 
-function normalizeDetails(value: Record<string, unknown> | undefined): Record<string, unknown> {
-  return value && Object.keys(value).length > 0 ? value : {};
+function normalizeDetails(
+  value: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  return value && Object.keys(value).length > 0 ? value : {}
 }
 
 async function createStoredFile(
-  params: CreateStoredFileParams,
+  params: CreateStoredFileParams
 ): Promise<FileRecord> {
-  assertExplicitOrigin(params.origin);
+  assertExplicitOrigin(params.origin)
 
   const resolvedMimeType = await resolveBufferMimeType(
     params.buffer,
-    params.mimeType,
-  );
+    params.mimeType
+  )
   const normalizedOriginalName = normalizeOriginalNameForMimeType(
     params.originalName,
-    resolvedMimeType,
-  );
+    resolvedMimeType
+  )
   const storedBlob = await storeBufferInBackend({
-    backend: params.backend || 'local_fs',
+    backend: params.backend || "local_fs",
     buffer: params.buffer,
     originalName: normalizedOriginalName,
     mimeType: resolvedMimeType,
-  });
-  const contentKind = mimeToFileContentKind(resolvedMimeType);
+  })
+  const contentKind = mimeToFileContentKind(resolvedMimeType)
 
   const record = await db.transaction().execute(async (trx) => {
     const blob = await trx
-      .insertInto('file_blobs')
+      .insertInto("file_blobs")
       .values({
         backend: storedBlob.backend,
         storage_key: storedBlob.storageKey,
         bucket: storedBlob.bucket,
         locator_json: toJsonObject(storedBlob.locator),
       })
-      .returning(['id', 'backend', 'storage_key', 'bucket', 'locator_json', 'created_at'])
-      .executeTakeFirstOrThrow();
+      .returning([
+        "id",
+        "backend",
+        "storage_key",
+        "bucket",
+        "locator_json",
+        "created_at",
+      ])
+      .executeTakeFirstOrThrow()
 
     const file = await trx
-      .insertInto('files')
+      .insertInto("files")
       .values({
         workspace_id: params.workspaceId,
         uploader_user_id: params.uploaderUserId,
@@ -89,20 +105,20 @@ async function createStoredFile(
         blob_id: blob.id,
       })
       .returning([
-        'id',
-        'workspace_id',
-        'uploader_user_id',
-        'original_name',
-        'mime_type',
-        'content_kind',
-        'size_bytes',
-        'sha256',
-        'created_at',
+        "id",
+        "workspace_id",
+        "uploader_user_id",
+        "original_name",
+        "mime_type",
+        "content_kind",
+        "size_bytes",
+        "sha256",
+        "created_at",
       ])
-      .executeTakeFirstOrThrow();
+      .executeTakeFirstOrThrow()
 
     await trx
-      .insertInto('file_origins')
+      .insertInto("file_origins")
       .values({
         file_id: file.id,
         source_family: params.origin.family,
@@ -115,7 +131,7 @@ async function createStoredFile(
         external_resource_key: params.origin.externalResourceKey ?? null,
         details_json: toJsonObject(normalizeDetails(params.origin.details)),
       })
-      .execute();
+      .execute()
 
     return {
       id: file.id,
@@ -138,43 +154,56 @@ async function createStoredFile(
       storageKey: blob.storage_key,
       bucket: blob.bucket,
       locator:
-        blob.locator_json && typeof blob.locator_json === 'object'
+        blob.locator_json && typeof blob.locator_json === "object"
           ? (blob.locator_json as Record<string, unknown>)
           : {},
-    };
-  });
+    }
+  })
 
-  void import('../../modules/files/parse-service.js')
+  void import("../../modules/files/parse-service.js")
     .then(({ enqueueDefaultFileParse }) =>
       enqueueDefaultFileParse({
         fileId: record.id,
         mimeType: record.mimeType,
         contentKind: record.contentKind,
-      }),
+      })
     )
     .catch((error) => {
-      console.error(`[file-io] Failed to enqueue default file parse for ${record.id}:`, error);
-    });
+      log.error(
+        { err: error },
+        `[file-io] Failed to enqueue default file parse for ${record.id}`
+      )
+    })
 
-  return record;
+  return record
 }
 
-export async function fileToBase64(record: Pick<FileRecord, 'storageBackend' | 'storageKey' | 'bucket' | 'locator'>): Promise<string> {
+export async function fileToBase64(
+  record: Pick<
+    FileRecord,
+    "storageBackend" | "storageKey" | "bucket" | "locator"
+  >
+): Promise<string> {
   return readStoredBlobAsBase64({
     backend: record.storageBackend,
     storageKey: record.storageKey,
     bucket: record.bucket,
     locator: record.locator,
-  });
+  })
 }
 
-export async function fileToBuffer(record: Pick<FileRecord, 'storageBackend' | 'storageKey' | 'bucket' | 'locator'>): Promise<Buffer> {
+export async function fileToBuffer(
+  record: Pick<
+    FileRecord,
+    "storageBackend" | "storageKey" | "bucket" | "locator"
+  >
+): Promise<Buffer> {
   return readStoredBlobAsBuffer({
     backend: record.storageBackend,
     storageKey: record.storageKey,
     bucket: record.bucket,
     locator: record.locator,
-  });
+  })
 }
 
 export async function saveFromUrl(
@@ -183,9 +212,9 @@ export async function saveFromUrl(
   uploaderUserId: string | null,
   originalName: string | undefined,
   origin: FileOriginInput,
-  backend: FileStorageBackend = 'local_fs',
+  backend: FileStorageBackend = "local_fs"
 ): Promise<FileRecord> {
-  const downloaded = await downloadToBuffer(url, originalName);
+  const downloaded = await downloadToBuffer(url, originalName)
   return createStoredFile({
     buffer: downloaded.buffer,
     originalName: downloaded.originalName,
@@ -194,7 +223,7 @@ export async function saveFromUrl(
     uploaderUserId,
     origin,
     backend,
-  });
+  })
 }
 
 export async function saveFromBase64(
@@ -204,17 +233,17 @@ export async function saveFromBase64(
   workspaceId: string | null,
   uploaderUserId: string | null,
   origin: FileOriginInput,
-  backend: FileStorageBackend = 'local_fs',
+  backend: FileStorageBackend = "local_fs"
 ): Promise<FileRecord> {
   return createStoredFile({
-    buffer: Buffer.from(base64, 'base64'),
+    buffer: Buffer.from(base64, "base64"),
     originalName,
     mimeType,
     workspaceId,
     uploaderUserId,
     origin,
     backend,
-  });
+  })
 }
 
 export async function saveFromBuffer(
@@ -224,7 +253,7 @@ export async function saveFromBuffer(
   workspaceId: string | null,
   uploaderUserId: string | null,
   origin: FileOriginInput,
-  backend: FileStorageBackend = 'local_fs',
+  backend: FileStorageBackend = "local_fs"
 ): Promise<FileRecord> {
   return createStoredFile({
     buffer,
@@ -234,5 +263,5 @@ export async function saveFromBuffer(
     uploaderUserId,
     origin,
     backend,
-  });
+  })
 }

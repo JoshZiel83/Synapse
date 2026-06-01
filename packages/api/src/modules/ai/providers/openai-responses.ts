@@ -32,6 +32,9 @@ import {
   canResumeBranchFromWindow,
 } from "../engine-branches.js"
 import { getFullFileUrlById, readFileBufferById } from "../../files/service.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("ai.openai-responses")
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   "image/jpeg",
@@ -54,9 +57,9 @@ async function ensureSupportedFormat(
     const converted = await sharp(buffer).png().toBuffer()
     return { buffer: converted, mimeType: "image/png" }
   } catch (err) {
-    console.error(
-      `[openai.responses] Failed to convert ${mimeType} to PNG:`,
-      err
+    log.error(
+      { err },
+      `[openai.responses] Failed to convert ${mimeType} to PNG`
     )
     return { buffer, mimeType }
   }
@@ -250,7 +253,7 @@ export class OpenAIResponsesProvider implements AIProvider {
             input: inputObject,
           })
         } catch {
-          console.error(
+          log.error(
             `Failed to parse Responses API tool call arguments for ${item.name}`
           )
         }
@@ -541,9 +544,9 @@ export class OpenAIResponsesProvider implements AIProvider {
           textParts.push(desc)
         }
       } catch (err: any) {
-        console.error(
-          `[openai.responses] Failed to resolve file_ref ${block.fileId}:`,
-          err.message
+        log.error(
+          { err: err.message },
+          `[openai.responses] Failed to resolve file_ref ${block.fileId}`
         )
         const desc = `[${block.category}: ${block.originalName} (read failed)]`
         nativeBlocks.push({ type: "input_text", text: desc })

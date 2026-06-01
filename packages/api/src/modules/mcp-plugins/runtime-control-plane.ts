@@ -1,6 +1,9 @@
 import crypto from "node:crypto"
 import os from "node:os"
 import { redis } from "../../infrastructure/redis/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("mcp.runtime")
 
 const COMMAND_STREAM_PREFIX = "mcp:runtime:commands:"
 const REPLY_LIST_PREFIX = "mcp:runtime:reply:"
@@ -149,7 +152,7 @@ async function runCommandListener() {
       if (!listenerRunning) {
         break
       }
-      console.error("[mcp-runtime] control plane listener error", error)
+      log.error({ err: error }, "[mcp-runtime] control plane listener error")
       await new Promise((resolve) => setTimeout(resolve, 1000))
     }
   }

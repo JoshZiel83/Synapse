@@ -59,6 +59,9 @@ import {
   type CanonicalMessage,
   type CanonicalPart,
 } from "../modules/im/messaging/canonical-message.js"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("interaction-projection")
 
 const TICK_INTERVAL_MS = 5_000
 const BATCH_SIZE = 10
@@ -117,16 +120,16 @@ export function startInteractionProjectionWorker(): WorkerHandle {
     try {
       const stats = await runOneTick()
       if (stats.errors > 0) {
-        console.warn("[interaction-projection] tick had errors", stats)
+        log.warn({ stats }, "tick had errors")
       }
       tickCounter += 1
       if (tickCounter % TOKEN_SWEEP_EVERY_TICKS === 0) {
         await sweepExpiredActionTokens().catch((err) => {
-          console.warn("[interaction-projection] token sweep failed:", err)
+          log.warn({ err }, "token sweep failed")
         })
       }
     } catch (err) {
-      console.warn("[interaction-projection] tick crashed", err)
+      log.warn({ err }, "tick crashed")
     } finally {
       if (!stopped) {
         timer = setTimeout(tick, TICK_INTERVAL_MS)
@@ -200,11 +203,7 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
         // supposed to convert all errors into a state update inside its
         // savepoint. Surface it but don't break the rest of the batch.
         stats.errors += 1
-        console.error(
-          "[interaction-projection] processOne unexpected throw",
-          err,
-          { rowId: row.id }
-        )
+        log.error({ err, rowId: row.id }, "processOne unexpected throw")
         // Best-effort bump attempts so we don't get stuck on a poison row.
         await bumpAttemptsOnRow(client, row, errorMessage(err)).catch(
           () => undefined
@@ -221,9 +220,7 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
     try {
       await enqueueOutboundDelivery(linkId)
     } catch (err) {
-      console.warn("[interaction-projection] post-commit enqueue failed", err, {
-        linkId,
-      })
+      log.warn({ err, linkId }, "post-commit enqueue failed")
     }
   }
 

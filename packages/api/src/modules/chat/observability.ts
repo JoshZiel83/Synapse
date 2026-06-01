@@ -1,7 +1,7 @@
 /**
  * Chat dedup observability counters.
  *
- * Lightweight in-process counters + a periodic console.info dump so we
+ * Lightweight in-process counters + a periodic log dump so we
  * have visibility into the S6 "main thread vs SW mutex" dedup work.
  * Two counters today:
  *
@@ -20,6 +20,10 @@
  * Use prom-client later if/when the rest of the app adopts it; this
  * keeps the counters useful without the infra dependency.
  */
+
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("chat.dedup")
 
 const counters: Record<string, number> = Object.create(null)
 
@@ -57,7 +61,7 @@ export function startChatDedupCounterLogger(intervalMs = 60_000) {
   loggerHandle = setInterval(() => {
     const snapshot = getChatDedupCountersSnapshot()
     if (Object.keys(snapshot).length === 0) return
-    console.info("[chat.dedup]", snapshot)
+    log.info({ data: snapshot }, "[chat.dedup]")
   }, intervalMs)
   // Don't keep the event loop alive just for telemetry.
   if (typeof loggerHandle.unref === "function") loggerHandle.unref()

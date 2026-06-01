@@ -3,6 +3,9 @@ import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
 import { registerWorker } from "./registry.js"
 import { processFileParseRun } from "../modules/files/parse-service.js"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("file-parsing")
 
 const DEFAULT_FILE_PARSE_CONCURRENCY = Math.max(
   1,
@@ -28,7 +31,7 @@ export function startFileParsingWorker() {
   )
 
   worker.on("failed", (job, err) => {
-    console.error(`File parsing job ${job?.id} failed:`, err.message)
+    log.error({ err }, `File parsing job ${job?.id} failed`)
   })
 
   registerWorker(worker)

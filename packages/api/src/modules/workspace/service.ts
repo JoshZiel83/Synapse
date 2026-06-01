@@ -28,6 +28,9 @@ import type {
   WorkspaceMembersTrustLevel,
 } from "../../infrastructure/database/generated/db.js"
 import { sql } from "kysely"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("workspace")
 
 export interface CreateWorkspaceInput {
   name: string
@@ -510,9 +513,9 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
         [templateId]
       )
     } catch (err) {
-      console.warn(
-        `[workspace.createWorkspace] best-effort download_count bump failed for catalog_item ${templateId}:`,
-        err
+      log.warn(
+        { err },
+        `[workspace.createWorkspace] best-effort download_count bump failed for catalog_item ${templateId}`
       )
     }
   }

@@ -55,6 +55,9 @@ import {
   IM_TRANSPORT_DELIVERY_JOB_DEFAULTS,
   imTransportDeliveryQueue,
 } from "./queues.js"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("outbox-sweeper")
 
 const SWEEP_INTERVAL_MS = 30_000
 const SWEEP_LOCK_KEY = "im:outbox-sweeper:lock"
@@ -265,7 +268,7 @@ export function startTransportOutboxSweeper(options?: {
     try {
       await runOneSweep()
     } catch (err) {
-      console.error("[im:outbox-sweeper] sweep failed:", err)
+      log.error({ err }, "sweep failed")
     }
   }
   // Kick off the first sweep ASAP after startup, then on the interval.
@@ -300,9 +303,9 @@ export async function runOneSweep(): Promise<void> {
       try {
         await processCandidate(candidate)
       } catch (err) {
-        console.error(
-          `[im:outbox-sweeper] failed to process link ${candidate.linkId}:`,
-          err
+        log.error(
+          { err, linkId: candidate.linkId },
+          `failed to process link ${candidate.linkId}`
         )
       }
     }

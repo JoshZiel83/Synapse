@@ -68,6 +68,9 @@ import { sessionThinkingQueue } from "./queues.js"
 import { registerWorker } from "./registry.js"
 import { getAssistantSessionMessagePersistence } from "./session-message-persistence.js"
 import { sql } from "kysely"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("session-thinking")
 
 type ThinkingPhase = "thinking" | "tool"
 
@@ -98,10 +101,7 @@ async function runCleanupStep(
   try {
     await operation()
   } catch (err: any) {
-    console.error(
-      `[session-thinking] Cleanup step failed for ${label}:`,
-      err?.message || String(err)
-    )
+    log.error({ err }, `Cleanup step failed for ${label}`)
   }
 }
 
@@ -174,9 +174,7 @@ export function startSessionThinkingWorker() {
         SESSION_LOCK_TTL
       )
       if (!acquired) {
-        console.log(
-          `[session-thinking] Session ${sessionId} is already being processed, skipping`
-        )
+        log.info(`Session ${sessionId} is already being processed, skipping`)
         return { success: false, reason: "session locked" }
       }
       const sessionLock: AcquiredLock = acquired
@@ -218,8 +216,8 @@ export function startSessionThinkingWorker() {
       try {
         let session = await getSession(sessionId)
         if (!session || session.status === "closed") {
-          console.log(
-            `[session-thinking] Session ${sessionId} is ${session?.status ?? "not found"}, skipping`
+          log.info(
+            `Session ${sessionId} is ${session?.status ?? "not found"}, skipping`
           )
           return { success: false, reason: "session closed or missing" }
         }
@@ -568,8 +566,8 @@ export function startSessionThinkingWorker() {
         availableSkills = capabilitySurface.availableSkills
         mcpTools = capabilitySurface.mcpTools
         if (mcpTools.tools.length > 0) {
-          console.log(
-            `[session-thinking] Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`
+          log.info(
+            `Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`
           )
         }
 
@@ -857,10 +855,7 @@ export function startSessionThinkingWorker() {
         const errorMessage = err?.message || "Unknown error"
         const turnInterrupted = isTurnInterruptedError(err)
         if (!turnInterrupted) {
-          console.error(
-            `[session-thinking] Session ${sessionId} failed:`,
-            errorMessage
-          )
+          log.error({ err }, `Session ${sessionId} failed: ${errorMessage}`)
         }
         const failedSession = await getSession(sessionId).catch(() => null)
 
@@ -1041,7 +1036,7 @@ export function startSessionThinkingWorker() {
   )
 
   worker.on("failed", (job, err) => {
-    console.error(`Session thinking job ${job?.id} failed:`, err.message)
+    log.error({ err }, `Session thinking job ${job?.id} failed`)
   })
 
   registerWorker(worker)

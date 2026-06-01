@@ -1,8 +1,11 @@
 import { Worker } from "bullmq"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
+import { createLogger } from "../infrastructure/logger/index.js"
 import { processAutomationExecution } from "../modules/automation/service.js"
 import { registerWorker } from "./registry.js"
+
+const log = createLogger("automation-execution")
 
 export function startAutomationExecutionWorker() {
   const worker = new Worker(
@@ -21,7 +24,7 @@ export function startAutomationExecutionWorker() {
   )
 
   worker.on("failed", (job, err) => {
-    console.error(`Automation execution job ${job?.id} failed:`, err.message)
+    log.error({ err }, `Automation execution job ${job?.id} failed`)
   })
 
   registerWorker(worker)

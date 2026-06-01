@@ -4,6 +4,9 @@ import fs from "node:fs/promises"
 import crypto from "node:crypto"
 import type { FileStorageBackend } from "@synapse/shared/types"
 import { assertPublicHost } from "./ssrf.js"
+import { createLogger } from "../logger/index.js"
+
+const log = createLogger("storage")
 
 // Production deployments inject STORAGE_DIR via the API container env
 // (docker-compose.yml sets /app/storage/files mounted to api_storage:).
@@ -307,7 +310,7 @@ export async function resolveBufferMimeType(
       : null)
 
   if (detectedMimeType && detectedMimeType !== normalizedClaimedMimeType) {
-    console.warn(
+    log.warn(
       `[storage] Corrected MIME type from ${normalizedClaimedMimeType} to ${detectedMimeType}`
     )
     return detectedMimeType

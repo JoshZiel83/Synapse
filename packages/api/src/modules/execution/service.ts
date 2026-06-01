@@ -3,11 +3,14 @@ import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
 import type { PayloadBlobsRetentionClass } from "../../infrastructure/database/generated/db.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { updateSessionStatus } from "../session/service.js"
 import {
   markTurnWakeupsDropped,
   publishSessionRuntime,
 } from "../session/runtime.js"
+
+const log = createLogger("execution")
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -562,7 +565,7 @@ export async function logRuntimeEvent(params: {
     })
     .execute()
     .catch((err) => {
-      console.error("[runtime_events] failed:", err.message)
+      log.error({ err }, "[runtime_events] failed")
     })
 }
 

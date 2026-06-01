@@ -39,12 +39,15 @@
 import { randomUUID } from "node:crypto"
 import type { SendMsgBody, WsFrame } from "@wecom/aibot-node-sdk"
 import { redisPub, redisSub } from "../../../../infrastructure/redis/index.js"
+import { createLogger } from "../../../../infrastructure/logger/index.js"
 import type { WecomClient } from "./client.js"
 
 const REQUEST_CHANNEL_PREFIX = "wecom:outbound:request:"
 const RESPONSE_CHANNEL_PREFIX = "wecom:outbound:response:"
 const RESPONSE_PATTERN = `${RESPONSE_CHANNEL_PREFIX}*`
 const DEFAULT_TIMEOUT_MS = 5_000
+
+const log = createLogger("im.wecom")
 
 export interface FrameBody {
   chatid: string
@@ -108,7 +111,7 @@ function pmessageDispatcher(
     }
     // resolve/reject self-cleanup (delete entry + clear timer)
   } catch (err) {
-    console.warn("[wecom] response parse failed:", safeErrorMessage(err))
+    log.warn({ err }, "[wecom] response parse failed")
   }
 }
 
@@ -119,11 +122,11 @@ function messageDispatcher(channel: string, payload: string): void {
     const result = handler(payload)
     if (result && typeof (result as Promise<void>).catch === "function") {
       ;(result as Promise<void>).catch((err: unknown) =>
-        console.warn("[wecom] request handler rejected:", safeErrorMessage(err))
+        log.warn({ err }, "[wecom] request handler rejected")
       )
     }
   } catch (err) {
-    console.warn("[wecom] request handler threw:", safeErrorMessage(err))
+    log.warn({ err }, "[wecom] request handler threw")
   }
 }
 
@@ -212,15 +215,12 @@ export async function subscribeAccountInboundChannel(
     try {
       req = JSON.parse(rawPayload) as WireRequest
     } catch (err) {
-      console.warn(
-        "[wecom] request payload parse failed:",
-        safeErrorMessage(err)
-      )
+      log.warn({ err }, "[wecom] request payload parse failed")
       return
     }
     const { requestId, frameBody } = req
     if (!requestId || !frameBody) {
-      console.warn("[wecom] request payload missing requestId/frameBody")
+      log.warn("[wecom] request payload missing requestId/frameBody")
       return
     }
     const pub =
@@ -239,7 +239,7 @@ export async function subscribeAccountInboundChannel(
         RESPONSE_CHANNEL_PREFIX + requestId,
         JSON.stringify(response)
       ).catch((err: unknown) =>
-        console.warn("[wecom] response publish failed:", safeErrorMessage(err))
+        log.warn({ err }, "[wecom] response publish failed")
       )
       return
     }

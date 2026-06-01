@@ -2,6 +2,7 @@ import type { CanonicalContentBlock } from "@synapse/shared"
 import { createRequire } from "module"
 import { mkdir } from "node:fs/promises"
 import { config } from "../../config/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { withTimeout } from "../../infrastructure/async/index.js"
 import { LRUCache } from "lru-cache"
 import { readFileBufferById } from "../files/service.js"
@@ -44,6 +45,7 @@ const ocrCache = new LRUCache<string, Promise<ImageOcrResult>>({
 })
 const localRequire = createRequire(import.meta.url)
 const warnedMessages = new Set<string>()
+const log = createLogger("ai.image-fallback")
 
 let tesseractModulePromise: Promise<TesseractModule | null> | null = null
 let workerPathPromise: Promise<string | null> | null = null
@@ -51,7 +53,7 @@ let workerPathPromise: Promise<string | null> | null = null
 function warnOnce(message: string): void {
   if (warnedMessages.has(message)) return
   warnedMessages.add(message)
-  console.warn(`[image-fallback] ${message}`)
+  log.warn(`[image-fallback] ${message}`)
 }
 
 function normalizeOcrText(text: string): string {

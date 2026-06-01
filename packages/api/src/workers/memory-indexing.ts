@@ -4,6 +4,9 @@ import { config } from "../config/index.js"
 import { redis } from "../infrastructure/redis/index.js"
 import { registerWorker } from "./registry.js"
 import { reindexMemoryItemEmbeddings } from "../modules/memory/indexing.js"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("memory-indexing")
 
 export function startMemoryIndexingWorker() {
   const worker = new Worker(
@@ -34,7 +37,7 @@ export function startMemoryIndexingWorker() {
   )
 
   worker.on("failed", (job, err) => {
-    console.error(`Memory indexing job ${job?.id} failed:`, err.message)
+    log.error({ err }, `Memory indexing job ${job?.id} failed`)
   })
 
   registerWorker(worker)

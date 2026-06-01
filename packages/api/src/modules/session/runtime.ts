@@ -2,6 +2,7 @@ import { redis } from "../../infrastructure/redis/index.js"
 import { query } from "../../infrastructure/database/index.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { sessionThinkingQueue } from "../../workers/queues.js"
 import {
   isThreadConversationKind,
@@ -26,6 +27,8 @@ import {
 import { sql } from "kysely"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { getSession, updateSessionStatus } from "./service.js"
+
+const log = createLogger("session.runtime")
 
 // Device-runtime v3 (PR #20): the relay-invoke-options helper is gone. Replicate
 // the trimmed-string normalization inline so the relay-tool fallback branch in
@@ -933,9 +936,9 @@ export function scheduleSessionRuntimeRefresh(
     () => {
       runtimePublishDebounceTimers.delete(sessionId)
       void publishSessionRuntime(workspaceId, sessionId).catch((error) => {
-        console.error(
-          `[runtime] failed to publish debounced runtime for session ${sessionId}:`,
-          error
+        log.error(
+          { err: error },
+          `[runtime] failed to publish debounced runtime for session ${sessionId}`
         )
       })
     },

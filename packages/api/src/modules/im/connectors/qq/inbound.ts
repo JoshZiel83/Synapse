@@ -20,6 +20,7 @@
  */
 
 import { redis } from "../../../../infrastructure/redis/index.js"
+import { createLogger } from "../../../../infrastructure/logger/index.js"
 import type {
   AccountStartContext,
   RunningAccount,
@@ -42,6 +43,8 @@ import {
   signEd25519UrlVerification,
   verifyEd25519BusinessEvent,
 } from "./webhook-signature.js"
+
+const log = createLogger("im.qq")
 
 export async function startQqAccount(
   ctx: AccountStartContext
@@ -302,9 +305,9 @@ async function recordInboundAnchor(params: {
       receivedAt: params.receivedAt,
     },
   }).catch((err) => {
-    console.warn(
-      `[im:qq] failed to record inbound anchor for account ${params.accountId}:`,
-      err
+    log.warn(
+      { err },
+      `[im:qq] failed to record inbound anchor for account ${params.accountId}`
     )
   })
 }

@@ -39,6 +39,7 @@ import {
   encryptSensitiveFields,
   isEncrypted,
 } from "../../infrastructure/crypto/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { query, transaction } from "../../infrastructure/database/index.js"
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import {
@@ -347,6 +348,8 @@ export class McpPluginError extends Error {
     super(message)
   }
 }
+
+const log = createLogger("mcp.service")
 
 function sanitizeSlug(value: string) {
   return slugify(value, { maxLength: 120 })
@@ -2713,9 +2716,9 @@ export async function seedBuiltinMcpPlugins() {
             pluginSeed.iconAssetPath
           )
         } catch (error) {
-          console.warn(
-            `[builtin-mcp] Failed to persist icon for ${seed.slug}/${pluginSeed.slug}; continuing without icon`,
-            error
+          log.warn(
+            { err: error },
+            `[builtin-mcp] Failed to persist icon for ${seed.slug}/${pluginSeed.slug}; continuing without icon`
           )
         }
       }

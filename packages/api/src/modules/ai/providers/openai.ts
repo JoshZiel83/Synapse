@@ -32,6 +32,9 @@ import {
   canResumeBranchFromWindow,
 } from "../engine-branches.js"
 import { getFullFileUrlById, readFileBufferById } from "../../files/service.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("ai.openai")
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   "image/jpeg",
@@ -55,7 +58,7 @@ async function ensureSupportedFormat(
     const converted = await sharp(buffer).png().toBuffer()
     return { buffer: converted, mimeType: "image/png" }
   } catch (err) {
-    console.error(`[openai] Failed to convert ${mimeType} to PNG:`, err)
+    log.error({ err }, `[openai] Failed to convert ${mimeType} to PNG`)
     return { buffer, mimeType }
   }
 }
@@ -174,7 +177,7 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
             input,
           })
         } catch {
-          console.error(
+          log.error(
             `Failed to parse tool call arguments for ${tc.function.name}`
           )
         }
@@ -473,9 +476,9 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
           textParts.push(desc)
         }
       } catch (err: any) {
-        console.error(
-          `[openai] Failed to resolve file_ref ${block.fileId}:`,
-          err.message
+        log.error(
+          { err: err.message },
+          `[openai] Failed to resolve file_ref ${block.fileId}`
         )
         const desc = `[${block.category}: ${block.originalName} (read failed)]`
         nativeBlocks.push({ type: "text", text: desc })

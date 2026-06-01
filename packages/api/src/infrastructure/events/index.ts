@@ -11,6 +11,9 @@ import {
   type TableRow,
 } from "../database/kysely.js"
 import { redisPub, redisSub } from "../redis/index.js"
+import { createLogger } from "../logger/index.js"
+
+const log = createLogger("events")
 
 export type Queryable = {
   query: (
@@ -168,9 +171,9 @@ async function processRealtimeOutboxEntry(entry: RealtimeEventOutboxRow) {
     return true
   } catch (error) {
     await markRealtimeOutboxEntryFailed(entry.id, error)
-    console.error(
-      `[events] Failed to dispatch realtime outbox entry ${entry.id}:`,
-      error
+    log.error(
+      { err: error },
+      `[events] Failed to dispatch realtime outbox entry ${entry.id}`
     )
     return false
   }
@@ -314,12 +317,15 @@ async function runRealtimeOutboxDispatcherLoop() {
         try {
           const gced = await gcRealtimeEventOutbox()
           if (gced > 0) {
-            console.info(
+            log.info(
               `[events] realtime_event_outbox GC: pruned ${gced} dispatched rows`
             )
           }
         } catch (gcError) {
-          console.error("[events] realtime_event_outbox GC failed:", gcError)
+          log.error(
+            { err: gcError },
+            "[events] realtime_event_outbox GC failed"
+          )
         }
       }
 
@@ -328,7 +334,10 @@ async function runRealtimeOutboxDispatcherLoop() {
       }
       await wait(processed > 0 ? 10 : config.realtime.outboxPollMs)
     } catch (error) {
-      console.error("[events] Realtime outbox dispatcher loop failed:", error)
+      log.error(
+        { err: error },
+        "[events] Realtime outbox dispatcher loop failed"
+      )
       if (!realtimeOutboxDispatcherRunning) {
         break
       }
@@ -368,7 +377,7 @@ export async function initEventBus() {
           try {
             await handler(event)
           } catch (err) {
-            console.error(`Event handler error for ${event.type}:`, err)
+            log.error({ err }, `Event handler error for ${event.type}`)
           }
         }
       }
@@ -379,12 +388,12 @@ export async function initEventBus() {
           try {
             await handler(event)
           } catch (err) {
-            console.error("Wildcard event handler error:", err)
+            log.error({ err }, "Wildcard event handler error")
           }
         }
       }
     } catch (err) {
-      console.error("Event parse error:", err)
+      log.error({ err }, "Event parse error")
     }
   })
 }

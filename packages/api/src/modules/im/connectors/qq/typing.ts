@@ -21,6 +21,9 @@ import { decodeUserOpenid } from "./address-encoding.js"
 import { QQ_MSG_TYPE } from "./types.js"
 import type { EndpointRef, MessageRef, TypingAdapterResult } from "../types.js"
 import type { TransportAccountSummary } from "@synapse/shared/types"
+import { createLogger } from "../../../../infrastructure/logger/index.js"
+
+const log = createLogger("im.qq")
 
 /**
  * Build a typing adapter for QQ. Returns null when:
@@ -50,9 +53,9 @@ export function createQqTypingAdapter(input: {
         if (stopped) return
         await sendInputNotify(input.account, userOpenid, msgId).catch((err) => {
           // Best-effort — typing failures must not abort the actor turn.
-          console.warn(
-            `[im:qq] input_notify failed for openid=${userOpenid}:`,
-            err
+          log.warn(
+            { err },
+            `[im:qq] input_notify failed for openid=${userOpenid}`
           )
         })
       },

@@ -33,6 +33,9 @@ import {
   canResumeBranchFromWindow,
 } from "../engine-branches.js"
 import { getFullFileUrlById, readFileBufferById } from "../../files/service.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("ai.bigmodel")
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   "image/jpeg",
@@ -55,7 +58,7 @@ async function ensureSupportedFormat(
     const converted = await sharp(buffer).png().toBuffer()
     return { buffer: converted, mimeType: "image/png" }
   } catch (err) {
-    console.error(`[bigmodel] Failed to convert ${mimeType} to PNG:`, err)
+    log.error({ err }, `[bigmodel] Failed to convert ${mimeType} to PNG`)
     return { buffer, mimeType }
   }
 }
@@ -211,7 +214,7 @@ export class BigModelChatCompletionsProvider implements AIProvider {
             input: JSON.parse(toolCall.function.arguments),
           })
         } catch {
-          console.error(
+          log.error(
             `Failed to parse BigModel tool call arguments for ${toolCall.function.name}`
           )
         }
@@ -499,9 +502,9 @@ export class BigModelChatCompletionsProvider implements AIProvider {
           textParts.push(desc)
         }
       } catch (err: any) {
-        console.error(
-          `[bigmodel] Failed to resolve file_ref ${block.fileId}:`,
-          err.message
+        log.error(
+          { err: err.message },
+          `[bigmodel] Failed to resolve file_ref ${block.fileId}`
         )
         const desc = `[${block.category}: ${block.originalName} (read failed)]`
         nativeBlocks.push({ type: "text", text: desc })

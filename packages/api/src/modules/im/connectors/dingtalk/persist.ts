@@ -30,6 +30,9 @@ import {
   updateTransportAccount,
 } from "../../service.js"
 import { refreshTransportRuntimeManager } from "../../runtime.js"
+import { createLogger } from "../../../../infrastructure/logger/index.js"
+
+const log = createLogger("im.dingtalk")
 
 export interface PersistDingtalkAccountInput {
   workspaceId: string
@@ -143,8 +146,7 @@ export async function persistDingtalkAccountFromRegistration(
     // Failure to wake reconcile isn't fatal — the next 15s tick will
     // pick the account up — but it deserves a log so an operator can
     // investigate why the in-process refresh hook is broken.
-    // eslint-disable-next-line no-console
-    console.error("[im][dingtalk] refreshTransportRuntimeManager failed:", err)
+    log.error({ err }, "[im][dingtalk] refreshTransportRuntimeManager failed")
   })
   return account
 }

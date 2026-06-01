@@ -1,4 +1,7 @@
 import { redisPub, redisSub } from "../redis/index.js"
+import { createLogger } from "../logger/index.js"
+
+const log = createLogger("auth-session-registry")
 
 const AUTH_SESSION_CONTROL_CHANNEL = "synapse:auth:sessions"
 
@@ -101,9 +104,9 @@ export async function initAuthSessionRegistry() {
       const message = JSON.parse(rawMessage) as AuthSessionControlMessage
       applyControlMessage(message)
     } catch (error) {
-      console.error(
-        "[auth-session-registry] Failed to parse control message:",
-        error
+      log.error(
+        { err: error },
+        "[auth-session-registry] Failed to parse control message"
       )
     }
   })
