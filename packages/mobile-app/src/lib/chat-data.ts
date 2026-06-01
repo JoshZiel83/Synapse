@@ -2,6 +2,13 @@ import Feather from "@expo/vector-icons/Feather"
 
 import { isUuid } from "@/lib/ids"
 import {
+  mergeChatItems,
+  sortChatConversations,
+  sortChatItems,
+  upsertChatConversation,
+  upsertChatConversations,
+} from "@shared/chat-state"
+import {
   CONVERSATION_ITEM_SCOPE,
   CONVERSATION_ITEM_SURFACE,
   CONVERSATION_ITEM_TYPE,
@@ -18,6 +25,16 @@ import {
   type PendingConversationRead,
   type PendingOutboxMessage,
 } from "@shared"
+
+// Re-exported under the historical names used across the mobile codebase; the
+// implementations now live in @synapse/shared/chat-state (shared with web).
+export {
+  mergeChatItems,
+  sortChatConversations,
+  sortChatItems,
+  upsertChatConversation,
+  upsertChatConversations,
+}
 
 export type LocalChatDeliveryStatus = "sending" | "retrying"
 
@@ -360,38 +377,6 @@ export function buildChatWorkspaceSnapshotFromQueueState(
   )
 }
 
-export function sortChatConversations(conversations: ChatConversationView[]) {
-  return [...conversations].sort((left, right) => {
-    const leftPinned = left.pinnedSortKey
-      ? new Date(left.pinnedSortKey).getTime()
-      : 0
-    const rightPinned = right.pinnedSortKey
-      ? new Date(right.pinnedSortKey).getTime()
-      : 0
-    if (leftPinned !== rightPinned) {
-      return rightPinned - leftPinned
-    }
-
-    const leftAt = left.lastItem?.createdAt ?? left.updatedAt ?? left.createdAt
-    const rightAt =
-      right.lastItem?.createdAt ?? right.updatedAt ?? right.createdAt
-    return new Date(rightAt).getTime() - new Date(leftAt).getTime()
-  })
-}
-
-export function sortChatItems<
-  T extends Pick<ChatConversationItem, "sequence" | "createdAt">,
->(items: T[]) {
-  return [...items].sort((left, right) => {
-    if (left.sequence !== right.sequence) {
-      return left.sequence - right.sequence
-    }
-    return (
-      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
-    )
-  })
-}
-
 export function getConversationViewerParticipant(
   conversation: ChatConversationView | null | undefined,
   workspaceMemberId: string | null | undefined
@@ -533,41 +518,6 @@ export function buildPreviewTextFromItem(
   }
 
   return `[${item.subtype}]`
-}
-
-export function mergeChatItems(
-  existing: ChatConversationItem[],
-  incoming: ChatConversationItem[]
-) {
-  const byKey = new Map<string, ChatConversationItem>()
-
-  for (const item of existing) {
-    byKey.set(item.id, item)
-  }
-
-  for (const item of incoming) {
-    byKey.set(item.id, item)
-  }
-
-  return sortChatItems([...byKey.values()])
-}
-
-export function upsertChatConversation(
-  conversations: ChatConversationView[],
-  incoming: ChatConversationView
-) {
-  const next = conversations.filter(
-    (conversation) => conversation.conversationId !== incoming.conversationId
-  )
-  next.push(incoming)
-  return sortChatConversations(next)
-}
-
-export function upsertChatConversations(
-  conversations: ChatConversationView[],
-  incoming: ChatConversationView[]
-) {
-  return incoming.reduce(upsertChatConversation, conversations)
 }
 
 export function getConversationMetaOrDefault(

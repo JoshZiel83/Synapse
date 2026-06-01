@@ -48,6 +48,14 @@
       "types": "./dist/chat-socket/index.d.ts",
       "default": "./dist/chat-socket/index.js"
     },
+    "./chat-state": {
+      "types": "./dist/chat-state/index.d.ts",
+      "default": "./dist/chat-state/index.js"
+    },
+    "./chat-queue": {
+      "types": "./dist/chat-queue/index.d.ts",
+      "default": "./dist/chat-queue/index.js"
+    },
     "./access/policies": {
       "types": "./dist/access/policies/index.d.ts",
       "default": "./dist/access/policies/index.js"
