@@ -89,3 +89,29 @@ test("honors extra keys and custom placeholder", () => {
   assert.equal(out.ssn, "[hidden]")
   assert.equal(out.name, "ok")
 })
+
+test("fails CLOSED at the depth limit (deep subtree is not leaked)", () => {
+  // Build nesting deeper than maxDepth with a secret at the very bottom.
+  const maxDepth = 4
+  let deepest: any = { token: "secret" }
+  for (let i = 0; i < maxDepth + 3; i++) deepest = { nested: deepest }
+  const out = redactSecrets(deepest, { maxDepth })
+  // Walk down to the cutoff: beyond maxDepth the subtree must be the
+  // placeholder, never the raw { token: "secret" }.
+  const serialized = JSON.stringify(out)
+  assert.ok(
+    !serialized.includes("secret"),
+    `deep secret leaked past maxDepth: ${serialized}`
+  )
+  assert.ok(serialized.includes("***REDACTED***"))
+})
+
+test("default maxDepth also fails closed for very deep input", () => {
+  let deepest: any = { token: "secret" }
+  for (let i = 0; i < 40; i++) deepest = { nested: deepest }
+  const serialized = JSON.stringify(redactSecrets(deepest))
+  assert.ok(
+    !serialized.includes("secret"),
+    "deep secret leaked at default depth"
+  )
+})

@@ -65,7 +65,7 @@ export function redactSecrets<T>(value: T, options: RedactOptions = {}): T {
       ]
     : DEFAULT_SENSITIVE_KEY_PARTS
   const placeholder = options.placeholder ?? REDACTED
-  const maxDepth = options.maxDepth ?? 12
+  const maxDepth = options.maxDepth ?? 32
   // Maps a source object/array to its redacted copy. Registered BEFORE
   // recursing into children so a cycle resolves to the (in-progress) redacted
   // copy rather than returning the original unredacted object.
@@ -100,8 +100,12 @@ export function redactSecrets<T>(value: T, options: RedactOptions = {}): T {
   }
 
   function walk(node: unknown, depth: number): unknown {
-    if (depth > maxDepth) return node
     if (node === null || typeof node !== "object") return node
+    // Fail CLOSED at the depth limit: returning a deep object/array subtree
+    // unredacted would leak any secret nested below maxDepth into logs. Replace
+    // the whole subtree with the placeholder instead. (Primitives are handled
+    // above and are safe — their sensitivity is decided by the parent's key.)
+    if (depth > maxDepth) return placeholder
 
     if (Array.isArray(node)) {
       const cached = done.get(node)
