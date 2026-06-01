@@ -427,5 +427,7 @@ pub struct DirSyncResult {
     pub applied: Vec<String>,
     pub deferred_conflicts: Vec<String>,
     pub conflict_sidecars: Vec<ConflictSidecar>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incomplete: Option<String>,
     pub new_base_manifest_sha256: String,
 }

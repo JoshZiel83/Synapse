@@ -590,6 +590,7 @@ async fn dir_sync(state: &Arc<State>, params: Value) -> Result<Value, RpcError> 
                 sidecar: c.sidecar,
             })
             .collect(),
+        incomplete: res.incomplete,
         new_base_manifest_sha256: res.new_base_manifest_sha256,
     })
     .unwrap())

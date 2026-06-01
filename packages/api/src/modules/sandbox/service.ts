@@ -386,11 +386,13 @@ async function waitForCatalog(
  * — file/symlink conflicts only). The caller surfaces both to the agent.
  *
  * Per-mount isolation: each mount's refresh is independent. If one mount's
- * syncDir THROWS (the helper can now fail closed on a sidecar/delete error,
- * round-8), we record it in `syncFailuresBySubpath`, leave that mount's base
- * UNadvanced (so next turn re-runs the merge and self-heals), and CONTINUE with
- * the other mounts — so a failure in one space never discards the already-
- * computed conflict notices of a space that refreshed cleanly (round-8 follow-up).
+ * syncDir fails — either by returning `incomplete` (the helper stopped mid-way
+ * but the partial sidecars are valid, round-9 #2) or by throwing outright — we
+ * record it in `syncFailuresBySubpath`, surface any sidecars already written,
+ * leave that mount's base UNadvanced (so next turn re-runs the merge and
+ * self-heals), and CONTINUE with the other mounts — so a failure in one space
+ * never discards the already-computed conflict notices of a space that refreshed
+ * cleanly (round-8 follow-up + round-9 #2).
  */
 export async function refreshSpaces(sessionId: string): Promise<{
   deferredConflictsBySubpath: Record<string, string[]>
@@ -428,16 +430,31 @@ export async function refreshSpaces(sessionId: string): Promise<{
         deferredConflictsBySubpath[mount.mount_subpath] =
           sync.deferred_conflicts
       }
+      // Surface every sidecar the helper actually wrote — INCLUDING when the
+      // sync stopped early (round-9 #2). The Rust paths are mount-relative
+      // (original = the real tree path, sidecar = a flat hashed leaf under
+      // .synapse-conflicts); prefix both with the mount subpath to make them
+      // agent-visible.
       if (sync.conflict_sidecars.length > 0) {
-        // Make the sidecar VFS paths agent-visible by prefixing the mount
-        // subpath (the Rust paths are relative to the mount root, e.g.
-        // /.synapse-conflicts/foo → /conversation/.synapse-conflicts/foo).
         sidecarsBySubpath[mount.mount_subpath] = sync.conflict_sidecars.map(
           (c) => ({
             original: `/${mount.mount_subpath}${c.original}`,
             sidecar: `/${mount.mount_subpath}${c.sidecar}`,
           })
         )
+      }
+      if (sync.incomplete) {
+        // The helper STOPPED EARLY on a per-path failure: the live dir is only
+        // partially synced (no valid new base), so do NOT advance base — leaving
+        // head!=base re-runs the sync next turn and self-heals (round-8
+        // fail-closed). But the sidecars written before the stop ARE surfaced
+        // above, so the agent still learns where its preserved copies are
+        // (round-9 #2: don't orphan an already-written sidecar).
+        syncFailuresBySubpath[mount.mount_subpath] = sync.incomplete
+        console.error(
+          `[sandbox] refresh sync incomplete for mount ${mount.id} (${mount.mount_subpath}); base left unadvanced for next-turn retry: ${sync.incomplete}`
+        )
+        continue
       }
       // Advance base to the synced-in head ONLY after a successful sync.
       // dir_sync resolves conflicts HEAD-WINS in the live tree (head applied to
@@ -450,11 +467,12 @@ export async function refreshSpaces(sessionId: string): Promise<{
       // agent's stale local copy.
       await updateFileMount(pool, mount.id, { baseSnapshotId: head })
     } catch (err) {
-      // The helper failed closed (e.g. a sidecar/delete write error) — the live
-      // dir is partially synced and base is NOT advanced. Record the failure so
-      // the caller can tell the agent this space's view is stale, and so commit
-      // can skip it this turn; next turn re-runs the merge from the same base
-      // and self-heals. CONTINUE so other mounts still refresh + surface notices.
+      // The helper threw outright (e.g. an RPC/spawn error before any partial
+      // result) — the live dir may be partially synced and base is NOT advanced.
+      // Record the failure so the caller can tell the agent this space's view is
+      // stale, and so commit skips it this turn; next turn re-runs the merge from
+      // the same base and self-heals. CONTINUE so other mounts still refresh +
+      // surface notices.
       const msg = err instanceof Error ? err.message : String(err)
       syncFailuresBySubpath[mount.mount_subpath] = msg
       console.error(
@@ -516,16 +534,22 @@ export interface CommitDeps {
    */
   loadCtx: (sessionId: string) => Promise<SessionContext | null>
   /**
-   * Reconcile the live dir to a committed manifest (head-wins + sidecar losers),
-   * returning the agent-visible sidecars, or `null` on failure. Default drives
-   * the real fs-helper via syncDir.
+   * Reconcile the live dir to a committed manifest (head-wins + sidecar losers).
+   * Returns `{ ok, sidecars }`: `ok` = the live dir is fully == committed (safe
+   * to advance base); `sidecars` = every preserved copy written, surfaced to the
+   * agent EVEN WHEN ok=false (round-9 #2: a sidecar written before a mid-way
+   * failure must not be orphaned). When ok=false the caller MUST NOT advance base
+   * (round-7 #A self-heal). Default drives the real fs-helper via syncDir.
    */
   reconcile: (
     mount: FileMountRow,
     baseManifestSha: string | null,
     committedManifestSha: string,
     hadConflicts: boolean
-  ) => Promise<{ original: string; sidecar: string }[] | null>
+  ) => Promise<{
+    ok: boolean
+    sidecars: { original: string; sidecar: string }[]
+  }>
 }
 
 function defaultCommitDeps(): CommitDeps {
@@ -539,23 +563,32 @@ function defaultCommitDeps(): CommitDeps {
       committedManifestSha,
       hadConflicts
     ) => {
-      if (!hadConflicts) return []
+      if (!hadConflicts) return { ok: true, sidecars: [] }
       try {
         const res = await syncDir({
           dir: mount.materialized_dir!,
           baseManifestSha256: baseManifestSha ?? undefined,
           toManifestSha256: committedManifestSha,
         })
-        return res.conflict_sidecars.map((c) => ({
+        const sidecars = res.conflict_sidecars.map((c) => ({
           original: `/${mount.mount_subpath}${c.original}`,
           sidecar: `/${mount.mount_subpath}${c.sidecar}`,
         }))
+        if (res.incomplete) {
+          // Partial reconcile: surface the sidecars written so far, but signal
+          // NOT-ok so the caller leaves base unadvanced (round-9 #2 + round-7 #A).
+          console.error(
+            `[sandbox] post-commit reconcile incomplete for mount ${mount.id}: ${res.incomplete}`
+          )
+          return { ok: false, sidecars }
+        }
+        return { ok: true, sidecars }
       } catch (err) {
         console.error(
           `[sandbox] post-commit reconcile failed for mount ${mount.id}:`,
           err
         )
-        return null
+        return { ok: false, sidecars: [] }
       }
     },
   }
@@ -787,13 +820,13 @@ async function commitOneMount(
   // the committed manifest (head-wins) and sidecar the local losers — exactly
   // like refresh — so live == committed and base-advance is safe.
   //
-  // deps.reconcile returns the sidecars written (mount-subpath-prefixed, so the
-  // caller can tell the agent where its pre-conflict copy is — round-7 #C), or
-  // `null` if the reconcile FAILED. On failure the caller MUST NOT advance base:
-  // leaving head!=base lets next turn's refresh re-run the reconcile and
-  // self-heal, whereas advancing base now would re-open the round-6 #1
-  // silent-overwrite bug (round-7 #A — the reconcile is an out-of-process RPC
-  // that can throw).
+  // deps.reconcile returns { ok, sidecars }: `sidecars` = every preserved copy
+  // written (mount-subpath-prefixed, so the caller can tell the agent where its
+  // pre-conflict copy is — round-7 #C + round-9 #2: surfaced EVEN when ok=false);
+  // `ok=false` = the reconcile did not fully bring the live dir to committed, so
+  // the caller MUST NOT advance base — leaving head!=base lets next turn's
+  // refresh re-run the reconcile and self-heal, whereas advancing base now would
+  // re-open the round-6 #1 silent-overwrite bug (round-7 #A).
   const reconcileLiveDir = (committedManifestSha: string) =>
     deps.reconcile(
       mount,
@@ -808,12 +841,14 @@ async function commitOneMount(
   // latest so the next commit doesn't re-derive the same conflict (and doesn't
   // overwrite head with the stale local copy).
   if (latestManifest && scan.manifest_sha256 === latestManifest) {
-    const sidecars = await reconcileLiveDir(latestManifest)
-    if (sidecars === null) {
-      // Reconcile failed → do NOT advance base. Next turn's refresh (head!=base)
-      // re-runs the reconcile and self-heals; advancing now would let the stale
-      // local loser silently overwrite head on the following commit (round-7 #A).
-      return { snapshotId: null, conflicts: scan.conflict_paths, sidecars: [] }
+    const { ok, sidecars } = await reconcileLiveDir(latestManifest)
+    if (!ok) {
+      // Reconcile not fully applied → do NOT advance base. Next turn's refresh
+      // (head!=base) re-runs the reconcile and self-heals; advancing now would
+      // let the stale local loser silently overwrite head on the following
+      // commit (round-7 #A). Still return the partial sidecars so the agent is
+      // told where its preserved copies are (round-9 #2).
+      return { snapshotId: null, conflicts: scan.conflict_paths, sidecars }
     }
     if (latestSnapshotId && mount.base_snapshot_id !== latestSnapshotId) {
       await updateFileMount(deps.dbh, mount.id, {
@@ -848,21 +883,23 @@ async function commitOneMount(
     })
     // Reconcile the live dir to the committed manifest (head-wins + sidecar the
     // losers) BEFORE advancing base, so the next turn never overwrites head with
-    // a stale local copy. (No-op → [] when there were no conflicts.)
-    const sidecars = await reconcileLiveDir(scan.manifest_sha256)
-    if (sidecars === null) {
-      // Reconcile failed AFTER the snapshot committed (head advanced to
-      // snapshot.id). Record the result snapshot for audit but do NOT advance
+    // a stale local copy. (No-op → ok with [] when there were no conflicts.)
+    const { ok, sidecars } = await reconcileLiveDir(scan.manifest_sha256)
+    if (!ok) {
+      // Reconcile not fully applied AFTER the snapshot committed (head advanced
+      // to snapshot.id). Record the result snapshot for audit but do NOT advance
       // base — next turn's refresh (head=snapshot.id != base=old) re-runs the
       // reconcile and self-heals. Advancing base here would re-open round-6 #1
-      // (the stale local loser would silently overwrite head) (round-7 #A).
+      // (the stale local loser would silently overwrite head) (round-7 #A). Still
+      // return the partial sidecars so the agent learns where its copies are
+      // (round-9 #2).
       await updateFileMount(deps.dbh, mount.id, {
         resultSnapshotId: snapshot.id,
       })
       return {
         snapshotId: snapshot.id,
         conflicts: scan.conflict_paths,
-        sidecars: [],
+        sidecars,
       }
     }
     // Advance the mount base to the snapshot we just produced.

@@ -21,6 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::blobs::BlobStore;
 use crate::rpc::RpcError;
@@ -650,13 +651,23 @@ pub struct DirSyncResult {
     pub deferred_conflicts: Vec<String>,
     /// The actual sidecars written (original path → sidecar path). Empty for a
     /// conflict whose dirty subtree had no files (e.g. a purely-empty-dir edit).
-    /// Lets the caller list ONLY real sidecars to the agent.
+    /// Lets the caller list ONLY real sidecars to the agent. Populated even when
+    /// the sync stops early (see `incomplete`) so already-preserved copies are
+    /// never orphaned (round-9 #2).
     pub conflict_sidecars: Vec<ConflictSidecar>,
+    /// `None` = the sync fully applied every incoming path. `Some(msg)` = it
+    /// STOPPED EARLY on a per-path failure (a sidecar write or a head apply/
+    /// delete error). On early stop the partial `conflict_sidecars` ARE valid
+    /// (their bytes are on disk) and MUST be surfaced, but the live dir is only
+    /// partially synced, so the caller MUST NOT advance base — leaving head!=base
+    /// lets the next turn re-run the sync and self-heal (round-8 fail-closed +
+    /// round-9 #2: don't lose the sidecars written before the failure).
+    pub incomplete: Option<String>,
     /// The manifest the live dir's base should advance to (= `to`), stored in
-    /// CAS. The caller ALWAYS advances file_mounts.base_snapshot_id to this —
-    /// since head won every conflict, working == head for all incoming paths, so
-    /// a later commit sees no spurious conflict and the agent's reconciled
-    /// re-edit commits cleanly.
+    /// CAS. The caller advances file_mounts.base_snapshot_id to this ONLY when
+    /// `incomplete` is None — since head won every conflict, working == head for
+    /// all incoming paths, so a later commit sees no spurious conflict and the
+    /// agent's reconciled re-edit commits cleanly. Empty string when incomplete.
     pub new_base_manifest_sha256: String,
 }
 
@@ -725,7 +736,11 @@ pub fn dir_sync(
     let mut sidecar_done: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
 
-    for p in &incoming {
+    // Per-path application, factored so a failure can STOP the loop while keeping
+    // the sidecars already written (round-9 #2). Returns Err(msg) on the first
+    // per-path failure; the caller sets `incomplete` and surfaces partial work.
+    let mut incomplete: Option<String> = None;
+    'outer: for p in &incoming {
         let locally_dirty_direct = local_dirty.contains(p);
         let locally_dirty_tree =
             local_dirty.iter().any(|q| q != p && paths_overlap(p, q));
@@ -760,26 +775,42 @@ pub fn dir_sync(
                     // Already sidecar'd under an earlier overlapping conflict path.
                     continue;
                 }
-                let sidecar_vfs = format!("/{CONFLICTS_DIRNAME}{dirty_path}");
-                // The .synapse-conflicts namespace is helper-owned scratch
-                // (never scanned/committed, agent-READable but not its to corrupt):
-                // proactively clear any non-directory an agent may have left along
-                // the sidecar's parent chain so create_dir_all can't be wedged
-                // (round-8 #1 defense-in-depth). Clobbering is safe here precisely
-                // because nothing in this namespace is recoverable content.
-                ensure_conflicts_parent_dirs(dir, &sidecar_vfs)?;
+                // Collision-free sidecar storage: a FLAT leaf named by the hash
+                // of the original VFS path, directly under .synapse-conflicts
+                // (round-9 #1). Mirroring the original tree (/.synapse-conflicts
+                // {dirty_path}) collides — a file sidecar /foo and a deeper
+                // /foo/bar.txt cannot coexist, and "preparing" one would DELETE
+                // the other recovery copy. A flat hashed leaf has no nesting, so
+                // there is no file-vs-dir collision, and re-preserving the same
+                // original overwrites only its own prior copy (idempotent). The
+                // returned {original, sidecar} carries the real original path for
+                // the agent.
+                let sidecar_vfs = sidecar_path_for(dirty_path);
+                // Ensure the single .synapse-conflicts dir exists (helper-owned
+                // scratch, never scanned/committed); clobber a non-dir an agent
+                // may have left at that one slot.
+                if let Err(e) = ensure_conflicts_root_dir(dir) {
+                    incomplete = Some(format!(
+                        "preparing conflict scratch for {dirty_path}: {e}"
+                    ));
+                    break 'outer;
+                }
                 // The sidecar write MUST succeed before we let head overwrite or
                 // delete the live path below — the head apply ALWAYS destroys the
                 // local copy, so a swallowed sidecar failure would be guaranteed
-                // data loss. Propagate the error: dir_sync fails, the caller
-                // leaves base unadvanced, and the next turn retries (round-8 #1).
-                apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(dirty_entry))
-                    .map_err(|e| {
-                        RpcError::Internal(format!(
-                            "failed to preserve local copy of {dirty_path} at \
-                             conflict sidecar {sidecar_vfs}: {e}"
-                        ))
-                    })?;
+                // data loss. On failure STOP (leave the live path intact): the
+                // caller won't advance base and the next turn retries (round-8 #1).
+                if let Err(e) =
+                    apply_entry_to_dir(cas, dir, &sidecar_vfs, Some(dirty_entry))
+                {
+                    incomplete = Some(format!(
+                        "failed to preserve local copy of {dirty_path} at \
+                         conflict sidecar {sidecar_vfs}: {e}"
+                    ));
+                    break 'outer;
+                }
+                // Sidecar bytes are on disk → record it so the caller surfaces it
+                // EVEN IF a later path fails (round-9 #2: never orphan a sidecar).
                 conflict_sidecars.push(ConflictSidecar {
                     original: dirty_path.clone(),
                     sidecar: sidecar_vfs,
@@ -787,13 +818,31 @@ pub fn dir_sync(
             }
             // Overwrite the live path with head's version (or remove it if head
             // deleted it). Any dirty subtree files were sidecar'd just above.
-            apply_entry_to_dir(cas, dir, p, to_entry)?;
+            if let Err(e) = apply_entry_to_dir(cas, dir, p, to_entry) {
+                incomplete = Some(format!("applying head to {p}: {e}"));
+                break 'outer;
+            }
             continue;
         }
 
         // Apply head's version into the live dir.
-        apply_entry_to_dir(cas, dir, p, to_entry)?;
+        if let Err(e) = apply_entry_to_dir(cas, dir, p, to_entry) {
+            incomplete = Some(format!("applying head to {p}: {e}"));
+            break 'outer;
+        }
         applied.push(p.clone());
+    }
+
+    if incomplete.is_some() {
+        // Partial sync: surface the sidecars written so far, but signal the
+        // caller NOT to advance base (no valid new_base). Self-heals next turn.
+        return Ok(DirSyncResult {
+            applied,
+            deferred_conflicts: deferred,
+            conflict_sidecars,
+            incomplete,
+            new_base_manifest_sha256: String::new(),
+        });
     }
 
     let new_base = to.store(cas)?;
@@ -801,82 +850,75 @@ pub fn dir_sync(
         applied,
         deferred_conflicts: deferred,
         conflict_sidecars,
+        incomplete: None,
         new_base_manifest_sha256: new_base,
     })
 }
 
-/// Ensure every parent directory of a sidecar path (under the helper-owned
-/// `.synapse-conflicts` scratch namespace) exists AS A DIRECTORY, clobbering any
-/// file/symlink an agent may have left in the way. This namespace is never
-/// scanned into a snapshot and holds no recoverable content, so clobbering is
-/// safe — and it guarantees the subsequent sidecar write can't be permanently
-/// wedged by a corrupted scratch tree (round-8 #1 defense-in-depth). Only paths
-/// strictly under `.synapse-conflicts` are touched.
+/// Collision-free sidecar VFS path for a dirty original path (round-9 #1). A
+/// FLAT leaf named by the hex sha256 of the original VFS path, directly under
+/// `.synapse-conflicts`. Because every sidecar is a direct child of the scratch
+/// root (never nested), no two sidecars can ever collide as file-vs-directory,
+/// and re-preserving the same original overwrites only its own prior copy. The
+/// human-readable original path travels separately in the returned
+/// `ConflictSidecar.original`, so the flat hashed name loses no information the
+/// agent needs.
+fn sidecar_path_for(original_vfs: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(original_vfs.as_bytes());
+    let hex = hex::encode(h.finalize());
+    format!("/{CONFLICTS_DIRNAME}/{hex}")
+}
+
+/// Ensure the single `.synapse-conflicts` scratch root exists AS A DIRECTORY,
+/// clobbering a non-directory an agent may have left at that one slot. This
+/// namespace is helper-owned, never scanned/committed; clobbering the ROOT slot
+/// itself is safe (it holds no entry we created — our sidecars are its children,
+/// and if the root is a non-dir there are none). Because sidecars are now flat
+/// leaves (see `sidecar_path_for`), only this one directory ever needs to exist
+/// — no nested parent chain to walk, so an existing sidecar can never be deleted
+/// to make room for another (the round-9 #1 data-loss path).
 ///
-/// Race-tolerant by design: the live dir is mounted into a RUNNING sandbox, so
-/// the sandbox process can concurrently create/remove scratch entries between
-/// our stat and our act. Benign races (AlreadyExists on create, NotFound on
-/// remove) must NOT fail the refresh — we only propagate if, after our attempt,
-/// the slot is still not a usable directory (round-8 follow-up: avoid
-/// over-throwing on a condition that already resolved itself).
-fn ensure_conflicts_parent_dirs(dir: &Path, sidecar_vfs: &str) -> Result<(), RpcError> {
-    debug_assert!(sidecar_vfs.starts_with(&format!("/{CONFLICTS_DIRNAME}/")));
-    let segs: Vec<&str> = sidecar_vfs
-        .trim_start_matches('/')
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
-    // The last segment is the sidecar file/symlink itself — only its ANCESTORS
-    // must be directories.
-    let mut cur = dir.to_path_buf();
-    for seg in segs.iter().take(segs.len().saturating_sub(1)) {
-        cur.push(seg);
-        // If a non-directory occupies the slot, remove it (NotFound = a
-        // concurrent actor already cleared it → fine).
-        if let Ok(m) = cur.symlink_metadata() {
-            if !m.file_type().is_dir() {
-                match fs::remove_file(&cur) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => {
-                        return Err(RpcError::Internal(format!(
-                            "clearing non-dir at conflict scratch {}: {e}",
-                            cur.display()
-                        )))
-                    }
+/// Race-tolerant: benign races with the running sandbox (AlreadyExists on create,
+/// NotFound on remove) must NOT fail the refresh; we only propagate if the slot
+/// is still not a usable directory afterward.
+fn ensure_conflicts_root_dir(dir: &Path) -> Result<(), RpcError> {
+    let root = dir.join(CONFLICTS_DIRNAME);
+    if let Ok(m) = root.symlink_metadata() {
+        if !m.file_type().is_dir() {
+            match fs::remove_file(&root) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(RpcError::Internal(format!(
+                        "clearing non-dir at conflict scratch {}: {e}",
+                        root.display()
+                    )))
                 }
             }
         }
-        // create_dir_all is idempotent (AlreadyExists-tolerant) and handles a
-        // concurrent creator. Re-check the final kind so a concurrent actor that
-        // re-placed a NON-dir is still caught.
-        match fs::create_dir_all(&cur) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => {
-                return Err(RpcError::Internal(format!(
-                    "creating conflict scratch dir {}: {e}",
-                    cur.display()
-                )))
-            }
-        }
-        match cur.symlink_metadata() {
-            Ok(m) if m.file_type().is_dir() => {}
-            Ok(_) => {
-                return Err(RpcError::Internal(format!(
-                    "conflict scratch slot {} is not a directory after prepare",
-                    cur.display()
-                )))
-            }
-            Err(e) => {
-                return Err(RpcError::Internal(format!(
-                    "stat conflict scratch dir {} after prepare: {e}",
-                    cur.display()
-                )))
-            }
+    }
+    match fs::create_dir_all(&root) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => {
+            return Err(RpcError::Internal(format!(
+                "creating conflict scratch dir {}: {e}",
+                root.display()
+            )))
         }
     }
-    Ok(())
+    match root.symlink_metadata() {
+        Ok(m) if m.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(RpcError::Internal(format!(
+            "conflict scratch slot {} is not a directory after prepare",
+            root.display()
+        ))),
+        Err(e) => Err(RpcError::Internal(format!(
+            "stat conflict scratch dir {} after prepare: {e}",
+            root.display()
+        ))),
+    }
 }
 
 /// Apply a single path's target entry into the live dir: materialize the

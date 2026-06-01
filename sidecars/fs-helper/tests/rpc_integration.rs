@@ -5,6 +5,29 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
+/// Resolve the host path of the sidecar that a dir_sync result recorded for the
+/// given original VFS path, by reading `conflict_sidecars` (the sidecar storage
+/// name is an opaque, collision-free hash — round-9 #1 — so tests must NOT
+/// reconstruct it from the original tree path). Returns None if not reported.
+fn sidecar_host_for(
+    live: &std::path::Path,
+    result: &serde_json::Value,
+    original: &str,
+) -> Option<PathBuf> {
+    let arr = result["result"]["conflict_sidecars"].as_array()?;
+    let entry = arr
+        .iter()
+        .find(|c| c["original"].as_str() == Some(original))?;
+    let sidecar_vfs = entry["sidecar"].as_str()?;
+    let mut p = live.to_path_buf();
+    for seg in sidecar_vfs.trim_start_matches('/').split('/') {
+        if !seg.is_empty() {
+            p.push(seg);
+        }
+    }
+    Some(p)
+}
+
 fn build_binary() -> PathBuf {
     // The test harness rebuilds via cargo; just use the dev binary path.
     let mut p = std::env::current_exe().unwrap();
@@ -1897,8 +1920,10 @@ fn dir_sync_defers_conflict_on_same_path_local_and_incoming() {
     // of being re-judged a conflict).
     assert_eq!(std::fs::read(live.join("x.txt")).unwrap(), b"head");
     // The agent's pre-conflict LOCAL version is preserved at the conflict
-    // sidecar so its work isn't lost.
-    let sidecar = live.join(".synapse-conflicts").join("x.txt");
+    // sidecar so its work isn't lost (storage name is an opaque hash — resolve
+    // it via the reported conflict_sidecars).
+    let sidecar = sidecar_host_for(&live, &r, "/x.txt")
+        .expect("conflict sidecar reported for /x.txt");
     assert!(sidecar.is_file(), "conflict sidecar not written: {r}");
     assert_eq!(std::fs::read(&sidecar).unwrap(), b"local");
     // The sidecar must NOT be committed: a scan of the live dir excludes the
@@ -1983,23 +2008,13 @@ fn dir_sync_tree_delete_conflict_preserves_local_subtree_files() {
     // head wins: /dir is gone from the live tree.
     assert!(!live.join("dir").exists(), "head-delete not applied: {r}");
     // but the agent's local file is preserved at the sidecar (NOT lost).
-    let sidecar = live
-        .join(".synapse-conflicts")
-        .join("dir")
-        .join("local.txt");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/local.txt")
+        .unwrap_or_else(|| panic!("local subtree file lost (no sidecar): {r}"));
     assert!(
         sidecar.is_file(),
         "local subtree file lost (no sidecar): {r}"
     );
     assert_eq!(std::fs::read(&sidecar).unwrap(), b"my-work");
-    // the result reports the sidecar so the caller can tell the agent.
-    let sidecars = r["result"]["conflict_sidecars"].as_array().unwrap();
-    assert!(
-        sidecars
-            .iter()
-            .any(|c| c["original"].as_str() == Some("/dir/local.txt")),
-        "sidecar not reported: {r}"
-    );
     helper.stop();
 }
 
@@ -2066,7 +2081,8 @@ fn dir_sync_multilevel_overlap_sidecars_each_local_file_once() {
     // head wins: /dir is now a file holding head's bytes.
     assert_eq!(std::fs::read(live.join("dir")).unwrap(), b"now-a-file");
     // the agent's nested edit is preserved at the sidecar (exactly once).
-    let sidecar = live.join(".synapse-conflicts/dir/sub/x.txt");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/sub/x.txt")
+        .expect("sidecar reported for /dir/sub/x.txt");
     assert_eq!(std::fs::read(&sidecar).unwrap(), b"my-edit");
     let sidecars = r["result"]["conflict_sidecars"].as_array().unwrap();
     let for_file: Vec<_> = sidecars
@@ -2078,6 +2094,89 @@ fn dir_sync_multilevel_overlap_sidecars_each_local_file_once() {
         1,
         "the same local file must be reported in conflict_sidecars exactly once: {r}"
     );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_sidecars_are_collision_free_for_overlapping_names() {
+    // round-9 #1: with TREE-MIRRORING sidecar names, preserving both /foo (a
+    // file) and /foo/bar.txt would collide — one's sidecar dir-vs-file would
+    // delete the other recovery copy. With flat hashed names every sidecar is a
+    // leaf directly under .synapse-conflicts, so BOTH survive. We exercise it via
+    // two SEPARATE refresh rounds against the same live dir (so both sidecars
+    // must coexist on disk afterward).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base A: /foo is a FILE.
+    let base_a = tmp.path().join("baseA");
+    std::fs::create_dir_all(&base_a).unwrap();
+    std::fs::write(base_a.join("foo"), "base-foo").unwrap();
+    let sha_a = helper.call(1, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_a.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+
+    // head A: /foo deleted (so the agent's local /foo edit conflicts).
+    let head_a = tmp.path().join("headA");
+    std::fs::create_dir_all(&head_a).unwrap();
+    std::fs::write(head_a.join("other"), "o").unwrap();
+    let head_a_sha = helper.call(2, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_a.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+
+    // live: materialize base A, agent edits /foo → conflict → sidecar of /foo.
+    let live = tmp.path().join("live");
+    helper.call(3, "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": sha_a, "target_dir": live.to_str().unwrap() }));
+    std::fs::write(live.join("foo"), "local-foo").unwrap();
+    let r1 = helper.call(4, "fs.dir.sync", serde_json::json!({
+        "dir": live.to_str().unwrap(),
+        "base_manifest_sha256": sha_a,
+        "to_manifest_sha256": head_a_sha,
+    }));
+    let foo_sidecar = sidecar_host_for(&live, &r1, "/foo")
+        .unwrap_or_else(|| panic!("/foo sidecar not reported: {r1}"));
+    assert_eq!(std::fs::read(&foo_sidecar).unwrap(), b"local-foo");
+
+    // Round 2 on the SAME live dir: now base is head_a (no /foo). Agent creates
+    // /foo/bar.txt (so /foo is now a DIRECTORY locally); head re-adds /foo as a
+    // file → conflict on the /foo subtree → sidecar of /foo/bar.txt.
+    let head_b = tmp.path().join("headB");
+    std::fs::create_dir_all(&head_b).unwrap();
+    std::fs::write(head_b.join("foo"), "head-foo-again").unwrap();
+    let head_b_sha = helper.call(5, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_b.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+    std::fs::create_dir_all(live.join("foo")).unwrap();
+    std::fs::write(live.join("foo/bar.txt"), "local-bar").unwrap();
+    let r2 = helper.call(6, "fs.dir.sync", serde_json::json!({
+        "dir": live.to_str().unwrap(),
+        "base_manifest_sha256": head_a_sha,
+        "to_manifest_sha256": head_b_sha,
+    }));
+    let bar_sidecar = sidecar_host_for(&live, &r2, "/foo/bar.txt")
+        .unwrap_or_else(|| panic!("/foo/bar.txt sidecar not reported: {r2}"));
+    assert_eq!(std::fs::read(&bar_sidecar).unwrap(), b"local-bar");
+
+    // THE KEY ASSERTION (round-9 #1): the FIRST round's /foo sidecar is STILL
+    // intact — flat hashed names mean the second round could not have deleted it
+    // to make room for /foo/bar.txt's sidecar.
+    assert!(
+        foo_sidecar.is_file(),
+        "the earlier /foo recovery copy was DELETED by a later overlapping sidecar"
+    );
+    assert_eq!(
+        std::fs::read(&foo_sidecar).unwrap(),
+        b"local-foo",
+        "the earlier /foo recovery copy was corrupted by a later overlapping sidecar"
+    );
+    // And the two sidecars are genuinely different host paths (no collision).
+    assert_ne!(foo_sidecar, bar_sidecar, "sidecar paths collided");
     helper.stop();
 }
 
@@ -2141,18 +2240,12 @@ fn dir_sync_preserves_dirty_local_symlink_under_tree_conflict() {
     // head wins: /dir is gone from the live tree.
     assert!(!live.join("dir").exists(), "head-delete not applied: {r}");
     // the agent's symlink is preserved at the sidecar (as a symlink).
-    let sidecar = live.join(".synapse-conflicts/dir/link");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/link")
+        .unwrap_or_else(|| panic!("symlink sidecar not reported: {r}"));
     let meta = std::fs::symlink_metadata(&sidecar)
         .unwrap_or_else(|e| panic!("symlink sidecar missing ({e}): {r}"));
     assert!(meta.file_type().is_symlink(), "sidecar is not a symlink: {r}");
     assert_eq!(std::fs::read_link(&sidecar).unwrap().to_str().unwrap(), "keep.txt");
-    let sidecars = r["result"]["conflict_sidecars"].as_array().unwrap();
-    assert!(
-        sidecars
-            .iter()
-            .any(|c| c["original"].as_str() == Some("/dir/link")),
-        "symlink sidecar not reported: {r}"
-    );
     helper.stop();
 }
 
@@ -2218,7 +2311,8 @@ fn dir_sync_sidecar_write_clobbers_corrupted_conflicts_namespace() {
     );
     // The sync must succeed (not error) and the local edit must be preserved.
     assert!(r.get("error").is_none(), "dir_sync errored: {r}");
-    let sidecar = live.join(".synapse-conflicts/dir/x.txt");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/x.txt")
+        .unwrap_or_else(|| panic!("sidecar not reported: {r}"));
     assert_eq!(
         std::fs::read(&sidecar).unwrap(),
         b"my-edit",
@@ -2272,9 +2366,9 @@ fn dir_sync_sidecar_tolerates_preexisting_conflicts_dir() {
         serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
     );
     std::fs::write(live.join("dir/x.txt"), "my-edit").unwrap();
-    // Pre-create the full scratch dir chain (simulates a prior conflict / a
-    // concurrent creator) so create_dir would hit EEXIST.
-    std::fs::create_dir_all(live.join(".synapse-conflicts/dir")).unwrap();
+    // Pre-create the scratch root (simulates a prior conflict / concurrent
+    // creator) so the root-dir ensure hits EEXIST.
+    std::fs::create_dir_all(live.join(".synapse-conflicts")).unwrap();
 
     let r = helper.call(
         4,
@@ -2286,8 +2380,10 @@ fn dir_sync_sidecar_tolerates_preexisting_conflicts_dir() {
         }),
     );
     assert!(r.get("error").is_none(), "dir_sync over-threw on EEXIST: {r}");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/x.txt")
+        .unwrap_or_else(|| panic!("sidecar not reported: {r}"));
     assert_eq!(
-        std::fs::read(live.join(".synapse-conflicts/dir/x.txt")).unwrap(),
+        std::fs::read(&sidecar).unwrap(),
         b"my-edit",
         "local edit not preserved with a pre-existing scratch dir: {r}"
     );

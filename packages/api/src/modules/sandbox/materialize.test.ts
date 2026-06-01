@@ -211,14 +211,19 @@ test(
       "B",
       "live reconciled to committed (head) value"
     )
-    // …and the agent's loser "L" is preserved at the sidecar (not lost).
-    const sidecar = join(live, ".synapse-conflicts", "x.txt")
-    assert.ok(existsSync(sidecar), "loser preserved at sidecar")
-    assert.equal(readFileSync(sidecar, "utf8"), "L")
+    // …and the agent's loser "L" is preserved at the sidecar (not lost). The
+    // sidecar storage name is an opaque collision-free hash (round-9 #1), so
+    // resolve it from the reported conflict_sidecars rather than the tree path.
+    const sidecarEntry = reconcile.conflict_sidecars.find(
+      (c) => c.original === "/x.txt"
+    )
     assert.ok(
-      reconcile.conflict_sidecars.some((c) => c.original === "/x.txt"),
+      sidecarEntry,
       "reconcile reports the sidecar so the caller can tell the agent"
     )
+    const sidecar = join(live, sidecarEntry!.sidecar.replace(/^\//, ""))
+    assert.ok(existsSync(sidecar), "loser preserved at sidecar")
+    assert.equal(readFileSync(sidecar, "utf8"), "L")
 
     // Proof the reconcile closed the silent-overwrite window: a fresh
     // scan_commit of the live dir against base=committed now sees NO conflict

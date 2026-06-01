@@ -114,9 +114,13 @@ export async function scanCommitDir(input: {
 /**
  * 3-way merge an incoming head manifest into a live working directory without
  * unmounting: applies (incoming − base) for paths the agent hasn't locally
- * dirtied, defers same-path conflicts. Returns the applied/deferred paths and
- * the new base manifest sha the caller must advance file_mounts.base_snapshot_id
- * to (else the next commit treats just-synced incoming as local dirt).
+ * dirtied, defers same-path conflicts (head-wins + sidecar the loser). On a
+ * fully-applied sync, returns the new base manifest sha the caller advances
+ * file_mounts.base_snapshot_id to (else the next commit treats just-synced
+ * incoming as local dirt). If the helper STOPPED EARLY on a per-path failure it
+ * returns `incomplete` set (with `new_base_manifest_sha256` empty) plus the
+ * partial `conflict_sidecars` already written — the caller must NOT advance base
+ * but MUST still surface those sidecars (round-9 #2).
  */
 export async function syncDir(input: {
   dir: string

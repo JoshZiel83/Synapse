@@ -251,10 +251,19 @@ export interface DirSyncResult {
   deferred_conflicts: string[]
   /**
    * The sidecars actually written (head-wins preserved the agent's local file
-   * here). Only file conflicts produce a sidecar; dir/delete/kind conflicts
-   * appear in deferred_conflicts but not here.
+   * here). Only file/symlink conflicts produce a sidecar; dir/delete/kind
+   * conflicts appear in deferred_conflicts but not here. Populated even when the
+   * sync stopped early (see `incomplete`) so already-written copies aren't lost.
    */
   conflict_sidecars: ConflictSidecar[]
+  /**
+   * Absent = the sync fully applied. Present = it STOPPED EARLY on a per-path
+   * failure (the string is the reason). On an incomplete sync the live dir is
+   * only partially synced, so the caller MUST NOT advance base (no valid
+   * new_base) — but the partial `conflict_sidecars` are valid and must still be
+   * surfaced to the agent. The next turn re-runs the sync and self-heals.
+   */
+  incomplete?: string
   /** Advance file_mounts.base_snapshot_id to the snapshot for this sha. */
   new_base_manifest_sha256: string
 }
