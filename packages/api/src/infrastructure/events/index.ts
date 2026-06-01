@@ -193,7 +193,7 @@ async function processRealtimeOutboxEntry(entry: RealtimeEventOutboxRow) {
 }
 
 export async function enqueueTransactionalEventDeliveries(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   event: {
     type: TransactionalRealtimeEventType
     payload: Record<string, unknown>
@@ -231,7 +231,7 @@ export async function enqueueTransactionalEventDeliveries(
 }
 
 export async function enqueueTransactionalEvent(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   event: TransactionalRealtimeEvent
 ) {
   const recipientWorkspaceMemberId =

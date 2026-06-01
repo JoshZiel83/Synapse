@@ -23,10 +23,13 @@ import {
 import { config } from "../../config/index.js"
 import { buildDaemonCommand as buildDaemonCommandImpl } from "./daemon-command.js"
 import { transaction } from "../../infrastructure/database/index.js"
+import { CompiledQuery } from "kysely"
 import {
   db,
   executeSql,
   executeSqlOn,
+  isKyselyExecutor,
+  type AnyExecutor,
 } from "../../infrastructure/database/kysely.js"
 import type { Queryable } from "../../infrastructure/events/index.js"
 import { authorizeAction } from "../access/service.js"
@@ -2446,16 +2449,31 @@ export async function createRemoteAgentDeliveriesForItem(params: {
   conversationId: string
   itemId: string
   authorParticipantId?: string
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
-  const queryable = params.queryable ?? {
-    query: (text: string, values?: any[]) => executeSql(text, values),
+  const executor: AnyExecutor = params.queryable ?? db
+  const runRaw = async <T = any>(text: string, values: unknown[]) => {
+    if (isKyselyExecutor(executor)) {
+      const result = await executor.executeQuery<T>(
+        CompiledQuery.raw(text, [...values])
+      )
+      return {
+        rows: result.rows as T[],
+        rowCount: Number(
+          (result as { numAffectedRows?: bigint }).numAffectedRows ??
+            result.rows.length
+        ),
+      }
+    }
+    return executor.query(text, values as any[]) as Promise<{
+      rows: T[]
+      rowCount?: number | null
+    }>
   }
-  const participants = await executeSqlOn<{
+  const participants = await runRaw<{
     participant_id: string
     remote_agent_id: string
   }>(
-    queryable,
     `
       SELECT
         cp.id AS participant_id,
@@ -2484,8 +2502,7 @@ export async function createRemoteAgentDeliveriesForItem(params: {
   )
 
   for (const participant of participants.rows) {
-    const inserted = await executeSqlOn(
-      queryable,
+    const inserted = await runRaw(
       `
         INSERT INTO remote_agent_message_deliveries (
           remote_agent_id,
@@ -2503,8 +2520,7 @@ export async function createRemoteAgentDeliveriesForItem(params: {
     )
 
     if ((inserted.rowCount ?? 0) > 0) {
-      await executeSqlOn(
-        queryable,
+      await runRaw(
         `
           INSERT INTO remote_agent_conversation_views (
             remote_agent_id,

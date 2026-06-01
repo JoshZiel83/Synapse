@@ -1,9 +1,8 @@
-import { pool } from "../../infrastructure/database/index.js"
 import {
   db,
-  executeCompiledQuery,
-  executeTakeFirst,
-  type QueryExecutor,
+  runBuilder,
+  takeFirstOn,
+  type AnyExecutor,
 } from "../../infrastructure/database/kysely.js"
 import { queueConversationTransportProjection } from "../im/service.js"
 import {
@@ -136,9 +135,9 @@ async function loadSession(sessionId: UUID): Promise<any | null> {
 export async function getConversationActorContextByPair(
   conversationId: UUID,
   actorId: UUID,
-  queryable: QueryExecutor = pool
+  queryable: AnyExecutor = db
 ) {
-  return executeTakeFirst(
+  return takeFirstOn(
     queryable,
     db
       .selectFrom("conversation_actor_contexts")
@@ -151,9 +150,9 @@ export async function getConversationActorContextByPair(
 
 export async function getConversationActorContextBySessionId(
   sessionId: UUID,
-  queryable: QueryExecutor = pool
+  queryable: AnyExecutor = db
 ) {
-  return executeTakeFirst(
+  return takeFirstOn(
     queryable,
     db
       .selectFrom("conversation_actor_contexts")
@@ -166,9 +165,9 @@ export async function getConversationActorContextBySessionId(
 async function getConversationActorSessionRow(
   conversationId: UUID,
   actorId: UUID,
-  queryable: QueryExecutor = pool
+  queryable: AnyExecutor = db
 ) {
-  return executeTakeFirst(
+  return takeFirstOn(
     queryable,
     db
       .selectFrom("sessions")
@@ -182,7 +181,7 @@ async function getConversationActorSessionRow(
 async function requireActiveActorConversationParticipant(
   conversationId: UUID,
   actorId: UUID,
-  queryable: QueryExecutor = pool
+  queryable: AnyExecutor = db
 ) {
   // P1b: upsert the actor's subject_id (on the same queryable for trx safety),
   // then filter conversation_participants by subject_id.
@@ -190,7 +189,7 @@ async function requireActiveActorConversationParticipant(
     kind: SUBJECT_KIND.ACTOR,
     actorId,
   })
-  const participant = await executeTakeFirst(
+  const participant = await takeFirstOn(
     queryable,
     db
       .selectFrom("conversation_participants")
@@ -215,7 +214,7 @@ export async function ensureConversationActorSessionContext(
     conversationId: UUID
     trigger?: SessionTrigger
   },
-  queryable: QueryExecutor = pool
+  queryable: AnyExecutor = db
 ) {
   await requireActiveActorConversationParticipant(
     params.conversationId,
@@ -230,7 +229,7 @@ export async function ensureConversationActorSessionContext(
   )
 
   let session = existingContext?.session_id
-    ? await executeTakeFirst(
+    ? await takeFirstOn(
         queryable,
         db
           .selectFrom("sessions")
@@ -256,7 +255,7 @@ export async function ensureConversationActorSessionContext(
       )
     }
 
-    const insertedSession = await executeTakeFirst<{ id: string }>(
+    const insertedSession = await takeFirstOn<{ id: string }>(
       queryable,
       db
         .insertInto("sessions")
@@ -304,7 +303,7 @@ export async function ensureConversationActorSessionContext(
     queryable
   )
 
-  await executeCompiledQuery(
+  await runBuilder(
     queryable,
     db
       .updateTable("conversation_actor_contexts")
@@ -330,7 +329,7 @@ export async function ensureConversationActorContext(
     actorId: UUID
     conversationId: UUID
   },
-  queryable: QueryExecutor = pool
+  queryable: AnyExecutor = db
 ) {
   await requireActiveActorConversationParticipant(
     params.conversationId,
@@ -351,7 +350,7 @@ export async function ensureConversationActorContext(
     }
   }
 
-  const insertedContext = await executeTakeFirst<{ id: string }>(
+  const insertedContext = await takeFirstOn<{ id: string }>(
     queryable,
     db
       .insertInto("conversation_actor_contexts")
@@ -466,7 +465,7 @@ export async function updateSessionCollaboration(
     collaborationState?: SessionCollaborationState
     activePlanApprovalInteractionId?: UUID | null
   },
-  queryable: QueryExecutor = pool
+  queryable: AnyExecutor = db
 ): Promise<void> {
   const values: Record<string, unknown> = {
     updated_at: sql`NOW()`,
@@ -485,7 +484,7 @@ export async function updateSessionCollaboration(
       params.activePlanApprovalInteractionId ?? null
   }
 
-  await executeCompiledQuery(
+  await runBuilder(
     queryable,
     db.updateTable("sessions").set(values).where("id", "=", params.sessionId)
   )

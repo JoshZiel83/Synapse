@@ -110,6 +110,18 @@ export async function runBuilder<T = any>(
   return executeCompiledQuery<T>(executor, builder)
 }
 
+/**
+ * `runBuilder` returning the first row (or null). Transitional bridge replacing
+ * the bare `executeTakeFirst(queryable, builder)` helper at AnyExecutor call sites.
+ */
+export async function takeFirstOn<T = any>(
+  executor: AnyExecutor,
+  builder: import("kysely").Compilable<T>
+): Promise<T | null> {
+  const result = await runBuilder<T>(executor, builder)
+  return result.rows[0] ?? null
+}
+
 export async function withDbTransaction<T>(
   fn: (trx: DatabaseTransaction) => Promise<T>
 ): Promise<T> {

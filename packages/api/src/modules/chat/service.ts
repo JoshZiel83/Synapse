@@ -54,10 +54,11 @@ import type {
   InteractionRequestSummary,
   TransportKind,
 } from "@synapse/shared/types"
-import { transaction } from "../../infrastructure/database/index.js"
+import { CompiledQuery } from "kysely"
 import {
-  executeSql,
-  executeSqlOn,
+  db,
+  withDbTransaction,
+  type AnyExecutor,
 } from "../../infrastructure/database/kysely.js"
 import { SUBJECT_KIND } from "@synapse/shared"
 import {
@@ -65,10 +66,7 @@ import {
   upsertAccessSubject,
   upsertAccessSubjectOn,
 } from "../access/subject-registry.js"
-import {
-  enqueueTransactionalEvent,
-  type Queryable,
-} from "../../infrastructure/events/index.js"
+import { enqueueTransactionalEvent } from "../../infrastructure/events/index.js"
 import { getFileUrlById } from "../files/service.js"
 import {
   buildNormalizedMessageContent,
@@ -649,14 +647,42 @@ function isUniqueViolation(error: unknown) {
   )
 }
 
-function rootQueryable(): Queryable {
-  return {
-    query: async (text: string, parameters?: any[]) =>
-      executeSql(text, parameters).then((result) => ({
-        rows: result.rows,
-        rowCount: result.rowCount,
-      })),
+function rootQueryable(): AnyExecutor {
+  return db
+}
+
+/**
+ * Run a raw SQL statement (text + positional params) on either the top-level
+ * `db`, a transaction `trx`, or a legacy bare pg client — the chat module's
+ * raw-SQL execution path during the Kysely-convergence transition. Routes
+ * through Kysely's `CompiledQuery.raw` for native executors, or the bare
+ * client's `.query` otherwise.
+ */
+async function runOn<T = any>(
+  executor: AnyExecutor,
+  text: string,
+  params: readonly unknown[] = []
+): Promise<{ rows: T[]; rowCount?: number | null }> {
+  if (typeof (executor as { selectFrom?: unknown }).selectFrom === "function") {
+    const result = await (
+      executor as import("../../infrastructure/database/kysely.js").Executor
+    ).executeQuery<T>(CompiledQuery.raw(text, [...params]))
+    return { rows: result.rows as T[] }
   }
+  return (
+    executor as import("../../infrastructure/database/kysely.js").QueryExecutor
+  ).query(text, [...params] as any[]) as Promise<{
+    rows: T[]
+    rowCount?: number | null
+  }>
+}
+
+/** `runOn` bound to the top-level `db` (replaces the old pool-scoped executeSql). */
+function runOnDb<T = any>(
+  text: string,
+  params: readonly unknown[] = []
+): Promise<{ rows: T[]; rowCount?: number | null }> {
+  return runOn<T>(db, text, params)
 }
 
 async function getWorkspaceMemberIdentityOrThrow(
@@ -675,10 +701,10 @@ async function getWorkspaceMemberIdentityOrThrow(
 }
 
 async function ensureClientInstance(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   input: UpdateClientInstanceInput
 ) {
-  const existing = await executeSqlOn<{
+  const existing = await runOn<{
     workspace_id: string
     workspace_member_id: string
   }>(
@@ -712,11 +738,11 @@ async function ensureClientInstance(
 }
 
 async function createClientInstance(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   input: RegisterClientInstanceInput
 ) {
   const clientInstanceId = randomUUID()
-  await executeSqlOn(
+  await runOn(
     queryable,
     `
       INSERT INTO chat_client_instances (
@@ -747,12 +773,12 @@ async function createClientInstance(
 }
 
 async function touchClientInstance(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   input: UpdateClientInstanceInput
 ) {
   await ensureClientInstance(queryable, input)
 
-  await executeSqlOn(
+  await runOn(
     queryable,
     `
       UPDATE chat_client_instances
@@ -774,7 +800,7 @@ async function touchClientInstance(
 }
 
 async function listConversationParticipantRows(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationIds: string[],
   options?: { useProfileSnapshot?: boolean }
 ) {
@@ -807,7 +833,7 @@ async function listConversationParticipantRows(
     ? "COALESCE(cp.actor_join_version_id, current_version.id)"
     : "current_version.id"
 
-  const result = await executeSqlOn<ParticipantRow>(
+  const result = await runOn<ParticipantRow>(
     queryable,
     `
       SELECT
@@ -912,11 +938,11 @@ async function listConversationParticipantRows(
 }
 
 async function getWorkspaceMemberConversationParticipantRow(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string,
   workspaceMemberId: string
 ) {
-  const result = await executeSqlOn<ParticipantRow>(
+  const result = await runOn<ParticipantRow>(
     queryable,
     `
       SELECT
@@ -998,11 +1024,11 @@ async function getWorkspaceMemberConversationParticipantRow(
 }
 
 async function getConversationBaseRow(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceMemberId: string,
   conversationId: string
 ) {
-  const result = await executeSqlOn<ConversationBaseRow>(
+  const result = await runOn<ConversationBaseRow>(
     queryable,
     `
       SELECT
@@ -1035,10 +1061,10 @@ async function getConversationBaseRow(
 }
 
 async function listConversationBaseRows(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceMemberId: string
 ) {
-  const result = await executeSqlOn<ConversationBaseRow>(
+  const result = await runOn<ConversationBaseRow>(
     queryable,
     `
       SELECT
@@ -1073,12 +1099,12 @@ async function listConversationBaseRows(
   return result.rows
 }
 
-async function listItemRowsByIds(queryable: Queryable, itemIds: string[]) {
+async function listItemRowsByIds(queryable: AnyExecutor, itemIds: string[]) {
   if (itemIds.length === 0) {
     return [] as ItemRow[]
   }
 
-  const result = await executeSqlOn<ItemRow>(
+  const result = await runOn<ItemRow>(
     queryable,
     `
       SELECT
@@ -1111,7 +1137,7 @@ async function listItemRowsByIds(queryable: Queryable, itemIds: string[]) {
 }
 
 async function hydrateConversationItems(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   itemRows: ItemRow[]
 ) {
   if (itemRows.length === 0) {
@@ -1120,7 +1146,7 @@ async function hydrateConversationItems(
 
   const itemIds = itemRows.map((row) => row.id)
   const [partsResult, restrictedAudienceResult] = await Promise.all([
-    executeSqlOn<ItemPartRow>(
+    runOn<ItemPartRow>(
       queryable,
       `
         SELECT
@@ -1139,7 +1165,7 @@ async function hydrateConversationItems(
       `,
       [itemIds]
     ),
-    executeSqlOn<ParticipantLinkRow>(
+    runOn<ParticipantLinkRow>(
       queryable,
       `
         SELECT item_id, target_participant_id
@@ -1198,7 +1224,7 @@ async function hydrateConversationItems(
 }
 
 async function loadConversationViews(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceId: string,
   workspaceMemberId: string,
   conversationIds?: string[]
@@ -1319,7 +1345,7 @@ async function loadConversationViews(
 }
 
 async function loadConversationView(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceId: string,
   workspaceMemberId: string,
   conversationId: string
@@ -1334,11 +1360,11 @@ async function loadConversationView(
 }
 
 async function getCurrentSyncCursor(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceId: string,
   workspaceMemberId: string
 ) {
-  const result = await executeSqlOn<{ cursor: string | number }>(
+  const result = await runOn<{ cursor: string | number }>(
     queryable,
     `
       SELECT COALESCE(MAX(sync_seq), 0) AS cursor
@@ -1352,11 +1378,11 @@ async function getCurrentSyncCursor(
 }
 
 async function countUnreadVisibleMessages(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string,
   participantId: string
 ) {
-  const result = await executeSqlOn<{ unread_count: string | number }>(
+  const result = await runOn<{ unread_count: string | number }>(
     queryable,
     `
       SELECT COUNT(*)::int AS unread_count
@@ -1393,7 +1419,7 @@ async function countUnreadVisibleMessages(
 }
 
 async function syncVisibleSharedItem(params: {
-  queryable: Queryable
+  queryable: AnyExecutor
   workspaceId?: string
   conversationId: string
   item: ChatConversationItem
@@ -1464,7 +1490,7 @@ async function syncVisibleSharedItem(params: {
 }
 
 async function upsertConversationView(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   params: {
     workspaceMemberId: string
     conversationId: string
@@ -1475,7 +1501,7 @@ async function upsertConversationView(
     summary?: Record<string, unknown>
   }
 ) {
-  await executeSqlOn(
+  await runOn(
     queryable,
     `
       INSERT INTO workspace_member_conversation_views (
@@ -1513,7 +1539,7 @@ async function upsertConversationView(
 export async function appendWorkspaceMemberSyncEvent<
   T extends ChatSyncEventType,
 >(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   params: {
     workspaceId: string
     workspaceMemberId: string
@@ -1523,7 +1549,7 @@ export async function appendWorkspaceMemberSyncEvent<
     payload: ChatSyncEventPayloadMap[T]
   }
 ) {
-  const inserted = await executeSqlOn<{
+  const inserted = await runOn<{
     sync_seq: string | number
     occurred_at: string | Date
   }>(
@@ -1576,10 +1602,10 @@ export async function appendWorkspaceMemberSyncEvent<
 }
 
 async function getConversationSequenceMax(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string
 ) {
-  const result = await executeSqlOn<{ max_sequence: string | number | null }>(
+  const result = await runOn<{ max_sequence: string | number | null }>(
     queryable,
     `
       SELECT MAX(sequence) AS max_sequence
@@ -1593,11 +1619,11 @@ async function getConversationSequenceMax(
 }
 
 async function getLastItemAtOrBeforeSequence(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string,
   sequence: number
 ) {
-  const result = await executeSqlOn<{ id: string }>(
+  const result = await runOn<{ id: string }>(
     queryable,
     `
       SELECT id
@@ -1613,7 +1639,7 @@ async function getLastItemAtOrBeforeSequence(
 }
 
 async function requireConversationAccess(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string,
   workspaceMemberId: string
 ) {
@@ -1656,7 +1682,7 @@ async function requireConversationAccess(
  * POST participants, DELETE participants.
  */
 async function requireConversationManagement(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string,
   workspaceMemberId: string
 ) {
@@ -1744,7 +1770,7 @@ function resolveMentionedConversationParticipant(
 }
 
 async function canonicalizeConversationItemParts(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   params: {
     conversationId: string
     parts?: ConversationItemPartInput[]
@@ -1818,7 +1844,7 @@ async function canonicalizeConversationItemParts(
 }
 
 async function validateConversationReplyTarget(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string,
   replyToItemId?: string,
   authorParticipantId?: string
@@ -1826,7 +1852,7 @@ async function validateConversationReplyTarget(
   if (!replyToItemId) {
     return null
   }
-  const rows = await executeSqlOn<ItemRow>(
+  const rows = await runOn<ItemRow>(
     queryable,
     `
       SELECT
@@ -1885,7 +1911,7 @@ async function validateConversationReplyTarget(
 }
 
 export async function resolveConversationReplyRef(params: {
-  queryable?: Queryable
+  queryable?: AnyExecutor
   conversationId: string
   participantId?: string
   replyRef?: string
@@ -1928,12 +1954,12 @@ export async function resolveConversationReplyRef(params: {
       LIMIT 1
     `
   const exact = params.queryable
-    ? await executeSqlOn<Pick<ItemRow, "id" | "sequence">>(
+    ? await runOn<Pick<ItemRow, "id" | "sequence">>(
         params.queryable,
         exactSql,
         [params.conversationId, sequence, params.participantId ?? null]
       )
-    : await executeSql<Pick<ItemRow, "id" | "sequence">>(exactSql, [
+    : await runOnDb<Pick<ItemRow, "id" | "sequence">>(exactSql, [
         params.conversationId,
         sequence,
         params.participantId ?? null,
@@ -1972,12 +1998,12 @@ export async function resolveConversationReplyRef(params: {
       LIMIT 3
     `
   const nearby = params.queryable
-    ? await executeSqlOn<Pick<ItemRow, "id" | "sequence">>(
+    ? await runOn<Pick<ItemRow, "id" | "sequence">>(
         params.queryable,
         nearbySql,
         [params.conversationId, sequence, params.participantId ?? null]
       )
-    : await executeSql<Pick<ItemRow, "id" | "sequence">>(nearbySql, [
+    : await runOnDb<Pick<ItemRow, "id" | "sequence">>(nearbySql, [
         params.conversationId,
         sequence,
         params.participantId ?? null,
@@ -1998,7 +2024,7 @@ export async function resolveConversationReplyRef(params: {
 }
 
 async function prepareConversationItemWrite(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   params: {
     conversationId: string
     scope: ItemScope
@@ -2060,10 +2086,10 @@ async function prepareConversationItemWrite(
 }
 
 async function listMentionedParticipantIdsForItem(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   itemId: string
 ) {
-  const result = await executeSqlOn<{ mentioned_participant_id: string }>(
+  const result = await runOn<{ mentioned_participant_id: string }>(
     queryable,
     `
       SELECT mentioned_participant_id
@@ -2133,7 +2159,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   sourceParticipantId?: string
   sourceName?: string
   summary?: string
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
   if (!params.workspaceId) {
     return [] as PendingActorWakeup[]
@@ -2152,7 +2178,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     return [] as PendingActorWakeup[]
   }
 
-  const restrictedAudienceResult = await executeSqlOn<ParticipantLinkRow>(
+  const restrictedAudienceResult = await runOn<ParticipantLinkRow>(
     queryable,
     `
       SELECT item_id, target_participant_id
@@ -2165,7 +2191,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     return [] as PendingActorWakeup[]
   }
 
-  const conversationRow = await executeSqlOn<{ kind: ConversationKind }>(
+  const conversationRow = await runOn<{ kind: ConversationKind }>(
     queryable,
     `
       SELECT kind
@@ -2284,7 +2310,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
 }
 
 async function loadHumanParticipantsForConversation(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string
 ) {
   const participants = await listConversationParticipantRows(queryable, [
@@ -2299,7 +2325,7 @@ async function loadHumanParticipantsForConversation(
 }
 
 async function syncConversationUpsertForWorkspaceMembers(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceId: string,
   workspaceMemberIds: string[],
   conversationId: string
@@ -2333,7 +2359,7 @@ async function syncConversationUpsertForWorkspaceMembers(
  * identity — dedup is keyed on (conversation_id, subject_id), not display_name.
  */
 async function resolveParticipantSubjectId(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   params: {
     participantType: ParticipantKind
     workspaceMemberId?: string
@@ -2379,7 +2405,7 @@ async function resolveParticipantSubjectId(
   // address here, so a future caller of ensureConversationParticipant can't
   // attach a bot/system or member-linked address as an external participant —
   // even if it skips the higher-level validateTransportAddresses gate.
-  const addr = await executeSqlOn<{
+  const addr = await runOn<{
     workspace_id: string
     address_type: string
     workspace_member_id: string | null
@@ -2412,7 +2438,7 @@ async function resolveParticipantSubjectId(
 }
 
 async function insertParticipant(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   params: {
     conversationId: string
     participantType: ParticipantKind
@@ -2440,7 +2466,7 @@ async function insertParticipant(
   // hatch — an external participant must carry a transport identity.
   const participantSubjectId =
     params.subjectId ?? (await resolveParticipantSubjectId(queryable, params))
-  await executeSqlOn(
+  await runOn(
     queryable,
     `
       INSERT INTO conversation_participants (
@@ -2467,7 +2493,7 @@ async function insertParticipant(
     ]
   )
 
-  await executeSqlOn(
+  await runOn(
     queryable,
     `
       INSERT INTO conversation_participant_states (
@@ -2484,7 +2510,7 @@ async function insertParticipant(
   )
 
   if (params.transportAddressId) {
-    await executeSqlOn(
+    await runOn(
       queryable,
       `
         INSERT INTO conversation_participant_addresses (
@@ -2508,14 +2534,14 @@ async function insertParticipant(
 }
 
 async function loadWorkspaceMembersByIds(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceId: string,
   workspaceMemberIds: string[]
 ) {
   if (workspaceMemberIds.length === 0) {
     return [] as Array<{ id: string; user_name: string }>
   }
-  const result = await executeSqlOn<{ id: string; user_name: string }>(
+  const result = await runOn<{ id: string; user_name: string }>(
     queryable,
     `
       SELECT wm.id, u.name AS user_name
@@ -2530,14 +2556,14 @@ async function loadWorkspaceMembersByIds(
 }
 
 async function loadActorsByIds(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceId: string,
   actorIds: string[]
 ) {
   if (actorIds.length === 0) {
     return [] as Array<{ id: string; name: string }>
   }
-  const result = await executeSqlOn<{ id: string; name: string }>(
+  const result = await runOn<{ id: string; name: string }>(
     queryable,
     `
       SELECT id, name
@@ -2551,14 +2577,14 @@ async function loadActorsByIds(
 }
 
 async function loadRemoteAgentsByIds(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   workspaceId: string,
   remoteAgentIds: string[]
 ) {
   if (remoteAgentIds.length === 0) {
     return [] as Array<{ id: string; name: string }>
   }
-  const result = await executeSqlOn<{ id: string; name: string }>(
+  const result = await runOn<{ id: string; name: string }>(
     queryable,
     `
       SELECT id, name
@@ -2574,9 +2600,9 @@ async function loadRemoteAgentsByIds(
 
 export async function getConversation(
   conversationId: string,
-  queryable: Queryable = rootQueryable()
+  queryable: AnyExecutor = rootQueryable()
 ) {
-  const result = await executeSqlOn<Record<string, unknown>>(
+  const result = await runOn<Record<string, unknown>>(
     queryable,
     `
       SELECT *
@@ -2595,7 +2621,7 @@ export async function createConversation(params: {
   title?: string
   createdByWorkspaceMemberId?: string
   metadata?: Record<string, unknown>
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
   const queryable = params.queryable ?? rootQueryable()
   if (!params.workspaceId) {
@@ -2605,7 +2631,7 @@ export async function createConversation(params: {
     throw new Error("createConversation: workspaceId is required")
   }
   const id = crypto.randomUUID()
-  const result = await executeSqlOn<Record<string, unknown>>(
+  const result = await runOn<Record<string, unknown>>(
     queryable,
     `
       INSERT INTO conversations (
@@ -2646,9 +2672,9 @@ export async function createConversationForWorkspaceMember(params: {
   actorIds?: string[]
   remoteAgentIds?: string[]
   metadata?: Record<string, unknown>
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
-  const executeCreate = async (queryable: Queryable) => {
+  const executeCreate = async (queryable: AnyExecutor) => {
     const workspaceMemberIds = [
       ...new Set(
         [
@@ -2770,12 +2796,12 @@ export async function createConversationForWorkspaceMember(params: {
   if (params.queryable) {
     return executeCreate(params.queryable)
   }
-  return transaction((client) => executeCreate(client))
+  return withDbTransaction((client) => executeCreate(client))
 }
 
 export async function listConversationParticipants(
   conversationId: string,
-  options?: { useProfileSnapshot?: boolean; queryable?: Queryable }
+  options?: { useProfileSnapshot?: boolean; queryable?: AnyExecutor }
 ) {
   return listConversationParticipantRows(
     options?.queryable ?? rootQueryable(),
@@ -2791,10 +2817,10 @@ export async function getConversationParticipant(params: {
   remoteAgentId?: string
   workspaceMemberId?: string
   transportAddressId?: string
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
   if (params.participantId) {
-    const result = await executeSqlOn<ParticipantRow>(
+    const result = await runOn<ParticipantRow>(
       params.queryable ?? rootQueryable(),
       `
         SELECT *
@@ -2845,7 +2871,7 @@ export async function ensureConversationParticipant(params: {
   roleKey?: string
   metadata?: Record<string, unknown>
   transportAddressId?: string
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
   const queryable = params.queryable ?? rootQueryable()
   const conversation = await getConversation(params.conversationId, queryable)
@@ -2884,7 +2910,7 @@ export async function ensureConversationParticipant(params: {
     transportAddressId: params.transportAddressId,
   })
 
-  const existing = await executeSqlOn<{ id: string; state: string }>(
+  const existing = await runOn<{ id: string; state: string }>(
     queryable,
     `
       SELECT cp.id, cp.state
@@ -2901,7 +2927,7 @@ export async function ensureConversationParticipant(params: {
     // P1b: subject_id is fixed at insert time. The existing-participant path
     // only refreshes presentation/state fields; the workspace_member_id /
     // actor_id / remote_agent_id columns no longer exist on this table.
-    await executeSqlOn(
+    await runOn(
       queryable,
       `
         UPDATE conversation_participants
@@ -2923,7 +2949,7 @@ export async function ensureConversationParticipant(params: {
     )
 
     if (params.transportAddressId) {
-      await executeSqlOn(
+      await runOn(
         queryable,
         `
             INSERT INTO conversation_participant_addresses (
@@ -2977,9 +3003,9 @@ export async function addConversationParticipants(params: {
   workspaceMemberIds?: string[]
   actorIds?: string[]
   remoteAgentIds?: string[]
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
-  const executeAdd = async (queryable: Queryable) => {
+  const executeAdd = async (queryable: AnyExecutor) => {
     const workspaceMemberIds = [...new Set(params.workspaceMemberIds ?? [])]
     const actorIds = [...new Set(params.actorIds ?? [])]
     const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
@@ -3079,7 +3105,7 @@ export async function addConversationParticipants(params: {
   if (params.queryable) {
     return executeAdd(params.queryable)
   }
-  return transaction((client) => executeAdd(client))
+  return withDbTransaction((client) => executeAdd(client))
 }
 
 export async function createConversationItem(params: {
@@ -3104,9 +3130,9 @@ export async function createConversationItem(params: {
   parts?: ConversationItemPartInput[]
   restrictedAudienceParticipantIds?: string[]
   contextTargetParticipantIds?: string[]
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
-  const executeInsert = async (queryable: Queryable) => {
+  const executeInsert = async (queryable: AnyExecutor) => {
     const prepared = await prepareConversationItemWrite(queryable, {
       conversationId: params.conversationId,
       scope: params.scope,
@@ -3121,7 +3147,7 @@ export async function createConversationItem(params: {
     const itemId = crypto.randomUUID()
     let insertedItem: ItemRow | null = null
 
-    const inserted = await executeSqlOn<ItemRow>(
+    const inserted = await runOn<ItemRow>(
       queryable,
       `
         INSERT INTO conversation_items (
@@ -3197,7 +3223,7 @@ export async function createConversationItem(params: {
     insertedItem = inserted.rows[0] ?? null
 
     if (!insertedItem && params.clientMessageId && params.authorParticipantId) {
-      const existing = await executeSqlOn<ItemRow>(
+      const existing = await runOn<ItemRow>(
         queryable,
         `
           SELECT
@@ -3255,7 +3281,7 @@ export async function createConversationItem(params: {
     }
 
     for (const [ordinal, part] of prepared.parts.entries()) {
-      await executeSqlOn(
+      await runOn(
         queryable,
         `
           INSERT INTO conversation_item_parts (
@@ -3289,7 +3315,7 @@ export async function createConversationItem(params: {
 
     if (prepared.mentionedParticipants.length > 0) {
       for (const mention of prepared.mentionedParticipants) {
-        await executeSqlOn(
+        await runOn(
           queryable,
           `
             INSERT INTO conversation_item_mentions (
@@ -3305,7 +3331,7 @@ export async function createConversationItem(params: {
     }
 
     for (const participantId of params.restrictedAudienceParticipantIds ?? []) {
-      await executeSqlOn(
+      await runOn(
         queryable,
         `
           INSERT INTO conversation_item_targets (
@@ -3320,7 +3346,7 @@ export async function createConversationItem(params: {
     }
 
     for (const participantId of params.contextTargetParticipantIds ?? []) {
-      await executeSqlOn(
+      await runOn(
         queryable,
         `
           INSERT INTO conversation_item_context_targets (
@@ -3333,7 +3359,7 @@ export async function createConversationItem(params: {
       )
     }
 
-    await executeSqlOn(
+    await runOn(
       queryable,
       `
         UPDATE conversations
@@ -3381,7 +3407,7 @@ export async function createConversationItem(params: {
   if (params.queryable) {
     return executeInsert(params.queryable)
   }
-  return transaction((client) => executeInsert(client))
+  return withDbTransaction((client) => executeInsert(client))
 }
 
 export async function sendConversationMessageFromParticipant(params: {
@@ -3394,7 +3420,7 @@ export async function sendConversationMessageFromParticipant(params: {
   contentBlocks: CanonicalContentBlock[]
   replyToItemId?: string
   metadata?: Record<string, unknown>
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
   if (
     !Array.isArray(params.contentBlocks) ||
@@ -3453,9 +3479,9 @@ export async function createConversationEvent<
   contextPolicy?: ConversationEventContextPolicy
   restrictedAudienceParticipantIds?: string[]
   contextTargetParticipantIds?: string[]
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
-  const executeCreate = async (queryable: Queryable) => {
+  const executeCreate = async (queryable: AnyExecutor) => {
     const spec = getConversationEventSpec(params.eventType)
     const timelinePolicy = params.timelinePolicy ?? spec.timelinePolicy
     const contextPolicy = params.contextPolicy ?? spec.contextPolicy
@@ -3543,7 +3569,7 @@ export async function createConversationEvent<
   if (params.queryable) {
     return executeCreate(params.queryable)
   }
-  return transaction((client) => executeCreate(client))
+  return withDbTransaction((client) => executeCreate(client))
 }
 
 export async function updateConversationItemEventPayload<
@@ -3551,9 +3577,9 @@ export async function updateConversationItemEventPayload<
 >(
   itemId: string,
   payload: ConversationFeedEventPayloadMap[T],
-  queryable: Queryable = rootQueryable()
+  queryable: AnyExecutor = rootQueryable()
 ) {
-  await executeSqlOn(
+  await runOn(
     queryable,
     `
       UPDATE conversation_items
@@ -3565,7 +3591,7 @@ export async function updateConversationItemEventPayload<
 }
 
 async function buildConversationItemDetails(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   itemRows: ItemRow[]
 ): Promise<ConversationItemDetail[]> {
   if (itemRows.length === 0) {
@@ -3588,7 +3614,7 @@ async function buildConversationItemDetails(
     participants.map((participant) => [participant.id, participant])
   )
   const itemIds = itemRows.map((row) => row.id)
-  const contextTargetsResult = await executeSqlOn<ParticipantLinkRow>(
+  const contextTargetsResult = await runOn<ParticipantLinkRow>(
     queryable,
     `
       SELECT item_id, target_participant_id
@@ -3857,7 +3883,7 @@ function conversationItemDetailToChatItem(
 }
 
 async function buildChatConversationItems(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   itemRows: ItemRow[],
   options?: { includeTransportDeliveries?: boolean }
 ) {
@@ -3952,13 +3978,13 @@ function mapTransportContext(
 }
 
 async function loadTransportDeliveriesForItems(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   itemIds: string[]
 ) {
   if (itemIds.length === 0) {
     return new Map<string, ConversationMessageTransportDelivery[]>()
   }
-  const result = await executeSqlOn<{
+  const result = await runOn<{
     item_id: string
     link_id: string
     transport_kind: TransportKind
@@ -4088,9 +4114,9 @@ export function isFeedItemVisibleToWorkspaceMember(
 
 export async function getConversationFeedItemById(
   itemId: string,
-  queryable: Queryable = rootQueryable()
+  queryable: AnyExecutor = rootQueryable()
 ) {
-  const rows = await executeSqlOn<ItemRow>(
+  const rows = await runOn<ItemRow>(
     queryable,
     `
       SELECT
@@ -4141,10 +4167,10 @@ export async function getContextConversationItemsForParticipant(params: {
   participantId: string
   beforeSequence?: number
   limit?: number
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
   const queryable = params.queryable ?? rootQueryable()
-  const result = await executeSqlOn<ItemRow>(
+  const result = await runOn<ItemRow>(
     queryable,
     `
       SELECT
@@ -4212,9 +4238,9 @@ export async function getContextConversationItemsForParticipant(params: {
 
 export async function getLastVisibleConversationItem(
   conversationId: string,
-  queryable: Queryable = rootQueryable()
+  queryable: AnyExecutor = rootQueryable()
 ) {
-  const result = await executeSqlOn<ItemRow>(
+  const result = await runOn<ItemRow>(
     queryable,
     `
       SELECT
@@ -4257,7 +4283,7 @@ export async function getLastVisibleConversationItem(
 export async function listWorkspaceConversationViews(params: {
   workspaceId: string
   workspaceMemberId: string
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
   return loadConversationViews(
     params.queryable ?? rootQueryable(),
@@ -4268,9 +4294,9 @@ export async function listWorkspaceConversationViews(params: {
 
 export async function listConversationRealtimeRecipients(
   conversationId: string,
-  queryable: Queryable = rootQueryable()
+  queryable: AnyExecutor = rootQueryable()
 ) {
-  const result = await executeSqlOn<{
+  const result = await runOn<{
     workspace_id: string
     workspace_member_id: string
   }>(
@@ -4305,7 +4331,7 @@ export async function createChatClientInstance(params: {
     params.workspaceId,
     params.userId
   )
-  const clientInstanceId = await transaction(async (client) =>
+  const clientInstanceId = await withDbTransaction(async (client) =>
     createClientInstance(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: identity.workspaceMemberId,
@@ -4333,7 +4359,7 @@ export async function touchChatClientInstance(params: {
     params.workspaceId,
     params.userId
   )
-  await transaction(async (client) => {
+  await withDbTransaction(async (client) => {
     await touchClientInstance(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: identity.workspaceMemberId,
@@ -4376,8 +4402,8 @@ export async function createChatConversation(params: {
   // External participants are not creatable through this public path; they are
   // minted only by the IM ingest path (syncTransportAddressConversationParticipant).
 
-  const conversationId = await transaction(async (client) => {
-    const existingRequest = await executeSqlOn<{ conversation_id: string }>(
+  const conversationId = await withDbTransaction(async (client) => {
+    const existingRequest = await runOn<{ conversation_id: string }>(
       client,
       `
         SELECT conversation_id
@@ -4432,7 +4458,7 @@ export async function createChatConversation(params: {
     }
 
     const newConversationId = crypto.randomUUID()
-    await executeSqlOn(
+    await runOn(
       client,
       `
         INSERT INTO conversations (
@@ -4495,7 +4521,7 @@ export async function createChatConversation(params: {
       })
     }
 
-    await executeSqlOn(
+    await runOn(
       client,
       `
         INSERT INTO chat_conversation_create_requests (
@@ -4583,7 +4609,7 @@ export async function getChatSync(params: {
     params.userId
   )
   const limit = Math.min(Math.max(params.limit ?? 200, 1), 500)
-  const result = await executeSql<{
+  const result = await runOn<{
     sync_seq: string | number
     workspace_id: string
     workspace_member_id: string
@@ -4593,6 +4619,7 @@ export async function getChatSync(params: {
     payload: unknown
     occurred_at: string | Date
   }>(
+    db,
     `
       SELECT
         sync_seq,
@@ -4682,7 +4709,8 @@ export async function getChatConversationMessages(params: {
   let hasMoreBefore = false
   let hasMoreAfter = false
   if (typeof params.afterSequence === "number") {
-    const result = await executeSql<ItemRow>(
+    const result = await runOn<ItemRow>(
+      db,
       `
         SELECT
           id,
@@ -4737,7 +4765,8 @@ export async function getChatConversationMessages(params: {
     hasMoreBefore = params.afterSequence > 0
     rows = hasMoreAfter ? result.rows.slice(0, limit) : result.rows
   } else if (typeof params.beforeSequence === "number") {
-    const result = await executeSql<ItemRow>(
+    const result = await runOn<ItemRow>(
+      db,
       `
         SELECT
           id,
@@ -4792,7 +4821,8 @@ export async function getChatConversationMessages(params: {
     hasMoreAfter = true
     rows = (hasMoreBefore ? result.rows.slice(0, limit) : result.rows).reverse()
   } else {
-    const result = await executeSql<ItemRow>(
+    const result = await runOn<ItemRow>(
+      db,
       `
         SELECT
           id,
@@ -4863,9 +4893,10 @@ export async function getChatConversationMessages(params: {
     )
   }
 
-  const readState = await executeSql<{
+  const readState = await runOn<{
     read_watermark_sequence: string | number
   }>(
+    db,
     `
       SELECT read_watermark_sequence
       FROM conversation_participant_states
@@ -4876,7 +4907,7 @@ export async function getChatConversationMessages(params: {
     [params.conversationId, access.participant.id]
   )
 
-  const deviceStateResult = await executeSql<{
+  const deviceStateResult = await runOn<{
     client_instance_id: string
     conversation_id: string
     last_visible_sequence: string | number
@@ -4884,6 +4915,7 @@ export async function getChatConversationMessages(params: {
     last_opened_at: string | Date | null
     draft_payload: unknown
   }>(
+    db,
     `
       SELECT
         client_instance_id,
@@ -4962,7 +4994,7 @@ export async function getChatConversationMessages(params: {
 }
 
 export async function requireRemoteAgentConversationAccess(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string,
   remoteAgentId: string
 ) {
@@ -4987,14 +5019,14 @@ export async function listVisibleConversationItemsForParticipant(params: {
   afterSequence?: number
   beforeSequence?: number
   limit?: number
-  queryable?: Queryable
+  queryable?: AnyExecutor
 }) {
   const queryable = params.queryable ?? rootQueryable()
   const limit = Math.min(Math.max(params.limit ?? 100, 1), 200)
   let rows: ItemRow[] = []
 
   if (typeof params.afterSequence === "number") {
-    const result = await executeSqlOn<ItemRow>(
+    const result = await runOn<ItemRow>(
       queryable,
       `
         SELECT
@@ -5043,7 +5075,7 @@ export async function listVisibleConversationItemsForParticipant(params: {
     )
     rows = result.rows
   } else if (typeof params.beforeSequence === "number") {
-    const result = await executeSqlOn<ItemRow>(
+    const result = await runOn<ItemRow>(
       queryable,
       `
         SELECT
@@ -5097,7 +5129,7 @@ export async function listVisibleConversationItemsForParticipant(params: {
     )
     rows = [...result.rows].reverse()
   } else {
-    const result = await executeSqlOn<ItemRow>(
+    const result = await runOn<ItemRow>(
       queryable,
       `
         SELECT
@@ -5196,7 +5228,7 @@ export async function sendChatConversationMessage(
     )
   }
 
-  const item = await transaction(async (client) => {
+  const item = await withDbTransaction(async (client) => {
     const access = await requireConversationAccess(
       client,
       params.conversationId,
@@ -5239,7 +5271,7 @@ export async function sendChatConversationMessage(
 export async function updateChatConversationReadWatermark(
   params: ReadWatermarkInput
 ): Promise<ChatConversationReadWatermarkResponse> {
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     const access = await requireConversationAccess(
       client,
       params.conversationId,
@@ -5261,7 +5293,7 @@ export async function updateChatConversationReadWatermark(
       maxSequence
     )
 
-    const existingState = await executeSqlOn<{
+    const existingState = await runOn<{
       read_watermark_sequence: string | number
       last_read_at: Date | string | null
     }>(
@@ -5301,7 +5333,7 @@ export async function updateChatConversationReadWatermark(
       nextSequence
     )
 
-    await executeSqlOn(
+    await runOn(
       client,
       `
         INSERT INTO conversation_participant_states (
@@ -5333,7 +5365,7 @@ export async function updateChatConversationReadWatermark(
         maxSequence,
         Math.max(params.lastVisibleSequence ?? nextSequence, nextSequence)
       )
-      await executeSqlOn(
+      await runOn(
         client,
         `
           INSERT INTO conversation_device_states (
@@ -5470,7 +5502,7 @@ export async function patchChatConversation(params: {
     params.workspaceId,
     params.userId
   )
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     await requireConversationManagement(
       client,
       params.conversationId,
@@ -5491,7 +5523,7 @@ export async function patchChatConversation(params: {
     setFragments.push("updated_at = NOW()")
     values.push(params.conversationId)
 
-    await executeSqlOn(
+    await runOn(
       client,
       `UPDATE conversations SET ${setFragments.join(", ")} WHERE id = $${position}`,
       values
@@ -5537,7 +5569,7 @@ export async function addChatConversationParticipants(params: {
     params.workspaceId,
     params.userId
   )
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     await requireConversationManagement(
       client,
       params.conversationId,
@@ -5582,11 +5614,11 @@ export async function addChatConversationParticipants(params: {
 }
 
 async function setParticipantState(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   participantId: string,
   state: "removed" | "left"
 ) {
-  await executeSqlOn(
+  await runOn(
     queryable,
     `
       UPDATE conversation_participants
@@ -5604,11 +5636,11 @@ async function setParticipantState(
 // surface at runtime when DELETE /chat/conversations/:cid/participants/:pid
 // is hit; a focused test on the SQL keeps it honest.
 export async function loadParticipantById(
-  queryable: Queryable,
+  queryable: AnyExecutor,
   conversationId: string,
   participantId: string
 ) {
-  const result = await executeSqlOn<{
+  const result = await runOn<{
     id: string
     conversation_id: string
     participant_type: ParticipantKind
@@ -5645,7 +5677,7 @@ export async function removeChatConversationParticipant(params: {
     params.workspaceId,
     params.userId
   )
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     const access = await requireConversationAccess(
       client,
       params.conversationId,
@@ -5803,7 +5835,7 @@ export async function registerChatPushToken(params: {
     params.workspaceId,
     params.userId
   )
-  const result = await executeSql<Record<string, unknown>>(
+  const result = await runOnDb<Record<string, unknown>>(
     `
       INSERT INTO chat_push_tokens (workspace_member_id, platform, token, device_label, metadata)
       VALUES ($1, $2, $3, $4, $5::jsonb)
@@ -5836,7 +5868,7 @@ export async function listChatPushTokens(params: {
     params.workspaceId,
     params.userId
   )
-  const result = await executeSql<Record<string, unknown>>(
+  const result = await runOnDb<Record<string, unknown>>(
     `
       SELECT id, workspace_member_id, platform, token, device_label,
              created_at, last_seen_at
@@ -5858,7 +5890,8 @@ export async function deleteChatPushToken(params: {
     params.workspaceId,
     params.userId
   )
-  const result = await executeSql<{ id: string }>(
+  const result = await runOn<{ id: string }>(
+    db,
     `
       DELETE FROM chat_push_tokens
       WHERE id = $1 AND workspace_member_id = $2
