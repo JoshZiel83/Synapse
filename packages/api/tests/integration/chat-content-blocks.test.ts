@@ -17,7 +17,7 @@ if (process.env.SYNAPSE_INT_TEST !== "1") {
 
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
-import { randomBytes } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import pg from "pg"
 import {
   setupChatStack,
@@ -28,10 +28,7 @@ import {
   type ChatStack,
 } from "./harness/index.js"
 
-const uuid = () =>
-  ([8, 4, 4, 4, 12] as const)
-    .map((len) => randomBytes(len / 2).toString("hex"))
-    .join("-")
+const uuid = () => randomUUID()
 
 // External participants are first-class, single-address identities: the API
 // requires a real transport_addresses row. Create one directly over pg (there

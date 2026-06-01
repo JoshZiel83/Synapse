@@ -18,7 +18,7 @@ if (process.env.SYNAPSE_INT_TEST !== "1") {
 
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
-import { randomBytes } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { WebSocket } from "ws"
 import {
   setupChatStack,
@@ -31,10 +31,7 @@ import {
   type ChatStack,
 } from "./harness/index.js"
 
-const uuid = () =>
-  ([8, 4, 4, 4, 12] as const)
-    .map((len) => randomBytes(len / 2).toString("hex"))
-    .join("-")
+const uuid = () => randomUUID()
 
 function wsUrl(): string {
   // The isolated API exposes its WS endpoint directly at /ws (no nginx in front).
