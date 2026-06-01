@@ -12,18 +12,6 @@ import {
 } from "../database/kysely.js"
 import { redisPub, redisSub } from "../redis/index.js"
 
-/**
- * @deprecated Legacy bare query interface still threaded by chat/interactions
- * during the Kysely-convergence transition. New code should use
- * {@link AnyExecutor}. Removed once chat/interactions migrate.
- */
-export type Queryable = {
-  query: (
-    text: string,
-    params?: any[]
-  ) => Promise<{ rows: any[]; rowCount?: number | null }>
-}
-
 export type TransactionalRealtimeEventType = "chat.sync.event"
 
 type TransactionalRealtimeEvent = SystemEvent & {

@@ -355,14 +355,14 @@ test(
   "upsertAccessSubjectOn (queryable variant) creates a workspace subject and is idempotent across racing calls",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db, "owner@example.test")
       const workspaceId = await insertWorkspace(db, userId)
-      const first = await upsertAccessSubjectOn(client, {
+      const first = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId,
       })
-      const second = await upsertAccessSubjectOn(client, {
+      const second = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId,
       })
@@ -375,7 +375,7 @@ test(
   "upsertAccessSubjectOn handles every kind (workspace_member, actor, remote_agent, conversation, user, external, platform)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db, "owner@example.test")
       const workspaceId = await insertWorkspace(db, userId)
       const memberId = await insertWorkspaceMember(db, workspaceId, userId)
@@ -384,36 +384,36 @@ test(
       const conversationId = await insertConversation(db, { workspaceId })
       const transportAddressId = await insertTransportAddress(db, workspaceId)
 
-      const wsId = await upsertAccessSubjectOn(client, {
+      const wsId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId,
       })
-      const memId = await upsertAccessSubjectOn(client, {
+      const memId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
         memberId,
       })
-      const actId = await upsertAccessSubjectOn(client, {
+      const actId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.ACTOR,
         actorId,
       })
-      const raId = await upsertAccessSubjectOn(client, {
+      const raId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.REMOTE_AGENT,
         remoteAgentId,
       })
-      const convoId = await upsertAccessSubjectOn(client, {
+      const convoId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId,
       })
-      const userSubjId = await upsertAccessSubjectOn(client, {
+      const userSubjId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.USER,
         userId,
       })
-      const extId = await upsertAccessSubjectOn(client, {
+      const extId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.EXTERNAL,
         workspaceId,
         transportAddressId,
       })
-      const platformId = await upsertAccessSubjectOn(client, {
+      const platformId = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.PLATFORM,
       })
 
@@ -436,10 +436,10 @@ test(
   "upsertAccessSubjectOn throws when the underlying entity FK is missing",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       await assert.rejects(
         () =>
-          upsertAccessSubjectOn(client, {
+          upsertAccessSubjectOn(db, {
             kind: SUBJECT_KIND.ACTOR,
             actorId: "00000000-0000-0000-0000-000000000000",
           }),
@@ -447,7 +447,7 @@ test(
       )
       await assert.rejects(
         () =>
-          upsertAccessSubjectOn(client, {
+          upsertAccessSubjectOn(db, {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
             memberId: "00000000-0000-0000-0000-000000000000",
           }),
@@ -455,7 +455,7 @@ test(
       )
       await assert.rejects(
         () =>
-          upsertAccessSubjectOn(client, {
+          upsertAccessSubjectOn(db, {
             kind: SUBJECT_KIND.REMOTE_AGENT,
             remoteAgentId: "00000000-0000-0000-0000-000000000000",
           }),
@@ -463,7 +463,7 @@ test(
       )
       await assert.rejects(
         () =>
-          upsertAccessSubjectOn(client, {
+          upsertAccessSubjectOn(db, {
             kind: SUBJECT_KIND.CONVERSATION,
             conversationId: "00000000-0000-0000-0000-000000000000",
           }),
@@ -477,19 +477,19 @@ test(
   "findAccessSubjectIdOn returns the existing id and null when missing",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db, "owner@example.test")
       const workspaceId = await insertWorkspace(db, userId)
-      const created = await upsertAccessSubjectOn(client, {
+      const created = await upsertAccessSubjectOn(db, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId,
       })
-      const found = await findAccessSubjectIdOn(client, {
+      const found = await findAccessSubjectIdOn(db, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId,
       })
       assert.equal(found, created)
-      const missing = await findAccessSubjectIdOn(client, {
+      const missing = await findAccessSubjectIdOn(db, {
         kind: SUBJECT_KIND.USER,
         userId: "00000000-0000-0000-0000-000000000000",
       })

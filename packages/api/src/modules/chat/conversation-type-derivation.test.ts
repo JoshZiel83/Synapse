@@ -254,7 +254,7 @@ async function bindConversation(
 async function addExternalParticipant(
   conversationId: string,
   transportAddressId: string,
-  client: unknown
+  db: AnyDb
 ): Promise<string> {
   const { ensureConversationParticipant } = await import("./service.js")
   const member = (await ensureConversationParticipant({
@@ -262,7 +262,7 @@ async function addExternalParticipant(
     participantType: "external",
     displayName: "Ext",
     transportAddressId,
-    queryable: client as never,
+    queryable: db as never,
   })) as { id: string }
   return member.id
 }
@@ -302,14 +302,14 @@ test(
   "binding account replacement is rejected while external participants from the old account remain",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const conversationId = await insertConversation(db, workspaceId)
       const accountA = await insertAccount(db, workspaceId)
       await bindConversation(db, workspaceId, conversationId, accountA)
       const addrA = await insertAddress(db, workspaceId, accountA)
-      await addExternalParticipant(conversationId, addrA, client)
+      await addExternalParticipant(conversationId, addrA, db)
 
       // A second account in the same workspace.
       const accountB = await insertAccount(db, workspaceId)
@@ -332,7 +332,7 @@ test(
   "participant address attachment is rejected when the address account != binding account",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberUser = await insertUser(db)
@@ -359,7 +359,7 @@ test(
         conversationId,
         participantType: "workspace_member",
         workspaceMemberId: memberId,
-        queryable: client as never,
+        queryable: db as never,
       })) as { id: string }
 
       // An address on a DIFFERENT account (same workspace).
@@ -478,7 +478,7 @@ test(
       const accountA = await insertAccount(db, workspaceId)
       await bindConversation(db, workspaceId, conversationId, accountA)
       const addrA = await insertAddress(db, workspaceId, accountA)
-      await addExternalParticipant(conversationId, addrA, client)
+      await addExternalParticipant(conversationId, addrA, db)
 
       await db
         .deleteFrom("conversation_transport_bindings")
@@ -507,7 +507,7 @@ test(
       const accountA = await insertAccount(db, workspaceId)
       await bindConversation(db, workspaceId, conversationId, accountA)
       const addrA = await insertAddress(db, workspaceId, accountA)
-      await addExternalParticipant(conversationId, addrA, client)
+      await addExternalParticipant(conversationId, addrA, db)
 
       await db
         .deleteFrom("conversations")
@@ -533,7 +533,7 @@ test(
   "participant address attachment is rejected on a native conversation (no binding)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberUser = await insertUser(db)
@@ -559,7 +559,7 @@ test(
         conversationId,
         participantType: "workspace_member",
         workspaceMemberId: memberId,
-        queryable: client as never,
+        queryable: db as never,
       })) as { id: string }
 
       await assert.rejects(
@@ -621,7 +621,7 @@ test(
   "getConversationParticipant finds an existing external participant by transportAddressId",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const conversationId = await insertConversation(db, workspaceId)
@@ -629,17 +629,13 @@ test(
       await bindConversation(db, workspaceId, conversationId, accountA)
       const addrA = await insertAddress(db, workspaceId, accountA)
 
-      const created = await addExternalParticipant(
-        conversationId,
-        addrA,
-        client
-      )
+      const created = await addExternalParticipant(conversationId, addrA, db)
 
       const { getConversationParticipant } = await import("./service.js")
       const found = await getConversationParticipant({
         conversationId,
         transportAddressId: addrA,
-        queryable: client as never,
+        queryable: db as never,
       })
       assert.ok(found, "existing external participant must be found by address")
       assert.equal(found!.id, created)
@@ -649,7 +645,7 @@ test(
       const none = await getConversationParticipant({
         conversationId,
         transportAddressId: addrOther,
-        queryable: client as never,
+        queryable: db as never,
       })
       assert.equal(none, null)
     })

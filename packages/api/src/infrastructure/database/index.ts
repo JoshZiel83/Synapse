@@ -306,44 +306,6 @@ export async function query<T extends pg.QueryResultRow = any>(
   }
 }
 
-export async function getClient() {
-  return pool.connect()
-}
-
-export async function transaction<T>(
-  fn: (client: pg.PoolClient) => Promise<T>
-): Promise<T> {
-  const client = await pool.connect()
-  try {
-    await client.query("BEGIN")
-    const originalQuery = client.query.bind(client)
-    client.query = (async (...args: any[]) => {
-      try {
-        return await (originalQuery as any)(...args)
-      } catch (err) {
-        const [text, params] = args
-        if (typeof text === "string") {
-          logQueryFailure(text, Array.isArray(params) ? params : undefined, err)
-        } else {
-          console.error("[db.query] failed:", {
-            message: err instanceof Error ? err.message : String(err),
-            config: text,
-          })
-        }
-        throw err
-      }
-    }) as typeof client.query
-    const result = await fn(client)
-    await client.query("COMMIT")
-    return result
-  } catch (e) {
-    await client.query("ROLLBACK")
-    throw e
-  } finally {
-    client.release()
-  }
-}
-
 export async function testConnection(): Promise<boolean> {
   try {
     await pool.query("SELECT 1")

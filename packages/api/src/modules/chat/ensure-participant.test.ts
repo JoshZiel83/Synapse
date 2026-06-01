@@ -151,7 +151,7 @@ test(
   "ensureConversationParticipant inserts then updates without writing dropped polymorphic columns",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberId = await insertWorkspaceMember(db, workspaceId, userId)
@@ -166,7 +166,7 @@ test(
         actorId,
         roleKey: "member",
         displayName: "first display",
-        queryable: client,
+        queryable: db,
       })
       assert.ok(first)
       const firstId = (first as { id: string }).id
@@ -180,7 +180,7 @@ test(
         roleKey: "owner",
         displayName: "second display",
         metadata: { rejoined: true },
-        queryable: client,
+        queryable: db,
       })
       assert.ok(again)
       const againId = (again as { id: string }).id
@@ -203,7 +203,7 @@ test(
   "ensureConversationParticipant (workspace_member) idempotent re-call updates state without touching dropped columns",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberId = await insertWorkspaceMember(db, workspaceId, userId)
@@ -216,7 +216,7 @@ test(
         participantType: "workspace_member",
         workspaceMemberId: memberId,
         roleKey: "member",
-        queryable: client,
+        queryable: db,
       })
       const firstId = (first as { id: string }).id
 
@@ -232,7 +232,7 @@ test(
         conversationId,
         participantType: "workspace_member",
         workspaceMemberId: memberId,
-        queryable: client,
+        queryable: db,
       })
       const againId = (again as { id: string }).id
       assert.equal(againId, firstId)
@@ -282,7 +282,7 @@ test(
   "external participant: same transport_address across two conversations reuses one subject; a different address gets its own",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       // Both conversations must be bound to the SAME account as the shared
@@ -313,21 +313,21 @@ test(
         participantType: "external",
         displayName: "Alice",
         transportAddressId: addr1,
-        queryable: client,
+        queryable: db,
       })) as { id: string; subjectId?: string }
       const b1 = (await ensureConversationParticipant({
         conversationId: convB,
         participantType: "external",
         displayName: "Alice elsewhere",
         transportAddressId: addr1,
-        queryable: client,
+        queryable: db,
       })) as { id: string }
       const a2 = (await ensureConversationParticipant({
         conversationId: convA,
         participantType: "external",
         displayName: "Bob",
         transportAddressId: addr2,
-        queryable: client,
+        queryable: db,
       })) as { id: string }
 
       const rows = await db
@@ -358,7 +358,7 @@ test(
   "external participant: renaming display_name does not create a duplicate (dedup by subject, not name)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const { conversationId, transportAccountId } = await insertImConversation(
@@ -376,14 +376,14 @@ test(
         participantType: "external",
         displayName: "Original Name",
         transportAddressId: addr,
-        queryable: client,
+        queryable: db,
       })) as { id: string }
       const renamed = (await ensureConversationParticipant({
         conversationId,
         participantType: "external",
         displayName: "Renamed",
         transportAddressId: addr,
-        queryable: client,
+        queryable: db,
       })) as { id: string }
       assert.equal(renamed.id, first.id)
 
@@ -401,7 +401,7 @@ test(
   "external participant without a transport identity is rejected (no throwaway)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const { conversationId } = await insertImConversation(db, workspaceId)
@@ -413,7 +413,7 @@ test(
           conversationId,
           participantType: "external",
           displayName: "Anonymous",
-          queryable: client,
+          queryable: db,
         }),
         /external participant requires transportAddressId/
       )
@@ -425,7 +425,7 @@ test(
   "external subject cannot join a non-IM conversation (no transport binding) — DB trigger",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       // A plain conversation with NO transport binding is not IM.
@@ -440,7 +440,7 @@ test(
           participantType: "external",
           displayName: "Sneaky",
           transportAddressId: addr,
-          queryable: client,
+          queryable: db,
         }),
         /no transport binding|external participants are IM-only/i
       )
@@ -452,7 +452,7 @@ test(
   "external subject from a different transport account than the conversation's binding is rejected (account mismatch) — DB trigger",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       // IM conversation bound to account A; the address belongs to account B.
@@ -470,7 +470,7 @@ test(
           participantType: "external",
           displayName: "Wrong account",
           transportAddressId: addrOnOtherAccount,
-          queryable: client,
+          queryable: db,
         }),
         /transport account .* does not match|binding account/i
       )
@@ -482,7 +482,7 @@ test(
   "ensureConversationParticipant rejects a linked (member-bound) address as external (resolver guard)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberId = await insertWorkspaceMember(db, workspaceId, userId)
@@ -503,7 +503,7 @@ test(
           participantType: "external",
           displayName: "Linked",
           transportAddressId: linkedAddr,
-          queryable: client,
+          queryable: db,
         }),
         /linked to a workspace member/
       )
@@ -515,7 +515,7 @@ test(
   "ensureConversationParticipant rejects a bot/system address as external (resolver guard)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const { conversationId, transportAccountId } = await insertImConversation(
@@ -535,7 +535,7 @@ test(
           participantType: "external",
           displayName: "Bot",
           transportAddressId: botAddr,
-          queryable: client,
+          queryable: db,
         }),
         /not a user address/
       )
@@ -547,7 +547,7 @@ test(
   "ensureConversationParticipant rejects an external address from another workspace (workspace mismatch)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const otherUserId = await insertUser(db)
@@ -567,7 +567,7 @@ test(
           participantType: "external",
           displayName: "Foreign",
           transportAddressId: foreignAddr,
-          queryable: client,
+          queryable: db,
         }),
         /does not match conversation|binding account/i
       )
@@ -579,7 +579,7 @@ test(
   "external participant happy path: unlinked user address on the binding account joins an IM conversation",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const { conversationId, transportAccountId } = await insertImConversation(
@@ -597,7 +597,7 @@ test(
         participantType: "external",
         displayName: "Real External",
         transportAddressId: addrOk,
-        queryable: client,
+        queryable: db,
       })) as { id: string }
       assert.ok(participant.id)
 
@@ -636,7 +636,7 @@ test(
   "round-11 P1: addConversationParticipants rejects a remote agent from another workspace (no cross-workspace leak)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const otherUserId = await insertUser(db)
@@ -651,7 +651,7 @@ test(
           workspaceId,
           conversationId,
           remoteAgentIds: [foreignAgentId],
-          queryable: client,
+          queryable: db,
         }),
         /remote agent/i
       )
@@ -662,7 +662,7 @@ test(
         workspaceId,
         conversationId,
         remoteAgentIds: [localAgentId],
-        queryable: client,
+        queryable: db,
       })
       const rows = await db
         .selectFrom("conversation_participants as cp")

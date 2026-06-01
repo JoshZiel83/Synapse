@@ -3,23 +3,13 @@
  * workspace-scoped binding (source=default_open) on the actor/remote_agent.
  * The historical `actors.access_policy` / `remote_agents.access_policy`
  * columns have been dropped; this module is the single point where the
- * derived intent is read/written.
- *
- * Both Kysely-style (`*` taking `KyselyDb`) and `pg.PoolClient`-style
- * (`*On` taking a `QueryExecutor`) helpers are exposed so callers in either
- * transaction style can keep all writes atomic with the binding insert.
+ * derived intent is read/written. All helpers take a Kysely {@link KyselyDb}
+ * executor (the top-level db or a transaction).
  */
 
 import { SUBJECT_KIND, workspaceRef, workspaceMemberRef } from "@synapse/shared"
-import type {
-  KyselyDb,
-  QueryExecutor,
-} from "../../infrastructure/database/kysely.js"
-import { executeSqlOn } from "../../infrastructure/database/kysely.js"
-import {
-  buildResourceAccessBindingInsertValues,
-  buildResourceAccessBindingInsertValuesOn,
-} from "./binding-storage.js"
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
+import { buildResourceAccessBindingInsertValues } from "./binding-storage.js"
 import { upsertAccessSubject } from "./subject-registry.js"
 
 export type AccessPolicyValue = "workspace_open" | "approval_required"
@@ -47,30 +37,6 @@ async function hasWorkspaceDefaultOpenBinding(
     .limit(1)
     .executeTakeFirst()
   return Boolean(row)
-}
-
-async function hasWorkspaceDefaultOpenBindingOn(
-  client: QueryExecutor,
-  resourceType: "actor" | "remote_agent",
-  resourceId: string,
-  workspaceId: string
-): Promise<boolean> {
-  const idColumn = resourceType === "actor" ? "actor_id" : "remote_agent_id"
-  const result = await executeSqlOn<{ id: string }>(
-    client,
-    `SELECT binding.id
-     FROM resource_access_bindings binding
-     INNER JOIN access_subjects subj ON subj.id = binding.subject_id
-     WHERE binding.resource_type = $1
-       AND binding.${idColumn} = $2::uuid
-       AND binding.source = 'default_open'
-       AND subj.kind = 'workspace'
-       AND subj.workspace_id = $3::uuid
-       AND binding.status = 'active'
-     LIMIT 1`,
-    [resourceType, resourceId, workspaceId]
-  )
-  return result.rows.length > 0
 }
 
 export async function deriveAccessPolicy(
@@ -172,81 +138,6 @@ export async function setAccessPolicy(
 }
 
 /**
- * `pg.PoolClient`-compatible variant of `setAccessPolicy`. Use this from inside
- * `transaction(async client => ...)` blocks (e.g. actor creation) so the
- * binding upsert commits atomically with the actor INSERT on the same trx.
- */
-export async function setAccessPolicyOn(
-  client: QueryExecutor,
-  params: {
-    resourceType: "actor" | "remote_agent"
-    resourceId: string
-    workspaceId: string
-    policy: AccessPolicyValue
-    createdByWorkspaceMemberId?: string | null
-  }
-): Promise<void> {
-  if (params.policy === "workspace_open") {
-    const existing = await hasWorkspaceDefaultOpenBindingOn(
-      client,
-      params.resourceType,
-      params.resourceId,
-      params.workspaceId
-    )
-    if (existing) return
-    const values = await buildResourceAccessBindingInsertValuesOn(client, {
-      workspaceId: params.workspaceId,
-      resourceType: params.resourceType,
-      resourceId: params.resourceId,
-      target: workspaceTarget(params.workspaceId),
-      source: "default_open",
-      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
-      reason: DEFAULT_OPEN_REASON,
-    })
-    await executeSqlOn(
-      client,
-      `INSERT INTO resource_access_bindings (
-         workspace_id, resource_type, installed_skill_id, plugin_installation_id,
-         automation_event_source_id, actor_id, remote_agent_id,
-         subject_id, conversation_type_mask_override, status, source,
-         created_by_workspace_member_id, reason
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-       ON CONFLICT DO NOTHING`,
-      [
-        values.workspace_id,
-        values.resource_type,
-        values.installed_skill_id,
-        values.plugin_installation_id,
-        values.automation_event_source_id,
-        values.actor_id,
-        values.remote_agent_id,
-        values.subject_id,
-        values.conversation_type_mask_override,
-        values.status,
-        values.source,
-        values.created_by_workspace_member_id,
-        values.reason,
-      ]
-    )
-    return
-  }
-
-  const idColumn =
-    params.resourceType === "actor" ? "actor_id" : "remote_agent_id"
-  await executeSqlOn(
-    client,
-    `UPDATE resource_access_bindings
-     SET status = 'revoked', revoked_at = NOW()
-     WHERE resource_type = $1
-       AND ${idColumn} = $2::uuid
-       AND source = 'default_open'
-       AND status = 'active'`,
-    [params.resourceType, params.resourceId]
-  )
-}
-
-/**
  * Approval flow: when an entity_access_requests row (target subject = actor or
  * remote_agent) is approved, write a workspace-member-scoped binding granting
  * that specific member access to the actor/remote_agent. This does NOT grant
@@ -298,78 +189,6 @@ export async function grantApprovedAccess(
     .where("subject_id", "=", subjectId)
     .executeTakeFirstOrThrow()
   return existing.id
-}
-
-/**
- * `pg.PoolClient`-compatible variant of `grantApprovedAccess`.
- */
-export async function grantApprovedAccessOn(
-  client: QueryExecutor,
-  params: {
-    resourceType: "actor" | "remote_agent"
-    resourceId: string
-    workspaceId: string
-    grantedToMemberId: string
-    grantedByWorkspaceMemberId?: string | null
-    reason?: string | null
-  }
-): Promise<string> {
-  const values = await buildResourceAccessBindingInsertValuesOn(client, {
-    workspaceId: params.workspaceId,
-    resourceType: params.resourceType,
-    resourceId: params.resourceId,
-    target: workspaceMemberTarget(params.grantedToMemberId),
-    source: "approval",
-    createdByWorkspaceMemberId: params.grantedByWorkspaceMemberId ?? null,
-    reason:
-      params.reason ?? `Approved access for member ${params.grantedToMemberId}`,
-  })
-  const inserted = await executeSqlOn<{ id: string }>(
-    client,
-    `INSERT INTO resource_access_bindings (
-       workspace_id, resource_type, installed_skill_id, plugin_installation_id,
-       automation_event_source_id, actor_id, remote_agent_id,
-       subject_id, conversation_type_mask_override, status, source,
-       created_by_workspace_member_id, reason
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     ON CONFLICT DO NOTHING
-     RETURNING id`,
-    [
-      values.workspace_id,
-      values.resource_type,
-      values.installed_skill_id,
-      values.plugin_installation_id,
-      values.automation_event_source_id,
-      values.actor_id,
-      values.remote_agent_id,
-      values.subject_id,
-      values.conversation_type_mask_override,
-      values.status,
-      values.source,
-      values.created_by_workspace_member_id,
-      values.reason,
-    ]
-  )
-  if (inserted.rows[0]) return inserted.rows[0].id
-
-  const idColumn =
-    params.resourceType === "actor" ? "actor_id" : "remote_agent_id"
-  const existing = await executeSqlOn<{ id: string }>(
-    client,
-    `SELECT id FROM resource_access_bindings
-     WHERE resource_type = $1
-       AND ${idColumn} = $2::uuid
-       AND source = 'approval'
-       AND status = 'active'
-       AND subject_id = $3::uuid
-     LIMIT 1`,
-    [params.resourceType, params.resourceId, values.subject_id]
-  )
-  if (!existing.rows[0]) {
-    throw new Error("Failed to upsert approval binding")
-  }
-  return existing.rows[0].id
 }
 
 function workspaceTarget(workspaceId: string) {

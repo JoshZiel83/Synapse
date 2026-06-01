@@ -1,5 +1,4 @@
 import {
-  executeTakeFirst,
   db as defaultDb,
   runBuilder,
 } from "../../infrastructure/database/kysely.js"

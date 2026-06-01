@@ -50,11 +50,6 @@ type CompilableStatement = {
   }
 }
 
-export type CompiledSqlStatement = {
-  sql: string
-  parameters: readonly unknown[]
-}
-
 /**
  * Transitional union accepted by access-layer `*On` helpers while the
  * Kysely-convergence refactor is in flight. New code should pass an
@@ -67,6 +62,19 @@ export type AnyExecutor = Executor | QueryExecutor
 /** True when the value is a Kysely executor (db or Transaction), not a bare pg client. */
 export function isKyselyExecutor(value: AnyExecutor): value is Executor {
   return typeof (value as Executor).selectFrom === "function"
+}
+
+/**
+ * Narrow an {@link AnyExecutor} to a Kysely {@link Executor}. Post-convergence
+ * every caller threads a Kysely executor; a bare pg client here is a bug.
+ */
+export function asExecutor(value: AnyExecutor): Executor {
+  if (!isKyselyExecutor(value)) {
+    throw new Error(
+      "asExecutor: expected a Kysely executor (db/trx), got a bare pg client"
+    )
+  }
+  return value
 }
 
 /**
@@ -129,11 +137,10 @@ export async function withDbTransaction<T>(
 }
 
 /**
- * @deprecated Compiles a Kysely statement then runs it through the bare
- * {@link QueryExecutor}, losing end-to-end type inference (caller supplies `<T>`,
- * defaults to `any`). Use `statement.execute(executor)` / `.executeTakeFirst()`
- * on a native builder, or `sql<Row>`...`.execute(executor)` for raw SQL, so the
- * row type flows from the query. Being removed.
+ * Internal: compile a Kysely statement and run it through a bare
+ * {@link QueryExecutor} (pg client). Used only by {@link runBuilder} for the
+ * legacy-pg-client branch of the AnyExecutor bridge. Not for direct use —
+ * prefer `statement.execute(executor)` / `runBuilder(executor, statement)`.
  */
 export async function executeCompiledQuery<T = any>(
   queryable: QueryExecutor,
@@ -146,62 +153,4 @@ export async function executeCompiledQuery<T = any>(
     rows: T[]
     rowCount?: number | null
   }>
-}
-
-/**
- * @deprecated See {@link executeCompiledQuery}. Use native
- * `.executeTakeFirst()` / `sql<Row>`...`.execute(executor)` then read `rows[0]`.
- */
-export async function executeTakeFirst<T = any>(
-  queryable: QueryExecutor,
-  statement: CompilableStatement
-): Promise<T | null> {
-  const result = await executeCompiledQuery<T>(queryable, statement)
-  return result.rows[0] ?? null
-}
-
-/**
- * @deprecated Runs a pre-compiled SQL string through the bare
- * {@link QueryExecutor} (returns `any`). Use `sql<Row>`...`.execute(executor)`.
- */
-export async function executeCompiledSql<T = any>(
-  queryable: QueryExecutor,
-  statement: CompiledSqlStatement
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  return queryable.query(statement.sql, [
-    ...statement.parameters,
-  ] as any[]) as Promise<{
-    rows: T[]
-    rowCount?: number | null
-  }>
-}
-
-/**
- * @deprecated Runs a raw SQL string against the pool (returns `any`, caller
- * supplies `<T>`). Use `sql<Row>`...`.execute(db)` so the row type flows from
- * the query. Being removed in the Kysely-convergence refactor.
- */
-export async function executeSql<T = any>(
-  text: string,
-  parameters?: readonly unknown[]
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  return executeCompiledSql<T>(pool, {
-    sql: text,
-    parameters: parameters ?? [],
-  })
-}
-
-/**
- * @deprecated Runs a raw SQL string against a bare {@link QueryExecutor}
- * (returns `any`). Use `sql<Row>`...`.execute(executor)` with {@link Executor}.
- */
-export async function executeSqlOn<T = any>(
-  queryable: QueryExecutor,
-  text: string,
-  parameters?: readonly unknown[]
-): Promise<{ rows: T[]; rowCount?: number | null }> {
-  return executeCompiledSql<T>(queryable, {
-    sql: text,
-    parameters: parameters ?? [],
-  })
 }
