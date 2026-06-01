@@ -19,19 +19,26 @@ test("redacts NESTED sensitive keys (the whole point)", () => {
   assert.equal((out.nested as any).deep.client_secret, "***REDACTED***")
 })
 
-test("redacts inside arrays of objects", () => {
+test("redacts the paired value of a sensitive {name,value} header entry", () => {
   const out = redactSecrets({
     headers: [
       { name: "authorization", value: "Bearer xyz" },
       { name: "content-type", value: "json" },
     ],
   })
-  // The KEY "value" is not sensitive; "authorization" as a value string is not
-  // redacted (we match key names, not values) — but a key literally named
-  // authorization is.
   const headers = out.headers as any[]
-  assert.equal(headers[0].value, "Bearer xyz")
+  // The {name:"authorization", value:...} pair → its value is redacted even
+  // though the literal key is "value". Non-sensitive header names pass through.
+  assert.equal(headers[0].value, "***REDACTED***")
+  assert.equal(headers[0].name, "authorization")
   assert.equal(headers[1].value, "json")
+})
+
+test("redacts key/value pair shape too (key:'authorization', value:...)", () => {
+  const out = redactSecrets({
+    params: [{ key: "authorization", value: "shh" }],
+  })
+  assert.equal((out.params as any[])[0].value, "***REDACTED***")
 })
 
 test("redacts a key literally named authorization at any depth", () => {
@@ -56,11 +63,22 @@ test("passes through primitives and leaves non-plain objects intact", () => {
   assert.equal((out as any).token, "***REDACTED***")
 })
 
-test("survives cyclic input", () => {
+test("survives cyclic input AND redacts secrets in the revisited node", () => {
   const a: any = { token: "x" }
   a.self = a
   const out = redactSecrets(a)
   assert.equal(out.token, "***REDACTED***")
+  // The cycle must resolve to the REDACTED copy, never the original object —
+  // otherwise the revisited node would leak the raw secret.
+  assert.equal(out.self.token, "***REDACTED***")
+  assert.notEqual(out.self, a)
+})
+
+test("shared (non-cyclic) references are also redacted on revisit", () => {
+  const shared: any = { token: "secret" }
+  const out = redactSecrets({ a: shared, b: shared })
+  assert.equal((out.a as any).token, "***REDACTED***")
+  assert.equal((out.b as any).token, "***REDACTED***")
 })
 
 test("honors extra keys and custom placeholder", () => {
