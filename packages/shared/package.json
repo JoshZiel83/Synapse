@@ -32,6 +32,18 @@
       "types": "./dist/schemas/index.d.ts",
       "default": "./dist/schemas/index.js"
     },
+    "./uuid": {
+      "types": "./dist/uuid/index.d.ts",
+      "default": "./dist/uuid/index.js"
+    },
+    "./emoji": {
+      "types": "./dist/emoji/index.d.ts",
+      "default": "./dist/emoji/index.js"
+    },
+    "./datetime": {
+      "types": "./dist/datetime/index.d.ts",
+      "default": "./dist/datetime/index.js"
+    },
     "./access/policies": {
       "types": "./dist/access/policies/index.d.ts",
       "default": "./dist/access/policies/index.js"

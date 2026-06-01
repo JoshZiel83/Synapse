@@ -31,15 +31,10 @@ import {
   summarizeConversationEvent,
   type InteractionRequestSummary,
 } from "@shared"
+import { formatChatTimestamp } from "@shared/datetime"
 
 function formatTimestamp(timestamp: string) {
-  const date = new Date(timestamp)
-  if (Number.isNaN(date.getTime())) return ""
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date)
+  return formatChatTimestamp(timestamp, "time")
 }
 
 function isMine(item: MobileChatItem, viewerParticipantId?: string) {
