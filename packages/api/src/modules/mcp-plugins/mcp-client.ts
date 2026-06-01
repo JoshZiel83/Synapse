@@ -15,6 +15,54 @@ interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown }
 }
 
+/**
+ * Parse a fully-buffered MCP Streamable-HTTP SSE body and return the result of
+ * the JSON-RPC message whose id matches `expectedId`. Exported for testing.
+ *
+ * Correctly handles: multi-line (folded) data within one event, multiple
+ * events in the stream, CRLF/optional-space framing (via eventsource-parser),
+ * and a final event that the server did NOT terminate with a blank line (we
+ * append a terminator since the body is complete). Throws on a JSON-RPC error
+ * matching our id, or if there were no data events at all.
+ */
+export function parseMcpSsePayload(text: string, expectedId: number): unknown {
+  const events: string[] = []
+  const parser = createParser({
+    onEvent: (event) => {
+      events.push(event.data)
+    },
+  })
+  // Append a terminator so a final un-terminated `data:` event still flushes.
+  parser.feed(text.endsWith("\n") ? `${text}\n` : `${text}\n\n`)
+
+  let fallback: unknown
+  let sawData = false
+  for (const data of events) {
+    if (!data) continue
+    sawData = true
+    let json: JsonRpcResponse
+    try {
+      json = JSON.parse(data) as JsonRpcResponse
+    } catch {
+      // Non-JSON event payload — remember as a last-resort raw fallback.
+      fallback = data
+      continue
+    }
+    if (json.id !== expectedId) continue
+    if (json.error) {
+      throw new Error(`MCP RPC error ${json.error.code}: ${json.error.message}`)
+    }
+    return json.result
+  }
+
+  if (!sawData) {
+    throw new Error("No data in SSE response")
+  }
+  // No event matched our id; return the raw payload of the last event as the
+  // previous implementation did (best-effort for non-JSON-RPC servers).
+  return fallback ?? ""
+}
+
 export class McpHttpClient {
   private endpoint: string
   private headers: Record<string, string>
@@ -150,48 +198,8 @@ export class McpHttpClient {
     response: Response,
     expectedId: number
   ): Promise<unknown> {
-    // Properly parse the SSE stream rather than scanning for the last `data:`
-    // line: a single event's data can span multiple `data:` lines (folded with
-    // newlines), and a stream can carry several events — we want the JSON-RPC
-    // message whose id matches this request. eventsource-parser handles the
-    // framing (multi-line data, optional space, CRLF, comments).
     const text = await response.text()
-    const events: string[] = []
-    const parser = createParser({
-      onEvent: (event) => {
-        events.push(event.data)
-      },
-    })
-    parser.feed(text)
-
-    let fallback: unknown
-    let sawData = false
-    for (const data of events) {
-      if (!data) continue
-      sawData = true
-      let json: JsonRpcResponse
-      try {
-        json = JSON.parse(data) as JsonRpcResponse
-      } catch {
-        // Non-JSON event payload — remember as a last-resort raw fallback.
-        fallback = data
-        continue
-      }
-      if (json.id !== expectedId) continue
-      if (json.error) {
-        throw new Error(
-          `MCP RPC error ${json.error.code}: ${json.error.message}`
-        )
-      }
-      return json.result
-    }
-
-    if (!sawData) {
-      throw new Error("No data in SSE response")
-    }
-    // No event matched our id; return the raw payload of the last event as the
-    // previous implementation did (best-effort for non-JSON-RPC servers).
-    return fallback ?? ""
+    return parseMcpSsePayload(text, expectedId)
   }
 
   async initialize(): Promise<{
