@@ -24,6 +24,7 @@ import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
+  withDbTransaction,
   type QueryExecutor,
 } from "../../infrastructure/database/kysely.js"
 import {
@@ -667,40 +668,35 @@ export function createAuthService(_app: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
-    const userRow = await transaction(async (client) => {
-      const runner = { query: client.query.bind(client) as typeof query }
-      const row = await executeTakeFirst<UserRow>(
-        runner,
-        db
-          .insertInto("users")
-          .values({
-            email: normalizedEmail,
-            password_hash: passwordHash,
-            name: name.trim(),
-          })
-          .returning(userSelection)
-      )
+    const userRow = await withDbTransaction(async (trx) => {
+      const row = await trx
+        .insertInto("users")
+        .values({
+          email: normalizedEmail,
+          password_hash: passwordHash,
+          name: name.trim(),
+        })
+        .returning(userSelection)
+        .executeTakeFirst()
       if (!row) {
         throw new Error("Failed to create user")
       }
 
-      const avatarFile = await createGeneratedUserAvatarFile(client, {
+      const avatarFile = await createGeneratedUserAvatarFile(trx, {
         userId: row.id,
         name: row.name,
         email: row.email,
       })
 
-      const updatedUser = await executeTakeFirst<UserRow>(
-        runner,
-        db
-          .updateTable("users")
-          .set({
-            avatar_file_id: avatarFile.fileId,
-            updated_at: sql`NOW()`,
-          })
-          .where("id", "=", row.id)
-          .returning(userSelection)
-      )
+      const updatedUser = await trx
+        .updateTable("users")
+        .set({
+          avatar_file_id: avatarFile.fileId,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", row.id)
+        .returning(userSelection)
+        .executeTakeFirst()
       if (!updatedUser) {
         throw new Error("Failed to update user avatar")
       }

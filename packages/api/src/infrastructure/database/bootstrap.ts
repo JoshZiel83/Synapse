@@ -1,7 +1,8 @@
 import { readFileSync } from "fs"
 import { dirname, join, resolve } from "path"
 import { fileURLToPath } from "url"
-import { executeSql } from "./kysely.js"
+import { sql } from "kysely"
+import { db } from "./kysely.js"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
@@ -22,49 +23,46 @@ export const CURRENT_SCHEMA_DESCRIPTION =
   "conversation type system reshaped: conversations_kind reduced to (direct, group) — 'private' renamed to 'direct', 'virtual' removed; conversations_boundary axis deleted (enum + column + check + index). The conversations internal_workspace_id column was renamed to workspace_id (NOT NULL); every conversation is workspace-scoped. IM-ness is now derived from the presence of a conversation_transport_bindings row (no stored boundary). New uq_conversations_id_workspace UNIQUE(id, workspace_id) anchors composite FKs: conversation_transport_bindings (conversation_id, workspace_id) -> conversations and account/endpoint composite FKs (NO ACTION DEFERRABLE) keeping binding account/endpoint in-workspace and preventing silent IM->native flips; access_subjects(conversation_id, workspace_id) -> conversations composite FK + conversation subjects now require workspace_id. transport_accounts gains UNIQUE(id, workspace_id); transport_endpoints gains UNIQUE(id, transport_account_id). validate_conversation_participant_subject rewritten: unconditional workspace match for all participant kinds, external participants are IM-only (require a binding) and must match the binding's transport account. Capability conversation_type_mask cap lowered 31 -> 15 (4 type keys: direct, group, im_direct, im_group). Prior: external IM identities first-class subjects."
 
 async function ensureSchemaMigrationsTable() {
-  await executeSql(`
+  await sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version VARCHAR(64) PRIMARY KEY,
       description TEXT NOT NULL DEFAULT '',
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `)
+  `.execute(db)
 }
 
 async function countBusinessTables() {
-  const result = await executeSql<{ count: string }>(
-    `SELECT COUNT(*) AS count
-     FROM information_schema.tables
-     WHERE table_schema = 'public'
-       AND table_type = 'BASE TABLE'
-       AND table_name <> 'schema_migrations'`
-  )
+  const result = await sql<{ count: string }>`
+    SELECT COUNT(*) AS count
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_type = 'BASE TABLE'
+      AND table_name <> 'schema_migrations'`.execute(db)
   return Number.parseInt(result.rows[0]?.count || "0", 10)
 }
 
 async function hasCurrentSchemaVersion() {
-  const result = await executeSql<{ exists: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1
-       FROM schema_migrations
-       WHERE version = $1
-     ) AS exists`,
-    [CURRENT_SCHEMA_VERSION]
-  )
+  const result = await sql<{ exists: boolean }>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM schema_migrations
+      WHERE version = ${CURRENT_SCHEMA_VERSION}
+    ) AS exists`.execute(db)
   return result.rows[0]?.exists === true
 }
 
 async function recordCurrentSchemaVersion() {
-  await executeSql(
-    `INSERT INTO schema_migrations (version, description)
-     VALUES ($1, $2)
-     ON CONFLICT (version) DO NOTHING`,
-    [CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_DESCRIPTION]
-  )
+  await sql`
+    INSERT INTO schema_migrations (version, description)
+    VALUES (${CURRENT_SCHEMA_VERSION}, ${CURRENT_SCHEMA_DESCRIPTION})
+    ON CONFLICT (version) DO NOTHING`.execute(db)
 }
 
 async function applyBootstrapSchema() {
-  await executeSql(schemaSql)
+  // schemaSql is a trusted local file (schema.sql) containing the full DDL with
+  // multiple statements — must run as raw SQL, not a parameterized fragment.
+  await sql.raw(schemaSql).execute(db)
 }
 
 /**
@@ -142,12 +140,16 @@ export async function bootstrapDatabaseSchema() {
 export async function rebuildDatabaseSchema() {
   console.log("Rebuilding database schema...")
 
-  await executeSql(`
+  await sql
+    .raw(
+      `
     DROP SCHEMA IF EXISTS public CASCADE;
     CREATE SCHEMA public;
     GRANT ALL ON SCHEMA public TO CURRENT_USER;
     GRANT ALL ON SCHEMA public TO public;
-  `)
+  `
+    )
+    .execute(db)
 
   try {
     await applyBootstrapSchema()

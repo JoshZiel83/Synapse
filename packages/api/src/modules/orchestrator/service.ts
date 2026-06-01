@@ -6,7 +6,7 @@ import type {
   UUID,
 } from "@synapse/shared"
 import { SUBJECT_KIND } from "@synapse/shared"
-import { query } from "../../infrastructure/database/index.js"
+import { db } from "../../infrastructure/database/kysely.js"
 import { createMemory, presetToOwnerScope } from "../memory/service.js"
 import type { MemoryPreset } from "../memory/service.js"
 import {
@@ -331,17 +331,14 @@ async function handleChangeAvatar(
     const pixelArtOptions = parsePixelArtAvatarOptions(
       action.metadata?.pixelArt
     )
-    const avatarFile = await createGeneratedActorPixelArtAvatarFile(
-      { query },
-      {
-        workspaceId,
-        actorId,
-        actorName: actor.definition.name,
-        actorTitle: actor.definition.title,
-        uploaderUserId: context.userId || null,
-        options: pixelArtOptions,
-      }
-    )
+    const avatarFile = await createGeneratedActorPixelArtAvatarFile(db, {
+      workspaceId,
+      actorId,
+      actorName: actor.definition.name,
+      actorTitle: actor.definition.title,
+      uploaderUserId: context.userId || null,
+      options: pixelArtOptions,
+    })
 
     const updatedActor = await updateActor(
       actorId,
