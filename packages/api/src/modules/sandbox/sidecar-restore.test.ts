@@ -411,3 +411,116 @@ test(
     ])
   }
 )
+
+test(
+  "restorePendingSidecars: a NON-sidecar live path (/actor/x.txt) is PERMANENT and is NOT overwritten (P1 silent-overwrite guard)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    // THE dangerous case: a corrupt pending record whose `sidecar` points at a
+    // REAL tree path (/actor/x.txt) instead of /actor/.synapse-conflicts/<leaf>,
+    // but with a complete, valid file payload. A loose route regex would treat it
+    // as restorable and write the agent's preserved bytes straight onto the live
+    // head file — a silent data overwrite. It MUST be classified permanent and
+    // the live file MUST be left untouched.
+    const work = mkdtempSync(join(tmpdir(), "synapse-overwrite-guard-"))
+
+    // Ingest the agent's preserved bytes into CAS so contentSha is a REAL blob
+    // (so the only thing stopping the overwrite is the path guard, not a missing
+    // payload).
+    const seedDir = join(work, "seed")
+    mkdirSync(seedDir, { recursive: true })
+    writeFileSync(join(seedDir, "x.txt"), "agent-preserved")
+    const scan = await scanCommitDir({ dir: seedDir })
+    const contentSha = scan.entries.find((e) => e.path === "/x.txt")?.sha256
+    assert.ok(contentSha, "agent bytes ingested into CAS")
+
+    // Live mount currently holds the head version at /actor/x.txt.
+    const liveActor = join(work, "fresh", "actor")
+    mkdirSync(liveActor, { recursive: true })
+    const liveFile = join(liveActor, "x.txt")
+    writeFileSync(liveFile, "head-current")
+
+    const pendingCommit: Record<string, PendingCommitConflict> = {
+      actor: {
+        paths: ["/x.txt"],
+        sidecars: [
+          {
+            original: "/actor/x.txt",
+            sidecar: "/actor/x.txt", // NOT under .synapse-conflicts → must be rejected
+            kind: "file",
+            contentSha,
+          },
+        ],
+      },
+    }
+    const emptyRefresh: Pick<
+      PendingRefreshConflicts,
+      "deferredConflictsBySubpath" | "sidecarsBySubpath"
+    > = { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
+
+    const result = await restorePendingSidecarsImpl(
+      "sess-irrelevant",
+      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      {
+        peekCommit: async () => pendingCommit,
+        peekRefresh: async () => emptyRefresh,
+      }
+    )
+
+    assert.equal(result.ok, false, "restore reports failure")
+    assert.deepEqual(
+      result.failedSidecars,
+      [{ sidecar: "/actor/x.txt", reason: "permanent" }],
+      "a non-.synapse-conflicts path is permanent, never restored"
+    )
+    // THE KEY ASSERTION: the live head file was NOT overwritten.
+    assert.equal(
+      readFileSync(liveFile, "utf8"),
+      "head-current",
+      "live tree file must NOT be clobbered by a corrupt sidecar record"
+    )
+  }
+)
+
+test(
+  "restorePendingSidecars: a sidecar path with a '..' leaf segment is PERMANENT (no traversal)",
+  { skip: helperAvailable ? false : "fs-helper binary not built" },
+  async () => {
+    const work = mkdtempSync(join(tmpdir(), "synapse-traversal-guard-"))
+    const liveActor = join(work, "fresh", "actor")
+    mkdirSync(liveActor, { recursive: true })
+
+    const pendingCommit: Record<string, PendingCommitConflict> = {
+      actor: {
+        paths: ["/x.txt"],
+        sidecars: [
+          {
+            original: "/actor/x.txt",
+            // nested leaf with traversal — not a flat in-namespace leaf
+            sidecar: "/actor/.synapse-conflicts/../x.txt",
+            kind: "file",
+            contentSha: "a".repeat(64),
+          },
+        ],
+      },
+    }
+    const emptyRefresh: Pick<
+      PendingRefreshConflicts,
+      "deferredConflictsBySubpath" | "sidecarsBySubpath"
+    > = { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
+
+    const result = await restorePendingSidecarsImpl(
+      "sess-irrelevant",
+      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      {
+        peekCommit: async () => pendingCommit,
+        peekRefresh: async () => emptyRefresh,
+      }
+    )
+
+    assert.equal(result.ok, false)
+    assert.deepEqual(result.failedSidecars, [
+      { sidecar: "/actor/.synapse-conflicts/../x.txt", reason: "permanent" },
+    ])
+  }
+)

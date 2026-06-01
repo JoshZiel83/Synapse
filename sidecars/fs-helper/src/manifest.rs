@@ -947,6 +947,31 @@ fn content_discriminator(entry: &ManifestEntry) -> String {
     }
 }
 
+/// Validate that a `sidecar_vfs` string is a SAFE, in-namespace conflict-sidecar
+/// path before it is restored: exactly `/.synapse-conflicts/<flat-leaf>`, where
+/// `<flat-leaf>` is a single non-empty segment that is not `.`/`..` and contains
+/// no further slashes. Defense-in-depth (P1): the supervisor already restricts
+/// the agent-visible path, but `write_sidecar` ultimately joins this onto the
+/// live mount via `vfs_to_host` (which would happily walk `..` or write a normal
+/// tree path). Refusing anything outside the helper-owned `.synapse-conflicts`
+/// scratch dir guarantees a restore can NEVER overwrite a real tree file.
+fn validate_sidecar_vfs(sidecar_vfs: &str) -> Result<(), RpcError> {
+    let bad = || {
+        RpcError::InvalidParams(format!(
+            "restore_sidecar: refusing unsafe sidecar path {sidecar_vfs:?} \
+             (must be /{CONFLICTS_DIRNAME}/<flat-leaf>)"
+        ))
+    };
+    let rest = sidecar_vfs
+        .strip_prefix(&format!("/{CONFLICTS_DIRNAME}/"))
+        .ok_or_else(bad)?;
+    // `rest` must be a SINGLE safe segment: non-empty, no slash, not "."/"..".
+    if rest.is_empty() || rest.contains('/') || rest == "." || rest == ".." {
+        return Err(bad());
+    }
+    Ok(())
+}
+
 /// Re-materialize a conflict sidecar into `dir` from its DURABLE recovery payload
 /// (round-11 #1), after a teardown deleted the prior live dir. A "file" sidecar
 /// is rebuilt from its CAS `content_sha`; a "symlink" sidecar from its `target`.
@@ -961,6 +986,9 @@ pub fn restore_sidecar(
     content_sha: Option<&str>,
     target: Option<&str>,
 ) -> Result<(), RpcError> {
+    // P1 defense-in-depth: only ever write inside the .synapse-conflicts scratch
+    // namespace — never onto a real tree path, never via `..` traversal.
+    validate_sidecar_vfs(sidecar_vfs)?;
     let entry = match kind {
         "symlink" => ManifestEntry {
             path: sidecar_vfs.to_string(),
@@ -1454,5 +1482,56 @@ mod tests {
             );
         }
         // If it failed, that's the propagation we want — nothing more to assert.
+    }
+
+    #[test]
+    fn restore_sidecar_rejects_paths_outside_the_conflicts_namespace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = BlobStore::open(&tmp.path().join("cas")).unwrap();
+        let dir = tmp.path().join("live");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A real tree file the corrupt record would try to clobber.
+        std::fs::write(dir.join("x.txt"), "head-current").unwrap();
+        let (sha, _, _) = cas.put_bytes(b"agent-preserved").unwrap();
+
+        // P1: a sidecar_vfs that is NOT /.synapse-conflicts/<flat-leaf> must be
+        // refused — restore can only ever write inside the scratch namespace.
+        for bad in [
+            "/x.txt",                          // a real tree path
+            "",                                // empty
+            "/.synapse-conflicts",             // the dir itself, no leaf
+            "/.synapse-conflicts/",            // empty leaf
+            "/.synapse-conflicts/a/b",         // nested, not flat
+            "/.synapse-conflicts/..",          // traversal leaf
+            "/.synapse-conflicts/../x.txt",    // traversal escaping the namespace
+            "/other/.synapse-conflicts/leaf",  // not mount-relative
+        ] {
+            let res =
+                restore_sidecar(&cas, &dir, bad, "file", Some(&sha), None);
+            assert!(
+                matches!(res, Err(RpcError::InvalidParams(_))),
+                "expected InvalidParams for unsafe sidecar path {bad:?}, got {res:?}"
+            );
+        }
+
+        // The live tree file must be untouched by any of the rejected attempts.
+        assert_eq!(
+            std::fs::read_to_string(dir.join("x.txt")).unwrap(),
+            "head-current",
+            "a rejected restore must never clobber a real tree file"
+        );
+
+        // A WELL-FORMED sidecar leaf is accepted and written under the namespace.
+        let good = "/.synapse-conflicts/deadbeef";
+        restore_sidecar(&cas, &dir, good, "file", Some(&sha), None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(
+                dir.join(".synapse-conflicts").join("deadbeef")
+            )
+            .unwrap(),
+            "agent-preserved",
+            "a valid sidecar leaf is restored into the scratch namespace"
+        );
     }
 }
