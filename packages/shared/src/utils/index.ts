@@ -376,3 +376,6 @@ export function buildMobileScanUrl(params: {
   url.searchParams.set("token", params.token)
   return url.toString()
 }
+
+export { redactSecrets } from "./redact.js"
+export type { RedactOptions } from "./redact.js"
