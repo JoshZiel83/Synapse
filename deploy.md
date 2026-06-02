@@ -293,6 +293,49 @@ set -a; . ./.env; set +a
 openssl s_client -connect "${SYNAPSE_PUBLIC_DOMAIN}:443" -servername "$SYNAPSE_PUBLIC_DOMAIN" -status </dev/null
 ```
 
+## 8b. Server-side actor isolation (sandbox)
+
+Per-session actor sandboxes run each actor turn's filesystem + command tools in
+an isolated runtime. Two backends, selected by `SYNAPSE_SANDBOX_BACKEND`:
+
+- **`local`** (default) — a same-host `device-runtime` child process. Command
+  confinement needs `bwrap` on the API host; absent it, the sandbox is
+  file-only (fail-closed).
+- **`docker`** — the per-session `device-runtime` runs in its own cloud-sandbox
+  container (DooD via the host docker socket), reached over the frp tunnel.
+  Command confinement (bwrap) and network isolation live in that container.
+
+Enable the docker backend:
+
+```bash
+# 1. Build the cloud-sandbox image (self-contained; compiles TS + Rust inside).
+docker compose --profile sandbox-build build sandbox-image
+
+# 2. In .env (setup.sh already generated the signing key + frp token):
+#      SYNAPSE_SANDBOX_ENABLED=true
+#      SYNAPSE_SANDBOX_BACKEND=docker
+#      SYNAPSE_SANDBOX_TUNNEL=frp
+#    (SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY + FRP_SHARED_TOKEN must be set.)
+
+# 3. Bring up the API + the tunnel edge.
+docker compose --profile production up -d api tunnel-edge
+```
+
+Notes:
+
+- The API container mounts `/var/run/docker.sock` to launch sandbox containers.
+  That socket is host-root-equivalent — the backend only ever runs the pinned
+  `SYNAPSE_SANDBOX_IMAGE` with a fixed argument list. A docker-socket-proxy is
+  the recommended hardening for multi-tenant hosts.
+- Sandbox containers join the **internal** `synapse-sandbox-egress` network: they
+  reach the API + tunnel-edge but have **no public egress and no DB/Redis
+  access** — so a confined command (which shares the container's netns) can't
+  reach the internet or the database.
+- `bwrap` runs without `CAP_NET_ADMIN` (`--unshare-net` is gated off via
+  `--cmd-sandbox-share-net`; network isolation is the container's job). The
+  backend sets `seccomp=unconfined`, `apparmor=unconfined`, `CAP_SYS_ADMIN`
+  per sandbox container — the API container keeps the default profile.
+
 ## 9. Troubleshooting
 
 Inspect logs:
