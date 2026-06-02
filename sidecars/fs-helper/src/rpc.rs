@@ -4,6 +4,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+/// Wire protocol version reported by `fs.hello`. TS clients pin an expected
+/// value (`FS_HELPER_PROTO_VERSION` in
+/// packages/device-runtime/src/builtins/fs-helper-resolve.ts) and fail loud on
+/// mismatch, which catches the "same CLI args, drifted RPC semantics" stale-
+/// binary class at runtime. BUMP IN LOCKSTEP with the TS constant: any wire-
+/// incompatible change to an existing RPC's params/result is a bump; adding a
+/// new method or an optional field is not.
+pub const PROTO_VERSION: u32 = 1;
+
+/// `fs.hello` result: the handshake every TS client performs on (re)spawn.
+/// Intentionally requires no State/CAS so it answers even when the helper was
+/// started without --cas-dir.
+#[derive(Debug, Serialize)]
+pub struct HelloResult {
+    pub proto_version: u32,
+    pub crate_version: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RpcRequest {
     #[serde(rename = "jsonrpc")]
