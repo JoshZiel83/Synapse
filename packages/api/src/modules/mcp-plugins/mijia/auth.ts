@@ -581,3 +581,41 @@ export async function refreshMijiaSessionTokens(authState: MijiaAuthState) {
 export function getMijiaAppBaseUrl() {
   return MIJIA_APP_BASE_URL
 }
+
+/**
+ * Serialize the internal MijiaAuthState into the canonical auth dict that the
+ * upstream mijiaAPI (and the mijia-mcp sidecar) expects.
+ *
+ * The internal state uses `userAgent`/`passO`; mijiaAPI's `available` check and
+ * request signing hard-require `ua`/`pass_o` (plus userId/cUserId/serviceToken/
+ * ssecurity). We map field names without mutating the stored state so that
+ * refreshMijiaSessionTokens (which reads the internal shape) keeps working.
+ *
+ * This is registered as the auth-secret serializer for the `mijia_qr_login`
+ * driver, so `${auth_b64:mijiaAccount}` in the seed entryPoint base64-encodes
+ * THIS shape rather than the raw internal state.
+ */
+export function serializeMijiaAuthForMiot(
+  state: Record<string, unknown>
+): Record<string, unknown> {
+  const s = state as Partial<MijiaAuthState> & Record<string, unknown>
+  const out: Record<string, unknown> = {
+    ua: s.userAgent,
+    deviceId: s.deviceId,
+    pass_o: s.passO,
+    userId: s.userId,
+    cUserId: s.cUserId,
+    serviceToken: s.serviceToken,
+    ssecurity: s.ssecurity,
+    passToken: s.passToken,
+    psecurity: s.psecurity,
+    nonce: s.nonce,
+    expireTime: s.expireTime,
+    saveTime: s.saveTime,
+  }
+  // Drop undefined keys so the JSON the sidecar receives is clean.
+  for (const key of Object.keys(out)) {
+    if (out[key] === undefined) delete out[key]
+  }
+  return out
+}

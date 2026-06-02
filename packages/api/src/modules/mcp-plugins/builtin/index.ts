@@ -58,8 +58,16 @@ export async function initBuiltinRegistry(): Promise<void> {
   registerBuiltinHandler("z_ai/toolkit", mod.zAiToolkitHandler)
   const feishuMod = await import("./feishu/app/index.js")
   registerBuiltinHandler("feishu/app", feishuMod.feishuAppHandler)
-  // aminer/openapi and amap/openapi are now remote MCP plugins (transport
-  // sse/http proxying the official servers) — no in-process handler.
-  const mijiaMod = await import("./mijia/smarthome/index.js")
-  registerBuiltinHandler("mijia/smarthome", mijiaMod.mijiaSmarthomeHandler)
+  // aminer/openapi, amap/openapi, and mijia/smarthome are now remote MCP
+  // plugins (transport sse/http proxying official servers / the mijia-mcp
+  // sidecar) — no in-process handler.
+
+  // The Mijia plugin proxies a multi-tenant sidecar over http: its stored
+  // secretPayload is the internal MijiaAuthState, but the sidecar expects the
+  // upstream mijiaAPI canonical dict. Register a serializer for the
+  // mijia_qr_login driver so ${auth_b64:mijiaAccount} encodes the right shape.
+  const { registerAuthSecretSerializer } =
+    await import("../transports/auth-serializers.js")
+  const { serializeMijiaAuthForMiot } = await import("../mijia/auth.js")
+  registerAuthSecretSerializer("mijia_qr_login", serializeMijiaAuthForMiot)
 }

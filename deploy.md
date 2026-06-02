@@ -195,6 +195,34 @@ and the `prepublish-guard` refuses any tarball containing `.map` files, so
 no sourcemaps are ever published. Back up the `verdaccio_storage` volume —
 losing it loses every published version (npm forbids re-publishing a version).
 
+## 5c. Mijia MCP sidecar (optional)
+
+The Mijia (Xiaomi smart-home) builtin plugin proxies a containerized,
+multi-tenant MCP sidecar (`sidecars/mijia-mcp/`, a fork of `javen-yan/miot-mcp`;
+see `sidecars/mijia-mcp/UPSTREAM.md`). It runs as the `mijia-mcp` service behind
+the `mijia` compose profile, internal-network only (no host port). Per-request
+Xiaomi credentials arrive in the `X-Mijia-Auth` header from the API — nothing is
+baked into the image, and the service deliberately does NOT receive `.env`
+(its environment is an explicit allowlist).
+
+The API reaches it at `http://mijia-mcp:8765/mcp` via `MIJIA_MCP_URL` (already
+defaulted in `docker-compose.yml`). Start it alongside the API:
+
+```bash
+docker compose --profile production --profile mijia up -d --build mijia-mcp api
+```
+
+Rebuild after changes:
+
+```bash
+docker compose --profile production --profile mijia up -d --build mijia-mcp
+```
+
+Login (QR) happens on the Synapse side (the `mijia_qr_login` auth driver); the
+sidecar only consumes the resulting credentials per request. One installation
+binds one Mi Home account (shared by that installation's authorized members);
+members who need their own account create a separate installation.
+
 ## 6. Start Production
 
 Start or update the TLS public stack:
