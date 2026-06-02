@@ -56,6 +56,10 @@ import {
   type SandboxSpec,
 } from "./sandbox-backend.js"
 import {
+  createDockerSandboxBackend,
+  type DockerSandboxBackendOptions,
+} from "./docker-sandbox-backend.js"
+import {
   resolveDeviceBuiltinIds,
   createSandboxGrants,
   revokeSandboxGrants,
@@ -95,13 +99,7 @@ function selectSandboxBackend(
   if (options.sandboxBackend) return options.sandboxBackend
   const kind = (process.env.SYNAPSE_SANDBOX_BACKEND || "local").toLowerCase()
   if (kind === "docker") {
-    // Phase 3 wires createDockerSandboxBackend here. Until then, fail loudly
-    // rather than silently falling back to local (which would mask a
-    // misconfigured deployment).
-    throw new SandboxServiceError(
-      "SYNAPSE_SANDBOX_BACKEND=docker is not yet available in this build",
-      500
-    )
+    return createDockerSandboxBackend(dockerBackendOptionsFromEnv())
   }
   const hostProvider = options.hostProvider ?? createLocalHostProvider()
   return createLocalSandboxBackend({
@@ -128,6 +126,40 @@ function selectSandboxBackend(
   })
 }
 
+/** Build the docker backend options from env. The image/network/volume are
+ *  required when docker is selected; missing values fail loudly. */
+function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
+  const require_ = (name: string): string => {
+    const v = process.env[name]?.trim()
+    if (!v) {
+      throw new SandboxServiceError(
+        `${name} is required when SYNAPSE_SANDBOX_BACKEND=docker`,
+        500
+      )
+    }
+    return v
+  }
+  const tunnel =
+    (process.env.SYNAPSE_SANDBOX_TUNNEL || "none").toLowerCase() === "frp"
+      ? "frp"
+      : "none"
+  return {
+    image: require_("SYNAPSE_SANDBOX_IMAGE"),
+    network: require_("SYNAPSE_SANDBOX_DOCKER_NETWORK"),
+    storageVolume: require_("SYNAPSE_SANDBOX_STORAGE_VOLUME"),
+    serverOrigin:
+      process.env.SYNAPSE_SANDBOX_SERVER_ORIGIN?.trim() || config.app.baseUrl,
+    tunnel,
+    tunnelServerAddr: process.env.SYNAPSE_TUNNEL_SERVER_ADDR?.trim(),
+    tunnelServerPort: process.env.SYNAPSE_TUNNEL_SERVER_PORT?.trim(),
+    tunnelAuthToken: process.env.FRP_SHARED_TOKEN?.trim(),
+    tunnelVhostHost: process.env.SYNAPSE_TUNNEL_VHOST_HOST?.trim(),
+    runAsUid: process.env.SYNAPSE_SANDBOX_RUN_AS_UID
+      ? Number(process.env.SYNAPSE_SANDBOX_RUN_AS_UID)
+      : undefined,
+  }
+}
+
 interface SessionContext {
   workspaceId: string
   conversationId: string
@@ -141,10 +173,7 @@ interface SessionContext {
  */
 function backendForKind(kind: SandboxBackendKind): SandboxBackend {
   if (kind === "docker") {
-    throw new SandboxServiceError(
-      "docker sandbox backend is not yet available in this build",
-      500
-    )
+    return createDockerSandboxBackend(dockerBackendOptionsFromEnv())
   }
   return createLocalSandboxBackend({
     hostProvider: createLocalHostProvider(),
@@ -182,6 +211,66 @@ function buildSandboxRefFromMounts(
     deviceId,
     pairingSessionId,
     hostPid: hostPid ?? undefined,
+  }
+}
+
+/**
+ * Whether the runtime behind a session's mounts is actually alive. Prefers the
+ * in-process handle (cheap); otherwise rebuilds a SandboxRef and probes via the
+ * owning backend (docker inspect / pid signal). On any error, treat as NOT
+ * alive so the caller recovers rather than handing back a dead sandbox.
+ */
+async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
+  const sessionId = mounts[0]?.session_id
+  if (sessionId) {
+    const live = liveSandboxHandles.get(sessionId)
+    if (live) {
+      try {
+        return await live.isRunning()
+      } catch {
+        return false
+      }
+    }
+  }
+  const ref = buildSandboxRefFromMounts(sessionId ?? "", mounts)
+  if (!ref) return false
+  try {
+    const handle = await backendForKind(ref.backend).connect(ref)
+    return await handle.isRunning()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Startup reconciler: tear down sandboxes left dangling by a crash so the next
+ * turn re-provisions cleanly. Two cases:
+ *  - mounts in 'provisioning'/'committing' (a crash mid-flight) → teardown.
+ *  - mounts 'active' but the runtime is dead → teardown (re-provision later).
+ * Genuine orphans (a docker container labeled for a session with NO live mount)
+ * are removed by removeOrphanSandboxContainers. Bounded; best-effort; logs.
+ */
+export async function reconcileSandboxes(): Promise<void> {
+  const rows = await db
+    .selectFrom("file_mounts")
+    .select("session_id")
+    .where("status", "in", ["provisioning", "active", "committing"])
+    .groupBy("session_id")
+    .execute()
+  for (const { session_id } of rows) {
+    const sessionId = session_id as string
+    try {
+      const mounts = await getActiveMountsForSession(db, sessionId)
+      if (mounts.length === 0) continue
+      const allActive = mounts.every((m) => m.status === "active")
+      if (allActive && (await isSandboxRuntimeAlive(mounts))) continue
+      console.warn(
+        `[sandbox] reconcile: tearing down stale session ${sessionId} (allActive=${allActive})`
+      )
+      await teardownSandbox(sessionId)
+    } catch (err) {
+      console.error(`[sandbox] reconcile failed for ${sessionId}:`, err)
+    }
   }
 }
 
@@ -290,7 +379,20 @@ export async function provisionSandbox(
   options: ProvisionSandboxOptions = {}
 ): Promise<SandboxProvisionResult> {
   const existing = await getActiveMountsForSession(db, sessionId)
-  if (existing.length > 0) {
+  // Fast path only when ALL mounts are 'active' (not mid-provision/commit) AND
+  // the runtime is actually alive. getActiveMountsForSession returns the LIVE
+  // set (status NOT IN closed/failed) which also includes 'provisioning' and
+  // 'committing'; short-circuiting on those would hand back a half-built or
+  // tearing-down sandbox. A dead runtime behind active mounts means the daemon
+  // crashed — we recover by tearing the stale device down and re-provisioning
+  // (the materialized live dirs are preserved across teardown's commit path).
+  const allActive =
+    existing.length > 0 && existing.every((m) => m.status === "active")
+  if (
+    existing.length > 0 &&
+    allActive &&
+    (await isSandboxRuntimeAlive(existing))
+  ) {
     // Already provisioned this session — report the ACTUAL state, not a
     // hardcoded false: commandline is enabled iff the paired device exposes a
     // commandline builtin (it only does so when bwrap confinement was available
@@ -354,6 +456,25 @@ export async function provisionSandbox(
       sidecarRestoreOk,
       failedSidecars,
     }
+  }
+
+  // There are live mounts but they're not all-active-and-alive (a prior provision
+  // crashed mid-flight, or the runtime died behind active mounts). Recover by
+  // tearing the stale sandbox down first — teardown commits any dirty state,
+  // kills the (possibly dead) runtime via the persisted backend, and closes the
+  // mounts — so the fresh provision below starts from a clean slate. Live dirs
+  // are preserved by teardown's commit path; their content is re-materialized
+  // from CAS on re-provision.
+  if (existing.length > 0) {
+    console.warn(
+      `[sandbox] session ${sessionId} has ${existing.length} stale/dead mount(s); tearing down before re-provision`
+    )
+    await teardownSandbox(sessionId).catch((err) =>
+      console.error(
+        `[sandbox] stale-mount teardown failed for ${sessionId} (continuing to re-provision):`,
+        err
+      )
+    )
   }
 
   const ctx = await loadSessionContext(sessionId)
