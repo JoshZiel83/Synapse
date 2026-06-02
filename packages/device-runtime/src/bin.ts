@@ -218,6 +218,15 @@ async function main() {
           process.env.SYNAPSE_DEVICE_CMD_SANDBOX,
         false
       )
+      // --cmd-sandbox-share-net: do NOT --unshare-net in the bwrap jail; the
+      // command shares the runtime's netns and network isolation is the
+      // container's job (Docker without CAP_NET_ADMIN, where --unshare-net's
+      // loopback bring-up fails). Only meaningful with --cmd-sandbox.
+      const cmdSandboxShareNet = isOn(
+        getFlag(args.flags, "cmd-sandbox-share-net") ??
+          process.env.SYNAPSE_DEVICE_CMD_SANDBOX_SHARE_NET,
+        false
+      )
       const fsDisableLiveSearch = isOn(
         getFlag(args.flags, "fs-disable-live-search") ??
           process.env.SYNAPSE_DEVICE_FS_DISABLE_LIVE_SEARCH,
@@ -390,6 +399,7 @@ async function main() {
               environment,
               toolchainManager,
               sandboxRoot: fsRoot,
+              sandboxShareNet: cmdSandboxShareNet,
             })
           )
         } else {
