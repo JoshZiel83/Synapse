@@ -84,22 +84,35 @@ RUN curl -fSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}
 
 WORKDIR /opt/synapse-device
 
-# Built TS packages (dist) + their package.json from the ts-builder, plus the
-# root manifests so `npm install --omit=dev` resolves runtime deps.
+# Built TS packages (dist + package.json) AND the fully-resolved node_modules
+# from the ts-builder. The builder's `npm ci --workspace=device-runtime ...`
+# already installed every runtime dep (zod/tldts/ws/semver/tar/...) and created
+# the node_modules/@synapse/* workspace symlinks, so we copy that tree verbatim
+# rather than re-resolving (which --workspaces=false would do incompletely).
 COPY --from=ts-builder /build/package.json /build/package-lock.json ./
+COPY --from=ts-builder /build/node_modules ./node_modules
 COPY --from=ts-builder /build/packages/device-runtime/package.json ./packages/device-runtime/package.json
 COPY --from=ts-builder /build/packages/device-runtime/dist ./packages/device-runtime/dist
+COPY --from=ts-builder /build/packages/device-runtime/node_modules ./packages/device-runtime/node_modules
 COPY --from=ts-builder /build/packages/shared/package.json ./packages/shared/package.json
 COPY --from=ts-builder /build/packages/shared/dist ./packages/shared/dist
+COPY --from=ts-builder /build/packages/shared/node_modules ./packages/shared/node_modules
 COPY --from=ts-builder /build/packages/device-protocol/package.json ./packages/device-protocol/package.json
 COPY --from=ts-builder /build/packages/device-protocol/dist ./packages/device-protocol/dist
+COPY --from=ts-builder /build/packages/device-protocol/node_modules ./packages/device-protocol/node_modules
 
 # fs-helper Rust sidecar (history / indexed search / extract).
 COPY --from=fs-helper-builder \
      /build/sidecars/fs-helper/target/release/synapse-device-fs-helper \
      /opt/synapse-device/sidecars/fs-helper/synapse-device-fs-helper
 
-RUN npm install --omit=dev --no-audit --no-fund --workspaces=false --ignore-scripts \
+# The builder's @synapse/* symlinks point at /build/packages/* — repoint them at
+# /opt/synapse-device/packages/* (where dist now lives), and expose the CLI.
+RUN rm -f node_modules/@synapse/shared node_modules/@synapse/device-protocol node_modules/@synapse/device-runtime \
+  && mkdir -p node_modules/@synapse \
+  && ln -sf /opt/synapse-device/packages/shared node_modules/@synapse/shared \
+  && ln -sf /opt/synapse-device/packages/device-protocol node_modules/@synapse/device-protocol \
+  && ln -sf /opt/synapse-device/packages/device-runtime node_modules/@synapse/device-runtime \
   && ln -sf /opt/synapse-device/packages/device-runtime/dist/bin.js /usr/local/bin/synapse-device \
   && chmod +x /opt/synapse-device/packages/device-runtime/dist/bin.js
 
