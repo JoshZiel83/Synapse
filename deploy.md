@@ -33,12 +33,13 @@ For TLS mode, point these hostnames at the server IP:
 - `www.<primary-domain>`
 - `m.<primary-domain>`
 - `mobile.<primary-domain>`
+- `npmr.<primary-domain>` (private npm registry; only needed if you run the `registry` profile)
 
 After generating `.env`, you can verify with:
 
 ```bash
 set -a; . ./.env; set +a
-getent ahostsv4 "$SYNAPSE_PUBLIC_DOMAIN" "$SYNAPSE_WWW_DOMAIN" "$SYNAPSE_MOBILE_SHORT_DOMAIN" "$SYNAPSE_MOBILE_DOMAIN"
+getent ahostsv4 "$SYNAPSE_PUBLIC_DOMAIN" "$SYNAPSE_WWW_DOMAIN" "$SYNAPSE_MOBILE_SHORT_DOMAIN" "$SYNAPSE_MOBILE_DOMAIN" "$SYNAPSE_REGISTRY_DOMAIN"
 ```
 
 HTTP-only mode can use a plain IP or hostname with a single port and does not require DNS.
@@ -68,8 +69,10 @@ This creates `.env` and `packages/web-next/.env.local`. Do not commit either fil
 - `SYNAPSE_WWW_DOMAIN`
 - `SYNAPSE_MOBILE_SHORT_DOMAIN`
 - `SYNAPSE_MOBILE_DOMAIN`
+- `SYNAPSE_REGISTRY_DOMAIN`
 - `LETSENCRYPT_CERT_NAME`
 - `LETSENCRYPT_EMAIL`
+- `PUBLIC_NPM_REGISTRY_URL`
 
 Before using real AI or ASR flows, fill the relevant provider variables in `.env`, including `AI_PROVIDER`, `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, and the Volcengine ASR variables if ASR is required.
 
@@ -80,6 +83,19 @@ Build production images:
 ```bash
 docker compose --profile production build api web mobile-web
 ```
+
+The API image bakes in everything it needs at build time — no runtime model
+downloads, no silent degradation:
+
+- the memory embedding model (`Xenova/multilingual-e5-small`) into
+  `/app/models/memory` (so vector search works offline),
+- the tesseract OCR language data (`chi_sim`, `chi_tra`, `eng`, `jpn`) into
+  `/app/models/tessdata`.
+
+These live outside the `api_storage` volume mount on purpose (a mount under
+`/app/storage` would shadow them). If a model or language fails to fetch, the
+image build FAILS rather than degrading at runtime. `MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD`
+is therefore `false` in the production container.
 
 Start infrastructure:
 
@@ -130,12 +146,67 @@ Manual renewal:
 ./infrastructure/scripts/renew-cert.sh
 ```
 
+## 5b. Private npm registry (Verdaccio)
+
+The private registry serves `@synapse/*` to end users and caches third-party
+deps from npmjs. It runs as the `verdaccio` service behind the `registry`
+compose profile, published at the registry subdomain
+(`$SYNAPSE_REGISTRY_DOMAIN`, e.g. `npmr.<primary-domain>`) through the same
+public nginx + TLS cert. The `4873` port is bound to loopback only — all
+external access goes through nginx. The real registry hostname lives only in
+the gitignored `.env` (`SYNAPSE_REGISTRY_DOMAIN` / `PUBLIC_NPM_REGISTRY_URL`),
+never in the repo.
+
+One-time setup (publisher credentials + registry config are gitignored):
+
+```bash
+cp infra/verdaccio/.env.example infra/verdaccio/.env   # set NPM_REGISTRY / PUBLIC_NPM_REGISTRY_URL
+# create a publisher (bcrypt hash appended to ./htpasswd, gitignored):
+docker run --rm httpd:2 htpasswd -nbB publisher 'STRONG_PASSWORD' >> infra/verdaccio/htpasswd
+```
+
+Make sure `$SYNAPSE_REGISTRY_DOMAIN` is in the TLS cert (re-run
+`./infrastructure/scripts/issue-cert.sh` — it now includes the registry
+subdomain in the SAN list), then start the registry:
+
+```bash
+docker compose --profile registry up -d verdaccio
+```
+
+Run the deny smoke test (verify third-party publish is refused, 403) per
+`infra/verdaccio/README.md`, then publish the packages. Order matters — the
+six sidecars must publish before `@synapse/device-runtime` (it pins them as
+exact `optionalDependencies`), and always use the wrappers (never a bare
+`npm publish`, which can leak a scoped package to public npm):
+
+```bash
+set -a && source infra/verdaccio/.env && set +a   # exports NPM_REGISTRY
+npm run build:device-protocol && npm run build:shared && npm run build:device-runtime
+npm run build -w packages/remote-agent-daemon
+node scripts/safe-publish.mjs packages/device-protocol
+node scripts/safe-publish.mjs packages/shared
+bash scripts/publish-device-runtime-sidecars.sh    # 6 sidecars FIRST
+node scripts/safe-publish.mjs packages/device-runtime
+node scripts/safe-publish.mjs packages/remote-agent-daemon
+```
+
+The publishable packages build with `tsconfig.build.json` (sourcemaps off)
+and the `prepublish-guard` refuses any tarball containing `.map` files, so
+no sourcemaps are ever published. Back up the `verdaccio_storage` volume —
+losing it loses every published version (npm forbids re-publishing a version).
+
 ## 6. Start Production
 
 Start or update the TLS public stack:
 
 ```bash
 docker compose --profile production --profile tls up -d api web mobile-web nginx
+```
+
+To also serve the private npm registry, add the `registry` profile:
+
+```bash
+docker compose --profile production --profile tls --profile registry up -d api web mobile-web nginx verdaccio
 ```
 
 Start or update the HTTP-only public stack:
@@ -152,6 +223,7 @@ Service routing:
 - HTTP-only mode: `http://${SYNAPSE_PUBLIC_HOST}:${SYNAPSE_HTTP_PORT}/mobile/` serves mobile web.
 - `/api/`, `/ws`, and `/files/` are proxied to the API.
 - `/mobile/` is proxied to the `mobile-web` static nginx container.
+- TLS mode: `https://${SYNAPSE_REGISTRY_DOMAIN}/` serves the private npm registry (when the `registry` profile is up).
 
 ## 7. Updates
 

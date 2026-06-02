@@ -1,5 +1,13 @@
 # Synapse private npm registry (Verdaccio)
 
+> **Production deploys run Verdaccio from the root `docker-compose.yml`**
+> (`registry` profile): `docker compose --profile registry up -d verdaccio`.
+> It shares the main network so the public nginx proxies it at
+> `https://$SYNAPSE_REGISTRY_DOMAIN/` with TLS, and the `4873` port is bound
+> to loopback only. The standalone `docker-compose.yml` in THIS directory is
+> kept for local/offline single-container use; pick one, not both. The
+> `config.yaml` and `htpasswd` here are the volumes both setups mount.
+
 Self-hosted [Verdaccio](https://verdaccio.org/) registry so external end
 users can one-shot `npm install` the Synapse npm packages **without**
 publishing them to public npmjs.
