@@ -46,11 +46,15 @@ import {
   restoreSidecar,
 } from "./materialize.js"
 import type { DirSyncResult } from "@synapse/device-runtime"
+import { createLocalHostProvider, type HostProvider } from "./host-provider.js"
 import {
-  createLocalHostProvider,
-  type HostProvider,
-  type RunHandle,
-} from "./host-provider.js"
+  createLocalSandboxBackend,
+  type SandboxBackend,
+  type SandboxBackendKind,
+  type SandboxHandle,
+  type SandboxRef,
+  type SandboxSpec,
+} from "./sandbox-backend.js"
 import {
   resolveDeviceBuiltinIds,
   createSandboxGrants,
@@ -73,15 +77,112 @@ export class SandboxServiceError extends Error {
   }
 }
 
-// In-process registry of live run handles, keyed by deviceId, so teardown can
-// SIGTERM the daemon it spawned. (host_pid is also persisted on file_mounts for
-// cross-process / crash recovery.)
-const liveRunHandles = new Map<string, RunHandle>()
+// In-process registry of live sandbox handles, keyed by sessionId (== the
+// SandboxHandle.sandboxId), so teardown can kill the runtime it started.
+// The backend + sandbox_resource_id (+ host_pid for local) are ALSO persisted
+// on file_mounts so a different process / post-restart teardown can rebuild a
+// SandboxRef and kill it without the in-process handle.
+const liveSandboxHandles = new Map<string, SandboxHandle>()
+
+/**
+ * Select the sandbox backend. `local` (default) spawns a same-host
+ * device-runtime child; `docker` (Phase 3) runs the cloud-sandbox image via
+ * DooD. A caller may inject its own backend/hostProvider for tests.
+ */
+function selectSandboxBackend(
+  options: ProvisionSandboxOptions
+): SandboxBackend {
+  if (options.sandboxBackend) return options.sandboxBackend
+  const kind = (process.env.SYNAPSE_SANDBOX_BACKEND || "local").toLowerCase()
+  if (kind === "docker") {
+    // Phase 3 wires createDockerSandboxBackend here. Until then, fail loudly
+    // rather than silently falling back to local (which would mask a
+    // misconfigured deployment).
+    throw new SandboxServiceError(
+      "SYNAPSE_SANDBOX_BACKEND=docker is not yet available in this build",
+      500
+    )
+  }
+  const hostProvider = options.hostProvider ?? createLocalHostProvider()
+  return createLocalSandboxBackend({
+    hostProvider,
+    beginLocalPairing: async (spec) => {
+      const pairing = await startPairing({
+        workspaceId: spec.workspaceId,
+        mode: "local_qr",
+        serverBaseUrl: spec.serverOrigin,
+        title: spec.title ?? `Sandbox ${spec.sessionId.slice(0, 8)}`,
+      })
+      if (!pairing.pairing_code) {
+        throw new SandboxServiceError(
+          "startPairing returned no pairing_code",
+          500
+        )
+      }
+      return {
+        pairingCode: pairing.pairing_code,
+        brokerDir: brokerDirFor(spec.sessionId),
+        pairingSessionId: pairing.pairing_session_id,
+      }
+    },
+  })
+}
 
 interface SessionContext {
   workspaceId: string
   conversationId: string
   actorId: string
+}
+
+/**
+ * A backend usable for `connect()` only (teardown / cross-process kill), built
+ * from the persisted SandboxRef kind. `create()` is never called on these, so
+ * the local backend's pairing dep is a throwing stub.
+ */
+function backendForKind(kind: SandboxBackendKind): SandboxBackend {
+  if (kind === "docker") {
+    throw new SandboxServiceError(
+      "docker sandbox backend is not yet available in this build",
+      500
+    )
+  }
+  return createLocalSandboxBackend({
+    hostProvider: createLocalHostProvider(),
+    beginLocalPairing: async () => {
+      throw new SandboxServiceError(
+        "beginLocalPairing is not available on a connect-only backend",
+        500
+      )
+    },
+  })
+}
+
+/**
+ * Rebuild a SandboxRef from the persisted file_mounts columns so teardown can
+ * reconnect+kill a runtime started by another process / before a restart.
+ * Returns null when there's no device to kill.
+ */
+function buildSandboxRefFromMounts(
+  sessionId: string,
+  mounts: FileMountRow[]
+): SandboxRef | null {
+  const deviceId = mounts.find((m) => m.device_id)?.device_id ?? null
+  if (!deviceId) return null
+  const backend = (mounts.find((m) => m.sandbox_backend)?.sandbox_backend ??
+    "local") as SandboxBackendKind
+  const sandboxResourceId =
+    mounts.find((m) => m.sandbox_resource_id)?.sandbox_resource_id ?? ""
+  const pairingSessionId =
+    mounts.find((m) => m.pairing_session_id)?.pairing_session_id ?? undefined
+  const hostPid = mounts.find((m) => m.host_pid)?.host_pid ?? undefined
+  return {
+    backend,
+    sandboxId: sessionId,
+    sandboxResourceId,
+    deviceId,
+    pairingSessionId,
+    hostPid: hostPid ?? undefined,
+  }
 }
 
 async function loadSessionContext(
@@ -169,7 +270,10 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
 }
 
 export interface ProvisionSandboxOptions {
+  /** Inject a HostProvider (local backend wraps it). Test seam. */
   hostProvider?: HostProvider
+  /** Inject a fully-built backend (overrides hostProvider + env selection). */
+  sandboxBackend?: SandboxBackend
   /** Max ms to wait for the device catalog to sync. */
   catalogTimeoutMs?: number
   createdByWorkspaceMemberId?: string | null
@@ -255,7 +359,7 @@ export async function provisionSandbox(
   const ctx = await loadSessionContext(sessionId)
   if (!ctx) throw new SandboxServiceError(`session ${sessionId} not found`, 404)
 
-  const hostProvider = options.hostProvider ?? createLocalHostProvider()
+  const backend = selectSandboxBackend(options)
   const fsHelperPath = resolveFsHelperPath()
   const sandboxRoot = sandboxRootFor(sessionId)
   const commandlineEnabled = isSandboxCommandlineAvailable()
@@ -276,6 +380,7 @@ export async function provisionSandbox(
       mountSubpath: spec.subpath,
       baseSnapshotId: spec.baseSnapshotId,
       materializedDir: dir,
+      sandboxBackend: backend.kind,
     })
     mounts.push(mount)
     await materializeSnapshot({
@@ -318,61 +423,62 @@ export async function provisionSandbox(
   }
 
   // Hoisted so the catch can tear down whatever was created.
-  let pairedDeviceId: string | null = null
-  let runHandle: RunHandle | null = null
+  let handle: SandboxHandle | null = null
   try {
-    // ⑥ local pairing: startPairing(local_qr) → pair → run.
-    const pairing = await startPairing({
-      workspaceId: ctx.workspaceId,
-      mode: "local_qr",
-      serverBaseUrl: config.app.baseUrl,
-      title: `Sandbox ${sessionId.slice(0, 8)}`,
-    })
-    if (!pairing.pairing_code) {
-      throw new SandboxServiceError(
-        "startPairing returned no pairing_code",
-        500
+    // ⑥ stand up the runtime via the selected backend. Staged-persistence
+    // callbacks write each fact onto ALL mounts the instant it exists so a
+    // mid-provision crash leaves the startup reconciler enough to reattach or
+    // safely clean up. Each callback is idempotent across the session's mounts.
+    const persistAll = async (
+      patch: Parameters<typeof updateFileMount>[2]
+    ): Promise<void> => {
+      await Promise.all(
+        mounts.map((mount) => updateFileMount(db, mount.id, patch))
       )
     }
-    const spawnParams = {
-      pairingCode: pairing.pairing_code,
-      brokerDir: brokerDirFor(sessionId),
-      fsRoot: sandboxRoot,
+    const spec: SandboxSpec = {
+      sessionId,
+      workspaceId: ctx.workspaceId,
+      sandboxRoot,
       fsHelperPath,
+      // The device dials back to the API. config.app.baseUrl for local;
+      // SYNAPSE_SANDBOX_SERVER_ORIGIN (internal address) is applied by the
+      // docker backend in Phase 4.
       serverOrigin: config.app.baseUrl,
       // ALWAYS run this per-session device in sandbox mode (--cmd-sandbox), even
-      // when bwrap is unavailable. This is a sandbox device: it must never
-      // expose an UNCONFINED commandline. The device-runtime's --cmd-sandbox
-      // branch fail-closes — bwrap present → confined commandline; bwrap absent
-      // → NO commandline tool at all (so nothing could later grant a host
-      // shell). `commandlineEnabled` only decides whether WE pre-authorize the
-      // commandline grant, not whether the device runs unconfined.
+      // when bwrap is unavailable. The device-runtime's --cmd-sandbox branch
+      // fail-closes: bwrap present → confined commandline; bwrap absent → NO
+      // commandline tool at all. `commandlineEnabled` only decides whether WE
+      // pre-authorize the commandline grant, not whether the device runs unconfined.
       confineCommands: true,
       title: `Sandbox ${sessionId.slice(0, 8)}`,
+      onPairingCreated: (pairingSessionId) => persistAll({ pairingSessionId }),
+      onResourceCreated: (sandboxResourceId) =>
+        persistAll({ sandboxResourceId }),
+      onDeviceClaimed: (deviceId) => persistAll({ deviceId }),
     }
-    const paired = await hostProvider.pair(spawnParams)
-    pairedDeviceId = paired.deviceId
-    runHandle = await hostProvider.run(spawnParams)
-    liveRunHandles.set(paired.deviceId, runHandle)
+    handle = await backend.create(spec)
+    liveSandboxHandles.set(handle.sandboxId, handle)
 
-    // Record device + pid on all mounts immediately (teardown/recovery need it).
-    for (const mount of mounts) {
-      await updateFileMount(db, mount.id, {
-        deviceId: paired.deviceId,
-        hostPid: runHandle.pid,
-      })
-    }
+    // Record device + resource handle on all mounts (teardown/recovery need it;
+    // the staged callbacks above already wrote device_id, this also pins
+    // host_pid for the local backend's pid-based kill fallback).
+    await persistAll({
+      deviceId: handle.deviceId,
+      hostPid: handle.hostPid ?? null,
+      sandboxResourceId: handle.sandboxResourceId || null,
+    })
 
     // ⑦ wait for device.catalog.sync to land (filesystem exposure visible).
-    await waitForCatalog(paired.deviceId, {
+    await waitForCatalog(handle.deviceId, {
       timeoutMs: options.catalogTimeoutMs ?? 30_000,
     })
 
     // ⑧ build both authorization layers (once, full capability list).
-    const builtins = await resolveDeviceBuiltinIds(paired.deviceId)
+    const builtins = await resolveDeviceBuiltinIds(handle.deviceId)
     await createSandboxGrants({
       workspaceId: ctx.workspaceId,
-      deviceId: paired.deviceId,
+      deviceId: handle.deviceId,
       actorId: ctx.actorId,
       conversationId: ctx.conversationId,
       builtins,
@@ -380,15 +486,13 @@ export async function provisionSandbox(
       createdByWorkspaceMemberId: options.createdByWorkspaceMemberId ?? null,
     })
 
-    // ⑨ mark mounts active + pin pairing session.
-    for (const mount of mounts) {
-      await updateFileMount(db, mount.id, { status: "active" })
-    }
+    // ⑨ mark mounts active.
+    await persistAll({ status: "active" })
 
     return {
       sessionId,
       sandboxRoot,
-      deviceId: paired.deviceId,
+      deviceId: handle.deviceId,
       commandlineEnabled,
       mountIds: mounts.map((m) => m.id),
       sidecarRestoreOk,
@@ -399,14 +503,15 @@ export async function provisionSandbox(
     // Best-effort cleanup of everything provisioned before the failure — the
     // mounts get marked 'failed' (so getActiveMountsForSession excludes them
     // and teardown can't recover), which means cleanup MUST happen here:
-    //  - stop the spawned daemon + drop its in-process handle,
+    //  - kill the runtime the backend started + drop its in-process handle,
     //  - revoke any partial grants + delete the paired device (cascades),
     //  - remove the on-disk scratch dirs (CAS untouched).
-    if (runHandle) {
-      await runHandle.stop().catch(() => {})
+    const pairedDeviceId = handle?.deviceId ?? null
+    if (handle) {
+      await handle.kill().catch(() => {})
+      liveSandboxHandles.delete(handle.sandboxId)
     }
     if (pairedDeviceId) {
-      liveRunHandles.delete(pairedDeviceId)
       await revokeSandboxGrants({
         workspaceId: ctx.workspaceId,
         deviceId: pairedDeviceId,
@@ -1617,16 +1722,31 @@ export async function teardownSandbox(
 
   const deviceId = mounts.find((m) => m.device_id)?.device_id ?? null
 
-  // ② stop the daemon (in-process handle if we have it, else SIGTERM the pid).
-  // Always — a failed commit doesn't justify leaving the runtime process alive.
-  if (deviceId) {
-    const handle = liveRunHandles.get(deviceId)
-    if (handle) {
-      await handle.stop().catch(() => {})
-      liveRunHandles.delete(deviceId)
-    } else {
-      const pid = mounts.find((m) => m.host_pid)?.host_pid
-      if (pid) killPid(pid)
+  // ② stop the runtime the backend started. Prefer the in-process handle
+  // (keyed by sessionId); else rebuild a SandboxRef from the persisted mount
+  // columns and reconnect via the SAME backend that created it (recorded in
+  // sandbox_backend), so a docker sandbox is `docker rm`'d and a local one is
+  // SIGTERM'd — never guessed from the current env. Always — a failed commit
+  // doesn't justify leaving the runtime alive.
+  const liveHandle = liveSandboxHandles.get(sessionId)
+  if (liveHandle) {
+    await liveHandle.kill().catch(() => {})
+    liveSandboxHandles.delete(sessionId)
+  } else {
+    const ref = buildSandboxRefFromMounts(sessionId, mounts)
+    if (ref) {
+      try {
+        const backend = backendForKind(ref.backend)
+        const handle = await backend.connect(ref)
+        await handle.kill()
+      } catch (err) {
+        console.error(
+          `[sandbox] teardown could not kill runtime for ${sessionId} via ${ref.backend} backend:`,
+          err
+        )
+        // Last-resort local fallback: signal the persisted pid directly.
+        if (ref.hostPid) killPid(ref.hostPid)
+      }
     }
   }
 
