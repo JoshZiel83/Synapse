@@ -292,6 +292,12 @@ export function startSessionThinkingWorker() {
       // (the cooperative abort surfaces as a generic TurnInterruptedError, so
       // the error TYPE alone can't tell us the turn was aborted for lock loss).
       let lockLost = false
+      // Flips true the moment we begin applying side-effects (executeActorActions
+      // onward). Some actions are NON-idempotent (create_memory, rename_self,
+      // change_avatar), so once side-effects have started we must NOT
+      // restore-and-requeue on a lock loss — a re-run would replay them. Before
+      // side-effects start, restoring+requeuing is safe (nothing was committed).
+      let sideEffectsStarted = false
       // Fenced lock-renew timer. Hoisted to handler scope and cleared in the
       // OUTER finally so renewal covers the WHOLE critical section — not just
       // actorThink, but executeActorActions + message persistence + turn/wakeup
@@ -1270,6 +1276,9 @@ export function startSessionThinkingWorker() {
 
         assertStillHoldLock()
 
+        // From here on we mutate external state (some non-idempotent). A lock
+        // loss past this point must NOT trigger a restore+requeue replay.
+        sideEffectsStarted = true
         await executeActorActions(workspaceId, actorId, result.actions, {
           sessionId,
           turnId: turn.id,
@@ -1404,32 +1413,56 @@ export function startSessionThinkingWorker() {
         // A lost lock or an interrupt cancels (not fails) the turn.
         const cancelled = turnInterrupted || lockLostError
 
-        // Lock lost: another worker now owns this session. RESTORE this turn's
-        // attached wakeups to `pending` (dropping them would silently lose
-        // user-triggered wakeups — the new owner only reads `pending`), mark the
-        // turn cancelled, and requeue so a worker re-claims the session (the
-        // Redis lock guarantees only one actually runs). Do NOT write a terminal
-        // session status — that's the new owner's call.
+        // Lock lost: another worker now owns this session. How we recover
+        // depends on whether we had begun applying side-effects:
+        //
+        //  - NOT started: nothing external was committed, so RESTORE this turn's
+        //    attached wakeups to `pending` (dropping them would silently lose
+        //    user-triggered wakeups — the new owner only reads `pending`) and
+        //    requeue so a worker re-drives them. Safe: no replay risk.
+        //
+        //  - ALREADY started: we may have committed NON-idempotent actions
+        //    (create_memory / rename_self / change_avatar / persisted messages).
+        //    Restoring+requeuing here would REPLAY them under the new owner. So
+        //    we DROP the wakeups instead and do NOT requeue — the actions this
+        //    turn already performed stand; we accept possibly not re-driving a
+        //    late-arriving wakeup over double-executing side-effects.
+        //
+        // Either way: mark the turn cancelled, do NOT write a terminal session
+        // status (the new owner drives that).
         if (lockLostError) {
           if (turn?.id) {
-            await runCleanupStep(
-              `restore wakeups for turn ${turn.id} (lock lost)`,
-              () => restoreTurnWakeupsToPending(turn.id)
-            )
+            if (sideEffectsStarted) {
+              log.warn(
+                `Session ${sessionId} lost lock AFTER side-effects started; ` +
+                  `dropping wakeups (no replay) to avoid double-executing non-idempotent actions`
+              )
+              await runCleanupStep(
+                `drop wakeups for turn ${turn.id} (lock lost mid-side-effects)`,
+                () => markTurnWakeupsDropped(turn.id)
+              )
+            } else {
+              await runCleanupStep(
+                `restore wakeups for turn ${turn.id} (lock lost pre-side-effects)`,
+                () => restoreTurnWakeupsToPending(turn.id)
+              )
+            }
             await runCleanupStep(`mark turn ${turn.id} cancelled`, () =>
               updateTurnStatus(turn.id, "cancelled", {
                 metadata: { errorMessage },
               })
             )
           }
-          // Requeue if there are now-pending wakeups to handle, so the session
-          // doesn't sit idle with unprocessed user messages.
-          const pendingAfterRestore = await getPendingWakeupCount(
-            sessionId
-          ).catch(() => 0)
-          if (pendingAfterRestore > 0) {
-            requeueAfterUnlock = true
-            requeueTrigger = "system_interrupt"
+          // Only requeue when we restored wakeups (pre-side-effects). If we
+          // dropped them (post-side-effects), there is nothing safe to re-drive.
+          if (!sideEffectsStarted) {
+            const pendingAfterRestore = await getPendingWakeupCount(
+              sessionId
+            ).catch(() => 0)
+            if (pendingAfterRestore > 0) {
+              requeueAfterUnlock = true
+              requeueTrigger = "system_interrupt"
+            }
           }
           await runCleanupStep(
             `shutdown MCP tools for session ${sessionId}`,
