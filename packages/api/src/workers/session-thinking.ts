@@ -215,18 +215,15 @@ export function startSessionThinkingWorker() {
             `Session ${sessionId} locked but ${pending} wakeup(s) pending; ` +
               `re-enqueuing a delayed retry`
           )
-          await sessionThinkingQueue
-            .add(
-              "think",
-              { sessionId, actorId, workspaceId, trigger, userId },
-              { delay: LOCK_CONTENDED_RETRY_DELAY_MS }
-            )
-            .catch((err: unknown) => {
-              log.error(
-                { err },
-                `failed to re-enqueue delayed retry for locked session ${sessionId}`
-              )
-            })
+          // The re-enqueue IS the only driver for these wakeups, so a failure
+          // must NOT be swallowed-and-reported-as-scheduled. Let it throw: this
+          // worker's job then fails, which surfaces in monitoring and (with job
+          // attempts) gets retried, rather than silently stranding the wakeups.
+          await sessionThinkingQueue.add(
+            "think",
+            { sessionId, actorId, workspaceId, trigger, userId },
+            { delay: LOCK_CONTENDED_RETRY_DELAY_MS }
+          )
           return {
             success: false,
             reason: "session locked",
@@ -824,14 +821,15 @@ export function startSessionThinkingWorker() {
           }
         )
 
-        // If we lost the session lock mid-turn, another worker now owns this
-        // session. Throw BEFORE applying any side-effects (actions, message
-        // persistence, runtime events) so we don't double-act with that worker.
-        // Throwing (vs returning) routes through the catch cleanup so the
-        // running turn + attached wakeups don't leak.
-        if (lockLost) {
-          throw new SessionLockLostError(sessionId)
+        // Bail before EACH side-effect / terminal write if we've lost the lock
+        // (the renew interval sets lockLost). Throwing routes through the catch
+        // cleanup; checking at every boundary shrinks the window in which the
+        // old worker and the new owner could both write.
+        const assertStillHoldLock = () => {
+          if (lockLost) throw new SessionLockLostError(sessionId)
         }
+
+        assertStillHoldLock()
 
         await executeActorActions(workspaceId, actorId, result.actions, {
           sessionId,
@@ -839,6 +837,8 @@ export function startSessionThinkingWorker() {
           userId,
           conversationId: session.conversation_id,
         })
+
+        assertStillHoldLock()
 
         const msgMetadata: Record<string, unknown> = {}
         if (result.toolsUsed && result.toolsUsed.length > 0)
@@ -854,6 +854,8 @@ export function startSessionThinkingWorker() {
         const hasMeta =
           Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined
         const messagePersistence = getAssistantSessionMessagePersistence(result)
+
+        assertStillHoldLock()
 
         if (messagePersistence.kind === "respond") {
           await publishSessionRuntime(workspaceId, sessionId, {
@@ -887,6 +889,7 @@ export function startSessionThinkingWorker() {
             metadata: { ...hasMeta, silentActions: true },
           })
         }
+        assertStillHoldLock()
         await markTurnWakeupsProcessed(turn.id)
         await updateTurnStatus(turn.id, "completed")
 
@@ -922,6 +925,7 @@ export function startSessionThinkingWorker() {
         })
 
         turn = null
+        assertStillHoldLock()
         const remainingPendingWakeups = await getPendingWakeupCount(sessionId)
         if (remainingPendingWakeups > 0) {
           requeueAfterUnlock = true
