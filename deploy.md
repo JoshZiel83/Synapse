@@ -205,11 +205,17 @@ Xiaomi credentials arrive in the `X-Mijia-Auth` header from the API — nothing 
 baked into the image, and the service deliberately does NOT receive `.env`
 (its environment is an explicit allowlist).
 
-The API reaches it at `http://mijia-mcp:8765/mcp` via `MIJIA_MCP_URL` (already
-defaulted in `docker-compose.yml`). Start it alongside the API:
+The API reaches it at `http://mijia-mcp:8765/mcp/` via `MIJIA_MCP_URL`. This is
+**empty by default** — the Mijia builtin plugin is only seeded when `MIJIA_MCP_URL`
+is set, so a plain `--profile production` deployment never surfaces a Mijia plugin
+that would fail at connect time against a sidecar you didn't start. To enable,
+set it in `.env` and bring up the sidecar with the `mijia` profile:
 
 ```bash
+echo 'MIJIA_MCP_URL=http://mijia-mcp:8765/mcp/' >> .env
 docker compose --profile production --profile mijia up -d --build mijia-mcp api
+# re-seed so the Mijia plugin appears (or run the normal seed step):
+docker compose --profile production run --rm api npm run db:bootstrap:runtime -w packages/api
 ```
 
 Rebuild after changes:

@@ -365,6 +365,10 @@ def build_app() -> Starlette:
             finally:
                 _registry().shutdown()
 
+    # Mount the stateless session manager at "/mcp". Starlette's Mount serves
+    # "/mcp/" directly (200) and 307-redirects a bare "/mcp"; compliant MCP
+    # clients (incl. the official SDK) follow the redirect, and the canonical
+    # URL Synapse configures is "/mcp/" so no redirect occurs in practice.
     return Starlette(
         debug=False,
         routes=[

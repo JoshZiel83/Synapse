@@ -19,14 +19,20 @@ const figmaCredentialed = Boolean(
   process.env.FIGMA_OAUTH_CLIENT_ID && process.env.FIGMA_OAUTH_CLIENT_SECRET
 )
 
+// Mijia proxies the optional mijia-mcp sidecar (compose `mijia` profile). Only
+// seed it when MIJIA_MCP_URL is actually set, so a default `--profile
+// production` deployment that hasn't started the sidecar does not surface an
+// installable plugin that fails at connect time against a non-existent service.
+const mijiaEnabled = Boolean(process.env.MIJIA_MCP_URL)
+
 export const builtinSeeds: BuiltinOrgSeed[] = [
   feishuSeed,
   aminerSeed,
   amapSeed,
   githubSeed,
   gitlabSeed,
-  mijiaSeed,
   zAiSeed,
+  ...(mijiaEnabled ? [mijiaSeed] : []),
   ...(figmaEnabled && figmaCredentialed ? [figmaSeed] : []),
 ]
 
