@@ -7,11 +7,11 @@
 // live directory back into a new manifest+blobs, and 3-way merge incoming
 // commits — all by spawning a short-lived helper pointed at that CAS dir.
 
-import { existsSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   withOneShotFsHelper,
+  resolveSidecarPathOrThrow,
   type ManifestScanCommitResult,
   type DirSyncResult,
 } from "@synapse/device-runtime"
@@ -29,15 +29,16 @@ export class SandboxMaterializeError extends Error {
  * SYNAPSE_DEVICE_FS_HELPER_PATH, then probes the sidecar build outputs
  * (release preferred, then debug) relative to the repo root. Throws if none
  * found (fail-loud — a sandbox cannot materialize without the helper).
+ *
+ * Release-first is deliberate for this production path: a stray newer debug
+ * build must not shadow the deployed release. The selection policy lives in the
+ * shared resolver (@synapse/device-runtime) so every consumer agrees.
  */
 export function resolveFsHelperPath(): string {
-  const fromEnv = process.env.SYNAPSE_DEVICE_FS_HELPER_PATH?.trim()
-  if (fromEnv && existsSync(fromEnv)) return fromEnv
-
   const here = fileURLToPath(import.meta.url)
   // dist layout: packages/api/dist/modules/sandbox/materialize.js → up to repo.
   // src layout (tsx): packages/api/src/modules/sandbox/materialize.ts.
-  const candidateRoots = [
+  const roots = [
     resolve(here, "..", "..", "..", "..", "..", "..", "sidecars", "fs-helper"),
     resolve(here, "..", "..", "..", "..", "..", "sidecars", "fs-helper"),
     resolve(here, "..", "..", "..", "..", "sidecars", "fs-helper"),
@@ -47,14 +48,17 @@ export function resolveFsHelperPath(): string {
     join("target", "debug", "synapse-device-fs-helper"),
     "synapse-device-fs-helper",
   ]
-  for (const root of candidateRoots) {
-    for (const suffix of suffixes) {
-      const candidate = join(root, suffix)
-      if (existsSync(candidate)) return candidate
-    }
-  }
-  throw new SandboxMaterializeError(
-    "synapse-device-fs-helper binary not found (build:fs-helper or set SYNAPSE_DEVICE_FS_HELPER_PATH)"
+  return resolveSidecarPathOrThrow(
+    {
+      roots,
+      suffixes,
+      mode: "release-first",
+      envVar: "SYNAPSE_DEVICE_FS_HELPER_PATH",
+    },
+    () =>
+      new SandboxMaterializeError(
+        "synapse-device-fs-helper binary not found (build:fs-helper or set SYNAPSE_DEVICE_FS_HELPER_PATH)"
+      )
   )
 }
 

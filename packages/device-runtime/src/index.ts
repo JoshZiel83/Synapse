@@ -78,3 +78,14 @@ export type {
   ManifestCleanupInput,
   SidecarRestoreInput,
 } from "./builtins/fs-helper-types.js"
+
+// Unified sidecar-binary resolver + the wire proto version TS clients pin.
+// Exposed so the API sandbox manager resolves the fs-helper the same way the
+// device-runtime does (consistent release-first vs newest-wins policy).
+export {
+  resolveSidecarPath,
+  resolveSidecarPathOrThrow,
+  FS_HELPER_PROTO_VERSION,
+  type ResolveMode,
+  type ResolveSidecarOptions,
+} from "./builtins/fs-helper-resolve.js"

@@ -6,40 +6,30 @@ import {
   writeFileSync,
   readFileSync,
   existsSync,
-  statSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { withOneShotFsHelper } from "./one-shot-fs-helper.js"
+import { resolveSidecarPath } from "./fs-helper-resolve.js"
 
-// Locate the built Rust binary. Tests run from the package dir; the binary
-// lives at <repo>/sidecars/fs-helper/target/{debug,release}/...
+// Locate the built Rust binary via the shared resolver in NEWEST-WINS mode:
+// rebuilding one profile (debug) must not be shadowed by a stale build of the
+// other (release), and vice versa. process.cwd() is the package dir under
+// `npm test -w packages/device-runtime` or the repo root under the root test
+// script — probe both.
 function findHelperBinary(): string | null {
-  // Explicit override wins (also how the api sandbox tests can be pointed at a
-  // specific build).
-  const fromEnv = process.env.SYNAPSE_DEVICE_FS_HELPER_PATH?.trim()
-  if (fromEnv && existsSync(fromEnv)) return fromEnv
-
-  // process.cwd() is the package dir under `npm test -w packages/device-runtime`
-  // or the repo root under the root test script — probe both. Both debug and
-  // release builds may exist; pick the NEWEST so a stale build of one profile
-  // can't shadow a current build of the other (the bug that made these tests
-  // fail with a clap "unexpected argument --cas-dir" against a pre-CAS binary).
-  const candidates = [
-    "sidecars/fs-helper/target/debug/synapse-device-fs-helper",
-    "sidecars/fs-helper/target/release/synapse-device-fs-helper",
-    "../../sidecars/fs-helper/target/debug/synapse-device-fs-helper",
-    "../../sidecars/fs-helper/target/release/synapse-device-fs-helper",
-  ].map((rel) => join(process.cwd(), rel))
-
-  let best: { path: string; mtimeMs: number } | null = null
-  for (const c of candidates) {
-    if (!existsSync(c)) continue
-    const mtimeMs = statSync(c).mtimeMs
-    if (!best || mtimeMs > best.mtimeMs) best = { path: c, mtimeMs }
-  }
-  return best?.path ?? null
+  return (
+    resolveSidecarPath({
+      roots: [process.cwd(), join(process.cwd(), "../..")],
+      suffixes: [
+        "sidecars/fs-helper/target/debug/synapse-device-fs-helper",
+        "sidecars/fs-helper/target/release/synapse-device-fs-helper",
+      ],
+      mode: "newest-wins",
+      envVar: "SYNAPSE_DEVICE_FS_HELPER_PATH",
+    }) ?? null
+  )
 }
 
 const HELPER = findHelperBinary()
