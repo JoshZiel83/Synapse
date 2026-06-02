@@ -14,7 +14,7 @@ function buildSkill(slug: string): AvailableSkillSummary {
     version: "test",
     sourceKind: "installed",
     entryPoint: slug,
-    accessTarget: { type: "workspace" },
+    accessTarget: { subject: { kind: "workspace", workspaceId: slug } },
   }
 }
 

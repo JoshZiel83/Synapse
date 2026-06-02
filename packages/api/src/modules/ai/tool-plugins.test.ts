@@ -169,11 +169,11 @@ test("multiple tool calls produce results in input order", async () => {
 test("plugin returning canonical file_ref array passes through unchanged", async () => {
   const fileRef: CanonicalContentBlock = {
     type: "file_ref",
-    id: "block-1",
-    fileId: "00000000-0000-4000-8000-000000000001",
-    url: "/files/00000000-0000-4000-8000-000000000001",
+    id: "00000000-0000-4000-8000-000000000001",
+    sha256: "a".repeat(64),
+    path: "/conversation/x.png",
     mimeType: "image/png",
-    originalName: "x.png",
+    name: "x.png",
     sizeBytes: 64,
     category: "image",
   }
@@ -191,5 +191,7 @@ test("plugin returning canonical file_ref array passes through unchanged", async
   const results = await executeCallableTools([call("returns_file_ref")])
   assert.equal(results[0].content.length, 1)
   assert.equal(results[0].content[0].type, "file_ref")
-  assert.equal((results[0].content[0] as any).fileId, fileRef.fileId)
+  if (results[0].content[0].type === "file_ref") {
+    assert.equal(results[0].content[0].sha256, fileRef.sha256)
+  }
 })

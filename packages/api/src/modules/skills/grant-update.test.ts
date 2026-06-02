@@ -20,7 +20,7 @@ import {
 import {
   targetSupportsConversationTypeOverride,
   validateConversationScopedAccessTarget,
-} from "../access/policy.ts"
+} from "../access/policy.js"
 import {
   buildSkillAccessRow,
   matchesScopeTarget,

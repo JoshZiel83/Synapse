@@ -6,7 +6,6 @@ import {
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js"
-import { getFileUrl } from "../../infrastructure/storage/index.js"
 import { getFileUrlById } from "../files/service.js"
 import {
   INVITE_TRUST_LEVELS,
@@ -543,7 +542,11 @@ export async function getWorkspaceChiefActorPreference(
         .onRef("a.workspace_id", "=", "wm.workspace_id")
         .on("a.is_active", "=", true)
     )
-    .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+    .leftJoin(
+      "file_assets as avatar_file",
+      "avatar_file.id",
+      "a.avatar_file_id"
+    )
     .select([
       "wm.workspace_id",
       "wm.user_id",

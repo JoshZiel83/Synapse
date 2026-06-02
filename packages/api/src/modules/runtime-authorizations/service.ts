@@ -556,6 +556,14 @@ function normalizeCommandlineGrantSpec(
       allowedEnv: grant.allowedEnv,
     }
   }
+  if (grant.executor === "sandbox") {
+    return {
+      executor: "sandbox",
+      workingDirectory:
+        normalizePathPrefix(grant.workingDirectory) || undefined,
+      allowedEnv: grant.allowedEnv,
+    }
+  }
   return {
     executor: grant.executor,
     commandMatchType: grant.commandMatchType,
@@ -912,6 +920,43 @@ export function commandlinePolicyMatches(
   const granted = grant.commandline
   const requested = action.commandline
   if (!granted || !requested) return false
+
+  // Sandbox grant: covers ANY requested command (bash / powershell / exec_file)
+  // whose cwd resolves within the sandbox mount points. Isolation is the
+  // boundary, so we do NOT require granted.executor === requested.executor; we
+  // hand the sandbox policy + the requested command's cwd to the shared matcher,
+  // which ignores command text and only checks the mount-point containment.
+  if (granted.executor === "sandbox") {
+    const requestedDir =
+      requested.executor === "exec_file"
+        ? requested.workingDirectory
+        : requested.workingDirectory
+    return Boolean(
+      sharedCommandlinePolicyAllows(
+        {
+          executor: "sandbox",
+          workingDirectory: granted.workingDirectory,
+          allowedEnv: granted.allowedEnv,
+        },
+        requested.executor === "exec_file"
+          ? {
+              kind: "exec_file",
+              program: requested.program,
+              argv: requested.argvPrefix ?? [],
+              workingDirectory: requestedDir,
+              platform: opts.platform,
+            }
+          : {
+              kind: "shell",
+              executor: requested.executor,
+              command: requested.commandText ?? "",
+              workingDirectory: requestedDir,
+              platform: opts.platform,
+            }
+      )
+    )
+  }
+
   if (granted.executor !== requested.executor) return false
 
   // exec_file branch: program + argv comparison via the canonical shared

@@ -12,6 +12,7 @@ import {
 import { ChatQuestionInteractionCard } from "@/components/chat-question-interaction-card"
 import { ChatMarkdown } from "@/components/chat-markdown"
 import { Avatar } from "@/components/ui"
+import { resolveContentUrl } from "@/lib/config"
 import type { ChatInteractionResolveInput } from "@/lib/api"
 import {
   buildChatFilePreviewHref,
@@ -208,18 +209,15 @@ function MessageBlocks({
       {attachments.map((block) => {
         if (block.type !== "file_ref") return null
 
+        const blockUrl = resolveContentUrl(block.sha256) ?? ""
+
         if (block.category === "image") {
           return (
             <ImageAttachment
               key={block.id}
-              uri={block.url}
+              uri={blockUrl}
               onPress={() =>
-                onOpenAttachment(
-                  block.url,
-                  block.mimeType,
-                  block.originalName,
-                  "image"
-                )
+                onOpenAttachment(blockUrl, block.mimeType, block.name, "image")
               }
             />
           )
@@ -230,16 +228,11 @@ function MessageBlocks({
             <FileAttachmentCard
               key={block.id}
               category="audio"
-              fileName={block.originalName}
+              fileName={block.name}
               mimeType={block.mimeType}
               mine={mine}
               onPress={() =>
-                onOpenAttachment(
-                  block.url,
-                  block.mimeType,
-                  block.originalName,
-                  "audio"
-                )
+                onOpenAttachment(blockUrl, block.mimeType, block.name, "audio")
               }
             />
           )
@@ -249,14 +242,14 @@ function MessageBlocks({
           <FileAttachmentCard
             key={block.id}
             category={block.category === "video" ? "video" : "document"}
-            fileName={block.originalName}
+            fileName={block.name}
             mimeType={block.mimeType}
             mine={mine}
             onPress={() =>
               onOpenAttachment(
-                block.url,
+                blockUrl,
                 block.mimeType,
-                block.originalName,
+                block.name,
                 block.category
               )
             }

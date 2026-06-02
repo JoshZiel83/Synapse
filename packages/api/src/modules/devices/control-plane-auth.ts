@@ -5,6 +5,7 @@
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto"
 import { db } from "../../infrastructure/database/kysely.js"
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 
 export interface DeviceHelloAuthInput {
   deviceId: string
@@ -46,11 +47,17 @@ function decodeBase64(value: string): Buffer | null {
  * Verify a runtime's device.hello against the DB. On success returns the
  * authenticated device_service_keys.id so the caller can record it on the
  * device_control_plane_sessions row.
+ *
+ * `executor` defaults to the global `db` singleton; a test injects the
+ * testcontainer-backed handle (e.g. the `withTestDb` transaction) so the lookups
+ * run against the same isolated schema the test seeded — instead of the global
+ * pool, which points at config.database.url and may not exist in CI.
  */
 export async function authenticateDeviceHello(
-  input: DeviceHelloAuthInput
+  input: DeviceHelloAuthInput,
+  executor: KyselyDb = db
 ): Promise<DeviceHelloAuthResult> {
-  const device = await db
+  const device = await executor
     .selectFrom("devices")
     .select(["id"])
     .where("id", "=", input.deviceId)
@@ -62,7 +69,7 @@ export async function authenticateDeviceHello(
       message: `device ${input.deviceId} not found`,
     }
   }
-  const service = await db
+  const service = await executor
     .selectFrom("device_services")
     .select(["id", "device_id"])
     .where("id", "=", input.serviceId)
@@ -74,7 +81,7 @@ export async function authenticateDeviceHello(
       message: `device_service ${input.serviceId} not found on device ${input.deviceId}`,
     }
   }
-  const key = await db
+  const key = await executor
     .selectFrom("device_service_keys")
     .select(["id", "pubkey", "pubkey_fingerprint", "revoked_at"])
     .where("service_id", "=", input.serviceId)

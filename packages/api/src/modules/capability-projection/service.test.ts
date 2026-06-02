@@ -11,6 +11,7 @@ test("projectToolsForPrincipal rejects workspace_member principal in v3.0", asyn
     () =>
       projectToolsForPrincipal({
         workspaceId: "00000000-0000-0000-0000-000000000001",
+        sessionId: "00000000-0000-0000-0000-0000000000a1",
         principal: {
           kind: "workspace_member",
           workspaceId: "00000000-0000-0000-0000-000000000001",
@@ -27,6 +28,7 @@ test("projectToolsForPrincipal rejects chat-runtime principal without conversati
     () =>
       projectToolsForPrincipal({
         workspaceId: "00000000-0000-0000-0000-000000000001",
+        sessionId: "00000000-0000-0000-0000-0000000000a2",
         principal: {
           kind: "actor",
           actorId: "00000000-0000-0000-0000-000000000003",

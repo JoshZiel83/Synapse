@@ -45,10 +45,10 @@ test("handler returning CanonicalContentBlock[] (e.g. mixed text + file_ref) pre
     {
       type: "file_ref",
       id: "block-out",
-      fileId: "00000000-0000-4000-8000-000000000099",
-      url: "/files/00000000-0000-4000-8000-000000000099",
+      sha256: "9".repeat(64),
+      path: "/conversation/generated.png",
       mimeType: "image/png",
-      originalName: "generated.png",
+      name: "generated.png",
       sizeBytes: 2048,
       category: "image",
     },
@@ -56,10 +56,7 @@ test("handler returning CanonicalContentBlock[] (e.g. mixed text + file_ref) pre
   assert.equal(result.content.length, 2)
   assert.equal(result.content[0].type, "text")
   assert.equal(result.content[1].type, "file_ref")
-  assert.equal(
-    (result.content[1] as any).fileId,
-    "00000000-0000-4000-8000-000000000099"
-  )
+  assert.equal((result.content[1] as any).sha256, "9".repeat(64))
   assert.deepEqual(result.origin, CALLABLE_PLUGIN_ORIGIN)
 })
 
@@ -117,10 +114,10 @@ test("handler returning content as MCP-protocol-shaped {content:[...], structure
       {
         type: "file_ref",
         id: "img-block",
-        fileId: "00000000-0000-4000-8000-000000000010",
-        url: "/files/00000000-0000-4000-8000-000000000010",
+        sha256: "1".repeat(64),
+        path: "/conversation/generated_image.png",
         mimeType: "image/png",
-        originalName: "generated_image.png",
+        name: "generated_image.png",
         sizeBytes: 4096,
         category: "image",
       },

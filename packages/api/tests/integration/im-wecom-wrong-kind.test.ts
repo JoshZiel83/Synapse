@@ -15,14 +15,11 @@
  * it as a row mutation that should not have happened.
  *
  * Run via:  npm run test:integration -w packages/api
- * (requires the docker-compose stack — DATABASE_URL must point at the
- * isolated test postgres on :55433)
+ * (requires the docker-compose stack — run-test.sh sets SYNAPSE_INT_TEST=1
+ * and the per-worktree DATABASE_URL/REDIS_URL)
  */
 
-if (
-  !process.env.DATABASE_URL ||
-  !process.env.DATABASE_URL.includes(":55433/")
-) {
+if (process.env.SYNAPSE_INT_TEST !== "1") {
   throw new Error(
     "im-wecom-wrong-kind.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
   )

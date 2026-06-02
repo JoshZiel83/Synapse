@@ -1,7 +1,8 @@
 // Sanity test for Phase 0 — verifies the test scaffolding works end-to-end:
 // 1. Test postgres + redis are reachable (assumes scripts/up.sh has run).
 // 2. resetDb + seedMinimal produce a usable workspace + session token.
-// 3. spawnApi launches a healthy API on port 38091.
+// 3. spawnApi launches a healthy API on the per-worktree API port (derived by
+//    scripts/lib.sh; see BASE_URL).
 //
 // Device-runtime v3 (PR #20+): the relay binary is gone, so the relay-pairing
 // portion of this test has been removed. Device pairing is exercised in

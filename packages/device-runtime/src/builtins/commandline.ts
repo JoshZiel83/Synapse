@@ -45,6 +45,11 @@ import {
 } from "../terminal/toolchain-manager.js"
 import { checkCommandlineAccess } from "../terminal/permissions.js"
 import { defaultPathResolver } from "../terminal/environment.js"
+import {
+  wrapDescriptorWithBwrap,
+  bwrapAvailable,
+  DEFAULT_SANDBOX_CWD,
+} from "../terminal/sandbox-confinement.js"
 import type {
   CommandlineMatchRequest,
   NormalizedCommandlinePolicy,
@@ -162,6 +167,13 @@ export interface CommandlineBuiltinOptions {
   toolchainManager?: ToolchainManager
   /** Path resolver — defaults to defaultPathResolver. */
   pathResolver?: PathResolver
+  /**
+   * When set, every command is wrapped in a bwrap jail rooted at this sandbox
+   * (no network, mount points bound to /conversation·/actor·/actor-conversation,
+   * cwd=/conversation). Set by the sandbox device-runtime (`run --cmd-sandbox`);
+   * Linux-only. Absent = normal host execution.
+   */
+  sandboxRoot?: string
 }
 
 export function createCommandlineBuiltin(
@@ -226,6 +238,16 @@ export function createCommandlineBuiltin(
         typeof rawWorkingDirectory === "string"
           ? rawWorkingDirectory
           : undefined
+
+      // In a sandbox, default the working directory to the sandbox cwd
+      // (/conversation) BEFORE the permission gate. The sandbox matcher requires
+      // a cwd inside a mount point and denies a request with none; applying the
+      // default here (not just at the spawn layer) means a normal sandbox
+      // command with no explicit cwd is authorized against the default mount and
+      // runs there, instead of being rejected by the matcher.
+      if (opts.sandboxRoot && resolvedWorkingDirectory === undefined) {
+        resolvedWorkingDirectory = DEFAULT_SANDBOX_CWD
+      }
 
       const rawTimeout = input.args["timeout_ms"]
       if (rawTimeout !== undefined && typeof rawTimeout !== "number") {
@@ -312,12 +334,15 @@ export function createCommandlineBuiltin(
       let resolved: ResolvedToolchain | undefined
       if (request.kind === "exec_file") {
         const manager = await getDefaultToolchainManager(opts, env)
+        // A sandbox grant carries no allowBundledToolchain (isolation is the
+        // boundary; bundled-toolchain capping is a shell/exec_file concept).
+        const allowBundled =
+          access.policy.executor === "sandbox"
+            ? false
+            : Boolean(access.policy.allowBundledToolchain)
         try {
           if (isBundleEligibleProgram(request.program)) {
-            resolved = await manager.resolve(
-              request.program,
-              Boolean(access.policy.allowBundledToolchain)
-            )
+            resolved = await manager.resolve(request.program, allowBundled)
           } else {
             const bare = await manager.resolveBare(request.program)
             if (!bare) {
@@ -421,8 +446,37 @@ export function createCommandlineBuiltin(
         }
       }
 
-      const exec = await spawnTerminalProcess(descriptor, {
-        cwd: resolvedWorkingDirectory,
+      // Sandbox confinement (Step 10): wrap the command in a bwrap jail so the
+      // commandline:"sandbox" grant is safe — no network, host FS unreachable
+      // outside the mount points, cwd defaults to /conversation. Fail-closed:
+      // if sandboxRoot is configured but bwrap isn't actually invocable, refuse
+      // rather than run unconfined on the host.
+      let spawnDescriptor = descriptor
+      let spawnCwd = resolvedWorkingDirectory
+      if (opts.sandboxRoot) {
+        if (!bwrapAvailable()) {
+          return toolErrorResult({
+            code: "runtime_constraint",
+            message:
+              "sandbox commandline requires bwrap, which is not available",
+            details: { reason: "bwrap_unavailable" },
+          })
+        }
+        const toolchainBinDirs = resolved ? [resolved.binDir] : []
+        spawnDescriptor = wrapDescriptorWithBwrap(descriptor, {
+          sandboxRoot: opts.sandboxRoot,
+          readonlyBinds: toolchainBinDirs,
+          // resolvedWorkingDirectory is defaulted to DEFAULT_SANDBOX_CWD above
+          // for sandbox requests, so it's always set here.
+          cwd: resolvedWorkingDirectory || DEFAULT_SANDBOX_CWD,
+        })
+        // bwrap sets the in-jail cwd via --chdir; the bwrap process itself runs
+        // from the sandbox root on the host.
+        spawnCwd = opts.sandboxRoot
+      }
+
+      const exec = await spawnTerminalProcess(spawnDescriptor, {
+        cwd: spawnCwd,
         baseEnv,
         toolchainBinDirs: resolved ? [resolved.binDir] : [],
         toolchainEnv: resolved?.env ?? {},

@@ -85,10 +85,10 @@ const contentBlockSchema = z.discriminatedUnion("type", [
   z.object({
     id: z.uuid().optional(),
     type: z.literal("file_ref"),
-    fileId: z.uuid(),
-    url: z.string(),
+    sha256: z.string().length(64),
+    path: z.string().min(1).optional(),
     mimeType: z.string(),
-    originalName: z.string(),
+    name: z.string(),
     sizeBytes: z.number(),
     category: z.enum(CANONICAL_FILE_CATEGORIES),
   }),

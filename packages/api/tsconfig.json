@@ -7,5 +7,9 @@
   },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../shared" }]
+  "references": [
+    { "path": "../shared" },
+    { "path": "../device-protocol" },
+    { "path": "../device-runtime" }
+  ]
 }

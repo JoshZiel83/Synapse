@@ -1161,16 +1161,16 @@ async function insertBinding(
   const ref =
     subjectKind === SUBJECT_KIND.WORKSPACE
       ? {
-          kind: SUBJECT_KIND.WORKSPACE as const,
+          kind: SUBJECT_KIND.WORKSPACE,
           workspaceId: params.target.subjectWorkspaceId!,
         }
       : subjectKind === SUBJECT_KIND.WORKSPACE_MEMBER
         ? {
-            kind: SUBJECT_KIND.WORKSPACE_MEMBER as const,
+            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
             memberId: params.target.subjectWorkspaceMemberId!,
           }
         : {
-            kind: SUBJECT_KIND.ACTOR as const,
+            kind: SUBJECT_KIND.ACTOR,
             actorId: params.target.subjectActorId!,
           }
   const subjectId = await upsertAccessSubject(db, ref)

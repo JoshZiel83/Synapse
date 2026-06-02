@@ -24,10 +24,7 @@
 // Run via: bash packages/api/tests/integration/scripts/run-test.sh \
 //   packages/api/tests/integration/session-runtime-snapshot.test.ts
 
-if (
-  !process.env.DATABASE_URL ||
-  !process.env.DATABASE_URL.includes(":55433/")
-) {
+if (process.env.SYNAPSE_INT_TEST !== "1") {
   throw new Error(
     "session-runtime-snapshot.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
   )

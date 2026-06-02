@@ -192,7 +192,7 @@ export const CANONICAL_FILE_CATEGORIES = [
   "video",
   "document",
 ] as const
-export const FILE_STORAGE_BACKENDS = ["local_fs"] as const
+export const FILE_STORAGE_BACKENDS = ["local_cas"] as const
 export const FILE_ORIGIN_FAMILIES = [
   "user_upload",
   "actor_output",
@@ -826,6 +826,11 @@ export const RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS = [
   "bash",
   "powershell",
   "exec_file",
+  // Sandbox confinement: "any command inside a bwrap jail (no network, root =
+  // the mounted file space)". Isolation is the boundary, so this variant carries
+  // no command/argv matcher — a sandbox grant authorizes every command whose cwd
+  // resolves inside the sandbox mount points. Linux-only; fail-closed elsewhere.
+  "sandbox",
 ] as const
 export const RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES = [
   "exact",
@@ -834,6 +839,16 @@ export const RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES = [
   "argv_exact",
   "argv_prefix",
   "argv_exact_preapproved",
+] as const
+
+// The fixed mount points a sandbox device-runtime exposes (the materialized
+// file-space roots). A commandline:sandbox grant only covers a command whose
+// working directory resolves within one of these. Kept here (not device-runtime)
+// so the shared matcher and the API projection agree on the boundary.
+export const SANDBOX_MOUNT_POINTS = [
+  "/conversation",
+  "/actor",
+  "/actor-conversation",
 ] as const
 
 export const AUTOMATION_TRIGGER_KINDS = ["schedule", "event"] as const

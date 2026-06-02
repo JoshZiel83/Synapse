@@ -21,7 +21,7 @@ upstream synapse_mobile_web {
 server {
     listen 80;
     listen [::]:80;
-    server_name ${SYNAPSE_PUBLIC_DOMAIN} ${SYNAPSE_WWW_DOMAIN} ${SYNAPSE_MOBILE_SHORT_DOMAIN} ${SYNAPSE_MOBILE_DOMAIN};
+    server_name ${SYNAPSE_PUBLIC_DOMAIN} ${SYNAPSE_WWW_DOMAIN} ${SYNAPSE_MOBILE_SHORT_DOMAIN} ${SYNAPSE_MOBILE_DOMAIN} ${SYNAPSE_REGISTRY_DOMAIN};
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -70,12 +70,6 @@ server {
 
     location ~ /\.(?!well-known/acme-challenge/) {
         return 404;
-    }
-
-    location /files/ {
-        proxy_pass http://synapse_api;
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
     }
 
     location /api/ {
@@ -153,12 +147,6 @@ server {
         return 404;
     }
 
-    location /files/ {
-        proxy_pass http://synapse_api;
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
-    }
-
     location /api/ {
         proxy_pass http://synapse_api;
         proxy_read_timeout 120s;
@@ -184,5 +172,56 @@ server {
 
     location / {
         return 302 /mobile$request_uri;
+    }
+}
+
+# Private npm registry (Verdaccio) at the registry subdomain. TLS is
+# terminated here (same SAN cert) and proxied to the verdaccio container on
+# the internal docker network. The verdaccio service lives behind the
+# `registry` compose profile, so it may be absent when nginx starts — we
+# resolve its name lazily via docker's embedded DNS (127.0.0.11) using a
+# variable upstream, so nginx still boots when the registry is down (the
+# vhost just 502s until verdaccio is up) instead of failing to start.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${SYNAPSE_REGISTRY_DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${LETSENCRYPT_CERT_NAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${LETSENCRYPT_CERT_NAME}/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/${LETSENCRYPT_CERT_NAME}/chain.pem;
+    ssl_session_cache shared:SynapseSSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    resolver_timeout 5s;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Sidecar tarballs are ~150-205MB; Verdaccio's own max_body_size is
+    # 512mb. The default proxy cap would reject a publish, so raise it here.
+    client_max_body_size 512m;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        try_files $uri =404;
+    }
+
+    location / {
+        set $verdaccio_upstream verdaccio;
+        proxy_pass http://$verdaccio_upstream:4873;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_request_buffering off;
     }
 }

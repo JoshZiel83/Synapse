@@ -25,7 +25,6 @@ import {
   textBlocks,
 } from "@synapse/shared"
 import { renderConversationEventContextBlocks } from "../chat/event-registry.js"
-import { getFileUrlById } from "../files/service.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 
@@ -187,16 +186,25 @@ export function itemPartsToCanonicalBlocks(
       continue
     }
 
-    if (part.part_type === "file_ref" && part.file_id) {
+    if (part.part_type === "file_ref" && part.ref_sha256) {
       const metadata = parseMetadata(part.metadata)
       blocks.push(
         fileRefBlock({
-          fileId: part.file_id,
-          url: part.file_id ? getFileUrlById(part.file_id) : "",
+          sha256: part.ref_sha256,
+          path:
+            part.ref_path ??
+            (typeof metadata.path === "string" ? metadata.path : undefined),
           mimeType:
-            part.file_mime_type || part.mime_type || "application/octet-stream",
-          originalName: part.original_name || part.name || "file",
-          sizeBytes: parseSizeBytes(part.size_bytes ?? metadata.sizeBytes),
+            part.mime_type ||
+            (typeof metadata.mimeType === "string"
+              ? metadata.mimeType
+              : null) ||
+            "application/octet-stream",
+          name:
+            part.name ||
+            (typeof metadata.name === "string" ? metadata.name : undefined) ||
+            "file",
+          sizeBytes: parseSizeBytes(metadata.sizeBytes),
           category: (metadata.category as CanonicalFileCategory) || "document",
         })
       )

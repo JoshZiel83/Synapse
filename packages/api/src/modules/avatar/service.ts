@@ -9,7 +9,7 @@ import {
   getStableFileUrl,
   getStableFullFileUrl,
   normalizeOriginalNameForMimeType,
-  storeBufferInBackend,
+  putBufferCas,
 } from "../../infrastructure/storage/index.js"
 import {
   buildSystemGeneratedOrigin,
@@ -291,43 +291,42 @@ async function saveSvgAvatarFile(
     params.originalName,
     SVG_MIME_TYPE
   )
-  const storedBlob = await storeBufferInBackend({
-    backend: "local_fs",
-    buffer,
-    originalName: normalizedOriginalName,
-    mimeType: SVG_MIME_TYPE,
-  })
+  // Content-address the SVG bytes (sha256 dedup) — same CAS as the central
+  // writer. This is the second file writer; it must stay consistent with
+  // file-io.createStoredFile's content_blobs + file_assets shape.
+  const blobRef = await putBufferCas(buffer)
   const origin = buildSystemGeneratedOrigin({
     system: params.originSystem,
     initiatorUserId: params.uploaderUserId,
     details: params.metadata,
   })
 
-  const blobRow = await executor
-    .insertInto("file_blobs")
+  await executor
+    .insertInto("content_blobs")
     .values({
-      backend: storedBlob.backend,
-      storage_key: storedBlob.storageKey,
-      bucket: storedBlob.bucket,
-      locator_json: storedBlob.locator as any,
+      sha256: blobRef.sha256,
+      size_bytes: String(blobRef.sizeBytes),
+      backend: "local_cas",
+      locator_json: {} as any,
     })
-    .returning("id")
-    .executeTakeFirst()
-  if (!blobRow) {
-    throw new Error("Failed to persist avatar file blob")
-  }
+    .onConflict((oc) => oc.column("sha256").doNothing())
+    .execute()
 
   const row = await executor
-    .insertInto("files")
+    .insertInto("file_assets")
     .values({
       workspace_id: params.workspaceId,
-      uploader_user_id: params.uploaderUserId,
+      content_sha256: blobRef.sha256,
       original_name: normalizedOriginalName,
       mime_type: SVG_MIME_TYPE,
       content_kind: mimeToFileContentKind(SVG_MIME_TYPE),
-      size_bytes: storedBlob.sizeBytes,
-      sha256: storedBlob.sha256,
-      blob_id: blobRow.id,
+      size_bytes: String(blobRef.sizeBytes),
+      uploader_user_id: params.uploaderUserId,
+      initiator_actor_id: origin.initiatorActorId ?? null,
+      source_family: origin.family,
+      source_system: origin.system,
+      parent_asset_id: origin.parentFileId ?? null,
+      details_json: (origin.details || {}) as any,
     })
     .returning("id")
     .executeTakeFirst()
@@ -335,29 +334,13 @@ async function saveSvgAvatarFile(
     throw new Error("Failed to persist avatar file")
   }
 
-  await executor
-    .insertInto("file_origins")
-    .values({
-      file_id: row.id,
-      source_family: origin.family,
-      source_system: origin.system,
-      initiator_user_id: origin.initiatorUserId ?? null,
-      initiator_actor_id: origin.initiatorActorId ?? null,
-      provider_key: origin.providerKey ?? null,
-      plugin_id: origin.pluginId ?? null,
-      parent_file_id: origin.parentFileId ?? null,
-      external_resource_key: origin.externalResourceKey ?? null,
-      details_json: (origin.details || {}) as any,
-    })
-    .execute()
-
   return {
     fileId: row.id,
     url: getStableFileUrl(row.id),
     fullUrl: getStableFullFileUrl(row.id),
     originalName: normalizedOriginalName,
     mimeType: SVG_MIME_TYPE,
-    sizeBytes: storedBlob.sizeBytes,
+    sizeBytes: blobRef.sizeBytes,
   }
 }
 

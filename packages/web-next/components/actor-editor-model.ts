@@ -14,7 +14,6 @@ import {
   type CanonicalContentBlock,
   type CoreActorDocKey,
 } from "@synapse/shared"
-import { resolveFileUrl } from "@/lib/utils"
 
 export type {
   ActorDocKey,
@@ -112,6 +111,7 @@ export type ActorFormState = {
 
 export type UploadedFile = {
   id: string
+  sha256: string
   url?: string
   fullUrl?: string
   originalName: string
@@ -172,7 +172,7 @@ export function summarizeBlocks(
   const file = blocks.find(
     (block): block is FileRefBlock => block.type === "file_ref"
   )
-  return file ? `Attached file: ${file.originalName}` : ""
+  return file ? `Attached file: ${file.name}` : ""
 }
 
 export function summarizeDoc(doc: Pick<ActorDoc, "content">, maxLength = 200) {
@@ -302,10 +302,9 @@ export function editableDocToActorDoc(doc: EditableDoc): ActorDoc | null {
 
 export function fileRecordToBlock(file: UploadedFile): FileRefBlock {
   return fileRefBlock({
-    fileId: file.id,
-    url: file.url || resolveFileUrl(file.fullUrl) || "",
+    sha256: file.sha256,
     mimeType: file.mimeType,
-    originalName: file.originalName,
+    name: file.originalName,
     sizeBytes: file.sizeBytes,
     category: mimeToCategory(file.mimeType),
   })
