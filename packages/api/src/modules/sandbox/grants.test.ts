@@ -3,17 +3,13 @@ import assert from "node:assert/strict"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { resolveDeviceBuiltinIds, SandboxGrantsError } from "./grants.js"
-import {
-  isSandboxCommandlineAvailable,
-  __setSandboxCommandlineAvailableForTest,
-} from "./model.js"
 
 /**
- * grants.ts + model.ts unit coverage that doesn't require a live device/API:
+ * grants.ts unit coverage that doesn't require a live device/API:
  *  - resolveDeviceBuiltinIds maps a device's filesystem+commandline exposures to
- *    their capability ids (and tolerates a fs-only device).
- *  - the bwrap probe cache seam works (the full two-layer grant creation runs
- *    against the global pool and is exercised by test:integration).
+ *    their capability ids (and tolerates a fs-only device). Whether the
+ *    commandline grant is built is decided by the resolved catalog
+ *    (commandlineCapabilityId != null), exercised by test:integration.
  */
 
 const NS = "sbg"
@@ -142,13 +138,4 @@ test("grants.ts: resolveDeviceBuiltinIds throws when filesystem capability is ab
       (err: unknown) => err instanceof SandboxGrantsError
     )
   })
-})
-
-test("model.ts: bwrap probe cache seam", () => {
-  __setSandboxCommandlineAvailableForTest(true)
-  assert.equal(isSandboxCommandlineAvailable(), true)
-  __setSandboxCommandlineAvailableForTest(false)
-  assert.equal(isSandboxCommandlineAvailable(), false)
-  // Reset so other tests re-probe the real host.
-  __setSandboxCommandlineAvailableForTest(null)
 })

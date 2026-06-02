@@ -72,6 +72,7 @@ test("local backend create(): fires staged callbacks in order and builds handle"
 
 test("local backend: pair failure propagates (run never called)", async () => {
   let ran = false
+  const cleaned: unknown[] = []
   const backend = createLocalSandboxBackend({
     hostProvider: stubProvider({
       async pair(): Promise<PairResult> {
@@ -83,13 +84,26 @@ test("local backend: pair failure propagates (run never called)", async () => {
       },
     }),
     beginLocalPairing: beginPairing(),
+    failCleanup: async (a) => {
+      cleaned.push(a)
+    },
   })
   await assert.rejects(() => backend.create(makeSpec()), /pair boom/)
   assert.equal(ran, false, "run must not be called after pair fails")
+  // pair() failed before a device existed → cleanup runs with deviceId null but
+  // still cancels the pending pairing session.
+  assert.deepEqual(cleaned, [
+    { workspaceId: "ws-1", deviceId: null, pairingSessionId: "pair-1" },
+  ])
 })
 
-test("local backend: run failure propagates after device claimed", async () => {
+test("local backend: run failure self-cleans the paired device + pairing (no leak)", async () => {
   const claimed: string[] = []
+  const cleaned: Array<{
+    workspaceId: string
+    deviceId: string | null
+    pairingSessionId: string | null
+  }> = []
   const backend = createLocalSandboxBackend({
     hostProvider: stubProvider({
       async run(): Promise<RunHandle> {
@@ -97,6 +111,9 @@ test("local backend: run failure propagates after device claimed", async () => {
       },
     }),
     beginLocalPairing: beginPairing(),
+    failCleanup: async (a) => {
+      cleaned.push(a)
+    },
   })
   await assert.rejects(
     () =>
@@ -109,28 +126,40 @@ test("local backend: run failure propagates after device claimed", async () => {
       ),
     /run boom/
   )
-  // The device WAS claimed+persisted before run failed — the spine's create()
-  // cleanup deletes it; the staged callback must have fired so reconciler/cleanup
-  // can find the device.
+  // The device WAS claimed+persisted before run failed — the staged callback
+  // fired (so the reconciler could also find it) AND the backend self-cleaned it
+  // (delete device + cancel pairing). This is the leak the round-2 review caught.
   assert.deepEqual(claimed, ["dev-1"])
+  assert.deepEqual(cleaned, [
+    { workspaceId: "ws-1", deviceId: "dev-1", pairingSessionId: "pair-1" },
+  ])
 })
 
-test("local backend: a throwing staged callback aborts create()", async () => {
+test("local backend: a throwing staged callback self-cleans + aborts create()", async () => {
+  const cleaned: unknown[] = []
   const backend = createLocalSandboxBackend({
     hostProvider: stubProvider(),
     beginLocalPairing: beginPairing(),
+    failCleanup: async (a) => {
+      cleaned.push(a)
+    },
   })
+  // onDeviceClaimed throws AFTER pair() claimed the device — without self-cleanup
+  // that device would leak (create never returns a handle for the spine to reap).
   await assert.rejects(
     () =>
       backend.create(
         makeSpec({
-          onPairingCreated: async () => {
+          onDeviceClaimed: async () => {
             throw new Error("persist boom")
           },
         })
       ),
     /persist boom/
   )
+  assert.deepEqual(cleaned, [
+    { workspaceId: "ws-1", deviceId: "dev-1", pairingSessionId: "pair-1" },
+  ])
 })
 
 test("local handle: setTimeout throws unsupported (never a silent no-op)", async () => {

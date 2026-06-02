@@ -335,6 +335,15 @@ Notes:
   `--cmd-sandbox-share-net`; network isolation is the container's job). The
   backend sets `seccomp=unconfined`, `apparmor=unconfined`, `CAP_SYS_ADMIN`
   per sandbox container — the API container keeps the default profile.
+- **Storage volume layout:** each sandbox container mounts only its own session
+  subpath of the shared `api_storage` volume. The API derives that subpath from
+  `STORAGE_DIR` relative to the volume's mount point inside the API container
+  (default `/app/storage`; override with `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT`).
+  In the reference compose `STORAGE_DIR=/app/storage/files` and the volume mounts
+  at `/app/storage`, so the subpath is `files/sandboxes/<sessionId>`. If you
+  remount the volume or change `STORAGE_DIR` so the storage dir no longer sits
+  under the mount point, set `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT` accordingly —
+  otherwise provisioning fails loudly rather than mounting the wrong directory.
 
 ## 9. Troubleshooting
 

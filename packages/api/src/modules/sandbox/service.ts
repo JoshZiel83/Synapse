@@ -12,7 +12,7 @@
 
 import { mkdir, rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
-import { join } from "node:path"
+import { join, relative, isAbsolute } from "node:path"
 import { actorRef, conversationRef } from "@synapse/shared"
 import { sql } from "kysely"
 import {
@@ -57,6 +57,7 @@ import {
 } from "./sandbox-backend.js"
 import {
   createDockerSandboxBackend,
+  reapDockerSandboxOrphans,
   type DockerSandboxBackendOptions,
 } from "./docker-sandbox-backend.js"
 import {
@@ -65,7 +66,6 @@ import {
   revokeSandboxGrants,
 } from "./grants.js"
 import {
-  isSandboxCommandlineAvailable,
   type SandboxProvisionResult,
   type SidecarRestoreFailure,
   type SidecarRestoreFailureReason,
@@ -274,10 +274,13 @@ async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
  * `buildSandboxRefFromMounts` returns a killable ref whenever ANY of device /
  * container-id / pid is set (so a half-provisioned container is never leaked),
  * with deviceId="" when the crash happened before the device was claimed.
- * Genuine orphans (a container labeled for a session with NO live mount at all)
- * are not enumerated here — they carry no DB row; a `docker rm` by the
- * synapse.sandbox.session label is the operator-facing cleanup. Bounded;
- * best-effort; logs.
+ *
+ * Label-only orphans — a container the API `docker run` started but crashed
+ * BEFORE persisting its `sandbox_resource_id`, so no file_mounts row can build a
+ * killable ref — are reaped separately via {@link reapDockerSandboxOrphans},
+ * which scans `docker ps` by the session label and removes any whose session
+ * isn't in the live-mount set. Only runs when the docker backend is selected.
+ * Bounded; best-effort; logs.
  */
 export async function reconcileSandboxes(): Promise<void> {
   const rows = await db
@@ -286,19 +289,43 @@ export async function reconcileSandboxes(): Promise<void> {
     .where("status", "in", ["provisioning", "active", "committing"])
     .groupBy("session_id")
     .execute()
+  const liveSessionIds = new Set<string>()
   for (const { session_id } of rows) {
     const sessionId = session_id as string
     try {
       const mounts = await getActiveMountsForSession(db, sessionId)
       if (mounts.length === 0) continue
       const allActive = mounts.every((m) => m.status === "active")
-      if (allActive && (await isSandboxRuntimeAlive(mounts))) continue
+      if (allActive && (await isSandboxRuntimeAlive(mounts))) {
+        // Healthy + alive — keep it (and shield its container from the orphan
+        // reaper below).
+        liveSessionIds.add(sessionId)
+        continue
+      }
       console.warn(
         `[sandbox] reconcile: tearing down stale session ${sessionId} (allActive=${allActive})`
       )
       await teardownSandbox(sessionId)
     } catch (err) {
       console.error(`[sandbox] reconcile failed for ${sessionId}:`, err)
+    }
+  }
+
+  // Reap label-only Docker orphans (the crash window the DB sweep above can't
+  // see). Only meaningful when the docker backend is active; the local backend
+  // has no containers.
+  if (
+    (process.env.SYNAPSE_SANDBOX_BACKEND || "local").toLowerCase() === "docker"
+  ) {
+    try {
+      const { removed } = await reapDockerSandboxOrphans(liveSessionIds)
+      if (removed.length > 0) {
+        console.warn(
+          `[sandbox] reconcile: reaped ${removed.length} label-only docker orphan(s): ${removed.join(", ")}`
+        )
+      }
+    } catch (err) {
+      console.error("[sandbox] reconcile: docker orphan reap failed:", err)
     }
   }
 }
@@ -323,6 +350,50 @@ async function loadSessionContext(
 function sandboxRootFor(sessionId: string): string {
   return join(STORAGE_DIR, "sandboxes", sessionId)
 }
+
+const DEFAULT_STORAGE_VOLUME_MOUNT = "/app/storage"
+function storageVolumeMountPoint(): string {
+  return (
+    process.env.SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT?.trim() ||
+    DEFAULT_STORAGE_VOLUME_MOUNT
+  )
+}
+
+/**
+ * Pure layout computation (exported for the compose-layout test): the sandbox
+ * root expressed RELATIVE to the storage volume's mount point. With
+ * storageDir=/app/storage/files and mountPoint=/app/storage this yields
+ * `files/sandboxes/<id>`. Throws if the root is not under the mount point.
+ */
+export function toSandboxVolumeSubpath(input: {
+  storageDir: string
+  mountPoint: string
+  sessionId: string
+}): string {
+  const root = join(input.storageDir, "sandboxes", input.sessionId)
+  const rel = relative(input.mountPoint, root)
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new SandboxServiceError(
+      `STORAGE_DIR (${input.storageDir}) is not under the sandbox storage ` +
+        `volume mount point (${input.mountPoint}); set ` +
+        `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT so volume-subpath can be derived. ` +
+        `Computed relative path: '${rel}'`,
+      500
+    )
+  }
+  // Always POSIX separators — the path is consumed by the Linux container's
+  // docker engine (host separator is POSIX here too, but normalize defensively).
+  return rel.split(/[\\/]/).join("/")
+}
+
+function sandboxVolumeSubpathFor(sessionId: string): string {
+  return toSandboxVolumeSubpath({
+    storageDir: STORAGE_DIR,
+    mountPoint: storageVolumeMountPoint(),
+    sessionId,
+  })
+}
+
 function brokerDirFor(sessionId: string): string {
   return join(sandboxRootFor(sessionId), ".broker")
 }
@@ -512,7 +583,6 @@ export async function provisionSandbox(
   const backend = selectSandboxBackend(options)
   const fsHelperPath = resolveFsHelperPath()
   const sandboxRoot = sandboxRootFor(sessionId)
-  const commandlineEnabled = isSandboxCommandlineAvailable()
 
   // ② ensure spaces + ③ resolve base snapshots.
   const specs = await ensureSessionSpaces(ctx)
@@ -590,6 +660,10 @@ export async function provisionSandbox(
       sessionId,
       workspaceId: ctx.workspaceId,
       sandboxRoot,
+      // Docker backend: where this session's root lives RELATIVE to the storage
+      // volume mount (computed from STORAGE_DIR, never hardcoded). Ignored by
+      // the local backend.
+      storageVolumeSubpath: sandboxVolumeSubpathFor(sessionId),
       fsHelperPath,
       // The device dials back to the API. config.app.baseUrl for local;
       // SYNAPSE_SANDBOX_SERVER_ORIGIN (internal address) is applied by the
@@ -625,7 +699,15 @@ export async function provisionSandbox(
     })
 
     // ⑧ build both authorization layers (once, full capability list).
+    // The device fail-closes at boot: it advertises a commandline builtin in its
+    // catalog ONLY when ITS OWN host can confine commands (bwrap+userns). So the
+    // resolved catalog — not a probe of the API process's PATH — is the single
+    // source of truth for whether to pre-authorize the commandline grant. This
+    // is correct for BOTH backends: the local device runs on the API host, while
+    // the docker device runs in the cloud-sandbox image (which has bubblewrap)
+    // even though the API image ships only the docker CLI.
     const builtins = await resolveDeviceBuiltinIds(handle.deviceId)
+    const commandlineEnabled = builtins.commandlineCapabilityId != null
     await createSandboxGrants({
       workspaceId: ctx.workspaceId,
       deviceId: handle.deviceId,

@@ -21,6 +21,9 @@ import {
   type RunHandle,
   type SpawnSandboxRuntimeParams,
 } from "./host-provider.js"
+import { sql } from "kysely"
+import { db } from "../../infrastructure/database/kysely.js"
+import { deleteDevice } from "../devices/service.js"
 
 /** Which backend produced/owns a sandbox. Persisted on file_mounts so teardown
  *  picks the right backend regardless of the API's current env. */
@@ -38,6 +41,15 @@ export interface SandboxSpec {
   workspaceId: string
   /** Per-session sandbox root on the API's view of the FS (materialized mounts live here). */
   sandboxRoot: string
+  /**
+   * Docker backend only: the sandbox root expressed RELATIVE TO the storage
+   * volume's mount point inside the API container, for `--mount volume-subpath=`.
+   * The spine computes it from STORAGE_DIR vs the volume mount point (a
+   * deployment convention) so the backend never hardcodes the layout — see
+   * `toSandboxVolumeSubpath`. The local backend ignores it (it uses
+   * `sandboxRoot` directly on the same host).
+   */
+  storageVolumeSubpath?: string
   /** Absolute fs-helper path (local passes via --fs-helper; docker maps into the container). */
   fsHelperPath: string
   /** API origin the device dials back to. Internal address for docker (api:3001). */
@@ -151,49 +163,70 @@ export function createLocalSandboxBackend(deps: {
   hostProvider: HostProvider
   /** Resolve the per-session pairing code + broker dir + control-plane facts.
    *  Provided by the spine (it owns startPairing + session context). */
-  beginLocalPairing: (
-    spec: SandboxSpec
-  ) => Promise<{
+  beginLocalPairing: (spec: SandboxSpec) => Promise<{
     pairingCode: string
     brokerDir: string
     pairingSessionId: string
   }>
+  /**
+   * Test seam: cleanup primitive run when create() fails after pairing. Defaults
+   * to the real DB-backed {@link defaultLocalFailCleanup} (delete device + cancel
+   * pairing); a unit test injects a spy to assert the leak is cleaned WITHOUT a
+   * live DB.
+   */
+  failCleanup?: (args: {
+    workspaceId: string
+    deviceId: string | null
+    pairingSessionId: string | null
+  }) => Promise<void>
 }): SandboxBackend {
   const { hostProvider, beginLocalPairing } = deps
+  const failCleanup = deps.failCleanup ?? defaultLocalFailCleanup
   return {
     kind: "local",
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
+      // Track created facts so a failure at ANY point after pairing (run() or a
+      // staged callback throwing) self-cleans them — honoring the SandboxSpec
+      // contract. Without this, a device claimed by pair() (or a cancelled
+      // pairing) leaks: the spine's create() cleanup only runs when create()
+      // RETURNED a handle, which it never does on this path.
       const { pairingCode, brokerDir, pairingSessionId } =
         await beginLocalPairing(spec)
-      await spec.onPairingCreated?.(pairingSessionId)
-
-      const spawnParams: SpawnSandboxRuntimeParams = {
-        pairingCode,
-        brokerDir,
-        fsRoot: spec.sandboxRoot,
-        fsHelperPath: spec.fsHelperPath,
-        serverOrigin: spec.serverOrigin,
-        enableDelete: spec.enableDelete,
-        confineCommands: spec.confineCommands,
-        title: spec.title,
-      }
-      const paired = await hostProvider.pair(spawnParams)
-      await spec.onDeviceClaimed?.(paired.deviceId)
-      let runHandle: RunHandle
+      const workspaceId = spec.workspaceId
+      let deviceId: string | null = null
       try {
-        runHandle = await hostProvider.run(spawnParams)
+        await spec.onPairingCreated?.(pairingSessionId)
+
+        const spawnParams: SpawnSandboxRuntimeParams = {
+          pairingCode,
+          brokerDir,
+          fsRoot: spec.sandboxRoot,
+          fsHelperPath: spec.fsHelperPath,
+          serverOrigin: spec.serverOrigin,
+          enableDelete: spec.enableDelete,
+          confineCommands: spec.confineCommands,
+          title: spec.title,
+        }
+        const paired = await hostProvider.pair(spawnParams)
+        deviceId = paired.deviceId
+        await spec.onDeviceClaimed?.(paired.deviceId)
+        const runHandle = await hostProvider.run(spawnParams)
+        return makeLocalHandle({
+          sessionId: spec.sessionId,
+          deviceId: paired.deviceId,
+          deviceServiceId: paired.serviceId,
+          pairingSessionId,
+          runHandle,
+        })
       } catch (err) {
-        // run failed after pair created the device — the spine's create()
-        // cleanup will deleteDevice; just propagate.
+        // Comprehensive self-cleanup: delete the paired device (cascades its
+        // services/exposures/grants) and cancel a still-pending pairing session
+        // so its code can't be reused. Idempotent + best-effort; rethrow.
+        await failCleanup({ workspaceId, deviceId, pairingSessionId }).catch(
+          () => {}
+        )
         throw err
       }
-      return makeLocalHandle({
-        sessionId: spec.sessionId,
-        deviceId: paired.deviceId,
-        deviceServiceId: paired.serviceId,
-        pairingSessionId,
-        runHandle,
-      })
     },
     async connect(ref: SandboxRef): Promise<SandboxHandle> {
       if (ref.backend !== "local") {
@@ -205,6 +238,32 @@ export function createLocalSandboxBackend(deps: {
       // host_pid. kill() falls back to signalling the pid directly.
       return makeLocalRefHandle(ref)
     },
+  }
+}
+
+/**
+ * Default self-cleanup for a local create() that failed after pairing. Deletes
+ * the paired device (cascades its services/exposures/grants) and cancels a
+ * still-pending pairing session so the code can't be reused. Best-effort +
+ * idempotent. Overridable via createLocalSandboxBackend({ failCleanup }) for
+ * DB-free unit tests.
+ */
+async function defaultLocalFailCleanup(args: {
+  workspaceId: string
+  deviceId: string | null
+  pairingSessionId: string | null
+}): Promise<void> {
+  if (args.deviceId) {
+    await deleteDevice(args.workspaceId, args.deviceId).catch(() => {})
+  }
+  if (args.pairingSessionId) {
+    await db
+      .updateTable("device_pairing_sessions")
+      .set({ status: "cancelled", updated_at: sql`NOW()` } as never)
+      .where("id", "=", args.pairingSessionId)
+      .where("status", "=", "pending")
+      .execute()
+      .catch(() => {})
   }
 }
 

@@ -18,6 +18,7 @@ import {
   createCloudDevicePairing,
   type CreateCloudDeviceResult,
 } from "../devices/cloud.js"
+import { deleteDevice } from "../devices/service.js"
 import {
   SandboxBackendError,
   type SandboxBackend,
@@ -58,11 +59,31 @@ export interface DockerSandboxBackendOptions {
     pairingSessionId: string,
     timeoutMs: number
   ) => Promise<{ deviceId: string; deviceServiceId: string }>
+  /** Test seam: override pairing creation (defaults to the DB-backed
+   *  createCloudDevicePairing) so create() is exercisable without a live DB. */
+  createPairing?: (input: {
+    workspaceId: string
+    title: string
+  }) => Promise<CreateCloudDeviceResult>
+  /** Test seam: override the post-failure cleanup (defaults to the DB-backed
+   *  {@link defaultDockerFailCleanup}) so the leak-cleanup is assertable in a
+   *  unit test without a DB. */
+  failCleanup?: (args: {
+    workspaceId: string
+    containerId: string | null
+    pairingSessionId: string | null
+    deviceId: string | null
+  }) => Promise<void>
 }
 
 const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 45_000
 const POLL_INTERVAL_MS = 500
 const STOP_GRACE_S = 5
+
+/** Docker label stamped on every sandbox container, carrying its session id.
+ *  Used both to verify ownership before removing a same-name container and to
+ *  reap label-only orphans (a container created before its id was persisted). */
+export const SANDBOX_SESSION_LABEL = "synapse.sandbox.session"
 
 export function createDockerSandboxBackend(
   opts: DockerSandboxBackendOptions
@@ -73,90 +94,106 @@ export function createDockerSandboxBackend(
 
   const docker = (args: string[]) => runDocker(spawnImpl, args)
 
+  const createPairing = opts.createPairing ?? defaultCreatePairing
+  const failCleanup: NonNullable<DockerSandboxBackendOptions["failCleanup"]> =
+    opts.failCleanup ?? ((args) => defaultDockerFailCleanup(docker, args))
+
   return {
     kind: "docker",
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
-      // ① mint a one-time bootstrap token + pending device id.
-      let pairing: CreateCloudDeviceResult
+      // Track every fact we create so a failure at ANY point (incl. a staged
+      // callback throwing) cleans up ALL of them — honoring the SandboxSpec
+      // contract: "a callback that throws aborts create() (which then runs its
+      // own cleanup)". Without this a mid-create failure leaks the pairing
+      // session, the container, and/or the bootstrapped device.
+      let pairingSessionId: string | null = null
+      let containerId: string | null = null
+      let deviceId: string | null = null
       try {
-        pairing = await createCloudDevicePairing({
-          workspaceId: spec.workspaceId,
-          title: spec.title ?? `Sandbox ${spec.sessionId.slice(0, 8)}`,
-          hostProvider: "docker",
+        // ① mint a one-time bootstrap token + pending device id.
+        let pairing: CreateCloudDeviceResult
+        try {
+          pairing = await createPairing({
+            workspaceId: spec.workspaceId,
+            title: spec.title ?? `Sandbox ${spec.sessionId.slice(0, 8)}`,
+          })
+        } catch (err) {
+          throw new SandboxBackendError(
+            `createCloudDevicePairing failed: ${errMsg(err)}`
+          )
+        }
+        pairingSessionId = pairing.pairing_session_id
+        await spec.onPairingCreated?.(pairing.pairing_session_id)
+
+        const containerName = `synapse-sbx-${sanitizeName(spec.sessionId)}`
+
+        // ② best-effort remove a stale same-name container (verify it's ours by
+        // the session label before deleting).
+        await removeStaleContainer(docker, containerName, spec.sessionId).catch(
+          () => {}
+        )
+
+        // ③ docker run -d. The CMD overrides the image default with the full
+        // `run` command (fs-root etc. are CLI-only flags, not env).
+        const runArgs = buildDockerRunArgs({
+          opts,
+          spec,
+          containerName,
+          bootstrapToken: pairing.bootstrap_token,
+        })
+
+        try {
+          const out = await docker(runArgs)
+          containerId = out.stdout.trim().split("\n").pop()!.trim()
+          if (!containerId) {
+            throw new SandboxBackendError("docker run returned no container id")
+          }
+        } catch (err) {
+          throw err instanceof SandboxBackendError
+            ? err
+            : new SandboxBackendError(`docker run failed: ${errMsg(err)}`)
+        }
+        await spec.onResourceCreated?.(containerId)
+
+        // ④ wait for the container to consume its bootstrap token (it self-
+        // registers the device on first boot). Surface docker logs on early exit.
+        let resolved: { deviceId: string; deviceServiceId: string }
+        try {
+          resolved = await (
+            opts.pollBootstrapConsumed ?? defaultPollBootstrapConsumed
+          )(pairing.pairing_session_id, bootstrapTimeoutMs)
+        } catch (err) {
+          const logs = await docker(["logs", "--tail", "50", containerId])
+            .then((r) => `${r.stdout}\n${r.stderr}`.trim())
+            .catch(() => "(docker logs unavailable)")
+          throw new SandboxBackendError(
+            `sandbox container did not bootstrap within ${bootstrapTimeoutMs}ms: ${errMsg(err)}\n--- container logs ---\n${logs}`
+          )
+        }
+        deviceId = resolved.deviceId
+        await spec.onDeviceClaimed?.(resolved.deviceId)
+
+        return makeDockerHandle({
+          docker,
+          sessionId: spec.sessionId,
+          containerId,
+          deviceId: resolved.deviceId,
+          deviceServiceId: resolved.deviceServiceId,
+          pairingSessionId: pairing.pairing_session_id,
         })
       } catch (err) {
-        throw new SandboxBackendError(
-          `createCloudDevicePairing failed: ${errMsg(err)}`
-        )
-      }
-      await spec.onPairingCreated?.(pairing.pairing_session_id)
-
-      const containerName = `synapse-sbx-${sanitizeName(spec.sessionId)}`
-
-      // ② best-effort remove a stale same-name container (verify it's ours by
-      // the session label before deleting).
-      await removeStaleContainer(docker, containerName, spec.sessionId).catch(
-        () => {}
-      )
-
-      // ③ docker run -d. The CMD overrides the image default with the full
-      // `run` command (fs-root etc. are CLI-only flags, not env).
-      const runArgs = buildDockerRunArgs({
-        opts,
-        spec,
-        containerName,
-        bootstrapToken: pairing.bootstrap_token,
-      })
-
-      let containerId: string
-      try {
-        const out = await docker(runArgs)
-        containerId = out.stdout.trim().split("\n").pop()!.trim()
-        if (!containerId) {
-          throw new SandboxBackendError("docker run returned no container id")
-        }
-      } catch (err) {
-        await failCleanup(docker, {
-          containerName: null,
-          pairingSessionId: pairing.pairing_session_id,
-          deviceId: null,
+        // Comprehensive self-cleanup of everything created before the failure:
+        // the bootstrapped device (cascades its services/exposures/grants), the
+        // pending pairing session (so the token can't be reused), and the
+        // container. Idempotent + best-effort; the original error is rethrown.
+        await failCleanup({
+          workspaceId: spec.workspaceId,
+          containerId,
+          pairingSessionId,
+          deviceId,
         }).catch(() => {})
-        throw err instanceof SandboxBackendError
-          ? err
-          : new SandboxBackendError(`docker run failed: ${errMsg(err)}`)
+        throw err
       }
-      await spec.onResourceCreated?.(containerId)
-
-      // ④ wait for the container to consume its bootstrap token (it self-
-      // registers the device on first boot). Surface docker logs on early exit.
-      let resolved: { deviceId: string; deviceServiceId: string }
-      try {
-        resolved = await (
-          opts.pollBootstrapConsumed ?? defaultPollBootstrapConsumed
-        )(pairing.pairing_session_id, bootstrapTimeoutMs)
-      } catch (err) {
-        const logs = await docker(["logs", "--tail", "50", containerId])
-          .then((r) => `${r.stdout}\n${r.stderr}`.trim())
-          .catch(() => "(docker logs unavailable)")
-        await failCleanup(docker, {
-          containerName: containerId,
-          pairingSessionId: pairing.pairing_session_id,
-          deviceId: null,
-        }).catch(() => {})
-        throw new SandboxBackendError(
-          `sandbox container did not bootstrap within ${bootstrapTimeoutMs}ms: ${errMsg(err)}\n--- container logs ---\n${logs}`
-        )
-      }
-      await spec.onDeviceClaimed?.(resolved.deviceId)
-
-      return makeDockerHandle({
-        docker,
-        sessionId: spec.sessionId,
-        containerId,
-        deviceId: resolved.deviceId,
-        deviceServiceId: resolved.deviceServiceId,
-        pairingSessionId: pairing.pairing_session_id,
-      })
     },
 
     async connect(ref: SandboxRef): Promise<SandboxHandle> {
@@ -214,7 +251,7 @@ function buildDockerRunArgs(params: {
     "--name",
     containerName,
     "--label",
-    `synapse.sandbox.session=${spec.sessionId}`,
+    `${SANDBOX_SESSION_LABEL}=${spec.sessionId}`,
     "--network",
     opts.network,
     // bwrap needs mount + (omitted) userns; AppArmor is the real mount-rslave
@@ -229,9 +266,13 @@ function buildDockerRunArgs(params: {
     "--user",
     String(opts.runAsUid ?? 0),
     // Share only this session's subpath of the storage volume (not the whole
-    // store). volume-subpath needs Docker Engine 26+.
+    // store). The subpath is the session root RELATIVE to the volume's mount
+    // point inside the API container, computed by the spine from STORAGE_DIR
+    // (sandboxVolumeSubpathFor) — NOT hardcoded here, so a deployment whose
+    // STORAGE_DIR differs from the volume root still mounts the right dir.
+    // volume-subpath needs Docker Engine 26+.
     "--mount",
-    `type=volume,src=${opts.storageVolume},dst=/sandbox-root,volume-subpath=sandboxes/${spec.sessionId}`,
+    `type=volume,src=${opts.storageVolume},dst=/sandbox-root,volume-subpath=${volumeSubpathFor(spec)}`,
   ]
   for (const [k, v] of Object.entries(env)) {
     args.push("-e", `${k}=${v}`)
@@ -300,24 +341,46 @@ async function defaultPollBootstrapConsumed(
   }
 }
 
-async function failCleanup(
+/** Default pairing creation: the DB-backed cloud-bootstrap pairing. */
+function defaultCreatePairing(input: {
+  workspaceId: string
+  title: string
+}): Promise<CreateCloudDeviceResult> {
+  return createCloudDevicePairing({
+    workspaceId: input.workspaceId,
+    title: input.title,
+    hostProvider: "docker",
+  })
+}
+
+async function defaultDockerFailCleanup(
   docker: (a: string[]) => Promise<{ stdout: string; stderr: string }>,
   args: {
-    containerName: string | null
-    pairingSessionId: string
+    workspaceId: string
+    containerId: string | null
+    pairingSessionId: string | null
     deviceId: string | null
   }
 ): Promise<void> {
-  // Cancel the (unconsumed) pairing session so the token can't be reused.
-  await db
-    .updateTable("device_pairing_sessions")
-    .set({ status: "cancelled", updated_at: sql`NOW()` } as never)
-    .where("id", "=", args.pairingSessionId)
-    .where("status", "=", "pending")
-    .execute()
-    .catch(() => {})
-  if (args.containerName) {
-    await docker(["rm", "-f", args.containerName]).catch(() => {})
+  // Order: device first (a consumed pairing session has device_id set with ON
+  // DELETE SET NULL, and deleting the device cascades its services/exposures/
+  // grants), then the pairing session, then the container.
+  if (args.deviceId) {
+    await deleteDevice(args.workspaceId, args.deviceId).catch(() => {})
+  }
+  // Cancel the (still-pending) pairing session so the token can't be reused. A
+  // consumed session is left as-is (the device delete already handled its FK).
+  if (args.pairingSessionId) {
+    await db
+      .updateTable("device_pairing_sessions")
+      .set({ status: "cancelled", updated_at: sql`NOW()` } as never)
+      .where("id", "=", args.pairingSessionId)
+      .where("status", "=", "pending")
+      .execute()
+      .catch(() => {})
+  }
+  if (args.containerId) {
+    await docker(["rm", "-f", args.containerId]).catch(() => {})
   }
 }
 
@@ -331,12 +394,67 @@ async function removeStaleContainer(
   const out = await docker([
     "inspect",
     "--format",
-    '{{ index .Config.Labels "synapse.sandbox.session" }}',
+    `{{ index .Config.Labels "${SANDBOX_SESSION_LABEL}" }}`,
     containerName,
   ]).catch(() => null)
   if (out && out.stdout.trim() === sessionId) {
     await docker(["rm", "-f", containerName]).catch(() => {})
   }
+}
+
+export interface ReapDockerOrphansResult {
+  /** session ids of containers we removed. */
+  removed: string[]
+  /** session ids found running that we kept (had a live mount). */
+  kept: string[]
+}
+
+/**
+ * Reap label-only Docker sandbox orphans: containers stamped with our session
+ * label whose session is NOT in `liveSessionIds` (the sessions that still have a
+ * recoverable DB mount). This catches the crash window the DB-driven reconciler
+ * can't — the API `docker run`s a container, then crashes BEFORE persisting its
+ * `sandbox_resource_id`, so teardown can't build a killable ref from file_mounts
+ * even though the container is up and labeled.
+ *
+ * Ownership is proven by the label (set only by this backend). Best-effort: a
+ * `docker ps`/`rm` failure is logged via the returned lists, never thrown. The
+ * spawn seam keeps it unit-testable without a docker daemon.
+ */
+export async function reapDockerSandboxOrphans(
+  liveSessionIds: Set<string>,
+  opts: { spawnImpl?: SpawnImpl } = {}
+): Promise<ReapDockerOrphansResult> {
+  const docker = (args: string[]) =>
+    runDocker(opts.spawnImpl ?? nodeSpawn, args)
+  const removed: string[] = []
+  const kept: string[] = []
+  // List every container (running or stopped) carrying our label, with its
+  // session id. `{{.Label "..."}}` formats the label value per container.
+  const out = await docker([
+    "ps",
+    "--all",
+    "--filter",
+    `label=${SANDBOX_SESSION_LABEL}`,
+    "--format",
+    `{{.ID}} {{.Label "${SANDBOX_SESSION_LABEL}"}}`,
+  ]).catch(() => null)
+  if (!out) return { removed, kept }
+  for (const line of out.stdout.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const sep = trimmed.indexOf(" ")
+    if (sep < 0) continue
+    const containerId = trimmed.slice(0, sep)
+    const sessionId = trimmed.slice(sep + 1).trim()
+    if (!sessionId || liveSessionIds.has(sessionId)) {
+      if (sessionId) kept.push(sessionId)
+      continue
+    }
+    await docker(["rm", "-f", containerId]).catch(() => {})
+    removed.push(sessionId)
+  }
+  return { removed, kept }
 }
 
 function makeDockerHandle(args: {
@@ -412,6 +530,22 @@ function runDocker(
         )
     })
   })
+}
+
+/** Resolve the per-session subpath of the storage volume to share into the
+ *  container. The spine computes it from STORAGE_DIR (relative to the volume
+ *  mount point); we require it rather than re-derive the layout here, and fail
+ *  loud if it's missing — mounting the wrong path would silently hide the
+ *  materialized files (and could fail `docker run` outright). */
+function volumeSubpathFor(spec: SandboxSpec): string {
+  const subpath = spec.storageVolumeSubpath?.trim()
+  if (!subpath) {
+    throw new SandboxBackendError(
+      `docker backend: spec.storageVolumeSubpath is required (session ${spec.sessionId}) ` +
+        `so the volume-subpath mount resolves the materialized sandbox root`
+    )
+  }
+  return subpath
 }
 
 function sanitizeName(sessionId: string): string {

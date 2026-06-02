@@ -76,6 +76,11 @@ services:
       SYNAPSE_SANDBOX_IMAGE: ${SYNAPSE_SANDBOX_IMAGE:-synapse-device-runtime:latest}
       SYNAPSE_SANDBOX_DOCKER_NETWORK: ${SYNAPSE_SANDBOX_DOCKER_NETWORK:-synapse-sandbox-egress}
       SYNAPSE_SANDBOX_STORAGE_VOLUME: ${SYNAPSE_SANDBOX_STORAGE_VOLUME:-synapse_api_storage}
+      # Where api_storage is mounted INSIDE this container. The API derives each
+      # sandbox's volume-subpath as STORAGE_DIR relative to this path (here
+      # STORAGE_DIR=/app/storage/files under /app/storage → files/sandboxes/<id>).
+      # Only override if you remount the volume elsewhere.
+      SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT: ${SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT:-/app/storage}
       # Internal address the sandbox container dials back to (NOT the public
       # APP_BASE_URL — the sandbox is on an internal-only network).
       SYNAPSE_SANDBOX_SERVER_ORIGIN: ${SYNAPSE_SANDBOX_SERVER_ORIGIN:-http://api:3001}

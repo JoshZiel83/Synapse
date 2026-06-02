@@ -59,7 +59,10 @@ import {
   shutdownAllInstances,
 } from "./modules/mcp-plugins/instance-manager.js"
 import { recoverInterruptedExecutions } from "./modules/execution/service.js"
-import { recoverFailedSandboxMounts } from "./modules/sandbox/index.js"
+import {
+  recoverFailedSandboxMounts,
+  reconcileSandboxes,
+} from "./modules/sandbox/index.js"
 import { registerActionToolPlugins } from "./modules/ai/tools.js"
 import { registerActorFileToolPlugins } from "./modules/ai/file-tools.js"
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js"
@@ -314,6 +317,14 @@ async function main() {
       }
     } catch (err) {
       console.error("Failed to recover sandbox mounts:", err)
+    }
+    // Tear down sandboxes left dangling by a crash (stale mounts + their
+    // runtimes) and reap label-only docker orphans, so the next turn
+    // re-provisions cleanly. Best-effort; runs after the commit-recovery above.
+    try {
+      await reconcileSandboxes()
+    } catch (err) {
+      console.error("Failed to reconcile sandboxes:", err)
     }
   }
 
