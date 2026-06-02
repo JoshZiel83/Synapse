@@ -4,6 +4,13 @@ import type { DatabaseTable } from "./db-types.js"
 
 const { Pool } = pg
 
+/**
+ * @internal Connection pool. Owned by the database infrastructure layer only:
+ * `kysely.ts` builds the `db`/`Executor` on top of it, and the schema-health
+ * functions below run their bootstrap-time `information_schema` probes on it.
+ * Business modules must NEVER import this — use `db`/`Executor` +
+ * `sql<Row>`...`.execute(executor)` instead (enforced by guard-db-paradigm).
+ */
 export const pool = new Pool({
   connectionString: config.database.url,
   max: 20,
@@ -294,18 +301,6 @@ function logQueryFailure(
   })
 }
 
-export async function query<T extends pg.QueryResultRow = any>(
-  text: string,
-  params?: any[]
-): Promise<pg.QueryResult<T>> {
-  try {
-    return await pool.query<T>(text, params)
-  } catch (err) {
-    logQueryFailure(text, params, err)
-    throw err
-  }
-}
-
 export async function testConnection(): Promise<boolean> {
   try {
     await pool.query("SELECT 1")
@@ -317,13 +312,22 @@ export async function testConnection(): Promise<boolean> {
 
 export async function inspectRequiredSchema(): Promise<RequiredSchemaIssue[]> {
   const tableNames = REQUIRED_SCHEMA_SPECS.map((spec) => spec.table)
-  const result = await query<{ table_name: string; column_name: string }>(
-    `SELECT table_name, column_name
+  const sql = `SELECT table_name, column_name
      FROM information_schema.columns
      WHERE table_schema = 'public'
-       AND table_name = ANY($1::text[])`,
-    [tableNames]
-  )
+       AND table_name = ANY($1::text[])`
+  let result: pg.QueryResult<{ table_name: string; column_name: string }>
+  try {
+    // Bootstrap-time schema probe: runs on the raw pool (this module owns it)
+    // BEFORE the Kysely `db` is relied upon. Not a business query.
+    result = await pool.query<{ table_name: string; column_name: string }>(
+      sql,
+      [tableNames]
+    )
+  } catch (err) {
+    logQueryFailure(sql, [tableNames], err)
+    throw err
+  }
 
   const columnsByTable = new Map<string, Set<string>>()
   for (const row of result.rows) {

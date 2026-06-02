@@ -4,25 +4,28 @@
 //
 // What counts as "legacy" (must be zero outside the whitelisted definition
 // files):
-//   1. Importing a bare query helper or the bare executor type from
+//   1. Importing a removed bare query helper or bare-pg executor type from
 //      `infrastructure/database/kysely(.js)` — executeSql, executeSqlOn,
 //      executeCompiledQuery, executeCompiledSql, the bare-helper `executeTakeFirst`
-//      (the FUNCTION import, not the Kysely builder method), or `QueryExecutor`.
-//   2. Importing `transaction` (the pg hand-rolled one) or the bare `query`
-//      from `infrastructure/database/index(.js)`.
+//      (the FUNCTION import, not the Kysely builder method), `QueryExecutor`,
+//      the `AnyExecutor` union, or its narrowing helpers `isKyselyExecutor` /
+//      `asExecutor`. All deleted by the convergence — use `Executor`.
+//   2. Importing `transaction`/`getClient`/`query` (the hand-rolled pg helpers)
+//      or the bare `pool` from `infrastructure/database/index(.js)`. `pool` is
+//      @internal to the database layer; business code uses `db`/`Executor`.
 //   3. Declaring a bespoke bare-executor object/type of shape
 //      `{ query: (text, params) => ... }` — inline object-literal adapters
 //      (e.g. `?? { query: (text, params) => runOnDb(...) }`) and interface /
 //      type-literal members named `query` with a `(text, ...) => Promise` shape.
 //
-//   NOTE (transitional, deliberately NOT yet flagged): the function-type-alias
-//   runners `type QueryRunner = <T>(text, params?) => Promise<...>` /
-//   `type SqlRunner = ...` that still live in chat/remote-agents/skills/
-//   mcp-plugins/automation/organization are plan-sanctioned transitional
-//   bridges (they execute on a Kysely executor under the hood). They are out of
-//   scope for this guard until the QueryExecutor/AnyExecutor union is retired;
-//   adding them here would hard-fail on intentionally-kept code. Tracked as a
-//   follow-up, not silently claimed as covered.
+//   NOT flagged (legitimate): function-type runner aliases like
+//   `type QueryRunner = <T>(text, params?) => Promise<{ rows }>` in
+//   automation/skills/mcp-plugins/organization. Post-convergence these are
+//   curried raw-SQL runners bound to a Kysely `Executor` (built by
+//   `runnerFn(executor: Executor)` → `executor.executeQuery(CompiledQuery.raw(...))`);
+//   they carry NO pg client and cannot reintroduce the bare-pg paradigm, so
+//   banning them would be noise. The bare-pg `{ query }` SHAPE is still caught
+//   by rule 3.
 //
 // This is import-AWARE and AST-based — it never flags `.executeTakeFirst()` /
 // `.execute()` builder chains, which are legitimate native Kysely usage.
@@ -50,7 +53,11 @@ const WHITELIST = new Set([
   "infrastructure/database/index.ts",
 ])
 
-// Named imports that are legacy when imported from database/kysely.
+// Named imports that are legacy when imported from database/kysely. The bare
+// query helpers were deleted in the convergence; `QueryExecutor`/`AnyExecutor`
+// (the bare-pg union) and `isKyselyExecutor`/`asExecutor` (its narrowing
+// helpers) were removed too — banning the names keeps them from being
+// reintroduced. Use `Executor` (Kysely<Database>: db or trx) instead.
 const KYSELY_LEGACY_IMPORTS = new Set([
   "executeSql",
   "executeSqlOn",
@@ -58,9 +65,21 @@ const KYSELY_LEGACY_IMPORTS = new Set([
   "executeCompiledSql",
   "executeTakeFirst", // the bare helper function (NOT the builder method)
   "QueryExecutor",
+  "AnyExecutor",
+  "isKyselyExecutor",
+  "asExecutor",
 ])
-// Named imports that are legacy when imported from database/index.
-const INDEX_LEGACY_IMPORTS = new Set(["transaction", "query", "getClient"])
+// Named imports that are legacy when imported from database/index. `pool` is
+// sealed: it is an @internal connection handle owned by the database layer
+// (kysely.ts builds `db` on it, the schema-health probes use it) — business
+// modules must use `db`/`Executor`, never the bare pool. kysely.ts/index.ts are
+// whitelisted so they can still reference it.
+const INDEX_LEGACY_IMPORTS = new Set([
+  "transaction",
+  "query",
+  "getClient",
+  "pool",
+])
 
 function listTsFiles(dir) {
   const out = []
