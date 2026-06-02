@@ -17,17 +17,11 @@ import type {
 import { WORK_ITEM_TRANSITIONS } from "../types/index.js"
 
 export function generateId(): string {
-  const cryptoRef = globalThis as typeof globalThis & {
-    crypto?: {
-      randomUUID?: () => string
-    }
-  }
-
-  if (typeof cryptoRef.crypto?.randomUUID === "function") {
-    return cryptoRef.crypto.randomUUID()
-  }
-
-  return `id_${Math.random().toString(36).slice(2)}_${Date.now()}`
+  // crypto.randomUUID is available in every runtime this ships to (Node 18+,
+  // all modern browsers, RN/Hermes with the polyfill). No Math.random
+  // fallback — that produced non-UUID, low-entropy ids and only ever ran in
+  // ancient environments we don't support.
+  return globalThis.crypto.randomUUID()
 }
 
 export function isValidTransition(
@@ -46,6 +40,19 @@ export function paginate(page: number, pageSize: number, maxPageSize = 100) {
 
 export function nowISO(): string {
   return new Date().toISOString()
+}
+
+/**
+ * Human-readable byte size with binary (1024) units: "512 B", "1.5 KB",
+ * "2.0 MB". Consolidates the byte-for-byte-identical formatBytes copied across
+ * the AI providers. NOTE: kept as binary "KB"/"MB" (not SI "kB") on purpose —
+ * this string is embedded in prompts the model reads, so the exact format must
+ * not drift (which is why pretty-bytes is deliberately not used).
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export const GROUP_CONVERSATION_KIND = CONVERSATION_KIND.GROUP
@@ -376,3 +383,14 @@ export function buildMobileScanUrl(params: {
   url.searchParams.set("token", params.token)
   return url.toString()
 }
+
+export { redactSecrets } from "./redact.js"
+export type { RedactOptions } from "./redact.js"
+
+export { computeBackoff } from "./backoff.js"
+export type { ComputeBackoffOptions } from "./backoff.js"
+
+export { slugify } from "./slug.js"
+export type { SlugifyOptions } from "./slug.js"
+
+export { parseJsonObject, parseJsonObjectOrUndefined } from "./json.js"

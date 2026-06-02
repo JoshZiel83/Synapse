@@ -16,12 +16,15 @@ type LazyQueue = {
   isMaterialized: () => boolean
 }
 
-function lazyQueue(name: string): LazyQueue {
+function lazyQueue(
+  name: string,
+  defaultJobOptions?: Queue["defaultJobOptions"]
+): LazyQueue {
   let queue: Queue | null = null
   return {
     get: () => {
       if (!queue) {
-        queue = new Queue(name, { connection: redis })
+        queue = new Queue(name, { connection: redis, defaultJobOptions })
       }
       return queue
     },
@@ -29,7 +32,28 @@ function lazyQueue(name: string): LazyQueue {
   }
 }
 
-const sessionThinkingLazy = lazyQueue(QUEUE_NAMES.SESSION_THINKING)
+/**
+ * Retry policy for session-thinking jobs. These jobs are the ONLY driver for a
+ * session's pending wakeups (user messages, follow-ups). Without attempts a
+ * transient Redis/BullMQ failure on the worker — or on a lock-contended
+ * re-enqueue — would drop the only future driver and strand the wakeups until
+ * an external recovery sweep. With attempts, a failed run is retried with
+ * backoff. The handler is idempotent w.r.t. re-runs: it re-claims the session
+ * lock and re-reads pending wakeups, so a retry simply re-drives whatever is
+ * still pending. Applied as the queue's defaultJobOptions so every enqueue
+ * (initial, lock-contended retry, finally requeue) inherits it.
+ */
+export const SESSION_THINKING_JOB_DEFAULTS = {
+  attempts: 5,
+  backoff: { type: "exponential" as const, delay: 2_000 },
+  removeOnComplete: { age: 3_600, count: 1_000 },
+  removeOnFail: { age: 86_400, count: 1_000 },
+} as const
+
+const sessionThinkingLazy = lazyQueue(
+  QUEUE_NAMES.SESSION_THINKING,
+  SESSION_THINKING_JOB_DEFAULTS
+)
 const automationSchedulerLazy = lazyQueue(QUEUE_NAMES.AUTOMATION_SCHEDULER)
 const automationExecutionLazy = lazyQueue(QUEUE_NAMES.AUTOMATION_EXECUTION)
 const imTransportDeliveryLazy = lazyQueue(QUEUE_NAMES.IM_TRANSPORT_DELIVERY)

@@ -47,6 +47,7 @@ import type { Job, JobsOptions, Queue } from "bullmq"
 import { sql } from "kysely"
 import { db } from "../infrastructure/database/kysely.js"
 import { redis } from "../infrastructure/redis/index.js"
+import { acquireLock, releaseLock } from "../infrastructure/redis/lock.js"
 import { parseJsonObject } from "../modules/im/service/_helpers.js"
 import { patchTransportMessageLinkMetadata } from "../modules/im/service.js"
 import {
@@ -54,6 +55,9 @@ import {
   IM_TRANSPORT_DELIVERY_JOB_DEFAULTS,
   imTransportDeliveryQueue,
 } from "./queues.js"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("outbox-sweeper")
 
 const SWEEP_INTERVAL_MS = 30_000
 const SWEEP_LOCK_KEY = "im:outbox-sweeper:lock"
@@ -264,7 +268,7 @@ export function startTransportOutboxSweeper(options?: {
     try {
       await runOneSweep()
     } catch (err) {
-      console.error("[im:outbox-sweeper] sweep failed:", err)
+      log.error({ err }, "sweep failed")
     }
   }
   // Kick off the first sweep ASAP after startup, then on the interval.
@@ -291,48 +295,23 @@ export async function stopTransportOutboxSweeper(): Promise<void> {
  * synchronously. Production code should rely on `startTransportOutboxSweeper`.
  */
 export async function runOneSweep(): Promise<void> {
-  const lockToken = await acquireSweeperLock()
-  if (!lockToken) return
+  const lock = await acquireLock(redis, SWEEP_LOCK_KEY, SWEEP_LOCK_TTL_MS)
+  if (!lock) return
   try {
     const links = await loadSweepCandidates()
     for (const candidate of links) {
       try {
         await processCandidate(candidate)
       } catch (err) {
-        console.error(
-          `[im:outbox-sweeper] failed to process link ${candidate.linkId}:`,
-          err
+        log.error(
+          { err, linkId: candidate.linkId },
+          `failed to process link ${candidate.linkId}`
         )
       }
     }
   } finally {
-    await releaseSweeperLock(lockToken)
+    await releaseLock(redis, lock)
   }
-}
-
-async function acquireSweeperLock(): Promise<string | null> {
-  const token = `${process.pid}-${Date.now()}-${Math.random()}`
-  const result = await redis.set(
-    SWEEP_LOCK_KEY,
-    token,
-    "PX",
-    SWEEP_LOCK_TTL_MS,
-    "NX"
-  )
-  return result === "OK" ? token : null
-}
-
-async function releaseSweeperLock(token: string): Promise<void> {
-  await redis.eval(
-    `if redis.call('GET', KEYS[1]) == ARGV[1] then
-       return redis.call('DEL', KEYS[1])
-     else
-       return 0
-     end`,
-    1,
-    SWEEP_LOCK_KEY,
-    token
-  )
 }
 
 interface SweepCandidate {

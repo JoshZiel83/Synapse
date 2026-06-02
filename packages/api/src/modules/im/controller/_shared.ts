@@ -18,6 +18,9 @@ import {
 import { requireRequestAction } from "../../access/guards.js"
 import { WECOM_BASE_WS_URL_MAX_BYTES } from "../connectors/wecom/credentials.js"
 import { refreshTransportRuntimeManager } from "../runtime.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("im.controller")
 
 export const transportAccountOwnerCreateShape = {
   ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).default("workspace"),
@@ -430,6 +433,9 @@ export async function requireWorkspaceAction(
 
 export async function refreshTransportRuntimeState(): Promise<void> {
   await refreshTransportRuntimeManager().catch((error) => {
-    console.error("[im] Failed to refresh transport runtime manager:", error)
+    log.error(
+      { err: error },
+      "[im] Failed to refresh transport runtime manager"
+    )
   })
 }

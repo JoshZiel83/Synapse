@@ -1,8 +1,8 @@
 import { useRouter } from "expo-router"
 import { useMemo } from "react"
-import { RefreshControl, ScrollView, StyleSheet, View } from "react-native"
+import { RefreshControl, StyleSheet, View } from "react-native"
 
-import { ConversationList } from "@/components/conversation-list"
+import { ConversationListView } from "@/components/conversation-list"
 import { MobileHeaderActions } from "@/components/mobile-header-actions"
 import {
   Button,
@@ -58,24 +58,14 @@ export default function ChatsTabScreen() {
           />
         </View>
 
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          contentInsetAdjustmentBehavior="automatic"
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => void refreshInbox()}
-            />
-          }
-        >
-          {loading ? (
+        {loading ? (
+          <View style={styles.stateWrap}>
             <SectionBlock>
               <LoadingBlock label="正在加载会话..." />
             </SectionBlock>
-          ) : error ? (
+          </View>
+        ) : error ? (
+          <View style={styles.stateWrap}>
             <SectionBlock>
               <EmptyState
                 icon="alert-circle"
@@ -92,26 +82,37 @@ export default function ChatsTabScreen() {
                 }
               />
             </SectionBlock>
-          ) : conversations.length > 0 ? (
-            <SectionBlock style={styles.listSection}>
-              <ConversationList
-                conversations={conversations}
-                workspaceMemberId={workspaceMemberId}
-                onPressConversation={(conversation) =>
-                  router.push(`/chat/${conversation.conversationId}`)
-                }
-              />
-            </SectionBlock>
-          ) : (
-            <SectionBlock>
-              <EmptyState
-                icon="message-square"
-                title="还没有任何聊天"
-                description={emptyDescription}
-              />
-            </SectionBlock>
-          )}
-        </ScrollView>
+          </View>
+        ) : (
+          <View style={styles.listShell}>
+            <ConversationListView
+              conversations={conversations}
+              workspaceMemberId={workspaceMemberId}
+              onPressConversation={(conversation) =>
+                router.push(`/chat/${conversation.conversationId}`)
+              }
+              contentContainerStyle={{
+                paddingHorizontal: 18,
+                paddingBottom: 128,
+              }}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={() => void refreshInbox()}
+                />
+              }
+              ListEmptyComponent={
+                <SectionBlock>
+                  <EmptyState
+                    icon="message-square"
+                    title="还没有任何聊天"
+                    description={emptyDescription}
+                  />
+                </SectionBlock>
+              }
+            />
+          </View>
+        )}
       </View>
       {permissionSheet}
     </ScreenView>
@@ -125,18 +126,11 @@ const styles = StyleSheet.create({
   headerGutter: {
     paddingHorizontal: 18,
   },
-  scroll: {
+  listShell: {
     flex: 1,
   },
-  scrollContent: {
+  stateWrap: {
     paddingHorizontal: 18,
-    paddingBottom: 128,
-  },
-  listSection: {
-    borderTopWidth: 0,
-    borderBottomWidth: 0,
-    paddingVertical: 0,
-    gap: 0,
   },
   retryAction: {
     marginTop: 10,

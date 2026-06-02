@@ -5,6 +5,7 @@ import websocket from "@fastify/websocket"
 import multipart from "@fastify/multipart"
 import { ZodError } from "zod"
 import { config } from "./config/index.js"
+import { createLogger } from "./infrastructure/logger/index.js"
 import {
   assertRequiredSchema,
   closeDatabasePool,
@@ -22,6 +23,7 @@ import {
 } from "./infrastructure/events/index.js"
 import { auditMiddleware } from "./infrastructure/middleware/audit.js"
 import { beginShutdown } from "./infrastructure/shutdown/state.js"
+import { withTimeout } from "./infrastructure/async/index.js"
 import { ensureStorageDir } from "./infrastructure/storage/index.js"
 import {
   setupWebSocket,
@@ -94,6 +96,8 @@ import {
   shutdownMemoryEmbeddingRuntime,
   warmMemoryEmbeddingRuntime,
 } from "./modules/memory/embedding-runtime.js"
+
+const log = createLogger("server")
 
 function isMalformedUuidDatabaseError(error: unknown) {
   if (!error || typeof error !== "object") {
@@ -200,9 +204,9 @@ async function main() {
 
   try {
     await assertRequiredSchema()
-    console.log("Database schema preflight passed")
+    log.info("Database schema preflight passed")
   } catch (err) {
-    console.error("Database schema preflight failed:", err)
+    log.error({ err }, "Database schema preflight failed")
     process.exit(1)
   }
 
@@ -213,11 +217,11 @@ async function main() {
 
   try {
     const platformAdmins = await syncConfiguredPlatformAdmins()
-    console.log(
+    log.info(
       `Platform admins synchronized (configuredEmails=${platformAdmins.configuredEmailCount}, matchedUsers=${platformAdmins.matchedUserCount}, platformAdmins=${platformAdmins.platformAdminCount})`
     )
   } catch (err) {
-    console.error("Failed to synchronize platform admins:", err)
+    log.error({ err }, "Failed to synchronize platform admins")
     process.exit(1)
   }
 
@@ -244,7 +248,7 @@ async function main() {
     await initBuiltinRegistry()
     initInstanceManagerListeners()
   } catch (err) {
-    console.error("Failed to initialize MCP runtime:", err)
+    log.error({ err }, "Failed to initialize MCP runtime")
     process.exit(1)
   }
 
@@ -274,7 +278,7 @@ async function main() {
   // Start server
   try {
     await app.listen({ port: config.port, host: config.host })
-    console.log(`Synapse API running on http://${config.host}:${config.port}`)
+    log.info(`Synapse API running on http://${config.host}:${config.port}`)
   } catch (err) {
     app.log.error(err)
     process.exit(1)
@@ -290,12 +294,12 @@ async function main() {
       recovered.recoveredTurns > 0 ||
       recovered.recoveredSessions > 0
     ) {
-      console.warn(
+      log.warn(
         `Recovered interrupted executions (toolCalls=${recovered.recoveredToolCalls}, turns=${recovered.recoveredTurns}, sessions=${recovered.recoveredSessions})`
       )
     }
   } catch (err) {
-    console.error("Failed to recover interrupted executions:", err)
+    log.error({ err }, "Failed to recover interrupted executions")
   }
 
   // Recover sandbox mounts whose teardown commit failed earlier (live dirs were
@@ -329,35 +333,19 @@ async function main() {
   await ensureRemoteAgentDeliveryRetryJob()
   startRemoteAgentDeliveryRetryWorker()
   void warmMemoryEmbeddingRuntime().catch((err) => {
-    console.error("Failed to warm memory embedding runtime:", err)
+    log.error({ err }, "Failed to warm memory embedding runtime")
   })
   if (config.im.runtimeManagerEnabled) {
     await startTransportRuntimeManager()
   } else {
-    console.log("[im] Transport runtime manager disabled on this instance")
+    log.info("[im] Transport runtime manager disabled on this instance")
   }
 
-  const waitWithTimeout = async (
+  const waitWithTimeout = (
     label: string,
     promise: Promise<unknown>,
     ms: number
-  ) => {
-    let timer: NodeJS.Timeout | null = null
-    try {
-      await Promise.race([
-        promise,
-        new Promise((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(`${label} timed out after ${ms}ms`)),
-            ms
-          )
-          timer.unref()
-        }),
-      ])
-    } finally {
-      if (timer) clearTimeout(timer)
-    }
-  }
+  ) => withTimeout(promise, ms, label)
 
   let shutdownStarted = false
   const gracefulShutdown = async (signal: string) => {

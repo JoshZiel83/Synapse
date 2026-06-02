@@ -2,6 +2,7 @@ import type {
   CanonicalContentBlock,
   ConversationReplyRef,
 } from "../types/index.js"
+import deepEqual from "fast-deep-equal"
 
 export const CHAT_QUEUE_DB_NAME = "synapse-chat-queue"
 export const CHAT_QUEUE_DB_VERSION = 1
@@ -140,7 +141,7 @@ export function sameStoredChatQueueState(
   left: StoredChatQueueState,
   right: StoredChatQueueState
 ) {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return deepEqual(left, right)
 }
 
 function latestIsoTimestamp(
@@ -155,7 +156,7 @@ function latestIsoTimestamp(
 }
 
 function sameStoredEntry(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return deepEqual(left, right)
 }
 
 export function mergeStoredQueueTransition(
@@ -256,7 +257,7 @@ export interface ChatQueueStateLike {
 }
 
 function sameEntry(left: unknown, right: unknown) {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+  return deepEqual(left ?? null, right ?? null)
 }
 
 export function mergeQueueStateForSave<T extends ChatQueueStateLike>(
@@ -304,6 +305,94 @@ export function mergeQueueStateForSave<T extends ChatQueueStateLike>(
       next.outbox[clientMessageId] = processedEntry
     } else {
       delete next.outbox[clientMessageId]
+    }
+  }
+
+  return next
+}
+
+/**
+ * Shared service-worker outbox flush loop.
+ *
+ * Extracted from the near-verbatim `flushOutbox` implementations in
+ * web-chat-service-worker.ts and the mobile chat-service-worker.ts. Both operate
+ * on the flat queue state (outbox only — no item merge; that happens on the main
+ * thread). The platform bits are injected:
+ *  - `send`: performs the POST for one entry (throws on failure)
+ *  - `now`: returns an ISO timestamp (injectable for tests)
+ *  - `failureMessage`: fallback error string (locale differs per client)
+ *
+ * Behaviour preserved exactly: entries are flushed in optimisticSequence order;
+ * each attempt bumps attemptCount + lastAttemptAt; on success the entry is
+ * removed; on failure it is marked "retrying" (sticky firstFailedAt) and the loop
+ * STOPS (matching both SWs, which break on first failure to preserve ordering).
+ */
+export interface FlushOutboxQueueDeps {
+  send: (entry: PendingOutboxMessage) => Promise<void>
+  now: () => string
+  failureMessage?: string
+}
+
+export async function flushOutboxQueue<
+  S extends {
+    clientInstanceId?: string
+    outbox: Record<string, PendingOutboxMessage>
+  },
+>(state: S, deps: FlushOutboxQueueDeps): Promise<S> {
+  if (!state.clientInstanceId) {
+    return state
+  }
+
+  let next = state
+  const entries = Object.values(state.outbox).sort(
+    (left, right) => left.optimisticSequence - right.optimisticSequence
+  )
+
+  for (const entry of entries) {
+    const currentEntry = next.outbox[entry.clientMessageId]
+    if (!currentEntry) {
+      continue
+    }
+
+    next = {
+      ...next,
+      outbox: {
+        ...next.outbox,
+        [entry.clientMessageId]: {
+          ...currentEntry,
+          attemptCount: (currentEntry.attemptCount || 0) + 1,
+          lastAttemptAt: deps.now(),
+        },
+      },
+    }
+
+    try {
+      await deps.send(entry)
+
+      const nextOutbox = { ...next.outbox }
+      delete nextOutbox[entry.clientMessageId]
+      next = { ...next, outbox: nextOutbox }
+    } catch (error) {
+      const failedEntry = next.outbox[entry.clientMessageId]
+      if (!failedEntry) {
+        break
+      }
+      next = {
+        ...next,
+        outbox: {
+          ...next.outbox,
+          [entry.clientMessageId]: {
+            ...failedEntry,
+            status: "retrying",
+            firstFailedAt: failedEntry.firstFailedAt || deps.now(),
+            lastErrorMessage:
+              error instanceof Error
+                ? error.message
+                : (deps.failureMessage ?? "Failed to send message"),
+          },
+        },
+      }
+      break
     }
   }
 

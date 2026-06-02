@@ -1,6 +1,7 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import {
   fileRefBlock,
+  parseJsonObject,
   type CanonicalFileRefBlock,
   type FileRecordView,
 } from "@synapse/shared"
@@ -54,18 +55,10 @@ export type FileAccessInfo = Pick<
   "id" | "workspaceId" | "mimeType" | "originalName" | "contentKind"
 >
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-}
-
 function toIsoString(value: string | Date | null | undefined): string {
   if (typeof value === "string") return value
   if (value instanceof Date) return value.toISOString()
   return new Date(0).toISOString()
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {}
 }
 
 type FileJoinRow = {

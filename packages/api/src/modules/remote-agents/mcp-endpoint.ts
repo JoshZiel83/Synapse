@@ -19,6 +19,9 @@ import { requireRemoteAgentConversationAccess } from "../chat/service.js"
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import { projectToolsForPrincipal } from "../capability-projection/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("remote-agent.mcp")
 
 type ActiveTransport = {
   transport: StreamableHTTPServerTransport
@@ -326,10 +329,12 @@ async function registerResolvedTools(params: {
         }
       )
     } catch (error) {
-      console.warn(
-        "[remote-agent mcp] tool registration skipped",
-        def.name,
-        error instanceof Error ? error.message : error
+      log.warn(
+        {
+          toolName: def.name,
+          err: error instanceof Error ? error.message : error,
+        },
+        "[remote-agent mcp] tool registration skipped"
       )
     }
   }

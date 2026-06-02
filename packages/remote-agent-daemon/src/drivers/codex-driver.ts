@@ -2,6 +2,7 @@ import { execSync, spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import path from "node:path"
 import process from "node:process"
+import { createInterface } from "node:readline"
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk"
 // codex app-server protocol v2 typed schema. Regenerate after bumping the local
 // `codex` binary with:
@@ -25,6 +26,7 @@ import type {
   SendPromptOptions,
   SessionSpec,
 } from "./types.js"
+import { EventQueue as EventQueueBase, whichBinary } from "./async-channel.js"
 
 type JsonRpcMethod =
   | "initialize"
@@ -41,19 +43,7 @@ function trimFirstLine(value: string) {
 }
 
 function which(binary: string) {
-  try {
-    const command = process.platform === "win32" ? "where" : "which"
-    const output = execSync(`${command} ${binary}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean)
-  } catch {
-    return undefined
-  }
+  return whichBinary(binary)
 }
 
 function resolveWindowsCodexEntry() {
@@ -113,45 +103,7 @@ function detectCodexBinary(): { path?: string; version?: string } {
   return { path, version }
 }
 
-class EventQueue {
-  private readonly queued: AgentSessionEvent[] = []
-  private readonly waiters: Array<(event: AgentSessionEvent | null) => void> =
-    []
-  private closed = false
-
-  push(event: AgentSessionEvent) {
-    if (this.closed) return
-    const waiter = this.waiters.shift()
-    if (waiter) {
-      waiter(event)
-      return
-    }
-    this.queued.push(event)
-  }
-
-  close() {
-    if (this.closed) return
-    this.closed = true
-    for (const waiter of this.waiters) waiter(null)
-    this.waiters.length = 0
-  }
-
-  async *iterator(): AsyncGenerator<AgentSessionEvent> {
-    while (true) {
-      const queued = this.queued.shift()
-      if (queued) {
-        yield queued
-        continue
-      }
-      if (this.closed) return
-      const next = await new Promise<AgentSessionEvent | null>((resolve) => {
-        this.waiters.push(resolve)
-      })
-      if (!next) return
-      yield next
-    }
-  }
-}
+class EventQueue extends EventQueueBase<AgentSessionEvent> {}
 
 function safeJsonParse<T = unknown>(value: string): T | null {
   try {
@@ -159,12 +111,6 @@ function safeJsonParse<T = unknown>(value: string): T | null {
   } catch {
     return null
   }
-}
-
-function splitLines(buffer: string) {
-  const parts = buffer.split(/\r?\n/)
-  const remainder = parts.pop() ?? ""
-  return { lines: parts, remainder }
 }
 
 function writeJsonLine(processRef: ChildProcess | null, payload: unknown) {
@@ -261,7 +207,6 @@ class CodexAgentSession implements AgentSession {
     string,
     (decision: PermissionDecision) => void
   >()
-  private stdoutBuffer = ""
   private readonly eventQueue = new EventQueue()
   private currentPrompt: string
 
@@ -284,12 +229,14 @@ class CodexAgentSession implements AgentSession {
 
   attach(child: ChildProcess) {
     this.child = child
-    child.stdout?.on("data", (chunk: Buffer | string) => {
-      this.stdoutBuffer += String(chunk)
-      const { lines, remainder } = splitLines(this.stdoutBuffer)
-      this.stdoutBuffer = remainder
-      for (const line of lines) this.handleStdoutLine(line)
-    })
+    if (child.stdout) {
+      // readline buffers across chunk boundaries with an internal
+      // StringDecoder, so a multi-byte UTF-8 sequence split across two data
+      // events is decoded correctly (the old String(chunk) buffering corrupted
+      // it). Same pattern the device-runtime sidecar already uses.
+      const rl = createInterface({ input: child.stdout })
+      rl.on("line", (line) => this.handleStdoutLine(line))
+    }
     child.once("exit", (code, signal) => {
       this.eventQueue.push({
         kind: "error",

@@ -4,6 +4,9 @@ import { redis } from "../infrastructure/redis/index.js"
 import { runDueRemoteAgentDeliveryRetries } from "../modules/remote-agents/service.js"
 import { remoteAgentDeliveryRetryQueue } from "./queues.js"
 import { registerWorker } from "./registry.js"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("remote-agent-delivery-retry")
 
 const REMOTE_AGENT_DELIVERY_RETRY_TICK_MS = 10_000
 
@@ -31,10 +34,7 @@ export function startRemoteAgentDeliveryRetryWorker() {
   )
 
   worker.on("failed", (job, err) => {
-    console.error(
-      `Remote agent delivery retry job ${job?.id} failed:`,
-      err.message
-    )
+    log.error({ err }, `Remote agent delivery retry job ${job?.id} failed`)
   })
 
   registerWorker(worker)

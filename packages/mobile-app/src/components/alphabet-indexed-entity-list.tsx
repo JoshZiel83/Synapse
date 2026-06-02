@@ -9,12 +9,17 @@ import {
 import {
   PanResponder,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
   type RefreshControlProps,
 } from "react-native"
+import { FlashList, type FlashListRef } from "@shopify/flash-list"
+import {
+  ALPHABET_RAIL,
+  comparePinyin,
+  getAlphabetInitial,
+} from "@shared/pinyin"
 
 import { Avatar } from "@/components/ui"
 import { theme } from "@/theme/tokens"
@@ -35,82 +40,19 @@ export type AlphabetIndexedEntityItem = {
   trailingAccessory?: React.ReactNode
 }
 
-type AlphabetSection = {
-  letter: string
-  items: AlphabetIndexedEntityItem[]
-}
+const LETTER_RAIL = ALPHABET_RAIL
 
-const LETTER_RAIL = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ", "#"]
-
-const PINYIN_INITIAL_BOUNDARIES: Array<{ letter: string; boundary: string }> = [
-  { letter: "A", boundary: "阿" },
-  { letter: "B", boundary: "八" },
-  { letter: "C", boundary: "嚓" },
-  { letter: "D", boundary: "哒" },
-  { letter: "E", boundary: "妸" },
-  { letter: "F", boundary: "发" },
-  { letter: "G", boundary: "旮" },
-  { letter: "H", boundary: "哈" },
-  { letter: "J", boundary: "击" },
-  { letter: "K", boundary: "喀" },
-  { letter: "L", boundary: "垃" },
-  { letter: "M", boundary: "妈" },
-  { letter: "N", boundary: "拿" },
-  { letter: "O", boundary: "哦" },
-  { letter: "P", boundary: "啪" },
-  { letter: "Q", boundary: "期" },
-  { letter: "R", boundary: "然" },
-  { letter: "S", boundary: "撒" },
-  { letter: "T", boundary: "塌" },
-  { letter: "W", boundary: "挖" },
-  { letter: "X", boundary: "昔" },
-  { letter: "Y", boundary: "压" },
-  { letter: "Z", boundary: "匝" },
-] as const
-
-function compareText(left: string, right: string) {
-  try {
-    return left.localeCompare(right, "zh-Hans-u-co-pinyin", {
-      sensitivity: "base",
-    })
-  } catch {
-    return left.localeCompare(right, undefined, {
-      sensitivity: "base",
-    })
-  }
-}
-
-function getInitialLetter(value: string) {
-  const first = value.trim().charAt(0)
-  if (!first) return "#"
-
-  const upper = first.toUpperCase()
-  if (/^[A-Z]$/.test(upper)) return upper
-
-  if (/^[\u4E00-\u9FFF]$/.test(first)) {
-    for (
-      let index = PINYIN_INITIAL_BOUNDARIES.length - 1;
-      index >= 0;
-      index -= 1
-    ) {
-      const current = PINYIN_INITIAL_BOUNDARIES[index]
-      if (current && compareText(first, current.boundary) >= 0) {
-        return current.letter
-      }
-    }
-    return "A"
-  }
-
-  return "#"
-}
+type FlatRow =
+  | { kind: "header"; letter: string }
+  | { kind: "item"; item: AlphabetIndexedEntityItem }
 
 function compareItems(
   left: AlphabetIndexedEntityItem,
   right: AlphabetIndexedEntityItem
 ) {
-  const titleCompare = compareText(left.title, right.title)
+  const titleCompare = comparePinyin(left.title, right.title)
   if (titleCompare !== 0) return titleCompare
-  return compareText(left.subtitle || "", right.subtitle || "")
+  return comparePinyin(left.subtitle || "", right.subtitle || "")
 }
 
 export function AlphabetIndexedEntityList({
@@ -126,49 +68,61 @@ export function AlphabetIndexedEntityList({
   refreshControl?: ReactElement<RefreshControlProps>
   bottomPadding?: number
 }) {
-  const scrollRef = useRef<ScrollView | null>(null)
-  const letterOffsetsRef = useRef<Record<string, number>>({})
+  const listRef = useRef<FlashListRef<FlatRow>>(null)
   const [railHeight, setRailHeight] = useState(0)
   const [activeLetter, setActiveLetter] = useState<string | null>(null)
 
   const sortedItems = useMemo(() => [...items].sort(compareItems), [items])
 
-  const sections = useMemo<AlphabetSection[]>(() => {
-    const grouped = new Map<string, AlphabetIndexedEntityItem[]>()
-    for (const item of sortedItems) {
-      const letter = getInitialLetter(item.title)
-      if (!grouped.has(letter)) {
-        grouped.set(letter, [])
+  // Flatten sorted items into header/item rows, and remember the flat index of
+  // each letter header so the rail can scrollToIndex.
+  const { rows, stickyHeaderIndices, letterToIndex, presentLetters } =
+    useMemo(() => {
+      const grouped = new Map<string, AlphabetIndexedEntityItem[]>()
+      for (const item of sortedItems) {
+        const letter = getAlphabetInitial(item.title)
+        if (!grouped.has(letter)) grouped.set(letter, [])
+        grouped.get(letter)!.push(item)
       }
-      grouped.get(letter)!.push(item)
-    }
 
-    return LETTER_RAIL.filter((letter) => grouped.has(letter)).map(
-      (letter) => ({
-        letter,
-        items: grouped.get(letter) || [],
-      })
-    )
-  }, [sortedItems])
+      const flat: FlatRow[] = []
+      const sticky: number[] = []
+      const index = new Map<string, number>()
+      const present = new Set<string>()
+      for (const letter of LETTER_RAIL) {
+        const group = grouped.get(letter)
+        if (!group || group.length === 0) continue
+        present.add(letter)
+        index.set(letter, flat.length)
+        sticky.push(flat.length)
+        flat.push({ kind: "header", letter })
+        for (const item of group) flat.push({ kind: "item", item })
+      }
+      return {
+        rows: flat,
+        stickyHeaderIndices: sticky,
+        letterToIndex: index,
+        presentLetters: present,
+      }
+    }, [sortedItems])
 
   function scrollToLetter(letter: string) {
-    const offset = letterOffsetsRef.current[letter]
-    if (typeof offset !== "number") return
+    const targetIndex = letterToIndex.get(letter)
+    if (typeof targetIndex !== "number") return
     setActiveLetter(letter)
-    scrollRef.current?.scrollTo({
-      y: Math.max(offset - 10, 0),
-      animated: false,
-    })
+    listRef.current?.scrollToIndex({ index: targetIndex, animated: false })
   }
 
   function activateRailByLocation(locationY: number) {
     if (!railHeight) return
-    const index = Math.min(
+    const railIndex = Math.min(
       LETTER_RAIL.length - 1,
       Math.max(0, Math.floor((locationY / railHeight) * LETTER_RAIL.length))
     )
-    const letter = LETTER_RAIL[index]!
-    scrollToLetter(letter)
+    const letter = LETTER_RAIL[railIndex]!
+    if (presentLetters.has(letter)) {
+      scrollToLetter(letter)
+    }
   }
 
   const railResponder = useMemo(
@@ -176,126 +130,125 @@ export function AlphabetIndexedEntityList({
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: (event) => {
-          activateRailByLocation(event.nativeEvent.locationY)
-        },
-        onPanResponderMove: (event) => {
-          activateRailByLocation(event.nativeEvent.locationY)
-        },
+        onPanResponderGrant: (event) =>
+          activateRailByLocation(event.nativeEvent.locationY),
+        onPanResponderMove: (event) =>
+          activateRailByLocation(event.nativeEvent.locationY),
       }),
-    [railHeight]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [railHeight, presentLetters]
   )
+
+  if (sortedItems.length === 0) {
+    return (
+      <View style={styles.pageShell}>
+        <FlashList
+          data={[]}
+          renderItem={() => null}
+          ListHeaderComponent={headerContent as ReactElement}
+          ListEmptyComponent={emptyState as ReactElement}
+          refreshControl={refreshControl}
+          contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 16 }}
+        />
+      </View>
+    )
+  }
 
   return (
     <View style={styles.pageShell}>
-      <ScrollView
-        ref={scrollRef}
-        style={styles.scroll}
-        contentContainerStyle={[
-          styles.scrollContent,
-          {
-            paddingBottom: bottomPadding,
-          },
-        ]}
+      <FlashList
+        ref={listRef}
+        data={rows}
+        keyExtractor={(row, i) =>
+          row.kind === "header" ? `h:${row.letter}` : `i:${row.item.key}:${i}`
+        }
+        getItemType={(row) => row.kind}
+        stickyHeaderIndices={stickyHeaderIndices}
+        renderItem={({ item: row }) =>
+          row.kind === "header" ? (
+            <View style={styles.letterHeader}>
+              <Text style={styles.letterHeaderText}>{row.letter}</Text>
+            </View>
+          ) : (
+            <Pressable
+              onPress={row.item.onPress}
+              style={({ pressed }) => [
+                styles.rowCard,
+                pressed && styles.rowCardPressed,
+              ]}
+            >
+              {row.item.leadingAccessory}
+              <View style={styles.avatarShell}>
+                <Avatar
+                  name={row.item.title}
+                  uri={row.item.avatarUrl || undefined}
+                  icon={
+                    row.item.targetType === ALPHABET_ENTITY_TARGET_TYPE.ACTOR
+                      ? "cpu"
+                      : "user"
+                  }
+                  size={40}
+                />
+                {row.item.targetType === ALPHABET_ENTITY_TARGET_TYPE.ACTOR ? (
+                  <View style={styles.actorBadge}>
+                    <MaterialCommunityIcons
+                      name="robot-outline"
+                      size={11}
+                      color={theme.colors.white}
+                    />
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowTitle}>{row.item.title}</Text>
+                {row.item.subtitle ? (
+                  <Text numberOfLines={2} style={styles.rowSubtitle}>
+                    {row.item.subtitle}
+                  </Text>
+                ) : null}
+              </View>
+              {row.item.trailingAccessory}
+            </Pressable>
+          )
+        }
+        ListHeaderComponent={headerContent as ReactElement}
+        refreshControl={refreshControl}
+        contentContainerStyle={{
+          paddingHorizontal: 18,
+          paddingTop: 16,
+          paddingBottom: bottomPadding,
+        }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        refreshControl={refreshControl}
-      >
-        {headerContent}
-        {sortedItems.length > 0 ? (
-          <View style={styles.listCard}>
-            {sections.map((section) => (
-              <View
-                key={section.letter}
-                onLayout={(event) => {
-                  letterOffsetsRef.current[section.letter] =
-                    event.nativeEvent.layout.y
-                }}
-              >
-                <View style={styles.letterHeader}>
-                  <Text style={styles.letterHeaderText}>{section.letter}</Text>
-                </View>
-                {section.items.map((item) => (
-                  <Pressable
-                    key={item.key}
-                    onPress={item.onPress}
-                    style={({ pressed }) => [
-                      styles.rowCard,
-                      pressed && styles.rowCardPressed,
-                    ]}
-                  >
-                    {item.leadingAccessory}
-                    <View style={styles.avatarShell}>
-                      <Avatar
-                        name={item.title}
-                        uri={item.avatarUrl || undefined}
-                        icon={
-                          item.targetType === ALPHABET_ENTITY_TARGET_TYPE.ACTOR
-                            ? "cpu"
-                            : "user"
-                        }
-                        size={40}
-                      />
-                      {item.targetType === ALPHABET_ENTITY_TARGET_TYPE.ACTOR ? (
-                        <View style={styles.actorBadge}>
-                          <MaterialCommunityIcons
-                            name="robot-outline"
-                            size={11}
-                            color={theme.colors.white}
-                          />
-                        </View>
-                      ) : null}
-                    </View>
-                    <View style={styles.rowBody}>
-                      <Text style={styles.rowTitle}>{item.title}</Text>
-                      {item.subtitle ? (
-                        <Text numberOfLines={2} style={styles.rowSubtitle}>
-                          {item.subtitle}
-                        </Text>
-                      ) : null}
-                    </View>
-                    {item.trailingAccessory}
-                  </Pressable>
-                ))}
-              </View>
-            ))}
-          </View>
-        ) : (
-          emptyState
-        )}
-      </ScrollView>
+      />
 
-      {sortedItems.length > 0 && sections.length > 0 ? (
-        <View
-          style={styles.letterRail}
-          onLayout={(event) => setRailHeight(event.nativeEvent.layout.height)}
-          {...railResponder.panHandlers}
-        >
-          {LETTER_RAIL.map((letter) => {
-            const enabled = sections.some(
-              (section) => section.letter === letter
-            )
-            return (
-              <Pressable
-                key={letter}
-                onPress={() => scrollToLetter(letter)}
-                disabled={!enabled}
-                style={styles.letterRailItem}
+      <View
+        style={styles.letterRail}
+        onLayout={(event) => setRailHeight(event.nativeEvent.layout.height)}
+        {...railResponder.panHandlers}
+      >
+        {LETTER_RAIL.map((letter) => {
+          const enabled = presentLetters.has(letter)
+          return (
+            <Pressable
+              key={letter}
+              onPress={() => scrollToLetter(letter)}
+              disabled={!enabled}
+              style={styles.letterRailItem}
+            >
+              <Text
+                style={[
+                  styles.letterRailText,
+                  !enabled && styles.letterRailTextMuted,
+                  activeLetter === letter && styles.letterRailTextActive,
+                ]}
               >
-                <Text
-                  style={[
-                    styles.letterRailText,
-                    !enabled && styles.letterRailTextMuted,
-                    activeLetter === letter && styles.letterRailTextActive,
-                  ]}
-                >
-                  {letter}
-                </Text>
-              </Pressable>
-            )
-          })}
-        </View>
-      ) : null}
+                {letter}
+              </Text>
+            </Pressable>
+          )
+        })}
+      </View>
     </View>
   )
 }
@@ -304,16 +257,6 @@ const styles = StyleSheet.create({
   pageShell: {
     flex: 1,
     position: "relative",
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 18,
-    paddingTop: 16,
-  },
-  listCard: {
-    backgroundColor: theme.colors.surface,
   },
   letterHeader: {
     marginHorizontal: -18,

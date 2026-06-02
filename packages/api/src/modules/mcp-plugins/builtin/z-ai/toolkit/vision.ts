@@ -283,9 +283,6 @@ async function callGLM4V(
     max_tokens: 2048,
   }
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 60000)
-
   try {
     const response = await fetch(ZHIPU_CHAT_ENDPOINT, {
       method: "POST",
@@ -294,7 +291,7 @@ async function callGLM4V(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(60000),
     })
 
     if (!response.ok) {
@@ -310,8 +307,6 @@ async function callGLM4V(
     )
   } catch (error) {
     throw normalizeZhipuTransportError("视觉理解 API", error)
-  } finally {
-    clearTimeout(timeout)
   }
 }
 

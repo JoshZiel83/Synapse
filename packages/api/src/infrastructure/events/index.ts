@@ -1,6 +1,6 @@
 import type { EventType, SystemEvent } from "@synapse/shared"
 import { sql } from "kysely"
-import { REDIS_CHANNELS } from "@synapse/shared"
+import { REDIS_CHANNELS, parseJsonObject } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import {
   db,
@@ -11,6 +11,9 @@ import {
   type TableRow,
 } from "../database/kysely.js"
 import { redisPub, redisSub } from "../redis/index.js"
+import { createLogger } from "../logger/index.js"
+
+const log = createLogger("events")
 
 export type TransactionalRealtimeEventType = "chat.sync.event"
 
@@ -49,21 +52,6 @@ function isTransactionalRealtimeEventType(
   return TRANSACTIONAL_REALTIME_EVENT_TYPES.has(
     type as TransactionalRealtimeEventType
   )
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>)
-        : {}
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
 function eventTimestampToIso(value: string | Date) {
@@ -172,9 +160,9 @@ async function processRealtimeOutboxEntry(entry: RealtimeEventOutboxRow) {
     return true
   } catch (error) {
     await markRealtimeOutboxEntryFailed(entry.id, error)
-    console.error(
-      `[events] Failed to dispatch realtime outbox entry ${entry.id}:`,
-      error
+    log.error(
+      { err: error },
+      `[events] Failed to dispatch realtime outbox entry ${entry.id}`
     )
     return false
   }
@@ -319,12 +307,15 @@ async function runRealtimeOutboxDispatcherLoop() {
         try {
           const gced = await gcRealtimeEventOutbox()
           if (gced > 0) {
-            console.info(
+            log.info(
               `[events] realtime_event_outbox GC: pruned ${gced} dispatched rows`
             )
           }
         } catch (gcError) {
-          console.error("[events] realtime_event_outbox GC failed:", gcError)
+          log.error(
+            { err: gcError },
+            "[events] realtime_event_outbox GC failed"
+          )
         }
       }
 
@@ -333,7 +324,10 @@ async function runRealtimeOutboxDispatcherLoop() {
       }
       await wait(processed > 0 ? 10 : config.realtime.outboxPollMs)
     } catch (error) {
-      console.error("[events] Realtime outbox dispatcher loop failed:", error)
+      log.error(
+        { err: error },
+        "[events] Realtime outbox dispatcher loop failed"
+      )
       if (!realtimeOutboxDispatcherRunning) {
         break
       }
@@ -373,7 +367,7 @@ export async function initEventBus() {
           try {
             await handler(event)
           } catch (err) {
-            console.error(`Event handler error for ${event.type}:`, err)
+            log.error({ err }, `Event handler error for ${event.type}`)
           }
         }
       }
@@ -384,12 +378,12 @@ export async function initEventBus() {
           try {
             await handler(event)
           } catch (err) {
-            console.error("Wildcard event handler error:", err)
+            log.error({ err }, "Wildcard event handler error")
           }
         }
       }
     } catch (err) {
-      console.error("Event parse error:", err)
+      log.error({ err }, "Event parse error")
     }
   })
 }

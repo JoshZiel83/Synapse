@@ -33,6 +33,9 @@ import {
   toCanonicalFileRefBlock,
   type FileOriginInput,
 } from "./service.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("files.ingest")
 
 export interface IngestContext {
   workspaceId: string
@@ -253,7 +256,7 @@ async function ingestImage(
       textBlock(`[Image: missing data, keys=${Object.keys(block).join(",")}]`)
     )
   } catch (err: any) {
-    console.error("[ingest-tool-output] Failed to ingest image:", err.message)
+    log.error({ err }, "[ingest-tool-output] Failed to ingest image")
     blocks.push(textBlock(`[Image: ingest failed - ${err.message}]`))
   }
 }
@@ -282,7 +285,7 @@ async function ingestAudio(
     }
     blocks.push(textBlock("[Audio: missing data]"))
   } catch (err: any) {
-    console.error("[ingest-tool-output] Failed to ingest audio:", err.message)
+    log.error({ err }, "[ingest-tool-output] Failed to ingest audio")
     blocks.push(textBlock(`[Audio: ingest failed - ${err.message}]`))
   }
 }
@@ -334,10 +337,7 @@ async function ingestResource(
     }
     blocks.push(textBlock(JSON.stringify(block)))
   } catch (err: any) {
-    console.error(
-      "[ingest-tool-output] Failed to ingest resource:",
-      err.message
-    )
+    log.error({ err }, "[ingest-tool-output] Failed to ingest resource")
     blocks.push(textBlock(JSON.stringify(block)))
   }
   // Silence unused-warning when no branch above produced a side effect.

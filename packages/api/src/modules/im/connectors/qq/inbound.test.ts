@@ -1,9 +1,17 @@
-import test from "node:test"
+import test, { after } from "node:test"
 import assert from "node:assert/strict"
 import type { InboundEnvelope, WebhookHandlerInput } from "../types.js"
 import { handleQqWebhook } from "./inbound.js"
 import { signEd25519UrlVerification } from "./webhook-signature.js"
 import { QQ_OP } from "./types.js"
+import { shutdownRedisConnections } from "../../../../infrastructure/redis/index.js"
+
+// A successful inbound dispatch calls recordInboundAnchor → redis.set on the
+// shared ioredis singleton, which opens a connection. Close it so the test
+// process exits instead of hanging on the open socket.
+after(async () => {
+  await shutdownRedisConnections().catch(() => {})
+})
 
 const SECRET = "DG5g3B4j9X2KOErG"
 

@@ -10,6 +10,7 @@ import type {
 } from "@synapse/shared"
 import {
   extractText,
+  formatBytes,
   formatMentionText,
   formatStructuredContentForProvider,
   textBlock,
@@ -35,6 +36,9 @@ import {
   getFullContentUrlBySha,
   readContentBufferBySha,
 } from "../../files/service.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("ai.anthropic")
 
 // Map tool names to their latest versioned type identifiers
 const BUILTIN_TOOL_TYPES: Record<string, string> = {
@@ -51,12 +55,6 @@ const SUPPORTED_IMAGE_FORMATS = new Set([
 
 // Anthropic API enforces 5 MB per base64 image/document
 const BASE64_THRESHOLD = 5 * 1024 * 1024
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 function buildAnthropicToolAlias(
   rawName: string,
@@ -120,7 +118,7 @@ async function ensureSupportedFormat(
     const converted = await sharp(buffer).png().toBuffer()
     return { buffer: converted, mimeType: "image/png" }
   } catch (err) {
-    console.error(`[anthropic] Failed to convert ${mimeType} to PNG:`, err)
+    log.error({ err }, `[anthropic] Failed to convert ${mimeType} to PNG`)
     return { buffer, mimeType }
   }
 }
@@ -308,24 +306,16 @@ export class AnthropicProvider implements AIProvider {
     const hasServerTools = params.builtinTools && params.builtinTools.length > 0
     const timeoutMs = hasServerTools ? 300_000 : 120_000
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), timeoutMs)
-
-    let response: Response
-    try {
-      response = await fetch(`${base}/v1/messages`, {
-        method: "POST",
-        headers: {
-          "x-api-key": this.config.apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      })
-    } finally {
-      clearTimeout(timeout)
-    }
+    const response = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "x-api-key": this.config.apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
 
     if (!response.ok) {
       const errorBody = await response.text()
@@ -352,7 +342,7 @@ export class AnthropicProvider implements AIProvider {
     // Debug: log content block types for diagnosing server tool behavior
     const blockTypes = data.content.map((b) => b.type)
     if (blockTypes.some((t) => t !== "text" && t !== "tool_use")) {
-      console.log(
+      log.debug(
         `[anthropic] non-standard blocks: ${JSON.stringify(blockTypes)} stop_reason=${data.stop_reason}`
       )
     }
@@ -707,9 +697,9 @@ export class AnthropicProvider implements AIProvider {
           textParts.push(desc)
         }
       } catch (err: any) {
-        console.error(
-          `[anthropic] Failed to resolve file_ref ${block.sha256}:`,
-          err.message
+        log.error(
+          { err: err.message },
+          `[anthropic] Failed to resolve file_ref ${block.sha256}`
         )
         const desc = `[${block.category}: ${block.name} (read failed)]`
         nativeBlocks.push({ type: "text", text: desc })

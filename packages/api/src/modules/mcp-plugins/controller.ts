@@ -13,6 +13,7 @@ import {
 } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
   createPluginInstallPlan,
@@ -153,6 +154,8 @@ const accessGrantUpdateSchema = z.object({
     .optional(),
 })
 
+const log = createLogger("mcp.controller")
+
 function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof McpPluginError) {
     return reply.status(error.statusCode).send({ error: error.message })
@@ -166,7 +169,7 @@ function handleError(reply: FastifyReply, error: unknown) {
       details: error.issues,
     })
   }
-  console.error("[MCP Controller]", error)
+  log.error({ err: error }, "[MCP Controller]")
   return reply.status(500).send({ error: "Internal server error" })
 }
 

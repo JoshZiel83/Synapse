@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb"
 
+import { flushOutboxQueue } from "@synapse/shared/chat-queue"
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
   CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
@@ -291,34 +292,10 @@ async function flushOutbox(
   auth: ChatWorkerAuthContext,
   snapshot: ReturnType<typeof createEmptyStoredChatQueueState>
 ) {
-  if (!snapshot.clientInstanceId) {
-    return snapshot
-  }
-
-  let next = snapshot
-  const entries = Object.values(snapshot.outbox).sort(
-    (left, right) => left.optimisticSequence - right.optimisticSequence
-  )
-
-  for (const entry of entries) {
-    const currentEntry = next.outbox[entry.clientMessageId]
-    if (!currentEntry) {
-      continue
-    }
-
-    next = {
-      ...next,
-      outbox: {
-        ...next.outbox,
-        [entry.clientMessageId]: {
-          ...currentEntry,
-          attemptCount: (currentEntry.attemptCount || 0) + 1,
-          lastAttemptAt: new Date().toISOString(),
-        },
-      },
-    }
-
-    try {
+  return flushOutboxQueue(snapshot, {
+    now: () => new Date().toISOString(),
+    failureMessage: "Failed to send message",
+    send: async (entry) => {
       await fetchJson(
         auth,
         `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
@@ -332,39 +309,8 @@ async function flushOutbox(
           }),
         }
       )
-
-      const nextOutbox = { ...next.outbox }
-      delete nextOutbox[entry.clientMessageId]
-
-      next = {
-        ...next,
-        outbox: nextOutbox,
-      }
-    } catch (error) {
-      const failedEntry = next.outbox[entry.clientMessageId]
-      if (!failedEntry) {
-        break
-      }
-
-      next = {
-        ...next,
-        outbox: {
-          ...next.outbox,
-          [entry.clientMessageId]: {
-            ...failedEntry,
-            status: "retrying",
-            firstFailedAt:
-              failedEntry.firstFailedAt || new Date().toISOString(),
-            lastErrorMessage:
-              error instanceof Error ? error.message : "Failed to send message",
-          },
-        },
-      }
-      break
-    }
-  }
-
-  return next
+    },
+  })
 }
 
 async function broadcast(message: ChatWorkerBroadcast) {

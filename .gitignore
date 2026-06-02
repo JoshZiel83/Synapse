@@ -11,11 +11,17 @@ coverage/
 artifacts/
 
 .claude/*
+# ...but DO track the bundled impeccable design skill.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/impeccable/
 CLAUDE.md
 TARGET.md
 
 .cert/*
 storage/
+# ...but NOT the source module that happens to be named "storage".
+!packages/api/src/infrastructure/storage/
 infrastructure/nginx.conf
 
 # Local dev / test scripts that may contain secrets

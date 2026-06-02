@@ -38,6 +38,9 @@ import {
 import { createGeneratedUserAvatarFile } from "../avatar/service.js"
 import { ensureConfiguredPlatformAdminForUser } from "../platform/admin-service.js"
 import { sql } from "kysely"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("auth")
 
 const SALT_ROUNDS = 10
 
@@ -642,9 +645,9 @@ async function disconnectSocketsBestEffort(
   try {
     await action
   } catch (error) {
-    console.error(
-      `[auth] Failed to disconnect websocket sessions after ${context}:`,
-      error
+    log.error(
+      { err: error },
+      `[auth] Failed to disconnect websocket sessions after ${context}`
     )
   }
 }

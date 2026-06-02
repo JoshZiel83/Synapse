@@ -148,8 +148,8 @@ export function normalizeDingtalkPayload(
   payload: DingtalkInboundPayload,
   options: NormalizeOptions = {}
 ): InboundEnvelope | null {
-  // Bot self-message filter (both fields; soimy reference checks both
-  // because senderStaffId may be undefined for unpublished dev apps).
+  // Bot self-message filter: check both fields because senderStaffId
+  // may be undefined for unpublished dev apps.
   const chatbotUserId = nonEmpty(payload.chatbotUserId)
   const senderId = nonEmpty(payload.senderId)
   const senderStaffId = nonEmpty(payload.senderStaffId)

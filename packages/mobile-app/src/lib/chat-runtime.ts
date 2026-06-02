@@ -18,6 +18,10 @@ import {
 } from "@/lib/chat-data"
 import { createChatPersistence } from "@/lib/chat-persistence"
 import { isChatServiceWorkerActive } from "@/lib/chat-web-service-worker"
+import {
+  clearDeliveredOutbox,
+  shouldIncrementUnreadCount,
+} from "@shared/chat-state"
 import type { ChatComposerSendPayload } from "@/lib/chat-compose"
 import { getDeviceLabel } from "@/lib/config"
 import { createId } from "@/lib/ids"
@@ -48,40 +52,6 @@ export interface ChatRuntimeState {
 }
 
 type ChatRuntimeListener = (state: ChatRuntimeState) => void
-
-function clearDeliveredOutbox(
-  outbox: ChatWorkspaceSnapshot["outbox"],
-  items: ChatConversationItem[]
-) {
-  const deliveredClientIds = new Set(
-    items
-      .map((item) => item.clientMessageId)
-      .filter((value): value is string => Boolean(value))
-  )
-  if (deliveredClientIds.size === 0) {
-    return outbox
-  }
-
-  const nextOutbox = { ...outbox }
-  for (const clientMessageId of deliveredClientIds) {
-    delete nextOutbox[clientMessageId]
-  }
-  return nextOutbox
-}
-
-function shouldIncrementUnreadCount(
-  conversation: Parameters<
-    typeof updateConversationInSnapshot
-  >[0]["conversations"][number],
-  item: ChatConversationItem
-) {
-  return (
-    item.itemType === "message" &&
-    item.scope === "shared" &&
-    item.surface === "visible" &&
-    item.authorParticipantId !== conversation.viewerParticipantId
-  )
-}
 
 function patchInteractionInConversationItem(
   item: ChatConversationItem,

@@ -3,6 +3,9 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
+import { useForm, Controller } from "react-hook-form"
+import { standardSchemaResolver } from "@hookform/resolvers/standard-schema"
+import { z } from "zod"
 
 import { api } from "@/lib/api"
 import { normalizeRedirectTarget } from "@/lib/auth"
@@ -23,6 +26,14 @@ import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WebQrLoginPanel } from "@/components/web-qr-login-panel"
 
+const loginSchema = z.object({
+  email: z.email("Enter a valid email address"),
+  password: z.string().min(1, "Password is required"),
+  temporaryLogin: z.boolean(),
+})
+
+type LoginFormValues = z.infer<typeof loginSchema>
+
 export function LoginForm({
   className,
   ...props
@@ -31,20 +42,22 @@ export function LoginForm({
   const searchParams = useSearchParams()
   const redirect = normalizeRedirectTarget(searchParams.get("redirect"))
   const { login } = useAuthStore()
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [temporaryLogin, setTemporaryLogin] = useState(false)
-  const [error, setError] = useState("")
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState("")
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setError("")
-    setIsSubmitting(true)
+  const {
+    control,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormValues>({
+    resolver: standardSchemaResolver(loginSchema),
+    defaultValues: { email: "", password: "", temporaryLogin: false },
+  })
 
+  const onSubmit = handleSubmit(async (values) => {
+    setSubmitError("")
     try {
-      await login(email, password, {
-        sessionPersistence: temporaryLogin ? "temporary" : "persistent",
+      await login(values.email, values.password, {
+        sessionPersistence: values.temporaryLogin ? "temporary" : "persistent",
       })
 
       if (redirect) {
@@ -56,11 +69,9 @@ export function LoginForm({
       const workspaces = result?.data ?? result ?? []
       router.push(workspaces.length === 0 ? "/welcome" : "/dashboard")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed")
-    } finally {
-      setIsSubmitting(false)
+      setSubmitError(err instanceof Error ? err.message : "Login failed")
     }
-  }
+  })
 
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
@@ -78,23 +89,33 @@ export function LoginForm({
               </TabsList>
 
               <TabsContent value="password" className="mt-0">
-                <form method="post" onSubmit={handleSubmit}>
+                <form method="post" onSubmit={onSubmit} noValidate>
                   <FieldGroup>
-                    <Field data-invalid={Boolean(error) || undefined}>
+                    <Field data-invalid={Boolean(errors.email) || undefined}>
                       <FieldLabel htmlFor="email">Email</FieldLabel>
-                      <Input
-                        id="email"
+                      <Controller
+                        control={control}
                         name="email"
-                        type="email"
-                        value={email}
-                        onChange={(event) => setEmail(event.target.value)}
-                        placeholder="you@example.com"
-                        autoComplete="email"
-                        aria-invalid={Boolean(error) || undefined}
-                        required
+                        render={({ field }) => (
+                          <Input
+                            {...field}
+                            id="email"
+                            type="email"
+                            placeholder="you@example.com"
+                            autoComplete="email"
+                            aria-invalid={Boolean(errors.email) || undefined}
+                          />
+                        )}
+                      />
+                      <FieldError
+                        errors={
+                          errors.email
+                            ? [{ message: errors.email.message }]
+                            : undefined
+                        }
                       />
                     </Field>
-                    <Field data-invalid={Boolean(error) || undefined}>
+                    <Field data-invalid={Boolean(errors.password) || undefined}>
                       <div className="flex items-center">
                         <FieldLabel htmlFor="password">Password</FieldLabel>
                         <Link
@@ -104,25 +125,42 @@ export function LoginForm({
                           Forgot your password?
                         </Link>
                       </div>
-                      <Input
-                        id="password"
+                      <Controller
+                        control={control}
                         name="password"
-                        type="password"
-                        value={password}
-                        onChange={(event) => setPassword(event.target.value)}
-                        autoComplete="current-password"
-                        aria-invalid={Boolean(error) || undefined}
-                        required
+                        render={({ field }) => (
+                          <Input
+                            {...field}
+                            id="password"
+                            type="password"
+                            autoComplete="current-password"
+                            aria-invalid={Boolean(errors.password) || undefined}
+                          />
+                        )}
                       />
-                      <FieldError>{error}</FieldError>
+                      <FieldError
+                        errors={
+                          errors.password
+                            ? [{ message: errors.password.message }]
+                            : submitError
+                              ? [{ message: submitError }]
+                              : undefined
+                        }
+                      />
                     </Field>
                     <Field>
                       <label className="flex items-center gap-3">
-                        <Checkbox
-                          checked={temporaryLogin}
-                          onCheckedChange={(checked) =>
-                            setTemporaryLogin(checked === true)
-                          }
+                        <Controller
+                          control={control}
+                          name="temporaryLogin"
+                          render={({ field }) => (
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={(checked) =>
+                                field.onChange(checked === true)
+                              }
+                            />
+                          )}
                         />
                         <span className="text-sm font-medium text-foreground">
                           Temporary login

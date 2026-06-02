@@ -3,6 +3,7 @@ import type {
   CanonicalContextItem,
   ConversationMessage,
 } from "@synapse/shared"
+import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import type {
   CanonicalArchiveFrame,
   CanonicalArchivePoint,
@@ -23,21 +24,6 @@ const SHARED_ARCHIVE_TAIL_TARGET = 24
 const PRIVATE_ARCHIVE_TAIL_TARGET = 32
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
-  if (!value) return undefined
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>
-    } catch {
-      return undefined
-    }
-  }
-  if (typeof value === "object") {
-    return value as Record<string, unknown>
-  }
-  return undefined
-}
 
 function parseJsonArray<T>(value: unknown): T[] | undefined {
   if (!value) return undefined

@@ -10,6 +10,7 @@ import type {
   JsonRpcRequest,
   JsonRpcResponse,
 } from "@synapse/device-protocol"
+import { computeBackoff } from "@synapse/shared"
 import type { RuntimeLogger, RuntimeStatus } from "./types.js"
 
 const BACKOFF_MIN_MS = 500
@@ -157,12 +158,14 @@ export class TransportClient {
   }
 
   private computeBackoff(): number {
-    const base = Math.min(
-      BACKOFF_MIN_MS * 2 ** Math.min(this.attempt - 1, 10),
-      BACKOFF_MAX_MS
-    )
-    const jitter = base * BACKOFF_JITTER * (Math.random() * 2 - 1)
-    return Math.max(BACKOFF_MIN_MS, Math.floor(base + jitter))
+    return computeBackoff(this.attempt - 1, {
+      baseMs: BACKOFF_MIN_MS,
+      maxMs: BACKOFF_MAX_MS,
+      minMs: BACKOFF_MIN_MS,
+      maxExponent: 10,
+      jitterMode: "symmetric",
+      jitter: BACKOFF_JITTER,
+    })
   }
 
   private sleep(ms: number) {

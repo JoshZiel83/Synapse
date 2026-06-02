@@ -1,6 +1,67 @@
 /* eslint-disable */
 "use strict";
 (() => {
+  var __create = Object.create;
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getProtoOf = Object.getPrototypeOf;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __commonJS = (cb, mod) => function __require() {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+    // If the importer is in node compatibility mode or this is not an ESM
+    // file that has been converted to a CommonJS file using a Babel-
+    // compatible transform (i.e. "__esModule" has not been set), then set
+    // "default" to the CommonJS "module.exports" for node compatibility.
+    isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+    mod
+  ));
+
+  // ../../node_modules/fast-deep-equal/index.js
+  var require_fast_deep_equal = __commonJS({
+    "../../node_modules/fast-deep-equal/index.js"(exports, module) {
+      "use strict";
+      module.exports = function equal(a, b) {
+        if (a === b) return true;
+        if (a && b && typeof a == "object" && typeof b == "object") {
+          if (a.constructor !== b.constructor) return false;
+          var length, i, keys;
+          if (Array.isArray(a)) {
+            length = a.length;
+            if (length != b.length) return false;
+            for (i = length; i-- !== 0; )
+              if (!equal(a[i], b[i])) return false;
+            return true;
+          }
+          if (a.constructor === RegExp) return a.source === b.source && a.flags === b.flags;
+          if (a.valueOf !== Object.prototype.valueOf) return a.valueOf() === b.valueOf();
+          if (a.toString !== Object.prototype.toString) return a.toString() === b.toString();
+          keys = Object.keys(a);
+          length = keys.length;
+          if (length !== Object.keys(b).length) return false;
+          for (i = length; i-- !== 0; )
+            if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
+          for (i = length; i-- !== 0; ) {
+            var key = keys[i];
+            if (!equal(a[key], b[key])) return false;
+          }
+          return true;
+        }
+        return a !== a && b !== b;
+      };
+    }
+  });
+
   // ../../node_modules/idb/build/index.js
   var instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
   var idbProxyableTypes;
@@ -235,6 +296,154 @@
       return isIteratorProp(target, prop) || oldTraps.has(target, prop);
     }
   }));
+
+  // ../shared/dist/chat-queue/index.js
+  var import_fast_deep_equal = __toESM(require_fast_deep_equal(), 1);
+  var CHAT_QUEUE_DB_NAME = "synapse-chat-queue";
+  var CHAT_QUEUE_DB_VERSION = 1;
+  var CHAT_QUEUE_STATE_STORE = "workspace_queue_states";
+  var CHAT_QUEUE_BROADCAST_CHANNEL = "synapse-chat-queue";
+  var CHAT_SERVICE_WORKER_SYNC_TAG = "synapse-chat-sync";
+  var CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-chat-periodic-sync";
+  function createEmptyStoredChatQueueState(workspaceId) {
+    return {
+      version: 3,
+      workspaceId,
+      inboxCursor: 0,
+      pendingReads: {},
+      outbox: {}
+    };
+  }
+  function isUuidLike(value) {
+    if (typeof value !== "string")
+      return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  }
+  function normalizeStoredChatQueueState(workspaceId, value) {
+    if (!value || typeof value !== "object") {
+      return createEmptyStoredChatQueueState(workspaceId);
+    }
+    const snapshot = value;
+    if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
+      return createEmptyStoredChatQueueState(workspaceId);
+    }
+    const pendingReads = snapshot.pendingReads && typeof snapshot.pendingReads === "object" ? Object.fromEntries(Object.entries(snapshot.pendingReads).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string"))) : {};
+    const outbox = snapshot.outbox && typeof snapshot.outbox === "object" ? Object.fromEntries(Object.entries(snapshot.outbox).filter(([, entry]) => Boolean(entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string"))) : {};
+    return {
+      version: 3,
+      workspaceId,
+      workspaceMemberId: typeof snapshot.workspaceMemberId === "string" ? snapshot.workspaceMemberId : void 0,
+      clientInstanceId: isUuidLike(snapshot.clientInstanceId) ? snapshot.clientInstanceId : void 0,
+      inboxCursor: typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
+      lastBootstrappedAt: typeof snapshot.lastBootstrappedAt === "string" ? snapshot.lastBootstrappedAt : void 0,
+      pendingReads,
+      outbox
+    };
+  }
+  function sameStoredChatQueueState(left, right) {
+    return (0, import_fast_deep_equal.default)(left, right);
+  }
+  function latestIsoTimestamp(currentValue, nextValue) {
+    if (!currentValue)
+      return nextValue;
+    if (!nextValue)
+      return currentValue;
+    return new Date(currentValue).getTime() >= new Date(nextValue).getTime() ? currentValue : nextValue;
+  }
+  function sameStoredEntry(left, right) {
+    return (0, import_fast_deep_equal.default)(left, right);
+  }
+  function mergeStoredQueueTransition(currentState, previousState, nextState) {
+    const nextWorkspaceState = currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId ? createEmptyStoredChatQueueState(nextState.workspaceId) : currentState.workspaceId === nextState.workspaceId ? currentState : createEmptyStoredChatQueueState(nextState.workspaceId);
+    const previousOutbox = previousState?.outbox ?? {};
+    const previousPendingReads = previousState?.pendingReads ?? {};
+    const nextOutbox = { ...nextWorkspaceState.outbox };
+    const nextPendingReads = { ...nextWorkspaceState.pendingReads };
+    for (const clientMessageId of Object.keys(previousOutbox)) {
+      if (!(clientMessageId in nextState.outbox)) {
+        delete nextOutbox[clientMessageId];
+      }
+    }
+    for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
+      if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
+        nextOutbox[clientMessageId] = entry;
+      }
+    }
+    for (const conversationId of Object.keys(previousPendingReads)) {
+      if (!(conversationId in nextState.pendingReads)) {
+        const currentEntry = nextPendingReads[conversationId];
+        const previousEntry = previousPendingReads[conversationId];
+        if (currentEntry && previousEntry && currentEntry.readUpToSequence > previousEntry.readUpToSequence) {
+          continue;
+        }
+        delete nextPendingReads[conversationId];
+      }
+    }
+    for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
+      if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
+        nextPendingReads[conversationId] = entry;
+      }
+    }
+    return {
+      ...nextWorkspaceState,
+      workspaceId: nextState.workspaceId,
+      workspaceMemberId: nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
+      clientInstanceId: nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
+      inboxCursor: Math.max(nextWorkspaceState.inboxCursor, nextState.inboxCursor),
+      lastBootstrappedAt: latestIsoTimestamp(nextWorkspaceState.lastBootstrappedAt, nextState.lastBootstrappedAt),
+      pendingReads: nextPendingReads,
+      outbox: nextOutbox
+    };
+  }
+  async function flushOutboxQueue(state, deps) {
+    if (!state.clientInstanceId) {
+      return state;
+    }
+    let next = state;
+    const entries = Object.values(state.outbox).sort((left, right) => left.optimisticSequence - right.optimisticSequence);
+    for (const entry of entries) {
+      const currentEntry = next.outbox[entry.clientMessageId];
+      if (!currentEntry) {
+        continue;
+      }
+      next = {
+        ...next,
+        outbox: {
+          ...next.outbox,
+          [entry.clientMessageId]: {
+            ...currentEntry,
+            attemptCount: (currentEntry.attemptCount || 0) + 1,
+            lastAttemptAt: deps.now()
+          }
+        }
+      };
+      try {
+        await deps.send(entry);
+        const nextOutbox = { ...next.outbox };
+        delete nextOutbox[entry.clientMessageId];
+        next = { ...next, outbox: nextOutbox };
+      } catch (error) {
+        const failedEntry = next.outbox[entry.clientMessageId];
+        if (!failedEntry) {
+          break;
+        }
+        next = {
+          ...next,
+          outbox: {
+            ...next.outbox,
+            [entry.clientMessageId]: {
+              ...failedEntry,
+              status: "retrying",
+              firstFailedAt: failedEntry.firstFailedAt || deps.now(),
+              lastErrorMessage: error instanceof Error ? error.message : deps.failureMessage ?? "Failed to send message"
+            }
+          }
+        };
+        break;
+      }
+    }
+    return next;
+  }
 
   // ../device-protocol/dist/enums.js
   var DEVICE_MCP_ERROR_CODES = [
@@ -1022,19 +1231,8 @@
   function isTransportKind(value) {
     return typeof value === "string" && TRANSPORT_KINDS.includes(value);
   }
-  function getRandomUUIDFactory() {
-    const cryptoRef = globalThis;
-    if (typeof cryptoRef.crypto?.randomUUID === "function") {
-      return cryptoRef.crypto.randomUUID.bind(cryptoRef.crypto);
-    }
-    return null;
-  }
-  function createCanonicalContentBlockId(prefix = "block") {
-    const randomUUID = getRandomUUIDFactory();
-    if (randomUUID) {
-      return randomUUID();
-    }
-    return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+  function createCanonicalContentBlockId(_prefix = "block") {
+    return globalThis.crypto.randomUUID();
   }
   function textBlock(text, id) {
     return {
@@ -1117,11 +1315,7 @@
     return [textBlock(s)];
   }
   function createActorDocId() {
-    const randomUUID = getRandomUUIDFactory();
-    if (randomUUID) {
-      return randomUUID();
-    }
-    return `doc_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+    return globalThis.crypto.randomUUID();
   }
   var SECRETARY_DEFAULT_DOCS = normalizeActorDocs([
     {
@@ -1904,104 +2098,6 @@
   // ../shared/dist/access/subject.js
   var platformRef = { kind: SUBJECT_KIND.PLATFORM };
 
-  // ../shared/dist/chat-queue/index.js
-  var CHAT_QUEUE_DB_NAME = "synapse-chat-queue";
-  var CHAT_QUEUE_DB_VERSION = 1;
-  var CHAT_QUEUE_STATE_STORE = "workspace_queue_states";
-  var CHAT_QUEUE_BROADCAST_CHANNEL = "synapse-chat-queue";
-  var CHAT_SERVICE_WORKER_SYNC_TAG = "synapse-chat-sync";
-  var CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-chat-periodic-sync";
-  function createEmptyStoredChatQueueState(workspaceId) {
-    return {
-      version: 3,
-      workspaceId,
-      inboxCursor: 0,
-      pendingReads: {},
-      outbox: {}
-    };
-  }
-  function isUuidLike(value) {
-    if (typeof value !== "string")
-      return false;
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-  }
-  function normalizeStoredChatQueueState(workspaceId, value) {
-    if (!value || typeof value !== "object") {
-      return createEmptyStoredChatQueueState(workspaceId);
-    }
-    const snapshot = value;
-    if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
-      return createEmptyStoredChatQueueState(workspaceId);
-    }
-    const pendingReads = snapshot.pendingReads && typeof snapshot.pendingReads === "object" ? Object.fromEntries(Object.entries(snapshot.pendingReads).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string"))) : {};
-    const outbox = snapshot.outbox && typeof snapshot.outbox === "object" ? Object.fromEntries(Object.entries(snapshot.outbox).filter(([, entry]) => Boolean(entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string"))) : {};
-    return {
-      version: 3,
-      workspaceId,
-      workspaceMemberId: typeof snapshot.workspaceMemberId === "string" ? snapshot.workspaceMemberId : void 0,
-      clientInstanceId: isUuidLike(snapshot.clientInstanceId) ? snapshot.clientInstanceId : void 0,
-      inboxCursor: typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
-      lastBootstrappedAt: typeof snapshot.lastBootstrappedAt === "string" ? snapshot.lastBootstrappedAt : void 0,
-      pendingReads,
-      outbox
-    };
-  }
-  function sameStoredChatQueueState(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-  function latestIsoTimestamp(currentValue, nextValue) {
-    if (!currentValue)
-      return nextValue;
-    if (!nextValue)
-      return currentValue;
-    return new Date(currentValue).getTime() >= new Date(nextValue).getTime() ? currentValue : nextValue;
-  }
-  function sameStoredEntry(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-  function mergeStoredQueueTransition(currentState, previousState, nextState) {
-    const nextWorkspaceState = currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId ? createEmptyStoredChatQueueState(nextState.workspaceId) : currentState.workspaceId === nextState.workspaceId ? currentState : createEmptyStoredChatQueueState(nextState.workspaceId);
-    const previousOutbox = previousState?.outbox ?? {};
-    const previousPendingReads = previousState?.pendingReads ?? {};
-    const nextOutbox = { ...nextWorkspaceState.outbox };
-    const nextPendingReads = { ...nextWorkspaceState.pendingReads };
-    for (const clientMessageId of Object.keys(previousOutbox)) {
-      if (!(clientMessageId in nextState.outbox)) {
-        delete nextOutbox[clientMessageId];
-      }
-    }
-    for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
-      if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
-        nextOutbox[clientMessageId] = entry;
-      }
-    }
-    for (const conversationId of Object.keys(previousPendingReads)) {
-      if (!(conversationId in nextState.pendingReads)) {
-        const currentEntry = nextPendingReads[conversationId];
-        const previousEntry = previousPendingReads[conversationId];
-        if (currentEntry && previousEntry && currentEntry.readUpToSequence > previousEntry.readUpToSequence) {
-          continue;
-        }
-        delete nextPendingReads[conversationId];
-      }
-    }
-    for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
-      if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
-        nextPendingReads[conversationId] = entry;
-      }
-    }
-    return {
-      ...nextWorkspaceState,
-      workspaceId: nextState.workspaceId,
-      workspaceMemberId: nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
-      clientInstanceId: nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
-      inboxCursor: Math.max(nextWorkspaceState.inboxCursor, nextState.inboxCursor),
-      lastBootstrappedAt: latestIsoTimestamp(nextWorkspaceState.lastBootstrappedAt, nextState.lastBootstrappedAt),
-      pendingReads: nextPendingReads,
-      outbox: nextOutbox
-    };
-  }
-
   // lib/chat-persistence.ts
   var queueDbPromise = null;
   function getQueueDatabase() {
@@ -2179,30 +2275,10 @@
     return next;
   }
   async function flushOutbox(auth, snapshot) {
-    if (!snapshot.clientInstanceId) {
-      return snapshot;
-    }
-    let next = snapshot;
-    const entries = Object.values(snapshot.outbox).sort(
-      (left, right) => left.optimisticSequence - right.optimisticSequence
-    );
-    for (const entry of entries) {
-      const currentEntry = next.outbox[entry.clientMessageId];
-      if (!currentEntry) {
-        continue;
-      }
-      next = {
-        ...next,
-        outbox: {
-          ...next.outbox,
-          [entry.clientMessageId]: {
-            ...currentEntry,
-            attemptCount: (currentEntry.attemptCount || 0) + 1,
-            lastAttemptAt: (/* @__PURE__ */ new Date()).toISOString()
-          }
-        }
-      };
-      try {
+    return flushOutboxQueue(snapshot, {
+      now: () => (/* @__PURE__ */ new Date()).toISOString(),
+      failureMessage: "Failed to send message",
+      send: async (entry) => {
         await fetchJson(
           auth,
           `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
@@ -2216,33 +2292,8 @@
             })
           }
         );
-        const nextOutbox = { ...next.outbox };
-        delete nextOutbox[entry.clientMessageId];
-        next = {
-          ...next,
-          outbox: nextOutbox
-        };
-      } catch (error) {
-        const failedEntry = next.outbox[entry.clientMessageId];
-        if (!failedEntry) {
-          break;
-        }
-        next = {
-          ...next,
-          outbox: {
-            ...next.outbox,
-            [entry.clientMessageId]: {
-              ...failedEntry,
-              status: "retrying",
-              firstFailedAt: failedEntry.firstFailedAt || (/* @__PURE__ */ new Date()).toISOString(),
-              lastErrorMessage: error instanceof Error ? error.message : "Failed to send message"
-            }
-          }
-        };
-        break;
       }
-    }
-    return next;
+    });
   }
   async function broadcast(message) {
     try {

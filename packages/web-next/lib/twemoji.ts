@@ -1,20 +1,8 @@
-import twemoji from "twemoji"
-
-export const TWEMOJI_ASSET_BASE =
-  "https://cdn.jsdelivr.net/gh/jdecked/twemoji@14.0.2/assets/"
-
-export function getTwemojiUrl(emoji: string | undefined | null): string | null {
-  if (!emoji) return null
-
-  const tester = (
-    twemoji as typeof twemoji & {
-      test?: (value: string) => boolean
-    }
-  ).test
-  if (typeof tester === "function" && !tester(emoji.trim())) return null
-
-  const codePoint = twemoji.convert.toCodePoint(emoji.trim())
-  if (!codePoint) return null
-
-  return `${TWEMOJI_ASSET_BASE}svg/${codePoint}.svg`
-}
+/**
+ * Re-export of the canonical Twemoji helper from @synapse/shared.
+ *
+ * The implementation now lives in `@synapse/shared/emoji` (dependency-free,
+ * single source of truth across web + mobile). This shim keeps the existing
+ * `@/lib/twemoji` import path stable for current call-sites.
+ */
+export { getTwemojiUrl, TWEMOJI_ASSET_BASE } from "@synapse/shared/emoji"

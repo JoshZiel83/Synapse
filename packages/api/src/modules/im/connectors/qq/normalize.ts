@@ -15,6 +15,7 @@
  */
 
 import { redis } from "../../../../infrastructure/redis/index.js"
+import { createLogger } from "../../../../infrastructure/logger/index.js"
 import {
   buildCanonicalMessage,
   textOnlyMessage,
@@ -32,6 +33,8 @@ import {
   parseRefIndices,
   setRefIndexEntry,
 } from "./ref-index.js"
+
+const log = createLogger("im.qq")
 
 interface QqAuthor {
   user_openid?: string
@@ -263,9 +266,9 @@ async function recordSelfRefIndex(params: {
   }).catch((err) => {
     // Logging only — losing ref-index is recoverable, the original
     // message still emits.
-    console.warn(
-      `[im:qq] failed to write ref-index for account ${params.accountId}:`,
-      err
+    log.warn(
+      { err },
+      `[im:qq] failed to write ref-index for account ${params.accountId}`
     )
   })
 }

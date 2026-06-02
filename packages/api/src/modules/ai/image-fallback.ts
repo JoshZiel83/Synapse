@@ -2,6 +2,9 @@ import type { CanonicalContentBlock } from "@synapse/shared"
 import { createRequire } from "module"
 import { mkdir } from "node:fs/promises"
 import { config } from "../../config/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+import { withTimeout } from "../../infrastructure/async/index.js"
+import { LRUCache } from "lru-cache"
 import { readContentBufferBySha } from "../files/service.js"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
@@ -32,9 +35,17 @@ type TesseractModule = {
   ): Promise<TesseractWorker>
 }
 
-const ocrCache = new Map<string, Promise<ImageOcrResult>>()
+// Bounded, TTL'd cache for OCR results (was an unbounded Map that grew for the
+// process lifetime, each entry holding up to ~4000 chars of OCR text). lru-cache
+// caps both count and age. We cache the in-flight Promise so concurrent callers
+// for the same key share one OCR run (single-flight).
+const ocrCache = new LRUCache<string, Promise<ImageOcrResult>>({
+  max: 500,
+  ttl: 60 * 60 * 1000, // 1h
+})
 const localRequire = createRequire(import.meta.url)
 const warnedMessages = new Set<string>()
+const log = createLogger("ai.image-fallback")
 
 let tesseractModulePromise: Promise<TesseractModule | null> | null = null
 let workerPathPromise: Promise<string | null> | null = null
@@ -42,7 +53,7 @@ let workerPathPromise: Promise<string | null> | null = null
 function warnOnce(message: string): void {
   if (warnedMessages.has(message)) return
   warnedMessages.add(message)
-  console.warn(`[image-fallback] ${message}`)
+  log.warn(`[image-fallback] ${message}`)
 }
 
 function normalizeOcrText(text: string): string {
@@ -107,27 +118,6 @@ async function prepareImageForOcr(buffer: Buffer): Promise<Buffer> {
       `sharp failed to normalize image input for OCR; falling back to original bytes. ${err?.message || "unknown error"}`
     )
     return buffer
-  }
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string
-): Promise<T> {
-  let timer: NodeJS.Timeout | null = null
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-          timeoutMs
-        )
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
   }
 }
 

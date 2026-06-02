@@ -14,6 +14,7 @@ import { sql } from "kysely"
 import { lookupResources } from "../access/evaluator.js"
 import { ACCESS_ACTIONS } from "../access/actions.js"
 import { db } from "../../infrastructure/database/kysely.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { loadAccessBindingRowsForResources } from "../access/binding-storage.js"
 import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
@@ -28,6 +29,8 @@ import { logToolCall } from "./audit.js"
 import { normalizeMcpToolResult } from "./result-normalizer.js"
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = "__"
+
+const log = createLogger("mcp.tool-resolver")
 
 export interface ResolvedMcpTools {
   tools: ToolDefinition[]
@@ -572,9 +575,9 @@ async function resolveTools(
       tools.push(...namespacedTools)
       instances.set(namespace, runtimeInstance)
     } catch (error: any) {
-      console.error(
-        `[MCP ToolResolver] Failed to initialize plugin ${plugin.publisher_slug || "plugin"}/${plugin.item_slug}:`,
-        error.message
+      log.error(
+        { err: error.message },
+        `[MCP ToolResolver] Failed to initialize plugin ${plugin.publisher_slug || "plugin"}/${plugin.item_slug}`
       )
     }
   }
@@ -696,7 +699,10 @@ async function resolveMcpToolsCommon(
         transport: instance.transport,
         instanceKey: namespace,
       }).catch((logError) => {
-        console.error("[MCP ToolResolver] Failed to log tool call:", logError)
+        log.error(
+          { err: logError },
+          "[MCP ToolResolver] Failed to log tool call"
+        )
       })
     }
   }

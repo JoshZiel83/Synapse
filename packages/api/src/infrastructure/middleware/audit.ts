@@ -1,5 +1,8 @@
 import type { FastifyRequest, FastifyReply, FastifyInstance } from "fastify"
 import { db, type TableInsert } from "../database/kysely.js"
+import { createLogger } from "../logger/index.js"
+
+const log = createLogger("audit")
 
 export function auditMiddleware(app: FastifyInstance) {
   app.addHook(
@@ -29,7 +32,7 @@ export function auditMiddleware(app: FastifyInstance) {
           })
           .execute()
       } catch (err) {
-        console.error("Audit log insert failed:", (err as Error).message)
+        log.error({ err }, "Audit log insert failed")
       }
     }
   )

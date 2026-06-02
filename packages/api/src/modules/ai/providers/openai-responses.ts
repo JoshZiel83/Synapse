@@ -9,6 +9,7 @@ import type {
 } from "@synapse/shared"
 import {
   extractText,
+  formatBytes,
   formatMentionText,
   formatStructuredContentForProvider,
   textBlock,
@@ -34,6 +35,9 @@ import {
   getFullContentUrlBySha,
   readContentBufferBySha,
 } from "../../files/service.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("ai.openai-responses")
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   "image/jpeg",
@@ -43,12 +47,6 @@ const SUPPORTED_IMAGE_FORMATS = new Set([
 ])
 
 const BASE64_THRESHOLD = 20 * 1024 * 1024
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 async function ensureSupportedFormat(
   buffer: Buffer,
@@ -62,9 +60,9 @@ async function ensureSupportedFormat(
     const converted = await sharp(buffer).png().toBuffer()
     return { buffer: converted, mimeType: "image/png" }
   } catch (err) {
-    console.error(
-      `[openai.responses] Failed to convert ${mimeType} to PNG:`,
-      err
+    log.error(
+      { err },
+      `[openai.responses] Failed to convert ${mimeType} to PNG`
     )
     return { buffer, mimeType }
   }
@@ -258,7 +256,7 @@ export class OpenAIResponsesProvider implements AIProvider {
             input: inputObject,
           })
         } catch {
-          console.error(
+          log.error(
             `Failed to parse Responses API tool call arguments for ${item.name}`
           )
         }
@@ -549,9 +547,9 @@ export class OpenAIResponsesProvider implements AIProvider {
           textParts.push(desc)
         }
       } catch (err: any) {
-        console.error(
-          `[openai.responses] Failed to resolve file_ref ${block.sha256}:`,
-          err.message
+        log.error(
+          { err: err.message },
+          `[openai.responses] Failed to resolve file_ref ${block.sha256}`
         )
         const desc = `[${block.category}: ${block.name} (read failed)]`
         nativeBlocks.push({ type: "input_text", text: desc })

@@ -182,11 +182,7 @@ function isMissingConfigValue(value: unknown) {
 }
 
 function base64Url(buffer: Buffer) {
-  return buffer
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "")
+  return buffer.toString("base64url")
 }
 
 function createPkcePair() {

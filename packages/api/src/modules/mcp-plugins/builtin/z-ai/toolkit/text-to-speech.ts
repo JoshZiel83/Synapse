@@ -110,9 +110,6 @@ export const ttsFeature: SubFeature = {
     if (typeof input.watermarkEnabled === "boolean")
       body.watermark_enabled = input.watermarkEnabled
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 60000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/audio/speech`, {
         method: "POST",
@@ -121,7 +118,7 @@ export const ttsFeature: SubFeature = {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: AbortSignal.timeout(60000),
       })
 
       if (!response.ok) {
@@ -158,8 +155,6 @@ export const ttsFeature: SubFeature = {
       ]
     } catch (error) {
       throw normalizeZhipuTransportError("文本转语音 API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }

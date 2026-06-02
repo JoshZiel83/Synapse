@@ -105,9 +105,6 @@ export const moderationFeature: SubFeature = {
           ? blocks[0]
           : blocks
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 60000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/moderations`, {
         method: "POST",
@@ -119,7 +116,7 @@ export const moderationFeature: SubFeature = {
           model: DEFAULT_MODEL,
           input: moderationInput,
         }),
-        signal: controller.signal,
+        signal: AbortSignal.timeout(60000),
       })
 
       if (!response.ok) {
@@ -171,8 +168,6 @@ export const moderationFeature: SubFeature = {
       return textBlocks(lines.join("\n"))
     } catch (error) {
       throw normalizeZhipuTransportError("内容安全 API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }

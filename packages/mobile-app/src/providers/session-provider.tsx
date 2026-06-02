@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 
 import {
   ApiError,
@@ -80,6 +81,7 @@ function applySession(
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient()
   const [state, setState] = useState<{
     status: SessionStatus
     user: User | null
@@ -95,8 +97,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const clearSession = useCallback(async () => {
     await persistSessionToken(null)
     await chatPersistence.clearAllWorkspaceState()
+    // Wipe React Query cache so a subsequent login (possibly a different user)
+    // never reads the previous session's cached workspace data.
+    queryClient.clear()
     applySession({ token: null }, setState)
-  }, [])
+  }, [queryClient])
 
   const refreshSession = useCallback(async () => {
     const storedToken = await readStoredValue(SESSION_TOKEN_KEY)

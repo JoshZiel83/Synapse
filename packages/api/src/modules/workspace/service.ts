@@ -10,7 +10,9 @@ import { getFileUrlById } from "../files/service.js"
 import {
   INVITE_TRUST_LEVELS,
   normalizeActorDocs,
+  parseJsonObject,
   RELATIONSHIP_ACCESS_POLICY,
+  slugify,
   type ActorDoc,
   type ActorDocInput,
   type ActorRole,
@@ -23,6 +25,9 @@ import type {
   WorkspaceMembersTrustLevel,
 } from "../../infrastructure/database/generated/db.js"
 import { sql } from "kysely"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("workspace")
 
 export interface CreateWorkspaceInput {
   name: string
@@ -83,13 +88,7 @@ async function getWorkspaceMemberRowById(workspaceMemberId: string) {
 }
 
 function generateSlug(name: string): string {
-  const base = name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
+  const base = slugify(name)
   const suffix = crypto.randomBytes(4).toString("hex")
   return `${base}-${suffix}`
 }
@@ -120,23 +119,6 @@ type LoadedOfficialActorTemplate = {
   actorSpecialties: string[]
   actorConfig: Record<string, unknown>
   isChiefActor: boolean
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value) as unknown
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {}
-    } catch {
-      return {}
-    }
-  }
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
 }
 
 function withOfficialChiefActorConfig(
@@ -490,9 +472,9 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
                updated_at = NOW()
          WHERE id = ${templateId}`.execute(db)
     } catch (err) {
-      console.warn(
-        `[workspace.createWorkspace] best-effort download_count bump failed for catalog_item ${templateId}:`,
-        err
+      log.warn(
+        { err },
+        `[workspace.createWorkspace] best-effort download_count bump failed for catalog_item ${templateId}`
       )
     }
   }

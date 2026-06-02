@@ -26,6 +26,9 @@ import {
   parseJsonObject,
 } from "./_helpers.js"
 import { getConversationTransportBinding } from "../service.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("im.delivery")
 
 /**
  * Recursively merge `patch` into `target`, returning a new object.
@@ -129,9 +132,9 @@ export async function queueConversationTransportProjection(params: {
     .executeTakeFirst()
   if (link && direction === "outbound") {
     await enqueueTransportDeliveryJobs([link.id]).catch((error) => {
-      console.error(
-        `[im] Failed to enqueue transport delivery job for link ${link.id}:`,
-        error
+      log.error(
+        { err: error },
+        `[im] Failed to enqueue transport delivery job for link ${link.id}`
       )
     })
   }

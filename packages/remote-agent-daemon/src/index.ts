@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
+import { setTimeout as sleep } from "node:timers/promises"
 import WebSocket from "ws"
 import { ClaudeDriver } from "./drivers/claude-driver.js"
 import { CodexDriver } from "./drivers/codex-driver.js"
@@ -173,10 +174,6 @@ function parseArgs(argv: string[]): DaemonConfig {
     logLevel,
     proxyUrl: proxyUrl?.trim() || undefined,
   }
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function ensureDirectory(dir: string) {

@@ -1,5 +1,11 @@
 import { Worker } from "bullmq"
 import { redis } from "../infrastructure/redis/index.js"
+import {
+  acquireLock,
+  renewLock,
+  releaseLock,
+  type AcquiredLock,
+} from "../infrastructure/redis/lock.js"
 import { db, type TableInsert } from "../infrastructure/database/kysely.js"
 import { emitEvent } from "../infrastructure/events/index.js"
 import {
@@ -70,6 +76,7 @@ import {
   markTurnWakeupsDropped,
   markTurnWakeupsProcessed,
   publishSessionRuntime,
+  restoreTurnWakeupsToPending,
 } from "../modules/session/runtime.js"
 import { createTurn, updateTurnStatus } from "../modules/execution/service.js"
 import {
@@ -81,6 +88,17 @@ import { sessionThinkingQueue } from "./queues.js"
 import { registerWorker } from "./registry.js"
 import { getAssistantSessionMessagePersistence } from "./session-message-persistence.js"
 import { sql } from "kysely"
+import { createLogger } from "../infrastructure/logger/index.js"
+
+const log = createLogger("session-thinking")
+
+/**
+ * Delay before re-attempting a session whose lock was held by another worker
+ * while wakeups were still pending. Long enough to let a normal turn's
+ * post-model side-effects finish, short enough that a user's queued message
+ * isn't left waiting noticeably.
+ */
+const LOCK_CONTENDED_RETRY_DELAY_MS = 2_000
 
 type ThinkingPhase = "thinking" | "tool"
 
@@ -114,10 +132,7 @@ async function runCleanupStep(
   try {
     await operation()
   } catch (err: any) {
-    console.error(
-      `[session-thinking] Cleanup step failed for ${label}:`,
-      err?.message || String(err)
-    )
+    log.error({ err }, `Cleanup step failed for ${label}`)
   }
 }
 
@@ -190,6 +205,51 @@ function isTurnInterruptedError(error: unknown) {
   return error instanceof Error && error.name === "TurnInterruptedError"
 }
 
+/**
+ * Thrown when this worker loses the session lock mid-turn (TTL lapsed and
+ * another worker took over, or the lock was force-released). We throw rather
+ * than return so the normal catch-block cleanup runs (drop attached wakeups,
+ * mark the running turn cancelled) — otherwise the session would be left with a
+ * dangling `running` turn + attached wakeups until external recovery. We do NOT
+ * touch session status or requeue: the new lock owner now drives the session.
+ */
+class SessionLockLostError extends Error {
+  constructor(sessionId: string) {
+    super(`session lock for ${sessionId} lost mid-turn`)
+    this.name = "SessionLockLostError"
+  }
+}
+
+function isSessionLockLostError(error: unknown) {
+  return error instanceof Error && error.name === "SessionLockLostError"
+}
+
+/**
+ * Pure decision for how a lock-loss turn recovers its wakeups. Extracted so the
+ * (subtle, concurrency-critical) policy is unit-testable without standing up
+ * the whole worker:
+ *
+ *  - replayUnsafe=false → restore the turn's attached wakeups to pending (the
+ *    new owner re-drives them; nothing non-idempotent ran).
+ *  - replayUnsafe=true  → drop the turn's attached wakeups (re-running would
+ *    replay a committed action/message).
+ *
+ * In BOTH cases, requeue iff wakeups remain pending afterward — these are late,
+ * independent wakeups not attached to this turn, so requeuing never replays it.
+ */
+export type LockLossWakeupAction = "restore" | "drop"
+
+export function decideLockLossRecovery(params: {
+  replayUnsafeStarted: boolean
+  /** Pending-wakeup count AFTER the restore/drop is applied. */
+  pendingAfterRecovery: number
+}): { wakeupAction: LockLossWakeupAction; requeue: boolean } {
+  return {
+    wakeupAction: params.replayUnsafeStarted ? "drop" : "restore",
+    requeue: params.pendingAfterRecovery > 0,
+  }
+}
+
 export function startSessionThinkingWorker() {
   const worker = new Worker(
     QUEUE_NAMES.SESSION_THINKING,
@@ -198,19 +258,44 @@ export function startSessionThinkingWorker() {
       const sessionLockKey = `${REDIS_CHANNELS.SESSION_LOCK_PREFIX}${sessionId}`
       const actorSessionsKey = `${REDIS_CHANNELS.ACTOR_SESSIONS_PREFIX}${actorId}`
 
-      const acquired = await redis.set(
+      const acquired = await acquireLock(
+        redis,
         sessionLockKey,
-        job.id!,
-        "PX",
-        SESSION_LOCK_TTL,
-        "NX"
+        SESSION_LOCK_TTL
       )
       if (!acquired) {
-        console.log(
-          `[session-thinking] Session ${sessionId} is already being processed, skipping`
-        )
+        // Another worker holds the lock. Normally fine — that worker drives the
+        // session. But if there are PENDING wakeups, we must guarantee a future
+        // driver: the current owner may have already read 0 pending (and be
+        // heading to idle) before these wakeups were enqueued/restored. Without
+        // a retry the wakeups would be stranded (these jobs are added with no
+        // BullMQ attempts, so returning here = job done, no retry). Re-enqueue a
+        // DELAYED job so it re-claims after the current owner releases.
+        const pending = await getPendingWakeupCount(sessionId).catch(() => 0)
+        if (pending > 0) {
+          log.info(
+            `Session ${sessionId} locked but ${pending} wakeup(s) pending; ` +
+              `re-enqueuing a delayed retry`
+          )
+          // The re-enqueue IS the only driver for these wakeups, so a failure
+          // must NOT be swallowed-and-reported-as-scheduled. Let it throw: this
+          // worker's job then fails, which surfaces in monitoring and (with job
+          // attempts) gets retried, rather than silently stranding the wakeups.
+          await sessionThinkingQueue.add(
+            "think",
+            { sessionId, actorId, workspaceId, trigger, userId },
+            { delay: LOCK_CONTENDED_RETRY_DELAY_MS }
+          )
+          return {
+            success: false,
+            reason: "session locked",
+            retryScheduled: true,
+          }
+        }
+        log.info(`Session ${sessionId} is already being processed, skipping`)
         return { success: false, reason: "session locked" }
       }
+      const sessionLock: AcquiredLock = acquired
 
       const currentCount = await redis.incr(actorSessionsKey)
       await redis.pexpire(actorSessionsKey, SESSION_LOCK_TTL * 2)
@@ -218,7 +303,7 @@ export function startSessionThinkingWorker() {
       const maxSessions = await getActorMaxSessions(actorId)
       if (currentCount > maxSessions) {
         await redis.decr(actorSessionsKey)
-        await redis.del(sessionLockKey)
+        await releaseLock(redis, sessionLock)
         throw new Error(
           `Actor ${actorId} concurrent limit (${maxSessions}) reached, will retry`
         )
@@ -228,6 +313,25 @@ export function startSessionThinkingWorker() {
       let thinkingActorName = "Unknown"
       let requeueAfterUnlock = false
       let requeueTrigger = trigger
+      // Set true by the lock-refresh interval if we lose the session lock
+      // mid-turn. Hoisted to handler scope so the catch block can branch on it
+      // (the cooperative abort surfaces as a generic TurnInterruptedError, so
+      // the error TYPE alone can't tell us the turn was aborted for lock loss).
+      let lockLost = false
+      // Flips true once this turn performs a NON-idempotent write — i.e. it
+      // executed at least one action (create_memory / rename_self /
+      // change_avatar / …) OR persisted an assistant message. A pure-reasoning
+      // turn (no actions, no message) stays false. On a lock loss we restore+
+      // requeue ONLY while this is false; once a non-idempotent write has run, a
+      // re-run would replay it, so we drop the turn's wakeups instead.
+      let replayUnsafeStarted = false
+      // Fenced lock-renew timer. Hoisted to handler scope and cleared in the
+      // OUTER finally so renewal covers the WHOLE critical section — not just
+      // actorThink, but executeActorActions + message persistence + turn/wakeup
+      // status + runtime/audit emits — until the lock is released. Otherwise a
+      // long side-effect phase could outlast the TTL and let another worker
+      // concurrently take over the session.
+      let lockRefreshInterval: ReturnType<typeof setInterval> | undefined
       let currentStatusText: string | undefined
       let currentPhase: ThinkingPhase | "error" = "thinking"
       let threadConversationId: string | undefined
@@ -249,8 +353,8 @@ export function startSessionThinkingWorker() {
       try {
         let session = await getSession(sessionId)
         if (!session || session.status === "closed") {
-          console.log(
-            `[session-thinking] Session ${sessionId} is ${session?.status ?? "not found"}, skipping`
+          log.info(
+            `Session ${sessionId} is ${session?.status ?? "not found"}, skipping`
           )
           return { success: false, reason: "session closed or missing" }
         }
@@ -910,8 +1014,8 @@ export function startSessionThinkingWorker() {
         availableSkills = capabilitySurface.availableSkills
         mcpTools = capabilitySurface.mcpTools
         if (mcpTools.tools.length > 0) {
-          console.log(
-            `[session-thinking] Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`
+          log.info(
+            `Resolved ${mcpTools.tools.length} MCP tools for actor ${actorId}`
           )
         }
 
@@ -993,12 +1097,29 @@ export function startSessionThinkingWorker() {
           activeTurnId: turn.id,
         })
 
-        const lockRefreshInterval = setInterval(
+        lockRefreshInterval = setInterval(
           async () => {
             try {
-              await redis.pexpire(sessionLockKey, SESSION_LOCK_TTL)
+              // Fenced refresh: only extend the TTL while we still hold the
+              // lock token. A bare PEXPIRE could resurrect a lock another
+              // worker has since taken over.
+              const stillHeld = await renewLock(
+                redis,
+                sessionLock,
+                SESSION_LOCK_TTL
+              )
+              if (!stillHeld) {
+                // We lost the lock (TTL lapsed and another worker took over, or
+                // it was force-released). Stop this turn cooperatively so we
+                // don't double-execute actions / send messages / emit events as
+                // a second worker runs the same session.
+                lockLost = true
+                log.warn(`lost session lock for ${sessionId}; aborting turn`)
+              }
             } catch {
-              // ignore
+              // Treat a renew error as a lost lock too — safer to bail than to
+              // keep acting while unsure we still hold it.
+              lockLost = true
             }
           },
           Math.floor(SESSION_LOCK_TTL / 2)
@@ -1006,9 +1127,9 @@ export function startSessionThinkingWorker() {
 
         let result
 
-        try {
-          await emitThinkingStatus("Calling AI model...")
+        await emitThinkingStatus("Calling AI model...")
 
+        try {
           result = await actorThink(
             actor,
             contextWindow,
@@ -1034,8 +1155,12 @@ export function startSessionThinkingWorker() {
               mcpVersion: mcpTools.mcpVersion,
               mcpRefresh: mcpTools.refresh,
               mcpSetTurnId: mcpTools.setTurnId,
-              shouldAbortTurn: () =>
-                hasPendingInterrupt(sessionId, "remote_control_terminated"),
+              shouldAbortTurn: async () =>
+                lockLost ||
+                (await hasPendingInterrupt(
+                  sessionId,
+                  "remote_control_terminated"
+                )),
               system,
               refreshCollaborationContext: async () => {
                 const refreshedSession = await getSession(sessionId)
@@ -1096,9 +1221,9 @@ export function startSessionThinkingWorker() {
             surfacedPendingCommitConflicts
           ) {
             await clearPendingCommitConflicts(sessionId).catch((err) =>
-              console.error(
-                `[session-thinking] failed to clear pending commit conflicts for ${sessionId}:`,
-                err
+              log.error(
+                { err },
+                `[session-thinking] failed to clear pending commit conflicts for ${sessionId}`
               )
             )
           }
@@ -1111,18 +1236,20 @@ export function startSessionThinkingWorker() {
             surfacedPendingRefreshConflicts
           ) {
             await clearPendingRefreshConflicts(sessionId).catch((err) =>
-              console.error(
-                `[session-thinking] failed to clear pending refresh conflicts for ${sessionId}:`,
-                err
+              log.error(
+                { err },
+                `[session-thinking] failed to clear pending refresh conflicts for ${sessionId}`
               )
             )
           }
         } finally {
-          clearInterval(lockRefreshInterval)
           // Turn-end: commit the multi-writer spaces (/conversation, /actor) so
           // the next turn — and other actors — see this turn's file writes.
           // (/actor-conversation is single-writer; committed at teardown.)
           // Best-effort: a commit failure must not abort action execution.
+          // NOTE: the lock-renew interval is intentionally NOT cleared here — it
+          // is cleared in the OUTER finally so the fenced renew covers the whole
+          // critical section (model + all side-effects), not just actorThink.
           if (sandboxEnabled) {
             try {
               // Skip spaces whose turn-start refresh FAILED: their live tree is
@@ -1133,7 +1260,7 @@ export function startSessionThinkingWorker() {
                 ["conversation", "actor"] as const
               ).filter((sp) => !refreshFailedSubpaths.has(sp))
               if (commitSubpaths.length === 0) {
-                console.warn(
+                log.warn(
                   `[session-thinking] skipping turn-end commit for ${sessionId}: all multi-writer spaces failed to refresh this turn`
                 )
               }
@@ -1150,28 +1277,48 @@ export function startSessionThinkingWorker() {
               // so they aren't silently swallowed.
               const commitConflicts = Object.entries(commit.conflictsBySubpath)
               if (commitConflicts.length > 0) {
-                console.warn(
-                  `[session-thinking] sandbox commit conflicts for ${sessionId}:`,
-                  commitConflicts
-                    .map(([sp, paths]) => `${sp}: ${paths.join(", ")}`)
-                    .join("; ")
+                log.warn(
+                  `[session-thinking] sandbox commit conflicts for ${sessionId}: ` +
+                    commitConflicts
+                      .map(([sp, paths]) => `${sp}: ${paths.join(", ")}`)
+                      .join("; ")
                 )
               }
             } catch (err) {
-              console.error(
-                `[session-thinking] sandbox commit failed for ${sessionId}:`,
-                err
+              log.error(
+                { err },
+                `[session-thinking] sandbox commit failed for ${sessionId}`
               )
             }
           }
         }
 
+        // Bail before EACH side-effect / terminal write if we've lost the lock
+        // (the renew interval sets lockLost). Throwing routes through the catch
+        // cleanup; checking at every boundary shrinks the window in which the
+        // old worker and the new owner could both write.
+        const assertStillHoldLock = () => {
+          if (lockLost) throw new SessionLockLostError(sessionId)
+        }
+
+        assertStillHoldLock()
+
+        // Mark the turn "replay-unsafe" ONLY when it actually performs a
+        // non-idempotent write. A pure-reasoning turn with no actions runs
+        // executeActorActions as a no-op (and persists no message), so it stays
+        // replay-SAFE — losing the lock there must still restore+requeue its
+        // wakeups rather than drop them.
+        if (result.actions.length > 0) {
+          replayUnsafeStarted = true
+        }
         await executeActorActions(workspaceId, actorId, result.actions, {
           sessionId,
           turnId: turn.id,
           userId,
           conversationId: session.conversation_id,
         })
+
+        assertStillHoldLock()
 
         const msgMetadata: Record<string, unknown> = {}
         if (result.toolsUsed && result.toolsUsed.length > 0)
@@ -1187,6 +1334,12 @@ export function startSessionThinkingWorker() {
         const hasMeta =
           Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined
         const messagePersistence = getAssistantSessionMessagePersistence(result)
+        // Persisting an assistant message is also a non-idempotent write.
+        if (messagePersistence.kind !== "none") {
+          replayUnsafeStarted = true
+        }
+
+        assertStillHoldLock()
 
         if (messagePersistence.kind === "respond") {
           await publishSessionRuntime(workspaceId, sessionId, {
@@ -1220,6 +1373,7 @@ export function startSessionThinkingWorker() {
             metadata: { ...hasMeta, silentActions: true },
           })
         }
+        assertStillHoldLock()
         await markTurnWakeupsProcessed(turn.id)
         await updateTurnStatus(turn.id, "completed")
 
@@ -1255,6 +1409,7 @@ export function startSessionThinkingWorker() {
         })
 
         turn = null
+        assertStillHoldLock()
         const remainingPendingWakeups = await getPendingWakeupCount(sessionId)
         if (remainingPendingWakeups > 0) {
           requeueAfterUnlock = true
@@ -1278,27 +1433,107 @@ export function startSessionThinkingWorker() {
         }
       } catch (err: any) {
         const errorMessage = err?.message || "Unknown error"
-        const turnInterrupted = isTurnInterruptedError(err)
-        if (!turnInterrupted) {
-          console.error(
-            `[session-thinking] Session ${sessionId} failed:`,
-            errorMessage
-          )
+        // Branch on the hoisted lockLost flag, NOT the error type: the
+        // cooperative abort surfaces as a generic TurnInterruptedError, so the
+        // type alone would misroute a lock-loss into the normal interrupt path
+        // (which mutates session status / requeues as if WE still own it).
+        const lockLostError = lockLost || isSessionLockLostError(err)
+        const turnInterrupted = !lockLostError && isTurnInterruptedError(err)
+        if (!turnInterrupted && !lockLostError) {
+          log.error({ err }, `Session ${sessionId} failed: ${errorMessage}`)
+        } else if (lockLostError) {
+          log.warn(`Session ${sessionId} turn aborted: lock lost mid-turn`)
         }
         const failedSession = await getSession(sessionId).catch(() => null)
+
+        // A lost lock or an interrupt cancels (not fails) the turn.
+        const cancelled = turnInterrupted || lockLostError
+
+        // Lock lost: another worker now owns this session. How we recover
+        // depends on whether we had begun applying side-effects:
+        //
+        //  - replay-SAFE (no non-idempotent write yet): RESTORE this turn's
+        //    attached wakeups to `pending` (dropping them would silently lose
+        //    user-triggered wakeups — the new owner only reads `pending`).
+        //
+        //  - replay-UNSAFE (already ran an action / persisted a message):
+        //    Restoring+requeuing the turn's OWN wakeups would REPLAY those
+        //    non-idempotent writes under the new owner. So we DROP this turn's
+        //    attached wakeups — the work it already did stands.
+        //
+        // In BOTH cases we then check for PENDING wakeups (these are LATE,
+        // independent wakeups that arrived during the turn and were never
+        // attached to it — enqueueSessionWakeup skips enqueuing a job while the
+        // session is running, relying on the owner to re-check at the end). If
+        // any remain pending we requeue so they get a driver. This never
+        // replays the current turn: in the unsafe case its own wakeups were
+        // dropped (not pending), so only the genuinely-unprocessed ones drive a
+        // re-run.
+        //
+        // Either way: mark the turn cancelled, do NOT write a terminal session
+        // status (the new owner drives that).
+        if (lockLostError) {
+          const wakeupAction: LockLossWakeupAction = replayUnsafeStarted
+            ? "drop"
+            : "restore"
+          if (turn?.id) {
+            if (wakeupAction === "drop") {
+              log.warn(
+                `Session ${sessionId} lost lock AFTER a non-idempotent write; ` +
+                  `dropping this turn's wakeups (no replay)`
+              )
+              await runCleanupStep(
+                `drop wakeups for turn ${turn.id} (lock lost, replay-unsafe)`,
+                () => markTurnWakeupsDropped(turn.id)
+              )
+            } else {
+              await runCleanupStep(
+                `restore wakeups for turn ${turn.id} (lock lost, replay-safe)`,
+                () => restoreTurnWakeupsToPending(turn.id)
+              )
+            }
+            await runCleanupStep(`mark turn ${turn.id} cancelled`, () =>
+              updateTurnStatus(turn.id, "cancelled", {
+                metadata: { errorMessage },
+              })
+            )
+          }
+          // Requeue decision (shared, unit-tested policy): requeue iff wakeups
+          // remain pending AFTER the restore/drop above. The current turn's
+          // wakeups are no longer pending in the unsafe case (dropped), so a
+          // re-run cannot replay it; it only drives genuinely-unprocessed input.
+          const pendingAfterRecovery = await getPendingWakeupCount(
+            sessionId
+          ).catch(() => 0)
+          const recovery = decideLockLossRecovery({
+            replayUnsafeStarted,
+            pendingAfterRecovery,
+          })
+          if (recovery.requeue) {
+            requeueAfterUnlock = true
+            requeueTrigger = "system_interrupt"
+          }
+          await runCleanupStep(
+            `shutdown MCP tools for session ${sessionId}`,
+            () => mcpTools.shutdown()
+          )
+          return {
+            success: false,
+            reason: "session lock lost",
+            requeued: requeueAfterUnlock,
+          }
+        }
 
         if (turn?.id) {
           await runCleanupStep(`drop wakeups for turn ${turn.id}`, () =>
             markTurnWakeupsDropped(turn.id)
           )
           await runCleanupStep(
-            `mark turn ${turn.id} ${turnInterrupted ? "cancelled" : "failed"}`,
+            `mark turn ${turn.id} ${cancelled ? "cancelled" : "failed"}`,
             () =>
-              updateTurnStatus(
-                turn.id,
-                turnInterrupted ? "cancelled" : "failed",
-                { metadata: { errorMessage } }
-              )
+              updateTurnStatus(turn.id, cancelled ? "cancelled" : "failed", {
+                metadata: { errorMessage },
+              })
           )
         }
 
@@ -1443,7 +1678,10 @@ export function startSessionThinkingWorker() {
 
         throw err
       } finally {
-        await redis.del(sessionLockKey)
+        // Stop renewing the lock only now — after ALL side-effects are done —
+        // so the fenced renew covered the whole critical section.
+        if (lockRefreshInterval) clearInterval(lockRefreshInterval)
+        await releaseLock(redis, sessionLock)
         await redis.decr(actorSessionsKey)
         if (requeueAfterUnlock) {
           await sessionThinkingQueue.add("think", {
@@ -1464,7 +1702,7 @@ export function startSessionThinkingWorker() {
   )
 
   worker.on("failed", (job, err) => {
-    console.error(`Session thinking job ${job?.id} failed:`, err.message)
+    log.error({ err }, `Session thinking job ${job?.id} failed`)
   })
 
   registerWorker(worker)

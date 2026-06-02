@@ -24,18 +24,9 @@ import type {
   ConversationTransportBindingSummary,
 } from "@synapse/shared/types"
 
-export function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>
-    } catch {
-      return {}
-    }
-  }
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {}
-}
+import { parseJsonObject } from "@synapse/shared"
+
+export { parseJsonObject }
 
 export function parseJsonArray<T>(value: unknown): T[] {
   if (typeof value === "string") {

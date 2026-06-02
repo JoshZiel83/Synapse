@@ -5,6 +5,7 @@ import {
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { sessionThinkingQueue } from "../../workers/queues.js"
 import {
   isThreadConversationKind,
@@ -29,6 +30,8 @@ import {
 import { sql } from "kysely"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { getSession, updateSessionStatus } from "./service.js"
+
+const log = createLogger("session.runtime")
 
 // Device-runtime v3 (PR #20): the relay-invoke-options helper is gone. Replicate
 // the trimmed-string normalization inline so the relay-tool fallback branch in
@@ -936,9 +939,9 @@ export function scheduleSessionRuntimeRefresh(
     () => {
       runtimePublishDebounceTimers.delete(sessionId)
       void publishSessionRuntime(workspaceId, sessionId).catch((error) => {
-        console.error(
-          `[runtime] failed to publish debounced runtime for session ${sessionId}:`,
-          error
+        log.error(
+          { err: error },
+          `[runtime] failed to publish debounced runtime for session ${sessionId}`
         )
       })
     },
@@ -1185,6 +1188,25 @@ export async function markTurnWakeupsDropped(turnId: string) {
     .set({
       status: "dropped",
       processed_at: sql`NOW()`,
+    })
+    .where("turn_id", "=", turnId)
+    .where("status", "=", "attached")
+    .execute()
+}
+
+/**
+ * Reverse attachPendingWakeupsToTurn: flip this turn's `attached` wakeups back
+ * to `pending` so another worker can re-claim them. Used when a turn is aborted
+ * WITHOUT having processed its wakeups (e.g. the worker lost the session lock
+ * mid-turn) — dropping them would silently lose user-triggered wakeups.
+ */
+export async function restoreTurnWakeupsToPending(turnId: string) {
+  await db
+    .updateTable("session_wakeups")
+    .set({
+      status: "pending",
+      turn_id: null,
+      attached_at: null,
     })
     .where("turn_id", "=", turnId)
     .where("status", "=", "attached")

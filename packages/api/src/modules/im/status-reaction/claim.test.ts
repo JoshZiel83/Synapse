@@ -46,12 +46,13 @@ class FakeRedis implements ClaimRedisLike {
 
   async eval(
     script: string,
-    _numKeys: 1,
-    key: string,
-    expected: string,
-    arg2?: string
+    _numKeys: number,
+    ...args: (string | number)[]
   ): Promise<number> {
     this.collectExpired()
+    const key = String(args[0])
+    const expected = String(args[1])
+    const arg2 = args[2]
     const entry = this.store.get(key)
     if (!entry || entry.value !== expected) return 0
     if (script.includes("PEXPIRE")) {

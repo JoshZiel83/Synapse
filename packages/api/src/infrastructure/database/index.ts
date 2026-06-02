@@ -1,8 +1,11 @@
 import pg from "pg"
 import { config } from "../../config/index.js"
+import { createLogger } from "../logger/index.js"
 import type { DatabaseTable } from "./db-types.js"
 
 const { Pool } = pg
+
+const log = createLogger("database")
 
 /**
  * @internal Connection pool. Owned by the database infrastructure layer only:
@@ -294,11 +297,14 @@ function logQueryFailure(
   err: unknown
 ) {
   const message = err instanceof Error ? err.message : String(err)
-  console.error("[db.query] failed:", {
-    message,
-    sql: text.replace(/\s+/g, " ").trim(),
-    params: summarizeParams(params),
-  })
+  log.error(
+    {
+      message,
+      sql: text.replace(/\s+/g, " ").trim(),
+      params: summarizeParams(params),
+    },
+    "[db.query] failed"
+  )
 }
 
 export async function testConnection(): Promise<boolean> {

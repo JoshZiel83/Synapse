@@ -99,9 +99,6 @@ export const sttFeature: SubFeature = {
       body.user_id = userId
     body.stream = false
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 120000)
-
     try {
       const response = await fetch(`${ZHIPU_API_BASE}/audio/transcriptions`, {
         method: "POST",
@@ -110,7 +107,7 @@ export const sttFeature: SubFeature = {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: AbortSignal.timeout(120000),
       })
 
       if (!response.ok) {
@@ -122,8 +119,6 @@ export const sttFeature: SubFeature = {
       return textBlocks(result.text || "No transcription result")
     } catch (error) {
       throw normalizeZhipuTransportError("语音转文本 API", error)
-    } finally {
-      clearTimeout(timeout)
     }
   },
 }

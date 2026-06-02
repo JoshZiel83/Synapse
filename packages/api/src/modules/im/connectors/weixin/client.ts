@@ -3,6 +3,7 @@
  */
 
 import crypto from "node:crypto"
+import { parseJsonObject } from "@synapse/shared"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import {
   DEFAULT_WEIXIN_BASE_URL,
@@ -46,22 +47,6 @@ export function buildWeixinHeaders(
 
 function nonEmpty(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      return parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>)
-        : {}
-    } catch {
-      return {}
-    }
-  }
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {}
 }
 
 export async function postWeixinJson(params: {

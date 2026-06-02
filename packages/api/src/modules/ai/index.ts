@@ -41,6 +41,11 @@ import { isPlanCollaborationMode } from "@synapse/shared/utils"
 import type { SessionCollaborationMode } from "@synapse/shared/types"
 import { randomUUID } from "crypto"
 import { config } from "../../config/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+import {
+  sleep,
+  withTimeout as withTimeoutBase,
+} from "../../infrastructure/async/index.js"
 import {
   createAIProvider,
   type AIProvider,
@@ -92,6 +97,8 @@ export { buildActorPrompt } from "./prompt-builder.js"
 
 const MAX_TOOL_ROUNDS = 100
 const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = DEFAULT_MODEL_ATTEMPT_POLICY
+
+const log = createLogger("ai")
 
 class TurnInterruptedError extends Error {
   constructor(message: string) {
@@ -194,27 +201,11 @@ function classifyModelError(error: unknown): string {
 
 async function delay(ms: number) {
   if (ms <= 0) return
-  await new Promise((resolve) => setTimeout(resolve, ms))
+  await sleep(ms)
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise
-  let timer: NodeJS.Timeout | null = null
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(new Error(`Model attempt timed out after ${timeoutMs}ms`)),
-          timeoutMs
-        )
-        timer.unref?.()
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  return withTimeoutBase(promise, timeoutMs, "Model attempt")
 }
 
 function effectiveAttemptPolicy(
@@ -287,7 +278,7 @@ async function buildResponseContentBlocks(
 
   const resolved = await resolveInlineReferenceSegments(segments, options)
   if (resolved.warnings.length > 0) {
-    console.warn(
+    log.warn(
       `[actorThink] Inline reference warnings: ${resolved.warnings.join("; ")}`
     )
   }
@@ -1018,9 +1009,9 @@ export async function actorThink(
               inputTokens: response.tokensUsed.input,
               outputTokens: response.tokensUsed.output,
             }).catch((err) => {
-              console.error(
-                "[actorThink] Failed to log provider step:",
-                err.message
+              log.error(
+                { err: err.message },
+                "[actorThink] Failed to log provider step"
               )
               return null
             })
@@ -1107,7 +1098,7 @@ export async function actorThink(
           ? assistantMsg.toolCalls
           : []
 
-      console.log(
+      log.info(
         `[actorThink] actor=${actor.id} turn=${turnId.slice(0, 8)} round=${currentRound} stopReason=${response.stopReason} toolCalls=[${toolCalls.map((tc: any) => tc.toolName).join(",")}] textLen=${textContent.length}`
       )
 
@@ -1126,9 +1117,9 @@ export async function actorThink(
           )
           allSupplementalBlocks.push(...collectFileRefBlocks(roundMediaBlocks))
         } catch (err: any) {
-          console.error(
-            "[actorThink] Failed to ingest response media:",
-            err.message
+          log.error(
+            { err: err.message },
+            "[actorThink] Failed to ingest response media"
           )
         }
       }
@@ -1182,16 +1173,16 @@ export async function actorThink(
               if (onStatus) {
                 await onStatus("Conversation updated. Re-analyzing...")
               }
-              console.log(
+              log.info(
                 `[actorThink] Conversation changed before send_to; rethinking with ${newMsgs.length} new message(s)`
               )
               builtinTools = await refreshBuiltinTools()
               continue
             }
           } catch (err: any) {
-            console.error(
-              "[actorThink] send_to preflight checkNewMessages failed:",
-              err.message
+            log.error(
+              { err: err.message },
+              "[actorThink] send_to preflight checkNewMessages failed"
             )
           }
         }
@@ -1796,14 +1787,14 @@ export async function actorThink(
                 const newMsgs = await options.checkNewMessages()
                 if (newMsgs && newMsgs.length > 0) {
                   appendSharedTailItems(newMsgs)
-                  console.log(
+                  log.info(
                     `[actorThink] Injected ${newMsgs.length} new message(s) between rounds`
                   )
                 }
               } catch (err: any) {
-                console.error(
-                  "[actorThink] checkNewMessages failed:",
-                  err.message
+                log.error(
+                  { err: err.message },
+                  "[actorThink] checkNewMessages failed"
                 )
               }
             }
@@ -1861,11 +1852,11 @@ export async function actorThink(
               mcpToolDefs = refreshed.tools
               mcpToolNames = new Set(mcpToolDefs.map((t) => t.name))
               currentMcpVersion = refreshed.mcpVersion
-              console.log(
+              log.info(
                 `[actorThink] MCP tools refreshed: ${mcpToolDefs.length} tools, version=${currentMcpVersion}`
               )
             } catch (err: any) {
-              console.error("[actorThink] MCP refresh failed:", err.message)
+              log.error({ err: err.message }, "[actorThink] MCP refresh failed")
               if (mcpReplanRequired) {
                 throw new Error(
                   `MCP tool definitions changed during execution, but refresh failed: ${err.message}`
@@ -1886,12 +1877,15 @@ export async function actorThink(
             const newMsgs = await options.checkNewMessages()
             if (newMsgs && newMsgs.length > 0) {
               appendSharedTailItems(newMsgs)
-              console.log(
+              log.info(
                 `[actorThink] Injected ${newMsgs.length} new message(s) between rounds`
               )
             }
           } catch (err: any) {
-            console.error("[actorThink] checkNewMessages failed:", err.message)
+            log.error(
+              { err: err.message },
+              "[actorThink] checkNewMessages failed"
+            )
           }
         }
 
@@ -1982,12 +1976,15 @@ export async function actorThink(
           const newMsgs = await options.checkNewMessages()
           if (newMsgs && newMsgs.length > 0) {
             appendSharedTailItems(newMsgs)
-            console.log(
+            log.info(
               `[actorThink] Injected ${newMsgs.length} new message(s) between rounds`
             )
           }
         } catch (err: any) {
-          console.error("[actorThink] checkNewMessages failed:", err.message)
+          log.error(
+            { err: err.message },
+            "[actorThink] checkNewMessages failed"
+          )
         }
       }
 
@@ -1996,7 +1993,7 @@ export async function actorThink(
     }
 
     // Exceeded MAX_TOOL_ROUNDS — fallback respond
-    console.warn(
+    log.warn(
       `[actorThink] actor=${actor.id} exceeded max tool rounds (${MAX_TOOL_ROUNDS})`
     )
 

@@ -4,6 +4,7 @@ import {
   takeFirstOn,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { queueConversationTransportProjection } from "../im/service.js"
 import {
   createConversationItem,
@@ -50,6 +51,8 @@ type SessionConversationMessageSubtype = Exclude<
   "chat.message"
 >
 import { v4 as uuidv4 } from "uuid"
+
+const log = createLogger("session")
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
   if (!value) return {}
@@ -584,9 +587,9 @@ export async function addSessionMessage(params: {
         restrictedAudienceParticipantIds,
       },
     }).catch((error) => {
-      console.error(
-        `Failed to queue transport projection for session item ${item.id}:`,
-        error?.message || error
+      log.error(
+        { err: error },
+        `Failed to queue transport projection for session item ${item.id}`
       )
     })
   }

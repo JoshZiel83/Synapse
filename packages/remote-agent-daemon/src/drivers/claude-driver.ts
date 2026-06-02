@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import process from "node:process"
 import {
   query as claudeAgentQuery,
@@ -20,6 +20,7 @@ import type {
   SendPromptOptions,
   SessionSpec,
 } from "./types.js"
+import { EventQueue as EventQueueBase, whichBinary } from "./async-channel.js"
 
 function trimFirstLine(value: string) {
   return value
@@ -29,19 +30,7 @@ function trimFirstLine(value: string) {
 }
 
 function which(binary: string) {
-  try {
-    const command = process.platform === "win32" ? "where" : "which"
-    const output = execSync(`${command} ${binary}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean)
-  } catch {
-    return undefined
-  }
+  return whichBinary(binary)
 }
 
 function detectClaudeBinary(): { path?: string; version?: string } {
@@ -109,45 +98,7 @@ class PromptInputQueue {
   }
 }
 
-class EventQueue {
-  private readonly queued: AgentSessionEvent[] = []
-  private readonly waiters: Array<(event: AgentSessionEvent | null) => void> =
-    []
-  private closed = false
-
-  push(event: AgentSessionEvent) {
-    if (this.closed) return
-    const waiter = this.waiters.shift()
-    if (waiter) {
-      waiter(event)
-      return
-    }
-    this.queued.push(event)
-  }
-
-  close() {
-    if (this.closed) return
-    this.closed = true
-    for (const waiter of this.waiters) waiter(null)
-    this.waiters.length = 0
-  }
-
-  async *iterator(): AsyncGenerator<AgentSessionEvent> {
-    while (true) {
-      const queued = this.queued.shift()
-      if (queued) {
-        yield queued
-        continue
-      }
-      if (this.closed) return
-      const next = await new Promise<AgentSessionEvent | null>((resolve) => {
-        this.waiters.push(resolve)
-      })
-      if (!next) return
-      yield next
-    }
-  }
-}
+class EventQueue extends EventQueueBase<AgentSessionEvent> {}
 
 function userMessage(text: string): SDKUserMessage {
   return {

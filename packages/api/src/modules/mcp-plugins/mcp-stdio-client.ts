@@ -5,6 +5,9 @@ import path from "path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ToolDefinition } from "@synapse/shared"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("mcp.stdio")
 
 type StdioEntryPointSpec = {
   command: string
@@ -230,7 +233,7 @@ export class McpStdioClient {
     this.transport.stderr?.on("data", (chunk) => {
       const message = chunk.toString().trim()
       if (!message) return
-      console.error(`[MCP stdio] ${message}`)
+      log.error(`[MCP stdio] ${message}`)
     })
   }
 

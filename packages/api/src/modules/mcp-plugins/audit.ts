@@ -1,5 +1,6 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
+import { redactSecrets } from "@synapse/shared"
 import { logRuntimeEvent } from "../execution/service.js"
 
 /**
@@ -26,7 +27,7 @@ export async function logToolCall(data: {
   transport?: string
   instanceKey?: string
 }) {
-  const sanitizedInput = sanitizeInput(data.input)
+  const sanitizedInput = redactSecrets(data.input)
 
   await logRuntimeEvent({
     workspaceId: data.workspaceId,
@@ -139,28 +140,4 @@ export async function getEventLogs(
   }
 
   return statement.orderBy("created_at", "desc").limit(limit).execute()
-}
-
-function sanitizeInput(
-  input: Record<string, unknown>
-): Record<string, unknown> {
-  const result = { ...input }
-  const sensitiveKeys = [
-    "apiKey",
-    "api_key",
-    "token",
-    "secret",
-    "password",
-    "authorization",
-  ]
-  for (const key of Object.keys(result)) {
-    if (
-      sensitiveKeys.some((sensitiveKey) =>
-        key.toLowerCase().includes(sensitiveKey.toLowerCase())
-      )
-    ) {
-      result[key] = "***REDACTED***"
-    }
-  }
-  return result
 }

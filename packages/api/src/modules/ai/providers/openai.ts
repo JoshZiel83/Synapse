@@ -9,6 +9,7 @@ import type {
 } from "@synapse/shared"
 import {
   extractText,
+  formatBytes,
   formatMentionText,
   formatStructuredContentForProvider,
   textBlock,
@@ -34,6 +35,9 @@ import {
   getFullContentUrlBySha,
   readContentBufferBySha,
 } from "../../files/service.js"
+import { createLogger } from "../../../infrastructure/logger/index.js"
+
+const log = createLogger("ai.openai")
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   "image/jpeg",
@@ -44,12 +48,6 @@ const SUPPORTED_IMAGE_FORMATS = new Set([
 
 // OpenAI enforces 20 MB per image
 const BASE64_THRESHOLD = 20 * 1024 * 1024
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 async function ensureSupportedFormat(
   buffer: Buffer,
@@ -63,7 +61,7 @@ async function ensureSupportedFormat(
     const converted = await sharp(buffer).png().toBuffer()
     return { buffer: converted, mimeType: "image/png" }
   } catch (err) {
-    console.error(`[openai] Failed to convert ${mimeType} to PNG:`, err)
+    log.error({ err }, `[openai] Failed to convert ${mimeType} to PNG`)
     return { buffer, mimeType }
   }
 }
@@ -182,7 +180,7 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
             input,
           })
         } catch {
-          console.error(
+          log.error(
             `Failed to parse tool call arguments for ${tc.function.name}`
           )
         }
@@ -481,9 +479,9 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
           textParts.push(desc)
         }
       } catch (err: any) {
-        console.error(
-          `[openai] Failed to resolve file_ref ${block.sha256}:`,
-          err.message
+        log.error(
+          { err: err.message },
+          `[openai] Failed to resolve file_ref ${block.sha256}`
         )
         const desc = `[${block.category}: ${block.name} (read failed)]`
         nativeBlocks.push({ type: "text", text: desc })

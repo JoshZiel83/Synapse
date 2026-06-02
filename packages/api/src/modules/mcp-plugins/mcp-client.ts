@@ -1,4 +1,5 @@
 import { ToolDefinition } from "@synapse/shared"
+import { createParser } from "eventsource-parser"
 
 interface JsonRpcRequest {
   jsonrpc: "2.0"
@@ -12,6 +13,72 @@ interface JsonRpcResponse {
   id: number
   result?: unknown
   error?: { code: number; message: string; data?: unknown }
+}
+
+/**
+ * Parse a fully-buffered MCP Streamable-HTTP SSE body and return the result of
+ * the JSON-RPC message whose id matches `expectedId`. Exported for testing.
+ *
+ * Correctly handles: multi-line (folded) data within one event, multiple
+ * events in the stream, CRLF/optional-space framing (via eventsource-parser),
+ * and a final event that the server did NOT terminate with a blank line (we
+ * append a terminator since the body is complete). Throws on a JSON-RPC error
+ * matching our id, or if there were no data events at all.
+ */
+export function parseMcpSsePayload(text: string, expectedId: number): unknown {
+  const events: string[] = []
+  const parser = createParser({
+    onEvent: (event) => {
+      events.push(event.data)
+    },
+  })
+  // Append a terminator so a final un-terminated `data:` event still flushes.
+  parser.feed(text.endsWith("\n") ? `${text}\n` : `${text}\n\n`)
+
+  let fallback: unknown
+  let sawData = false
+  let sawJsonRpc = false
+  for (const data of events) {
+    if (!data) continue
+    sawData = true
+    let json: JsonRpcResponse
+    try {
+      json = JSON.parse(data) as JsonRpcResponse
+    } catch {
+      // Non-JSON event payload — remember as a last-resort raw fallback.
+      fallback = data
+      continue
+    }
+    // A JSON-RPC frame carries jsonrpc/id; track that we saw at least one so we
+    // can tell "no JSON-RPC at all" (legacy server → use raw fallback) apart
+    // from "JSON-RPC but none matched our id" (protocol mismatch → throw).
+    if (
+      json &&
+      typeof json === "object" &&
+      ("jsonrpc" in json || "id" in json || "result" in json || "error" in json)
+    ) {
+      sawJsonRpc = true
+    }
+    if (json.id !== expectedId) continue
+    if (json.error) {
+      throw new Error(`MCP RPC error ${json.error.code}: ${json.error.message}`)
+    }
+    return json.result
+  }
+
+  if (!sawData) {
+    throw new Error("No data in SSE response")
+  }
+  // We received JSON-RPC frames but none carried our request id — a mismatched
+  // or out-of-order response. Surfacing this as an error prevents it from
+  // silently degrading to an empty tool list / empty tool result.
+  if (sawJsonRpc) {
+    throw new Error(
+      `MCP SSE response had no JSON-RPC message matching request id ${expectedId}`
+    )
+  }
+  // Only non-JSON-RPC (legacy/raw) payloads were seen — best-effort passthrough.
+  return fallback ?? ""
 }
 
 export class McpHttpClient {
@@ -92,7 +159,6 @@ export class McpHttpClient {
     }
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30000)
     this.activeRequests.add(controller)
 
     try {
@@ -100,7 +166,10 @@ export class McpHttpClient {
         method: "POST",
         headers,
         body: JSON.stringify(request),
-        signal: controller.signal,
+        signal: AbortSignal.any([
+          AbortSignal.timeout(30000),
+          controller.signal,
+        ]),
       })
 
       // Track session ID from response
@@ -139,7 +208,6 @@ export class McpHttpClient {
       }
       throw error
     } finally {
-      clearTimeout(timeout)
       this.activeRequests.delete(controller)
     }
   }
@@ -149,36 +217,7 @@ export class McpHttpClient {
     expectedId: number
   ): Promise<unknown> {
     const text = await response.text()
-    const lines = text.split("\n")
-    let lastData = ""
-
-    for (const line of lines) {
-      if (line.startsWith("data:")) {
-        // SSE spec: space after colon is optional
-        const payload = line.slice(5)
-        lastData = payload.startsWith(" ") ? payload.slice(1) : payload
-      }
-    }
-
-    if (!lastData) {
-      throw new Error("No data in SSE response")
-    }
-
-    try {
-      const json = JSON.parse(lastData) as JsonRpcResponse
-      if (json.error) {
-        throw new Error(
-          `MCP RPC error ${json.error.code}: ${json.error.message}`
-        )
-      }
-      return json.result
-    } catch (e) {
-      if (e instanceof SyntaxError) {
-        // If we can't parse as JSON-RPC, return the raw text content
-        return lastData
-      }
-      throw e
-    }
+    return parseMcpSsePayload(text, expectedId)
   }
 
   async initialize(): Promise<{
@@ -218,17 +257,11 @@ export class McpHttpClient {
           ...this.headers,
           "Mcp-Session-Id": this.sessionId,
         }
-        const controller = new AbortController()
-        const timeout = setTimeout(() => controller.abort(), 3000)
-        try {
-          await fetch(this.endpoint, {
-            method: "DELETE",
-            headers,
-            signal: controller.signal,
-          }).catch(() => {}) // Best-effort
-        } finally {
-          clearTimeout(timeout)
-        }
+        await fetch(this.endpoint, {
+          method: "DELETE",
+          headers,
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {}) // Best-effort
       }
     } finally {
       this.initialized = false

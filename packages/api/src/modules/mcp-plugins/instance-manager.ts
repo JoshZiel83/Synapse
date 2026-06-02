@@ -296,6 +296,11 @@ function clearTTLTimer(key: string) {
   }
 }
 
+// NOTE: this is intentionally NOT the shared infrastructure/redis/lock helper.
+// It is a richer 2-key lease that atomically maintains a companion metadata key
+// (nodeId/token/updatedAt) alongside the lock so other replicas can READ who
+// holds the runtime without taking it. Folding it into the single-key helper
+// would lose that metadata atomicity, so it keeps its own fenced Lua scripts.
 async function acquireRuntimeLease(instanceKey: string) {
   const token = `${RUNTIME_NODE_ID}:${randomUUID()}`
   const metadata: RuntimeLeaseMetadata = {

@@ -11,6 +11,7 @@ import {
   REUSE_SCOPES,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
+  slugify,
   subjectScopeLabel,
   workspaceMemberRef,
   workspaceRef,
@@ -38,6 +39,7 @@ import {
   encryptSensitiveFields,
   isEncrypted,
 } from "../../infrastructure/crypto/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import {
   db,
@@ -356,14 +358,10 @@ export class McpPluginError extends Error {
   }
 }
 
+const log = createLogger("mcp.service")
+
 function sanitizeSlug(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120)
+  return slugify(value, { maxLength: 120 })
 }
 
 function asObject(value: unknown): JsonObject {
@@ -2708,9 +2706,9 @@ export async function seedBuiltinMcpPlugins() {
             pluginSeed.iconAssetPath
           )
         } catch (error) {
-          console.warn(
-            `[builtin-mcp] Failed to persist icon for ${seed.slug}/${pluginSeed.slug}; continuing without icon`,
-            error
+          log.warn(
+            { err: error },
+            `[builtin-mcp] Failed to persist icon for ${seed.slug}/${pluginSeed.slug}; continuing without icon`
           )
         }
       }

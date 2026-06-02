@@ -58,13 +58,6 @@ export async function dispatchSyncTool(
 
   const fetchImpl = opts.fetchImpl ?? fetch
   const url = `${endpoint.internalUrl.replace(/\/$/, "")}/mcp`
-  const controller = new AbortController()
-  // Wall-clock timer that aborts the in-flight fetch. CRITICAL: clear it in
-  // every exit path (success / HTTP error / synapse_error / catch) so the
-  // process doesn't leak timers under steady load. Prior version used
-  // sleep().then(abort) which left an unowned promise + timer in node's
-  // queue on every successful call.
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60_000)
 
   try {
     const res = await fetchImpl(url, {
@@ -83,7 +76,7 @@ export async function dispatchSyncTool(
           _meta: { synapse_operation: opts.envelope },
         },
       }),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
     })
     if (!res.ok) {
       return {
@@ -135,7 +128,5 @@ export async function dispatchSyncTool(
         message: `dispatch error: ${(err as Error).message}`,
       },
     }
-  } finally {
-    clearTimeout(timer)
   }
 }

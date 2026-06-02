@@ -8,6 +8,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { delimiter, join, relative, sep } from "node:path"
+import picomatch from "picomatch"
 import { INTERNAL_NAMESPACE, pathUnderPrefix } from "../vfs.js"
 import type { ExtendedLocalBackend } from "../vfs.js"
 
@@ -81,47 +82,6 @@ function isInternal(canonical: string): boolean {
   return (
     canonical === INTERNAL_NAMESPACE || canonical.startsWith(INTERNAL_PREFIX)
   )
-}
-
-function globToRegex(g: string): RegExp {
-  // Minimal glob translator: **, *, ?, [...] only.
-  let re = ""
-  let i = 0
-  while (i < g.length) {
-    const c = g[i]!
-    if (c === "*") {
-      if (g[i + 1] === "*") {
-        re += ".*"
-        i += 2
-        // optional / after **
-        if (g[i] === "/") i += 1
-      } else {
-        re += "[^/]*"
-        i += 1
-      }
-      continue
-    }
-    if (c === "?") {
-      re += "[^/]"
-      i += 1
-      continue
-    }
-    if (c === "[") {
-      const close = g.indexOf("]", i + 1)
-      if (close > 0) {
-        re += g.slice(i, close + 1)
-        i = close + 1
-        continue
-      }
-    }
-    if (/[.+^$|()/\\{}]/.test(c)) {
-      re += "\\" + c
-    } else {
-      re += c
-    }
-    i += 1
-  }
-  return new RegExp("^" + re + "$")
 }
 
 async function runRgStream(opts: {
@@ -244,9 +204,14 @@ export async function dispatchRipgrep(
   if (input.mode === "path" && input.query.length > 0) {
     regexFilter = input.regex ? new RegExp(input.query) : null
   }
-  let globFilter: RegExp | null = null
+  let globFilter: ((path: string) => boolean) | null = null
   if (input.mode === "path" && input.glob) {
-    globFilter = globToRegex(input.glob)
+    // picomatch is the de-facto glob matcher (powers fast-glob/globby/chokidar)
+    // and implements **, *, ?, braces, negation, and POSIX classes — the gaps
+    // the previous "minimal glob translator" left open. dot:true so dotfiles
+    // match like rg's --glob does.
+    const isMatch = picomatch(input.glob, { dot: true })
+    globFilter = (path: string) => isMatch(path)
   }
   const { truncated } = await runRgStream({
     rgPath,
@@ -315,7 +280,7 @@ export async function dispatchRipgrep(
         const relForGlob = canonical.startsWith("/")
           ? canonical.slice(1)
           : canonical
-        if (!globFilter.test(relForGlob)) return true
+        if (!globFilter(relForGlob)) return true
       }
       if (seen.has(canonical)) return true
       seen.add(canonical)

@@ -16,6 +16,7 @@ import {
   extractText,
   MEMORY_PERMISSION,
   normalizeCanonicalContentBlocks,
+  parseJsonObject,
   SUBJECT_KIND,
   textBlocks,
 } from "@synapse/shared"
@@ -30,6 +31,7 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { config } from "../../config/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
 import {
   buildMemorySearchText,
   buildMemoryTextDigest,
@@ -59,6 +61,8 @@ import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { listSpaceLevelGrantSpaceIds } from "./access-grant-storage.js"
 
 const DEFAULT_NAMESPACE = "default"
+
+const log = createLogger("memory")
 
 /**
  * D4: `memory_spaces` is now keyed by (owner_subject_id, scope_subject_id?,
@@ -173,18 +177,6 @@ const MEMORY_RECALL_QUERY_MAX_CHARS = 1_200
 const MEMORY_LEXICAL_TOKEN_LIMIT = 24
 const MEMORY_LEXICAL_QUERY_MAX_CHARS = 512
 const MEMORY_RRF_K = 60
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>
-    } catch {
-      return {}
-    }
-  }
-  return value as Record<string, unknown>
-}
 
 function toIsoString(value: string | Date | null | undefined) {
   if (!value) return undefined
@@ -2173,14 +2165,14 @@ export async function searchMemories(
         })
       } catch (error) {
         if (!isTsqueryStackOverflow(error)) throw error
-        console.warn(
-          "[memory] lexical search degraded due to tsquery stack overflow",
+        log.warn(
           {
             workspaceId,
             actorId: input.actorId,
             conversationId: input.conversationId,
             queryLength: queryText.length,
-          }
+          },
+          "[memory] lexical search degraded due to tsquery stack overflow"
         )
       }
     }
@@ -2203,9 +2195,9 @@ export async function searchMemories(
         )
       }
     } catch (error) {
-      console.warn(
-        "[memory] vector search unavailable, falling back to lexical only:",
-        error instanceof Error ? error.message : String(error)
+      log.warn(
+        { err: error },
+        "[memory] vector search unavailable, falling back to lexical only"
       )
     }
   }

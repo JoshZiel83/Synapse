@@ -70,12 +70,10 @@ async function fetchWeixinJson<T>(params: {
   timeoutMs: number
   headers?: Record<string, string>
 }): Promise<T> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), params.timeoutMs)
   try {
     const response = await fetch(params.url, {
       headers: params.headers,
-      signal: controller.signal,
+      signal: AbortSignal.timeout(params.timeoutMs),
     })
     const text = await response.text()
     if (!response.ok) {
@@ -85,12 +83,10 @@ async function fetchWeixinJson<T>(params: {
     }
     return (text ? JSON.parse(text) : {}) as T
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
+    if (error instanceof Error && error.name === "TimeoutError") {
       return {} as T
     }
     throw error
-  } finally {
-    clearTimeout(timer)
   }
 }
 

@@ -9,6 +9,9 @@ import { type ResolvedMcpTools } from "../mcp-plugins/tool-resolver.js"
 import { projectToolsForPrincipal } from "../capability-projection/service.js"
 import { listVisibleSkills } from "../skills/service.js"
 import { db } from "../../infrastructure/database/kysely.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("capabilities")
 
 const EMPTY_MCP_TOOLS: ResolvedMcpTools = {
   tools: [],
@@ -83,10 +86,7 @@ export async function resolveActorCapabilitySurface(
       })
     }
   } catch (error: any) {
-    console.error(
-      "[capabilities] Failed to resolve MCP tools:",
-      error?.message || String(error)
-    )
+    log.error({ err: error }, "[capabilities] Failed to resolve MCP tools")
   }
 
   const availableSkills = await listVisibleSkills({

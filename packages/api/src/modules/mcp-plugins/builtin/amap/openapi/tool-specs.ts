@@ -342,13 +342,11 @@ async function fetchAmap(
   }
 
   const url = `${AMAP_API_BASE}${spec.path}?${query.toString()}`
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const response = await fetch(url, {
       method: "GET",
-      signal: controller.signal,
+      signal: AbortSignal.timeout(timeoutMs),
     })
     const text = await response.text()
     const parsed = parseJsonMaybe(text)
@@ -387,12 +385,10 @@ async function fetchAmap(
 
     return parsed
   } catch (error) {
-    if (error instanceof Error && controller.signal.aborted) {
+    if (error instanceof Error && error.name === "TimeoutError") {
       throw new Error(`AMap ${spec.name} timed out after ${timeoutMs} ms.`)
     }
     throw error
-  } finally {
-    clearTimeout(timeout)
   }
 }
 

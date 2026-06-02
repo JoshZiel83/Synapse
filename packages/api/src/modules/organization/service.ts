@@ -1,9 +1,11 @@
 import type pg from "pg"
+import deepEqual from "fast-deep-equal"
 import {
   extractText,
   GROUP_CONVERSATION_KIND,
   normalizeActorDocs,
   normalizeCanonicalContentBlocks,
+  parseJsonObject,
   RELATIONSHIP_ACCESS_POLICY,
   summarizeActorDoc,
   summarizeActorForPrompt,
@@ -280,18 +282,6 @@ const ACTOR_PACKAGE_SELECT = `
     AND item.is_active = TRUE
 `
 
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>
-    } catch {
-      return {}
-    }
-  }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {}
-}
-
 function parseJsonArray<T>(value: unknown): T[] {
   if (!value) return []
   if (typeof value === "string") {
@@ -310,7 +300,7 @@ function arraysEqual(left: string[], right: string[]) {
 }
 
 function jsonEqual(left: unknown, right: unknown) {
-  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {})
+  return deepEqual(left ?? {}, right ?? {})
 }
 
 function sortDocs(docs: ActorDoc[]) {

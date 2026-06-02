@@ -29,6 +29,8 @@
  */
 
 import WebSocket from "ws"
+import { computeBackoff } from "@synapse/shared"
+import { sleep } from "../../../../infrastructure/async/index.js"
 import {
   QQ_CLOSE_CODE,
   QQ_EVENT,
@@ -504,27 +506,12 @@ function sendJson(ws: WebSocket, value: unknown): void {
 }
 
 function exponentialDelay(attempt: number): number {
-  const base = Math.min(
-    MAX_RECONNECT_DELAY_MS,
-    BASE_RECONNECT_DELAY_MS * 2 ** Math.min(attempt, 8)
-  )
-  // ±20% jitter
-  const jitter = base * 0.2 * (Math.random() * 2 - 1)
-  return Math.max(BASE_RECONNECT_DELAY_MS, Math.floor(base + jitter))
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve()
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort)
-      resolve()
-    }, ms)
-    t.unref?.()
-    const onAbort = () => {
-      clearTimeout(t)
-      resolve()
-    }
-    signal.addEventListener("abort", onAbort, { once: true })
+  return computeBackoff(attempt, {
+    baseMs: BASE_RECONNECT_DELAY_MS,
+    maxMs: MAX_RECONNECT_DELAY_MS,
+    minMs: BASE_RECONNECT_DELAY_MS,
+    maxExponent: 8,
+    jitterMode: "symmetric",
+    jitter: 0.2,
   })
 }
