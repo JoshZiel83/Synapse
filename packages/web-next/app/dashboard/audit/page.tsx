@@ -1,8 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
+import { qk } from "@/lib/query-keys"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -112,43 +114,44 @@ function DetailRow({
 
 export default function AuditPage() {
   const { workspaceId } = useWorkspace()
-  const [logs, setLogs] = useState<AuditLog[]>([])
-  const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
-  const [totalPages, setTotalPages] = useState(1)
   const [actionFilter, setActionFilter] = useState("all")
   const [selected, setSelected] = useState<AuditLog | null>(null)
   const pageSize = 20
 
-  useEffect(() => {
-    if (!workspaceId) return
-    loadLogs()
-  }, [workspaceId, page])
+  const params = `page=${page}&pageSize=${pageSize}${actionFilter !== "all" ? `&action=${actionFilter}` : ""}`
 
-  async function loadLogs() {
-    if (!workspaceId) return
-    setLoading(true)
-    try {
-      const params = `page=${page}&pageSize=${pageSize}${actionFilter !== "all" ? `&action=${actionFilter}` : ""}`
-      const data = await api.getAuditLogs(workspaceId, params)
-      const items = Array.isArray(data) ? data : data?.items || data?.data || []
-      setLogs(items)
-      if (data?.total) {
-        setTotalPages(Math.ceil(data.total / pageSize))
-      } else if (data?.totalPages) {
-        setTotalPages(data.totalPages)
+  const auditQuery = useQuery({
+    queryKey: workspaceId
+      ? qk.auditLogs(workspaceId, params)
+      : ["audit-logs", "disabled"],
+    queryFn: () => api.getAuditLogs(workspaceId!, params),
+    enabled: !!workspaceId,
+  })
+
+  const data = auditQuery.data as
+    | {
+        items?: AuditLog[]
+        data?: AuditLog[]
+        total?: number
+        totalPages?: number
       }
-    } catch (err) {
-      console.error("Failed to load audit logs:", err)
-    } finally {
-      setLoading(false)
-    }
-  }
+    | AuditLog[]
+    | undefined
+  const logs: AuditLog[] = Array.isArray(data)
+    ? data
+    : (data?.items ?? data?.data ?? [])
+  const totalPages = Array.isArray(data)
+    ? 1
+    : data?.total
+      ? Math.ceil(data.total / pageSize)
+      : (data?.totalPages ?? 1)
+  const loading = auditQuery.isPending && !!workspaceId
+  const loadLogs = () => auditQuery.refetch()
 
   function handleFilterChange(action: string) {
     setActionFilter(action)
     setPage(1)
-    setTimeout(() => loadLogs(), 0)
   }
 
   const actionTypes = ["all", "create", "update", "delete", "login", "think"]

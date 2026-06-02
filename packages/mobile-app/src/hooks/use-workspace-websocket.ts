@@ -3,17 +3,13 @@ import { useEffect, useRef, type MutableRefObject } from "react"
 import { getWebSocketUrl } from "@/lib/config"
 import { useSession } from "@/providers/session-provider"
 import type { ChatSocketEvent } from "@shared"
+import {
+  createChatSocket,
+  type ChatSocketHandle,
+  type ChatSocketSubscription,
+} from "@shared/chat-socket"
 
-export type WorkspaceSocketSubscription =
-  | {
-      key: string
-      topic: "inbox"
-    }
-  | {
-      key: string
-      topic: "conversation"
-      conversationId: string
-    }
+export type WorkspaceSocketSubscription = ChatSocketSubscription
 
 interface UseWorkspaceWebSocketOptions {
   enabled?: boolean
@@ -35,63 +31,17 @@ type HookSubscriber = {
   onConnectedRef: MutableRefObject<(() => void) | undefined>
 }
 
+// Module-level multiplex: all hook instances share ONE socket. The connection
+// state machine itself (auth handshake, ping watchdog, reconnect backoff,
+// subscription diffing) lives in the shared createChatSocket transport core; this
+// module only aggregates subscribers and feeds the core its auth/subscriptions.
 const hookSubscribers = new Map<string, HookSubscriber>()
-
-let sharedSocket: WebSocket | null = null
-let sharedReconnectTimer: ReturnType<typeof setTimeout> | null = null
-let sharedReconnectAttempts = 0
-const MAX_RECONNECT_ATTEMPTS = 20
-const PING_WATCHDOG_MS = 45_000
-let pingWatchdogTimer: ReturnType<typeof setTimeout> | null = null
-
-function clearPingWatchdog() {
-  if (pingWatchdogTimer) {
-    clearTimeout(pingWatchdogTimer)
-    pingWatchdogTimer = null
-  }
-}
-
-function resetPingWatchdog() {
-  clearPingWatchdog()
-  pingWatchdogTimer = setTimeout(() => {
-    // No ping from server in 45s — close so onclose triggers a reconnect.
-    if (sharedSocket && sharedSocket.readyState === sharedSocket.OPEN) {
-      try {
-        sharedSocket.close()
-      } catch {
-        // ignore
-      }
-    }
-  }, PING_WATCHDOG_MS)
-}
-let sharedAuthenticated = false
-let sharedSentSubscriptions = new Map<string, string>()
-let sharedActiveToken: string | null = null
-let sharedActiveWorkspaceId: string | null = null
 
 function getActiveSubscribers() {
   return [...hookSubscribers.values()].filter(
     (subscriber) =>
       subscriber.enabled && subscriber.token && subscriber.workspaceId
   )
-}
-
-function getSharedToken() {
-  return getActiveSubscribers()[0]?.token || null
-}
-
-function getSharedWorkspaceId() {
-  return getActiveSubscribers()[0]?.workspaceId || null
-}
-
-function getDesiredSubscriptions() {
-  const subscriptions = new Map<string, string>()
-  for (const subscriber of getActiveSubscribers()) {
-    for (const subscription of subscriber.subscriptions) {
-      subscriptions.set(subscription.key, JSON.stringify(subscription))
-    }
-  }
-  return subscriptions
 }
 
 function dispatchEvent(event: ChatSocketEvent | Record<string, unknown>) {
@@ -106,170 +56,42 @@ function dispatchConnected() {
   }
 }
 
-function clearSharedReconnectTimer() {
-  if (sharedReconnectTimer) {
-    clearTimeout(sharedReconnectTimer)
-    sharedReconnectTimer = null
-  }
+let sharedHandle: ChatSocketHandle | null = null
+
+function getSharedHandle(): ChatSocketHandle {
+  if (sharedHandle) return sharedHandle
+  sharedHandle = createChatSocket({
+    connect: (url) => new WebSocket(url),
+    resolveUrl: () => getWebSocketUrl(),
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (handle) =>
+      clearTimeout(handle as ReturnType<typeof setTimeout>),
+    getAuth: () => {
+      const active = getActiveSubscribers()[0]
+      if (!active) return null
+      return { token: active.token, workspaceId: active.workspaceId }
+    },
+    getSubscriptions: () => {
+      // Aggregate (dedupe by key) across all active subscribers.
+      const byKey = new Map<string, WorkspaceSocketSubscription>()
+      for (const subscriber of getActiveSubscribers()) {
+        for (const subscription of subscriber.subscriptions) {
+          byKey.set(subscription.key, subscription)
+        }
+      }
+      return [...byKey.values()]
+    },
+    onEvent: (event) =>
+      dispatchEvent(event as ChatSocketEvent | Record<string, unknown>),
+    onConnected: () => dispatchConnected(),
+  })
+  // Always running; getAuth gates whether it actually connects.
+  sharedHandle.start()
+  return sharedHandle
 }
 
-function closeSharedSocket() {
-  clearSharedReconnectTimer()
-  sharedAuthenticated = false
-  sharedSentSubscriptions.clear()
-  if (sharedSocket) {
-    sharedSocket.onopen = null
-    sharedSocket.onmessage = null
-    sharedSocket.onclose = null
-    sharedSocket.onerror = null
-    sharedSocket.close()
-    sharedSocket = null
-  }
-}
-
-function syncSharedSubscriptions() {
-  if (
-    !sharedSocket ||
-    sharedSocket.readyState !== WebSocket.OPEN ||
-    !sharedAuthenticated
-  ) {
-    return
-  }
-
-  const desired = getDesiredSubscriptions()
-  for (const [key] of sharedSentSubscriptions) {
-    if (desired.has(key)) continue
-    sharedSocket.send(
-      JSON.stringify({
-        type: "unsubscribe",
-        key,
-      })
-    )
-    sharedSentSubscriptions.delete(key)
-  }
-
-  for (const [key, serialized] of desired) {
-    if (sharedSentSubscriptions.get(key) === serialized) continue
-    sharedSocket.send(
-      JSON.stringify({
-        type: "subscribe",
-        ...JSON.parse(serialized),
-      })
-    )
-    sharedSentSubscriptions.set(key, serialized)
-  }
-}
-
-function ensureSharedSocket() {
-  const token = getSharedToken()
-  const workspaceId = getSharedWorkspaceId()
-  if (!token) {
-    sharedActiveToken = null
-    sharedActiveWorkspaceId = null
-    closeSharedSocket()
-    return
-  }
-  if (!workspaceId) {
-    sharedActiveWorkspaceId = null
-    closeSharedSocket()
-    return
-  }
-
-  if (sharedActiveToken && sharedActiveToken !== token) {
-    sharedActiveToken = token
-    closeSharedSocket()
-  }
-  if (sharedActiveWorkspaceId && sharedActiveWorkspaceId !== workspaceId) {
-    sharedActiveWorkspaceId = workspaceId
-    closeSharedSocket()
-  }
-
-  if (sharedSocket) {
-    syncSharedSubscriptions()
-    return
-  }
-
-  sharedActiveToken = token
-  sharedActiveWorkspaceId = workspaceId
-  const socket = new WebSocket(getWebSocketUrl())
-  sharedSocket = socket
-
-  socket.onopen = () => {
-    sharedReconnectAttempts = 0
-    socket.send(
-      JSON.stringify({
-        type: "auth",
-        token,
-        workspaceId,
-      })
-    )
-  }
-
-  socket.onmessage = (event) => {
-    try {
-      const parsed = JSON.parse(event.data) as Record<string, unknown>
-      const rawType = typeof parsed.type === "string" ? parsed.type : ""
-      const normalizedType = rawType
-
-      const normalized = {
-        ...parsed,
-        type: normalizedType,
-      } as ChatSocketEvent | Record<string, unknown>
-
-      if (normalizedType === "auth.ok") {
-        sharedAuthenticated = true
-        syncSharedSubscriptions()
-        dispatchConnected()
-        resetPingWatchdog()
-        return
-      }
-
-      if (normalizedType === "auth.error") {
-        closeSharedSocket()
-        return
-      }
-
-      if (normalizedType === "ping") {
-        socket.send(JSON.stringify({ type: "pong" }))
-        resetPingWatchdog()
-        return
-      }
-
-      dispatchEvent(normalized)
-    } catch {
-      // Ignore malformed websocket frames.
-    }
-  }
-
-  socket.onclose = () => {
-    sharedAuthenticated = false
-    sharedSentSubscriptions.clear()
-    sharedSocket = null
-    clearPingWatchdog()
-
-    if (!getSharedToken()) {
-      return
-    }
-
-    if (sharedReconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      // Match the web client's 20-attempt cap: stop trying so a stale token
-      // doesn't cause endless retries. A fresh auth flow will reset the
-      // counter by calling resetSharedReconnect().
-      return
-    }
-
-    sharedReconnectAttempts += 1
-    const delay = Math.min(5000, 1000 * sharedReconnectAttempts)
-    clearSharedReconnectTimer()
-    sharedReconnectTimer = setTimeout(() => {
-      sharedReconnectTimer = null
-      ensureSharedSocket()
-    }, delay)
-  }
-
-  socket.onerror = () => {
-    // Let onclose drive reconnect.
-  }
+function reconcileSharedSocket() {
+  getSharedHandle().sync()
 }
 
 function createSubscriberId() {
@@ -305,28 +127,22 @@ export function useWorkspaceWebSocket({
       onEventRef,
       onConnectedRef,
     })
-    ensureSharedSocket()
-    syncSharedSubscriptions()
+    reconcileSharedSocket()
 
     return () => {
       hookSubscribers.delete(subscriberId)
-      syncSharedSubscriptions()
-      ensureSharedSocket()
+      reconcileSharedSocket()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
-    const subscriberId = subscriberIdRef.current
-    const subscriber = hookSubscribers.get(subscriberId)
-    if (!subscriber) {
-      return
-    }
-
+    const subscriber = hookSubscribers.get(subscriberIdRef.current)
+    if (!subscriber) return
     subscriber.enabled = enabled
     subscriber.token = token
     subscriber.workspaceId = workspaceId
     subscriber.subscriptions = subscriptionsRef.current
-    ensureSharedSocket()
-    syncSharedSubscriptions()
+    reconcileSharedSocket()
   }, [enabled, subscriptionSignature, token, workspaceId])
 }

@@ -207,6 +207,30 @@
     }
   }
 
+  /* CSS scroll-snap replaces the former hand-rolled wheel-hijack engine
+     (landing-snap-scroll-controller.tsx). Gated to the same tall desktop
+     fine-pointer viewports, and disabled under prefers-reduced-motion so
+     reduced-motion users get natural scrolling. Keyboard section nav lives in
+     the (now slim) LandingSnapScrollController JS island. */
+  @media (min-width: 1024px) and (pointer: fine) and (min-height: 1000px) {
+    html.landing-snap-root {
+      scroll-snap-type: y mandatory;
+      scroll-behavior: smooth;
+    }
+
+    .landing-snap-section {
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html.landing-snap-root {
+      scroll-snap-type: none;
+      scroll-behavior: auto;
+    }
+  }
+
   .animate-fade-up {
     animation: fade-up 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
   }

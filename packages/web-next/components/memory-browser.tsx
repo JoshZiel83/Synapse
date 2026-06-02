@@ -7,6 +7,7 @@ import {
   useSearchParams,
   type ReadonlyURLSearchParams,
 } from "next/navigation"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowRightLeft,
   ChevronDown,
@@ -67,6 +68,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { api } from "@/lib/api"
+import { qk } from "@/lib/query-keys"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -131,12 +133,8 @@ export default function MemoryBrowser() {
   const effectiveCurrentWorkspaceMemberId = currentWorkspaceMemberId || ""
   const currentWorkspaceMemberLabel = user?.name || user?.email || "Me"
 
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [creatingFromFiles, setCreatingFromFiles] = useState(false)
-  const [memories, setMemories] = useState<Memory[]>([])
-  const [actors, setActors] = useState<any[]>([])
-  const [groups, setGroups] = useState<any[]>([])
+  const queryClient = useQueryClient()
   const [pendingFileCreate, setPendingFileCreate] =
     useState<PendingFileCreate | null>(null)
   const [movingMemory, setMovingMemory] = useState<Memory | null>(null)
@@ -158,50 +156,63 @@ export default function MemoryBrowser() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragCounterRef = useRef(0)
 
-  useEffect(() => {
+  type BrowserData = {
+    memories: Memory[]
+    actors: ReturnType<typeof normalizeActorOption>[]
+    groups: ReturnType<typeof normalizeGroupOption>[]
+  }
+
+  const browserQuery = useQuery<BrowserData>({
+    queryKey: workspaceId
+      ? qk.memoriesBrowser(workspaceId)
+      : ["memories-browser", "disabled"],
+    queryFn: async () => {
+      const [memoryData, actorData, conversationData] = await Promise.all([
+        api.getMemories(workspaceId!),
+        api.getActors(workspaceId!),
+        api.loadConversationCatalog(workspaceId!),
+      ])
+      return {
+        memories: (Array.isArray(memoryData)
+          ? memoryData
+          : memoryData?.memories || []
+        ).map(projectMemory),
+        actors: (Array.isArray(actorData) ? actorData : []).map(
+          normalizeActorOption
+        ),
+        groups: conversationData.map(normalizeGroupOption),
+      }
+    },
+    enabled: !!workspaceId,
+  })
+
+  const memories = useMemo(
+    () => browserQuery.data?.memories ?? [],
+    [browserQuery.data]
+  )
+  const actors = browserQuery.data?.actors ?? []
+  const groups = browserQuery.data?.groups ?? []
+  const loading = browserQuery.isPending && !!workspaceId
+  const refreshing = browserQuery.isFetching && !browserQuery.isPending
+
+  // Apply a local optimistic patch to the cached memories list.
+  const patchMemories = (updater: (current: Memory[]) => Memory[]) => {
     if (!workspaceId) return
-    void loadData()
-  }, [workspaceId])
+    queryClient.setQueryData<BrowserData>(
+      qk.memoriesBrowser(workspaceId),
+      (prev) => (prev ? { ...prev, memories: updater(prev.memories) } : prev)
+    )
+  }
 
   async function loadData() {
     if (!workspaceId) return
-    setLoading(true)
-    try {
-      const [memoryData, actorData, conversationData] = await Promise.all([
-        api.getMemories(workspaceId),
-        api.getActors(workspaceId),
-        api.loadConversationCatalog(workspaceId),
-      ])
-
-      setMemories(
-        (Array.isArray(memoryData)
-          ? memoryData
-          : memoryData?.memories || []
-        ).map(projectMemory)
-      )
-      setActors(
-        (Array.isArray(actorData) ? actorData : []).map(normalizeActorOption)
-      )
-      setGroups(conversationData.map(normalizeGroupOption))
-    } catch (error) {
-      console.error("Failed to load memories:", error)
-      toast.error(
-        error instanceof Error ? error.message : "Failed to load memories"
-      )
-    } finally {
-      setLoading(false)
-    }
+    await browserQuery.refetch()
   }
 
   async function refreshData() {
     if (!workspaceId) return
-    setRefreshing(true)
-    try {
-      await loadData()
-      toast.success("Memories refreshed")
-    } finally {
-      setRefreshing(false)
-    }
+    await browserQuery.refetch()
+    toast.success("Memories refreshed")
   }
 
   const folders = useMemo(
@@ -381,14 +392,14 @@ export default function MemoryBrowser() {
       // detect the thin shape explicitly and drop the row from the
       // local list — the principal can no longer see it.
       if (result?.moved === true && !result?.owner) {
-        setMemories((current) =>
+        patchMemories((current) =>
           current.filter((memory) => memory.id !== movingMemory.id)
         )
         toast.success("Memory moved (out of view)")
         return
       }
       const savedMemory = projectMemory((result?.memory || result) as any)
-      setMemories((current) =>
+      patchMemories((current) =>
         current.map((memory) =>
           memory.id === movingMemory.id ? savedMemory : memory
         )

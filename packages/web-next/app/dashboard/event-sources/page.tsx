@@ -1,6 +1,8 @@
 "use client"
 
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { qk } from "@/lib/query-keys"
 import type {
   AutomationEventSource,
   AutomationIntegrationProvider,
@@ -187,14 +189,8 @@ function sourceProviderDetail(source: AutomationEventSource) {
 
 export default function EventSourcesPage() {
   const { workspaceId, workspaceName } = useWorkspace()
-  const [sources, setSources] = useState<AutomationEventSource[]>([])
-  const [installations, setInstallations] = useState<
-    IntegrationInstallationView[]
-  >([])
-  const [occurrences, setOccurrences] = useState<AutomationOccurrence[]>([])
+  const queryClient = useQueryClient()
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
-  const [loadingSources, setLoadingSources] = useState(true)
-  const [loadingOccurrences, setLoadingOccurrences] = useState(false)
   const [savingSource, setSavingSource] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [search, setSearch] = useState("")
@@ -211,6 +207,65 @@ export default function EventSourcesPage() {
       ? formState.mode
       : null
 
+  const sourcesQuery = useQuery({
+    queryKey: workspaceId
+      ? qk.automationEventSources(workspaceId)
+      : ["automation-event-sources", "disabled"],
+    queryFn: async () => {
+      const [nextSources, nextInstallations] = await Promise.all([
+        api.getAutomationEventSources(workspaceId!),
+        api.getInstallations(workspaceId!),
+      ])
+      return {
+        sources: nextSources,
+        installations: Array.isArray(nextInstallations)
+          ? (nextInstallations as IntegrationInstallationView[])
+          : [],
+      }
+    },
+    enabled: !!workspaceId,
+  })
+
+  const sources = useMemo(
+    () => sourcesQuery.data?.sources ?? [],
+    [sourcesQuery.data]
+  )
+  const installations = sourcesQuery.data?.installations ?? []
+  const loadingSources = sourcesQuery.isPending && !!workspaceId
+
+  const occurrencesQuery = useQuery({
+    queryKey:
+      workspaceId && selectedSourceId
+        ? [
+            ...qk.automationEventSources(workspaceId),
+            selectedSourceId,
+            "occurrences",
+          ]
+        : ["automation-occurrences", "disabled"],
+    queryFn: () =>
+      api.getAutomationEventSourceOccurrences(workspaceId!, selectedSourceId!),
+    enabled: !!workspaceId && !!selectedSourceId,
+  })
+  const occurrences = occurrencesQuery.data ?? []
+  const loadingOccurrences = occurrencesQuery.isPending && !!selectedSourceId
+
+  const reloadSources = () => {
+    if (!workspaceId) return
+    return queryClient.invalidateQueries({
+      queryKey: qk.automationEventSources(workspaceId),
+    })
+  }
+  const reloadOccurrences = (eventSourceId: string) => {
+    if (!workspaceId) return
+    return queryClient.invalidateQueries({
+      queryKey: [
+        ...qk.automationEventSources(workspaceId),
+        eventSourceId,
+        "occurrences",
+      ],
+    })
+  }
+
   const availableIntegrationDefinitions = useMemo(
     () =>
       integrationProvider
@@ -226,70 +281,16 @@ export default function EventSourcesPage() {
     [installations, integrationProvider]
   )
 
-  async function loadSources() {
-    if (!workspaceId) return
-
-    setLoadingSources(true)
-    try {
-      const [nextSources, nextInstallations] = await Promise.all([
-        api.getAutomationEventSources(workspaceId),
-        api.getInstallations(workspaceId),
-      ])
-      setSources(nextSources)
-      setInstallations(
-        Array.isArray(nextInstallations) ? nextInstallations : []
-      )
-      setSelectedSourceId((currentId) => {
-        if (
-          currentId &&
-          nextSources.some((source) => source.id === currentId)
-        ) {
-          return currentId
-        }
-        return nextSources[0]?.id || null
-      })
-    } catch (error) {
-      console.error("Failed to load automation event sources:", error)
-      toast.error(
-        error instanceof Error ? error.message : "Failed to load event sources"
-      )
-    } finally {
-      setLoadingSources(false)
-    }
-  }
-
-  async function loadOccurrences(eventSourceId: string) {
-    if (!workspaceId) return
-
-    setLoadingOccurrences(true)
-    try {
-      const nextOccurrences = await api.getAutomationEventSourceOccurrences(
-        workspaceId,
-        eventSourceId
-      )
-      setOccurrences(nextOccurrences)
-    } catch (error) {
-      console.error("Failed to load automation event source history:", error)
-      toast.error(
-        error instanceof Error ? error.message : "Failed to load event history"
-      )
-      setOccurrences([])
-    } finally {
-      setLoadingOccurrences(false)
-    }
-  }
-
+  // Keep a valid selection as the source list changes (was previously done
+  // inline in loadSources()).
   useEffect(() => {
-    void loadSources()
-  }, [workspaceId])
-
-  useEffect(() => {
-    if (!selectedSourceId) {
-      setOccurrences([])
-      return
-    }
-    void loadOccurrences(selectedSourceId)
-  }, [selectedSourceId, workspaceId])
+    setSelectedSourceId((currentId) => {
+      if (currentId && sources.some((source) => source.id === currentId)) {
+        return currentId
+      }
+      return sources[0]?.id || null
+    })
+  }, [sources])
 
   const filteredSources = useMemo(() => {
     const keyword = deferredSearch.trim().toLowerCase()
@@ -361,7 +362,7 @@ export default function EventSourcesPage() {
         toast.success("Integration event sources saved")
         setCreateDialogOpen(false)
         setFormState(EMPTY_FORM)
-        await loadSources()
+        await reloadSources()
       } catch (error) {
         console.error("Failed to create integration event sources:", error)
         toast.error(
@@ -412,7 +413,7 @@ export default function EventSourcesPage() {
       toast.success("Event source saved")
       setCreateDialogOpen(false)
       setFormState(EMPTY_FORM)
-      await loadSources()
+      await reloadSources()
     } catch (error) {
       console.error("Failed to create automation event source:", error)
       toast.error(
@@ -433,9 +434,9 @@ export default function EventSourcesPage() {
     try {
       await api.updateAutomationEventSource(workspaceId, source.id, { status })
       toast.success(`Event source marked ${status}`)
-      await loadSources()
+      await reloadSources()
       if (selectedSourceId === source.id) {
-        await loadOccurrences(source.id)
+        await reloadOccurrences(source.id)
       }
     } catch (error) {
       console.error("Failed to update event source:", error)
@@ -461,7 +462,7 @@ export default function EventSourcesPage() {
     try {
       await api.archiveAutomationEventSource(workspaceId, source.id)
       toast.success("Event source archived")
-      await loadSources()
+      await reloadSources()
     } catch (error) {
       console.error("Failed to archive event source:", error)
       toast.error(
@@ -499,7 +500,7 @@ export default function EventSourcesPage() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => void loadSources()}
+            onClick={() => void reloadSources()}
             disabled={loadingSources}
           >
             <RefreshCw
@@ -833,7 +834,7 @@ export default function EventSourcesPage() {
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => void loadOccurrences(selectedSource.id)}
+                      onClick={() => void reloadOccurrences(selectedSource.id)}
                       disabled={loadingOccurrences}
                     >
                       <RefreshCw

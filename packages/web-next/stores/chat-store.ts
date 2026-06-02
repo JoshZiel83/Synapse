@@ -1835,7 +1835,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       Math.max(Date.now() * 1000, ...existingSequences) + 1
 
     const entry: OutboxEntry = {
-      clientMessageId: createUuid("message"),
+      clientMessageId: createUuid(),
       conversationId,
       contentBlocks: input.contentBlocks,
       replyToItemId: input.replyToItemId,
@@ -2006,7 +2006,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   createWorkspaceThread: async (workspaceId, kind, actorIds, options) => {
     const response = await api.createChatConversation(workspaceId, {
-      clientRequestId: createUuid("conversation"),
+      clientRequestId: createUuid(),
       kind,
       title: options?.title,
       actorIds,
