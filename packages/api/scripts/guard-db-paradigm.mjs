@@ -10,9 +10,19 @@
 //      (the FUNCTION import, not the Kysely builder method), or `QueryExecutor`.
 //   2. Importing `transaction` (the pg hand-rolled one) or the bare `query`
 //      from `infrastructure/database/index(.js)`.
-//   3. Declaring a bespoke bare-executor type/object of shape
-//      `{ query: (text, params) => ... }` (the QueryRunner/SqlRunner/QueryClient/
-//      Queryable pattern, or inline `{ query: ... }` adapters).
+//   3. Declaring a bespoke bare-executor object/type of shape
+//      `{ query: (text, params) => ... }` — inline object-literal adapters
+//      (e.g. `?? { query: (text, params) => runOnDb(...) }`) and interface /
+//      type-literal members named `query` with a `(text, ...) => Promise` shape.
+//
+//   NOTE (transitional, deliberately NOT yet flagged): the function-type-alias
+//   runners `type QueryRunner = <T>(text, params?) => Promise<...>` /
+//   `type SqlRunner = ...` that still live in chat/remote-agents/skills/
+//   mcp-plugins/automation/organization are plan-sanctioned transitional
+//   bridges (they execute on a Kysely executor under the hood). They are out of
+//   scope for this guard until the QueryExecutor/AnyExecutor union is retired;
+//   adding them here would hard-fail on intentionally-kept code. Tracked as a
+//   follow-up, not silently claimed as covered.
 //
 // This is import-AWARE and AST-based — it never flags `.executeTakeFirst()` /
 // `.execute()` builder chains, which are legitimate native Kysely usage.
@@ -107,10 +117,11 @@ function checkFile(file) {
       }
     }
 
-    // (3) bespoke bare-executor type: a type/interface member or object literal
+    // (3) bespoke bare-executor: a type/interface member OR an object-literal
     // property named `query` whose value is `(text..., params?...) => Promise`.
-    // Heuristic: a property signature/assignment named "query" with a function
-    // type/arrow taking a first param named text/sql/queryText.
+    // - PropertySignature/MethodSignature: type-literal/interface shape.
+    // - PropertyAssignment with an arrow/function value: inline object adapter
+    //   like `?? { query: (text, params) => runOnDb(...) }`.
     if (
       (ts.isPropertySignature(node) || ts.isMethodSignature(node)) &&
       node.name &&
@@ -127,7 +138,29 @@ function checkFile(file) {
       }
     }
 
+    if (
+      ts.isPropertyAssignment(node) &&
+      node.name &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "query" &&
+      (ts.isArrowFunction(node.initializer) ||
+        ts.isFunctionExpression(node.initializer)) &&
+      isBareQueryFn(node.initializer)
+    ) {
+      reportAt(
+        node,
+        "inline bare-executor adapter `{ query: (text, params) => ... }` — pass `db`/`Executor` instead"
+      )
+    }
+
     ts.forEachChild(node, visit)
+  }
+
+  function firstParamIsQueryText(params) {
+    if (!params?.length) return false
+    const p0 = params[0]
+    const pname = p0.name && ts.isIdentifier(p0.name) ? p0.name.text : ""
+    return /^(text|sql|queryText)$/i.test(pname)
   }
 
   function isBareQuerySig(typeNode) {
@@ -136,10 +169,13 @@ function checkFile(file) {
       ts.isFunctionTypeNode(typeNode) || ts.isMethodSignature(typeNode)
         ? typeNode
         : null
-    if (!fn || !fn.parameters?.length) return false
-    const p0 = fn.parameters[0]
-    const pname = p0.name && ts.isIdentifier(p0.name) ? p0.name.text : ""
-    return /^(text|sql|queryText)$/i.test(pname)
+    if (!fn) return false
+    return firstParamIsQueryText(fn.parameters)
+  }
+
+  function isBareQueryFn(fnNode) {
+    // arrow/function expression whose first param is named text/sql/queryText
+    return firstParamIsQueryText(fnNode.parameters)
   }
 
   visit(sf)

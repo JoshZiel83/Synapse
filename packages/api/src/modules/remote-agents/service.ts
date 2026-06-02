@@ -1368,9 +1368,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
     queryable?: AnyExecutor
   } = {}
 ) {
-  const queryable: AnyExecutor = options.queryable ?? {
-    query: (text, params) => runOnDb(text, params),
-  }
+  const queryable: AnyExecutor = options.queryable ?? db
   const conversationId = options.conversationId ?? null
   // The LATERAL also pulls runtime_state / status_text / last_error from
   // the context row so we can prefer them over the binding-level values
