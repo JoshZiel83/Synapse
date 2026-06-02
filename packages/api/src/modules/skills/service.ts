@@ -30,9 +30,10 @@ import {
 } from "@synapse/shared"
 import { lookupResources } from "../access/evaluator.js"
 import { ACCESS_ACTIONS } from "../access/actions.js"
-import { CompiledQuery } from "kysely"
+import { CompiledQuery, sql } from "kysely"
 import {
   db,
+  runBuilder,
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
@@ -1306,7 +1307,7 @@ function visibleRowToAccessTarget(
 }
 
 async function ensureMarketplacePublisher(
-  run: QueryRunner,
+  executor: Executor,
   options?: {
     ownerUserId?: string
     slug?: string
@@ -1314,45 +1315,46 @@ async function ensureMarketplacePublisher(
     description?: string
   }
 ) {
-  const result = await run<{ id: string }>(
-    `INSERT INTO publishers (
-       slug,
-       display_name,
-       description,
-       owner_user_id,
-       workspace_id,
-       is_verified
-     )
-     VALUES ($1, $2, 'Official marketplace publisher', $3, NULL, TRUE)
-     ON CONFLICT (slug) DO UPDATE SET
-       display_name = EXCLUDED.display_name,
-       description = EXCLUDED.description,
-       owner_user_id = COALESCE(publishers.owner_user_id, EXCLUDED.owner_user_id),
-       is_verified = TRUE,
-       updated_at = NOW()
-     RETURNING id`,
-    [
-      options?.slug || DEFAULT_MARKETPLACE_PUBLISHER_SLUG,
-      options?.displayName || DEFAULT_MARKETPLACE_PUBLISHER_NAME,
-      options?.ownerUserId || null,
-    ]
+  const result = await runBuilder(
+    executor,
+    executor
+      .insertInto("publishers")
+      .values({
+        slug: options?.slug || DEFAULT_MARKETPLACE_PUBLISHER_SLUG,
+        display_name: options?.displayName || DEFAULT_MARKETPLACE_PUBLISHER_NAME,
+        description: "Official marketplace publisher",
+        owner_user_id: options?.ownerUserId || null,
+        workspace_id: null,
+        is_verified: true,
+      })
+      .onConflict((oc) =>
+        oc.column("slug").doUpdateSet({
+          display_name: sql`excluded.display_name`,
+          description: sql`excluded.description`,
+          owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
+          is_verified: true,
+          updated_at: sql`NOW()`,
+        })
+      )
+      .returning("id")
   )
 
   return result.rows[0]!.id
 }
 
 async function assertWorkspaceSkillSlugAvailable(
-  run: QueryRunner,
+  executor: Executor,
   workspaceId: string,
   slug: string
 ) {
-  const existing = await run(
-    `SELECT 1
-     FROM installed_skills
-     WHERE workspace_id = $1
-       AND slug = $2
-     LIMIT 1`,
-    [workspaceId, slug]
+  const existing = await runBuilder(
+    executor,
+    executor
+      .selectFrom("installed_skills")
+      .select(sql<number>`1`.as("one"))
+      .where("workspace_id", "=", workspaceId)
+      .where("slug", "=", slug)
+      .limit(1)
   )
 
   if (existing.rows.length > 0) {
@@ -1364,20 +1366,21 @@ async function assertWorkspaceSkillSlugAvailable(
 }
 
 async function allocateInstalledSkillSlug(
-  run: QueryRunner,
+  executor: Executor,
   workspaceId: string,
   preferredSlug: string
 ) {
   let candidate = preferredSlug
   let index = 2
   while (true) {
-    const existing = await run(
-      `SELECT 1
-       FROM installed_skills
-       WHERE workspace_id = $1
-         AND slug = $2
-       LIMIT 1`,
-      [workspaceId, candidate]
+    const existing = await runBuilder(
+      executor,
+      executor
+        .selectFrom("installed_skills")
+        .select(sql<number>`1`.as("one"))
+        .where("workspace_id", "=", workspaceId)
+        .where("slug", "=", candidate)
+        .limit(1)
     )
     if (existing.rows.length === 0) {
       return candidate
@@ -1477,7 +1480,7 @@ function buildPreparedSnapshotFromInput(params: {
 }
 
 async function allocateMarketplaceItemSlug(
-  run: QueryRunner,
+  executor: Executor,
   publisherId: string,
   preferredSlug: string,
   excludeItemId?: string
@@ -1485,16 +1488,18 @@ async function allocateMarketplaceItemSlug(
   let candidate = preferredSlug || "skill"
   let index = 2
   while (true) {
-    const existing = await run<{ id: string }>(
-      `SELECT id
-       FROM catalog_items
-       WHERE publisher_id = $1
-         AND item_kind = 'skill_package'
-         AND workspace_id IS NULL
-         AND slug = $2
-         AND ($3::uuid IS NULL OR id <> $3::uuid)
-       LIMIT 1`,
-      [publisherId, candidate, excludeItemId || null]
+    const exclude = excludeItemId || null
+    const existing = await runBuilder(
+      executor,
+      executor
+        .selectFrom("catalog_items")
+        .select("id")
+        .where("publisher_id", "=", publisherId)
+        .where("item_kind", "=", "skill_package")
+        .where("workspace_id", "is", null)
+        .where("slug", "=", candidate)
+        .where(sql<boolean>`(${exclude}::uuid IS NULL OR id <> ${exclude}::uuid)`)
+        .limit(1)
     )
     if (existing.rows.length === 0) {
       return candidate
@@ -1505,53 +1510,39 @@ async function allocateMarketplaceItemSlug(
 }
 
 async function upsertSkillMirrorSource(
-  run: QueryRunner,
+  executor: Executor,
   input: ImportedMirrorSkillPackage["mirrorSource"]
 ) {
-  const result = await run<{ id: string }>(
-    `INSERT INTO skill_mirror_sources (
-       source_type,
-       locator_key,
-       locator,
-       requested_ref,
-       resolved_revision,
-       refresh_mode,
-       last_sync_status,
-       source_warnings,
-       last_error,
-       last_synced_at
-     )
-     VALUES (
-       $1,
-       $2,
-       $3::jsonb,
-       $4,
-       $5,
-       'manual',
-       'synced',
-       $6::text[],
-       NULL,
-       NOW()
-     )
-     ON CONFLICT (source_type, locator_key) DO UPDATE SET
-       locator = EXCLUDED.locator,
-       requested_ref = EXCLUDED.requested_ref,
-       resolved_revision = EXCLUDED.resolved_revision,
-       refresh_mode = EXCLUDED.refresh_mode,
-       last_sync_status = 'synced',
-       source_warnings = EXCLUDED.source_warnings,
-       last_error = NULL,
-       last_synced_at = NOW(),
-       updated_at = NOW()
-     RETURNING id`,
-    [
-      input.sourceType,
-      input.locatorKey,
-      JSON.stringify(input.locator),
-      input.requestedRef || null,
-      input.resolvedRevision || null,
-      input.sourceWarnings,
-    ]
+  const result = await runBuilder(
+    executor,
+    executor
+      .insertInto("skill_mirror_sources")
+      .values({
+        source_type: input.sourceType,
+        locator_key: input.locatorKey,
+        locator: sql`${JSON.stringify(input.locator)}::jsonb`,
+        requested_ref: input.requestedRef || null,
+        resolved_revision: input.resolvedRevision || null,
+        refresh_mode: "manual",
+        last_sync_status: "synced",
+        source_warnings: input.sourceWarnings,
+        last_error: null,
+        last_synced_at: sql`NOW()`,
+      })
+      .onConflict((oc) =>
+        oc.columns(["source_type", "locator_key"]).doUpdateSet({
+          locator: sql`excluded.locator`,
+          requested_ref: sql`excluded.requested_ref`,
+          resolved_revision: sql`excluded.resolved_revision`,
+          refresh_mode: sql`excluded.refresh_mode`,
+          last_sync_status: "synced",
+          source_warnings: sql`excluded.source_warnings`,
+          last_error: null,
+          last_synced_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+      )
+      .returning("id")
   )
   return result.rows[0]!.id
 }
@@ -1572,95 +1563,52 @@ function snapshotFileSize(blocks: CanonicalContentBlock[]) {
 }
 
 async function insertSkillSnapshot(
-  run: QueryRunner,
+  executor: Executor,
   snapshot: PreparedSkillSnapshot,
   options?: {
     mirrorSourceId?: string | null
     resolvedRevision?: string | null
   }
 ) {
-  const inserted = await run<{ id: string }>(
-    `INSERT INTO skill_snapshots (
-       mirror_source_id,
-       entry_path,
-       name,
-       description,
-       argument_hint,
-       disable_model_invocation,
-       user_invocable,
-       allowed_tools,
-       model,
-       effort,
-       context,
-       agent,
-       hooks,
-       body_blocks,
-       content_hash,
-       source_warnings,
-       resolved_revision
-     )
-     VALUES (
-       $1,
-       $2,
-       $3,
-       $4,
-       $5,
-       $6,
-       $7,
-       $8::text[],
-       $9,
-       $10,
-       $11,
-       $12,
-       $13::jsonb,
-       $14::jsonb,
-       $15,
-       $16::text[],
-       $17
-     )
-     RETURNING id`,
-    [
-      options?.mirrorSourceId || null,
-      SKILL_ENTRY_PATH,
-      snapshot.frontmatter.name,
-      snapshot.frontmatter.description,
-      snapshot.frontmatter.argumentHint || null,
-      snapshot.frontmatter.disableModelInvocation,
-      snapshot.frontmatter.userInvocable,
-      snapshot.frontmatter.allowedTools,
-      snapshot.frontmatter.model || null,
-      snapshot.frontmatter.effort || null,
-      snapshot.frontmatter.context || null,
-      snapshot.frontmatter.agent || null,
-      JSON.stringify(snapshot.frontmatter.hooks || {}),
-      JSON.stringify(snapshot.bodyBlocks),
-      snapshot.contentHash,
-      snapshot.sourceWarnings,
-      options?.resolvedRevision || null,
-    ]
+  const inserted = await runBuilder(
+    executor,
+    executor
+      .insertInto("skill_snapshots")
+      .values({
+        mirror_source_id: options?.mirrorSourceId || null,
+        entry_path: SKILL_ENTRY_PATH,
+        name: snapshot.frontmatter.name,
+        description: snapshot.frontmatter.description,
+        argument_hint: snapshot.frontmatter.argumentHint || null,
+        disable_model_invocation: snapshot.frontmatter.disableModelInvocation,
+        user_invocable: snapshot.frontmatter.userInvocable,
+        allowed_tools: snapshot.frontmatter.allowedTools,
+        model: snapshot.frontmatter.model || null,
+        effort: snapshot.frontmatter.effort || null,
+        context: snapshot.frontmatter.context || null,
+        agent: snapshot.frontmatter.agent || null,
+        hooks: sql`${JSON.stringify(snapshot.frontmatter.hooks || {})}::jsonb`,
+        body_blocks: sql`${JSON.stringify(snapshot.bodyBlocks)}::jsonb`,
+        content_hash: snapshot.contentHash,
+        source_warnings: snapshot.sourceWarnings,
+        resolved_revision: options?.resolvedRevision || null,
+      })
+      .returning("id")
   )
   const snapshotId = inserted.rows[0]!.id
 
   for (const file of snapshot.files) {
-    await run(
-      `INSERT INTO skill_snapshot_files (
-         skill_snapshot_id,
-         path,
-         media_type,
-         content_blocks,
-         sha256,
-         size_bytes
-       )
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6)`,
-      [
-        snapshotId,
-        file.path,
-        file.mediaType || null,
-        JSON.stringify(file.contentBlocks),
-        hashSnapshotFileContent(file.contentBlocks),
-        snapshotFileSize(file.contentBlocks),
-      ]
-    )
+    await executor
+      .insertInto("skill_snapshot_files")
+      .values({
+        skill_snapshot_id: snapshotId,
+        path: file.path,
+        media_type: file.mediaType || null,
+        content_blocks: sql`${JSON.stringify(file.contentBlocks)}::jsonb`,
+        sha256: hashSnapshotFileContent(file.contentBlocks),
+        size_bytes: snapshotFileSize(file.contentBlocks),
+      })
+      .execute()
   }
 
   return snapshotId
@@ -2072,18 +2020,22 @@ async function findSkillIdsByBindingFilter(params: {
 async function findInstalledSkillBySource(
   workspaceId: string,
   sourceCatalogItemId: string,
-  run: QueryRunner = runQuery
+  executor: Executor = db
 ) {
-  const result = await run<{ id: string }>(
-    `SELECT skill.id
-     FROM installed_skills skill
-     JOIN skill_source_refs source_ref
-       ON source_ref.skill_id = skill.id
-     WHERE skill.workspace_id = $1
-       AND source_ref.source_catalog_item_id = $2
-     ORDER BY skill.updated_at DESC
-     LIMIT 1`,
-    [workspaceId, sourceCatalogItemId]
+  const result = await runBuilder(
+    executor,
+    executor
+      .selectFrom("installed_skills as skill")
+      .innerJoin(
+        "skill_source_refs as source_ref",
+        "source_ref.skill_id",
+        "skill.id"
+      )
+      .select("skill.id")
+      .where("skill.workspace_id", "=", workspaceId)
+      .where("source_ref.source_catalog_item_id", "=", sourceCatalogItemId)
+      .orderBy("skill.updated_at", "desc")
+      .limit(1)
   )
 
   return result.rows[0]?.id || null
@@ -2283,12 +2235,12 @@ async function upsertImportedMarketplaceSkill(
   authorUserId?: string
 ) {
   const result = await withDbTransaction(async (client) => {
-    const publisherId = await ensureMarketplacePublisher(clientRunner(client), {
+    const publisherId = await ensureMarketplacePublisher(client, {
       ownerUserId: authorUserId,
       ...publisherOptionsForMirrorSource(imported.mirrorSource.sourceType),
     })
     const mirrorSourceId = await upsertSkillMirrorSource(
-      clientRunner(client),
+      client,
       imported.mirrorSource
     )
     const existing = await getMarketplaceRowByMirrorSourceId(
@@ -2301,112 +2253,76 @@ async function upsertImportedMarketplaceSkill(
       existing.latest_version_value === imported.version &&
       existing.snapshot_content_hash === imported.contentHash
     ) {
-      await runOn(
-        client,
-        `UPDATE catalog_items
-         SET display_name = $2,
-             summary = $3,
-             long_description = $3,
-             tags = $4,
-             metadata = $5::jsonb,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [
-          existing.item_id,
-          imported.frontmatter.name,
-          imported.frontmatter.description,
-          imported.tags,
-          JSON.stringify(imported.itemMetadata),
-        ]
-      )
+      await client
+        .updateTable("catalog_items")
+        .set({
+          display_name: imported.frontmatter.name,
+          summary: imported.frontmatter.description,
+          long_description: imported.frontmatter.description,
+          tags: imported.tags,
+          metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", existing.item_id)
+        .execute()
       return existing.item_id
     }
 
     const itemSlug = existing
       ? existing.item_slug
       : await allocateMarketplaceItemSlug(
-          clientRunner(client),
+          client,
           publisherId,
           sanitizeSlug(imported.catalogSlug) || "skill"
         )
 
     let itemId = existing?.item_id || null
     if (existing) {
-      await runOn(
-        client,
-        `UPDATE catalog_items
-         SET slug = $2,
-             display_name = $3,
-             summary = $4,
-             long_description = $4,
-             mirror_source_id = $5,
-             source_kind = 'official',
-             visibility = 'public',
-             tags = $6,
-             is_active = TRUE,
-             metadata = $7::jsonb,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [
-          existing.item_id,
-          itemSlug,
-          imported.frontmatter.name,
-          imported.frontmatter.description,
-          mirrorSourceId,
-          imported.tags,
-          JSON.stringify(imported.itemMetadata),
-        ]
-      )
+      await client
+        .updateTable("catalog_items")
+        .set({
+          slug: itemSlug,
+          display_name: imported.frontmatter.name,
+          summary: imported.frontmatter.description,
+          long_description: imported.frontmatter.description,
+          mirror_source_id: mirrorSourceId,
+          source_kind: "official",
+          visibility: "public",
+          tags: imported.tags,
+          is_active: true,
+          metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", existing.item_id)
+        .execute()
       itemId = existing.item_id
     } else {
-      const inserted = await runOn<{ id: string }>(
+      const inserted = await runBuilder(
         client,
-        `INSERT INTO catalog_items (
-           publisher_id,
-           workspace_id,
-           item_kind,
-           slug,
-           display_name,
-           summary,
-           long_description,
-           mirror_source_id,
-           source_kind,
-           visibility,
-           tags,
-           is_active,
-           metadata
-         )
-         VALUES (
-           $1,
-           NULL,
-           'skill_package',
-           $2,
-           $3,
-           $4,
-           $4,
-           $5,
-           'official',
-           'public',
-           $6,
-           TRUE,
-           $7::jsonb
-         )
-         RETURNING id`,
-        [
-          publisherId,
-          itemSlug,
-          imported.frontmatter.name,
-          imported.frontmatter.description,
-          mirrorSourceId,
-          imported.tags,
-          JSON.stringify(imported.itemMetadata),
-        ]
+        client
+          .insertInto("catalog_items")
+          .values({
+            publisher_id: publisherId,
+            workspace_id: null,
+            item_kind: "skill_package",
+            slug: itemSlug,
+            display_name: imported.frontmatter.name,
+            summary: imported.frontmatter.description,
+            long_description: imported.frontmatter.description,
+            mirror_source_id: mirrorSourceId,
+            source_kind: "official",
+            visibility: "public",
+            tags: imported.tags,
+            is_active: true,
+            metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
+          })
+          .returning("id")
       )
       itemId = inserted.rows[0]!.id
     }
 
     const snapshotId = await insertSkillSnapshot(
-      clientRunner(client),
+      client,
       imported,
       {
         mirrorSourceId,
@@ -2414,76 +2330,71 @@ async function upsertImportedMarketplaceSkill(
       }
     )
 
-    const existingVersion = await runOn<{ id: string }>(
+    const existingVersion = await runBuilder(
       client,
-      `SELECT id
-       FROM catalog_versions
-       WHERE catalog_item_id = $1
-         AND version = $2
-       LIMIT 1`,
-      [itemId, imported.version]
+      client
+        .selectFrom("catalog_versions")
+        .select("id")
+        .where("catalog_item_id", "=", itemId!)
+        .where("version", "=", imported.version)
+        .limit(1)
     )
 
     const versionId =
       existingVersion.rows[0]?.id ||
       (
-        await runOn<{ id: string }>(
+        await runBuilder(
           client,
-          `INSERT INTO catalog_versions (
-             catalog_item_id,
-             version,
-             status,
-             changelog,
-             metadata,
-             created_by_user_id
-           )
-           VALUES ($1, $2, 'active', $3, $4::jsonb, $5)
-           RETURNING id`,
-          [
-            itemId,
-            imported.version,
-            imported.changelog,
-            JSON.stringify(imported.itemMetadata),
-            authorUserId || null,
-          ]
+          client
+            .insertInto("catalog_versions")
+            .values({
+              catalog_item_id: itemId!,
+              version: imported.version,
+              status: "active",
+              changelog: imported.changelog,
+              metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
+              created_by_user_id: authorUserId || null,
+            })
+            .returning("id")
         )
       ).rows[0]!.id
 
     if (existingVersion.rows[0]) {
-      await runOn(
-        client,
-        `UPDATE catalog_versions
-         SET status = 'active',
-             changelog = $2,
-             metadata = $3::jsonb
-         WHERE id = $1`,
-        [versionId, imported.changelog, JSON.stringify(imported.itemMetadata)]
-      )
+      await client
+        .updateTable("catalog_versions")
+        .set({
+          status: "active",
+          changelog: imported.changelog,
+          metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
+        })
+        .where("id", "=", versionId)
+        .execute()
     }
 
-    await runOn(
-      client,
-      `INSERT INTO skill_package_version_specs (
-         catalog_version_id,
-         skill_snapshot_id,
-         default_conversation_type_mask,
-         created_at
-       )
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (catalog_version_id) DO UPDATE SET
-         skill_snapshot_id = EXCLUDED.skill_snapshot_id,
-         default_conversation_type_mask = EXCLUDED.default_conversation_type_mask`,
-      [versionId, snapshotId, DEFAULT_CONVERSATION_TYPE_MASK]
-    )
+    await client
+      .insertInto("skill_package_version_specs")
+      .values({
+        catalog_version_id: versionId,
+        skill_snapshot_id: snapshotId,
+        default_conversation_type_mask: DEFAULT_CONVERSATION_TYPE_MASK,
+        created_at: sql`NOW()`,
+      })
+      .onConflict((oc) =>
+        oc.column("catalog_version_id").doUpdateSet({
+          skill_snapshot_id: sql`excluded.skill_snapshot_id`,
+          default_conversation_type_mask: sql`excluded.default_conversation_type_mask`,
+        })
+      )
+      .execute()
 
-    await runOn(
-      client,
-      `UPDATE catalog_items
-       SET latest_version_id = $2,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [itemId, versionId]
-    )
+    await client
+      .updateTable("catalog_items")
+      .set({
+        latest_version_id: versionId,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", itemId!)
+      .execute()
 
     return itemId
   })
@@ -2610,7 +2521,7 @@ export async function publishMarketplaceSkill(input: {
   })
 
   const result = await withDbTransaction(async (client) => {
-    const publisherId = await ensureMarketplacePublisher(clientRunner(client), {
+    const publisherId = await ensureMarketplacePublisher(client, {
       ownerUserId: input.authorUserId,
     })
     const existing = input.skillId
@@ -2643,164 +2554,121 @@ export async function publishMarketplaceSkill(input: {
           : null
 
     if (existing) {
-      await runOn(
-        client,
-        `UPDATE catalog_items
-         SET slug = $2,
-             display_name = $3,
-             summary = $4,
-             long_description = $4,
-             tags = $5,
-             is_active = $6,
-             icon_file_id = $7,
-             metadata = $8::jsonb,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [
-          existing.item_id,
-          canonicalSlug,
-          preparedSnapshot.frontmatter.name,
-          preparedSnapshot.frontmatter.description,
-          input.tags || [],
-          input.isActive ?? true,
-          nextIconFileId,
-          JSON.stringify(itemMetadata),
-        ]
-      )
+      await client
+        .updateTable("catalog_items")
+        .set({
+          slug: canonicalSlug,
+          display_name: preparedSnapshot.frontmatter.name,
+          summary: preparedSnapshot.frontmatter.description,
+          long_description: preparedSnapshot.frontmatter.description,
+          tags: input.tags || [],
+          is_active: input.isActive ?? true,
+          icon_file_id: nextIconFileId,
+          metadata: sql`${JSON.stringify(itemMetadata)}::jsonb`,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", existing.item_id)
+        .execute()
       itemId = existing.item_id
     } else {
-      const inserted = await runOn<{ id: string }>(
+      const inserted = await runBuilder(
         client,
-        `INSERT INTO catalog_items (
-           publisher_id,
-           workspace_id,
-           item_kind,
-           slug,
-           display_name,
-           summary,
-           long_description,
-           mirror_source_id,
-           source_kind,
-           visibility,
-           tags,
-           is_active,
-           icon_file_id,
-           metadata
-         )
-         VALUES (
-           $1,
-           NULL,
-           'skill_package',
-           $2,
-           $3,
-           $4,
-           $4,
-           NULL,
-           'official',
-           'public',
-           $5,
-           $6,
-           $7,
-           $8::jsonb
-         )
-         RETURNING id`,
-        [
-          publisherId,
-          canonicalSlug,
-          preparedSnapshot.frontmatter.name,
-          preparedSnapshot.frontmatter.description,
-          input.tags || [],
-          input.isActive ?? true,
-          nextIconFileId,
-          JSON.stringify(itemMetadata),
-        ]
+        client
+          .insertInto("catalog_items")
+          .values({
+            publisher_id: publisherId,
+            workspace_id: null,
+            item_kind: "skill_package",
+            slug: canonicalSlug,
+            display_name: preparedSnapshot.frontmatter.name,
+            summary: preparedSnapshot.frontmatter.description,
+            long_description: preparedSnapshot.frontmatter.description,
+            mirror_source_id: null,
+            source_kind: "official",
+            visibility: "public",
+            tags: input.tags || [],
+            is_active: input.isActive ?? true,
+            icon_file_id: nextIconFileId,
+            metadata: sql`${JSON.stringify(itemMetadata)}::jsonb`,
+          })
+          .returning("id")
       )
       itemId = inserted.rows[0]!.id
     }
 
     const snapshotId = await insertSkillSnapshot(
-      clientRunner(client),
+      client,
       preparedSnapshot
     )
 
-    const existingVersion = await runOn<{ id: string }>(
+    const existingVersion = await runBuilder(
       client,
-      `SELECT id
-       FROM catalog_versions
-       WHERE catalog_item_id = $1
-         AND version = $2
-       LIMIT 1`,
-      [itemId, version]
+      client
+        .selectFrom("catalog_versions")
+        .select("id")
+        .where("catalog_item_id", "=", itemId!)
+        .where("version", "=", version)
+        .limit(1)
     )
 
     const versionMetadata = input.metadata || {}
     const versionId =
       existingVersion.rows[0]?.id ||
       (
-        await runOn<{ id: string }>(
+        await runBuilder(
           client,
-          `INSERT INTO catalog_versions (
-             catalog_item_id,
-             version,
-             status,
-             changelog,
-             metadata,
-             created_by_user_id
-           )
-           VALUES ($1, $2, 'active', $3, $4::jsonb, $5)
-           RETURNING id`,
-          [
-            itemId,
-            version,
-            input.changelog || "",
-            JSON.stringify(versionMetadata),
-            input.authorUserId || null,
-          ]
+          client
+            .insertInto("catalog_versions")
+            .values({
+              catalog_item_id: itemId!,
+              version,
+              status: "active",
+              changelog: input.changelog || "",
+              metadata: sql`${JSON.stringify(versionMetadata)}::jsonb`,
+              created_by_user_id: input.authorUserId || null,
+            })
+            .returning("id")
         )
       ).rows[0]!.id
 
     if (existingVersion.rows[0]) {
-      await runOn(
-        client,
-        `UPDATE catalog_versions
-         SET status = 'active',
-             changelog = $2,
-             metadata = $3::jsonb,
-             created_by_user_id = COALESCE(created_by_user_id, $4),
-             created_at = created_at
-         WHERE id = $1`,
-        [
-          versionId,
-          input.changelog || "",
-          JSON.stringify(versionMetadata),
-          input.authorUserId || null,
-        ]
-      )
+      await client
+        .updateTable("catalog_versions")
+        .set({
+          status: "active",
+          changelog: input.changelog || "",
+          metadata: sql`${JSON.stringify(versionMetadata)}::jsonb`,
+          created_by_user_id: sql`COALESCE(created_by_user_id, ${input.authorUserId || null})`,
+          created_at: sql`created_at`,
+        })
+        .where("id", "=", versionId)
+        .execute()
     }
 
-    await runOn(
-      client,
-      `INSERT INTO skill_package_version_specs (
-         catalog_version_id,
-         skill_snapshot_id,
-         default_conversation_type_mask,
-         created_at
-       )
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (catalog_version_id) DO UPDATE SET
-         skill_snapshot_id = EXCLUDED.skill_snapshot_id,
-         default_conversation_type_mask = EXCLUDED.default_conversation_type_mask`,
-      [versionId, snapshotId, defaultConversationTypeMask]
-    )
+    await client
+      .insertInto("skill_package_version_specs")
+      .values({
+        catalog_version_id: versionId,
+        skill_snapshot_id: snapshotId,
+        default_conversation_type_mask: defaultConversationTypeMask,
+        created_at: sql`NOW()`,
+      })
+      .onConflict((oc) =>
+        oc.column("catalog_version_id").doUpdateSet({
+          skill_snapshot_id: sql`excluded.skill_snapshot_id`,
+          default_conversation_type_mask: sql`excluded.default_conversation_type_mask`,
+        })
+      )
+      .execute()
 
-    await runOn(
-      client,
-      `UPDATE catalog_items
-       SET latest_version_id = $2,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [itemId, versionId]
-    )
+    await client
+      .updateTable("catalog_items")
+      .set({
+        latest_version_id: versionId,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", itemId!)
+      .execute()
 
     return itemId
   })
@@ -2870,59 +2738,45 @@ export async function createWorkspaceSkill(input: {
 
   const result = await withDbTransaction(async (client) => {
     const snapshotId = await insertSkillSnapshot(
-      clientRunner(client),
+      client,
       preparedSnapshot
     )
     const installedSlug = await allocateInstalledSkillSlug(
-      clientRunner(client),
+      client,
       input.workspaceId,
       sanitizeSlug(preparedSnapshot.frontmatter.name) || "skill"
     )
-    const insertedSkill = await runOn<{ id: string }>(
+    const insertedSkill = await runBuilder(
       client,
-      `INSERT INTO installed_skills (
-         workspace_id,
-         slug,
-         name,
-         icon_file_id,
-         tags,
-         current_version,
-         current_snapshot_id,
-         is_active,
-         created_by_workspace_member_id
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, 1, $7, TRUE, $8)
-       RETURNING id`,
-      [
-        input.workspaceId,
-        installedSlug,
-        preparedSnapshot.frontmatter.name,
-        iconFileId,
-        input.tags || [],
-        snapshotId,
-        input.installedByWorkspaceMemberId || null,
-      ]
+      client
+        .insertInto("installed_skills")
+        .values({
+          workspace_id: input.workspaceId,
+          slug: installedSlug,
+          name: preparedSnapshot.frontmatter.name,
+          icon_file_id: iconFileId,
+          tags: input.tags || [],
+          current_version: 1,
+          current_snapshot_id: snapshotId,
+          is_active: true,
+          created_by_workspace_member_id:
+            input.installedByWorkspaceMemberId || null,
+        })
+        .returning("id")
     )
     const skillId = insertedSkill.rows[0]!.id
 
-    await runOn<{ id: string }>(
-      client,
-      `INSERT INTO skill_versions (
-         skill_id,
-         version,
-         skill_snapshot_id,
-         metadata,
-         created_by_workspace_member_id
-       )
-       VALUES ($1, 1, $2, $3::jsonb, $4)
-       RETURNING id`,
-      [
-        skillId,
-        snapshotId,
-        JSON.stringify({}),
-        input.installedByWorkspaceMemberId || null,
-      ]
-    )
+    await client
+      .insertInto("skill_versions")
+      .values({
+        skill_id: skillId,
+        version: 1,
+        skill_snapshot_id: snapshotId,
+        metadata: sql`${JSON.stringify({})}::jsonb`,
+        created_by_workspace_member_id:
+          input.installedByWorkspaceMemberId || null,
+      })
+      .execute()
 
     await ensureSkillBinding(client, {
       skillId,
@@ -3320,7 +3174,7 @@ export async function installMarketplaceSkill(input: {
     const existingSkillId = await findInstalledSkillBySource(
       input.workspaceId,
       input.marketSkillId,
-      clientRunner(client)
+      client
     )
 
     if (existingSkillId) {
@@ -3337,7 +3191,7 @@ export async function installMarketplaceSkill(input: {
     }
 
     const installedSlug = await allocateInstalledSkillSlug(
-      clientRunner(client),
+      client,
       input.workspaceId,
       sanitizeSlug(
         marketplaceSkill.snapshot_name || marketplaceSkill.item_slug
@@ -3346,75 +3200,61 @@ export async function installMarketplaceSkill(input: {
         "skill"
     )
 
-    const insertedSkill = await runOn<{ id: string }>(
+    const insertedSkill = await runBuilder(
       client,
-      `INSERT INTO installed_skills (
-         workspace_id,
-         slug,
-         name,
-         icon_file_id,
-         tags,
-         current_version,
-         current_snapshot_id,
-         is_active,
-         conversation_type_mask_override,
-         created_by_workspace_member_id
-       )
-       VALUES ($1, $2, $3, $4, $5, 1, $6, TRUE, $7, $8)
-       RETURNING id`,
-      [
-        input.workspaceId,
-        installedSlug,
-        marketplaceSkill.snapshot_name || marketplaceSkill.item_display_name,
-        marketplaceSkill.item_icon_file_id,
-        marketplaceSkill.item_tags || [],
-        marketplaceSkill.snapshot_id,
-        marketplaceSkill.spec_default_conversation_type_mask ?? null,
-        input.installedByWorkspaceMemberId || null,
-      ]
+      client
+        .insertInto("installed_skills")
+        .values({
+          workspace_id: input.workspaceId,
+          slug: installedSlug,
+          name:
+            marketplaceSkill.snapshot_name ||
+            marketplaceSkill.item_display_name,
+          icon_file_id: marketplaceSkill.item_icon_file_id,
+          tags: marketplaceSkill.item_tags || [],
+          current_version: 1,
+          current_snapshot_id: marketplaceSkill.snapshot_id!,
+          is_active: true,
+          conversation_type_mask_override:
+            marketplaceSkill.spec_default_conversation_type_mask ?? null,
+          created_by_workspace_member_id:
+            input.installedByWorkspaceMemberId || null,
+        })
+        .returning("id")
     )
     const skillId = insertedSkill.rows[0]!.id
 
-    await runOn<{ id: string }>(
-      client,
-      `INSERT INTO skill_versions (
-         skill_id,
-         version,
-         skill_snapshot_id,
-         metadata,
-         created_by_workspace_member_id
-       )
-       VALUES ($1, 1, $2, $3::jsonb, $4)
-       RETURNING id`,
-      [
-        skillId,
-        marketplaceSkill.snapshot_id,
-        JSON.stringify({}),
-        input.installedByWorkspaceMemberId || null,
-      ]
-    )
+    await client
+      .insertInto("skill_versions")
+      .values({
+        skill_id: skillId,
+        version: 1,
+        skill_snapshot_id: marketplaceSkill.snapshot_id!,
+        metadata: sql`${JSON.stringify({})}::jsonb`,
+        created_by_workspace_member_id:
+          input.installedByWorkspaceMemberId || null,
+      })
+      .execute()
 
-    await runOn(
-      client,
-      `INSERT INTO skill_source_refs (
-         skill_id,
-         source_catalog_item_id,
-         source_catalog_version_id,
-         sync_mode,
-         is_customized
-       )
-       VALUES ($1, $2, $3, 'manual_merge', FALSE)`,
-      [skillId, marketplaceSkill.item_id, marketplaceSkill.latest_version_id]
-    )
+    await client
+      .insertInto("skill_source_refs")
+      .values({
+        skill_id: skillId,
+        source_catalog_item_id: marketplaceSkill.item_id,
+        source_catalog_version_id: marketplaceSkill.latest_version_id,
+        sync_mode: "manual_merge",
+        is_customized: false,
+      })
+      .execute()
 
-    await runOn(
-      client,
-      `UPDATE catalog_items
-       SET download_count = download_count + 1,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [marketplaceSkill.item_id]
-    )
+    await client
+      .updateTable("catalog_items")
+      .set({
+        download_count: sql`${sql.ref("download_count")} + 1`,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", marketplaceSkill.item_id)
+      .execute()
 
     await ensureSkillBinding(client, {
       skillId,
@@ -3505,69 +3345,54 @@ export async function updateInstalledSkill(input: {
         },
       })
       const snapshotId = await insertSkillSnapshot(
-        clientRunner(client),
+        client,
         preparedSnapshot
       )
       nextName = preparedSnapshot.frontmatter.name
 
-      await runOn<{ id: string }>(
-        client,
-        `INSERT INTO skill_versions (
-           skill_id,
-           version,
-           skill_snapshot_id,
-           metadata,
-           created_by_workspace_member_id
-         )
-         VALUES ($1, $2, $3, $4::jsonb, $5)
-         RETURNING id`,
-        [
-          existing.skill_id,
-          nextVersion,
-          snapshotId,
-          JSON.stringify(parseJsonObject(existing.version_metadata)),
-          existing.created_by_workspace_member_id || null,
-        ]
-      )
+      await client
+        .insertInto("skill_versions")
+        .values({
+          skill_id: existing.skill_id,
+          version: nextVersion,
+          skill_snapshot_id: snapshotId,
+          metadata: sql`${JSON.stringify(parseJsonObject(existing.version_metadata))}::jsonb`,
+          created_by_workspace_member_id:
+            existing.created_by_workspace_member_id || null,
+        })
+        .execute()
 
-      await runOn(
-        client,
-        `UPDATE installed_skills
-         SET name = $2,
-             icon_file_id = $3,
-             tags = $4,
-             current_version = $5,
-             current_snapshot_id = $6,
-             is_active = COALESCE($7, is_active),
-             updated_at = NOW()
-         WHERE id = $1`,
-        [
-          existing.skill_id,
-          nextName,
-          input.iconFileId === undefined
-            ? existing.icon_file_id
-            : input.iconFileId
-              ? await normalizeWorkspaceSkillIconFileId(
-                  input.iconFileId,
-                  input.workspaceId
-                )
-              : null,
-          input.tags || existing.tags || [],
-          nextVersion,
-          snapshotId,
-          input.isEnabled === undefined ? null : input.isEnabled,
-        ]
-      )
+      await client
+        .updateTable("installed_skills")
+        .set({
+          name: nextName,
+          icon_file_id:
+            input.iconFileId === undefined
+              ? existing.icon_file_id
+              : input.iconFileId
+                ? await normalizeWorkspaceSkillIconFileId(
+                    input.iconFileId,
+                    input.workspaceId
+                  )
+                : null,
+          tags: input.tags || existing.tags || [],
+          current_version: nextVersion,
+          current_snapshot_id: snapshotId,
+          is_active: sql`COALESCE(${input.isEnabled === undefined ? null : input.isEnabled}, is_active)`,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", existing.skill_id)
+        .execute()
 
       if (existing.source_catalog_item_id) {
-        await runOn(
-          client,
-          `UPDATE skill_source_refs
-           SET is_customized = TRUE,
-               updated_at = NOW()
-           WHERE skill_id = $1`,
-          [existing.skill_id]
-        )
+        await client
+          .updateTable("skill_source_refs")
+          .set({
+            is_customized: true,
+            updated_at: sql`NOW()`,
+          })
+          .where("skill_id", "=", existing.skill_id)
+          .execute()
       }
 
       return
@@ -3588,25 +3413,23 @@ export async function updateInstalledSkill(input: {
                 input.workspaceId
               )
             : null
-      await runOn(
-        client,
-        `UPDATE installed_skills
-         SET icon_file_id = $2,
-             tags = $3,
-             is_active = $4,
-             conversation_type_mask_override = $5,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [
-          existing.skill_id,
-          nextIconFileId,
-          input.tags === undefined ? existing.tags || [] : input.tags,
-          input.isEnabled === undefined ? existing.is_active : input.isEnabled,
-          input.conversationTypeMaskOverride === undefined
-            ? existing.conversation_type_mask_override
-            : input.conversationTypeMaskOverride,
-        ]
-      )
+      await client
+        .updateTable("installed_skills")
+        .set({
+          icon_file_id: nextIconFileId,
+          tags: input.tags === undefined ? existing.tags || [] : input.tags,
+          is_active:
+            input.isEnabled === undefined
+              ? existing.is_active
+              : input.isEnabled,
+          conversation_type_mask_override:
+            input.conversationTypeMaskOverride === undefined
+              ? existing.conversation_type_mask_override
+              : input.conversationTypeMaskOverride,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", existing.skill_id)
+        .execute()
     }
   })
 
@@ -3647,55 +3470,41 @@ export async function upgradeInstalledSkill(input: {
   }
 
   await withDbTransaction(async (client) => {
-    await runOn<{ id: string }>(
-      client,
-      `INSERT INTO skill_versions (
-         skill_id,
-         version,
-         skill_snapshot_id,
-         metadata,
-         created_by_workspace_member_id
-       )
-       VALUES ($1, $2, $3, $4::jsonb, $5)
-       RETURNING id`,
-      [
-        existing.skill_id,
-        existing.current_version + 1,
-        marketplaceSkill.snapshot_id,
-        JSON.stringify(parseJsonObject(existing.version_metadata)),
-        existing.created_by_workspace_member_id || null,
-      ]
-    )
+    await client
+      .insertInto("skill_versions")
+      .values({
+        skill_id: existing.skill_id,
+        version: existing.current_version + 1,
+        skill_snapshot_id: marketplaceSkill.snapshot_id!,
+        metadata: sql`${JSON.stringify(parseJsonObject(existing.version_metadata))}::jsonb`,
+        created_by_workspace_member_id:
+          existing.created_by_workspace_member_id || null,
+      })
+      .execute()
 
-    await runOn(
-      client,
-      `UPDATE installed_skills
-       SET name = $2,
-           icon_file_id = $3,
-           tags = $4,
-           current_version = $5,
-           current_snapshot_id = $6,
-            updated_at = NOW()
-       WHERE id = $1`,
-      [
-        existing.skill_id,
-        marketplaceSkill.snapshot_name || marketplaceSkill.item_display_name,
-        marketplaceSkill.item_icon_file_id,
-        marketplaceSkill.item_tags || [],
-        existing.current_version + 1,
-        marketplaceSkill.snapshot_id,
-      ]
-    )
+    await client
+      .updateTable("installed_skills")
+      .set({
+        name:
+          marketplaceSkill.snapshot_name || marketplaceSkill.item_display_name,
+        icon_file_id: marketplaceSkill.item_icon_file_id,
+        tags: marketplaceSkill.item_tags || [],
+        current_version: existing.current_version + 1,
+        current_snapshot_id: marketplaceSkill.snapshot_id!,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", existing.skill_id)
+      .execute()
 
-    await runOn(
-      client,
-      `UPDATE skill_source_refs
-       SET source_catalog_version_id = $2,
-           is_customized = FALSE,
-           updated_at = NOW()
-       WHERE skill_id = $1`,
-      [existing.skill_id, marketplaceSkill.latest_version_id]
-    )
+    await client
+      .updateTable("skill_source_refs")
+      .set({
+        source_catalog_version_id: marketplaceSkill.latest_version_id,
+        is_customized: false,
+        updated_at: sql`NOW()`,
+      })
+      .where("skill_id", "=", existing.skill_id)
+      .execute()
   })
 
   return getInstalledSkillResponse(input.workspaceId, input.installedSkillId)
@@ -3721,13 +3530,11 @@ export async function uninstallInstalledSkill(
       }
     }
 
-    await runOn(
-      client,
-      `DELETE FROM installed_skills
-       WHERE id = $1
-         AND workspace_id = $2`,
-      [installedSkillId, workspaceId]
-    )
+    await client
+      .deleteFrom("installed_skills")
+      .where("id", "=", installedSkillId)
+      .where("workspace_id", "=", workspaceId)
+      .execute()
 
     await hardDeleteBindingsForResourceOn(client, {
       resourceType: "installed_skill",
@@ -4064,13 +3871,14 @@ export async function readVisibleSkill(input: {
     }
   }
 
-  const result = await runQuery<SkillSnapshotFileRow>(
-    `SELECT id, skill_snapshot_id, path, media_type, content_blocks, created_at, updated_at
-     FROM skill_snapshot_files
-     WHERE skill_snapshot_id = $1
-       AND path = $2
-     LIMIT 1`,
-    [installedSkill.current_snapshot_id, targetPath]
+  const result = await runBuilder(
+    db,
+    db
+      .selectFrom("skill_snapshot_files")
+      .select(["path", "content_blocks"])
+      .where("skill_snapshot_id", "=", installedSkill.current_snapshot_id)
+      .where("path", "=", targetPath)
+      .limit(1)
   )
 
   const asset = result.rows[0]
