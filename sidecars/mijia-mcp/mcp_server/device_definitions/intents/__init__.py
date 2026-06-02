@@ -1,2 +1,1 @@
 """Intent definition modules."""
-

@@ -69,4 +69,3 @@ line-length = 100
 
 [tool.ruff.format]
 # Default ruff formatter; the point is consistent whitespace (no trailing ws).
-
