@@ -30,6 +30,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -78,6 +79,13 @@ HEADER_EXPOSE_RAW = "x-mijia-expose-raw"
 MAX_AUTH_HEADER_BYTES = 16 * 1024
 MAX_TENANT_LEN = 256
 
+# Idle eviction: drop a tenant's cached adapter (and its secret dir) after this
+# many seconds with no borrow, so a multi-tenant deployment's memory + on-disk
+# secret footprint tracks ACTIVE tenants, not every tenant ever seen.
+ADAPTER_IDLE_TTL_SECONDS = float(
+    os.environ.get("MIJIA_ADAPTER_IDLE_TTL_SECONDS", str(30 * 60))
+)
+
 
 class TenantError(Exception):
     """Raised when the per-request tenant/credential headers are unusable."""
@@ -104,7 +112,15 @@ def _allowed_tool_names(expose_raw: bool) -> set[str]:
 
 
 class _AdapterEntry:
-    __slots__ = ("adapter", "config_dir", "auth_hash", "tenant", "refcount", "retired")
+    __slots__ = (
+        "adapter",
+        "config_dir",
+        "auth_hash",
+        "tenant",
+        "refcount",
+        "retired",
+        "last_used",
+    )
 
     def __init__(
         self,
@@ -119,6 +135,7 @@ class _AdapterEntry:
         self.tenant = tenant
         self.refcount = 0
         self.retired = False
+        self.last_used = time.monotonic()
 
 
 class _AdapterRegistry:
@@ -154,6 +171,7 @@ class _AdapterRegistry:
         ).hexdigest()[:32]
         entry: _AdapterEntry
         with self._lock:
+            self._evict_idle_locked()
             existing = self._by_tenant.get(tenant)
             if existing is not None and existing.auth_hash == auth_hash:
                 entry = existing
@@ -172,11 +190,26 @@ class _AdapterRegistry:
                 entry = _AdapterEntry(adapter, config_dir, auth_hash, tenant)
                 self._by_tenant[tenant] = entry
             entry.refcount += 1
+            entry.last_used = time.monotonic()
         try:
             yield entry.adapter
         finally:
             with self._lock:
                 entry.refcount -= 1
+                entry.last_used = time.monotonic()
+                self._maybe_delete_locked(entry)
+
+    def _evict_idle_locked(self) -> None:
+        """Retire + delete entries idle beyond the TTL (refcount 0 only)."""
+        if ADAPTER_IDLE_TTL_SECONDS <= 0:
+            return
+        now = time.monotonic()
+        for entry in list(self._by_tenant.values()):
+            if (
+                entry.refcount <= 0
+                and now - entry.last_used > ADAPTER_IDLE_TTL_SECONDS
+            ):
+                entry.retired = True
                 self._maybe_delete_locked(entry)
 
     def _maybe_delete_locked(self, entry: _AdapterEntry) -> None:
@@ -257,7 +290,13 @@ _LOWLEVEL: Server = Server("mijia-mcp")
 @_LOWLEVEL.list_tools()
 async def _list_tools() -> list[types.Tool]:
     request = _current_request()
-    expose_raw = _truthy(request.headers.get(HEADER_EXPOSE_RAW)) if request else False
+    if request is None:
+        raise TenantError("no active request context")
+    # Require valid tenant/credential headers before advertising anything, and
+    # derive expose_raw from the authenticated request (not a bare header), so
+    # an unauthenticated caller cannot enumerate tool schemas — including the
+    # raw-tool set — by setting X-Mijia-Expose-Raw alone.
+    _tenant, _auth, expose_raw = _decode_tenant_headers(request)
     allowed = _allowed_tool_names(expose_raw)
     out: list[types.Tool] = []
     for tool in srv.mcp._tool_manager.list_tools():

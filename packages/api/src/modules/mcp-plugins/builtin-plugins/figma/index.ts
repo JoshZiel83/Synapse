@@ -120,13 +120,21 @@ export const figmaSeed: BuiltinOrgSeed = {
           ownerScope: "installation",
           authorizeUrl: "https://www.figma.com/oauth/mcp",
           tokenUrl: "https://api.figma.com/v1/oauth/token",
-          userInfoUrl: "https://api.figma.com/v1/me",
           // The driver reads binding.scopes (array) and joins them into the
           // OAuth `scope` query param.
           scopes: ["mcp:connect"],
-          profileIdPath: "id",
-          profileDisplayNamePath: "handle",
-          profileAvatarUrlPath: "img_url",
+          // RFC 8707 resource indicator: Figma's protected-resource metadata
+          // names the resource as the /mcp endpoint, and the OAuth server binds
+          // the issued token to it. Without this, the token is not valid for
+          // https://mcp.figma.com/mcp. The driver appends these to both the
+          // authorize URL and the token request.
+          extraAuthorizeParams: { resource: "https://mcp.figma.com/mcp" },
+          extraTokenParams: { resource: "https://mcp.figma.com/mcp" },
+          // NOTE: deliberately NO userInfoUrl. Figma's REST GET /v1/me requires
+          // the `current_user:read` REST scope, which the MCP OAuth flow
+          // (mcp:connect only) does not grant — fetching it would hard-fail the
+          // install at the callback. externalAccountId/displayName fall back to
+          // the token-response claims (sub / user_id / name).
           // Figma's OAuth metadata advertises client_secret_basic /
           // client_secret_post only (no public 'none'), so BOTH clientId and
           // clientSecret are required. Provisioned via env from a
