@@ -144,9 +144,19 @@ const ExecFileWireSchema = z.object({
   allowed_env: z.array(z.string()).optional(),
 })
 
+// Sandbox confinement variant — no command/argv matcher (isolation is the
+// boundary). Must stay byte-for-byte aligned with the shared
+// SandboxPolicyWireSchema (enforced by commandline-parity.test.ts).
+const SandboxWireSchema = z.object({
+  executor: z.literal("sandbox"),
+  working_directory: z.string().optional(),
+  allowed_env: z.array(z.string()).optional(),
+})
+
 export const RuntimeCommandlinePolicySchema = z.discriminatedUnion("executor", [
   ShellWireSchema,
   ExecFileWireSchema,
+  SandboxWireSchema,
 ])
 export type RuntimeCommandlinePolicy = z.infer<
   typeof RuntimeCommandlinePolicySchema

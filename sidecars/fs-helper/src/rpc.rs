@@ -179,6 +179,102 @@ pub struct ExtractTextInput {
     pub max_bytes: Option<u64>,
 }
 
+// ─────────────────────── CAS + manifest inputs ───────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CasPutInput {
+    /// Absolute host path of the source file to ingest into the CAS.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CasHasInput {
+    pub sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CasGcInput {
+    /// The complete reachable set; any blob NOT in this set is deleted.
+    pub reachable_sha256: Vec<String>,
+    /// Grace window (seconds): blobs modified more recently than this are NEVER
+    /// deleted even if unreachable, protecting in-flight commits whose blobs are
+    /// on disk before their snapshot row commits. Defaults to 3600 when omitted.
+    #[serde(default)]
+    pub grace_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManifestMaterializeInput {
+    /// Manifest blob sha to materialize; None/empty = empty tree.
+    #[serde(default)]
+    pub manifest_sha256: Option<String>,
+    /// Absolute host path of the plain directory to populate.
+    pub target_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManifestScanCommitInput {
+    /// Absolute host path of the live working directory to scan.
+    pub dir: String,
+    /// What the live dir was materialized from (for 3-way merge base).
+    #[serde(default)]
+    pub base_manifest_sha256: Option<String>,
+    /// Current space head (may have advanced past base); when present and
+    /// != base, a 3-way merge is performed.
+    #[serde(default)]
+    pub latest_manifest_sha256: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirSyncInput {
+    /// Absolute host path of the live working directory to reconcile.
+    pub dir: String,
+    /// The dir's current base manifest.
+    #[serde(default)]
+    pub base_manifest_sha256: Option<String>,
+    /// The new head manifest to merge toward.
+    pub to_manifest_sha256: String,
+    /// R12-1: when true, write sidecars + apply non-conflicting incoming changes
+    /// but DEFER overwriting the conflicting live paths with head. The caller
+    /// durably persists the pending record, then calls fs.dir.apply_head to
+    /// finish. Defaults false (legacy one-shot apply).
+    #[serde(default)]
+    pub defer_conflict_apply: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirApplyHeadInput {
+    /// Absolute host path of the live working directory.
+    pub dir: String,
+    /// The head manifest whose values to apply at the conflict paths.
+    pub to_manifest_sha256: String,
+    /// The conflict paths (deferred_conflicts from the dir_sync phase) to
+    /// overwrite with head now that the pending record is durable.
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManifestCleanupInput {
+    /// Absolute host paths (scratch dirs) to remove.
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SidecarRestoreInput {
+    /// Absolute host path of the live mount root to restore the sidecar into.
+    pub dir: String,
+    /// The mount-relative sidecar VFS leaf (e.g. /.synapse-conflicts/<hash>).
+    pub sidecar_vfs: String,
+    /// "file" or "symlink".
+    pub kind: String,
+    /// CAS sha for a file sidecar (its bytes are already in CAS).
+    #[serde(default)]
+    pub content_sha: Option<String>,
+    /// Symlink target for a symlink sidecar.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
 // ─────────────────────────── outputs ─────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -289,4 +385,87 @@ pub struct ExtractTextResult {
     pub source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _error: Option<String>,
+}
+
+// ─────────────────────── CAS + manifest outputs ──────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct CasPutResult {
+    pub sha256: String,
+    pub size: u64,
+    pub dedup: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasHasResult {
+    pub exists: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CasGcResult {
+    pub deleted_count: u64,
+}
+
+/// Wire form of a manifest entry returned by scan_commit (so the TS caller
+/// can persist path→sha mappings without re-reading the manifest blob).
+#[derive(Debug, Serialize)]
+pub struct ManifestEntryWire {
+    pub path: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    pub mode: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+impl From<&crate::manifest::ManifestEntry> for ManifestEntryWire {
+    fn from(e: &crate::manifest::ManifestEntry) -> Self {
+        let kind = match e.kind {
+            crate::manifest::EntryKind::File => "file",
+            crate::manifest::EntryKind::Dir => "dir",
+            crate::manifest::EntryKind::Symlink => "symlink",
+        };
+        Self {
+            path: e.path.clone(),
+            kind: kind.to_string(),
+            sha256: e.sha256.clone(),
+            mode: e.mode,
+            size: e.size,
+            target: e.target.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManifestScanCommitResult {
+    pub manifest_sha256: String,
+    pub entries: Vec<ManifestEntryWire>,
+    pub new_blobs: Vec<String>,
+    pub conflict_paths: Vec<String>,
+    pub entry_count: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConflictSidecar {
+    pub original: String,
+    pub sidecar: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DirSyncResult {
+    pub applied: Vec<String>,
+    pub deferred_conflicts: Vec<String>,
+    pub conflict_sidecars: Vec<ConflictSidecar>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incomplete: Option<String>,
+    pub new_base_manifest_sha256: String,
 }

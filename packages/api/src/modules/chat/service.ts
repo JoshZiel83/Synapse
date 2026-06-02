@@ -111,7 +111,8 @@ type NonEventItemType = Exclude<ItemType, "event">
 export interface ConversationItemPartInput {
   type: "text" | "file_ref" | "json"
   text?: string
-  fileId?: string
+  refPath?: string | null
+  refSha256?: string | null
   json?: unknown
   mimeType?: string
   name?: string
@@ -199,7 +200,8 @@ type ItemPartRow = {
   ordinal: number
   part_type: "text" | "file_ref" | "json"
   text_value: string | null
-  file_id: string | null
+  ref_path: string | null
+  ref_sha256: string | null
   json_value: unknown
   mime_type: string | null
   name: string | null
@@ -1128,7 +1130,8 @@ async function hydrateConversationItems(
           ordinal,
           part_type,
           text_value,
-          file_id,
+          ref_path,
+          ref_sha256,
           json_value,
           mime_type,
           name,
@@ -3264,13 +3267,14 @@ export async function createConversationItem(params: {
             ordinal,
             part_type,
             text_value,
-            file_id,
+            ref_path,
+            ref_sha256,
             json_value,
             mime_type,
             name,
             metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb)
         `,
         [
           crypto.randomUUID(),
@@ -3278,7 +3282,8 @@ export async function createConversationItem(params: {
           ordinal,
           part.type,
           part.type === "text" ? (part.text ?? "") : null,
-          part.type === "file_ref" ? (part.fileId ?? null) : null,
+          part.type === "file_ref" ? (part.refPath ?? null) : null,
+          part.type === "file_ref" ? (part.refSha256 ?? null) : null,
           part.type === "json" ? JSON.stringify(part.json ?? {}) : null,
           part.mimeType ?? null,
           part.name ?? null,

@@ -82,17 +82,14 @@ async function loadArchivePoint(
             cap.ordinal AS part_ordinal,
             cap.part_type,
             cap.text_value,
-            cap.file_id,
+            cap.ref_path,
+            cap.ref_sha256,
             cap.json_value,
             cap.mime_type,
             cap.name,
-            cap.metadata AS part_metadata,
-            f.original_name,
-            f.mime_type AS file_mime_type,
-            f.size_bytes
+            cap.metadata AS part_metadata
      FROM context_archive_frames caf
      LEFT JOIN context_archive_frame_parts cap ON cap.archive_frame_id = caf.id
-     LEFT JOIN files f ON f.id = cap.file_id
      WHERE caf.archive_point_id = $1
      ORDER BY caf.ordinal ASC, cap.ordinal ASC`,
     [archivePointId]
@@ -107,14 +104,12 @@ async function loadArchivePoint(
       frameMap.get(row.id)!.parts.push({
         part_type: row.part_type,
         text_value: row.text_value,
-        file_id: row.file_id,
+        ref_path: row.ref_path,
+        ref_sha256: row.ref_sha256,
         json_value: row.json_value,
         mime_type: row.mime_type,
         name: row.name,
         metadata: row.part_metadata,
-        original_name: row.original_name,
-        file_mime_type: row.file_mime_type,
-        size_bytes: row.size_bytes,
       })
     }
   }
@@ -250,7 +245,8 @@ function blockToArchivePart(block: CanonicalContentBlock) {
     return {
       partType: "text",
       textValue: block.text,
-      fileId: null,
+      refPath: null as string | null,
+      refSha256: null as string | null,
       jsonValue: null,
       mimeType: null,
       name: null,
@@ -262,7 +258,8 @@ function blockToArchivePart(block: CanonicalContentBlock) {
     return {
       partType: "json",
       textValue: null,
-      fileId: null,
+      refPath: null as string | null,
+      refSha256: null as string | null,
       jsonValue: {
         id: block.id,
         type: "mention",
@@ -277,11 +274,14 @@ function blockToArchivePart(block: CanonicalContentBlock) {
   return {
     partType: "file_ref",
     textValue: null,
-    fileId: block.fileId,
+    refPath: block.path ?? null,
+    refSha256: block.sha256,
     jsonValue: null,
     mimeType: block.mimeType,
-    name: block.originalName,
+    name: block.name,
     metadata: {
+      sha256: block.sha256,
+      path: block.path,
       sizeBytes: block.sizeBytes,
       category: block.category,
     },
@@ -321,14 +321,15 @@ async function insertArchiveFrames(
       const part = blockToArchivePart(frame.parts[partIndex]!)
       await runQuery(
         `INSERT INTO context_archive_frame_parts
-           (archive_frame_id, ordinal, part_type, text_value, file_id, json_value, mime_type, name, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           (archive_frame_id, ordinal, part_type, text_value, ref_path, ref_sha256, json_value, mime_type, name, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           frameId,
           partIndex,
           part.partType,
           part.textValue,
-          part.fileId,
+          part.refPath,
+          part.refSha256,
           part.jsonValue,
           part.mimeType,
           part.name,

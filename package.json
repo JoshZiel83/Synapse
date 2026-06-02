@@ -36,6 +36,8 @@
     "build:api": "npm run build -w packages/api",
     "build:daemon": "npm run build -w packages/remote-agent-daemon",
     "build:web": "npm run build -w packages/device-protocol && npm run build -w packages/shared && npm run build -w packages/web-next",
+    "typecheck:api": "npm run typecheck -w packages/api",
+    "typecheck": "npm run typecheck:api",
     "test": "npm run test -w packages/api",
     "test:api": "npm run test -w packages/api",
     "test:conformance": "npm run test:conformance -w packages/api",

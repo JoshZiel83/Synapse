@@ -14,10 +14,16 @@ CREATE TYPE workspace_access_bindings_access_key AS ENUM ('model_admin', 'actor_
 CREATE TYPE workspace_invites_trust_level AS ENUM ('admin', 'member', 'guest');
 CREATE TYPE conversations_kind AS ENUM ('direct', 'group');
 CREATE TYPE file_content_kind AS ENUM ('image', 'audio', 'video', 'document');
-CREATE TYPE file_storage_backend AS ENUM ('local_fs');
 CREATE TYPE file_origin_family AS ENUM ('user_upload', 'actor_output', 'tool_output', 'model_output', 'external_import', 'package_import', 'system_generated', 'platform_asset');
 CREATE TYPE file_parse_run_status AS ENUM ('pending', 'running', 'succeeded', 'failed', 'skipped');
 CREATE TYPE file_parse_output_kind AS ENUM ('text', 'structured_json', 'derived_file');
+CREATE TYPE file_snapshot_reason AS ENUM ('session_commit', 'manual', 'import', 'gc_root');
+CREATE TYPE file_permission AS ENUM ('read', 'write', 'admin');
+CREATE TYPE file_access_grants_status AS ENUM ('active', 'revoked', 'superseded');
+CREATE TYPE file_mount_status AS ENUM ('provisioning', 'active', 'committing', 'closed', 'failed');
+-- NOTE: content_blobs.backend is TEXT + CHECK (not a PG enum) on purpose:
+-- adding a future backend (s3, tiered, remote) is then a one-line CHECK
+-- loosen rather than an ALTER TYPE. See plan round-9 #10.
 CREATE TYPE resource_access_bindings_status AS ENUM ('active', 'revoked');
 CREATE TYPE resource_access_bindings_source AS ENUM ('manual', 'default_open', 'approval', 'system');
 CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'device_capability', 'automation_event_source', 'actor', 'remote_agent');
@@ -381,47 +387,63 @@ CREATE INDEX idx_audit_logs_workspace ON audit_logs(workspace_id, created_at DES
 CREATE INDEX idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
 
--- ============ Files ============
-CREATE TABLE file_blobs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  backend file_storage_backend NOT NULL,
-  storage_key VARCHAR(500) NOT NULL,
-  bucket VARCHAR(255),
+-- ============ Files (content-addressed) ============
+-- file-service refactor: unified content-addressed store shared by the by-id
+-- asset library (file_assets, below) AND the by-path working-tree snapshots
+-- (file_snapshots, defined later after access_subjects). A blob's identity IS
+-- its sha256; the same sha256 is one physical blob regardless of how many
+-- logical paths/assets point at it (zero-copy publish/pull). The scope layer
+-- (file_spaces / file_access_grants / file_mounts) lives in the late section
+-- because it references access_subjects + the scope-validation helpers.
+
+CREATE TABLE content_blobs (
+  -- sha256 hex IS the primary key — the CAS path is derived from it
+  -- (blobs/<aa>/<sha256>), so there is no separate surrogate id and no
+  -- storage_key (that's what makes publish/pull a pure reference change).
+  sha256 VARCHAR(64) PRIMARY KEY,
+  size_bytes BIGINT NOT NULL,
+  -- TEXT + CHECK rather than a PG enum: a future backend (s3/tiered/remote)
+  -- is a CHECK loosen, not an ALTER TYPE migration (plan round-9 #10).
+  backend TEXT NOT NULL DEFAULT 'local_cas'
+    CHECK (backend IN ('local_cas')),
+  -- Location/backend metadata. Empty for local_cas (path derived from sha);
+  -- a future S3/tier backend stores bucket/key/tier here. Kept so storage
+  -- layering needs no schema change at the app layer.
   locator_json JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE (backend, storage_key)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- NOTE: deliberately NO mime_type/name here — the same bytes can be a PDF
+  -- named "report.pdf" in one context and an attachment named "q3.pdf" in
+  -- another. MIME/name live on the referencing row (file_assets) or are
+  -- inferred from the path by the content resolver.
 );
 
-CREATE TABLE files (
+-- The by-id asset library: stable entity assets (avatars, icons, skill
+-- icons) + any "produced file" that needs an addressable id. Folds the old
+-- files + file_origins (1:1) into one row. The asset's "current bytes"
+-- pointer is `content_sha256`; re-pointing it (zero-copy) is publish/pull.
+CREATE TABLE file_assets (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  uploader_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  content_sha256 VARCHAR(64) NOT NULL REFERENCES content_blobs(sha256) ON DELETE RESTRICT,
   original_name VARCHAR(500) NOT NULL,
   mime_type VARCHAR(255) NOT NULL,
   content_kind file_content_kind NOT NULL,
   size_bytes BIGINT NOT NULL,
-  sha256 VARCHAR(64) NOT NULL,
-  blob_id UUID NOT NULL REFERENCES file_blobs(id) ON DELETE RESTRICT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE file_origins (
-  file_id UUID PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+  uploader_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  -- provenance (folded from file_origins). initiator_actor_id has no FK by
+  -- convention (matches the old file_origins shape).
+  initiator_actor_id UUID,
   source_family file_origin_family NOT NULL,
   source_system VARCHAR(100) NOT NULL,
-  initiator_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  initiator_actor_id UUID,
-  provider_key VARCHAR(100),
-  plugin_id UUID,
-  parent_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
-  external_resource_key VARCHAR(500),
+  parent_asset_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   details_json JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE file_parse_runs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  file_id UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  asset_id UUID NOT NULL REFERENCES file_assets(id) ON DELETE CASCADE,
   pipeline VARCHAR(100) NOT NULL,
   parser_key VARCHAR(100) NOT NULL,
   parser_version VARCHAR(50),
@@ -442,23 +464,23 @@ CREATE TABLE file_parse_outputs (
   role VARCHAR(100) NOT NULL,
   text_content TEXT,
   structured_json JSONB NOT NULL DEFAULT '{}',
-  derived_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  derived_asset_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   is_primary BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_files_workspace ON files(workspace_id, created_at DESC);
-CREATE INDEX idx_files_uploader ON files(uploader_user_id, created_at DESC);
-CREATE INDEX idx_files_blob ON files(blob_id);
-CREATE INDEX idx_files_sha256 ON files(sha256);
-CREATE INDEX idx_file_origins_family ON file_origins(source_family, source_system, created_at DESC);
-CREATE INDEX idx_file_parse_runs_file ON file_parse_runs(file_id, created_at DESC);
+CREATE INDEX idx_file_assets_workspace ON file_assets(workspace_id, created_at DESC);
+CREATE INDEX idx_file_assets_uploader ON file_assets(uploader_user_id, created_at DESC);
+CREATE INDEX idx_file_assets_content ON file_assets(content_sha256);
+CREATE INDEX idx_file_assets_origin ON file_assets(source_family, source_system, created_at DESC);
+CREATE INDEX idx_file_assets_parent ON file_assets(parent_asset_id) WHERE parent_asset_id IS NOT NULL;
+CREATE INDEX idx_file_parse_runs_asset ON file_parse_runs(asset_id, created_at DESC);
 CREATE INDEX idx_file_parse_runs_status ON file_parse_runs(status, created_at DESC);
 CREATE INDEX idx_file_parse_outputs_run ON file_parse_outputs(run_id, created_at);
 
 ALTER TABLE users
   ADD CONSTRAINT users_avatar_file_id_fkey
-  FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
+  FOREIGN KEY (avatar_file_id) REFERENCES file_assets(id) ON DELETE SET NULL;
 
 CREATE TABLE realtime_event_outbox (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -556,7 +578,7 @@ CREATE TABLE publishers (
   slug VARCHAR(100) UNIQUE NOT NULL,
   display_name VARCHAR(255) NOT NULL,
   description TEXT DEFAULT '',
-  logo_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  logo_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   is_builtin BOOLEAN DEFAULT FALSE,
@@ -571,7 +593,7 @@ CREATE TABLE catalog_categories (
   item_kind catalog_categories_item_kind NOT NULL,
   display_name VARCHAR(255) NOT NULL,
   description TEXT DEFAULT '',
-  icon_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  icon_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   sort_order INT NOT NULL DEFAULT 0,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -588,7 +610,7 @@ CREATE TABLE catalog_items (
   display_name VARCHAR(255) NOT NULL,
   summary TEXT DEFAULT '',
   long_description TEXT DEFAULT '',
-  icon_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  icon_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   mirror_source_id UUID REFERENCES skill_mirror_sources(id) ON DELETE SET NULL,
   source_kind catalog_items_source_kind NOT NULL DEFAULT 'official',
   visibility catalog_items_visibility NOT NULL DEFAULT 'public',
@@ -661,7 +683,7 @@ CREATE TABLE actor_template_version_specs (
   catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE CASCADE,
   role actors_role NOT NULL,
   name VARCHAR(255) NOT NULL,
-  avatar_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  avatar_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   avatar_emoji VARCHAR(32),
   title VARCHAR(255) NOT NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
@@ -872,7 +894,7 @@ CREATE TABLE actors (
   name VARCHAR(255) NOT NULL,
   role actors_role NOT NULL,
   title VARCHAR(255) NOT NULL,
-  avatar_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  avatar_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   avatar_emoji VARCHAR(32),
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
@@ -901,7 +923,7 @@ CREATE TABLE remote_agents (
   title VARCHAR(255) NOT NULL,
   description TEXT,
   runtime_kind remote_agents_runtime_kind NOT NULL,
-  avatar_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  avatar_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   avatar_emoji VARCHAR(32),
   -- P2: see actors.access_policy comment above.
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -1727,7 +1749,8 @@ CREATE TABLE conversation_item_parts (
   ordinal INT NOT NULL,
   part_type conversation_item_parts_part_type NOT NULL,
   text_value TEXT,
-  file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  ref_path TEXT,
+  ref_sha256 VARCHAR(64),
   json_value JSONB,
   mime_type VARCHAR(255),
   name VARCHAR(255),
@@ -1735,12 +1758,13 @@ CREATE TABLE conversation_item_parts (
   UNIQUE(item_id, ordinal),
   CHECK (
     (part_type = 'text' AND text_value IS NOT NULL) OR
-    (part_type = 'file_ref' AND file_id IS NOT NULL) OR
+    (part_type = 'file_ref' AND ref_sha256 IS NOT NULL) OR
     (part_type = 'json' AND json_value IS NOT NULL)
   )
 );
 
 CREATE INDEX idx_conversation_item_parts_item ON conversation_item_parts(item_id, ordinal);
+CREATE INDEX idx_conversation_item_parts_ref_sha ON conversation_item_parts(ref_sha256) WHERE ref_sha256 IS NOT NULL;
 
 CREATE TABLE conversation_participants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2185,7 +2209,8 @@ CREATE TABLE tool_result_parts (
   ordinal INT NOT NULL,
   part_type tool_result_parts_part_type NOT NULL,
   text_value TEXT,
-  file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  ref_path TEXT,
+  ref_sha256 VARCHAR(64),
   json_value JSONB,
   mime_type VARCHAR(255),
   name VARCHAR(255),
@@ -2193,12 +2218,13 @@ CREATE TABLE tool_result_parts (
   UNIQUE(tool_result_id, ordinal),
   CHECK (
     (part_type = 'text' AND text_value IS NOT NULL) OR
-    (part_type = 'file_ref' AND file_id IS NOT NULL) OR
+    (part_type = 'file_ref' AND ref_sha256 IS NOT NULL) OR
     (part_type = 'json' AND json_value IS NOT NULL)
   )
 );
 
 CREATE INDEX idx_tool_result_parts_result ON tool_result_parts(tool_result_id, ordinal);
+CREATE INDEX idx_tool_result_parts_ref_sha ON tool_result_parts(ref_sha256) WHERE ref_sha256 IS NOT NULL;
 
 CREATE TABLE session_wakeups (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2665,7 +2691,8 @@ CREATE TABLE memory_item_parts (
   ordinal INT NOT NULL,
   part_type memory_item_parts_part_type NOT NULL,
   text_value TEXT,
-  file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  ref_path TEXT,
+  ref_sha256 VARCHAR(64),
   json_value JSONB,
   mime_type VARCHAR(255),
   name VARCHAR(255),
@@ -2673,12 +2700,13 @@ CREATE TABLE memory_item_parts (
   UNIQUE(memory_item_id, ordinal),
   CHECK (
     (part_type = 'text' AND text_value IS NOT NULL) OR
-    (part_type = 'file_ref' AND file_id IS NOT NULL) OR
+    (part_type = 'file_ref' AND ref_sha256 IS NOT NULL) OR
     (part_type = 'json' AND json_value IS NOT NULL)
   )
 );
 
 CREATE INDEX idx_memory_item_parts_item ON memory_item_parts(memory_item_id, ordinal);
+CREATE INDEX idx_memory_item_parts_ref_sha ON memory_item_parts(ref_sha256) WHERE ref_sha256 IS NOT NULL;
 
 CREATE TABLE memory_item_chunks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2797,7 +2825,8 @@ CREATE TABLE context_archive_frame_parts (
   ordinal INT NOT NULL,
   part_type context_archive_frame_parts_part_type NOT NULL,
   text_value TEXT,
-  file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  ref_path TEXT,
+  ref_sha256 VARCHAR(64),
   json_value JSONB,
   mime_type VARCHAR(255),
   name VARCHAR(255),
@@ -2805,13 +2834,15 @@ CREATE TABLE context_archive_frame_parts (
   UNIQUE(archive_frame_id, ordinal),
   CHECK (
     (part_type = 'text' AND text_value IS NOT NULL) OR
-    (part_type = 'file_ref' AND file_id IS NOT NULL) OR
+    (part_type = 'file_ref' AND ref_sha256 IS NOT NULL) OR
     (part_type = 'json' AND json_value IS NOT NULL)
   )
 );
 
 CREATE INDEX idx_context_archive_frame_parts_frame
   ON context_archive_frame_parts(archive_frame_id, ordinal);
+CREATE INDEX idx_context_archive_frame_parts_ref_sha
+  ON context_archive_frame_parts(ref_sha256) WHERE ref_sha256 IS NOT NULL;
 
 CREATE TABLE context_compaction_runs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2957,7 +2988,7 @@ CREATE TABLE installed_skills (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   slug VARCHAR(120) NOT NULL,
   name VARCHAR(255) NOT NULL,
-  icon_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  icon_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   tags TEXT[] DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   current_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
@@ -4750,3 +4781,258 @@ CREATE TRIGGER tg_memory_grant_validate
   BEFORE INSERT OR UPDATE ON memory_access_grants
   FOR EACH ROW
   EXECUTE FUNCTION validate_memory_access_grant();
+
+-- ============================================================================
+-- file-service refactor: scope layer (file_spaces) + working-tree snapshot
+-- DAG (file_snapshots) + access grants (file_access_grants) + sandbox mounts
+-- (file_mounts). Placed here (after access_subjects + the scope-validation
+-- helpers is_memory_owner_subject_kind / is_scope_eligible_subject /
+-- access_subject_workspace_id) because the validation triggers depend on them.
+-- Mirrors the memory_spaces / memory_access_grants design (the proven
+-- subject+scope+grant pattern) so file scoping is multi-owner from day one.
+-- ============================================================================
+
+-- Multi-scope file space: one logical namespace owned by a subject (actor /
+-- conversation / workspace / workspace_member / remote_agent), optionally
+-- scoped to a second subject (conversation), with a namespace_key. Mirrors
+-- memory_spaces exactly. `current_snapshot_id` is the working-tree HEAD; its
+-- composite FK to file_snapshots(id, file_space_id) is added after that table
+-- so the snapshot is guaranteed to belong to THIS space.
+CREATE TABLE file_spaces (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  owner_subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE CASCADE,
+  scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE,
+  namespace_key VARCHAR(255) NOT NULL DEFAULT 'default',
+  current_snapshot_id UUID,  -- composite FK added after file_snapshots
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Needed as a composite-FK target so file_snapshots/file_mounts can pin a
+  -- snapshot to its space.
+  UNIQUE (id, workspace_id)
+);
+
+CREATE UNIQUE INDEX uq_file_spaces_scoped
+  ON file_spaces(workspace_id, owner_subject_id, scope_subject_id, namespace_key)
+  WHERE scope_subject_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_file_spaces_unscoped
+  ON file_spaces(workspace_id, owner_subject_id, namespace_key)
+  WHERE scope_subject_id IS NULL;
+CREATE INDEX idx_file_spaces_owner ON file_spaces(owner_subject_id);
+CREATE INDEX idx_file_spaces_workspace ON file_spaces(workspace_id);
+
+-- Working-tree snapshot DAG (replaces the helper's history.sqlite as the
+-- authoritative history). Each row points at a manifest blob in the CAS
+-- (content_blobs) whose serialization lists path -> {kind, sha256, mode,
+-- size, target}. `version` is monotonic per space; parent_snapshot_id forms
+-- the DAG. The (parent_snapshot_id, file_space_id) composite FK keeps the
+-- chain inside one space (no cross-space DAG splicing).
+CREATE TABLE file_snapshots (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  file_space_id UUID NOT NULL REFERENCES file_spaces(id) ON DELETE CASCADE,
+  parent_snapshot_id UUID,
+  version BIGINT NOT NULL,
+  manifest_sha256 VARCHAR(64) NOT NULL REFERENCES content_blobs(sha256) ON DELETE RESTRICT,
+  reason file_snapshot_reason NOT NULL DEFAULT 'session_commit',
+  entry_count INT NOT NULL DEFAULT 0,
+  total_bytes BIGINT NOT NULL DEFAULT 0,
+  created_by_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Composite-FK target: lets file_spaces.current_snapshot_id +
+  -- file_mounts.base/result_snapshot_id pin a snapshot to its space.
+  UNIQUE (id, file_space_id),
+  UNIQUE (file_space_id, version),
+  -- parent must be in the same space.
+  FOREIGN KEY (parent_snapshot_id, file_space_id)
+    REFERENCES file_snapshots(id, file_space_id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_file_snapshots_space ON file_snapshots(file_space_id, created_at DESC);
+CREATE INDEX idx_file_snapshots_parent ON file_snapshots(parent_snapshot_id) WHERE parent_snapshot_id IS NOT NULL;
+CREATE INDEX idx_file_snapshots_manifest ON file_snapshots(manifest_sha256);
+CREATE INDEX idx_file_snapshots_session ON file_snapshots(created_by_session_id) WHERE created_by_session_id IS NOT NULL;
+
+-- Deferred composite FK: file_spaces.current_snapshot_id must reference a
+-- snapshot of the SAME space. Column-level ON DELETE SET NULL (PG15+) nulls
+-- only current_snapshot_id, never the PK id, when the pointed-at snapshot is
+-- deleted. (Target is PG16 — see test/helpers/db.ts pgvector:pg16.)
+ALTER TABLE file_spaces
+  ADD CONSTRAINT file_spaces_current_snapshot_fkey
+  FOREIGN KEY (current_snapshot_id, id)
+  REFERENCES file_snapshots(id, file_space_id)
+  ON DELETE SET NULL (current_snapshot_id);
+
+-- file_space owner/scope validation (mirrors validate_memory_space_subject_scope).
+CREATE OR REPLACE FUNCTION validate_file_space_subject_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_owner_ws UUID;
+  v_scope_ws UUID;
+BEGIN
+  IF NOT is_memory_owner_subject_kind(NEW.owner_subject_id) THEN
+    RAISE EXCEPTION 'file_spaces.owner_subject_id % must reference a subject of kind workspace_member|actor|remote_agent|workspace|conversation', NEW.owner_subject_id;
+  END IF;
+  IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'file_spaces.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+  v_owner_ws := access_subject_workspace_id(NEW.owner_subject_id);
+  IF v_owner_ws IS NULL OR v_owner_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'file_spaces.owner_subject_id % workspace % does not match space workspace %', NEW.owner_subject_id, v_owner_ws, NEW.workspace_id;
+  END IF;
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'file_spaces.scope_subject_id % workspace % does not match space workspace %', NEW.scope_subject_id, v_scope_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_file_space_validate
+  BEFORE INSERT OR UPDATE ON file_spaces
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_file_space_subject_scope();
+
+-- Access grants over a file space (space-wide) or a single asset (mirrors
+-- memory_access_grants). file_asset_id NULL = space-wide grant.
+CREATE TABLE file_access_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  file_space_id UUID NOT NULL REFERENCES file_spaces(id) ON DELETE CASCADE,
+  file_asset_id UUID REFERENCES file_assets(id) ON DELETE CASCADE,
+  subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE CASCADE,
+  scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE,
+  permissions file_permission[] NOT NULL
+    CHECK (cardinality(permissions) > 0 AND array_position(permissions, NULL) IS NULL),
+  status file_access_grants_status NOT NULL DEFAULT 'active',
+  source TEXT,
+  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
+  revoked_at TIMESTAMPTZ,
+  superseded_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_file_access_grants_active
+  ON file_access_grants(
+    file_space_id,
+    COALESCE(file_asset_id::text, ''),
+    subject_id,
+    COALESCE(scope_subject_id::text, '')
+  )
+  WHERE status = 'active';
+CREATE INDEX idx_file_access_grants_space
+  ON file_access_grants(file_space_id, status, created_at DESC);
+CREATE INDEX idx_file_access_grants_subject
+  ON file_access_grants(subject_id, status, created_at DESC);
+CREATE INDEX idx_file_access_grants_asset
+  ON file_access_grants(file_asset_id)
+  WHERE file_asset_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION validate_file_access_grant()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_subject_kind subject_kind;
+  v_subject_ws   UUID;
+  v_scope_ws     UUID;
+  v_space_ws     UUID;
+  v_asset_ws     UUID;
+BEGIN
+  IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'file_access_grants.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+  SELECT kind INTO v_subject_kind FROM access_subjects WHERE id = NEW.subject_id;
+  IF v_subject_kind IS NULL THEN
+    RAISE EXCEPTION 'file_access_grants.subject_id % not found', NEW.subject_id;
+  END IF;
+  IF v_subject_kind NOT IN ('workspace_member','actor','remote_agent','workspace','conversation') THEN
+    RAISE EXCEPTION 'file_access_grants.subject_id % refers to kind % which is not allowed', NEW.subject_id, v_subject_kind;
+  END IF;
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'file_access_grants.subject_id % workspace mismatch (% vs %)', NEW.subject_id, v_subject_ws, NEW.workspace_id;
+  END IF;
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'file_access_grants.scope_subject_id % workspace mismatch', NEW.scope_subject_id;
+    END IF;
+  END IF;
+  SELECT workspace_id INTO v_space_ws FROM file_spaces WHERE id = NEW.file_space_id;
+  IF v_space_ws IS NULL OR v_space_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'file_access_grants.file_space_id % missing or workspace mismatch (% vs %)', NEW.file_space_id, v_space_ws, NEW.workspace_id;
+  END IF;
+  IF NEW.file_asset_id IS NOT NULL THEN
+    -- Existence is the FOUND flag, NOT a non-null workspace_id: a library-global
+    -- asset legitimately has workspace_id NULL, so testing v_asset_ws IS NULL
+    -- would wrongly reject a real global asset.
+    SELECT workspace_id INTO v_asset_ws FROM file_assets WHERE id = NEW.file_asset_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'file_access_grants.file_asset_id % not found', NEW.file_asset_id;
+    END IF;
+    -- file_assets.workspace_id may be NULL for library-global assets; only
+    -- enforce a match when the asset is workspace-scoped.
+    IF v_asset_ws IS NOT NULL AND v_asset_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'file_access_grants.file_asset_id % workspace mismatch', NEW.file_asset_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_file_grant_validate
+  BEFORE INSERT OR UPDATE ON file_access_grants
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_file_access_grant();
+
+-- Sandbox mounts: one row per (session, space) projection. A session's
+-- sandbox mounts up to three spaces (/conversation, /actor,
+-- /actor-conversation) under one mount_subpath each. device_id is the local
+-- sandbox device-runtime spawned for the session (ON DELETE SET NULL so
+-- teardown's deleteDevice doesn't block and the mount audit row survives).
+CREATE TABLE file_mounts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  file_space_id UUID NOT NULL REFERENCES file_spaces(id) ON DELETE CASCADE,
+  mount_subpath TEXT NOT NULL
+    CHECK (mount_subpath IN ('conversation', 'actor', 'actor-conversation')),
+  device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
+  pairing_session_id UUID REFERENCES device_pairing_sessions(id) ON DELETE SET NULL,
+  base_snapshot_id UUID,
+  result_snapshot_id UUID,
+  refresh_policy TEXT NOT NULL DEFAULT 'per_turn'
+    CHECK (refresh_policy IN ('per_turn', 'on_teardown')),
+  status file_mount_status NOT NULL DEFAULT 'provisioning',
+  materialized_dir TEXT,
+  host_pid INT,
+  error_message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  closed_at TIMESTAMPTZ,
+  -- base/result snapshots must belong to the mounted space.
+  FOREIGN KEY (base_snapshot_id, file_space_id)
+    REFERENCES file_snapshots(id, file_space_id) ON DELETE SET NULL,
+  FOREIGN KEY (result_snapshot_id, file_space_id)
+    REFERENCES file_snapshots(id, file_space_id) ON DELETE SET NULL
+);
+
+-- One active mount per (session, space) AND per (session, mount_subpath) so a
+-- session never has two live mounts competing for the same path (resolver
+-- ambiguity) or the same space.
+CREATE UNIQUE INDEX uq_file_mounts_active_session_space
+  ON file_mounts(session_id, file_space_id)
+  WHERE status NOT IN ('closed', 'failed');
+CREATE UNIQUE INDEX uq_file_mounts_active_session_subpath
+  ON file_mounts(session_id, mount_subpath)
+  WHERE status NOT IN ('closed', 'failed');
+CREATE INDEX idx_file_mounts_device ON file_mounts(device_id) WHERE device_id IS NOT NULL;
+CREATE INDEX idx_file_mounts_status ON file_mounts(status, created_at DESC);
+CREATE INDEX idx_file_mounts_space ON file_mounts(file_space_id);

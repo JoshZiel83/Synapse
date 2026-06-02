@@ -14,6 +14,7 @@ mod blobs;
 mod extract;
 mod history;
 mod index;
+mod manifest;
 mod path;
 mod rpc;
 mod search;
@@ -27,6 +28,13 @@ pub struct Cli {
     pub root: PathBuf,
     #[arg(long)]
     pub work_dir: PathBuf,
+    /// Shared content-addressed store directory. When set, the helper can
+    /// serve the CAS + manifest RPCs (fs.cas.*, fs.manifest.*, fs.dir.sync)
+    /// against this store. Distinct from --work-dir (which holds the
+    /// per-device-ephemeral history/index sqlite). A supervisor drives a
+    /// one-shot helper with --cas-dir to materialize/commit file spaces.
+    #[arg(long)]
+    pub cas_dir: Option<PathBuf>,
     #[arg(long)]
     pub tika_endpoint: Option<String>,
     #[arg(long, default_value = "")]
@@ -57,6 +65,11 @@ pub struct State {
     pub cli: Cli,
     pub history: Mutex<history::HistoryStore>,
     pub index: Mutex<index::IndexStore>,
+    /// Shared content-addressed store (when --cas-dir is set). Behind a
+    /// Mutex so concurrent cas/manifest RPCs serialize their filesystem
+    /// work; the store ops themselves are atomic but a Mutex keeps the
+    /// blocking scans off the async dispatch worker cleanly.
+    pub cas: Option<Mutex<blobs::BlobStore>>,
     /// Tracks background fs.index.rebuild tasks so fs.index.status can
     /// surface progress. Rebuild is long-running for large trees; the RPC
     /// itself MUST return immediately with the task_id so the TS client's
@@ -94,10 +107,18 @@ async fn main() -> Result<()> {
         cli.tika_endpoint.as_deref(),
         cli.max_extract_bytes,
     )?;
+    let cas = match &cli.cas_dir {
+        Some(dir) => {
+            std::fs::create_dir_all(dir)?;
+            Some(Mutex::new(blobs::BlobStore::open(dir)?))
+        }
+        None => None,
+    };
     let state = Arc::new(State {
         cli,
         history: Mutex::new(history),
         index: Mutex::new(index),
+        cas,
         tasks: Mutex::new(std::collections::HashMap::new()),
     });
 
@@ -438,8 +459,206 @@ async fn dispatch(
             .await?;
             Ok(serde_json::to_value(out).unwrap())
         }
+        "fs.cas.put" => cas_put(&state, params).await,
+        "fs.cas.has" => cas_has(&state, params).await,
+        "fs.cas.gc" => cas_gc(&state, params).await,
+        "fs.manifest.materialize" => manifest_materialize(&state, params).await,
+        "fs.manifest.scan_commit" => manifest_scan_commit(&state, params).await,
+        "fs.dir.sync" => dir_sync(&state, params).await,
+        "fs.dir.apply_head" => dir_apply_head(&state, params).await,
+        "fs.manifest.cleanup" => manifest_cleanup(&state, params).await,
+        "fs.sidecar.restore" => sidecar_restore(&state, params).await,
         other => Err(RpcError::MethodNotFound(other.to_string())),
     }
+}
+
+/// Acquire the CAS store lock, or InvalidParams if the helper wasn't
+/// started with --cas-dir.
+async fn cas_lock<'a>(
+    state: &'a Arc<State>,
+) -> Result<tokio::sync::MutexGuard<'a, blobs::BlobStore>, RpcError> {
+    match &state.cas {
+        Some(m) => Ok(m.lock().await),
+        None => Err(RpcError::InvalidParams(
+            "cas not configured: helper started without --cas-dir".into(),
+        )),
+    }
+}
+
+async fn cas_put(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {
+    let input: rpc::CasPutInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    let (sha256, size, dedup) =
+        cas.put_streaming(std::path::Path::new(&input.path), None)?;
+    Ok(serde_json::to_value(rpc::CasPutResult { sha256, size, dedup }).unwrap())
+}
+
+async fn cas_has(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {
+    let input: rpc::CasHasInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    let exists = cas.exists(&input.sha256);
+    Ok(serde_json::to_value(rpc::CasHasResult { exists }).unwrap())
+}
+
+async fn cas_gc(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {
+    let input: rpc::CasGcInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    let reachable: std::collections::HashSet<String> =
+        input.reachable_sha256.into_iter().collect();
+    // Default 1h grace: never delete a blob younger than this, so a concurrent
+    // commit (which writes blobs to the CAS before committing the snapshot row
+    // that makes them reachable) can't be raced into corruption.
+    let grace_secs = input.grace_secs.unwrap_or(3600);
+    let (deleted, _skipped_young) = cas.gc_sweep(&reachable, grace_secs)?;
+    Ok(serde_json::to_value(rpc::CasGcResult { deleted_count: deleted }).unwrap())
+}
+
+async fn manifest_materialize(
+    state: &Arc<State>,
+    params: Value,
+) -> Result<Value, RpcError> {
+    let input: rpc::ManifestMaterializeInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    let m = manifest::Manifest::load(&cas, input.manifest_sha256.as_deref())?;
+    manifest::materialize(&cas, &m, std::path::Path::new(&input.target_dir))?;
+    Ok(Value::Object(Map::new()))
+}
+
+async fn manifest_scan_commit(
+    state: &Arc<State>,
+    params: Value,
+) -> Result<Value, RpcError> {
+    let input: rpc::ManifestScanCommitInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    // Scan the live dir → working manifest + any new blobs ingested.
+    let (working, new_blobs) =
+        manifest::scan_dir(&cas, std::path::Path::new(&input.dir))?;
+    let base = manifest::Manifest::load(&cas, input.base_manifest_sha256.as_deref())?;
+    let (final_manifest, conflict_paths) = match input.latest_manifest_sha256.as_deref()
+    {
+        // No latest, or latest == base → no merge needed; working IS the
+        // committed tree.
+        None => (working, Vec::new()),
+        Some(latest_sha)
+            if Some(latest_sha) == input.base_manifest_sha256.as_deref() =>
+        {
+            (working, Vec::new())
+        }
+        Some(latest_sha) => {
+            let latest = manifest::Manifest::load(&cas, Some(latest_sha))?;
+            let res = manifest::three_way_merge(&base, &working, &latest);
+            (res.merged, res.conflict_paths)
+        }
+    };
+    let manifest_sha256 = final_manifest.store(&cas)?;
+    let entries: Vec<rpc::ManifestEntryWire> = final_manifest
+        .entries
+        .values()
+        .map(rpc::ManifestEntryWire::from)
+        .collect();
+    let entry_count = final_manifest.entry_count() as u64;
+    let total_bytes = final_manifest.total_bytes();
+    Ok(serde_json::to_value(rpc::ManifestScanCommitResult {
+        manifest_sha256,
+        entries,
+        new_blobs,
+        conflict_paths,
+        entry_count,
+        total_bytes,
+    })
+    .unwrap())
+}
+
+async fn dir_sync(state: &Arc<State>, params: Value) -> Result<Value, RpcError> {
+    let input: rpc::DirSyncInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    let from = manifest::Manifest::load(&cas, input.base_manifest_sha256.as_deref())?;
+    let to = manifest::Manifest::load(&cas, Some(&input.to_manifest_sha256))?;
+    let res = manifest::dir_sync(
+        &cas,
+        std::path::Path::new(&input.dir),
+        &from,
+        &to,
+        input.defer_conflict_apply,
+    )?;
+    Ok(serde_json::to_value(rpc::DirSyncResult {
+        applied: res.applied,
+        deferred_conflicts: res.deferred_conflicts,
+        conflict_sidecars: res
+            .conflict_sidecars
+            .into_iter()
+            .map(|c| rpc::ConflictSidecar {
+                original: c.original,
+                sidecar: c.sidecar,
+                kind: c.kind,
+                content_sha: c.content_sha,
+                target: c.target,
+            })
+            .collect(),
+        incomplete: res.incomplete,
+        new_base_manifest_sha256: res.new_base_manifest_sha256,
+    })
+    .unwrap())
+}
+
+async fn dir_apply_head(
+    state: &Arc<State>,
+    params: Value,
+) -> Result<Value, RpcError> {
+    let input: rpc::DirApplyHeadInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    let to = manifest::Manifest::load(&cas, Some(&input.to_manifest_sha256))?;
+    manifest::apply_head_for_conflicts(
+        &cas,
+        std::path::Path::new(&input.dir),
+        &to,
+        &input.paths,
+    )?;
+    Ok(Value::Object(Map::new()))
+}
+
+async fn manifest_cleanup(
+    _state: &Arc<State>,
+    params: Value,
+) -> Result<Value, RpcError> {
+    let input: rpc::ManifestCleanupInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    for p in &input.paths {
+        let path = std::path::Path::new(p);
+        if let Ok(meta) = path.symlink_metadata() {
+            if meta.file_type().is_dir() {
+                let _ = std::fs::remove_dir_all(path);
+            } else {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    Ok(Value::Object(Map::new()))
+}
+
+async fn sidecar_restore(
+    state: &Arc<State>,
+    params: Value,
+) -> Result<Value, RpcError> {
+    let input: rpc::SidecarRestoreInput = serde_json::from_value(params)
+        .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
+    let cas = cas_lock(state).await?;
+    manifest::restore_sidecar(
+        &cas,
+        std::path::Path::new(&input.dir),
+        &input.sidecar_vfs,
+        &input.kind,
+        input.content_sha.as_deref(),
+        input.target.as_deref(),
+    )?;
+    Ok(Value::Object(Map::new()))
 }
 
 fn new_uuid_like() -> String {

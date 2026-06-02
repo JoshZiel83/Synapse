@@ -503,14 +503,13 @@ async function ensureBuiltinPluginIcon(
   const key = `${seedSlug}/${pluginSlug}`
 
   const existing = await db
-    .selectFrom("files as f")
-    .innerJoin("file_origins as fo", "fo.file_id", "f.id")
+    .selectFrom("file_assets as f")
     .select("f.id")
     .where("f.workspace_id", "is", null)
-    .where("fo.source_family", "=", "platform_asset")
-    .where("fo.source_system", "=", FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON)
-    .where(sql<boolean>`fo.details_json->>'builtinPluginIconKey' = ${key}`)
-    .where(sql<boolean>`fo.details_json->>'sha256' = ${sha256}`)
+    .where("f.source_family", "=", "platform_asset")
+    .where("f.source_system", "=", FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON)
+    .where(sql<boolean>`f.details_json->>'builtinPluginIconKey' = ${key}`)
+    .where("f.content_sha256", "=", sha256)
     .limit(1)
     .executeTakeFirst()
 

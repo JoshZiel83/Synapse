@@ -132,14 +132,16 @@ test("every registered connector populates capability + messageCapabilities full
   for (const connector of listConnectors()) {
     for (const key of requiredCapabilityKeys) {
       assert.notEqual(
-        (connector.capability as Record<string, unknown>)[key],
+        (connector.capability as unknown as Record<string, unknown>)[key],
         undefined,
         `${connector.transportKind} capability missing ${String(key)}`
       )
     }
     for (const key of requiredMessageCapabilityKeys) {
       assert.notEqual(
-        (connector.messageCapabilities as Record<string, unknown>)[key],
+        (connector.messageCapabilities as unknown as Record<string, unknown>)[
+          key
+        ],
         undefined,
         `${connector.transportKind} messageCapabilities missing ${String(key)}`
       )

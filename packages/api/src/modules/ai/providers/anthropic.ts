@@ -32,7 +32,10 @@ import {
   buildBranchDeltaWindow,
   canResumeBranchFromWindow,
 } from "../engine-branches.js"
-import { getFullFileUrlById, readFileBufferById } from "../../files/service.js"
+import {
+  getFullContentUrlBySha,
+  readContentBufferBySha,
+} from "../../files/service.js"
 import { createLogger } from "../../../infrastructure/logger/index.js"
 
 const log = createLogger("ai.anthropic")
@@ -591,24 +594,25 @@ export class AnthropicProvider implements AIProvider {
                   { ...block, category: "image" },
                   "Image input is not enabled for this provider request."
                 )
-              : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
+              : `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
         nativeBlocks.push({ type: "text", text: desc })
         textParts.push(desc)
         // Always inject FileRef hint even for unsupported types
         nativeBlocks.push({
           type: "text",
           text: this.buildFileRefHint(
-            block.fileId,
-            block.originalName,
+            block.sha256,
+            block.path,
+            block.name,
             block.category
           ),
         })
         continue
       }
 
-      // Supported — read from disk and build Anthropic native block
+      // Supported — read from CAS by sha256 and build Anthropic native block
       try {
-        let buffer = await readFileBufferById(block.fileId)
+        let buffer = await readContentBufferBySha(block.sha256)
         if (!buffer) {
           throw new Error("file not found")
         }
@@ -635,7 +639,10 @@ export class AnthropicProvider implements AIProvider {
             } else {
               nativeBlock = {
                 type: "image",
-                source: { type: "url", url: getFullFileUrlById(block.fileId) },
+                source: {
+                  type: "url",
+                  url: getFullContentUrlBySha(block.sha256),
+                },
               }
             }
             break
@@ -653,7 +660,10 @@ export class AnthropicProvider implements AIProvider {
             } else {
               nativeBlock = {
                 type: "document",
-                source: { type: "url", url: getFullFileUrlById(block.fileId) },
+                source: {
+                  type: "url",
+                  url: getFullContentUrlBySha(block.sha256),
+                },
               }
             }
             break
@@ -669,7 +679,7 @@ export class AnthropicProvider implements AIProvider {
 
         if (nativeBlock) {
           nativeBlocks.push(nativeBlock)
-          textParts.push(`[${block.category}: ${block.originalName}]`)
+          textParts.push(`[${block.category}: ${block.name}]`)
         } else {
           const desc =
             block.category === "audio"
@@ -682,16 +692,16 @@ export class AnthropicProvider implements AIProvider {
                     { ...block, category: "image" },
                     "Direct image input is not available for Anthropic in this request."
                   )
-                : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`
+                : `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`
           nativeBlocks.push({ type: "text", text: desc })
           textParts.push(desc)
         }
       } catch (err: any) {
         log.error(
           { err: err.message },
-          `[anthropic] Failed to resolve file_ref ${block.fileId}`
+          `[anthropic] Failed to resolve file_ref ${block.sha256}`
         )
-        const desc = `[${block.category}: ${block.originalName} (read failed)]`
+        const desc = `[${block.category}: ${block.name} (read failed)]`
         nativeBlocks.push({ type: "text", text: desc })
         textParts.push(desc)
       }
@@ -700,8 +710,9 @@ export class AnthropicProvider implements AIProvider {
       nativeBlocks.push({
         type: "text",
         text: this.buildFileRefHint(
-          block.fileId,
-          block.originalName,
+          block.sha256,
+          block.path,
+          block.name,
           block.category
         ),
       })
@@ -711,14 +722,20 @@ export class AnthropicProvider implements AIProvider {
   }
 
   private buildFileRefHint(
-    fileId: string,
-    originalName: string,
+    sha256: string,
+    path: string | undefined,
+    name: string,
     category: string
   ): string {
+    // Prefer the LLM-visible path handle when the ref came from a mounted
+    // sandbox space; fall back to the sha256 content ref for history-only
+    // references that have no live path.
+    const handle = path ?? `sha256:${sha256}`
     return [
-      `This ${category} "${originalName}" is available as <FileRef id="${fileId}"/>.`,
-      `To display it in your response, use exactly: <FileRef id="${fileId}"/>.`,
-      `If a tool parameter expects a fileRef, pass the same exact string <FileRef id="${fileId}"/> instead of inventing a URL or data URI.`,
+      `This ${category} "${name}" is available at ${handle}.`,
+      path
+        ? `To reference it, use its path: ${path}.`
+        : `It is a stored content reference (no live path).`,
     ].join(" ")
   }
 

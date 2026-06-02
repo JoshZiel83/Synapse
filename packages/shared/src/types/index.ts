@@ -1651,12 +1651,19 @@ export interface CanonicalTextBlock {
 export interface CanonicalFileRefBlock {
   id: UUID
   type: "file_ref"
-  fileId: string // files table UUID
-  url: string // /files/... (frontend display)
+  // Content identity — ALWAYS present. Pinned at message-persist time so the
+  // block renders forever (even after the file is overwritten/deleted) and
+  // the model/frontend fetch bytes by sha256 (GET /content/:sha256).
+  sha256: string
+  // The LLM-visible "live handle" (/conversation/..., /actor/...). Present
+  // when the ref came from a mounted sandbox space; absent for pure history
+  // / memory references that only need to render.
+  path?: string
   mimeType: string
-  originalName: string
   sizeBytes: number
   category: CanonicalFileCategory
+  // Display name (for a tree file = basename(path)).
+  name: string
 }
 
 export interface CanonicalMentionBlock {
@@ -4773,10 +4780,10 @@ export function fileRefBlock(
         ? input.id
         : createCanonicalContentBlockId("file"),
     type: "file_ref",
-    fileId: input.fileId,
-    url: input.url,
+    sha256: input.sha256,
+    ...(input.path !== undefined ? { path: input.path } : {}),
     mimeType: input.mimeType,
-    originalName: input.originalName,
+    name: input.name,
     sizeBytes: input.sizeBytes,
     category: input.category,
   }
@@ -4856,10 +4863,16 @@ export function isCanonicalContentBlock(
   if (block.type === "file_ref") {
     const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes)
     return (
-      typeof block.fileId === "string" &&
-      typeof block.url === "string" &&
+      // Redesigned FileRefBlock (file-service refactor): sha256 is the always-
+      // present content identity; path is optional (present only for live
+      // mounted spaces); name replaces originalName; fileId/url were dropped.
+      // MUST mirror normalizeCanonicalContentBlocks' file_ref validation below,
+      // else this guard (used as a strict filter in chat/event-registry.ts and
+      // chat/message-content.ts) would reject every block fileRefBlock() emits.
+      typeof block.sha256 === "string" &&
+      (block.path === undefined || typeof block.path === "string") &&
       typeof block.mimeType === "string" &&
-      typeof block.originalName === "string" &&
+      typeof block.name === "string" &&
       sizeBytes !== null &&
       (block.category === "image" ||
         block.category === "audio" ||
@@ -4892,10 +4905,10 @@ export function normalizeCanonicalContentBlocks(
     if (block.type === "file_ref") {
       const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes)
       if (
-        typeof block.fileId !== "string" ||
-        typeof block.url !== "string" ||
+        typeof block.sha256 !== "string" ||
+        (block.path !== undefined && typeof block.path !== "string") ||
         typeof block.mimeType !== "string" ||
-        typeof block.originalName !== "string" ||
+        typeof block.name !== "string" ||
         sizeBytes === null ||
         (block.category !== "image" &&
           block.category !== "audio" &&
@@ -5336,7 +5349,7 @@ export function summarizeActorDoc(doc: ActorDoc, maxLength = 200): string {
     ): block is Extract<ActorDoc["content"][number], { type: "file_ref" }> =>
       block.type === "file_ref"
   )
-  return fileBlock ? `Attached file: ${fileBlock.originalName}` : ""
+  return fileBlock ? `Attached file: ${fileBlock.name}` : ""
 }
 
 export function pickActorDocSummary(

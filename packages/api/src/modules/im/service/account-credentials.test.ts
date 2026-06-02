@@ -308,6 +308,8 @@ test("validateAndNormalizeAccountConfig: connector validateConfig rejection thro
     transportKind: TEST_KIND,
     capability: {
       transportKind: TEST_KIND,
+      displayName: "Stub Feishu",
+      iconAssetPath: "/icon/feishu.svg",
       supportedConnectionModes: ["long_connection"],
       supportedEndpointTypes: ["direct"],
       supportsDirectMessages: true,
@@ -370,6 +372,8 @@ test("validateAndNormalizeAccountConfig: disabled status skips validation", () =
     transportKind: TEST_KIND,
     capability: {
       transportKind: TEST_KIND,
+      displayName: "Stub Feishu",
+      iconAssetPath: "/icon/feishu.svg",
       supportedConnectionModes: ["long_connection"],
       supportedEndpointTypes: ["direct"],
       supportsDirectMessages: true,
@@ -409,6 +413,8 @@ test("validateAndNormalizeAccountConfig: returns connector normalized form", () 
     transportKind: TEST_KIND,
     capability: {
       transportKind: TEST_KIND,
+      displayName: "Stub Feishu",
+      iconAssetPath: "/icon/feishu.svg",
       supportedConnectionModes: ["long_connection"],
       supportedEndpointTypes: ["direct"],
       supportsDirectMessages: true,

@@ -18,7 +18,7 @@
 //   2. seeds the minimal user, plus the official actor catalog so that
 //      `POST /api/v1/workspaces` can install per-workspace actor instances
 //      without 500ing on "Official actor templates are missing."
-//   3. spawns the API on 127.0.0.1:38091
+//   3. spawns the API on the per-worktree API port (127.0.0.1:$INT_API_PORT)
 //   4. returns an unauthenticated ApiClient pointed at /api/v1
 //
 // Calling teardownChatStack() in `after`:

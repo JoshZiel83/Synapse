@@ -1,40 +1,123 @@
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git \
+  && apt-get install -y --no-install-recommends ca-certificates git curl \
   && rm -rf /var/lib/apt/lists/*
 RUN git init
 RUN npm config set registry https://registry.npmmirror.com \
   && npm config set fetch-retries 5 \
   && npm config set fetch-retry-mintimeout 20000 \
   && npm config set fetch-retry-maxtimeout 120000
+
+# package-lock.json validates EVERY workspace against an on-disk
+# package.json, so all 13 workspace manifests must be present before
+# `npm ci` — even the ones this image does not build (the 6 platform
+# sidecar bundles + device-sdk + remote-agent-daemon + web-next).
 COPY package.json package-lock.json ./
+COPY packages/device-protocol/package.json packages/device-protocol/
 COPY packages/shared/package.json packages/shared/
+COPY packages/device-runtime/package.json packages/device-runtime/
+COPY packages/device-sdk/package.json packages/device-sdk/
+COPY packages/device-runtime-bundles-linux-x64/package.json packages/device-runtime-bundles-linux-x64/
+COPY packages/device-runtime-bundles-linux-arm64/package.json packages/device-runtime-bundles-linux-arm64/
+COPY packages/device-runtime-bundles-darwin-x64/package.json packages/device-runtime-bundles-darwin-x64/
+COPY packages/device-runtime-bundles-darwin-arm64/package.json packages/device-runtime-bundles-darwin-arm64/
+COPY packages/device-runtime-bundles-win32-x64/package.json packages/device-runtime-bundles-win32-x64/
+COPY packages/device-runtime-bundles-win32-arm64/package.json packages/device-runtime-bundles-win32-arm64/
 COPY packages/api/package.json packages/api/
 COPY packages/remote-agent-daemon/package.json packages/remote-agent-daemon/
 COPY packages/web-next/package.json packages/web-next/
+
+# Install the api build chain only. --ignore-scripts is safe: sharp ships
+# prebuilt @img binaries, onnxruntime-node ships its napi binding, and
+# bcryptjs is pure JS — verified by the `require(...)` assertion below.
 RUN npm ci --legacy-peer-deps --ignore-scripts \
+      --workspace=packages/device-protocol \
       --workspace=packages/shared \
+      --workspace=packages/device-runtime \
       --workspace=packages/api \
       --include-workspace-root
+
 COPY tsconfig.base.json ./
 COPY .setup/ .setup/
+
+# Source for the api dependency chain, copied in topological order.
+COPY packages/device-protocol/ packages/device-protocol/
 COPY packages/shared/ packages/shared/
+COPY packages/device-runtime/ packages/device-runtime/
 COPY packages/api/ packages/api/
-RUN npx tsc -b packages/shared --force
-RUN npm run build -w packages/api
+
+# Build strictly in dependency order. Each package resolves its @synapse/*
+# deps through node_modules symlinks pointing at the PRIOR package's dist,
+# so the order is load-bearing (the packages have no tsc project
+# references in their build configs). The package `build` scripts each run
+# a `prebuild` that wipes dist, and use tsconfig.build.json (sourceMap
+# off) so no .map artifacts ship.
+RUN npm run build -w packages/device-protocol \
+  && npm run build -w packages/shared \
+  && npm run build -w packages/device-runtime \
+  && npm run build -w packages/api -- --sourceMap false --declarationMap false
+
 RUN cp packages/api/src/infrastructure/database/schema.sql packages/api/dist/infrastructure/database/schema.sql
-# tsc only emits .ts → .js, so non-TS assets (svg icons, etc.) under
-# src/ never reach dist/. The runtime entry resolves these via
-# `import.meta.url` from dist/ (see mcp-plugins/service.ts), so we
-# mirror the asset tree from src/ to dist/ explicitly. If more
-# non-TS asset dirs appear, add them here.
+# tsc only emits .ts → .js, so non-TS assets (svg icons, etc.) under src/
+# never reach dist/. The runtime entry resolves these via import.meta.url
+# from dist/ (see mcp-plugins/service.ts), so mirror the asset tree from
+# src/ to dist/ explicitly. If more non-TS asset dirs appear, add them here.
 RUN mkdir -p packages/api/dist/modules/mcp-plugins/builtin-plugins \
   && cp -r packages/api/src/modules/mcp-plugins/builtin-plugins/assets \
        packages/api/dist/modules/mcp-plugins/builtin-plugins/assets
 
+# --- BAKE: tesseract OCR language data (chi_sim, chi_tra, eng, jpn) ---
+# Baked under /app/models (NOT /app/storage — that path is a runtime
+# volume mount that would shadow anything baked beneath it). The OCR
+# worker reads ${TESSERACT_LANG_PATH}/<lang>.traineddata.gz and gunzips
+# by magic byte, so we gzip each file. Pinned to the tessdata_best 4.1.0
+# tag for reproducible builds. The trailing assertion turns a missing
+# language into a hard BUILD failure (no silent runtime CDN fetch).
+ENV TESSDATA_BEST_REF=4.1.0
+RUN set -eux; mkdir -p /app/models/tessdata; \
+  for lang in chi_sim chi_tra eng jpn; do \
+    curl -fsSL --retry 3 -o "/app/models/tessdata/${lang}.traineddata" \
+      "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/${TESSDATA_BEST_REF}/${lang}.traineddata"; \
+    gzip -n -f "/app/models/tessdata/${lang}.traineddata"; \
+    test -s "/app/models/tessdata/${lang}.traineddata.gz" \
+      || { echo "FATAL: tesseract language ${lang} was not baked"; exit 1; }; \
+  done
+
+# --- BAKE: memory embedding model (Xenova/multilingual-e5-small) ---
+# Run the COMPILED bootstrap (dist/*.js, plain node): the embedding worker
+# is spawned as a worker_thread and only loads cleanly as .js — the tsx
+# (.ts) path fails with ERR_UNKNOWN_FILE_EXTENSION. Baked into /app/models
+# (outside the storage volume). The assertion makes a missing model a hard
+# build failure, since the runtime warm-up is fire-and-forget.
+RUN set -eux; mkdir -p /app/models/memory; \
+  MEMORY_MODEL_CACHE_DIR=/app/models/memory \
+  MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=true \
+  MEMORY_EMBEDDING_MODEL_ID=Xenova/multilingual-e5-small \
+  node packages/api/dist/modules/memory/bootstrap-model.js; \
+  test -f "/app/models/memory/Xenova/multilingual-e5-small/onnx/model.onnx" \
+    || { echo "FATAL: embedding model onnx weights were not baked"; exit 1; }; \
+  test -f "/app/models/memory/Xenova/multilingual-e5-small/tokenizer.json" \
+    || { echo "FATAL: embedding model tokenizer was not baked"; exit 1; }
+
+# --- BUILD-TIME ASSERTION: native bindings load (no silent runtime ENOENT) ---
+# --ignore-scripts skipped postinstall; prove the prebuilt native modules the
+# API actually uses load before shipping. onnxruntime is exercised THROUGH
+# @huggingface/transformers (which bundles its own copy) — the API never
+# imports onnxruntime-node directly, so we don't test it standalone (a stray
+# top-level copy would clash .so symbols with the transformers-bundled one).
+RUN node -e "require('@huggingface/transformers'); require('sharp'); require('tesseract.js'); console.log('native deps OK')"
+
 FROM node:20-bookworm-slim
 WORKDIR /app
+# Carry the whole built tree: node_modules (with @synapse symlinks + native
+# binaries), every package's dist/, and the baked /app/models. dist/index.js
+# resolves @synapse/device-protocol + @synapse/device-runtime via these symlinks.
 COPY --from=builder /app/ ./
+# Baked-in immutable assets live OUTSIDE the api_storage volume mount.
+ENV MEMORY_MODEL_CACHE_DIR=/app/models/memory \
+    MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=false \
+    TESSERACT_LANG_PATH=/app/models/tessdata \
+    TESSERACT_LANGS=chi_sim+chi_tra+eng+jpn
 EXPOSE 3001
 CMD ["node", "packages/api/dist/index.js"]

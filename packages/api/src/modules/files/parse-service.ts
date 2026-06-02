@@ -51,7 +51,7 @@ type ParseStrategy =
 
 type ParseRunRow = {
   id: string
-  file_id: string
+  asset_id: string
   pipeline: string
   parser_key: string
   parser_version: string | null
@@ -72,7 +72,7 @@ type ParseOutputRow = {
   is_primary: boolean
   text_content: string | null
   structured_json: unknown
-  derived_file_id: string | null
+  derived_asset_id: string | null
   created_at: string | Date | null
 }
 
@@ -193,7 +193,11 @@ async function extractParsedText(params: {
     }
   }
 
-  const ocr = await extractImageOcrText(params.fileId)
+  const ocrRecord = await getFileRecord(params.fileId)
+  if (!ocrRecord) {
+    throw new Error("Image asset not found for OCR")
+  }
+  const ocr = await extractImageOcrText(ocrRecord.sha256)
   if (!ocr.ok || !ocr.text) {
     throw new Error(ocr.error || "Image OCR did not return text")
   }
@@ -220,7 +224,7 @@ async function listParseOutputsForRuns(
   const derivedFileIds = Array.from(
     new Set(
       rows
-        .map((row) => row.derived_file_id)
+        .map((row) => row.derived_asset_id)
         .filter((value): value is string => typeof value === "string")
     )
   )
@@ -249,9 +253,9 @@ async function listParseOutputsForRuns(
       isPrimary: row.is_primary,
       textContent: row.text_content ?? undefined,
       structuredJson: parseJsonObject(row.structured_json),
-      derivedFileId: row.derived_file_id,
-      derivedFile: row.derived_file_id
-        ? derivedFiles.get(row.derived_file_id)
+      derivedFileId: row.derived_asset_id,
+      derivedFile: row.derived_asset_id
+        ? derivedFiles.get(row.derived_asset_id)
         : undefined,
       createdAt: toIsoString(row.created_at),
     })
@@ -264,7 +268,7 @@ async function mapRunRow(row: ParseRunRow): Promise<FileParseRunView> {
   const outputsByRunId = await listParseOutputsForRuns([row.id])
   return {
     id: row.id,
-    fileId: row.file_id,
+    fileId: row.asset_id,
     pipeline: row.pipeline,
     parserKey: row.parser_key,
     parserVersion: row.parser_version,
@@ -301,7 +305,7 @@ export async function enqueueFileParse(params: {
   const run = await db
     .insertInto("file_parse_runs")
     .values({
-      file_id: params.fileId,
+      asset_id: params.fileId,
       pipeline: params.pipeline || DEFAULT_FILE_PARSE_PIPELINE,
       parser_key: PENDING_PARSER_KEY,
       parser_version: null,
@@ -346,7 +350,7 @@ export async function processFileParseRun(runId: string): Promise<void> {
     return
   }
 
-  const record = await getFileRecord(run.file_id)
+  const record = await getFileRecord(run.asset_id)
   if (!record) {
     await db
       .updateTable("file_parse_runs")
@@ -453,7 +457,7 @@ export async function getLatestSuccessfulFileParse(
   const row = (await db
     .selectFrom("file_parse_runs")
     .selectAll()
-    .where("file_id", "=", fileId)
+    .where("asset_id", "=", fileId)
     .where("pipeline", "=", pipeline)
     .where("status", "=", "succeeded")
     .orderBy("created_at", "desc")
@@ -475,7 +479,7 @@ export async function getLatestAvailableFileParse(
   const row = (await db
     .selectFrom("file_parse_runs")
     .selectAll()
-    .where("file_id", "=", fileId)
+    .where("asset_id", "=", fileId)
     .where("pipeline", "=", pipeline)
     .orderBy("created_at", "desc")
     .limit(1)

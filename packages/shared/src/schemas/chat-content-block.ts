@@ -29,10 +29,12 @@ export const canonicalTextBlockSchema = z.object({
 export const canonicalFileRefBlockSchema = z.object({
   id: blockIdSchema,
   type: z.literal("file_ref"),
-  fileId: z.uuid(),
-  url: z.string().min(1),
+  // sha256 (hex) is the always-present content identity; path is the optional
+  // LLM-visible handle (/conversation/..., /actor/...).
+  sha256: z.string().length(64),
+  path: z.string().min(1).optional(),
   mimeType: z.string().min(1),
-  originalName: z.string().min(1),
+  name: z.string().min(1),
   sizeBytes: z.number().int().nonnegative(),
   category: z.enum(CANONICAL_FILE_CATEGORIES),
 })

@@ -315,6 +315,18 @@ function describeRuntimeAuthorizationSpec(
         ].filter((value): value is string => Boolean(value)),
       }
     }
+    if (cmd.executor === "sandbox") {
+      return {
+        summary: "沙箱命令授权（隔离 shell）",
+        detailLines: [
+          "在 bwrap 沙箱内执行任意命令（无网络）",
+          cmd.workingDirectory ? `工作目录：${cmd.workingDirectory}` : null,
+          cmd.allowedEnv && cmd.allowedEnv.length > 0
+            ? `继承环境变量：${cmd.allowedEnv.join(", ")}`
+            : null,
+        ].filter((value): value is string => Boolean(value)),
+      }
+    }
     return {
       summary:
         cmd.commandMatchType === "exact"

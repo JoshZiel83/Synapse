@@ -14,7 +14,10 @@ import {
   uploadFile,
   canUserAccessFileWorkspace,
   readFileBufferById,
+  readContentBufferBySha,
+  getContentMimeBySha,
 } from "./service.js"
+import { canUserAccessContent } from "./content-access.js"
 import {
   enqueueFileParse,
   getLatestAvailableFileParse,
@@ -224,5 +227,39 @@ export async function filesReadController(app: FastifyInstance) {
       mimeType: info.mimeType,
       originalName: info.originalName,
     })
+  })
+
+  // Content-addressed read: GET /api/v1/content/:sha256. file_ref blocks render
+  // by content sha (pinned at message-persist time). A sha is not itself an
+  // authorization token, so contentAccessResolver checks every reference path
+  // the caller could legitimately reach the bytes through (message / memory /
+  // file-space grant / asset). Optional ?conv= and ?space= narrow the search.
+  app.get<{
+    Params: { sha256: string }
+    Querystring: { conv?: string; space?: string }
+  }>("/content/:sha256", async (request, reply) => {
+    const userId = (request as any).user!.userId as string
+    const sha256 = request.params.sha256
+    if (!/^[a-f0-9]{64}$/.test(sha256)) {
+      return reply.status(400).send({ error: "Invalid content hash" })
+    }
+
+    const allowed = await canUserAccessContent(sha256, userId, {
+      conversationId: request.query.conv ?? null,
+      fileSpaceId: request.query.space ?? null,
+    })
+    if (!allowed) {
+      return reply.status(403).send({ error: "Forbidden" })
+    }
+
+    const buffer = await readContentBufferBySha(sha256)
+    if (!buffer) {
+      return reply.status(404).send({ error: "Content not found" })
+    }
+    const mimeType = await getContentMimeBySha(sha256)
+    reply.type(mimeType || "application/octet-stream")
+    // Content is immutable (addressed by hash) → cache aggressively.
+    reply.header("Cache-Control", "public, max-age=31536000, immutable")
+    return reply.send(buffer)
   })
 }

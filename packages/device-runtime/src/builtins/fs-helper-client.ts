@@ -32,12 +32,26 @@ import type {
   SearchPathResult,
   ExtractTextInput,
   ExtractTextResult,
+  CasPutInput,
+  CasPutResult,
+  CasHasInput,
+  CasHasResult,
+  CasGcInput,
+  CasGcResult,
+  ManifestMaterializeInput,
+  ManifestScanCommitInput,
+  ManifestScanCommitResult,
+  DirSyncInput,
+  DirSyncResult,
+  ManifestCleanupInput,
 } from "./fs-helper-types.js"
 
 export interface FsHelperClientOptions {
   helperPath: string
   rootPath: string
   workDir: string
+  /** Shared content-addressed store dir; enables fs.cas.* / fs.manifest.* */
+  casDir?: string
   tikaEndpoint?: string
   indexIgnore?: string
   maxSnapshotBytes: number
@@ -97,6 +111,13 @@ const METHOD_TIMEOUT_OVERRIDES: Record<string, number> = {
   // dispatch turnaround is fast. Keep the timeout modest but not 5s —
   // generating the task_id + first SQLite writes can spike on slow disks.
   "fs.index.rebuild": 15_000,
+  // CAS/manifest ops scan + ingest whole directory trees; a large
+  // conversation working set can take a while. Generous ceiling so a real
+  // commit/sync of a big tree doesn't get killed mid-ingest.
+  "fs.manifest.scan_commit": 120_000,
+  "fs.dir.sync": 120_000,
+  "fs.manifest.materialize": 120_000,
+  "fs.cas.gc": 120_000,
 }
 
 const STDERR_TAIL_BYTES = 4096
@@ -132,6 +153,18 @@ export interface FsHelperClient {
   searchPath(input: SearchPathInput): Promise<SearchPathResult>
 
   extractText(input: ExtractTextInput): Promise<ExtractTextResult>
+
+  // CAS + manifest (Step 1/2). Require the helper to have been started with
+  // a --cas-dir; otherwise the helper returns invalid_params.
+  casPut(input: CasPutInput): Promise<CasPutResult>
+  casHas(input: CasHasInput): Promise<CasHasResult>
+  casGc(input: CasGcInput): Promise<CasGcResult>
+  manifestMaterialize(input: ManifestMaterializeInput): Promise<void>
+  manifestScanCommit(
+    input: ManifestScanCommitInput
+  ): Promise<ManifestScanCommitResult>
+  dirSync(input: DirSyncInput): Promise<DirSyncResult>
+  manifestCleanup(input: ManifestCleanupInput): Promise<void>
 }
 
 export function createFsHelperClient(
@@ -160,6 +193,7 @@ export function createFsHelperClient(
 
   function buildArgs(): string[] {
     const args = ["--root", opts.rootPath, "--work-dir", opts.workDir]
+    if (opts.casDir) args.push("--cas-dir", opts.casDir)
     if (opts.tikaEndpoint) args.push("--tika-endpoint", opts.tikaEndpoint)
     if (opts.indexIgnore) args.push("--fs-index-ignore", opts.indexIgnore)
     args.push("--max-snapshot-bytes", String(opts.maxSnapshotBytes))
@@ -302,6 +336,14 @@ export function createFsHelperClient(
     searchContent: (input) => request("fs.search.content", input),
     searchPath: (input) => request("fs.search.path", input),
     extractText: (input) => request("fs.extract.text", input),
+    casPut: (input) => request("fs.cas.put", input),
+    casHas: (input) => request("fs.cas.has", input),
+    casGc: (input) => request("fs.cas.gc", input),
+    manifestMaterialize: (input) =>
+      request<void>("fs.manifest.materialize", input),
+    manifestScanCommit: (input) => request("fs.manifest.scan_commit", input),
+    dirSync: (input) => request("fs.dir.sync", input),
+    manifestCleanup: (input) => request<void>("fs.manifest.cleanup", input),
     // expose internal for tests
     [Symbol.for("fs-helper-client.stderrTail")]: () => stderrTail,
   } as FsHelperClient

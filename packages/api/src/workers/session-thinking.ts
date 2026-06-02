@@ -25,6 +25,25 @@ import type {
 } from "@synapse/shared"
 import type { CanonicalContextItem } from "@synapse/shared/types"
 import { actorThink } from "../modules/ai/index.js"
+import {
+  provisionSandbox,
+  refreshSpaces,
+  commitSpaces,
+  teardownSandbox,
+  peekPendingCommitConflicts,
+  clearPendingCommitConflicts,
+  peekPendingRefreshConflicts,
+  clearPendingRefreshConflicts,
+  mergePendingRefreshConflicts,
+} from "../modules/sandbox/index.js"
+import {
+  partitionSidecars,
+  formatRestoredPair,
+  transientUnrestoredSentence,
+  permanentUnrestoredSentence,
+} from "../modules/sandbox/conflict-notice.js"
+import type { SidecarRestoreFailureReason } from "../modules/sandbox/model.js"
+import { config } from "../config/index.js"
 import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
 import {
   buildConversationContextItems,
@@ -103,6 +122,9 @@ function deriveThinkingPhase(status: string): ThinkingPhase {
   return "thinking"
 }
 
+// Opt-in file sandbox (device-runtime + content-addressed mounts).
+const sandboxEnabled = config.sandbox.enabled
+
 async function runCleanupStep(
   label: string,
   operation: () => Promise<unknown>
@@ -148,6 +170,20 @@ async function putSessionToIdle(sessionId: string) {
   const session = await getSession(sessionId)
   if (!session || session.status !== "running") {
     return
+  }
+
+  // Tear down the file sandbox on the clean running→idle transition: commit all
+  // dirty spaces, stop the daemon, delete live dirs, revoke grants, delete the
+  // device. Best-effort — a teardown failure must not block the idle transition.
+  if (sandboxEnabled) {
+    try {
+      await teardownSandbox(sessionId)
+    } catch (err) {
+      console.error(
+        `[session-thinking] sandbox teardown failed for ${sessionId}:`,
+        err
+      )
+    }
   }
 
   await updateSessionStatus(sessionId, "idle", { errorMessage: null })
@@ -588,7 +624,313 @@ export function startSessionThinkingWorker() {
           conversationId: session.conversation_id,
         })
         const primaryModel = resolvedModelPlan?.candidates[0] || null
-        let finalContextItems = contextItems
+
+        // File sandbox lifecycle (opt-in via SYNAPSE_SANDBOX_ENABLED). Runs
+        // BEFORE the context window is built so (a) the agent's file view
+        // reflects other writers' new commits this turn, and (b) any merge
+        // conflict is injected as a system notice the agent actually sees.
+        let sandboxConflictNotice: CanonicalContextItem | null = null
+        // Pending commit conflicts are cleared only AFTER actorThink succeeds
+        // (at-least-once delivery — see below), so remember whether we surfaced
+        // any this turn.
+        let surfacedPendingCommitConflicts = false
+        // Subpaths whose turn-start refresh FAILED (helper threw) — their live
+        // dir is partially synced + base unadvanced. Skip committing them at
+        // turn-end so a half-synced tree isn't snapshotted; next turn re-runs the
+        // refresh from the same base and self-heals (round-8 follow-up).
+        let refreshFailedSubpaths = new Set<string>()
+        // Whether we surfaced persisted refresh conflicts this turn (cleared only
+        // after actorThink returns — at-least-once delivery, round-10 #1).
+        let surfacedPendingRefreshConflicts = false
+        // R12-3 / P3: whether a pending sidecar failed restore in a way that is
+        // still RETRYABLE (transient). Only a transient failure should block
+        // clearing the pending store after actorThink — a transient sidecar's
+        // copy may re-materialize on a later provision, so keep the notice alive.
+        // A PERMANENT failure (corrupt/missing payload) will NEVER restore, so
+        // its notice is delivered once (the unrecoverable wording) and then the
+        // store is cleared — otherwise the agent would re-receive the same dead
+        // notice every turn forever (the blob is unprotectable regardless).
+        let hasTransientSidecarFailure = false
+        // P2 fail-closed: provision reported restore NOT-ok but produced an EMPTY
+        // failed-sidecar list (the failure-collection in provisionSandbox itself
+        // threw). We then cannot trust that any sidecar made it to disk, so every
+        // pending sidecar must be treated as (transiently) unrestored — none gets
+        // a "read it" and the pending store is NOT cleared. Distinct from the
+        // normal case where an empty failed list means "all restored".
+        let restoreStatusUnknown = false
+        // P2/P3: agent-visible sidecar path → WHY it failed restore this
+        // provision ("transient" = retry later; "permanent" = unrecoverable).
+        // The notice uses this to avoid "read it" for missing paths and to word
+        // transient vs permanent failures differently. Absent from the map =
+        // restored (readable).
+        let failedSidecarReasons = new Map<
+          string,
+          SidecarRestoreFailureReason
+        >()
+        if (sandboxEnabled) {
+          try {
+            const provision = await provisionSandbox(sessionId)
+            failedSidecarReasons = new Map(
+              provision.failedSidecars.map((f) => [f.sidecar, f.reason])
+            )
+            // P2 fail-closed: ok=false with no per-sidecar detail → unknown.
+            restoreStatusUnknown =
+              !provision.sidecarRestoreOk &&
+              provision.failedSidecars.length === 0
+            // Block clearing the pending store when ANY sidecar may still need a
+            // retry: a transient per-sidecar failure, OR the unknown state above
+            // (we can't prove any sidecar was delivered). Permanent failures do
+            // NOT block (delivered once then cleared).
+            hasTransientSidecarFailure =
+              restoreStatusUnknown ||
+              provision.failedSidecars.some((f) => f.reason === "transient")
+            const refresh = await refreshSpaces(sessionId)
+            // Record any spaces whose refresh FAILED so turn-end commit skips
+            // them (their live tree is half-synced; committing it could entangle
+            // this turn's edits with partially-applied head bytes). Next turn
+            // re-runs the refresh from the same base and self-heals.
+            refreshFailedSubpaths = new Set(
+              Object.keys(refresh.syncFailuresBySubpath)
+            )
+            // Commit conflicts recorded by a PREVIOUS turn's turn-end commit
+            // (which ran after the actor already replied). READ but do NOT clear
+            // yet — clearing happens post-actorThink so a crash before the model
+            // sees the notice doesn't drop it.
+            const pendingCommitConflicts =
+              await peekPendingCommitConflicts(sessionId)
+            // Refresh conflicts persisted across turns for at-least-once delivery
+            // (round-10 #1). refreshSpaces already stashed THIS turn's conflicts;
+            // peek returns them merged with any still-undelivered from a prior
+            // interrupted turn. UNION with this turn's in-memory result too, so a
+            // swallowed persist failure (base may already have advanced for synced
+            // subpaths) can't drop this turn's conflict from the notice. Cleared
+            // only after actorThink returns.
+            const persistedRefresh =
+              await peekPendingRefreshConflicts(sessionId)
+            const displayRefresh = mergePendingRefreshConflicts(
+              persistedRefresh,
+              {
+                deferredConflictsBySubpath: refresh.deferredConflictsBySubpath,
+                sidecarsBySubpath: refresh.sidecarsBySubpath,
+              }
+            )
+
+            const refreshEntries = Object.entries(
+              displayRefresh.deferredConflictsBySubpath
+            )
+            // Subpaths that did NOT fully sync THIS turn — for them we must not
+            // promise "head LIVES at the path" (round-10 #4: the live path may be
+            // only half-synced). Their conflicts/sidecars are still surfaced, but
+            // under a "view may be half-synced" caveat below.
+            const syncFailureEntries = Object.entries(
+              refresh.syncFailuresBySubpath
+            )
+            const failedSet = new Set(syncFailureEntries.map(([sp]) => sp))
+            const commitEntries = Object.entries(pendingCommitConflicts)
+            // Head-wins refresh lines cover ONLY subpaths that fully synced (head
+            // genuinely LIVES at the path). Incomplete subpaths get the
+            // half-synced caveat instead (round-10 #4).
+            const syncedRefreshEntries = refreshEntries.filter(
+              ([sp]) => !failedSet.has(sp)
+            )
+            const incompleteRefreshEntries = refreshEntries.filter(([sp]) =>
+              failedSet.has(sp)
+            )
+            const refreshLines = syncedRefreshEntries.map(
+              ([sp, paths]) =>
+                `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
+            )
+            const commitLines = commitEntries.map(
+              ([sp, c]) =>
+                `/${sp}: ${c.paths.map((p) => `/${sp}${p}`).join(", ")}`
+            )
+            // Sidecars to surface = the merged refresh sidecars (persisted ∪ this
+            // turn, round-10 #1). `kind` distinguishes a readable-bytes file
+            // sidecar from a readable-JSON symlink sidecar (round-10 #3). These
+            // are ALWAYS listed when present — independent of whether their
+            // subpath fully synced — so an incomplete subpath's preserved copy is
+            // never orphaned before the persisted store is cleared (round-10
+            // follow-up: the sidecar listing must not hide behind the head-wins
+            // line).
+            const refreshSidecars = Object.values(
+              displayRefresh.sidecarsBySubpath
+            ).flat()
+            // P2/P3: split restored (leaf exists, "read it") from unrestored,
+            // and unrestored further into transient (retry later) vs permanent
+            // (unrecoverable). Failed sidecars never get a "read it".
+            const {
+              restored: restoredRefreshSidecars,
+              transient: transientRefreshSidecars,
+              permanent: permanentRefreshSidecars,
+            } = partitionSidecars(
+              refreshSidecars,
+              failedSidecarReasons,
+              restoreStatusUnknown
+            )
+            const sidecarPairs = restoredRefreshSidecars.map(formatRestoredPair)
+            // Per-path coverage (round-7 #D), restricted to fully-synced subpaths:
+            // a deferred conflict path is "covered" iff some sidecar's original IS
+            // that path or sits under it.
+            const sidecarOriginals = refreshSidecars.map((s) => s.original)
+            const hasUncoveredRefreshConflict = syncedRefreshEntries.some(
+              ([sp, paths]) =>
+                paths.some((p) => {
+                  const abs = `/${sp}${p}`
+                  return !sidecarOriginals.some(
+                    (o) => o === abs || o.startsWith(`${abs}/`)
+                  )
+                })
+            )
+            // We surfaced (and may clear) persisted refresh conflicts iff there
+            // were any deferred paths OR any sidecars to show.
+            surfacedPendingRefreshConflicts =
+              refreshEntries.length > 0 || refreshSidecars.length > 0
+
+            if (
+              refreshLines.length > 0 ||
+              commitLines.length > 0 ||
+              syncFailureEntries.length > 0 ||
+              surfacedPendingRefreshConflicts
+            ) {
+              if (refreshLines.length > 0) {
+                console.warn(
+                  `[session-thinking] sandbox refresh conflicts for ${sessionId}: ${refreshLines.join("; ")}`
+                )
+              }
+              if (commitLines.length > 0) {
+                console.warn(
+                  `[session-thinking] sandbox prior-turn commit conflicts for ${sessionId}: ${commitLines.join("; ")}`
+                )
+              }
+              if (syncFailureEntries.length > 0) {
+                console.warn(
+                  `[session-thinking] sandbox refresh sync failures for ${sessionId}: ${syncFailureEntries
+                    .map(([sp, msg]) => `/${sp}: ${msg}`)
+                    .join("; ")}`
+                )
+              }
+              const sections: string[] = []
+              if (refreshLines.length > 0) {
+                const noSidecarNote = hasUncoveredRefreshConflict
+                  ? " Some conflict paths have NO sidecar — for any conflict path without a listed sidecar (below), re-read the live path: it now holds the other writer's version."
+                  : ""
+                sections.push(
+                  `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}.${noSidecarNote}`
+                )
+              }
+              // The preserved-copy listing is its OWN sentence, emitted whenever
+              // ANY refresh sidecar exists — even if every conflicting subpath was
+              // incomplete this turn (so refreshLines is empty). This guarantees a
+              // preserved copy is named before the persisted store is cleared
+              // post-actorThink (round-10 follow-up: no orphaned sidecar).
+              if (sidecarPairs.length > 0) {
+                sections.push(
+                  `Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar (read it — file sidecars hold the bytes verbatim, symlink sidecars hold JSON {"kind":"symlink","target":...} — reconcile with the live/head version, then write the merged result back to the original path): ${sidecarPairs.join("; ")}.`
+                )
+              }
+              // P2/P3: sidecars that FAILED to re-materialize are listed WITHOUT
+              // a "read it" — transient ones promise a later-turn restore,
+              // permanent ones (corrupt/missing payload) are flagged as
+              // unrecoverable so the agent redoes the work instead of waiting.
+              const transientRefreshSentence = transientUnrestoredSentence(
+                transientRefreshSidecars
+              )
+              if (transientRefreshSentence) {
+                sections.push(transientRefreshSentence)
+              }
+              const permanentRefreshSentence = permanentUnrestoredSentence(
+                permanentRefreshSidecars
+              )
+              if (permanentRefreshSentence) {
+                sections.push(permanentRefreshSentence)
+              }
+              if (commitEntries.length > 0) {
+                // round-7 #C: the post-commit reconcile preserved the agent's
+                // pre-conflict copy at a sidecar — point at it instead of
+                // claiming the work was simply lost. P2/P3: split restored ("read
+                // it") from transient (retry later) and permanent (unrecoverable).
+                const commitSidecars = commitEntries.flatMap(
+                  ([, c]) => c.sidecars
+                )
+                const {
+                  restored: restoredCommitSidecars,
+                  transient: transientCommitSidecars,
+                  permanent: permanentCommitSidecars,
+                } = partitionSidecars(
+                  commitSidecars,
+                  failedSidecarReasons,
+                  restoreStatusUnknown
+                )
+                const commitSidecarPairs =
+                  restoredCommitSidecars.map(formatRestoredPair)
+                const commitSidecarNote =
+                  commitSidecarPairs.length > 0
+                    ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar — read it (symlink sidecars hold JSON metadata), reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
+                    : ""
+                const transientCommitSentence = transientUnrestoredSentence(
+                  transientCommitSidecars
+                )
+                const permanentCommitSentence = permanentUnrestoredSentence(
+                  permanentCommitSidecars
+                )
+                const unrestoredCommitNote = [
+                  transientCommitSentence,
+                  permanentCommitSentence,
+                ]
+                  .filter(Boolean)
+                  .map((s) => ` ${s}`)
+                  .join("")
+                sections.push(
+                  `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote}${unrestoredCommitNote} Re-read each path and re-apply your change if it's still needed.`
+                )
+                surfacedPendingCommitConflicts = true
+              }
+              if (syncFailureEntries.length > 0) {
+                // round-8 follow-up + round-10 #4: a space failed to FULLY merge
+                // in the latest head this turn. Its view may be HALF-SYNCED — head
+                // is NOT guaranteed to be at the path — and it will NOT be
+                // committed at turn-end (avoids snapshotting a half-synced tree);
+                // the platform retries the merge next turn. Any conflict paths +
+                // sidecars already preserved for it ARE listed above and remain
+                // valid; surface those paths here too so the agent re-reads them.
+                const incompleteLines = incompleteRefreshEntries.map(
+                  ([sp, paths]) =>
+                    `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
+                )
+                const incompletePathsNote =
+                  incompleteLines.length > 0
+                    ? ` Conflicting paths there (re-read carefully; your preserved copies are in the sidecar list above): ${incompleteLines.join("; ")}.`
+                    : ""
+                sections.push(
+                  `These spaces could NOT be fully refreshed to the latest version this turn and may show a HALF-SYNCED view — do NOT assume the other writer's version is at the path there; re-read carefully and avoid large edits until they recover: ${syncFailureEntries
+                    .map(([sp]) => `/${sp}`)
+                    .join(", ")}.${incompletePathsNote}`
+                )
+              }
+              sandboxConflictNotice = {
+                kind: "system_notice",
+                noticeType: "generic",
+                scope: "private",
+                surface: "internal",
+                parts: textBlocks(`File merge conflict. ${sections.join(" ")}`),
+                metadata: {
+                  refreshConflicts: displayRefresh.deferredConflictsBySubpath,
+                  priorCommitConflicts: pendingCommitConflicts,
+                  refreshSyncFailures: refresh.syncFailuresBySubpath,
+                },
+              }
+            }
+          } catch (sandboxErr) {
+            console.error(
+              `[session-thinking] sandbox provision/refresh failed for ${sessionId}:`,
+              sandboxErr
+            )
+          }
+        }
+
+        let finalContextItems = sandboxConflictNotice
+          ? [sandboxConflictNotice, ...contextItems]
+          : contextItems
         if (primaryModel?.crossTurnToolHistory && !conversationId) {
           const executionToolResults =
             await loadExecutionToolResultsForSession(sessionId)
@@ -612,6 +954,11 @@ export function startSessionThinkingWorker() {
               },
               ...finalContextItems,
             ]
+          }
+          // Preserve the sandbox conflict notice (the rebuild above replaced
+          // finalContextItems wholesale).
+          if (sandboxConflictNotice) {
+            finalContextItems = [sandboxConflictNotice, ...finalContextItems]
           }
         }
 
@@ -749,77 +1096,169 @@ export function startSessionThinkingWorker() {
 
         await emitThinkingStatus("Calling AI model...")
 
-        result = await actorThink(
-          actor,
-          contextWindow,
-          undefined,
-          resolvedModelPlan,
-          workspaceId,
-          {
-            sessionId,
-            turnId: turn.id,
-            collaborationMode:
-              session.collaborationMode ||
-              session.collaboration_mode ||
-              "default",
-            conversationId: session.conversation_id,
-            conversationKind: session.conversation_kind,
-            isImConversation: session.isImConversation,
-            conversationParticipants: participantEntries,
-            userId,
-            availableSkills,
-            onStatus: emitThinkingStatus,
-            mcpTools: mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
-            mcpExecutor: mcpTools.executor,
-            mcpVersion: mcpTools.mcpVersion,
-            mcpRefresh: mcpTools.refresh,
-            mcpSetTurnId: mcpTools.setTurnId,
-            shouldAbortTurn: async () =>
-              lockLost ||
-              (await hasPendingInterrupt(
-                sessionId,
-                "remote_control_terminated"
-              )),
-            system,
-            refreshCollaborationContext: async () => {
-              const refreshedSession = await getSession(sessionId)
-              if (refreshedSession) {
-                session = refreshedSession
-              }
-              return {
-                collaborationMode:
-                  session?.collaborationMode ||
-                  session?.collaboration_mode ||
-                  "default",
-                system: session ? buildSystemPrompt(session) : system,
-              }
-            },
-            checkNewMessages:
-              conversationId && actorParticipantId
-                ? async () => {
-                    const update = await loadNewContextItems({
-                      conversationId,
-                      participantId: actorParticipantId!,
-                      actorId,
-                      sinceSequence: lastKnownConversationSequence,
-                    })
-                    lastKnownConversationSequence = update.maxSequence
-                    if (update.items.length > 0) {
-                      await attachPendingWakeupsToTurn(sessionId, turn.id)
-                      await publishSessionRuntime(workspaceId, sessionId, {
-                        laneState: "running",
-                        health: "ok",
-                        phase:
-                          currentPhase === "error" ? "thinking" : currentPhase,
-                        statusText: currentStatusText,
-                        activeTurnId: turn.id,
+        try {
+          result = await actorThink(
+            actor,
+            contextWindow,
+            undefined,
+            resolvedModelPlan,
+            workspaceId,
+            {
+              sessionId,
+              turnId: turn.id,
+              collaborationMode:
+                session.collaborationMode ||
+                session.collaboration_mode ||
+                "default",
+              conversationId: session.conversation_id,
+              conversationKind: session.conversation_kind,
+              isImConversation: session.isImConversation,
+              conversationParticipants: participantEntries,
+              userId,
+              availableSkills,
+              onStatus: emitThinkingStatus,
+              mcpTools: mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
+              mcpExecutor: mcpTools.executor,
+              mcpVersion: mcpTools.mcpVersion,
+              mcpRefresh: mcpTools.refresh,
+              mcpSetTurnId: mcpTools.setTurnId,
+              shouldAbortTurn: async () =>
+                lockLost ||
+                (await hasPendingInterrupt(
+                  sessionId,
+                  "remote_control_terminated"
+                )),
+              system,
+              refreshCollaborationContext: async () => {
+                const refreshedSession = await getSession(sessionId)
+                if (refreshedSession) {
+                  session = refreshedSession
+                }
+                return {
+                  collaborationMode:
+                    session?.collaborationMode ||
+                    session?.collaboration_mode ||
+                    "default",
+                  system: session ? buildSystemPrompt(session) : system,
+                }
+              },
+              checkNewMessages:
+                conversationId && actorParticipantId
+                  ? async () => {
+                      const update = await loadNewContextItems({
+                        conversationId,
+                        participantId: actorParticipantId!,
+                        actorId,
+                        sinceSequence: lastKnownConversationSequence,
                       })
+                      lastKnownConversationSequence = update.maxSequence
+                      if (update.items.length > 0) {
+                        await attachPendingWakeupsToTurn(sessionId, turn.id)
+                        await publishSessionRuntime(workspaceId, sessionId, {
+                          laneState: "running",
+                          health: "ok",
+                          phase:
+                            currentPhase === "error"
+                              ? "thinking"
+                              : currentPhase,
+                          statusText: currentStatusText,
+                          activeTurnId: turn.id,
+                        })
+                      }
+                      return update.items.length > 0 ? update.items : null
                     }
-                    return update.items.length > 0 ? update.items : null
-                  }
-                : undefined,
+                  : undefined,
+            }
+          )
+
+          // actorThink returned: the model has now consumed the conflict notice
+          // that was injected into its context window. Clear the persisted
+          // pending commit conflicts ONLY now (at-least-once delivery — if the
+          // job had crashed before here, the next turn would re-surface them).
+          //
+          // R12-3 / P3: do NOT clear if a sidecar failed restore TRANSIENTLY
+          // this provision — the agent couldn't read the preserved copy and it
+          // may re-materialize next provision, so keep the record retryable. A
+          // PERMANENT failure does NOT block clearing: it can never restore, so
+          // we deliver the (unrecoverable) notice once and then clear, instead of
+          // re-surfacing a dead notice every turn forever.
+          if (
+            sandboxEnabled &&
+            !hasTransientSidecarFailure &&
+            surfacedPendingCommitConflicts
+          ) {
+            await clearPendingCommitConflicts(sessionId).catch((err) =>
+              log.error(
+                { err },
+                `[session-thinking] failed to clear pending commit conflicts for ${sessionId}`
+              )
+            )
           }
-        )
+          // Same at-least-once contract for refresh conflicts (round-10 #1):
+          // clear the persisted refresh notice ONLY after the model consumed it
+          // AND no sidecar failed TRANSIENTLY (R12-3 / P3).
+          if (
+            sandboxEnabled &&
+            !hasTransientSidecarFailure &&
+            surfacedPendingRefreshConflicts
+          ) {
+            await clearPendingRefreshConflicts(sessionId).catch((err) =>
+              log.error(
+                { err },
+                `[session-thinking] failed to clear pending refresh conflicts for ${sessionId}`
+              )
+            )
+          }
+        } finally {
+          // Turn-end: commit the multi-writer spaces (/conversation, /actor) so
+          // the next turn — and other actors — see this turn's file writes.
+          // (/actor-conversation is single-writer; committed at teardown.)
+          // Best-effort: a commit failure must not abort action execution.
+          // NOTE: the lock-renew interval is intentionally NOT cleared here — it
+          // is cleared in the OUTER finally so the fenced renew covers the whole
+          // critical section (model + all side-effects), not just actorThink.
+          if (sandboxEnabled) {
+            try {
+              // Skip spaces whose turn-start refresh FAILED: their live tree is
+              // half-synced (base unadvanced), so committing now could entangle
+              // this turn's edits with partially-applied head bytes. They
+              // self-heal on the next turn's refresh (round-8 follow-up).
+              const commitSubpaths = (
+                ["conversation", "actor"] as const
+              ).filter((sp) => !refreshFailedSubpaths.has(sp))
+              if (commitSubpaths.length === 0) {
+                log.warn(
+                  `[session-thinking] skipping turn-end commit for ${sessionId}: all multi-writer spaces failed to refresh this turn`
+                )
+              }
+              const commit =
+                commitSubpaths.length > 0
+                  ? await commitSpaces(sessionId, [...commitSubpaths])
+                  : {
+                      snapshotIdBySubpath: {},
+                      conflictsBySubpath: {},
+                      sidecarsBySubpath: {},
+                    }
+              // Surface per-file commit conflicts (a path this session changed
+              // that another writer committed first — head kept, local dropped)
+              // so they aren't silently swallowed.
+              const commitConflicts = Object.entries(commit.conflictsBySubpath)
+              if (commitConflicts.length > 0) {
+                log.warn(
+                  `[session-thinking] sandbox commit conflicts for ${sessionId}: ` +
+                    commitConflicts
+                      .map(([sp, paths]) => `${sp}: ${paths.join(", ")}`)
+                      .join("; ")
+                )
+              }
+            } catch (err) {
+              log.error(
+                { err },
+                `[session-thinking] sandbox commit failed for ${sessionId}`
+              )
+            }
+          }
+        }
 
         // Bail before EACH side-effect / terminal write if we've lost the lock
         // (the renew interval sets lockLost). Throwing routes through the catch

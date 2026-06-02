@@ -247,7 +247,7 @@ function mergeContentBlocks(
         ): block is Extract<CanonicalContentBlock, { type: "file_ref" }> =>
           block.type === "file_ref"
       )
-      .map((block) => block.fileId)
+      .map((block) => block.sha256)
   )
 
   for (const block of extraBlocks) {
@@ -259,8 +259,8 @@ function mergeContentBlocks(
       merged.push(block)
       continue
     }
-    if (seenFileIds.has(block.fileId)) continue
-    seenFileIds.add(block.fileId)
+    if (seenFileIds.has(block.sha256)) continue
+    seenFileIds.add(block.sha256)
     merged.push(block)
   }
 
@@ -447,11 +447,13 @@ function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
     }
     return {
       type: "file_ref" as const,
-      fileId: block.fileId,
+      refPath: block.path ?? null,
+      refSha256: block.sha256,
       mimeType: block.mimeType,
-      name: block.originalName,
+      name: block.name,
       metadata: {
-        url: block.url,
+        sha256: block.sha256,
+        path: block.path,
         sizeBytes: block.sizeBytes,
         category: block.category,
       },

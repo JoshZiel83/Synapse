@@ -427,7 +427,8 @@ export async function createToolResult(params: {
   parts: Array<{
     type: "text" | "file_ref" | "json"
     text?: string
-    fileId?: string
+    refPath?: string | null
+    refSha256?: string | null
     json?: unknown
     mimeType?: string
     name?: string
@@ -464,7 +465,9 @@ export async function createToolResult(params: {
           ordinal,
           part_type: part.type,
           text_value: part.type === "text" ? part.text || "" : null,
-          file_id: part.type === "file_ref" ? part.fileId || null : null,
+          ref_path: part.type === "file_ref" ? (part.refPath ?? null) : null,
+          ref_sha256:
+            part.type === "file_ref" ? (part.refSha256 ?? null) : null,
           json_value:
             part.type === "json"
               ? sql`${JSON.stringify(part.json ?? {})}::jsonb`
@@ -513,7 +516,8 @@ export async function getToolHistoryForSession(sessionId: string) {
       "trp.ordinal as result_part_ordinal",
       "trp.part_type as result_part_type",
       "trp.text_value as result_text_value",
-      "trp.file_id as result_file_id",
+      "trp.ref_path as result_ref_path",
+      "trp.ref_sha256 as result_ref_sha256",
       "trp.json_value as result_json_value",
       "trp.mime_type as result_mime_type",
       "trp.name as result_name",

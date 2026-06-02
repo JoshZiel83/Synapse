@@ -74,6 +74,7 @@ HTTP_PORT="${SYNAPSE_HTTP_PORT:-${existing_http_port:-80}}"
 WWW_DOMAIN="${SYNAPSE_WWW_DOMAIN:-$(read_env_value SYNAPSE_WWW_DOMAIN)}"
 MOBILE_SHORT_DOMAIN="${SYNAPSE_MOBILE_SHORT_DOMAIN:-$(read_env_value SYNAPSE_MOBILE_SHORT_DOMAIN)}"
 MOBILE_DOMAIN="${SYNAPSE_MOBILE_DOMAIN:-$(read_env_value SYNAPSE_MOBILE_DOMAIN)}"
+REGISTRY_DOMAIN="${SYNAPSE_REGISTRY_DOMAIN:-$(read_env_value SYNAPSE_REGISTRY_DOMAIN)}"
 LETSENCRYPT_CERT_NAME_VALUE="${LETSENCRYPT_CERT_NAME:-$(read_env_value LETSENCRYPT_CERT_NAME)}"
 LETSENCRYPT_EMAIL_VALUE="${LETSENCRYPT_EMAIL:-$(read_env_value LETSENCRYPT_EMAIL)}"
 
@@ -92,9 +93,15 @@ fi
 WWW_DOMAIN="${WWW_DOMAIN:-www.$DOMAIN}"
 MOBILE_SHORT_DOMAIN="${MOBILE_SHORT_DOMAIN:-m.$DOMAIN}"
 MOBILE_DOMAIN="${MOBILE_DOMAIN:-mobile.$DOMAIN}"
+REGISTRY_DOMAIN="${REGISTRY_DOMAIN:-npmr.$DOMAIN}"
 LETSENCRYPT_CERT_NAME_VALUE="${LETSENCRYPT_CERT_NAME_VALUE:-$DOMAIN}"
 LETSENCRYPT_EMAIL_VALUE="${LETSENCRYPT_EMAIL_VALUE:-admin@$DOMAIN}"
 WS_URL="$WS_SCHEME://${APP_URL#*://}"
+# External-reachable URL of the private npm registry (end-user side). The
+# API embeds it into the dashboard one-click daemon install command. The
+# real registry host stays out of the repo — it lives only in this .env.
+PUBLIC_NPM_REGISTRY_URL="${SYNAPSE_PUBLIC_NPM_REGISTRY_URL:-$(read_env_value PUBLIC_NPM_REGISTRY_URL)}"
+PUBLIC_NPM_REGISTRY_URL="${PUBLIC_NPM_REGISTRY_URL:-$PUBLIC_SCHEME://$REGISTRY_DOMAIN/}"
 API_PROXY_ORIGIN="${SYNAPSE_API_PROXY_ORIGIN:-http://localhost:3001}"
 SELECTED_AI_PROVIDER="${SYNAPSE_AI_PROVIDER:-}"
 SELECTED_AI_ENGINE_KIND="${SYNAPSE_AI_ENGINE_KIND:-}"
@@ -179,8 +186,6 @@ ENV_FILES_UPDATED=false
 if [ ! -f "$ENV_FILE" ]; then
   POSTGRES_PASSWORD=$(generate_password)
   REDIS_PASSWORD=$(generate_password)
-  JWT_SECRET=$(generate_password)
-  JWT_REFRESH_SECRET=$(generate_password)
   APP_SECRET=$(generate_password)
   MCP_ENCRYPTION_KEY=$(generate_password)
 
@@ -196,9 +201,7 @@ POSTGRES_DB=synapse
 # Redis
 REDIS_PASSWORD=$REDIS_PASSWORD
 
-# JWT / application secrets
-JWT_SECRET=$JWT_SECRET
-JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET
+# Application secrets
 APP_SECRET=$APP_SECRET
 MCP_ENCRYPTION_KEY=$MCP_ENCRYPTION_KEY
 
@@ -210,6 +213,7 @@ SYNAPSE_PUBLIC_DOMAIN=$DOMAIN
 SYNAPSE_WWW_DOMAIN=$WWW_DOMAIN
 SYNAPSE_MOBILE_SHORT_DOMAIN=$MOBILE_SHORT_DOMAIN
 SYNAPSE_MOBILE_DOMAIN=$MOBILE_DOMAIN
+SYNAPSE_REGISTRY_DOMAIN=$REGISTRY_DOMAIN
 LETSENCRYPT_CERT_NAME=$LETSENCRYPT_CERT_NAME_VALUE
 LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL_VALUE
 
@@ -225,8 +229,16 @@ HOST=localhost
 DATABASE_URL=postgresql://synapse:${POSTGRES_PASSWORD}@localhost:5432/synapse
 REDIS_URL=redis://:${REDIS_PASSWORD}@localhost:6379
 PLATFORM_ADMIN_EMAILS=demo@synapse.dev
+STORAGE_DIR=storage/files
+# Local-dev model settings. The production Docker image bakes the embedding
+# model in and overrides these (download off, /app/models/memory) via the
+# compose api environment block.
 MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=true
-MEMORY_MODEL_CACHE_DIR=/app/storage/models/memory
+MEMORY_MODEL_CACHE_DIR=storage/models/memory
+
+# Private npm registry (end-user reachable URL). Used by the API to build
+# the dashboard one-click daemon install command. Real host stays in .env.
+PUBLIC_NPM_REGISTRY_URL=$PUBLIC_NPM_REGISTRY_URL
 
 # Realtime ASR (Volcengine / Doubao Seed ASR Streaming 2.0)
 ASR_PROVIDER=volcengine
@@ -267,8 +279,10 @@ upsert_env_var "$ENV_FILE" SYNAPSE_PUBLIC_DOMAIN "$DOMAIN"
 upsert_env_var "$ENV_FILE" SYNAPSE_WWW_DOMAIN "$WWW_DOMAIN"
 upsert_env_var "$ENV_FILE" SYNAPSE_MOBILE_SHORT_DOMAIN "$MOBILE_SHORT_DOMAIN"
 upsert_env_var "$ENV_FILE" SYNAPSE_MOBILE_DOMAIN "$MOBILE_DOMAIN"
+upsert_env_var "$ENV_FILE" SYNAPSE_REGISTRY_DOMAIN "$REGISTRY_DOMAIN"
 upsert_env_var "$ENV_FILE" LETSENCRYPT_CERT_NAME "$LETSENCRYPT_CERT_NAME_VALUE"
 upsert_env_var "$ENV_FILE" LETSENCRYPT_EMAIL "$LETSENCRYPT_EMAIL_VALUE"
+upsert_env_var "$ENV_FILE" PUBLIC_NPM_REGISTRY_URL "$PUBLIC_NPM_REGISTRY_URL"
 upsert_env_var "$ENV_FILE" APP_BASE_URL "$APP_URL"
 upsert_env_var "$ENV_FILE" BASE_URL "$APP_URL"
 upsert_env_var "$ENV_FILE" NEXT_PUBLIC_API_URL "/api/v1"

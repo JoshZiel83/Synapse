@@ -16,6 +16,7 @@
     "npm-shrinkwrap.json"
   ],
   "scripts": {
+    "prebuild": "rm -rf dist tsconfig.build.tsbuildinfo",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",

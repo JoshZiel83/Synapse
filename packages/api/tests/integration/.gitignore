@@ -1,3 +1,4 @@
 .cache/
 *.log
 tmp-profiles/
+.stack-env

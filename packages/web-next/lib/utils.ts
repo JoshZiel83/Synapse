@@ -31,3 +31,12 @@ export function resolveFileUrl(url?: string | null) {
 
   return url
 }
+
+// Content-addressed file ref render URL. file_ref blocks now carry a sha256
+// (+ optional path); bytes are served by GET /api/v1/content/<sha256> (mounted
+// under /api/v1 so the dev Next rewrite + prod nginx proxy it like any API
+// route). This builds the absolute URL (reusing resolveFileUrl's origin logic).
+export function resolveContentUrl(sha256?: string | null) {
+  if (!sha256) return undefined
+  return resolveFileUrl(`/api/v1/content/${sha256}`)
+}

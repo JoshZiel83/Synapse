@@ -416,7 +416,7 @@ export function renderCanonicalBlocksToText(blocks: CanonicalContentBlock[]) {
         ? block.text
         : block.type === "mention"
           ? `@${block.mention.name || "Unknown"}`
-          : `[File: ${block.originalName} | ${block.mimeType} | ${block.url}]`
+          : `[File: ${block.name} | ${block.mimeType} | ${block.path ?? `sha256:${block.sha256}`}]`
     )
     .join("\n")
 }

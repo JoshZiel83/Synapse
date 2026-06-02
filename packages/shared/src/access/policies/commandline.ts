@@ -65,17 +65,37 @@ const ExecFilePolicyWireSchema = z.object({
   allowed_env: z.array(z.string()).optional(),
 })
 
+// ─────────────────────────── sandbox branch ──────────────────────────────────
+// "Any command inside a bwrap jail" — no command/argv matcher. The grant covers
+// every command whose working directory resolves within the sandbox mount
+// points; isolation is the boundary, not a command whitelist. Carries only an
+// optional workingDirectory (a narrower sub-mount cap) and allowedEnv.
+
+const SandboxPolicyCamelSchema = z.object({
+  executor: z.literal("sandbox"),
+  workingDirectory: z.string().optional(),
+  allowedEnv: z.array(z.string()).optional(),
+})
+
+const SandboxPolicyWireSchema = z.object({
+  executor: z.literal("sandbox"),
+  working_directory: z.string().optional(),
+  allowed_env: z.array(z.string()).optional(),
+})
+
 // ─────────────────────────── unions + types ──────────────────────────────────
 
 export const CommandlinePolicySchema = z.discriminatedUnion("executor", [
   ShellPolicyCamelSchema,
   ExecFilePolicyCamelSchema,
+  SandboxPolicyCamelSchema,
 ])
 export type CommandlinePolicy = z.infer<typeof CommandlinePolicySchema>
 
 export const WireCommandlinePolicySchema = z.discriminatedUnion("executor", [
   ShellPolicyWireSchema,
   ExecFilePolicyWireSchema,
+  SandboxPolicyWireSchema,
 ])
 export type WireCommandlinePolicy = z.infer<typeof WireCommandlinePolicySchema>
 
@@ -88,14 +108,19 @@ export type CommandlineExecFilePolicy = Extract<
   CommandlinePolicy,
   { executor: "exec_file" }
 >
+export type CommandlineSandboxPolicy = Extract<
+  CommandlinePolicy,
+  { executor: "sandbox" }
+>
 
 // Cross-check against the canonical enum lists (constants/enums.ts) so a
 // drift between the two halves of the union fails at build time. We do this
 // by asserting type-level equality with helper triggers.
 const _ALL_EXECUTORS_CHECK: ReadonlyArray<CommandlinePolicy["executor"]> =
   RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS
+// Only the matcher-bearing branches carry commandMatchType; sandbox has none.
 const _ALL_MATCH_TYPES_CHECK: ReadonlyArray<
-  CommandlinePolicy["commandMatchType"]
+  (CommandlineShellPolicy | CommandlineExecFilePolicy)["commandMatchType"]
 > = RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES
 void _ALL_EXECUTORS_CHECK
 void _ALL_MATCH_TYPES_CHECK
@@ -119,6 +144,13 @@ export function serializeCommandlinePolicyToWire(
       argv_prefix: policy.argvPrefix,
       working_directory: policy.workingDirectory,
       allow_bundled_toolchain: policy.allowBundledToolchain,
+      allowed_env: policy.allowedEnv,
+    }
+  }
+  if (policy.executor === "sandbox") {
+    return {
+      executor: "sandbox",
+      working_directory: policy.workingDirectory,
       allowed_env: policy.allowedEnv,
     }
   }
@@ -149,6 +181,13 @@ export function parseCommandlinePolicyFromWire(
       argvPrefix: parsed.argv_prefix,
       workingDirectory: parsed.working_directory,
       allowBundledToolchain: parsed.allow_bundled_toolchain,
+      allowedEnv: parsed.allowed_env,
+    }
+  }
+  if (parsed.executor === "sandbox") {
+    return {
+      executor: "sandbox",
+      workingDirectory: parsed.working_directory,
       allowedEnv: parsed.allowed_env,
     }
   }

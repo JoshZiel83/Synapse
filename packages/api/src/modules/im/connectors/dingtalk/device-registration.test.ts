@@ -18,8 +18,8 @@ interface MockFetchOptions {
 function makeMockFetch(opts: MockFetchOptions) {
   let i = 0
   const fn = async (
-    _input: RequestInfo | URL,
-    _init?: RequestInit
+    _input: Parameters<typeof fetch>[0],
+    _init?: Parameters<typeof fetch>[1]
   ): Promise<Response> => {
     const r = opts.responses[i++]
     if (!r) throw new Error("mock fetch ran out of responses")
