@@ -86,6 +86,8 @@ export {
   resolveSidecarPath,
   resolveSidecarPathOrThrow,
   FS_HELPER_PROTO_VERSION,
+  FsHelperProtoMismatchError,
+  assertFsHelperProto,
   type ResolveMode,
   type ResolveSidecarOptions,
 } from "./builtins/fs-helper-resolve.js"

@@ -26,6 +26,46 @@ import { join } from "node:path"
 export const FS_HELPER_PROTO_VERSION = 1
 
 /**
+ * Thrown when the spawned fs-helper reports a proto_version that doesn't match
+ * FS_HELPER_PROTO_VERSION (or predates the `fs.hello` handshake entirely). Both
+ * the one-shot driver and the long-lived client throw this on (re)spawn, so a
+ * stale binary fails loud instead of silently mis-serving RPCs.
+ */
+export class FsHelperProtoMismatchError extends Error {
+  constructor(
+    public readonly expected: number,
+    public readonly got: number | undefined,
+    public readonly crateVersion: string | undefined
+  ) {
+    super(
+      `fs-helper protocol mismatch: client expects proto_version=${expected}, ` +
+        `helper reports ${got ?? "none (pre-handshake binary)"}` +
+        (crateVersion ? ` (crate ${crateVersion})` : "") +
+        `. Rebuild the sidecar (build:fs-helper).`
+    )
+    this.name = "FsHelperProtoMismatchError"
+  }
+}
+
+/**
+ * Validate an `fs.hello` result against the pinned proto version. Throws
+ * FsHelperProtoMismatchError on mismatch or a malformed/absent result.
+ */
+export function assertFsHelperProto(hello: unknown): void {
+  const obj =
+    typeof hello === "object" && hello !== null
+      ? (hello as { proto_version?: unknown; crate_version?: unknown })
+      : {}
+  const got =
+    typeof obj.proto_version === "number" ? obj.proto_version : undefined
+  const crate =
+    typeof obj.crate_version === "string" ? obj.crate_version : undefined
+  if (got !== FS_HELPER_PROTO_VERSION) {
+    throw new FsHelperProtoMismatchError(FS_HELPER_PROTO_VERSION, got, crate)
+  }
+}
+
+/**
  * Selection policy when more than one candidate exists on disk:
  *   - "release-first": probe candidates in the given order, first hit wins.
  *     Right for PRODUCTION — a stray newer debug build must never shadow the

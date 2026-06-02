@@ -6,6 +6,11 @@
 import { existsSync } from "node:fs"
 import type { SidecarHandle } from "../sidecar.js"
 import { startSidecar } from "../sidecar.js"
+import {
+  FS_HELPER_PROTO_VERSION,
+  FsHelperProtoMismatchError,
+  assertFsHelperProto,
+} from "./fs-helper-resolve.js"
 import type {
   HistorySnapshotInput,
   HistorySnapshotResult,
@@ -186,6 +191,10 @@ export function createFsHelperClient(
   let stopped = false
   let history: RestartHistory = { lastRestartAt: null, parked: false }
   let helperMissing = false
+  // Handles that have completed the fs.hello handshake. A WeakSet (not a bool)
+  // so a respawned handle is naturally treated as un-handshaked — the old
+  // handle is GC'd, the new one isn't in the set, so request() re-handshakes.
+  const handshaked = new WeakSet<SidecarHandle>()
 
   if (!opts.helperPath || !existsSync(opts.helperPath)) {
     helperMissing = true
@@ -275,8 +284,52 @@ export function createFsHelperClient(
     return METHOD_TIMEOUT_OVERRIDES[method] ?? defaultTimeoutMs
   }
 
+  /**
+   * Verify a freshly-spawned handle speaks our wire protocol before its first
+   * real RPC. Calls h.request("fs.hello") DIRECTLY (not the gated request()
+   * below) to avoid recursing through the gate. Throws FsHelperProtoMismatchError
+   * on mismatch or on a pre-handshake binary (method_not_found). Idempotent per
+   * handle via the WeakSet.
+   */
+  async function ensureHandshake(h: SidecarHandle): Promise<void> {
+    if (handshaked.has(h)) return
+    const ms = timeoutMs("fs.hello")
+    let timer: NodeJS.Timeout | null = null
+    try {
+      const hello = await new Promise<unknown>((resolve, reject) => {
+        timer = setTimeout(() => {
+          try {
+            void h.stop()
+          } catch {
+            /* swallow */
+          }
+          handle = null
+          reject(new FsHelperTimeoutError("fs.hello", ms))
+        }, ms)
+        h.request("fs.hello", {}).then(resolve, reject)
+      })
+      assertFsHelperProto(hello)
+      handshaked.add(h)
+    } catch (err) {
+      // A pre-handshake binary answers method_not_found (-32601) → treat as a
+      // proto mismatch (rebuild needed) rather than a generic RPC error.
+      const m = (err as Error).message?.match(/^(-?\d+):\s*(.+)$/)
+      if (m && Number.parseInt(m[1]!, 10) === -32601) {
+        throw new FsHelperProtoMismatchError(
+          FS_HELPER_PROTO_VERSION,
+          undefined,
+          undefined
+        )
+      }
+      throw err
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   async function request<T>(method: string, params: unknown): Promise<T> {
     const h = ensureHandle()
+    await ensureHandshake(h)
     const ms = timeoutMs(method)
     let timer: NodeJS.Timeout | null = null
     try {

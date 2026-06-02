@@ -46,6 +46,13 @@ function makeFakeStart(): {
         request: (m: string, p?: unknown) => Promise<unknown>
       }
     ).request = (method: string) => {
+      // The client handshakes (fs.hello) on every fresh handle before its
+      // first real RPC. Auto-resolve it so tests exercise the real method's
+      // behavior (timeout / restart / park) rather than hanging on the
+      // unanswered handshake. Keys on method only, matching resolveRequest.
+      if (method === "fs.hello") {
+        return Promise.resolve({ proto_version: 1, crate_version: "test" })
+      }
       return new Promise((resolve, reject) => {
         const id = String(++nextId)
         pending.set(id, { resolve, reject, method })
