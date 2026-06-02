@@ -38,11 +38,10 @@ import type {
 } from "@synapse/shared/types"
 import {
   db,
-  isKyselyExecutor,
   runBuilder,
   takeFirstOn,
   withDbTransaction,
-  type AnyExecutor,
+  type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import {
@@ -74,28 +73,22 @@ import {
 } from "../session/collaboration-state.js"
 import { upsertInteractionTransportProjection } from "./transport-projections.js"
 
-/** Run raw SQL (text+params) on db / trx / pg client. */
+/** Run raw SQL (text+params) on db / trx. */
 async function runOn<T = any>(
-  executor: AnyExecutor,
+  executor: Executor,
   text: string,
   params: readonly unknown[] = []
 ): Promise<{ rows: T[]; rowCount?: number | null }> {
-  if (isKyselyExecutor(executor)) {
-    const result = await executor.executeQuery<T>(
-      CompiledQuery.raw(text, [...params])
-    )
-    return {
-      rows: result.rows as T[],
-      rowCount:
-        result.numAffectedRows === undefined
-          ? null
-          : Number(result.numAffectedRows),
-    }
+  const result = await executor.executeQuery<T>(
+    CompiledQuery.raw(text, [...params])
+  )
+  return {
+    rows: result.rows as T[],
+    rowCount:
+      result.numAffectedRows === undefined
+        ? null
+        : Number(result.numAffectedRows),
   }
-  return executor.query(text, [...params] as any[]) as Promise<{
-    rows: T[]
-    rowCount?: number | null
-  }>
 }
 
 /** `runOn` bound to the top-level db. */
@@ -108,28 +101,20 @@ function runOnDb<T = any>(
 
 /**
  * Run a pre-compiled query on an optional executor: native executeQuery for
- * Kysely executors / top-level db (when undefined), bare client.query otherwise.
+ * Kysely executors / top-level db (when undefined).
  */
 async function runCompiledOn<T = any>(
-  executor: AnyExecutor | undefined,
+  executor: Executor | undefined,
   compiled: CompiledQuery<T>
 ): Promise<{ rows: T[]; rowCount?: number | null }> {
-  if (!executor || isKyselyExecutor(executor)) {
-    const result = await (executor ?? db).executeQuery(compiled)
-    return {
-      rows: result.rows as T[],
-      rowCount:
-        result.numAffectedRows === undefined
-          ? null
-          : Number(result.numAffectedRows),
-    }
+  const result = await (executor ?? db).executeQuery(compiled)
+  return {
+    rows: result.rows as T[],
+    rowCount:
+      result.numAffectedRows === undefined
+        ? null
+        : Number(result.numAffectedRows),
   }
-  return executor.query(compiled.sql, [
-    ...compiled.parameters,
-  ] as any[]) as Promise<{
-    rows: T[]
-    rowCount?: number | null
-  }>
 }
 
 type RawInteractionRow = {
@@ -1247,7 +1232,7 @@ function buildInteractionSummary(
 
 async function getInteractionRowById(
   interactionId: string,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
@@ -1405,7 +1390,7 @@ function parseStoredInteractionResolveResponse(
 async function getInteractionCommandRow(
   interactionId: string,
   commandId: string,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ) {
   const compiled = db
     .selectFrom("interaction_response_commands")
@@ -1423,7 +1408,7 @@ async function getInteractionCommandRow(
 
 async function getInteractionRowByIdForUpdate(
   interactionId: string,
-  queryable: AnyExecutor
+  queryable: Executor
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
@@ -1547,7 +1532,7 @@ async function getInteractionRowByIdForUpdate(
 }
 
 async function insertInteractionCommandRow(
-  client: AnyExecutor,
+  client: Executor,
   params: {
     interactionId: string
     commandId: string
@@ -1578,7 +1563,7 @@ async function insertInteractionCommandRow(
 }
 
 async function appendInteractionUpdatedSyncEvent(
-  queryable: AnyExecutor,
+  queryable: Executor,
   interaction: InteractionRequestSummary
 ) {
   const allRecipients = await listConversationRealtimeRecipients(
@@ -1617,7 +1602,7 @@ async function appendInteractionUpdatedSyncEvent(
 
 async function syncInteractionEventPayload(
   interaction: InteractionRequestSummary,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ) {
   if (!interaction.itemId) return
   await updateConversationItemEventPayload(
@@ -1976,7 +1961,7 @@ function buildRuntimeAuthorizationSupersededNotice(
 }
 
 async function insertInteractionRequest(
-  client: AnyExecutor,
+  client: Executor,
   params: {
     workspaceId: string
     conversationId: string
@@ -2056,7 +2041,7 @@ async function insertInteractionRequest(
  * the one the conflicting unique index pinned.
  */
 async function resolveInsertConflictWinner(
-  client: AnyExecutor,
+  client: Executor,
   params: { workspaceId: string; requestKey: string; taskId?: string }
 ): Promise<string | null> {
   // Prefer the task-keyed lookup when available — for plan_approval /
@@ -2077,7 +2062,7 @@ async function resolveInsertConflictWinner(
 
 async function findInteractionIdByTaskId(
   taskId: string,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ) {
   const compiled = db
     .selectFrom("interaction_requests")
@@ -2092,7 +2077,7 @@ async function findInteractionIdByTaskId(
 async function findPendingInteractionIdByRequestKey(
   workspaceId: string,
   requestKey: string,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ) {
   const compiled = db
     .selectFrom("interaction_requests")
@@ -2107,7 +2092,7 @@ async function findPendingInteractionIdByRequestKey(
 }
 
 async function insertUserInputInteractionDetails(
-  client: AnyExecutor,
+  client: Executor,
   params: {
     interactionId: string
     promptPayload: Record<string, unknown>
@@ -2128,7 +2113,7 @@ async function insertUserInputInteractionDetails(
 }
 
 async function insertPlanApprovalInteractionDetails(
-  client: AnyExecutor,
+  client: Executor,
   params: {
     interactionId: string
     planPayload: Record<string, unknown>
@@ -2149,7 +2134,7 @@ async function insertPlanApprovalInteractionDetails(
 }
 
 async function insertRuntimeAuthorizationInteractionDetails(
-  client: AnyExecutor,
+  client: Executor,
   params: {
     interactionId: string
     deviceId: string
@@ -2221,7 +2206,7 @@ async function insertRuntimeAuthorizationInteractionDetails(
 }
 
 async function updateInteractionConversationItemId(
-  client: AnyExecutor,
+  client: Executor,
   interactionId: string,
   conversationItemId: string
 ) {
@@ -2243,7 +2228,7 @@ async function updateInteractionConversationItemId(
 }
 
 async function updateInteractionRequestRow(
-  client: AnyExecutor,
+  client: Executor,
   interactionId: string,
   values: Record<string, unknown>
 ) {
@@ -2262,7 +2247,7 @@ async function updateInteractionRequestRow(
 }
 
 async function updateInteractionResolutionPayload(
-  client: AnyExecutor,
+  client: Executor,
   interactionKind: InteractionRequestKind,
   interactionId: string,
   payload: Record<string, unknown>
@@ -2988,7 +2973,7 @@ export async function findOpenRuntimeAuthorizationInteraction(
 
 export async function getInteractionRequestSummary(
   interactionId: string,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ) {
   const row = await getInteractionRowById(interactionId, queryable)
   return row ? buildInteractionSummary(row) : null

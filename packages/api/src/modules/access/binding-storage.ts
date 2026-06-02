@@ -3,7 +3,7 @@ import {
   runBuilder,
 } from "../../infrastructure/database/kysely.js"
 import type {
-  AnyExecutor,
+  Executor,
   KyselyDb,
   TableInsert,
 } from "../../infrastructure/database/kysely.js"
@@ -78,7 +78,7 @@ export async function buildResourceAccessBindingInsertValues(
  * `pg.PoolClient`-compatible variant of `buildResourceAccessBindingInsertValues`.
  */
 export async function buildResourceAccessBindingInsertValuesOn(
-  client: AnyExecutor,
+  client: Executor,
   input: {
     workspaceId: string
     resourceType: AccessBindableResourceType
@@ -125,7 +125,7 @@ export async function buildResourceAccessBindingInsertValuesOn(
 import type { AccessBindingRow } from "./bindings.js"
 
 export async function insertAccessBindingReturningIdOn(
-  client: AnyExecutor,
+  client: Executor,
   params: Parameters<typeof buildResourceAccessBindingInsertValuesOn>[1]
 ): Promise<string> {
   const values = await buildResourceAccessBindingInsertValuesOn(client, params)
@@ -144,7 +144,7 @@ export async function insertAccessBindingReturningIdOn(
 }
 
 export async function insertAccessBindingReturningRowOn(
-  client: AnyExecutor,
+  client: Executor,
   params: Parameters<typeof buildResourceAccessBindingInsertValuesOn>[1]
 ): Promise<AccessBindingRow> {
   const values = await buildResourceAccessBindingInsertValuesOn(client, params)
@@ -588,7 +588,7 @@ export async function loadAccessBindingRowsForResourcesAndContext(
  * resource.
  */
 export async function hasAnyBindingForResourceOn(
-  client: AnyExecutor,
+  client: Executor,
   input: {
     resourceType: AccessBindableResourceType
     resourceId: string
@@ -635,7 +635,7 @@ function resourceIdColumnForRaw(resourceType: AccessBindableResourceType) {
  * FROM` so NULL-vs-NULL and UUID-equality both work correctly.
  */
 export async function findActiveBindingIdByResourceAndSubject(
-  client: AnyExecutor,
+  client: Executor,
   input: {
     workspaceId: string
     resourceType: AccessBindableResourceType
@@ -692,7 +692,7 @@ export async function updateGrantConversationTypeMaskOverride(
  * Bulk revoke variant of `revokeGrant`.
  */
 export async function revokeGrantsByIdsOn(
-  client: AnyExecutor,
+  client: Executor,
   bindingIds: string[]
 ): Promise<void> {
   if (bindingIds.length === 0) return
@@ -710,7 +710,7 @@ export async function revokeGrantsByIdsOn(
  * Hard-delete every binding pointing at a resource.
  */
 export async function hardDeleteBindingsForResourceOn(
-  client: AnyExecutor,
+  client: Executor,
   input: {
     resourceType: AccessBindableResourceType
     resourceId: string

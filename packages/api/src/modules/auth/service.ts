@@ -24,7 +24,7 @@ import {
   runBuilder,
   takeFirstOn,
   withDbTransaction,
-  type AnyExecutor,
+  type Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
   disconnectSocketsForSession,
@@ -93,7 +93,7 @@ export interface AuthServiceResult {
   sessionPersistence: AuthSessionPersistence
 }
 
-type DatabaseExecutor = AnyExecutor
+type DatabaseExecutor = Executor
 
 interface AuthQrLoginRequestRow {
   id: string

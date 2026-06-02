@@ -33,9 +33,8 @@ import { ACCESS_ACTIONS } from "../access/actions.js"
 import { CompiledQuery } from "kysely"
 import {
   db,
-  isKyselyExecutor,
   withDbTransaction,
-  type AnyExecutor,
+  type Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
   getWorkspaceCapabilityConversationTypeMask,
@@ -230,23 +229,17 @@ type QueryRunner = <T extends QueryRow>(
   params?: unknown[]
 ) => Promise<QueryResultLike<T>>
 
-/** Build a {@link QueryRunner} backed by an {@link AnyExecutor}. */
-function runnerFn(executor: AnyExecutor): QueryRunner {
+/** Build a {@link QueryRunner} backed by an {@link Executor} (db/trx). */
+function runnerFn(executor: Executor): QueryRunner {
   return <T extends QueryRow>(text: string, params?: unknown[]) =>
-    isKyselyExecutor(executor)
-      ? (executor
-          .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
-          .then((r) => ({ rows: r.rows as T[] })) as Promise<
-          QueryResultLike<T>
-        >)
-      : (executor.query(text, (params ?? []) as any[]) as Promise<
-          QueryResultLike<T>
-        >)
+    executor
+      .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
+      .then((r) => ({ rows: r.rows as T[] })) as Promise<QueryResultLike<T>>
 }
 
-/** Run raw SQL on an explicit executor (db / trx / pg client). */
+/** Run raw SQL on an explicit executor (db / trx). */
 function runOn<T extends QueryRow = any>(
-  executor: AnyExecutor,
+  executor: Executor,
   text: string,
   params?: unknown[]
 ): Promise<QueryResultLike<T>> {
@@ -263,7 +256,7 @@ function runOnDb<T extends QueryRow = any>(
 
 const runQuery: QueryRunner = runnerFn(db)
 
-function clientRunner(client: AnyExecutor): QueryRunner {
+function clientRunner(client: Executor): QueryRunner {
   return async <T extends QueryRow>(text: string, params?: unknown[]) =>
     runOn<T>(client, text, params)
 }
@@ -2097,7 +2090,7 @@ async function findInstalledSkillBySource(
 }
 
 async function ensureSkillBinding(
-  client: AnyExecutor,
+  client: Executor,
   input: {
     skillId: string
     workspaceId: string

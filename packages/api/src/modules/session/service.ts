@@ -2,7 +2,7 @@ import {
   db,
   runBuilder,
   takeFirstOn,
-  type AnyExecutor,
+  type Executor,
 } from "../../infrastructure/database/kysely.js"
 import { queueConversationTransportProjection } from "../im/service.js"
 import {
@@ -135,7 +135,7 @@ async function loadSession(sessionId: UUID): Promise<any | null> {
 export async function getConversationActorContextByPair(
   conversationId: UUID,
   actorId: UUID,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   return takeFirstOn(
     queryable,
@@ -150,7 +150,7 @@ export async function getConversationActorContextByPair(
 
 export async function getConversationActorContextBySessionId(
   sessionId: UUID,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   return takeFirstOn(
     queryable,
@@ -165,7 +165,7 @@ export async function getConversationActorContextBySessionId(
 async function getConversationActorSessionRow(
   conversationId: UUID,
   actorId: UUID,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   return takeFirstOn(
     queryable,
@@ -181,7 +181,7 @@ async function getConversationActorSessionRow(
 async function requireActiveActorConversationParticipant(
   conversationId: UUID,
   actorId: UUID,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   // P1b: upsert the actor's subject_id (on the same queryable for trx safety),
   // then filter conversation_participants by subject_id.
@@ -214,7 +214,7 @@ export async function ensureConversationActorSessionContext(
     conversationId: UUID
     trigger?: SessionTrigger
   },
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   await requireActiveActorConversationParticipant(
     params.conversationId,
@@ -329,7 +329,7 @@ export async function ensureConversationActorContext(
     actorId: UUID
     conversationId: UUID
   },
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   await requireActiveActorConversationParticipant(
     params.conversationId,
@@ -465,7 +465,7 @@ export async function updateSessionCollaboration(
     collaborationState?: SessionCollaborationState
     activePlanApprovalInteractionId?: UUID | null
   },
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ): Promise<void> {
   const values: Record<string, unknown> = {
     updated_at: sql`NOW()`,

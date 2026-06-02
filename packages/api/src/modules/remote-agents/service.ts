@@ -25,9 +25,8 @@ import { buildDaemonCommand as buildDaemonCommandImpl } from "./daemon-command.j
 import { CompiledQuery } from "kysely"
 import {
   db,
-  isKyselyExecutor,
   withDbTransaction,
-  type AnyExecutor,
+  type Executor,
 } from "../../infrastructure/database/kysely.js"
 import { authorizeAction } from "../access/service.js"
 import {
@@ -44,28 +43,22 @@ import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import { nextAttemptAt, shouldFailDelivery } from "./delivery-retry.js"
 
-/** Run raw SQL (text+params) on db / trx / pg client. */
+/** Run raw SQL (text+params) on db / trx. */
 async function runOn<T = any>(
-  executor: AnyExecutor,
+  executor: Executor,
   text: string,
   params: readonly unknown[] = []
 ): Promise<{ rows: T[]; rowCount?: number | null }> {
-  if (isKyselyExecutor(executor)) {
-    const result = await executor.executeQuery<T>(
-      CompiledQuery.raw(text, [...params])
-    )
-    return {
-      rows: result.rows as T[],
-      rowCount: Number(
-        (result as { numAffectedRows?: bigint }).numAffectedRows ??
-          result.rows.length
-      ),
-    }
+  const result = await executor.executeQuery<T>(
+    CompiledQuery.raw(text, [...params])
+  )
+  return {
+    rows: result.rows as T[],
+    rowCount: Number(
+      (result as { numAffectedRows?: bigint }).numAffectedRows ??
+        result.rows.length
+    ),
   }
-  return executor.query(text, [...params] as any[]) as Promise<{
-    rows: T[]
-    rowCount?: number | null
-  }>
 }
 
 /** `runOn` bound to the top-level db. */
@@ -249,7 +242,7 @@ async function getOrInitConversationContext(
   remoteAgentId: string,
   conversationId: string,
   runtimeKind: RemoteAgentRuntimeKind | null,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   const result = await runOn<{
     runtime_kind: RemoteAgentRuntimeKind | null
@@ -289,7 +282,7 @@ async function updateConversationRuntimeStatus(
     interactionId?: string | null
     lastError?: string | null
   },
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   await runOn(
     queryable,
@@ -433,7 +426,7 @@ async function loadAgentStartTargetsForMachine(machineId: string) {
 async function setMachineLifecycleState(
   machineId: string,
   state: RemoteAgentLifecycleState,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   await runOn(
     queryable,
@@ -451,7 +444,7 @@ async function setMachineLifecycleState(
 async function upsertRuntimeCatalog(
   machineId: string,
   entries: RuntimeCatalogEntry[],
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   for (const entry of entries) {
     await runOn(
@@ -594,7 +587,7 @@ async function replayResolvedRemoteAgentInteractions(params: {
 async function updateRemoteAgentRuntimeStatus(
   machineId: string,
   message: RuntimeStatusMessage,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   const runStatus =
     message.state === REMOTE_AGENT_RUNTIME_STATE.OFFLINE
@@ -966,7 +959,7 @@ async function scheduleDeliveryRetry(
   machineId: string | null,
   deliveryIds: string[],
   reason: string,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   if (deliveryIds.length === 0) return
   if (machineId) {
@@ -1165,7 +1158,7 @@ export async function authenticateMachineForRemoteAgent(params: {
 
 async function loadConversationHostWorkspaceId(
   conversationId: string,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   const result = await runOn<{ workspace_id: string | null }>(
     queryable,
@@ -1248,7 +1241,7 @@ async function ensureRemoteAgentRun(params: {
   status: "queued" | "running" | "completed" | "failed" | "cancelled"
   statusText?: string | null
   lastError?: string | null
-  queryable?: AnyExecutor
+  queryable?: Executor
 }) {
   const queryable = params.queryable ?? db
   const existing = await runOn<{ id: string }>(
@@ -1365,10 +1358,10 @@ export async function loadRemoteAgentRuntimeSnapshot(
      * the user-visible state read path was still binding/global.
      */
     conversationId?: string | null
-    queryable?: AnyExecutor
+    queryable?: Executor
   } = {}
 ) {
-  const queryable: AnyExecutor = options.queryable ?? db
+  const queryable: Executor = options.queryable ?? db
   const conversationId = options.conversationId ?? null
   // The LATERAL also pulls runtime_state / status_text / last_error from
   // the context row so we can prefer them over the binding-level values
@@ -1532,7 +1525,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
 
 async function emitRemoteAgentRuntimeUpdated(
   remoteAgentId: string,
-  queryable: AnyExecutor = db
+  queryable: Executor = db
 ) {
   const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId, {
     queryable,
@@ -2453,26 +2446,20 @@ export async function createRemoteAgentDeliveriesForItem(params: {
   conversationId: string
   itemId: string
   authorParticipantId?: string
-  queryable?: AnyExecutor
+  queryable?: Executor
 }) {
-  const executor: AnyExecutor = params.queryable ?? db
+  const executor: Executor = params.queryable ?? db
   const runRaw = async <T = any>(text: string, values: unknown[]) => {
-    if (isKyselyExecutor(executor)) {
-      const result = await executor.executeQuery<T>(
-        CompiledQuery.raw(text, [...values])
-      )
-      return {
-        rows: result.rows as T[],
-        rowCount: Number(
-          (result as { numAffectedRows?: bigint }).numAffectedRows ??
-            result.rows.length
-        ),
-      }
+    const result = await executor.executeQuery<T>(
+      CompiledQuery.raw(text, [...values])
+    )
+    return {
+      rows: result.rows as T[],
+      rowCount: Number(
+        (result as { numAffectedRows?: bigint }).numAffectedRows ??
+          result.rows.length
+      ),
     }
-    return executor.query(text, values as any[]) as Promise<{
-      rows: T[]
-      rowCount?: number | null
-    }>
   }
   const participants = await runRaw<{
     participant_id: string

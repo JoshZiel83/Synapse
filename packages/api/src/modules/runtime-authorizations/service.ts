@@ -34,12 +34,9 @@ import { subjectScopeLabel } from "@synapse/shared"
 import { sql, type Selectable } from "kysely"
 import type { ZodIssue } from "zod"
 import {
-  asExecutor,
   db,
-  isKyselyExecutor,
   runBuilder,
   takeFirstOn,
-  type AnyExecutor,
   type Executor,
   type KyselyDb,
   type TableInsert,
@@ -576,7 +573,7 @@ function normalizeCommandlineGrantSpec(
 
 export async function createRuntimeAuthorizationGrant(
   params: CreateRuntimeAuthorizationGrantParams,
-  executor?: AnyExecutor
+  executor?: Executor
 ): Promise<RuntimeAuthorizationGrantRecord> {
   // subject-scope-refactor: whitelist gate BEFORE any side effect, so callers
   // can't slip through nonsense combinations like workspace_member+conversation.
@@ -598,9 +595,8 @@ export async function createRuntimeAuthorizationGrant(
   if (executor) {
     // Every production caller threads a Kysely executor (interactions approval
     // runs inside withDbTransaction → Transaction<Database>; the manual
-    // endpoint passes none). asExecutor throws if a bare pg client ever slips
-    // through, rather than silently writing on the wrong connection.
-    return createGrantInKyselyTx(asExecutor(executor), params, grantSpec)
+    // endpoint passes none).
+    return createGrantInKyselyTx(executor, params, grantSpec)
   }
 
   // No transaction: normalize to a fresh Kysely transaction so we still run
@@ -675,7 +671,7 @@ async function createGrantInKyselyTx(
 
 export async function getRuntimeAuthorizationGrant(
   id: string,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ): Promise<RuntimeAuthorizationGrantRecord | null> {
   const statement = db
     .selectFrom("runtime_authorization_grants as g")
@@ -707,7 +703,7 @@ export async function getRuntimeAuthorizationGrant(
 
 export async function revokeRuntimeAuthorizationGrant(
   id: string,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ) {
   const statement = db
     .updateTable("runtime_authorization_grants")
@@ -727,7 +723,7 @@ export async function revokeRuntimeAuthorizationGrant(
 
 export async function supersedeRuntimeAuthorizationGrant(
   id: string,
-  queryable?: AnyExecutor
+  queryable?: Executor
 ) {
   const statement = db
     .updateTable("runtime_authorization_grants")
@@ -755,7 +751,7 @@ export async function supersedeRuntimeAuthorizationGrant(
 
 export async function consumeRuntimeAuthorizationGrant(
   id: string,
-  executor?: AnyExecutor
+  executor?: Executor
 ): Promise<boolean> {
   // Use raw SQL for SKIP LOCKED semantics — Kysely's updateTable doesn't yet
   // expose a clean way to nest a FOR UPDATE SKIP LOCKED sub-select.
@@ -769,14 +765,6 @@ export async function consumeRuntimeAuthorizationGrant(
     )
     RETURNING id
   `
-  if (executor && !isKyselyExecutor(executor)) {
-    // bare pg client path (interactions approval, same connection)
-    const compiled = statement.compile(db)
-    const result = await executor.query(compiled.sql, [
-      ...compiled.parameters,
-    ] as any[])
-    return result.rows.length > 0
-  }
   const result = await statement.execute(executor ?? db)
   return result.rows.length > 0
 }

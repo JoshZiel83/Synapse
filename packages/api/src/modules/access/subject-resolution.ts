@@ -1,7 +1,6 @@
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import { sql } from "kysely"
 import type {
-  AnyExecutor,
   Executor,
   KyselyDb,
 } from "../../infrastructure/database/kysely.js"
@@ -375,7 +374,7 @@ export async function buildRuntimePrincipalContext(
  * via the shared `isPrincipalWorkspaceBound` helper.
  */
 export async function buildRuntimePrincipalContextOn(
-  executor: AnyExecutor,
+  executor: Executor,
   params: {
     principal: SubjectRef
     workspaceId: string
@@ -459,7 +458,7 @@ export async function buildRuntimePrincipalContextOn(
 }
 
 async function assertPrincipalBelongsToWorkspaceOn(
-  executor: AnyExecutor,
+  executor: Executor,
   principal: SubjectRef,
   workspaceId: string
 ): Promise<void> {

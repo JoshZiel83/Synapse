@@ -6,7 +6,7 @@ import {
   db,
   runBuilder,
   withDbTransaction,
-  type AnyExecutor,
+  type Executor,
   type TableInsert,
   type TableRow,
 } from "../database/kysely.js"
@@ -181,7 +181,7 @@ async function processRealtimeOutboxEntry(entry: RealtimeEventOutboxRow) {
 }
 
 export async function enqueueTransactionalEventDeliveries(
-  queryable: AnyExecutor,
+  queryable: Executor,
   event: {
     type: TransactionalRealtimeEventType
     payload: Record<string, unknown>
@@ -219,7 +219,7 @@ export async function enqueueTransactionalEventDeliveries(
 }
 
 export async function enqueueTransactionalEvent(
-  queryable: AnyExecutor,
+  queryable: Executor,
   event: TransactionalRealtimeEvent
 ) {
   const recipientWorkspaceMemberId =

@@ -41,11 +41,10 @@ import {
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import {
   db,
-  isKyselyExecutor,
   runBuilder,
   takeFirstOn,
   withDbTransaction,
-  type AnyExecutor,
+  type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
@@ -136,18 +135,12 @@ type QueryRunner = <T extends QueryRow>(
   params?: unknown[]
 ) => Promise<QueryResultLike<T>>
 
-/** Build a {@link QueryRunner} backed by an {@link AnyExecutor} (db/trx/pg client). */
-function runnerFn(executor: AnyExecutor): QueryRunner {
+/** Build a {@link QueryRunner} backed by an {@link Executor} (db/trx). */
+function runnerFn(executor: Executor): QueryRunner {
   return <T extends QueryRow>(text: string, params?: unknown[]) =>
-    isKyselyExecutor(executor)
-      ? (executor
-          .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
-          .then((r) => ({ rows: r.rows as T[] })) as Promise<
-          QueryResultLike<T>
-        >)
-      : (executor.query(text, (params ?? []) as any[]) as Promise<
-          QueryResultLike<T>
-        >)
+    executor
+      .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
+      .then((r) => ({ rows: r.rows as T[] })) as Promise<QueryResultLike<T>>
 }
 
 type JsonObject = Record<string, unknown>

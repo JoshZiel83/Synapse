@@ -15,12 +15,10 @@
 
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import type {
-  AnyExecutor,
   Executor,
   KyselyDb,
   TableRow,
 } from "../../infrastructure/database/kysely.js"
-import { asExecutor } from "../../infrastructure/database/kysely.js"
 
 export type AccessSubjectRow = TableRow<"access_subjects">
 
@@ -320,10 +318,10 @@ export async function loadAccessSubject(
  * checks happen on the same pg client" plan).
  */
 export async function loadAccessSubjectOn(
-  executor: AnyExecutor,
+  executor: Executor,
   subjectId: string
 ): Promise<SubjectRef | null> {
-  return loadAccessSubject(asExecutor(executor), subjectId)
+  return loadAccessSubject(executor, subjectId)
 }
 
 export async function loadAccessSubjectMany(
@@ -398,10 +396,10 @@ export async function findAccessSubjectId(
  * `KyselyDb` and crashes at runtime when called with a raw `PoolClient`.
  */
 export async function findAccessSubjectIdOn(
-  executor: AnyExecutor,
+  executor: Executor,
   ref: SubjectRef
 ): Promise<string | null> {
-  return findAccessSubjectId(asExecutor(executor), ref)
+  return findAccessSubjectId(executor, ref)
 }
 
 /**
@@ -411,10 +409,10 @@ export async function findAccessSubjectIdOn(
  * (Transaction<Database> is a Kysely<Database>).
  */
 export async function upsertAccessSubjectOn(
-  executor: AnyExecutor,
+  executor: Executor,
   ref: SubjectRef
 ): Promise<string> {
-  return upsertAccessSubject(asExecutor(executor), ref)
+  return upsertAccessSubject(executor, ref)
 }
 
 /**
@@ -423,7 +421,7 @@ export async function upsertAccessSubjectOn(
  * commit the subject upsert + grant insert in the same transaction. Since
  * `Transaction<Database>` is assignable to `Kysely<Database>` structurally,
  * this just delegates — kept as a named export to make intent explicit at
- * call sites and to mirror the `upsertAccessSubjectOn(client: QueryExecutor)`
+ * call sites and to mirror the `upsertAccessSubjectOn(executor: Executor)`
  * pg-form helper.
  */
 export async function upsertAccessSubjectOnTrx(

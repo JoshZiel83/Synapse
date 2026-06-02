@@ -24,7 +24,7 @@ import { sql } from "kysely"
 import {
   db,
   runBuilder,
-  type AnyExecutor,
+  type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 
@@ -54,7 +54,7 @@ export interface ActionTokenRecord {
  * never outlive the underlying interaction.
  */
 export async function mintActionToken(
-  executor: AnyExecutor,
+  executor: Executor,
   params: {
     interactionRequestId: string
     interactionExpiresAt: Date | string | null | undefined
