@@ -11,25 +11,24 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { withOneShotFsHelper } from "./one-shot-fs-helper.js"
-import { resolveSidecarPath } from "./fs-helper-resolve.js"
+import { resolveFsHelperForProfile } from "./fs-helper-resolve.js"
 
-// Locate the built Rust binary via the shared resolver in NEWEST-WINS mode:
-// rebuilding one profile (debug) must not be shadowed by a stale build of the
-// other (release), and vice versa. process.cwd() is the package dir under
-// `npm test -w packages/device-runtime` or the repo root under the root test
-// script — probe both.
+// Locate the built Rust binary via the shared single-source-of-truth resolver
+// in the "debug" profile (newest-wins: rebuilding one profile must not be
+// shadowed by a stale build of the other). process.cwd() is the package dir
+// under `npm test -w packages/device-runtime` or the repo root under the root
+// test script — derive the sidecar dir for both layouts and take the first that
+// resolves.
 function findHelperBinary(): string | null {
-  return (
-    resolveSidecarPath({
-      roots: [process.cwd(), join(process.cwd(), "../..")],
-      suffixes: [
-        "sidecars/fs-helper/target/debug/synapse-device-fs-helper",
-        "sidecars/fs-helper/target/release/synapse-device-fs-helper",
-      ],
-      mode: "newest-wins",
-      envVar: "SYNAPSE_DEVICE_FS_HELPER_PATH",
-    }) ?? null
-  )
+  const sidecarDirs = [
+    join(process.cwd(), "sidecars/fs-helper"), // repo-root cwd
+    join(process.cwd(), "../../sidecars/fs-helper"), // package-dir cwd
+  ]
+  for (const dir of sidecarDirs) {
+    const found = resolveFsHelperForProfile("debug", dir)
+    if (found) return found
+  }
+  return null
 }
 
 const HELPER = findHelperBinary()

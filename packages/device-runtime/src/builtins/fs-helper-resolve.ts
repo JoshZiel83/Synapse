@@ -16,6 +16,12 @@
 import { existsSync, statSync } from "node:fs"
 import { join } from "node:path"
 
+/** The sidecar binary's basename — the single spelling every consumer uses. */
+export const FS_HELPER_BIN_NAME = "synapse-device-fs-helper"
+
+/** Env override checked first by every resolver. */
+export const FS_HELPER_ENV_VAR = "SYNAPSE_DEVICE_FS_HELPER_PATH"
+
 /**
  * Wire protocol version the TS clients expect from the fs-helper's `fs.hello`
  * handshake. MUST match `PROTO_VERSION` in sidecars/fs-helper/src/rpc.rs — bump
@@ -138,4 +144,84 @@ export function resolveSidecarPathOrThrow(
     `${opts.suffixes[opts.suffixes.length - 1] ?? "sidecar binary"} not found ` +
       `(build it or set ${opts.envVar ?? "the override env var"})`
   )
+}
+
+// ─────────────────────────── profile single-source-of-truth ────────────────
+//
+// The fs-helper has two consumption profiles that differ ONLY in suffix order +
+// selection mode. Express that ONCE here so every consumer — the api resolver,
+// the device-runtime one-shot test, AND the pretest freshness guard — derives
+// its candidates from the same table instead of re-spelling them. (The pretest
+// guard used to re-enumerate candidates in bash and drifted out of sync with
+// this module four times; it now calls fsHelperCandidatePaths via tsx instead.)
+
+export type FsHelperProfile = "release" | "debug"
+
+interface FsHelperProfileSpec {
+  mode: ResolveMode
+  /** Suffixes under <sidecarDir>, in priority order. */
+  suffixes: string[]
+  /** The path a `cargo build [--release]` of this profile writes. */
+  buildOutput: string
+}
+
+const REL = join("target", "release", FS_HELPER_BIN_NAME)
+const DBG = join("target", "debug", FS_HELPER_BIN_NAME)
+
+/**
+ * Per-profile selection rules. The ONLY place suffix order / mode / build output
+ * are defined:
+ *   - release: api's production path. release-first (a stray newer debug must
+ *     not shadow the deployed release); also accepts a bare binary next to the
+ *     sidecar dir. `cargo build --release` writes target/release.
+ *   - debug: device-runtime's dev/test path. newest-wins (rebuilding one profile
+ *     must not be shadowed by a stale build of the other). `cargo build` writes
+ *     target/debug.
+ */
+export const FS_HELPER_PROFILES: Record<FsHelperProfile, FsHelperProfileSpec> =
+  {
+    release: {
+      mode: "release-first",
+      suffixes: [REL, DBG, FS_HELPER_BIN_NAME],
+      buildOutput: REL,
+    },
+    debug: { mode: "newest-wins", suffixes: [DBG, REL], buildOutput: DBG },
+  }
+
+/**
+ * Absolute on-disk candidates (env override excluded) a profile would probe,
+ * anchored at `sidecarDir`. Order matches the profile's suffix priority.
+ */
+export function fsHelperCandidatePaths(
+  profile: FsHelperProfile,
+  sidecarDir: string
+): string[] {
+  return FS_HELPER_PROFILES[profile].suffixes.map((s) => join(sidecarDir, s))
+}
+
+/** The path `cargo build`/`cargo build --release` of this profile produces. */
+export function fsHelperBuildOutput(
+  profile: FsHelperProfile,
+  sidecarDir: string
+): string {
+  return join(sidecarDir, FS_HELPER_PROFILES[profile].buildOutput)
+}
+
+/**
+ * Resolve the binary a profile would actually pick, anchored at `sidecarDir`,
+ * honoring the env override exactly like every other consumer. Returns undefined
+ * if nothing resolves. This is what the pretest guard calls (via tsx) so it
+ * never re-implements resolution logic in bash.
+ */
+export function resolveFsHelperForProfile(
+  profile: FsHelperProfile,
+  sidecarDir: string
+): string | undefined {
+  const spec = FS_HELPER_PROFILES[profile]
+  return resolveSidecarPath({
+    roots: [sidecarDir],
+    suffixes: spec.suffixes,
+    mode: spec.mode,
+    envVar: FS_HELPER_ENV_VAR,
+  })
 }

@@ -7,11 +7,13 @@
 // live directory back into a new manifest+blobs, and 3-way merge incoming
 // commits — all by spawning a short-lived helper pointed at that CAS dir.
 
-import { join, resolve } from "node:path"
+import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   withOneShotFsHelper,
   resolveSidecarPathOrThrow,
+  FS_HELPER_PROFILES,
+  FS_HELPER_ENV_VAR,
   type ManifestScanCommitResult,
   type DirSyncResult,
 } from "@synapse/device-runtime"
@@ -30,9 +32,11 @@ export class SandboxMaterializeError extends Error {
  * (release preferred, then debug) relative to the repo root. Throws if none
  * found (fail-loud — a sandbox cannot materialize without the helper).
  *
- * Release-first is deliberate for this production path: a stray newer debug
- * build must not shadow the deployed release. The selection policy lives in the
- * shared resolver (@synapse/device-runtime) so every consumer agrees.
+ * Suffix order + selection mode come from the shared FS_HELPER_PROFILES.release
+ * spec (single source of truth); only the candidate ROOTS are api-specific
+ * (anchored on this file via import.meta.url to handle the dist-vs-src layout).
+ * Release-first is deliberate: a stray newer debug build must not shadow the
+ * deployed release.
  */
 export function resolveFsHelperPath(): string {
   const here = fileURLToPath(import.meta.url)
@@ -43,17 +47,12 @@ export function resolveFsHelperPath(): string {
     resolve(here, "..", "..", "..", "..", "..", "sidecars", "fs-helper"),
     resolve(here, "..", "..", "..", "..", "sidecars", "fs-helper"),
   ]
-  const suffixes = [
-    join("target", "release", "synapse-device-fs-helper"),
-    join("target", "debug", "synapse-device-fs-helper"),
-    "synapse-device-fs-helper",
-  ]
   return resolveSidecarPathOrThrow(
     {
       roots,
-      suffixes,
-      mode: "release-first",
-      envVar: "SYNAPSE_DEVICE_FS_HELPER_PATH",
+      suffixes: FS_HELPER_PROFILES.release.suffixes,
+      mode: FS_HELPER_PROFILES.release.mode,
+      envVar: FS_HELPER_ENV_VAR,
     },
     () =>
       new SandboxMaterializeError(

@@ -14,11 +14,19 @@ BIN="synapse-device-fs-helper"
 pass=0
 fail=0
 
-# A PATH containing coreutils but NOT cargo, to simulate a Rust-less host.
+# A PATH that has everything the guard needs (coreutils + node/npx/npm/tsx to run
+# the resolver CLI) but NOT cargo, to simulate a Rust-less host. We symlink the
+# real tools so `npx tsx` still works; only cargo is withheld.
 NO_CARGO_BIN="$(mktemp -d)"
-for t in bash dirname pwd command echo printf cat mktemp rm realpath ls; do
+for t in bash sh dirname pwd command echo printf cat mktemp rm realpath ls \
+         node npx npm env grep sed head tail cut tr; do
   s="$(command -v "$t" 2>/dev/null)" && [[ -n "$s" ]] && ln -sf "$s" "$NO_CARGO_BIN/$t" 2>/dev/null
 done
+# Guard: cargo must NOT be reachable via this PATH (the whole point).
+if PATH="$NO_CARGO_BIN" command -v cargo >/dev/null 2>&1; then
+  echo "FATAL: test harness PATH still exposes cargo; cannot simulate Rust-less host" >&2
+  exit 1
+fi
 
 cleanup() { rm -rf "$NO_CARGO_BIN"; }
 trap cleanup EXIT
