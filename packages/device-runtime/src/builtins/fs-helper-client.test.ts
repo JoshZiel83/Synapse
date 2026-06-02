@@ -103,10 +103,13 @@ interface HelloFakeChild {
 /**
  * Fake start whose fs.hello answer varies per spawn — drives the
  * handshake-failure-then-recovery path. `helloPerStart[i]` is the hello result
- * (or an Error to reject with) for the i-th spawned helper; out-of-range spawns
- * reuse the last entry. Records whether each handle was stop()ed so a test can
- * assert a failed-handshake handle is torn down.
+ * for the i-th spawned helper; out-of-range spawns reuse the last entry. Special
+ * values: an `Error` rejects the handshake; `HELLO_HANG` never settles (to
+ * exercise the handshake timeout). Records whether each handle was stop()ed so a
+ * test can assert a failed-handshake handle is torn down.
  */
+const HELLO_HANG = Symbol("hello-hang")
+
 function makeHelloVaryingStart(helloPerStart: Array<unknown | Error>): {
   start: (typeof import("../sidecar.js"))["startSidecar"]
   children: HelloFakeChild[]
@@ -145,6 +148,7 @@ function makeHelloVaryingStart(helloPerStart: Array<unknown | Error>): {
     ).request = (method: string) => {
       if (method === "fs.hello") {
         const hello = helloPerStart[Math.min(index, helloPerStart.length - 1)]
+        if (hello === HELLO_HANG) return new Promise<unknown>(() => {}) // never settles
         return hello instanceof Error
           ? Promise.reject(hello)
           : Promise.resolve(hello)
@@ -287,4 +291,28 @@ test("repeated handshake mismatch does NOT park the client", async () => {
   // Still available (not parked) and it kept spawning fresh helpers each time.
   assert.equal(client.isAvailable(), true)
   assert.equal(fake.children.length, 3)
+})
+
+test("repeated fs.hello timeout DOES park the client (wedge is a crash loop)", async () => {
+  // A handshake that hangs (wedged helper) is NOT a stale-binary case: it must
+  // count toward the crash-park window so a stuck helper can't be re-spawned
+  // forever. Two timeouts within 60s → parked.
+  const fake = makeHelloVaryingStart([HELLO_HANG])
+  const client = makeClient(fake.start)
+
+  await assert.rejects(
+    client.historyList({}),
+    (e: unknown) => (e as Error).name === "FsHelperTimeoutError"
+  )
+  await assert.rejects(
+    client.historyList({}),
+    (e: unknown) => (e as Error).name === "FsHelperTimeoutError"
+  )
+  // Third call must immediately fail FsHelperUnavailable (parked) — the wedge
+  // was counted toward the park window, unlike a proto mismatch.
+  await assert.rejects(
+    client.historyList({}),
+    (e: unknown) => (e as Error).name === "FsHelperUnavailableError"
+  )
+  assert.equal(client.isAvailable(), false)
 })

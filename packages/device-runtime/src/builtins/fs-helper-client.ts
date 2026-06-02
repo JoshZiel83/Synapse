@@ -293,15 +293,22 @@ export function createFsHelperClient(
   }
 
   /**
-   * Tear down a handle we no longer trust (handshake failure / wedge): mark it
-   * discarded so the exit handler won't count it toward the park window, stop
-   * the process, and clear `handle` so the next RPC spawns a fresh one. This is
-   * what lets a rebuilt binary actually take over: without it, a proto-mismatch
-   * throw would leave the OLD process alive and every later RPC would reuse it
-   * until the whole device-runtime restarted.
+   * Tear down a handle we no longer trust (handshake failure / wedge): stop the
+   * process and clear `handle` so the next RPC spawns a fresh one. This is what
+   * lets a rebuilt binary actually take over — without it a proto-mismatch throw
+   * would leave the OLD process alive and every later RPC would reuse it until
+   * the whole device-runtime restarted.
+   *
+   * `skipPark` controls crash-park accounting:
+   *   - true  → STALE-BINARY failure (wrong proto_version / pre-handshake
+   *     binary). Not a crash loop; recovery is rebuild + respawn, so mark the
+   *     handle discarded and the exit handler skips the park window.
+   *   - false → TIMEOUT / wedge / generic startup error. This IS crash-loop-
+   *     like, so leave it OUT of `discarded` and let the exit handler count it
+   *     toward the park window — repeated wedges must still park.
    */
-  function discardHandle(h: SidecarHandle): void {
-    discarded.add(h)
+  function discardHandle(h: SidecarHandle, skipPark: boolean): void {
+    if (skipPark) discarded.add(h)
     try {
       void h.stop()
     } catch {
@@ -313,12 +320,12 @@ export function createFsHelperClient(
   /**
    * Verify a freshly-spawned handle speaks our wire protocol before its first
    * real RPC. Calls h.request("fs.hello") DIRECTLY (not the gated request()
-   * below) to avoid recursing through the gate. On ANY failure (version
-   * mismatch, pre-handshake binary, or timeout) the handle is discarded + the
-   * process stopped, so the next RPC spawns a fresh helper — a rebuilt binary
-   * is picked up without a device-runtime restart. Throws
-   * FsHelperProtoMismatchError for version/pre-handshake failures. Idempotent
-   * per handle via the WeakSet.
+   * below) to avoid recursing through the gate. On ANY failure the handle is
+   * torn down so the next RPC spawns a fresh helper, but only a STALE-BINARY
+   * failure (proto mismatch / pre-handshake binary) skips crash-park accounting
+   * — a timeout/wedge still counts toward the park window so a stuck helper
+   * can't be re-spawned forever. Throws FsHelperProtoMismatchError for
+   * version/pre-handshake failures. Idempotent per handle via the WeakSet.
    */
   async function ensureHandshake(h: SidecarHandle): Promise<void> {
     if (handshaked.has(h)) return
@@ -334,13 +341,19 @@ export function createFsHelperClient(
       assertFsHelperProto(hello)
       handshaked.add(h)
     } catch (err) {
-      // Failed/untrusted handshake → tear down so a rebuilt binary can take
-      // over on the next RPC (don't leave the old process serving).
-      discardHandle(h)
-      // A pre-handshake binary answers method_not_found (-32601) → treat as a
-      // proto mismatch (rebuild needed) rather than a generic RPC error.
+      // Classify: a stale-binary handshake failure (wrong proto_version, or a
+      // pre-handshake binary answering method_not_found -32601) is NOT a crash
+      // loop — recovery is rebuild + respawn, so it must skip the park window.
+      // Anything else (fs.hello timeout/wedge, other RPC error, spawn failure)
+      // IS crash-loop-like and must count toward park.
+      const isProtoMismatch = err instanceof FsHelperProtoMismatchError
       const m = (err as Error).message?.match(/^(-?\d+):\s*(.+)$/)
-      if (m && Number.parseInt(m[1]!, 10) === -32601) {
+      const isMethodNotFound = !!m && Number.parseInt(m[1]!, 10) === -32601
+      const staleBinary = isProtoMismatch || isMethodNotFound
+
+      discardHandle(h, staleBinary)
+
+      if (isMethodNotFound) {
         throw new FsHelperProtoMismatchError(
           FS_HELPER_PROTO_VERSION,
           undefined,
