@@ -31,6 +31,7 @@
     "prebuild": "rm -rf dist tsconfig.build.tsbuildinfo",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc --watch",
+    "pretest": "bash ../../scripts/pretest-fs-helper.sh",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "prepublishOnly": "node ../../scripts/prepublish-guard.mjs"
   },
