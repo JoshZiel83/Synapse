@@ -3187,18 +3187,14 @@ export async function canUserResolveInteraction(params: {
       return true
     }
 
-    const grant = await runOnDb<{ workspace_member_id: string }>(
-      `
-        SELECT workspace_member_id
-        FROM remote_agent_group_interaction_grants
-        WHERE remote_agent_id = $1
-          AND workspace_member_id = $2
-        LIMIT 1
-      `,
-      [
-        interaction.requester.remoteAgentId,
-        viewerMembership.workspace_member_id,
-      ]
+    const grant = await runBuilder(
+      db,
+      db
+        .selectFrom("remote_agent_group_interaction_grants")
+        .select("workspace_member_id")
+        .where("remote_agent_id", "=", interaction.requester.remoteAgentId)
+        .where("workspace_member_id", "=", viewerMembership.workspace_member_id)
+        .limit(1)
     )
 
     return Boolean(grant.rows[0]?.workspace_member_id)
@@ -3528,16 +3524,22 @@ export async function resolveInteractionRequest(
         throw new Error(`Conversation ${locked.conversation_id} not found`)
       }
       if (conversationRow.kind !== "direct") {
-        const grantRow = await runOn<{ workspace_member_id: string }>(
+        const grantRow = await runBuilder(
           client,
-          `
-            SELECT workspace_member_id
-            FROM remote_agent_group_interaction_grants
-            WHERE remote_agent_id = $1
-              AND workspace_member_id = $2
-            LIMIT 1
-          `,
-          [locked.requester_remote_agent_id, params.resolverWorkspaceMemberId]
+          db
+            .selectFrom("remote_agent_group_interaction_grants")
+            .select("workspace_member_id")
+            .where(
+              "remote_agent_id",
+              "=",
+              locked.requester_remote_agent_id
+            )
+            .where(
+              "workspace_member_id",
+              "=",
+              params.resolverWorkspaceMemberId
+            )
+            .limit(1)
         )
         if (!grantRow.rows[0]?.workspace_member_id) {
           throw new Error(
@@ -3630,24 +3632,18 @@ export async function resolveInteractionRequest(
       }
 
       if (locked.remote_agent_run_id && locked.requester_remote_agent_id) {
-        await runOn(
-          client,
-          `
-            UPDATE remote_agent_conversation_contexts
-            SET collaboration_mode = $3,
-                collaboration_state = $4::jsonb,
-                active_plan_approval_interaction_id = NULL,
-                updated_at = NOW()
-            WHERE remote_agent_id = $1
-              AND conversation_id = $2
-          `,
-          [
-            locked.requester_remote_agent_id,
-            locked.conversation_id,
-            nextStatus === "approved" ? "default" : "plan_drafting",
-            JSON.stringify({}),
-          ]
-        )
+        await client
+          .updateTable("remote_agent_conversation_contexts")
+          .set({
+            collaboration_mode:
+              nextStatus === "approved" ? "default" : "plan_drafting",
+            collaboration_state: jsonbValue({}),
+            active_plan_approval_interaction_id: null,
+            updated_at: sql`NOW()`,
+          })
+          .where("remote_agent_id", "=", locked.requester_remote_agent_id)
+          .where("conversation_id", "=", locked.conversation_id)
+          .execute()
       } else {
         if (!locked.task_id) {
           throw new Error(`Interaction ${locked.id} is missing task governance`)
