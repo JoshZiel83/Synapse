@@ -56,3 +56,19 @@ test("CRLF framing + optional space after colon", () => {
   const text = `data:${rpc(3, "crlf")}\r\n\r\n`
   assert.equal(parseMcpSsePayload(text, 3), "crlf")
 })
+
+test("THROWS when JSON-RPC events exist but none match our id (mismatch)", () => {
+  // Only an unrelated id is present — must not silently degrade to "".
+  const text = `data: ${rpc(1, "other")}\n\n`
+  assert.throws(
+    () => parseMcpSsePayload(text, 99),
+    /no JSON-RPC message matching request id 99/
+  )
+})
+
+test("non-JSON-RPC (legacy/raw) payload falls back to the raw string", () => {
+  // A server that streams a plain text event (no JSON-RPC framing) — keep the
+  // best-effort raw passthrough rather than throwing.
+  const text = `data: just-some-text\n\n`
+  assert.equal(parseMcpSsePayload(text, 1), "just-some-text")
+})

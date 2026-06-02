@@ -37,6 +37,7 @@ export function parseMcpSsePayload(text: string, expectedId: number): unknown {
 
   let fallback: unknown
   let sawData = false
+  let sawJsonRpc = false
   for (const data of events) {
     if (!data) continue
     sawData = true
@@ -48,6 +49,16 @@ export function parseMcpSsePayload(text: string, expectedId: number): unknown {
       fallback = data
       continue
     }
+    // A JSON-RPC frame carries jsonrpc/id; track that we saw at least one so we
+    // can tell "no JSON-RPC at all" (legacy server → use raw fallback) apart
+    // from "JSON-RPC but none matched our id" (protocol mismatch → throw).
+    if (
+      json &&
+      typeof json === "object" &&
+      ("jsonrpc" in json || "id" in json || "result" in json || "error" in json)
+    ) {
+      sawJsonRpc = true
+    }
     if (json.id !== expectedId) continue
     if (json.error) {
       throw new Error(`MCP RPC error ${json.error.code}: ${json.error.message}`)
@@ -58,8 +69,15 @@ export function parseMcpSsePayload(text: string, expectedId: number): unknown {
   if (!sawData) {
     throw new Error("No data in SSE response")
   }
-  // No event matched our id; return the raw payload of the last event as the
-  // previous implementation did (best-effort for non-JSON-RPC servers).
+  // We received JSON-RPC frames but none carried our request id — a mismatched
+  // or out-of-order response. Surfacing this as an error prevents it from
+  // silently degrading to an empty tool list / empty tool result.
+  if (sawJsonRpc) {
+    throw new Error(
+      `MCP SSE response had no JSON-RPC message matching request id ${expectedId}`
+    )
+  }
+  // Only non-JSON-RPC (legacy/raw) payloads were seen — best-effort passthrough.
   return fallback ?? ""
 }
 
