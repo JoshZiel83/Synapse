@@ -12,6 +12,7 @@ import {
 function makeHarness(opts: {
   auth: ChatSocketAuth | null
   subscriptions: ChatSocketSubscription[]
+  authErrorIsFatal?: boolean
 }) {
   const sent: Array<Record<string, unknown>> = []
   const events: Array<Record<string, unknown>> = []
@@ -70,6 +71,7 @@ function makeHarness(opts: {
     onEvent: (e) => events.push(e),
     onConnected: () => connectedCalls.push(connectedCalls.length),
     onStateChange: (s) => states.push(s),
+    authErrorIsFatal: opts.authErrorIsFatal,
   })
 
   return {
@@ -203,6 +205,28 @@ test("auth.error does NOT reconnect the same identity on a later sync()", () => 
   h.setAuth({ token: "t2", workspaceId: "ws1" })
   h.handle.sync()
   assert.equal(h.connectCount, 2, "new identity should connect")
+})
+
+test("non-fatal auth.error (cookie auth): a later sync() retries the SAME identity", () => {
+  // authErrorIsFatal=false models web cookie auth (identity = workspaceId only).
+  const h = makeHarness({
+    auth: { workspaceId: "ws1" },
+    subscriptions: [{ key: "inbox", topic: "inbox" }],
+    authErrorIsFatal: false,
+  })
+  h.handle.start()
+  h.last().open()
+  h.last().receive({ type: "auth.error" })
+  assert.equal(h.connectCount, 1)
+  assert.equal(h.pendingTimerCount(), 0, "auth.error suspends auto-reconnect")
+
+  // The cookie refreshed; the same workspace's socket should reconnect on sync().
+  h.handle.sync()
+  assert.equal(
+    h.connectCount,
+    2,
+    "non-fatal auth.error must allow same-identity reconnect via sync()"
+  )
 })
 
 test("subscription diff: adds new, removes stale, leaves unchanged", () => {

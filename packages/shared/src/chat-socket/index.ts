@@ -78,6 +78,19 @@ export interface ChatSocketDeps {
   deserialize?: (raw: unknown) => Record<string, unknown> | null
   maxReconnectAttempts?: number
   pingWatchdogMs?: number
+  /**
+   * How `auth.error` is treated:
+   *  - `true` (default): the rejected identity is permanently fatal — it will not
+   *    (re)connect until a DIFFERENT identity arrives. Correct for TOKEN auth
+   *    (mobile): a rejected token stays rejected, so reconnect attempts on every
+   *    subscription change would just loop.
+   *  - `false`: `auth.error` only stops the CURRENT auto-reconnect loop; a later
+   *    `sync()` (e.g. inputs changed, or the cookie was refreshed) is allowed to
+   *    reconnect the same identity. Correct for COOKIE auth (web), where the
+   *    identity is just the workspaceId and the underlying cookie can become valid
+   *    again without the identity string changing.
+   */
+  authErrorIsFatal?: boolean
 }
 
 export interface ChatSocketHandle {
@@ -125,6 +138,7 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
   const maxReconnectAttempts =
     deps.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS
   const pingWatchdogMs = deps.pingWatchdogMs ?? DEFAULT_PING_WATCHDOG_MS
+  const authErrorIsFatal = deps.authErrorIsFatal ?? true
 
   let running = false
   let socket: SocketLike | null = null
@@ -142,6 +156,12 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
   let pingTimer: TimerHandle = null
   /** Set during intentional teardown so onclose does not schedule a reconnect. */
   let suppressReconnect = false
+  /**
+   * Set after a NON-fatal `auth.error` (authErrorIsFatal=false, i.e. cookie auth):
+   * the current auto-reconnect loop is paused, but an explicit `sync()` clears it
+   * so a fresh attempt (e.g. after a cookie refresh) can run.
+   */
+  let autoReconnectSuspended = false
   const sentSubscriptions = new Map<string, string>()
 
   function setState(state: ChatSocketConnectionState) {
@@ -248,10 +268,15 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       }
 
       if (type === "auth.error") {
-        // Fatal for this identity: tear down and refuse to reconnect it until a
-        // DIFFERENT auth identity arrives (records fatalIdentity so the sync()/
-        // reconnect paths skip it instead of looping).
-        fatalIdentity = authIdentity(auth)
+        if (authErrorIsFatal) {
+          // Token auth: rejected identity is permanently fatal until a DIFFERENT
+          // identity arrives (records fatalIdentity so sync()/reconnect skip it).
+          fatalIdentity = authIdentity(auth)
+        } else {
+          // Cookie auth: just suspend the auto-reconnect loop. A later sync()
+          // (inputs changed, or the cookie refreshed) clears this and retries.
+          autoReconnectSuspended = true
+        }
         teardownSocket()
         return
       }
@@ -318,6 +343,11 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
     if (fatalIdentity !== null && identity !== fatalIdentity) {
       fatalIdentity = null
     }
+    // Auto-reconnect suspended after a non-fatal auth.error; only an explicit
+    // sync() (which clears the flag) may revive it.
+    if (autoReconnectSuspended) {
+      return
+    }
     // This exact identity was rejected by auth.error; do not (re)connect it.
     if (identity === fatalIdentity) {
       return
@@ -355,6 +385,13 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
     },
     sync() {
       if (!running) return
+      // An explicit sync() is a fresh signal from the consumer (inputs changed,
+      // session refreshed, etc.): lift any non-fatal auth-error suspension so the
+      // cookie gets another chance, and reset the reconnect budget for the retry.
+      if (autoReconnectSuspended) {
+        autoReconnectSuspended = false
+        reconnectAttempts = 0
+      }
       evaluate()
     },
   }

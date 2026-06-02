@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -15,15 +15,20 @@ import type {
 import { summarizeRuntimePreview } from "./runtime-ui"
 import { formatChatTimestamp } from "@synapse/shared/datetime"
 
-// Preserve the original web behavior of formatting the >7d fallback date in the
-// browser's locale (the shared formatter defaults to zh-CN for mobile parity).
-const browserLocale =
-  typeof navigator !== "undefined" && navigator.language
-    ? navigator.language
-    : undefined
-
-function formatRelativeTime(dateStr: string) {
-  return formatChatTimestamp(dateStr, "relative", { locale: browserLocale })
+/**
+ * Read the browser locale only on the client, AFTER mount. Reading it at module
+ * scope would diverge between SSR (undefined) and hydration (e.g. "en-US"),
+ * causing a hydration mismatch on the >7d date fallback. Returning `undefined`
+ * lets the shared formatter use its stable default (zh-CN) for the first paint.
+ */
+function useBrowserLocale(): string | undefined {
+  const [locale, setLocale] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && navigator.language) {
+      setLocale(navigator.language)
+    }
+  }, [])
+  return locale
 }
 
 interface ConversationListProps {
@@ -81,6 +86,9 @@ export default function ConversationList({
   loading = false,
 }: ConversationListProps) {
   const [search, setSearch] = useState("")
+  const browserLocale = useBrowserLocale()
+  const formatRelativeTime = (dateStr: string) =>
+    formatChatTimestamp(dateStr, "relative", { locale: browserLocale })
   const headerTitle = title || "Messages"
 
   const filtered = search

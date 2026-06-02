@@ -26,12 +26,15 @@ const mobileWorkerPath = path.resolve(
   "chat-service-worker.ts"
 )
 
-test("mobile chat-service-worker imports mergeQueueStateForSave from shared", async () => {
+test("mobile chat-service-worker imports mergeQueueStateForSave from the narrow @shared/chat-queue subpath", async () => {
   const body = await readFile(mobileWorkerPath, "utf8")
+  // Require the NARROW subpath (not the bare @shared barrel): the service worker
+  // must keep its dependency surface tight so it never transitively pulls zod
+  // (or other heavy barrel exports) into the bundle.
   assert.match(
     body,
-    /import \{[^}]*mergeQueueStateForSave[^}]*\}\s+from\s+"@shared(?:\/chat-queue)?"/s,
-    "mobile chat-service-worker must import mergeQueueStateForSave from @shared (or its /chat-queue subpath)"
+    /import \{[^}]*mergeQueueStateForSave[^}]*\}\s+from\s+"@shared\/chat-queue"/s,
+    "mobile chat-service-worker must import mergeQueueStateForSave from @shared/chat-queue"
   )
 })
 

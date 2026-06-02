@@ -84,6 +84,10 @@ export function useWebSocket({
         enabledRef.current && workspaceIdRef.current
           ? { workspaceId: workspaceIdRef.current }
           : null,
+      // Cookie auth: a server auth.error shouldn't permanently kill this
+      // workspace's socket — the cookie can refresh/revalidate without the
+      // identity (workspaceId) changing. A later sync() retries.
+      authErrorIsFatal: false,
       getSubscriptions: () => subscriptionsRef.current,
       onEvent: (event) =>
         onEventRef.current?.(
