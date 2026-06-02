@@ -12,7 +12,7 @@ class MijiaConfig:
     enableQR: bool = True
     qr_open_mode: str = "browser"
     log_level: str = "INFO"
-    
+
     @classmethod
     def from_env(cls) -> 'MijiaConfig':
         """Load configuration from environment variables"""
@@ -40,7 +40,7 @@ def load_mijia_config() -> MijiaConfig:
     - MIJIA_ENABLE_QR: Whether to enable QR code login (optional, default: true)
     - MIJIA_QR_OPEN_MODE: How to open the generated QR code page, supports browser/viewer/none
     - MIJIA_LOG_LEVEL: Log level (optional, default: INFO)
-    
+
     Returns:
         MijiaConfig: Mijia configuration object
     """

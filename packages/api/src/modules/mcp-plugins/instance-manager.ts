@@ -620,7 +620,19 @@ async function createOwnedInstance(
   configHash: string,
   leaseToken?: string
 ) {
-  const underlying = await createTransportInstance(params, key, configHash)
+  let underlying: McpInstance
+  try {
+    underlying = await createTransportInstance(params, key, configHash)
+  } catch (error) {
+    // Transport creation (e.g. remote init / fail-fast listTools) threw before
+    // any state was registered, so shutdownInstanceByKey will never run to
+    // release the lease. Release it here so a transient connection failure does
+    // not pin this instance key until the Redis lease TTL expires.
+    if (leaseToken) {
+      await releaseRuntimeLease(key, leaseToken).catch(() => undefined)
+    }
+    throw error
+  }
   const wrapped: McpInstance = {
     ...underlying,
     shutdown: async () => {

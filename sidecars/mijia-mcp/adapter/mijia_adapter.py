@@ -49,14 +49,14 @@ class MijiaAdapter:
         self._auth_manager = AuthDataManager(config_dir=config_dir)
         # Patch mijiaAPI to avoid encoding issues with QR code display
         self._patch_qr_display()
-    
+
     def _patch_qr_display(self):
         """Patch mijiaAPI's QR display method to avoid encoding issues
 
         The original mijiaAPI._print_qr method tries to print Unicode block
         characters to the terminal using qr.print_ascii(), which causes
         encoding errors on some systems.
-        
+
         This patch replaces the method to only save the QR code as a PNG file,
         avoiding the problematic ASCII output while maintaining functionality.
         """
@@ -210,14 +210,14 @@ class MijiaAdapter:
                             qr.print_ascii(invert=True, tty=False)
                         except Exception:
                             _LOGGER.info(f'Fallback login URL: {loginurl}')
-                
+
             except Exception as e:
                 _LOGGER.error(f'Failed to save QR code: {e}')
                 raise
-        
+
         # Replace the problematic _print_qr method in mijiaAPI 3.x
         mijiaAPI._print_qr = staticmethod(safe_print_qr)
-        
+
     async def connect(self) -> bool:
         """Connect to Mijia cloud service
 
@@ -226,7 +226,7 @@ class MijiaAdapter:
         """
         try:
             _LOGGER.info("Starting connection to Mijia cloud service...")
-            
+
             if not self._config:
                 error_msg = "Mijia configuration not loaded, please check config file or environment variables"
                 _LOGGER.error(error_msg)
@@ -248,7 +248,7 @@ class MijiaAdapter:
                 self._auth_data = self._api.login()
             else:
                 self._auth_data = self._api.auth_data
-            
+
             # 检查 API 是否可用
             if self._api.available:
                 self._connected = True
@@ -262,18 +262,18 @@ class MijiaAdapter:
                     _LOGGER.info("Expired authentication data cleared")
                 else:
                     _LOGGER.warning("Failed to clear expired authentication data")
-                
+
                 raise RuntimeError(error_msg)
-                
+
         except Exception as e:
             error_msg = f"Failed to connect to Mijia cloud service: {str(e)}"
             _LOGGER.error(error_msg)
             _LOGGER.debug(f"Detailed error information: {traceback.format_exc()}")
-            
+
             # 重置连接状态
             self._connected = False
             self._api = None
-            
+
             return False
 
     async def disconnect(self):
@@ -288,29 +288,29 @@ class MijiaAdapter:
             _LOGGER.info("Disconnected from Mijia cloud service")
         except Exception as e:
             _LOGGER.error(f"Error during disconnection: {e}")
-    
+
     def clear_auth_data(self) -> bool:
         """清除认证数据
-        
+
         Returns:
             bool: 是否清除成功
         """
         self._auth_data = None
         return self._auth_manager.clear()
-    
+
     def has_valid_auth_data(self) -> bool:
         """检查是否有有效的认证数据
-        
+
         Returns:
             bool: 是否有有效的认证数据
         """
         if self._auth_data:
             return self._auth_manager.validate(self._auth_data)
         return self._auth_manager.exists() and self._auth_manager.validate()
-    
+
     def get_auth_file_path(self) -> Path:
         """获取认证数据文件路径
-        
+
         Returns:
             Path: 认证数据文件路径
         """
@@ -393,14 +393,14 @@ class MijiaAdapter:
         if login_url:
             _LOGGER.info(f"Fallback login URL: {login_url}")
         return False
-    
+
     def _create_device_sync(self, device_data: Dict[str, Any], index: int) -> tuple:
         """同步创建设备对象的辅助方法
-        
+
         Args:
             device_data: 设备数据
             index: 设备索引
-            
+
         Returns:
             tuple: (success: bool, device: mijiaDevice or None, error_info: str or None)
         """
@@ -408,22 +408,22 @@ class MijiaAdapter:
             did = device_data.get("did")
             if not did:
                 return False, None, f"Device{index}(missing did)"
-            
+
             model = device_data.get("model")
             if not model:
                 return False, None, f"Device{index}(missing model)"
-            
+
             device = mijiaDevice(self._api, did=did)
-            
+
             return True, device, None
-            
+
         except Exception as e:
             device_name = device_data.get('name', f'Device{index}')
             return False, None, device_name
-    
+
     async def discover_devices(self, max_workers: int = 5) -> List[mijiaDevice]:
         """Discover devices with concurrent processing
-        
+
         Args:
             max_workers: 最大并发工作线程数，默认为5
 
@@ -434,26 +434,26 @@ class MijiaAdapter:
             error_msg = "Not connected to Mijia cloud service, please call connect() method first"
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
-        
+
         try:
             _LOGGER.info("Starting Mijia device discovery...")
-            
+
             # 获取设备列表
             raw_device_infos = self._api.get_devices_list()
             self._device_infos = {
                 str(item.get("did")): item for item in raw_device_infos if item.get("did")
             }
-            
+
             if not raw_device_infos:
                 _LOGGER.warning("No devices discovered")
                 return []
-            
+
             _LOGGER.info(f"Retrieved {len(raw_device_infos)} device information from cloud")
             _LOGGER.info(f"Using concurrent processing with {max_workers} workers to optimize performance")
-            
+
             device_infos = []
             failed_devices = []
-            
+
             original_get_devices_list = self._api.get_devices_list
             self._api.get_devices_list = lambda home_id=None: raw_device_infos if home_id is None else [
                 item for item in raw_device_infos if str(item.get("home_id")) == str(home_id)
@@ -484,19 +484,19 @@ class MijiaAdapter:
                             _LOGGER.warning(f"Exception processing device {index}: {e}")
             finally:
                 self._api.get_devices_list = original_get_devices_list
-            
+
             success_count = len(device_infos)
             failed_count = len(failed_devices)
-            
+
             if success_count > 0:
                 device_names = [device.name for device in device_infos]
                 _LOGGER.info(f"Successfully discovered {success_count} devices: {device_names}")
-            
+
             if failed_count > 0:
                 _LOGGER.warning(f"{failed_count} devices failed to create: {failed_devices}")
-            
+
             return device_infos
-            
+
         except Exception as e:
             error_msg = f"Failed to discover devices: {str(e)}"
             _LOGGER.error(error_msg)
@@ -513,7 +513,7 @@ class MijiaAdapter:
             List: Device property list
         """
         device = self._get_device(device_id)
-        
+
         try:
             # Get device specification information
             propsMap = device.prop_list
@@ -523,7 +523,7 @@ class MijiaAdapter:
         except Exception as e:
             _LOGGER.error(f"Failed to get device properties for {device_id}: {e}")
             raise
-    
+
     async def get_device_actions(self, device_id: str) -> List:
         """Get device action list
 
@@ -535,10 +535,10 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         if device_id not in self._devices:
             raise ValueError(f"Device {device_id} not found")
-        
+
         try:
             device = self._devices[device_id]
             if not device.action_list:
@@ -547,7 +547,7 @@ class MijiaAdapter:
         except Exception as e:
             _LOGGER.error(f"Failed to get device operations: {e}")
             raise
-    
+
     async def get_property_value(self, device_id: str, siid: int, piid: int) -> Any:
         """Get device property value
 
@@ -561,7 +561,7 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             # Use API to get property directly
             result = self._api.get_devices_prop({
@@ -574,11 +574,11 @@ class MijiaAdapter:
                 return result.get('value')
 
             raise RuntimeError(f"Failed to get property: {result.get('code')}")
-                
+
         except Exception as e:
             _LOGGER.error(f"Failed to get property value: {e}")
             raise
-    
+
     async def set_property_value(self, device_id: str, siid: int, piid: int, value: Any) -> bool:
         """Set device property value
 
@@ -593,7 +593,7 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             # Use API to set property directly
             result = self._api.set_devices_prop({
@@ -609,11 +609,11 @@ class MijiaAdapter:
             else:
                 _LOGGER.warning(f"Failed to set property {siid}:{piid} = {value} (device: {device_id}), error code: {result.get('code')}")
             return success
-                
+
         except Exception as e:
             _LOGGER.error(f"Failed to set property value: {e}")
             raise
-    
+
     async def call_action(self, device_id: str, siid: int, aiid: int, params: List[Any] = None) -> List[Any]:
         """Execute device action
 
@@ -628,7 +628,7 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             # Use API to execute action directly
             result = self._api.run_action({
@@ -637,17 +637,17 @@ class MijiaAdapter:
                 "aiid": aiid,
                 "value": params or []
             })
-            
+
             if result.get('code') == 0:
                 _LOGGER.info(f"Successfully executed action {siid}:{aiid} (device: {device_id})")
                 return result.get('out', [])
             else:
                 raise RuntimeError(f"Action execution failed, error code: {result.get('code')}")
-                
+
         except Exception as e:
             _LOGGER.error(f"Failed to execute action: {e}")
             raise
-    
+
     async def get_homes(self) -> List[Dict[str, Any]]:
         """Get home list
 
@@ -656,7 +656,7 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             homes = self._api.get_homes_list()
             self._homes_cache = homes
@@ -676,7 +676,7 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             scenes = self._api.get_scenes_list(home_id)
             for scene in scenes:
@@ -699,7 +699,7 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             resolved_home_id = home_id or self._scene_home_map.get(str(scene_id))
             if resolved_home_id is None:
@@ -731,7 +731,7 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             if owner_id is not None:
                 _LOGGER.warning("owner_id is ignored by mijiaAPI 3.x; using home_id only")
@@ -755,13 +755,13 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         if device_id not in self._devices:
             try:
                 self._devices[device_id] = mijiaDevice(self._api, did=device_id)
             except Exception as e:
                 raise RuntimeError(f"Device {device_id} not found or failed to initialize: {e}") from e
-        
+
         return self._devices[device_id]
 
     def _build_room_lookup(self) -> Dict[str, Dict[str, str]]:
@@ -1006,17 +1006,17 @@ class MijiaAdapter:
         except Exception as e:
             _LOGGER.error(f"Failed to execute action {action_name} for {device_id}: {e}")
             raise
-    
+
     @property
     def connected(self) -> bool:
         """Whether connected"""
         return self._connected
-    
+
     @property
     def device_count(self) -> int:
         """Device count"""
         return len(self._devices)
-    
+
     async def get_device_status(self, device_id: str) -> Dict[str, Any]:
         """Get device status information
 
@@ -1028,10 +1028,10 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             device = self._get_device(device_id)
-            
+
             # Get device basic information
             status_info = {
                 "device_id": device_id,
@@ -1042,20 +1042,20 @@ class MijiaAdapter:
                 "spec_type": getattr(device, 'spec_type', None),
                 "last_update": datetime.now().isoformat()
             }
-            
+
             # Cache status information
             self._device_status_cache[device_id] = status_info
             self._last_status_update = datetime.now()
-            
+
             _LOGGER.debug(f"Successfully retrieved device status: {device.name} ({device_id})")
             return status_info
-            
+
         except Exception as e:
             error_msg = f"Failed to get device status {device_id}: {str(e)}"
             _LOGGER.error(error_msg)
             _LOGGER.debug(f"Detailed error information: {traceback.format_exc()}")
             raise RuntimeError(error_msg) from e
-    
+
     async def refresh_all_device_status(self) -> Dict[str, Dict[str, Any]]:
         """Refresh all device status
 
@@ -1064,13 +1064,13 @@ class MijiaAdapter:
         """
         if not self._connected:
             raise RuntimeError("Not connected to Mijia cloud service")
-        
+
         try:
             _LOGGER.info("Starting to refresh all device status...")
-            
+
             status_results = {}
             failed_devices = []
-            
+
             for device_id in self._devices.keys():
                 try:
                     status = await self.get_device_status(device_id)
@@ -1079,23 +1079,23 @@ class MijiaAdapter:
                     _LOGGER.warning(f"Failed to refresh device status {device_id}: {e}")
                     failed_devices.append(device_id)
                     continue
-            
+
             success_count = len(status_results)
             failed_count = len(failed_devices)
-            
+
             _LOGGER.info(f"Device status refresh completed: {success_count} successful, {failed_count} failed")
-            
+
             if failed_count > 0:
                 _LOGGER.warning(f"Failed to refresh devices: {failed_devices}")
-            
+
             return status_results
-            
+
         except Exception as e:
             error_msg = f"Failed to refresh all device status: {str(e)}"
             _LOGGER.error(error_msg)
             _LOGGER.debug(f"Detailed error information: {traceback.format_exc()}")
             raise RuntimeError(error_msg) from e
-    
+
     def get_cached_device_status(self, device_id: str) -> Optional[Dict[str, Any]]:
         """Get cached device status
 
@@ -1106,7 +1106,7 @@ class MijiaAdapter:
             Optional[Dict[str, Any]]: Cached device status, returns None if not exists
         """
         return self._device_status_cache.get(device_id)
-    
+
     def get_all_cached_device_status(self) -> Dict[str, Dict[str, Any]]:
         """Get all cached device status
 
@@ -1114,7 +1114,7 @@ class MijiaAdapter:
             Dict[str, Dict[str, Any]]: All cached device status
         """
         return self._device_status_cache.copy()
-    
+
     def clear_status_cache(self) -> int:
         """Clear status cache
 
@@ -1126,7 +1126,7 @@ class MijiaAdapter:
         self._last_status_update = None
         _LOGGER.info(f"Cleared {cache_count} device status caches")
         return cache_count
-    
+
     @property
     def last_status_update(self) -> Optional[datetime]:
         """Last status update time"""

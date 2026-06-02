@@ -17,6 +17,12 @@ const MIJIA_APP_BASE_URL = "https://api.mijia.tech/app"
 const MIJIA_QR_URL = "https://account.xiaomi.com/longPolling/loginUrl"
 const MIJIA_SERVICE_LOGIN_URL = "https://account.xiaomi.com/pass/serviceLogin"
 const DEFAULT_QR_TTL_MS = 10 * 60_000
+// Xiaomi service tokens are long-lived; we treat a fresh login OR a successful
+// refresh as good for 30 days and extend expireTime accordingly. The
+// resolve-time refresh (ensureFreshPluginConnection) fires within 60s of this,
+// so without extending it on refresh the connection would re-refresh on every
+// resolve and eventually be marked expired.
+const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000
 const SERVICE_TOKEN_COOKIE_NAME = "serviceToken"
 const YET_ANOTHER_SERVICE_TOKEN = "yetAnotherServiceToken"
 
@@ -506,7 +512,7 @@ export async function progressMijiaQrLoginSession(input: {
     ),
     serviceToken,
     yetAnotherServiceToken: jar.get(YET_ANOTHER_SERVICE_TOKEN) || serviceToken,
-    expireTime: Date.now() + 30 * 24 * 60 * 60 * 1_000,
+    expireTime: Date.now() + SESSION_LIFETIME_MS,
     saveTime: Date.now(),
   }
 
@@ -574,6 +580,9 @@ export async function refreshMijiaSessionTokens(authState: MijiaAuthState) {
       serviceData.ssecurity.trim().length > 0
         ? serviceData.ssecurity
         : authState.ssecurity,
+    // Extend the lifetime on successful refresh; otherwise the stale expireTime
+    // keeps the connection perpetually within the refresh window.
+    expireTime: Date.now() + SESSION_LIFETIME_MS,
     saveTime: Date.now(),
   } satisfies MijiaAuthState
 }
