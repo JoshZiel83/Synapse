@@ -15,8 +15,15 @@ import type {
 import { summarizeRuntimePreview } from "./runtime-ui"
 import { formatChatTimestamp } from "@synapse/shared/datetime"
 
+// Preserve the original web behavior of formatting the >7d fallback date in the
+// browser's locale (the shared formatter defaults to zh-CN for mobile parity).
+const browserLocale =
+  typeof navigator !== "undefined" && navigator.language
+    ? navigator.language
+    : undefined
+
 function formatRelativeTime(dateStr: string) {
-  return formatChatTimestamp(dateStr, "relative")
+  return formatChatTimestamp(dateStr, "relative", { locale: browserLocale })
 }
 
 interface ConversationListProps {

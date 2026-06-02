@@ -180,6 +180,31 @@ test("auth.error tears down without reconnecting", () => {
   assert.equal(h.connectCount, 1)
 })
 
+test("auth.error does NOT reconnect the same identity on a later sync()", () => {
+  const h = makeHarness({
+    auth: { token: "t1", workspaceId: "ws1" },
+    subscriptions: [{ key: "inbox", topic: "inbox" }],
+  })
+  h.handle.start()
+  h.last().open()
+  h.last().receive({ type: "auth.error" })
+  assert.equal(h.connectCount, 1)
+
+  // A subscription change drives sync() — must NOT reconnect the rejected identity.
+  h.setSubscriptions([
+    { key: "inbox", topic: "inbox" },
+    { key: "c:1", topic: "conversation", conversationId: "1" },
+  ])
+  h.handle.sync()
+  h.handle.sync()
+  assert.equal(h.connectCount, 1, "rejected identity must not reconnect")
+
+  // A NEW identity clears the fatal mark and connects.
+  h.setAuth({ token: "t2", workspaceId: "ws1" })
+  h.handle.sync()
+  assert.equal(h.connectCount, 2, "new identity should connect")
+})
+
 test("subscription diff: adds new, removes stale, leaves unchanged", () => {
   const h = makeHarness({
     auth: { workspaceId: "ws1" },

@@ -30,8 +30,8 @@ test("mobile chat-service-worker imports mergeQueueStateForSave from shared", as
   const body = await readFile(mobileWorkerPath, "utf8")
   assert.match(
     body,
-    /import \{[^}]*mergeQueueStateForSave[^}]*\}\s+from\s+"@shared"/s,
-    "mobile chat-service-worker must import mergeQueueStateForSave from @shared"
+    /import \{[^}]*mergeQueueStateForSave[^}]*\}\s+from\s+"@shared(?:\/chat-queue)?"/s,
+    "mobile chat-service-worker must import mergeQueueStateForSave from @shared (or its /chat-queue subpath)"
   )
 })
 

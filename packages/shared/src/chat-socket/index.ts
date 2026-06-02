@@ -130,6 +130,13 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
   let socket: SocketLike | null = null
   let authenticated = false
   let activeIdentity: string | null = null
+  /**
+   * Auth identity that was rejected by an `auth.error` frame. We refuse to
+   * (re)connect this exact identity until a DIFFERENT identity arrives via
+   * sync() — otherwise a server-side auth rejection would loop forever as the
+   * hooks call sync() on every subscription change.
+   */
+  let fatalIdentity: string | null = null
   let reconnectAttempts = 0
   let reconnectTimer: TimerHandle = null
   let pingTimer: TimerHandle = null
@@ -241,8 +248,10 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       }
 
       if (type === "auth.error") {
-        // Fatal for this identity: tear down and do not reconnect until a new
-        // auth identity arrives via sync().
+        // Fatal for this identity: tear down and refuse to reconnect it until a
+        // DIFFERENT auth identity arrives (records fatalIdentity so the sync()/
+        // reconnect paths skip it instead of looping).
+        fatalIdentity = authIdentity(auth)
         teardownSocket()
         return
       }
@@ -269,7 +278,10 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       }
       if (!running) return
       // Only reconnect while the same auth is still desired.
-      if (authIdentity(deps.getAuth()) === null) return
+      const closingIdentity = authIdentity(deps.getAuth())
+      if (closingIdentity === null) return
+      // Never reconnect an identity the server rejected with auth.error.
+      if (closingIdentity === fatalIdentity) return
       if (reconnectAttempts >= maxReconnectAttempts) return
 
       reconnectAttempts += 1
@@ -299,6 +311,15 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       // Nothing to connect to right now.
       teardownSocket()
       activeIdentity = null
+      return
+    }
+
+    // A different identity has arrived — clear any prior fatal mark.
+    if (fatalIdentity !== null && identity !== fatalIdentity) {
+      fatalIdentity = null
+    }
+    // This exact identity was rejected by auth.error; do not (re)connect it.
+    if (identity === fatalIdentity) {
       return
     }
 
