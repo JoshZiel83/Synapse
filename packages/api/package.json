@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "start": "node dist/index.js",
     "pretest": "npm run typecheck",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "tsx --test --test-force-exit \"src/**/*.test.ts\"",
     "test:integration": "bash tests/integration/scripts/run-integration.sh",
     "test:integration:keep-stack": "KEEP_CONTAINERS=1 bash tests/integration/scripts/run-integration.sh",
     "test:integration:llm-smoke": "tsx --test tests/integration/manual/llm-smoke.test.ts",
