@@ -120,7 +120,7 @@ test(
   "checkPermission: workspace_member + scope=conversation grant visible only inside that conversation",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const wsId = await newWorkspace(db)
       const memberId = await newWorkspaceMember(db, wsId)
       const targetActorId = await newActor(db, wsId)
@@ -130,7 +130,7 @@ test(
       // Write a `subject=workspace_member + scope=conversation` binding on
       // the target actor. The member should be able to "use" the actor only
       // when the runtime context places them inside conv A.
-      await insertAccessBindingReturningIdOn(client as any, {
+      await insertAccessBindingReturningIdOn(db, {
         workspaceId: wsId,
         resourceType: "actor",
         resourceId: targetActorId,
@@ -197,12 +197,12 @@ test(
   "checkPermission: legacy workspace_member (scope NULL) grant is visible without runtime context",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const wsId = await newWorkspace(db)
       const memberId = await newWorkspaceMember(db, wsId)
       const targetActorId = await newActor(db, wsId)
 
-      await insertAccessBindingReturningIdOn(client as any, {
+      await insertAccessBindingReturningIdOn(db, {
         workspaceId: wsId,
         resourceType: "actor",
         resourceId: targetActorId,

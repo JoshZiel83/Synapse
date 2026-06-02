@@ -4,14 +4,17 @@ import type {
   ConversationMessage,
 } from "@synapse/shared"
 import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
-import { query, transaction } from "../../infrastructure/database/index.js"
 import type {
   CanonicalArchiveFrame,
   CanonicalArchivePoint,
   ProviderContextManifest,
   ProviderContextWindow,
 } from "@synapse/shared"
-import { db } from "../../infrastructure/database/kysely.js"
+import {
+  db,
+  withDbTransaction,
+  type Executor,
+} from "../../infrastructure/database/kysely.js"
 import { itemPartsToCanonicalBlocks } from "../ai/context-builder.js"
 import { compileContextItemsToConversationMessages } from "../ai/context-compiler.js"
 import { sql } from "kysely"
@@ -21,8 +24,6 @@ const SHARED_ARCHIVE_TAIL_TARGET = 24
 const PRIVATE_ARCHIVE_TAIL_TARGET = 32
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-type QueryRunner = (text: string, params?: any[]) => Promise<{ rows: any[] }>
 
 function parseJsonArray<T>(value: unknown): T[] | undefined {
   if (!value) return undefined
@@ -63,37 +64,33 @@ async function ensureSessionContextState(sessionId: string) {
 
 async function loadArchivePoint(
   archivePointId: string,
-  runQuery: QueryRunner = query
+  executor: Executor = db
 ): Promise<CanonicalArchivePoint | null> {
-  const pointResult = await runQuery(
-    `SELECT *
-     FROM context_archive_points
-     WHERE id = $1
-     LIMIT 1`,
-    [archivePointId]
-  )
+  const pointResult = await sql<any>`
+    SELECT *
+    FROM context_archive_points
+    WHERE id = ${archivePointId}
+    LIMIT 1`.execute(executor)
 
   const point = pointResult.rows[0]
   if (!point) return null
 
-  const framesResult = await runQuery(
-    `SELECT caf.*,
-            cap.id AS part_id,
-            cap.ordinal AS part_ordinal,
-            cap.part_type,
-            cap.text_value,
-            cap.ref_path,
-            cap.ref_sha256,
-            cap.json_value,
-            cap.mime_type,
-            cap.name,
-            cap.metadata AS part_metadata
-     FROM context_archive_frames caf
-     LEFT JOIN context_archive_frame_parts cap ON cap.archive_frame_id = caf.id
-     WHERE caf.archive_point_id = $1
-     ORDER BY caf.ordinal ASC, cap.ordinal ASC`,
-    [archivePointId]
-  )
+  const framesResult = await sql<any>`
+    SELECT caf.*,
+           cap.id AS part_id,
+           cap.ordinal AS part_ordinal,
+           cap.part_type,
+           cap.text_value,
+           cap.ref_path,
+           cap.ref_sha256,
+           cap.json_value,
+           cap.mime_type,
+           cap.name,
+           cap.metadata AS part_metadata
+    FROM context_archive_frames caf
+    LEFT JOIN context_archive_frame_parts cap ON cap.archive_frame_id = caf.id
+    WHERE caf.archive_point_id = ${archivePointId}
+    ORDER BY caf.ordinal ASC, cap.ordinal ASC`.execute(executor)
 
   const frameMap = new Map<string, { row: any; parts: any[] }>()
   for (const row of framesResult.rows) {
@@ -289,53 +286,51 @@ function blockToArchivePart(block: CanonicalContentBlock) {
 }
 
 async function insertArchiveFrames(
-  runQuery: QueryRunner,
+  executor: Executor,
   archivePointId: string,
   frames: CanonicalArchiveFrame[]
 ) {
   for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
     const frame = frames[frameIndex]
-    const frameResult = await runQuery(
-      `INSERT INTO context_archive_frames
-         (archive_point_id, ordinal, role, frame_type, tool_calls, tool_results, source_item_ids, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id`,
-      [
-        archivePointId,
-        frameIndex,
-        frame.role,
-        frame.frameType,
-        frame.toolCalls ? JSON.stringify(frame.toolCalls) : null,
-        frame.toolResults ? JSON.stringify(frame.toolResults) : null,
-        frame.sourceItemIds && frame.sourceItemIds.length > 0
-          ? frame.sourceItemIds
-          : [],
-        JSON.stringify(frame.metadata || {}),
-      ]
-    )
+    const frameResult = await sql<{ id: string }>`
+      INSERT INTO context_archive_frames
+        (archive_point_id, ordinal, role, frame_type, tool_calls, tool_results, source_item_ids, metadata)
+      VALUES (
+        ${archivePointId},
+        ${frameIndex},
+        ${frame.role},
+        ${frame.frameType},
+        ${frame.toolCalls ? JSON.stringify(frame.toolCalls) : null},
+        ${frame.toolResults ? JSON.stringify(frame.toolResults) : null},
+        ${
+          frame.sourceItemIds && frame.sourceItemIds.length > 0
+            ? frame.sourceItemIds
+            : []
+        },
+        ${JSON.stringify(frame.metadata || {})}
+      )
+      RETURNING id`.execute(executor)
 
     const frameId = frameResult.rows[0]?.id
     if (!frameId || !frame.parts || frame.parts.length === 0) continue
 
     for (let partIndex = 0; partIndex < frame.parts.length; partIndex += 1) {
       const part = blockToArchivePart(frame.parts[partIndex]!)
-      await runQuery(
-        `INSERT INTO context_archive_frame_parts
-           (archive_frame_id, ordinal, part_type, text_value, ref_path, ref_sha256, json_value, mime_type, name, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [
-          frameId,
-          partIndex,
-          part.partType,
-          part.textValue,
-          part.refPath,
-          part.refSha256,
-          part.jsonValue,
-          part.mimeType,
-          part.name,
-          JSON.stringify(part.metadata || {}),
-        ]
-      )
+      await sql`
+        INSERT INTO context_archive_frame_parts
+          (archive_frame_id, ordinal, part_type, text_value, ref_path, ref_sha256, json_value, mime_type, name, metadata)
+        VALUES (
+          ${frameId},
+          ${partIndex},
+          ${part.partType},
+          ${part.textValue},
+          ${part.refPath},
+          ${part.refSha256},
+          ${part.jsonValue},
+          ${part.mimeType},
+          ${part.name},
+          ${JSON.stringify(part.metadata || {})}
+        )`.execute(executor)
     }
   }
 }
@@ -381,19 +376,16 @@ async function maybeCompactChain(params: {
     return
   }
 
-  await transaction(async (client) => {
-    const runQuery = client.query.bind(client) as QueryRunner
-    const stateResult = await runQuery(
-      `SELECT ${archiveIdColumn} AS archive_point_id
-       FROM ${stateTable}
-       WHERE ${stateIdColumn} = $1
-       FOR UPDATE`,
-      [stateIdValue]
-    )
+  await withDbTransaction(async (trx) => {
+    const stateResult = await sql<{ archive_point_id: string | null }>`
+      SELECT ${sql.ref(archiveIdColumn)} AS archive_point_id
+      FROM ${sql.table(stateTable)}
+      WHERE ${sql.ref(stateIdColumn)} = ${stateIdValue}
+      FOR UPDATE`.execute(trx)
 
     const activeArchivePointId = stateResult.rows[0]?.archive_point_id || null
     const activeArchivePoint = activeArchivePointId
-      ? await loadArchivePoint(activeArchivePointId, runQuery)
+      ? await loadArchivePoint(activeArchivePointId, trx)
       : null
     const activeCoverage = activeArchivePoint?.coversUntilSequence ?? 0
     const uncoveredItems = scopedItems.filter(
@@ -424,86 +416,76 @@ async function maybeCompactChain(params: {
       return
     }
 
-    const archivePointResult = await runQuery(
-      `INSERT INTO context_archive_points
-         (conversation_id, session_id, chain_scope, parent_archive_point_id, covers_until_sequence, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id`,
-      [
-        params.conversationId,
-        params.chainScope === "private" ? params.sessionId || null : null,
-        params.chainScope,
-        activeArchivePointId,
-        targetCoverage,
-        JSON.stringify({
+    const archivePointResult = await sql<{ id: string }>`
+      INSERT INTO context_archive_points
+        (conversation_id, session_id, chain_scope, parent_archive_point_id, covers_until_sequence, metadata)
+      VALUES (
+        ${params.conversationId},
+        ${params.chainScope === "private" ? params.sessionId || null : null},
+        ${params.chainScope},
+        ${activeArchivePointId},
+        ${targetCoverage},
+        ${JSON.stringify({
           strategyKey: "lossless_archive_v1",
           appendedItemCount: itemsToArchive.length,
           totalFrameCount: frames.length,
-        }),
-      ]
-    )
+        })}
+      )
+      RETURNING id`.execute(trx)
 
     const archivePointId = archivePointResult.rows[0]?.id
     if (!archivePointId) {
       return
     }
 
-    await insertArchiveFrames(runQuery, archivePointId, frames)
+    await insertArchiveFrames(trx, archivePointId, frames)
 
-    const compactionRunResult = await runQuery(
-      `INSERT INTO context_compaction_runs
-         (conversation_id, session_id, chain_scope, strategy_key, base_archive_point_id, output_archive_point_id, status, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7)
-       RETURNING id`,
-      [
-        params.conversationId,
-        params.chainScope === "private" ? params.sessionId || null : null,
-        params.chainScope,
-        "lossless_archive_v1",
-        activeArchivePointId,
-        archivePointId,
-        JSON.stringify({
+    const compactionRunResult = await sql<{ id: string }>`
+      INSERT INTO context_compaction_runs
+        (conversation_id, session_id, chain_scope, strategy_key, base_archive_point_id, output_archive_point_id, status, metadata)
+      VALUES (
+        ${params.conversationId},
+        ${params.chainScope === "private" ? params.sessionId || null : null},
+        ${params.chainScope},
+        ${"lossless_archive_v1"},
+        ${activeArchivePointId},
+        ${archivePointId},
+        'completed',
+        ${JSON.stringify({
           appendedItemCount: itemsToArchive.length,
           targetCoverage,
-        }),
-      ]
-    )
+        })}
+      )
+      RETURNING id`.execute(trx)
 
     const compactionRunId = compactionRunResult.rows[0]?.id
     if (compactionRunId) {
       if (activeArchivePointId) {
-        await runQuery(
-          `INSERT INTO context_compaction_run_inputs
-             (run_id, input_kind, archive_point_id, metadata)
-           VALUES ($1, 'archive_point', $2, $3)`,
-          [
-            compactionRunId,
-            activeArchivePointId,
-            JSON.stringify({ role: "base" }),
-          ]
-        )
+        await sql`
+          INSERT INTO context_compaction_run_inputs
+            (run_id, input_kind, archive_point_id, metadata)
+          VALUES (${compactionRunId}, 'archive_point', ${activeArchivePointId}, ${JSON.stringify(
+            { role: "base" }
+          )})`.execute(trx)
       }
 
-      await runQuery(
-        `INSERT INTO context_compaction_run_inputs
-           (run_id, input_kind, from_sequence, to_sequence, metadata)
-         VALUES ($1, 'sequence_range', $2, $3, $4)`,
-        [
-          compactionRunId,
-          activeCoverage + 1,
-          targetCoverage,
-          JSON.stringify({ appendedItemCount: itemsToArchive.length }),
-        ]
-      )
+      await sql`
+        INSERT INTO context_compaction_run_inputs
+          (run_id, input_kind, from_sequence, to_sequence, metadata)
+        VALUES (
+          ${compactionRunId},
+          'sequence_range',
+          ${activeCoverage + 1},
+          ${targetCoverage},
+          ${JSON.stringify({ appendedItemCount: itemsToArchive.length })}
+        )`.execute(trx)
     }
 
-    await runQuery(
-      `UPDATE ${stateTable}
-       SET ${archiveIdColumn} = $2,
-           updated_at = NOW()
-       WHERE ${stateIdColumn} = $1`,
-      [stateIdValue, archivePointId]
-    )
+    await sql`
+      UPDATE ${sql.table(stateTable)}
+      SET ${sql.ref(archiveIdColumn)} = ${archivePointId},
+          updated_at = NOW()
+      WHERE ${sql.ref(stateIdColumn)} = ${stateIdValue}`.execute(trx)
   })
 }
 

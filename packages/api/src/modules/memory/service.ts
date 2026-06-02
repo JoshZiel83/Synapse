@@ -20,19 +20,13 @@ import {
   SUBJECT_KIND,
   textBlocks,
 } from "@synapse/shared"
-import { sql, type RawBuilder } from "kysely"
+import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import { pool, transaction } from "../../infrastructure/database/index.js"
-import {
-  upsertAccessSubject,
-  upsertAccessSubjectOn,
-} from "../access/subject-registry.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   db,
-  executeCompiledQuery,
-  executeSqlOn,
-  executeTakeFirst,
-  type QueryExecutor,
+  withDbTransaction,
+  type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
@@ -865,7 +859,7 @@ export async function findExistingMemorySpace(input: {
  * the trigger enforces the same invariant in case anyone bypasses this path.
  */
 export async function resolveOrCreateMemorySpace(
-  client: QueryExecutor,
+  executor: Executor,
   input: {
     workspaceId: string
     owner: SubjectRef
@@ -895,9 +889,9 @@ export async function resolveOrCreateMemorySpace(
     )
   }
 
-  const ownerSubjectId = await upsertAccessSubjectOn(client, input.owner)
+  const ownerSubjectId = await upsertAccessSubject(executor, input.owner)
   const scopeSubjectId = input.scope
-    ? await upsertAccessSubjectOn(client, input.scope)
+    ? await upsertAccessSubject(executor, input.scope)
     : null
   const namespaceKey =
     (input.namespaceKey || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
@@ -923,14 +917,21 @@ export async function resolveOrCreateMemorySpace(
   const conflictClause = scopeSubjectId
     ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL`
     : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL`
-  const result = await executeSqlOn<MemorySpaceRow>(
-    client,
-    `INSERT INTO memory_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
+  const result = await executor.executeQuery<MemorySpaceRow>(
+    CompiledQuery.raw(
+      `INSERT INTO memory_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
      ON CONFLICT ${conflictClause}
        DO UPDATE SET updated_at = memory_spaces.updated_at
      RETURNING id, workspace_id, owner_subject_id, scope_subject_id, namespace_key`,
-    [uuidv4(), input.workspaceId, ownerSubjectId, scopeSubjectId, namespaceKey]
+      [
+        uuidv4(),
+        input.workspaceId,
+        ownerSubjectId,
+        scopeSubjectId,
+        namespaceKey,
+      ]
+    )
   )
   const row = result.rows[0]
   if (!row) {
@@ -980,14 +981,13 @@ async function normalizeMemoryContent(input: {
 }
 
 async function insertMemoryParts(
-  client: QueryExecutor,
+  executor: Executor,
   memoryItemId: string,
   parts: DraftConversationPart[]
 ) {
   for (let ordinal = 0; ordinal < parts.length; ordinal += 1) {
     const part = parts[ordinal]
-    await executeCompiledQuery(
-      client,
+    await executor.executeQuery(
       db.insertInto("memory_item_parts").values({
         id: uuidv4(),
         memory_item_id: memoryItemId,
@@ -1009,13 +1009,9 @@ async function insertMemoryParts(
   }
 }
 
-async function maybeMarkSuperseded(
-  client: QueryExecutor,
-  memoryItemId?: string
-) {
+async function maybeMarkSuperseded(executor: Executor, memoryItemId?: string) {
   if (!memoryItemId) return
-  await executeCompiledQuery(
-    client,
+  await executor.executeQuery(
     db
       .updateTable("memory_items")
       .set({
@@ -1598,10 +1594,10 @@ async function recordMemoryRecallRun(params: {
     params.queryBlocks || []
   )
   const runId = uuidv4()
-  await transaction(async (client) => {
-    await executeSqlOn(
-      client,
-      `INSERT INTO memory_recall_runs (
+  await withDbTransaction(async (trx) => {
+    await trx.executeQuery(
+      CompiledQuery.raw(
+        `INSERT INTO memory_recall_runs (
          id,
          workspace_id,
          actor_id,
@@ -1613,22 +1609,22 @@ async function recordMemoryRecallRun(params: {
          metadata,
          created_at
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, NOW())`,
-      [
-        runId,
-        params.workspaceId,
-        params.actorId || null,
-        params.conversationId || null,
-        params.workspaceMemberId || null,
-        params.recallType,
-        params.queryText,
-        JSON.stringify(normalizedQueryBlocks),
-        JSON.stringify(params.metadata || {}),
-      ]
+        [
+          runId,
+          params.workspaceId,
+          params.actorId || null,
+          params.conversationId || null,
+          params.workspaceMemberId || null,
+          params.recallType,
+          params.queryText,
+          JSON.stringify(normalizedQueryBlocks),
+          JSON.stringify(params.metadata || {}),
+        ]
+      )
     )
 
     for (const result of params.results) {
-      await executeCompiledQuery(
-        client,
+      await trx.executeQuery(
         db.insertInto("memory_recall_run_results").values({
           id: uuidv4(),
           run_id: runId,
@@ -1697,15 +1693,14 @@ export async function createMemory(
   const normalizedContent = await normalizeMemoryContent(input)
   const memoryItemId = uuidv4()
 
-  await transaction(async (client) => {
-    const space = await resolveOrCreateMemorySpace(client, {
+  await withDbTransaction(async (trx) => {
+    const space = await resolveOrCreateMemorySpace(trx, {
       workspaceId,
       owner: input.owner,
       scope: input.scope,
       namespaceKey: input.namespaceKey,
     })
-    await executeCompiledQuery(
-      client,
+    await trx.executeQuery(
       db.insertInto("memory_items").values({
         id: memoryItemId,
         workspace_id: workspaceId,
@@ -1735,8 +1730,8 @@ export async function createMemory(
         updated_at: sql`NOW()`,
       })
     )
-    await insertMemoryParts(client, memoryItemId, normalizedContent.parts)
-    await maybeMarkSuperseded(client, input.supersedesMemoryId)
+    await insertMemoryParts(trx, memoryItemId, normalizedContent.parts)
+    await maybeMarkSuperseded(trx, input.supersedesMemoryId)
   })
 
   const lexicalIndex = await rebuildMemoryItemLexicalIndex(memoryItemId)
@@ -1800,9 +1795,8 @@ export async function updateMemory(
     category: input.category || existing.category,
   })
 
-  await transaction(async (client) => {
-    await executeCompiledQuery(
-      client,
+  await withDbTransaction(async (trx) => {
+    await trx.executeQuery(
       db
         .updateTable("memory_items")
         .set({
@@ -1838,12 +1832,11 @@ export async function updateMemory(
         .where("workspace_id", "=", workspaceId)
     )
 
-    await executeCompiledQuery(
-      client,
+    await trx.executeQuery(
       db.deleteFrom("memory_item_parts").where("memory_item_id", "=", memoryId)
     )
-    await insertMemoryParts(client, memoryId, normalizedContent.parts)
-    await maybeMarkSuperseded(client, input.supersedesMemoryId)
+    await insertMemoryParts(trx, memoryId, normalizedContent.parts)
+    await maybeMarkSuperseded(trx, input.supersedesMemoryId)
   })
 
   const lexicalIndex = await rebuildMemoryItemLexicalIndex(memoryId)
@@ -1859,15 +1852,13 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
   if (!existingRow) {
     throw new MemoryError("Memory not found", 404)
   }
-  await transaction(async (client) => {
-    const deleted = await executeCompiledQuery(
-      client,
-      db
-        .deleteFrom("memory_items")
-        .where("workspace_id", "=", workspaceId)
-        .where("id", "=", memoryId)
-    )
-    if (!deleted.rowCount) {
+  await withDbTransaction(async (trx) => {
+    const deleted = await trx
+      .deleteFrom("memory_items")
+      .where("workspace_id", "=", workspaceId)
+      .where("id", "=", memoryId)
+      .executeTakeFirst()
+    if (!deleted.numDeletedRows) {
       throw new MemoryError("Memory not found", 404)
     }
   })
@@ -1996,20 +1987,18 @@ export async function moveMemoryToSpace(
   // already exist) and UPDATE the memory row in one transaction. The
   // source-exists re-check inside the txn turns a racing delete into a
   // clean 404 instead of a silent 0-row UPDATE.
-  await transaction(async (client) => {
-    const stillThere = await executeTakeFirst<{ id: string }>(
-      client,
-      db
-        .selectFrom("memory_items")
-        .select("id")
-        .where("id", "=", memoryId)
-        .where("workspace_id", "=", workspaceId)
-        .limit(1)
-    )
+  await withDbTransaction(async (trx) => {
+    const stillThere = await trx
+      .selectFrom("memory_items")
+      .select("id")
+      .where("id", "=", memoryId)
+      .where("workspace_id", "=", workspaceId)
+      .limit(1)
+      .executeTakeFirst()
     if (!stillThere) {
       throw new MemoryError("Memory not found", 404)
     }
-    const targetSpace = await resolveOrCreateMemorySpace(client, {
+    const targetSpace = await resolveOrCreateMemorySpace(trx, {
       workspaceId,
       owner: target.owner,
       scope: target.scope,
@@ -2018,8 +2007,7 @@ export async function moveMemoryToSpace(
     if (targetSpace.id === existingRow.memory_space_id) {
       return // raced into a no-op
     }
-    await executeCompiledQuery(
-      client,
+    await trx.executeQuery(
       db
         .updateTable("memory_items")
         .set({

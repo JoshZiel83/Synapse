@@ -1,7 +1,8 @@
 import { readFileSync } from "fs"
 import { dirname, join, resolve } from "path"
 import { fileURLToPath } from "url"
-import { executeSql } from "./kysely.js"
+import { sql } from "kysely"
+import { db } from "./kysely.js"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
@@ -29,49 +30,46 @@ export const CURRENT_SCHEMA_DESCRIPTION =
   "(2) File-service refactor — unified content-addressed store: replaced file_blobs/files/file_origins with content_blobs (sha256 PK, backend TEXT+CHECK, locator_json) + file_assets (folds files+file_origins; content_sha256 pointer); file_parse_runs/outputs reference asset_id/derived_asset_id. Scope layer mirroring memory_spaces: file_spaces (owner/scope/namespace + current_snapshot_id composite FK), file_snapshots (working-tree DAG, parent composite FK, manifest_sha256 -> content_blobs), file_access_grants (space/asset grants), file_mounts (session x space sandbox mounts, base/result snapshot composite FKs, ON DELETE SET NULL device_id, two active partial-uniques). FK fan-out: 12 avatar/icon/logo *_file_id retargeted files->file_assets + 4 *_parts file_ref columns (conversation/tool_result/memory/context_archive) converted from file_id to ref_path + ref_sha256 (sha256 the always-present identity, path optional) with ref_sha256 partial indexes + updated file_ref CHECK. Backs the per-actor-session sandbox file spaces."
 
 async function ensureSchemaMigrationsTable() {
-  await executeSql(`
+  await sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version VARCHAR(64) PRIMARY KEY,
       description TEXT NOT NULL DEFAULT '',
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `)
+  `.execute(db)
 }
 
 async function countBusinessTables() {
-  const result = await executeSql<{ count: string }>(
-    `SELECT COUNT(*) AS count
-     FROM information_schema.tables
-     WHERE table_schema = 'public'
-       AND table_type = 'BASE TABLE'
-       AND table_name <> 'schema_migrations'`
-  )
+  const result = await sql<{ count: string }>`
+    SELECT COUNT(*) AS count
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_type = 'BASE TABLE'
+      AND table_name <> 'schema_migrations'`.execute(db)
   return Number.parseInt(result.rows[0]?.count || "0", 10)
 }
 
 async function hasCurrentSchemaVersion() {
-  const result = await executeSql<{ exists: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1
-       FROM schema_migrations
-       WHERE version = $1
-     ) AS exists`,
-    [CURRENT_SCHEMA_VERSION]
-  )
+  const result = await sql<{ exists: boolean }>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM schema_migrations
+      WHERE version = ${CURRENT_SCHEMA_VERSION}
+    ) AS exists`.execute(db)
   return result.rows[0]?.exists === true
 }
 
 async function recordCurrentSchemaVersion() {
-  await executeSql(
-    `INSERT INTO schema_migrations (version, description)
-     VALUES ($1, $2)
-     ON CONFLICT (version) DO NOTHING`,
-    [CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_DESCRIPTION]
-  )
+  await sql`
+    INSERT INTO schema_migrations (version, description)
+    VALUES (${CURRENT_SCHEMA_VERSION}, ${CURRENT_SCHEMA_DESCRIPTION})
+    ON CONFLICT (version) DO NOTHING`.execute(db)
 }
 
 async function applyBootstrapSchema() {
-  await executeSql(schemaSql)
+  // schemaSql is a trusted local file (schema.sql) containing the full DDL with
+  // multiple statements — must run as raw SQL, not a parameterized fragment.
+  await sql.raw(schemaSql).execute(db)
 }
 
 /**
@@ -149,12 +147,16 @@ export async function bootstrapDatabaseSchema() {
 export async function rebuildDatabaseSchema() {
   console.log("Rebuilding database schema...")
 
-  await executeSql(`
+  await sql
+    .raw(
+      `
     DROP SCHEMA IF EXISTS public CASCADE;
     CREATE SCHEMA public;
     GRANT ALL ON SCHEMA public TO CURRENT_USER;
     GRANT ALL ON SCHEMA public TO public;
-  `)
+  `
+    )
+    .execute(db)
 
   try {
     await applyBootstrapSchema()

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { actorRef } from "@synapse/shared"
 import type { Kysely } from "kysely"
+import { type Executor } from "../../infrastructure/database/kysely.js"
 import { withTestDbAndClient } from "../../test/helpers/db.js"
 import {
   ensureFileSpace,
@@ -93,15 +94,15 @@ async function seed(db: Kysely<any>) {
 }
 
 async function ingest(
-  client: { query: (t: string, p?: any[]) => Promise<any> },
+  executor: Executor,
   scan: { manifest_sha256: string; new_blobs: string[] }
 ) {
-  await ensureContentBlob(client, {
+  await ensureContentBlob(executor, {
     sha256: scan.manifest_sha256,
     sizeBytes: 0,
   })
   for (const blob of scan.new_blobs) {
-    await ensureContentBlob(client, { sha256: blob, sizeBytes: 0 })
+    await ensureContentBlob(executor, { sha256: blob, sizeBytes: 0 })
   }
 }
 
@@ -115,8 +116,8 @@ test(
       // Inject the test client as the commit executor + ctx loader, so the whole
       // commit runs on this pinned connection and sees the seeded rows.
       const depsBase: Partial<CommitDeps> = {
-        dbh: client as unknown as CommitDeps["dbh"],
-        runInTx: async (fn) => fn(client as unknown as CommitDeps["dbh"]),
+        dbh: db,
+        runInTx: async (fn) => fn(db),
         loadCtx: async () => ({
           workspaceId,
           conversationId,
@@ -131,13 +132,13 @@ test(
       mkdirSync(baseDir, { recursive: true })
       writeFileSync(join(baseDir, "x.txt"), "A")
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ingest(client, baseScan)
+      await ingest(db, baseScan)
 
-      const space = await ensureFileSpace(client, {
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -151,8 +152,8 @@ test(
       mkdirSync(headDir, { recursive: true })
       writeFileSync(join(headDir, "x.txt"), "B")
       const headScan = await scanCommitDir({ dir: headDir })
-      await ingest(client, headScan)
-      const headSnap = await appendSnapshot(client, {
+      await ingest(db, headScan)
+      const headSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -171,7 +172,7 @@ test(
       })
       writeFileSync(join(liveDir, "x.txt"), "L")
 
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -179,7 +180,7 @@ test(
         baseSnapshotId: baseSnap.id,
         materializedDir: liveDir,
       })
-      await updateFileMount(client, await mountId(client, sessionId), {
+      await updateFileMount(db, await mountId(client, sessionId), {
         status: "active",
       })
 
@@ -222,7 +223,7 @@ test(
 
       // THE KEY ASSERTION: base must NOT have advanced (reconcile failed), so the
       // next turn's refresh (head != base) will re-run and self-heal.
-      const mounts = await getActiveMountsForSession(client, sessionId)
+      const mounts = await getActiveMountsForSession(db, sessionId)
       const actorMount = mounts.find((m) => m.mount_subpath === "actor")
       assert.ok(actorMount, "actor mount still active")
       assert.equal(
@@ -258,8 +259,8 @@ test(
     await withTestDbAndClient(async ({ db, client }) => {
       const { workspaceId, actorId, conversationId, sessionId } = await seed(db)
       const depsBase: Partial<CommitDeps> = {
-        dbh: client as unknown as CommitDeps["dbh"],
-        runInTx: async (fn) => fn(client as unknown as CommitDeps["dbh"]),
+        dbh: db,
+        runInTx: async (fn) => fn(db),
         loadCtx: async () => ({ workspaceId, conversationId, actorId }),
       }
 
@@ -268,12 +269,12 @@ test(
       mkdirSync(baseDir, { recursive: true })
       writeFileSync(join(baseDir, "x.txt"), "A")
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ingest(client, baseScan)
-      const space = await ensureFileSpace(client, {
+      await ingest(db, baseScan)
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -285,8 +286,8 @@ test(
       mkdirSync(headDir, { recursive: true })
       writeFileSync(join(headDir, "x.txt"), "B")
       const headScan = await scanCommitDir({ dir: headDir })
-      await ingest(client, headScan)
-      await appendSnapshot(client, {
+      await ingest(db, headScan)
+      await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -302,7 +303,7 @@ test(
         targetDir: liveDir,
       })
       writeFileSync(join(liveDir, "x.txt"), "L")
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -310,7 +311,7 @@ test(
         baseSnapshotId: baseSnap.id,
         materializedDir: liveDir,
       })
-      await updateFileMount(client, await mountId(client, sessionId), {
+      await updateFileMount(db, await mountId(client, sessionId), {
         status: "active",
       })
 
@@ -336,7 +337,7 @@ test(
         result.conflictsBySubpath.actor?.includes("/x.txt"),
         "x.txt reported as a commit conflict"
       )
-      const mounts = await getActiveMountsForSession(client, sessionId)
+      const mounts = await getActiveMountsForSession(db, sessionId)
       const actorMount = mounts.find((m) => m.mount_subpath === "actor")
       // base ADVANCED to the new snapshot (reconcile succeeded → live==committed).
       assert.notEqual(
@@ -378,8 +379,8 @@ test(
     await withTestDbAndClient(async ({ db, client }) => {
       const { workspaceId, actorId, conversationId, sessionId } = await seed(db)
       const depsBase: Partial<CommitDeps> = {
-        dbh: client as unknown as CommitDeps["dbh"],
-        runInTx: async (fn) => fn(client as unknown as CommitDeps["dbh"]),
+        dbh: db,
+        runInTx: async (fn) => fn(db),
         loadCtx: async () => ({ workspaceId, conversationId, actorId }),
       }
 
@@ -389,12 +390,12 @@ test(
       mkdirSync(baseDir, { recursive: true })
       writeFileSync(join(baseDir, "x.txt"), "A")
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ingest(client, baseScan)
-      const space = await ensureFileSpace(client, {
+      await ingest(db, baseScan)
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -407,8 +408,8 @@ test(
       mkdirSync(headDir, { recursive: true })
       writeFileSync(join(headDir, "x.txt"), "B")
       const headScan = await scanCommitDir({ dir: headDir })
-      await ingest(client, headScan)
-      const headSnap = await appendSnapshot(client, {
+      await ingest(db, headScan)
+      const headSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -427,7 +428,7 @@ test(
       })
       writeFileSync(join(liveDir, "x.txt"), "L")
       writeFileSync(join(liveDir, "y.txt"), "Y")
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -435,7 +436,7 @@ test(
         baseSnapshotId: baseSnap.id,
         materializedDir: liveDir,
       })
-      await updateFileMount(client, await mountId(client, sessionId), {
+      await updateFileMount(db, await mountId(client, sessionId), {
         status: "active",
       })
 
@@ -466,7 +467,7 @@ test(
         "x.txt reported as a commit conflict"
       )
 
-      const mounts = await getActiveMountsForSession(client, sessionId)
+      const mounts = await getActiveMountsForSession(db, sessionId)
       const actorMount = mounts.find((m) => m.mount_subpath === "actor")!
       // base NOT advanced (reconcile failed) — round-7 #A self-heal …
       assert.equal(
@@ -481,7 +482,7 @@ test(
         "result_snapshot records the appended snapshot even when base lags"
       )
       // Space head advanced to the new snapshot (the append committed).
-      const headNow = await getFileSpace(client, space.id)
+      const headNow = await getFileSpace(db, space.id)
       assert.equal(
         headNow?.current_snapshot_id,
         newSnapId,
@@ -529,11 +530,11 @@ test(
       // failing after the snapshot committed + base advanced.
       let txCount = 0
       const depsBase: Partial<CommitDeps> = {
-        dbh: client as unknown as CommitDeps["dbh"],
+        dbh: db,
         runInTx: async (fn) => {
           txCount += 1
           if (txCount >= 2) throw new Error("simulated pending-persist failure")
-          return fn(client as unknown as CommitDeps["dbh"])
+          return fn(db)
         },
         loadCtx: async () => ({ workspaceId, conversationId, actorId }),
       }
@@ -543,12 +544,12 @@ test(
       mkdirSync(baseDir, { recursive: true })
       writeFileSync(join(baseDir, "x.txt"), "A")
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ingest(client, baseScan)
-      const space = await ensureFileSpace(client, {
+      await ingest(db, baseScan)
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -560,8 +561,8 @@ test(
       mkdirSync(headDir, { recursive: true })
       writeFileSync(join(headDir, "x.txt"), "B")
       const headScan = await scanCommitDir({ dir: headDir })
-      await ingest(client, headScan)
-      await appendSnapshot(client, {
+      await ingest(db, headScan)
+      await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -579,7 +580,7 @@ test(
       })
       writeFileSync(join(liveDir, "x.txt"), "L")
       writeFileSync(join(liveDir, "y.txt"), "Y")
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -587,7 +588,7 @@ test(
         baseSnapshotId: baseSnap.id,
         materializedDir: liveDir,
       })
-      await updateFileMount(client, await mountId(client, sessionId), {
+      await updateFileMount(db, await mountId(client, sessionId), {
         status: "active",
       })
 
@@ -628,12 +629,12 @@ test(
       mkdirSync(baseDir, { recursive: true })
       writeFileSync(join(baseDir, "x.txt"), "A")
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ingest(client, baseScan)
-      const space = await ensureFileSpace(client, {
+      await ingest(db, baseScan)
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -646,8 +647,8 @@ test(
       mkdirSync(headDir, { recursive: true })
       writeFileSync(join(headDir, "x.txt"), "B")
       const headScan = await scanCommitDir({ dir: headDir })
-      await ingest(client, headScan)
-      await appendSnapshot(client, {
+      await ingest(db, headScan)
+      await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -663,7 +664,7 @@ test(
         targetDir: liveDir,
       })
       writeFileSync(join(liveDir, "x.txt"), "L")
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -671,7 +672,7 @@ test(
         baseSnapshotId: baseSnap.id,
         materializedDir: liveDir,
       })
-      await updateFileMount(client, await mountId(client, sessionId), {
+      await updateFileMount(db, await mountId(client, sessionId), {
         status: "active",
       })
 
@@ -680,7 +681,7 @@ test(
       // live loser must survive + base must not advance.
       await assert.rejects(
         commitSpaces(sessionId, ["actor"], {
-          dbh: client as unknown as CommitDeps["dbh"],
+          dbh: db,
           runInTx: async () => {
             throw new Error("simulated pending-persist failure")
           },
@@ -699,7 +700,7 @@ test(
         "live loser must survive when the pending persist failed (apply is deferred)"
       )
       // base did not advance.
-      const mounts = await getActiveMountsForSession(client, sessionId)
+      const mounts = await getActiveMountsForSession(db, sessionId)
       const actorMount = mounts.find((m) => m.mount_subpath === "actor")!
       assert.equal(
         actorMount.base_snapshot_id,
@@ -725,12 +726,12 @@ test(
       mkdirSync(baseDir, { recursive: true })
       writeFileSync(join(baseDir, "x.txt"), "A")
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ingest(client, baseScan)
-      const space = await ensureFileSpace(client, {
+      await ingest(db, baseScan)
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -742,8 +743,8 @@ test(
       mkdirSync(headDir, { recursive: true })
       writeFileSync(join(headDir, "x.txt"), "B")
       const headScan = await scanCommitDir({ dir: headDir })
-      await ingest(client, headScan)
-      const headSnap = await appendSnapshot(client, {
+      await ingest(db, headScan)
+      const headSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -758,7 +759,7 @@ test(
         targetDir: liveDir,
       })
       writeFileSync(join(liveDir, "x.txt"), "L")
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -766,14 +767,14 @@ test(
         baseSnapshotId: baseSnap.id,
         materializedDir: liveDir,
       })
-      await updateFileMount(client, await mountId(client, sessionId), {
+      await updateFileMount(db, await mountId(client, sessionId), {
         status: "active",
       })
 
       // DEFAULT reconcile + applyHead + a real (passthrough) runInTx.
       const result = await commitSpaces(sessionId, ["actor"], {
-        dbh: client as unknown as CommitDeps["dbh"],
-        runInTx: async (fn) => fn(client as unknown as CommitDeps["dbh"]),
+        dbh: db,
+        runInTx: async (fn) => fn(db),
         loadCtx: async () => ({ workspaceId, conversationId, actorId }),
       })
 
@@ -792,7 +793,7 @@ test(
       assert.equal(sc?.original, "/actor/x.txt", "loser preserved at a sidecar")
       assert.ok(sc?.contentSha, "sidecar carries the CAS-durable content sha")
       // base advanced to latest (equals-latest branch).
-      const mounts = await getActiveMountsForSession(client, sessionId)
+      const mounts = await getActiveMountsForSession(db, sessionId)
       const actorMount = mounts.find((m) => m.mount_subpath === "actor")!
       assert.equal(
         actorMount.base_snapshot_id,

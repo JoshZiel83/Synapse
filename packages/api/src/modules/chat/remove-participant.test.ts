@@ -99,13 +99,12 @@ async function insertConversation(
 
 async function insertConversationParticipant(
   db: AnyDb,
-  client: import("pg").PoolClient,
   conversationId: string,
   participantType: "workspace_member" | "actor" | "remote_agent",
   entityId: string,
   state: "active" | "left" | "removed" = "active"
 ): Promise<string> {
-  const subjectId = await upsertAccessSubjectOn(client, {
+  const subjectId = await upsertAccessSubjectOn(db, {
     kind:
       participantType === "workspace_member"
         ? SUBJECT_KIND.WORKSPACE_MEMBER
@@ -136,25 +135,20 @@ test(
   "loadParticipantById projects entity IDs from access_subjects (workspace_member)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberId = await insertWorkspaceMember(db, workspaceId, userId)
       const conversationId = await insertConversation(db, workspaceId)
       const participantId = await insertConversationParticipant(
         db,
-        client,
         conversationId,
         "workspace_member",
         memberId
       )
 
       const { loadParticipantById } = await import("./service.js")
-      const row = await loadParticipantById(
-        client,
-        conversationId,
-        participantId
-      )
+      const row = await loadParticipantById(db, conversationId, participantId)
       assert.ok(row, "expected a participant row")
       assert.equal(row.id, participantId)
       assert.equal(row.conversation_id, conversationId)
@@ -171,25 +165,20 @@ test(
   "loadParticipantById projects actor_id from access_subjects (actor)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const actorId = await insertActor(db, workspaceId)
       const conversationId = await insertConversation(db, workspaceId)
       const participantId = await insertConversationParticipant(
         db,
-        client,
         conversationId,
         "actor",
         actorId
       )
 
       const { loadParticipantById } = await import("./service.js")
-      const row = await loadParticipantById(
-        client,
-        conversationId,
-        participantId
-      )
+      const row = await loadParticipantById(db, conversationId, participantId)
       assert.ok(row)
       assert.equal(row.participant_type, "actor")
       assert.equal(row.actor_id, actorId)
@@ -203,25 +192,20 @@ test(
   "loadParticipantById projects remote_agent_id from access_subjects (remote_agent)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const remoteAgentId = await insertRemoteAgent(db, workspaceId)
       const conversationId = await insertConversation(db, workspaceId)
       const participantId = await insertConversationParticipant(
         db,
-        client,
         conversationId,
         "remote_agent",
         remoteAgentId
       )
 
       const { loadParticipantById } = await import("./service.js")
-      const row = await loadParticipantById(
-        client,
-        conversationId,
-        participantId
-      )
+      const row = await loadParticipantById(db, conversationId, participantId)
       assert.ok(row)
       assert.equal(row.participant_type, "remote_agent")
       assert.equal(row.remote_agent_id, remoteAgentId)
@@ -235,14 +219,14 @@ test(
   "loadParticipantById returns null when participant does not exist in conversation",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const conversationId = await insertConversation(db, workspaceId)
 
       const { loadParticipantById } = await import("./service.js")
       const row = await loadParticipantById(
-        client,
+        db,
         conversationId,
         "00000000-0000-0000-0000-000000000000"
       )
@@ -255,7 +239,7 @@ test(
   "loadParticipantById is scoped by conversation (will not return a participant from a different conversation with the same id space)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const memberId = await insertWorkspaceMember(db, workspaceId, userId)
@@ -263,7 +247,6 @@ test(
       const conversationB = await insertConversation(db, workspaceId)
       const participantA = await insertConversationParticipant(
         db,
-        client,
         conversationA,
         "workspace_member",
         memberId
@@ -271,12 +254,12 @@ test(
 
       const { loadParticipantById } = await import("./service.js")
       const sameConv = await loadParticipantById(
-        client,
+        db,
         conversationA,
         participantA
       )
       const wrongConv = await loadParticipantById(
-        client,
+        db,
         conversationB,
         participantA
       )

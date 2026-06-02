@@ -702,22 +702,22 @@ test(
   "hasAnyBindingForResourceOn returns false when there are no bindings and true once one is written",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const before = await hasAnyBindingForResourceOn(client, {
+      const before = await hasAnyBindingForResourceOn(db, {
         resourceType: "actor",
         resourceId: actorId,
       })
       assert.equal(before, false)
-      const values = await buildResourceAccessBindingInsertValuesOn(client, {
+      const values = await buildResourceAccessBindingInsertValuesOn(db, {
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
         target: { subject: workspaceRef(workspaceId) },
       })
       await db.insertInto("resource_access_bindings").values(values).execute()
-      const after = await hasAnyBindingForResourceOn(client, {
+      const after = await hasAnyBindingForResourceOn(db, {
         resourceType: "actor",
         resourceId: actorId,
       })
@@ -730,7 +730,7 @@ test(
   "hasAnyBindingForResourceOn with activeOnly=true ignores revoked rows",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
       const values = await buildResourceAccessBindingInsertValues(db, {
@@ -746,13 +746,13 @@ test(
         .executeTakeFirstOrThrow()
       await revokeGrant(db, { bindingId: inserted.id as string })
 
-      const anyBinding = await hasAnyBindingForResourceOn(client, {
+      const anyBinding = await hasAnyBindingForResourceOn(db, {
         resourceType: "actor",
         resourceId: actorId,
       })
       assert.equal(anyBinding, true)
 
-      const activeBinding = await hasAnyBindingForResourceOn(client, {
+      const activeBinding = await hasAnyBindingForResourceOn(db, {
         resourceType: "actor",
         resourceId: actorId,
         activeOnly: true,
@@ -766,7 +766,7 @@ test(
   "findActiveBindingIdByResourceAndSubject returns the binding id when active",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
       const values = await buildResourceAccessBindingInsertValues(db, {
@@ -785,7 +785,7 @@ test(
         workspaceId,
       })
 
-      const found = await findActiveBindingIdByResourceAndSubject(client, {
+      const found = await findActiveBindingIdByResourceAndSubject(db, {
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
@@ -800,14 +800,14 @@ test(
   "findActiveBindingIdByResourceAndSubject returns null when the binding is revoked or missing",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
       const subjectId = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId,
       })
-      const nothing = await findActiveBindingIdByResourceAndSubject(client, {
+      const nothing = await findActiveBindingIdByResourceAndSubject(db, {
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
@@ -831,7 +831,7 @@ test(
     // scoped row never got inserted. This test directly asserts that
     // an unscoped binding is NOT returned when the caller searches for
     // a scoped one.
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const grantedActorId = await insertActor(db, workspaceId)
       const targetActorId = await insertActor(db, workspaceId)
@@ -870,30 +870,24 @@ test(
       })
 
       // Look up the unscoped binding — should match.
-      const foundUnscoped = await findActiveBindingIdByResourceAndSubject(
-        client,
-        {
-          workspaceId,
-          resourceType: "actor",
-          resourceId: targetActorId,
-          subjectId,
-          scopeSubjectId: null,
-        }
-      )
+      const foundUnscoped = await findActiveBindingIdByResourceAndSubject(db, {
+        workspaceId,
+        resourceType: "actor",
+        resourceId: targetActorId,
+        subjectId,
+        scopeSubjectId: null,
+      })
       assert.equal(foundUnscoped, unscoped.id)
 
       // Look up the SCOPED binding — must NOT collapse onto the
       // unscoped one. Pre-fix this returned `unscoped.id`.
-      const foundScoped = await findActiveBindingIdByResourceAndSubject(
-        client,
-        {
-          workspaceId,
-          resourceType: "actor",
-          resourceId: targetActorId,
-          subjectId,
-          scopeSubjectId,
-        }
-      )
+      const foundScoped = await findActiveBindingIdByResourceAndSubject(db, {
+        workspaceId,
+        resourceType: "actor",
+        resourceId: targetActorId,
+        subjectId,
+        scopeSubjectId,
+      })
       assert.equal(
         foundScoped,
         null,
@@ -1035,7 +1029,7 @@ test(
   "revokeGrantsByIdsOn revokes active bindings and is a no-op for already-revoked rows",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actor1 = await insertActor(db, workspaceId)
       const actor2 = await insertActor(db, workspaceId)
@@ -1054,7 +1048,7 @@ test(
           .executeTakeFirstOrThrow()
         ids.push(inserted.id as string)
       }
-      await revokeGrantsByIdsOn(client, ids)
+      await revokeGrantsByIdsOn(db, ids)
       const rows = await db
         .selectFrom("resource_access_bindings")
         .select(["id", "status"])
@@ -1063,7 +1057,7 @@ test(
       assert.equal(rows.length, 2)
       for (const r of rows) assert.equal(r.status, "revoked")
 
-      await revokeGrantsByIdsOn(client, ids)
+      await revokeGrantsByIdsOn(db, ids)
       const stillRevoked = await db
         .selectFrom("resource_access_bindings")
         .select("status")
@@ -1071,7 +1065,7 @@ test(
         .execute()
       for (const r of stillRevoked) assert.equal(r.status, "revoked")
 
-      await revokeGrantsByIdsOn(client, [])
+      await revokeGrantsByIdsOn(db, [])
     })
   }
 )
@@ -1080,7 +1074,7 @@ test(
   "hardDeleteBindingsForResourceOn removes every binding tied to a resource",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
       const values = await buildResourceAccessBindingInsertValues(db, {
@@ -1097,7 +1091,7 @@ test(
         .execute()
       assert.equal(before.length, 1)
 
-      await hardDeleteBindingsForResourceOn(client, {
+      await hardDeleteBindingsForResourceOn(db, {
         resourceType: "actor",
         resourceId: actorId,
       })
@@ -1263,10 +1257,10 @@ test(
   "insertAccessBindingReturningIdOn writes a binding and returns its id",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const id = await insertAccessBindingReturningIdOn(client, {
+      const id = await insertAccessBindingReturningIdOn(db, {
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
@@ -1292,10 +1286,10 @@ test(
   "insertAccessBindingReturningRowOn returns a row with subject_kind + projections reconstructed",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const row = await insertAccessBindingReturningRowOn(client, {
+      const row = await insertAccessBindingReturningRowOn(db, {
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,

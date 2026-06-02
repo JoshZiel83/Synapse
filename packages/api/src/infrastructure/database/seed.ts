@@ -11,10 +11,9 @@ import { seedPlatformDefaultGroup } from "../../modules/model-groups/service.js"
 import { ensureSeedPlatformAdminForUser } from "../../modules/platform/admin-service.js"
 import { importSeededClawhubMarketplaceSkill } from "../../modules/skills/service.js"
 import { ensureStorageDir } from "../storage/index.js"
-import { transaction } from "./index.js"
+import { sql } from "kysely"
 import type { CatalogVersionFilesFileRole } from "./generated/db.js"
 import { db } from "./kysely.js"
-import { executeSql, executeSqlOn } from "./kysely.js"
 import { ensurePublisher } from "./seed-utils.js"
 import {
   seedOfficialActorCatalog,
@@ -55,26 +54,22 @@ type ImportedSkillPackage = {
 }
 
 async function seedDemoWorkspace(userId: string) {
-  const result = await executeSql<{ id: string }>(
-    `INSERT INTO workspaces (name, slug, description, owner_id, is_trusted)
-     VALUES ('Yihang', 'yihang', 'Refactored workspace seed', $1, TRUE)
-     ON CONFLICT (slug) DO UPDATE SET
-       name = EXCLUDED.name,
-       description = EXCLUDED.description,
-       is_trusted = EXCLUDED.is_trusted,
-       updated_at = NOW()
-     RETURNING id`,
-    [userId]
-  )
+  const result = await sql<{ id: string }>`
+    INSERT INTO workspaces (name, slug, description, owner_id, is_trusted)
+    VALUES ('Yihang', 'yihang', 'Refactored workspace seed', ${userId}, TRUE)
+    ON CONFLICT (slug) DO UPDATE SET
+      name = EXCLUDED.name,
+      description = EXCLUDED.description,
+      is_trusted = EXCLUDED.is_trusted,
+      updated_at = NOW()
+    RETURNING id`.execute(db)
   const workspaceId = result.rows[0]!.id
 
-  const memberResult = await executeSql<{ id: string }>(
-    `INSERT INTO workspace_members (workspace_id, user_id, trust_level)
-     VALUES ($1, $2, 'admin')
-     ON CONFLICT (workspace_id, user_id) DO UPDATE SET trust_level = 'admin'
-     RETURNING id`,
-    [workspaceId, userId]
-  )
+  const memberResult = await sql<{ id: string }>`
+    INSERT INTO workspace_members (workspace_id, user_id, trust_level)
+    VALUES (${workspaceId}, ${userId}, 'admin')
+    ON CONFLICT (workspace_id, user_id) DO UPDATE SET trust_level = 'admin'
+    RETURNING id`.execute(db)
   const workspaceMemberId = memberResult.rows[0]!.id
 
   return { workspaceId, workspaceMemberId }
@@ -90,42 +85,40 @@ async function seedDefaultActorDiscoveryProfiles(params: {
       kind: SUBJECT_KIND.ACTOR,
       actorId,
     })
-    await executeSql(
-      `INSERT INTO workspace_relationship_profiles (
-         workspace_id,
-         subject_id,
-         identity_search_enabled,
-         approval_mode,
-         qr_token,
-         created_by_workspace_member_id
-       )
-       VALUES ($1, $2, TRUE, 'auto', $3, $4)
-       ON CONFLICT (workspace_id, subject_id)
-       DO UPDATE SET
-         identity_search_enabled = EXCLUDED.identity_search_enabled,
-         approval_mode = EXCLUDED.approval_mode,
-         updated_at = NOW()`,
-      [
-        params.workspaceId,
-        subjectId,
-        crypto.randomUUID(),
-        params.workspaceMemberId,
-      ]
-    )
+    await sql`
+      INSERT INTO workspace_relationship_profiles (
+        workspace_id,
+        subject_id,
+        identity_search_enabled,
+        approval_mode,
+        qr_token,
+        created_by_workspace_member_id
+      )
+      VALUES (
+        ${params.workspaceId},
+        ${subjectId},
+        TRUE,
+        'auto',
+        ${crypto.randomUUID()},
+        ${params.workspaceMemberId}
+      )
+      ON CONFLICT (workspace_id, subject_id)
+      DO UPDATE SET
+        identity_search_enabled = EXCLUDED.identity_search_enabled,
+        approval_mode = EXCLUDED.approval_mode,
+        updated_at = NOW()`.execute(db)
   }
 
   if (params.actorIds.length === 0) {
     return
   }
 
-  await executeSql(
-    `UPDATE actors
-     SET is_public_shared = TRUE,
-         updated_at = NOW()
-     WHERE workspace_id = $1
-       AND id = ANY($2::uuid[])`,
-    [params.workspaceId, params.actorIds]
-  )
+  await sql`
+    UPDATE actors
+    SET is_public_shared = TRUE,
+        updated_at = NOW()
+    WHERE workspace_id = ${params.workspaceId}
+      AND id = ANY(${params.actorIds}::uuid[])`.execute(db)
 }
 
 function sha256Hex(value: Buffer | string) {
@@ -542,14 +535,12 @@ async function seedOfficialSkills(userId: string) {
 async function countCatalogItems(
   itemKind: "actor_template" | "skill_package" | "plugin_package"
 ) {
-  const result = await executeSql<{ count: string }>(
-    `SELECT COUNT(*)::text AS count
-     FROM catalog_items
-     WHERE item_kind = $1
-       AND workspace_id IS NULL
-       AND is_active = TRUE`,
-    [itemKind]
-  )
+  const result = await sql<{ count: string }>`
+    SELECT COUNT(*)::text AS count
+    FROM catalog_items
+    WHERE item_kind = ${itemKind}
+      AND workspace_id IS NULL
+      AND is_active = TRUE`.execute(db)
   return Number(result.rows[0]?.count || 0)
 }
 
@@ -558,66 +549,52 @@ export async function seedDatabase() {
   await ensureStorageDir()
 
   const passwordHash = await hash("demo1234", 10)
-  const userResult = await executeSql<{ id: string }>(
-    `INSERT INTO users (email, name, password_hash)
-     VALUES ('demo@synapse.dev', 'Demo User', $1)
-     ON CONFLICT (email) DO UPDATE SET
-       name = EXCLUDED.name,
-       password_hash = EXCLUDED.password_hash,
-       updated_at = NOW()
-     RETURNING id`,
-    [passwordHash]
-  )
+  const userResult = await sql<{ id: string }>`
+    INSERT INTO users (email, name, password_hash)
+    VALUES ('demo@synapse.dev', 'Demo User', ${passwordHash})
+    ON CONFLICT (email) DO UPDATE SET
+      name = EXCLUDED.name,
+      password_hash = EXCLUDED.password_hash,
+      updated_at = NOW()
+    RETURNING id`.execute(db)
   const userId = userResult.rows[0]!.id
 
-  const demoUserAvatar = await createGeneratedUserAvatarFile(
-    { query: executeSql },
-    {
-      userId,
-      name: "Demo User",
-      email: "demo@synapse.dev",
-    }
-  )
-  await executeSql(
-    `UPDATE users
-     SET avatar_file_id = $2,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [userId, demoUserAvatar.fileId]
-  )
+  const demoUserAvatar = await createGeneratedUserAvatarFile(db, {
+    userId,
+    name: "Demo User",
+    email: "demo@synapse.dev",
+  })
+  await sql`
+    UPDATE users
+    SET avatar_file_id = ${demoUserAvatar.fileId},
+        updated_at = NOW()
+    WHERE id = ${userId}`.execute(db)
 
   await ensureSeedPlatformAdminForUser({
     id: userId,
     email: "demo@synapse.dev",
   })
 
-  const ordinaryUserResult = await executeSql<{ id: string }>(
-    `INSERT INTO users (email, name, password_hash)
-     VALUES ('yihang@synapse.dev', 'Yihang', $1)
-     ON CONFLICT (email) DO UPDATE SET
-       name = EXCLUDED.name,
-       password_hash = EXCLUDED.password_hash,
-       updated_at = NOW()
-     RETURNING id`,
-    [passwordHash]
-  )
+  const ordinaryUserResult = await sql<{ id: string }>`
+    INSERT INTO users (email, name, password_hash)
+    VALUES ('yihang@synapse.dev', 'Yihang', ${passwordHash})
+    ON CONFLICT (email) DO UPDATE SET
+      name = EXCLUDED.name,
+      password_hash = EXCLUDED.password_hash,
+      updated_at = NOW()
+    RETURNING id`.execute(db)
   const ordinaryUserId = ordinaryUserResult.rows[0]!.id
 
-  const ordinaryUserAvatar = await createGeneratedUserAvatarFile(
-    { query: executeSql },
-    {
-      userId: ordinaryUserId,
-      name: "Yihang",
-      email: "yihang@synapse.dev",
-    }
-  )
-  await executeSql(
-    `UPDATE users
-     SET avatar_file_id = $2,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [ordinaryUserId, ordinaryUserAvatar.fileId]
-  )
+  const ordinaryUserAvatar = await createGeneratedUserAvatarFile(db, {
+    userId: ordinaryUserId,
+    name: "Yihang",
+    email: "yihang@synapse.dev",
+  })
+  await sql`
+    UPDATE users
+    SET avatar_file_id = ${ordinaryUserAvatar.fileId},
+        updated_at = NOW()
+    WHERE id = ${ordinaryUserId}`.execute(db)
 
   await seedPlatformDefaultGroup()
 
@@ -635,16 +612,14 @@ export async function seedDatabase() {
     workspaceMemberId,
     actorIds: runtimeRefs.actorIds,
   })
-  await executeSql(
-    `INSERT INTO workspace_member_preferences
-       (workspace_member_id, chief_actor_id, created_at, updated_at)
-     VALUES ($1, $2, NOW(), NOW())
-     ON CONFLICT (workspace_member_id)
-     DO UPDATE SET
-       chief_actor_id = EXCLUDED.chief_actor_id,
-       updated_at = NOW()`,
-    [workspaceMemberId, runtimeRefs.chiefActorId]
-  )
+  await sql`
+    INSERT INTO workspace_member_preferences
+      (workspace_member_id, chief_actor_id, created_at, updated_at)
+    VALUES (${workspaceMemberId}, ${runtimeRefs.chiefActorId}, NOW(), NOW())
+    ON CONFLICT (workspace_member_id)
+    DO UPDATE SET
+      chief_actor_id = EXCLUDED.chief_actor_id,
+      updated_at = NOW()`.execute(db)
   const [actorMarketplaceCount, skillMarketplaceCount, pluginMarketplaceCount] =
     await Promise.all([
       countCatalogItems("actor_template"),

@@ -34,18 +34,19 @@ import type {
   RuntimeBindingScope,
   ScopedSubjectTarget,
 } from "@synapse/shared"
-import { sql, type RawBuilder } from "kysely"
+import { CompiledQuery, sql, type RawBuilder, type SqlBool } from "kysely"
 import {
   encryptSensitiveFields,
   isEncrypted,
 } from "../../infrastructure/crypto/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import { query, transaction } from "../../infrastructure/database/index.js"
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import {
   db,
-  executeCompiledQuery,
-  executeTakeFirst,
+  runBuilder,
+  takeFirstOn,
+  withDbTransaction,
+  type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
@@ -135,6 +136,14 @@ type QueryRunner = <T extends QueryRow>(
   text: string,
   params?: unknown[]
 ) => Promise<QueryResultLike<T>>
+
+/** Build a {@link QueryRunner} backed by an {@link Executor} (db/trx). */
+function runnerFn(executor: Executor): QueryRunner {
+  return <T extends QueryRow>(text: string, params?: unknown[]) =>
+    executor
+      .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
+      .then((r) => ({ rows: r.rows as T[] })) as Promise<QueryResultLike<T>>
+}
 
 type JsonObject = Record<string, unknown>
 type JsonArray = unknown[]
@@ -1304,7 +1313,7 @@ async function getInstallationPayload(
 }
 
 async function ensureCatalogItem(
-  run: QueryRunner,
+  ex: Executor,
   input: {
     orgId: string
     workspaceId?: string
@@ -1324,15 +1333,20 @@ async function ensureCatalogItem(
   }
 ) {
   const normalizedSlug = sanitizeSlug(input.slug)
-  const existing = await run<{ id: string }>(
-    `SELECT id
-     FROM catalog_items
-     WHERE publisher_id = $1
-       AND item_kind = 'plugin_package'
-       AND slug = $2
-       AND workspace_id IS NOT DISTINCT FROM $3
-     LIMIT 1`,
-    [input.orgId, normalizedSlug, input.workspaceId || null]
+  const existing = await runBuilder(
+    ex,
+    ex
+      .selectFrom("catalog_items")
+      .select("id")
+      .where("publisher_id", "=", input.orgId)
+      .where("item_kind", "=", "plugin_package")
+      .where("slug", "=", normalizedSlug)
+      .where(
+        sql<SqlBool>`${sql.ref("workspace_id")} is not distinct from ${
+          input.workspaceId || null
+        }`
+      )
+      .limit(1)
   )
 
   const metadata = {
@@ -1347,80 +1361,62 @@ async function ensureCatalogItem(
 
   if (existing.rows.length > 0) {
     const itemId = existing.rows[0]!.id
-    await run(
-      `UPDATE catalog_items
-       SET display_name = $2,
-           summary = $3,
-           long_description = $4,
-           source_kind = $5,
-           visibility = 'public',
-           tags = $6,
-           is_active = TRUE,
-           icon_file_id = $7,
-           metadata = $8::jsonb,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [
-        itemId,
-        input.displayName,
-        input.description || "",
-        input.longDescription || "",
-        input.transport === "device"
-          ? "device"
-          : input.isBuiltin
-            ? "builtin"
-            : "official",
-        input.tags || [],
-        input.iconFileId || null,
-        JSON.stringify(metadata),
-      ]
-    )
+    await ex
+      .updateTable("catalog_items")
+      .set({
+        display_name: input.displayName,
+        summary: input.description || "",
+        long_description: input.longDescription || "",
+        source_kind:
+          input.transport === "device"
+            ? "device"
+            : input.isBuiltin
+              ? "builtin"
+              : "official",
+        visibility: "public",
+        tags: input.tags || [],
+        is_active: true,
+        icon_file_id: input.iconFileId || null,
+        metadata: sql`${JSON.stringify(metadata)}::jsonb`,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", itemId)
+      .execute()
     return itemId
   }
 
-  const inserted = await run<{ id: string }>(
-    `INSERT INTO catalog_items (
-       publisher_id,
-       workspace_id,
-       item_kind,
-       slug,
-       display_name,
-       summary,
-       long_description,
-       icon_file_id,
-       source_kind,
-       visibility,
-       tags,
-       is_active,
-       metadata
-     )
-     VALUES (
-       $1, $2, 'plugin_package', $3, $4, $5, $6, $7, $8, 'public', $9, TRUE, $10::jsonb
-     )
-     RETURNING id`,
-    [
-      input.orgId,
-      input.workspaceId || null,
-      normalizedSlug,
-      input.displayName,
-      input.description || "",
-      input.longDescription || "",
-      input.iconFileId || null,
-      input.transport === "device"
-        ? "device"
-        : input.isBuiltin
-          ? "builtin"
-          : "official",
-      input.tags || [],
-      JSON.stringify(metadata),
-    ]
+  const inserted = await runBuilder(
+    ex,
+    ex
+      .insertInto("catalog_items")
+      .values({
+        publisher_id: input.orgId,
+        workspace_id: input.workspaceId || null,
+        item_kind: "plugin_package",
+        slug: normalizedSlug,
+        display_name: input.displayName,
+        summary: input.description || "",
+        long_description: input.longDescription || "",
+        icon_file_id: input.iconFileId || null,
+        source_kind:
+          input.transport === "device"
+            ? "device"
+            : input.isBuiltin
+              ? "builtin"
+              : "official",
+        visibility: "public",
+        tags: input.tags || [],
+        is_active: true,
+        metadata: sql`${JSON.stringify(metadata)}::jsonb`,
+      })
+      .returning("id")
   )
 
   return inserted.rows[0]!.id
 }
 
 async function upsertPluginVersion(
-  run: QueryRunner,
+  ex: Executor,
   itemId: string,
   input: {
     version?: string
@@ -1446,19 +1442,23 @@ async function upsertPluginVersion(
   }
 ) {
   const versionValue = input.version || "1.0.0"
-  const upsertedVersion = await run<{ id: string }>(
-    `INSERT INTO catalog_versions (
-       catalog_item_id,
-       version,
-       status,
-       changelog,
-       metadata
-     )
-     VALUES ($1, $2, 'active', '', '{}'::jsonb)
-     ON CONFLICT (catalog_item_id, version) DO UPDATE
-       SET status = 'active'
-     RETURNING id`,
-    [itemId, versionValue]
+  const upsertedVersion = await runBuilder(
+    ex,
+    ex
+      .insertInto("catalog_versions")
+      .values({
+        catalog_item_id: itemId,
+        version: versionValue,
+        status: "active",
+        changelog: "",
+        metadata: sql`'{}'::jsonb`,
+      })
+      .onConflict((oc) =>
+        oc.columns(["catalog_item_id", "version"]).doUpdateSet({
+          status: "active",
+        })
+      )
+      .returning("id")
   )
   const versionId = upsertedVersion.rows[0]!.id
 
@@ -1480,117 +1480,109 @@ async function upsertPluginVersion(
     defaultReuseScope
   )
 
-  await run(
-    `INSERT INTO plugin_package_version_specs (
-       catalog_version_id,
-       transport,
-       entry_point,
-       tool_manifest,
-       config_schema,
-       default_config,
-       install_flow,
-       auth_bindings,
-       default_mount_scope,
-       default_reuse_scope,
-       default_conversation_type_mask,
-       supported_reuse_scopes,
-       requires_handshake,
-       metadata
-     )
-     VALUES (
-       $1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb,
-       $9, $10, $11, $12, $13, $14::jsonb
-     )
-     ON CONFLICT (catalog_version_id) DO UPDATE
-       SET transport = EXCLUDED.transport,
-           entry_point = EXCLUDED.entry_point,
-           tool_manifest = EXCLUDED.tool_manifest,
-           config_schema = EXCLUDED.config_schema,
-           default_config = EXCLUDED.default_config,
-           install_flow = EXCLUDED.install_flow,
-           auth_bindings = EXCLUDED.auth_bindings,
-           default_mount_scope = EXCLUDED.default_mount_scope,
-           default_reuse_scope = EXCLUDED.default_reuse_scope,
-           default_conversation_type_mask = EXCLUDED.default_conversation_type_mask,
-           supported_reuse_scopes = EXCLUDED.supported_reuse_scopes,
-           requires_handshake = EXCLUDED.requires_handshake,
-           metadata = EXCLUDED.metadata`,
-    [
-      versionId,
-      input.transport,
-      input.entryPoint || null,
-      JSON.stringify(input.toolsManifest || []),
-      JSON.stringify(input.configSchema || {}),
-      JSON.stringify(input.defaultConfig || {}),
-      JSON.stringify(input.installFlow || { steps: input.setupSteps || [] }),
-      JSON.stringify(input.authBindings || []),
-      internalAttachmentScope(input.defaultInstanceScope || "workspace"),
-      internalReuseScope(defaultReuseScope),
-      defaultConversationTypeMask,
-      supportedReuseScopes.map((scope) => internalReuseScope(scope)),
-      input.requiresHandshake ?? input.transport !== "builtin",
-      JSON.stringify(metadata),
-    ]
-  )
+  await ex
+    .insertInto("plugin_package_version_specs")
+    .values({
+      catalog_version_id: versionId,
+      transport:
+        input.transport as TableInsert<"plugin_package_version_specs">["transport"],
+      entry_point: input.entryPoint || null,
+      tool_manifest: sql`${JSON.stringify(input.toolsManifest || [])}::jsonb`,
+      config_schema: sql`${JSON.stringify(input.configSchema || {})}::jsonb`,
+      default_config: sql`${JSON.stringify(input.defaultConfig || {})}::jsonb`,
+      install_flow: sql`${JSON.stringify(
+        input.installFlow || { steps: input.setupSteps || [] }
+      )}::jsonb`,
+      auth_bindings: sql`${JSON.stringify(input.authBindings || [])}::jsonb`,
+      default_mount_scope: internalAttachmentScope(
+        input.defaultInstanceScope || "workspace"
+      ),
+      default_reuse_scope: internalReuseScope(defaultReuseScope),
+      default_conversation_type_mask: defaultConversationTypeMask,
+      supported_reuse_scopes: supportedReuseScopes.map((scope) =>
+        internalReuseScope(scope)
+      ),
+      requires_handshake: input.requiresHandshake ?? input.transport !== "builtin",
+      metadata: sql`${JSON.stringify(metadata)}::jsonb`,
+    })
+    .onConflict((oc) =>
+      oc.column("catalog_version_id").doUpdateSet({
+        transport: sql`excluded.transport`,
+        entry_point: sql`excluded.entry_point`,
+        tool_manifest: sql`excluded.tool_manifest`,
+        config_schema: sql`excluded.config_schema`,
+        default_config: sql`excluded.default_config`,
+        install_flow: sql`excluded.install_flow`,
+        auth_bindings: sql`excluded.auth_bindings`,
+        default_mount_scope: sql`excluded.default_mount_scope`,
+        default_reuse_scope: sql`excluded.default_reuse_scope`,
+        default_conversation_type_mask: sql`excluded.default_conversation_type_mask`,
+        supported_reuse_scopes: sql`excluded.supported_reuse_scopes`,
+        requires_handshake: sql`excluded.requires_handshake`,
+        metadata: sql`excluded.metadata`,
+      })
+    )
+    .execute()
 
-  await run(
-    `DELETE FROM plugin_version_runtime_permissions
-     WHERE catalog_version_id = $1`,
-    [versionId]
-  )
+  await ex
+    .deleteFrom("plugin_version_runtime_permissions")
+    .where("catalog_version_id", "=", versionId)
+    .execute()
 
   for (const permissionKey of input.authorization?.requiredPermissions || []) {
-    await run(
-      `INSERT INTO plugin_version_runtime_permissions (
-         catalog_version_id,
-         permission_key,
-         is_required,
-         rationale
-       )
-       VALUES ($1, $2, TRUE, '')`,
-      [versionId, permissionKey]
-    )
+    await ex
+      .insertInto("plugin_version_runtime_permissions")
+      .values({
+        catalog_version_id: versionId,
+        permission_key: permissionKey,
+        is_required: true,
+        rationale: "",
+      })
+      .execute()
   }
 
-  await run(
-    `UPDATE catalog_items
-     SET latest_version_id = $2,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [itemId, versionId]
-  )
+  await ex
+    .updateTable("catalog_items")
+    .set({
+      latest_version_id: versionId,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", itemId)
+    .execute()
 
   return versionId
 }
 
 async function assignPluginCategories(
-  run: QueryRunner,
+  ex: Executor,
   itemId: string,
   categorySlugs: string[]
 ) {
-  await run(
-    `DELETE FROM catalog_item_categories
-     WHERE catalog_item_id = $1`,
-    [itemId]
-  )
+  await ex
+    .deleteFrom("catalog_item_categories")
+    .where("catalog_item_id", "=", itemId)
+    .execute()
 
   if (categorySlugs.length === 0) return
 
-  const result = await run<{ id: string }>(
-    `SELECT id
-     FROM catalog_categories
-     WHERE item_kind = 'plugin_package'
-       AND slug = ANY($1::text[])`,
-    [categorySlugs]
+  const result = await runBuilder(
+    ex,
+    ex
+      .selectFrom("catalog_categories")
+      .select("id")
+      .where("item_kind", "=", "plugin_package")
+      .where("slug", "in", categorySlugs)
   )
 
   for (const row of result.rows) {
-    await run(
-      `INSERT INTO catalog_item_categories (catalog_item_id, category_id)
-       VALUES ($1, $2)
-       ON CONFLICT DO NOTHING`,
-      [itemId, row.id]
-    )
+    await ex
+      .insertInto("catalog_item_categories")
+      .values({
+        catalog_item_id: itemId,
+        category_id: row.id,
+      })
+      .onConflict((oc) => oc.doNothing())
+      .execute()
   }
 }
 
@@ -1717,11 +1709,10 @@ export async function createPlugin(data: {
     reason?: string
   }
 }) {
-  const itemId = await transaction(async (client) => {
-    const run = client.query.bind(client) as QueryRunner
-    const catalogItemId = await ensureCatalogItem(run, data)
-    await upsertPluginVersion(run, catalogItemId, data)
-    await assignPluginCategories(run, catalogItemId, data.categorySlugs || [])
+  const itemId = await withDbTransaction(async (client) => {
+    const catalogItemId = await ensureCatalogItem(client, data)
+    await upsertPluginVersion(client, catalogItemId, data)
+    await assignPluginCategories(client, catalogItemId, data.categorySlugs || [])
     return catalogItemId
   })
 
@@ -1853,7 +1844,7 @@ export async function installPluginUnified(data: {
 
   async function validateResolvedConfigForInstall(
     config: Record<string, unknown>,
-    run: QueryRunner
+    ex: Executor
   ) {
     if (plugin.entry_point !== "feishu/app") {
       return
@@ -1879,14 +1870,13 @@ export async function installPluginUnified(data: {
       throw new McpPluginError(400, "Feishu account authorization is required.")
     }
 
-    const connectionResult = await run<{
-      public_payload: unknown
-    }>(
-      `SELECT public_payload
-       FROM plugin_connections
-       WHERE id = $1
-       LIMIT 1`,
-      [rawConnection.connectionId]
+    const connectionResult = await runBuilder(
+      ex,
+      ex
+        .selectFrom("plugin_connections")
+        .select("public_payload")
+        .where("id", "=", rawConnection.connectionId)
+        .limit(1)
     )
     if (connectionResult.rows.length === 0) {
       throw new McpPluginError(400, "Feishu auth connection not found.")
@@ -1907,7 +1897,7 @@ export async function installPluginUnified(data: {
     }
   }
 
-  const result = await transaction(async (client) => {
+  const result = await withDbTransaction(async (client) => {
     const catalogRow = await getPluginCatalogRowByItemId(plugin.id)
     const catalogVersionId = catalogRow?.version_id
     if (!catalogVersionId) {
@@ -1927,7 +1917,7 @@ export async function installPluginUnified(data: {
         workspaceMemberId: target.workspaceMemberId,
       })
     )
-    const insertedInstallation = await executeTakeFirst<{ id: string }>(
+    const insertedInstallation = await takeFirstOn<{ id: string }>(
       client,
       db
         .insertInto("plugin_installations")
@@ -1959,18 +1949,15 @@ export async function installPluginUnified(data: {
       authBindings: plugin.auth_bindings || [],
       configData: resolvedConfigBase,
       authSessionIds: data.authSessionIds,
-      run: client.query.bind(client) as QueryRunner,
+      run: runnerFn(client),
     })
-    await validateResolvedConfigForInstall(
-      resolvedConfig,
-      client.query.bind(client) as QueryRunner
-    )
+    await validateResolvedConfigForInstall(resolvedConfig, client)
     const encryptedConfig = encryptSensitiveFields(
       resolvedConfig,
       plugin.config_schema || {}
     )
 
-    await executeCompiledQuery(
+    await runBuilder(
       client,
       db
         .updateTable("plugin_installations")
@@ -1997,7 +1984,7 @@ export async function installPluginUnified(data: {
       createdByWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
       reason: plugin.authorization?.reason || null,
     })
-    await executeCompiledQuery(
+    await runBuilder(
       client,
       db.insertInto("plugin_source_refs").values({
         installation_id: installationId,
@@ -2007,7 +1994,7 @@ export async function installPluginUnified(data: {
       })
     )
 
-    await executeCompiledQuery(
+    await runBuilder(
       client,
       db
         .updateTable("catalog_items")
@@ -2046,13 +2033,13 @@ export async function uninstallPluginUnified(installId: string) {
   if (!installation) {
     throw new McpPluginError(404, "Installation not found")
   }
-  await transaction(async (client) => {
+  await withDbTransaction(async (client) => {
     await hardDeleteBindingsForResourceOn(client, {
       resourceType: "plugin_installation",
       resourceId: installId,
     })
 
-    await executeCompiledQuery(
+    await runBuilder(
       client,
       db.deleteFrom("plugin_installations").where("id", "=", installId)
     )
@@ -2181,7 +2168,7 @@ export async function updateInstallation(
 
   async function validateResolvedConfigForUpdate(
     config: Record<string, unknown>,
-    run: QueryRunner
+    ex: Executor
   ) {
     if (plugin.entry_point !== "feishu/app") {
       return
@@ -2207,14 +2194,13 @@ export async function updateInstallation(
       throw new McpPluginError(400, "Feishu account authorization is required.")
     }
 
-    const connectionResult = await run<{
-      public_payload: unknown
-    }>(
-      `SELECT public_payload
-       FROM plugin_connections
-       WHERE id = $1
-       LIMIT 1`,
-      [rawConnection.connectionId]
+    const connectionResult = await runBuilder(
+      ex,
+      ex
+        .selectFrom("plugin_connections")
+        .select("public_payload")
+        .where("id", "=", rawConnection.connectionId)
+        .limit(1)
     )
     if (connectionResult.rows.length === 0) {
       throw new McpPluginError(400, "Feishu auth connection not found.")
@@ -2235,8 +2221,8 @@ export async function updateInstallation(
     }
   }
 
-  await transaction(async (client) => {
-    const run = client.query.bind(client) as QueryRunner
+  await withDbTransaction(async (client) => {
+    const run = runnerFn(client)
 
     const resolvedConfig =
       data.configData || data.authSessionIds
@@ -2256,7 +2242,7 @@ export async function updateInstallation(
         : mergedConfig
 
     if (data.configData || data.authSessionIds) {
-      await validateResolvedConfigForUpdate(resolvedConfig, run)
+      await validateResolvedConfigForUpdate(resolvedConfig, client)
     }
 
     if (data.configData || data.authSessionIds) {
@@ -2264,33 +2250,36 @@ export async function updateInstallation(
         resolvedConfig,
         plugin.config_schema || {}
       )
-      await run(
-        `UPDATE plugin_installations
-         SET config_data = $2::jsonb,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [installId, JSON.stringify(encryptedConfig)]
-      )
+      await client
+        .updateTable("plugin_installations")
+        .set({
+          config_data: sql`${JSON.stringify(encryptedConfig)}::jsonb`,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", installId)
+        .execute()
     }
 
     if (data.isEnabled !== undefined) {
-      await run(
-        `UPDATE plugin_installations
-         SET status = $2,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [installId, data.isEnabled ? "active" : "disabled"]
-      )
+      await client
+        .updateTable("plugin_installations")
+        .set({
+          status: data.isEnabled ? "active" : "disabled",
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", installId)
+        .execute()
     }
 
     if (data.lifecycleScope) {
-      await run(
-        `UPDATE plugin_installations
-         SET reuse_scope = $2,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [installId, internalReuseScope(nextLifecycleScope)]
-      )
+      await client
+        .updateTable("plugin_installations")
+        .set({
+          reuse_scope: internalReuseScope(nextLifecycleScope),
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", installId)
+        .execute()
     }
 
     if (data.attachmentTarget) {
@@ -2304,23 +2293,25 @@ export async function updateInstallation(
           workspaceMemberId: target.workspaceMemberId,
         })
       )
-      await run(
-        `UPDATE plugin_installations
-         SET attachment_subject_id = $2,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [installId, newSubjectId]
-      )
+      await client
+        .updateTable("plugin_installations")
+        .set({
+          attachment_subject_id: newSubjectId,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", installId)
+        .execute()
     }
 
     if (data.conversationTypeMaskOverride !== undefined) {
-      await run(
-        `UPDATE plugin_installations
-         SET conversation_type_mask_override = $2,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [installId, data.conversationTypeMaskOverride]
-      )
+      await client
+        .updateTable("plugin_installations")
+        .set({
+          conversation_type_mask_override: data.conversationTypeMaskOverride,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", installId)
+        .execute()
     }
   })
 
@@ -2467,7 +2458,7 @@ export async function grantPluginInstallationAccess(input: {
     )
   }
 
-  const result = await transaction(async (client) => {
+  const result = await withDbTransaction(async (client) => {
     const inserted = await insertAccessBindingReturningRowOn(client, {
       workspaceId: input.workspaceId,
       resourceType: "plugin_installation",

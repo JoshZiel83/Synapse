@@ -46,11 +46,12 @@ import {
   validateAutomationRuleCreatePayload,
 } from "@synapse/shared/automation"
 import { decrypt, encrypt } from "../../infrastructure/crypto/index.js"
-import { transaction } from "../../infrastructure/database/index.js"
+import { CompiledQuery, sql } from "kysely"
 import {
   db,
-  executeSql,
-  executeSqlOn,
+  runBuilder,
+  withDbTransaction,
+  type Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
   createConversationEvent,
@@ -311,22 +312,21 @@ type QueryRunner = {
   run: SqlRunner
 }
 
-type QueryClient = { query: (text: string, params?: any[]) => Promise<any> }
-type QueryRunnerLike = QueryRunner | QueryClient
-
-function resolveQueryRunner(client?: QueryRunnerLike): QueryRunner {
-  if (client && "run" in client) {
-    return client
+function runnerFor(executor: Executor): QueryRunner {
+  return {
+    run: <T = any>(text: string, params?: unknown[]) =>
+      executor.executeQuery<T>(
+        CompiledQuery.raw(text, params ? [...params] : [])
+      ) as Promise<{ rows: T[]; rowCount?: number | null }>,
   }
-  return client
-    ? {
-        run: <T = any>(text: string, params?: unknown[]) =>
-          executeSqlOn<T>(client, text, params),
-      }
-    : {
-        run: executeSql,
-      }
 }
+
+function resolveQueryRunner(executor?: Executor): QueryRunner {
+  return runnerFor(executor ?? db)
+}
+
+const runQuery: SqlRunner = (text, params) =>
+  resolveQueryRunner().run(text, params)
 
 function createAutomationValidationError(
   issues: { path: string; message: string }[]
@@ -1072,7 +1072,7 @@ async function loadAutomationTargets(
   if (ruleIds.length === 0) {
     return new Map<string, string[]>()
   }
-  const result = await executeSql<TargetParticipantRow>(
+  const result = await runQuery<TargetParticipantRow>(
     `SELECT rule_id, target_participant_id
      FROM ${tableName}
      WHERE rule_id = ANY($1)
@@ -1100,7 +1100,7 @@ async function loadAutomationRulesByIds(
     deliveriesResult,
     targetsByRule,
   ] = await Promise.all([
-    executeSql<AutomationRuleRow>(
+    runQuery<AutomationRuleRow>(
       `SELECT *
        FROM automation_rules
        WHERE workspace_id = $1
@@ -1108,7 +1108,7 @@ async function loadAutomationRulesByIds(
        ORDER BY created_at DESC`,
       [workspaceId, ruleIds]
     ),
-    executeSql<AutomationTriggerRow>(
+    runQuery<AutomationTriggerRow>(
       `SELECT at.*,
               aes.source_key AS event_source_key,
               aes.name AS event_source_name,
@@ -1132,13 +1132,13 @@ async function loadAutomationRulesByIds(
        WHERE at.rule_id = ANY($1)`,
       [ruleIds]
     ),
-    executeSql<AutomationPolicyRow>(
+    runQuery<AutomationPolicyRow>(
       `SELECT *
        FROM automation_policies
        WHERE rule_id = ANY($1)`,
       [ruleIds]
     ),
-    executeSql<AutomationDeliveryRow>(
+    runQuery<AutomationDeliveryRow>(
       `SELECT *
        FROM automation_deliveries
        WHERE rule_id = ANY($1)`,
@@ -1181,14 +1181,15 @@ async function validateAutomationEventSourceProvider(
     if (!normalizedRef) {
       throw new Error("webhook event sources require providerRef")
     }
-    const endpointResult = await executeSql<{ id: string }>(
-      `SELECT id
-       FROM automation_webhook_endpoints
-       WHERE id = $1
-         AND workspace_id = $2
-         AND status = 'active'
-       LIMIT 1`,
-      [normalizedRef, workspaceId]
+    const endpointResult = await runBuilder(
+      db,
+      db
+        .selectFrom("automation_webhook_endpoints")
+        .select("id")
+        .where("id", "=", normalizedRef)
+        .where("workspace_id", "=", workspaceId)
+        .where("status", "=", "active")
+        .limit(1)
     )
     if (!endpointResult.rows[0]) {
       throw new Error(`Webhook endpoint ${normalizedRef} not found or inactive`)
@@ -1238,20 +1239,20 @@ async function allocateAutomationEventSourceKey(params: {
       attempt === 0
         ? baseKey
         : `${baseKey}.${crypto.randomBytes(2).toString("hex")}`
-    const existing = await executeSql<{ id: string }>(
-      `SELECT id
-       FROM automation_event_sources
-       WHERE workspace_id = $1
-         AND provider_kind = $2
-         AND COALESCE(provider_ref, '') = COALESCE($3, '')
-         AND source_key = $4
-       LIMIT 1`,
-      [
-        params.workspaceId,
-        params.providerKind,
-        params.providerRef || null,
-        candidate,
-      ]
+    const existing = await runBuilder(
+      db,
+      db
+        .selectFrom("automation_event_sources")
+        .select("id")
+        .where("workspace_id", "=", params.workspaceId)
+        .where("provider_kind", "=", params.providerKind)
+        .where(
+          sql`COALESCE(provider_ref, '')`,
+          "=",
+          sql`COALESCE(${params.providerRef || null}, '')`
+        )
+        .where("source_key", "=", candidate)
+        .limit(1)
     )
     if (!existing.rows[0]) {
       return candidate
@@ -1267,7 +1268,7 @@ async function pauseAutomationRulesForEventSource(
   reason: string
 ) {
   const auditUserId = await resolveAutomationAuditUserId(operator)
-  const affected = await executeSql<{ id: string; workspace_id: string }>(
+  const affected = await runQuery<{ id: string; workspace_id: string }>(
     `UPDATE automation_rules ar
      SET status = 'paused',
          last_error_at = NOW(),
@@ -1283,20 +1284,21 @@ async function pauseAutomationRulesForEventSource(
   )
 
   for (const row of affected.rows) {
-    await executeSql(
-      `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-       VALUES ($1, $2, $3, 'automation_rule.pause', 'automation_rule', $4, $5)`,
-      [
-        row.workspace_id,
-        auditUserId,
-        operator.actorId || null,
-        row.id,
-        JSON.stringify({
+    await db
+      .insertInto("audit_logs")
+      .values({
+        workspace_id: row.workspace_id,
+        user_id: auditUserId,
+        actor_id: operator.actorId || null,
+        action: "automation_rule.pause",
+        resource_type: "automation_rule",
+        resource_id: row.id,
+        details: JSON.stringify({
           reason,
           eventSourceId,
         }),
-      ]
-    )
+      })
+      .execute()
   }
 }
 
@@ -1594,8 +1596,8 @@ export async function grantAutomationEventSourceAccess(input: {
     return mapAutomationEventSourceAccessGrant(existing)
   }
 
-  const inserted = await transaction(async (client) => {
-    const binding = await insertAccessBindingReturningRowOn(client, {
+  const inserted = await withDbTransaction(async (trx) => {
+    const binding = await insertAccessBindingReturningRowOn(trx, {
       workspaceId: input.workspaceId,
       resourceType: "automation_event_source",
       resourceId: input.eventSourceId,
@@ -1672,32 +1674,36 @@ async function pauseAutomationRule(params: {
   operator: AutomationOperatorInput
 }) {
   const auditUserId = await resolveAutomationAuditUserId(params.operator)
-  const updated = await executeSql<{ id: string }>(
-    `UPDATE automation_rules
-     SET status = 'paused',
-         last_error_at = NOW(),
-         last_error_message = $2,
-         updated_at = NOW()
-     WHERE id = $1
-       AND status = 'active'
-     RETURNING id`,
-    [params.ruleId, params.reason]
+  const updated = await runBuilder(
+    db,
+    db
+      .updateTable("automation_rules")
+      .set({
+        status: "paused",
+        last_error_at: sql`NOW()`,
+        last_error_message: params.reason,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", params.ruleId)
+      .where("status", "=", "active")
+      .returning("id")
   )
   if (!updated.rows[0]) {
     return
   }
 
-  await executeSql(
-    `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-     VALUES ($1, $2, $3, 'automation_rule.pause', 'automation_rule', $4, $5)`,
-    [
-      params.workspaceId,
-      auditUserId,
-      params.operator.actorId || null,
-      params.ruleId,
-      JSON.stringify({ reason: params.reason }),
-    ]
-  )
+  await db
+    .insertInto("audit_logs")
+    .values({
+      workspace_id: params.workspaceId,
+      user_id: auditUserId,
+      actor_id: params.operator.actorId || null,
+      action: "automation_rule.pause",
+      resource_type: "automation_rule",
+      resource_id: params.ruleId,
+      details: JSON.stringify({ reason: params.reason }),
+    })
+    .execute()
 }
 
 async function pauseAutomationRulesMissingEventSourceAccess(
@@ -1705,7 +1711,7 @@ async function pauseAutomationRulesMissingEventSourceAccess(
   operator: AutomationOperatorInput,
   reason: string
 ) {
-  const result = await executeSql<AutomationRuleRow>(
+  const result = await runQuery<AutomationRuleRow>(
     `SELECT ar.*
      FROM automation_rules ar
      JOIN automation_triggers at
@@ -1773,7 +1779,7 @@ export async function getAutomationEventSource(
   workspaceId: string,
   eventSourceId: string
 ) {
-  const result = await executeSql<AutomationEventSourceRow>(
+  const result = await runQuery<AutomationEventSourceRow>(
     `SELECT ${automationEventSourceSelectClause("aes", "aib")}
      FROM automation_event_sources aes
      ${automationEventSourceJoinClause("aes", "aib")}
@@ -1815,7 +1821,7 @@ export async function listAutomationEventSources(
     where += ` AND aes.source_key = $${values.length}`
   }
 
-  const result = await executeSql<AutomationEventSourceRow>(
+  const result = await runQuery<AutomationEventSourceRow>(
     `SELECT ${automationEventSourceSelectClause("aes", "aib")}
      FROM automation_event_sources aes
      ${automationEventSourceJoinClause("aes", "aib")}
@@ -1851,7 +1857,7 @@ export async function listAutomationEventSources(
 }
 
 async function loadAutomationWebhookEndpointSecret(endpointId: string) {
-  const result = await executeSql<AutomationWebhookEndpointRow>(
+  const result = await runQuery<AutomationWebhookEndpointRow>(
     `SELECT *
      FROM automation_webhook_endpoints
      WHERE id = $1
@@ -1872,17 +1878,18 @@ async function updateWebhookEndpointStatus(
   endpointId: string,
   status: AutomationWebhookEndpoint["status"]
 ) {
-  await executeSql(
-    `UPDATE automation_webhook_endpoints
-     SET status = $2,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [endpointId, status]
-  )
+  await db
+    .updateTable("automation_webhook_endpoints")
+    .set({
+      status,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", endpointId)
+    .execute()
 }
 
 async function getAutomationIntegrationBinding(bindingId: string) {
-  const result = await executeSql<AutomationIntegrationBindingRow>(
+  const result = await runQuery<AutomationIntegrationBindingRow>(
     `SELECT *
      FROM automation_integration_bindings
      WHERE id = $1
@@ -1931,7 +1938,7 @@ async function ensureAutomationIntegrationBinding(params: {
   const ingressKind = params.integration.ingressKind || "webhook"
   const targetId = params.integration.targetId.trim()
   const targetLabel = params.integration.targetLabel?.trim() || targetId
-  const existingResult = await executeSql<AutomationIntegrationBindingRow>(
+  const existingResult = await runQuery<AutomationIntegrationBindingRow>(
     `SELECT *
      FROM automation_integration_bindings
      WHERE workspace_id = $1
@@ -1953,13 +1960,14 @@ async function ensureAutomationIntegrationBinding(params: {
   const existing = existingResult.rows[0]
   if (existing) {
     if (existing.target_label !== targetLabel) {
-      await executeSql(
-        `UPDATE automation_integration_bindings
-         SET target_label = $2,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [existing.id, targetLabel]
-      )
+      await db
+        .updateTable("automation_integration_bindings")
+        .set({
+          target_label: targetLabel,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", existing.id)
+        .execute()
       return getAutomationIntegrationBinding(existing.id)
     }
     return existing
@@ -1971,68 +1979,71 @@ async function ensureAutomationIntegrationBinding(params: {
     ingressKind === "webhook" ? crypto.randomBytes(18).toString("hex") : null
   const secret = ingressKind === "webhook" ? generateSecret() : null
 
-  await transaction(async (client) => {
+  await withDbTransaction(async (trx) => {
     if (endpointId && pathToken && secret) {
-      await executeSqlOn(
-        client,
-        `INSERT INTO automation_webhook_endpoints
-           (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by_workspace_member_id, created_at, updated_at)
-         VALUES ($1, $2, $3, 'disabled', $4, $5, $6, $7, $8, NOW(), NOW())`,
-        [
-          endpointId,
-          params.workspaceId,
-          integrationEndpointName(params.integration.provider, targetLabel),
-          pathToken,
-          encrypt(secret),
-          secretHint(secret),
-          JSON.stringify({
+      await trx
+        .insertInto("automation_webhook_endpoints")
+        .values({
+          id: endpointId,
+          workspace_id: params.workspaceId,
+          name: integrationEndpointName(
+            params.integration.provider,
+            targetLabel
+          ),
+          status: "disabled",
+          path_token: pathToken,
+          secret_ciphertext: encrypt(secret),
+          secret_hint: secretHint(secret),
+          metadata: JSON.stringify({
             managedBy: "integration_binding",
             integrationProvider: params.integration.provider,
             integrationTargetKind: params.integration.targetKind,
             integrationTargetId: targetId,
             integrationTargetLabel: targetLabel,
           }),
-          params.creator.workspaceMemberId || null,
-        ]
-      )
+          created_by_workspace_member_id: params.creator.workspaceMemberId || null,
+          created_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .execute()
     }
 
-    await executeSqlOn(
-      client,
-      `INSERT INTO automation_integration_bindings
-         (id, workspace_id, installation_id, provider, ingress_kind, target_kind, target_id, target_label,
-          webhook_endpoint_id, external_subscription_id, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, NOW(), NOW())`,
-      [
-        bindingId,
-        params.workspaceId,
-        params.installation.id,
-        params.integration.provider,
-        ingressKind,
-        params.integration.targetKind,
-        targetId,
-        targetLabel,
-        endpointId,
-        JSON.stringify({
+    await trx
+      .insertInto("automation_integration_bindings")
+      .values({
+        id: bindingId,
+        workspace_id: params.workspaceId,
+        installation_id: params.installation.id,
+        provider: params.integration.provider,
+        ingress_kind: ingressKind,
+        target_kind: params.integration.targetKind,
+        target_id: targetId,
+        target_label: targetLabel,
+        webhook_endpoint_id: endpointId,
+        external_subscription_id: null,
+        metadata: JSON.stringify({
           integrationProvider: params.integration.provider,
           integrationTargetKind: params.integration.targetKind,
         }),
-      ]
-    )
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .execute()
   })
 
   return getAutomationIntegrationBinding(bindingId)
 }
 
 async function listActiveIntegrationSourceKeysForBinding(bindingId: string) {
-  const result = await executeSql<{ source_key: string }>(
-    `SELECT source_key
-     FROM automation_event_sources
-     WHERE provider_kind = 'integration'
-       AND integration_binding_id = $1
-       AND status IN ('active', 'deprecated')
-     ORDER BY source_key ASC`,
-    [bindingId]
+  const result = await runBuilder(
+    db,
+    db
+      .selectFrom("automation_event_sources")
+      .select("source_key")
+      .where("provider_kind", "=", "integration")
+      .where("integration_binding_id", "=", bindingId)
+      .where("status", "in", ["active", "deprecated"])
+      .orderBy("source_key", "asc")
   )
   return Array.from(
     new Set(result.rows.map((row) => row.source_key).filter(Boolean))
@@ -2069,13 +2080,14 @@ async function reconcileIntegrationBindingWebhook(
         integration,
       })
     }
-    await executeSql(
-      `UPDATE automation_integration_bindings
-       SET external_subscription_id = NULL,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [binding.id]
-    )
+    await db
+      .updateTable("automation_integration_bindings")
+      .set({
+        external_subscription_id: null,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", binding.id)
+      .execute()
     await updateWebhookEndpointStatus(endpoint.id, "disabled")
     return getAutomationIntegrationBinding(binding.id)
   }
@@ -2133,13 +2145,14 @@ async function reconcileIntegrationBindingWebhook(
     })
   }
 
-  await executeSql(
-    `UPDATE automation_integration_bindings
-     SET external_subscription_id = $2,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [binding.id, externalSubscriptionId]
-  )
+  await db
+    .updateTable("automation_integration_bindings")
+    .set({
+      external_subscription_id: externalSubscriptionId,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", binding.id)
+    .execute()
   await updateWebhookEndpointStatus(endpoint.id, "active")
   return getAutomationIntegrationBinding(binding.id)
 }
@@ -2189,48 +2202,45 @@ async function createIntegrationAutomationEventSource(
     targetLabel,
   })
 
-  const existingResult = await executeSql<AutomationEventSourceRow>(
-    `SELECT *
-     FROM automation_event_sources
-     WHERE workspace_id = $1
-       AND provider_kind = 'integration'
-       AND integration_binding_id = $2
-       AND source_key = $3
-     LIMIT 1`,
-    [workspaceId, binding.id, normalizedSourceKey]
+  const existingResult = await runBuilder(
+    db,
+    db
+      .selectFrom("automation_event_sources")
+      .select(["id", "status", "metadata"])
+      .where("workspace_id", "=", workspaceId)
+      .where("provider_kind", "=", "integration")
+      .where("integration_binding_id", "=", binding.id)
+      .where("source_key", "=", normalizedSourceKey)
+      .limit(1)
   )
   const existing = existingResult.rows[0]
 
   if (existing) {
     const nextStatus = input.status || "active"
-    await executeSql(
-      `UPDATE automation_event_sources
-       SET name = $3,
-           description = $4,
-           recommended_usage = $5,
-           payload_schema = $6,
-           example_payload = $7,
-           status = $8,
-           metadata = $9,
-           updated_at = NOW()
-       WHERE workspace_id = $1
-         AND id = $2`,
-      [
-        workspaceId,
-        existing.id,
-        input.name?.trim() || template.name,
-        input.description?.trim() || template.description,
-        input.recommendedUsage?.trim() || template.recommendedUsage || "",
-        JSON.stringify(input.payloadSchema || template.payloadSchema || {}),
-        JSON.stringify(input.examplePayload || template.examplePayload || {}),
-        input.status || "active",
-        JSON.stringify({
+    await db
+      .updateTable("automation_event_sources")
+      .set({
+        name: input.name?.trim() || template.name,
+        description: input.description?.trim() || template.description,
+        recommended_usage:
+          input.recommendedUsage?.trim() || template.recommendedUsage || "",
+        payload_schema: JSON.stringify(
+          input.payloadSchema || template.payloadSchema || {}
+        ),
+        example_payload: JSON.stringify(
+          input.examplePayload || template.examplePayload || {}
+        ),
+        status: input.status || "active",
+        metadata: JSON.stringify({
           ...parseJsonObject(existing.metadata),
           ...(template.metadata || {}),
           ...(input.metadata || {}),
         }),
-      ]
-    )
+        updated_at: sql`NOW()`,
+      })
+      .where("workspace_id", "=", workspaceId)
+      .where("id", "=", existing.id)
+      .execute()
 
     if (
       binding.ingress_kind === "webhook" &&
@@ -2242,15 +2252,16 @@ async function createIntegrationAutomationEventSource(
       await reconcileIntegrationBindingWebhook(binding.id)
     }
 
-    await executeSql(
-      `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-       VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
-      [
-        workspaceId,
-        auditUserId,
-        creator.actorId || null,
-        existing.id,
-        JSON.stringify({
+    await db
+      .insertInto("audit_logs")
+      .values({
+        workspace_id: workspaceId,
+        user_id: auditUserId,
+        actor_id: creator.actorId || null,
+        action: "automation_event_source.update",
+        resource_type: "automation_event_source",
+        resource_id: existing.id,
+        details: JSON.stringify({
           providerKind: "integration",
           sourceKey: normalizedSourceKey,
           integration: {
@@ -2265,8 +2276,8 @@ async function createIntegrationAutomationEventSource(
           reusedExisting: true,
           status: nextStatus,
         }),
-      ]
-    )
+      })
+      .execute()
     const updated = await getAutomationEventSource(workspaceId, existing.id)
     if (!updated) {
       throw new Error(
@@ -2277,46 +2288,51 @@ async function createIntegrationAutomationEventSource(
   }
 
   const sourceId = uuidv4()
-  await transaction(async (client) => {
-    await executeSqlOn(
-      client,
-      `INSERT INTO automation_event_sources
-         (id, workspace_id, provider_kind, provider_ref, webhook_endpoint_id, integration_binding_id, source_key,
-          name, description, recommended_usage, payload_schema, example_payload, status, created_by_kind,
-          created_by_workspace_member_id, created_by_actor_id, created_by_session_id, metadata, created_at, updated_at)
-       VALUES ($1, $2, 'integration', NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())`,
-      [
-        sourceId,
-        workspaceId,
-        binding.id,
-        normalizedSourceKey,
-        input.name?.trim() || template.name,
-        input.description?.trim() || template.description,
-        input.recommendedUsage?.trim() || template.recommendedUsage || "",
-        JSON.stringify(input.payloadSchema || template.payloadSchema || {}),
-        JSON.stringify(input.examplePayload || template.examplePayload || {}),
-        initialStatus,
-        creator.kind,
-        creator.workspaceMemberId || null,
-        creator.actorId || null,
-        creator.sessionId || null,
-        JSON.stringify({
+  await withDbTransaction(async (trx) => {
+    await trx
+      .insertInto("automation_event_sources")
+      .values({
+        id: sourceId,
+        workspace_id: workspaceId,
+        provider_kind: "integration",
+        provider_ref: null,
+        webhook_endpoint_id: null,
+        integration_binding_id: binding.id,
+        source_key: normalizedSourceKey,
+        name: input.name?.trim() || template.name,
+        description: input.description?.trim() || template.description,
+        recommended_usage:
+          input.recommendedUsage?.trim() || template.recommendedUsage || "",
+        payload_schema: JSON.stringify(
+          input.payloadSchema || template.payloadSchema || {}
+        ),
+        example_payload: JSON.stringify(
+          input.examplePayload || template.examplePayload || {}
+        ),
+        status: initialStatus,
+        created_by_kind: creator.kind,
+        created_by_workspace_member_id: creator.workspaceMemberId || null,
+        created_by_actor_id: creator.actorId || null,
+        created_by_session_id: creator.sessionId || null,
+        metadata: JSON.stringify({
           ...(template.metadata || {}),
           ...(input.metadata || {}),
         }),
-      ]
-    )
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .execute()
 
-    await executeSqlOn(
-      client,
-      `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-       VALUES ($1, $2, $3, 'automation_event_source.create', 'automation_event_source', $4, $5)`,
-      [
-        workspaceId,
-        auditUserId,
-        creator.actorId || null,
-        sourceId,
-        JSON.stringify({
+    await trx
+      .insertInto("audit_logs")
+      .values({
+        workspace_id: workspaceId,
+        user_id: auditUserId,
+        actor_id: creator.actorId || null,
+        action: "automation_event_source.create",
+        resource_type: "automation_event_source",
+        resource_id: sourceId,
+        details: JSON.stringify({
           providerKind: "integration",
           sourceKey: normalizedSourceKey,
           integration: {
@@ -2330,8 +2346,8 @@ async function createIntegrationAutomationEventSource(
           },
           status: initialStatus,
         }),
-      ]
-    )
+      })
+      .execute()
   })
 
   try {
@@ -2343,12 +2359,12 @@ async function createIntegrationAutomationEventSource(
       await reconcileIntegrationBindingWebhook(binding.id)
     }
   } catch (error) {
-    await executeSql(
-      `DELETE FROM automation_event_sources
-       WHERE workspace_id = $1
-         AND id = $2`,
-      [workspaceId, sourceId]
-    ).catch(() => undefined)
+    await db
+      .deleteFrom("automation_event_sources")
+      .where("workspace_id", "=", workspaceId)
+      .where("id", "=", sourceId)
+      .execute()
+      .catch(() => undefined)
     throw error
   }
 
@@ -2385,62 +2401,52 @@ export async function createAutomationEventSource(
     name: input.name,
     explicitKey: input.sourceKey,
   })
-  const existingResult = await executeSql<AutomationEventSourceRow>(
-    `SELECT *
-     FROM automation_event_sources
-     WHERE workspace_id = $1
-       AND provider_kind = $2
-       AND COALESCE(provider_ref, '') = COALESCE($3, '')
-       AND source_key = $4
-     LIMIT 1`,
-    [
-      workspaceId,
-      input.providerKind,
-      providerBinding.providerRef,
-      normalizedSourceKey,
-    ]
+  const existingResult = await runBuilder(
+    db,
+    db
+      .selectFrom("automation_event_sources")
+      .select(["id", "metadata"])
+      .where("workspace_id", "=", workspaceId)
+      .where("provider_kind", "=", input.providerKind)
+      .where(
+        sql`COALESCE(provider_ref, '')`,
+        "=",
+        sql`COALESCE(${providerBinding.providerRef}, '')`
+      )
+      .where("source_key", "=", normalizedSourceKey)
+      .limit(1)
   )
   const existing = existingResult.rows[0]
 
   if (existing) {
-    await executeSql(
-      `UPDATE automation_event_sources
-       SET provider_ref = $3,
-           webhook_endpoint_id = $4,
-           name = $5,
-           description = $6,
-           recommended_usage = $7,
-           payload_schema = $8,
-           example_payload = $9,
-           status = $10,
-           metadata = $11,
-           updated_at = NOW()
-       WHERE workspace_id = $1
-         AND id = $2`,
-      [
-        workspaceId,
-        existing.id,
-        providerBinding.providerRef,
-        providerBinding.webhookEndpointId,
-        input.name.trim(),
-        input.description.trim(),
-        input.recommendedUsage?.trim() || "",
-        JSON.stringify(input.payloadSchema || {}),
-        JSON.stringify(input.examplePayload || {}),
-        input.status || "active",
-        JSON.stringify(input.metadata || existing.metadata || {}),
-      ]
-    )
+    await db
+      .updateTable("automation_event_sources")
+      .set({
+        provider_ref: providerBinding.providerRef,
+        webhook_endpoint_id: providerBinding.webhookEndpointId,
+        name: input.name.trim(),
+        description: input.description.trim(),
+        recommended_usage: input.recommendedUsage?.trim() || "",
+        payload_schema: JSON.stringify(input.payloadSchema || {}),
+        example_payload: JSON.stringify(input.examplePayload || {}),
+        status: input.status || "active",
+        metadata: JSON.stringify(input.metadata || existing.metadata || {}),
+        updated_at: sql`NOW()`,
+      })
+      .where("workspace_id", "=", workspaceId)
+      .where("id", "=", existing.id)
+      .execute()
 
-    await executeSql(
-      `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-       VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
-      [
-        workspaceId,
-        auditUserId,
-        creator.actorId || null,
-        existing.id,
-        JSON.stringify({
+    await db
+      .insertInto("audit_logs")
+      .values({
+        workspace_id: workspaceId,
+        user_id: auditUserId,
+        actor_id: creator.actorId || null,
+        action: "automation_event_source.update",
+        resource_type: "automation_event_source",
+        resource_id: existing.id,
+        details: JSON.stringify({
           providerKind: input.providerKind,
           providerRef: providerBinding.providerRef,
           sourceKey: normalizedSourceKey,
@@ -2448,8 +2454,8 @@ export async function createAutomationEventSource(
           status: input.status || "active",
           reusedExisting: true,
         }),
-      ]
-    )
+      })
+      .execute()
 
     const updated = await getAutomationEventSource(workspaceId, existing.id)
     if (!updated) {
@@ -2462,50 +2468,49 @@ export async function createAutomationEventSource(
 
   const sourceId = uuidv4()
 
-  await executeSql(
-    `INSERT INTO automation_event_sources
-       (id, workspace_id, provider_kind, provider_ref, webhook_endpoint_id, source_key, name, description, recommended_usage,
-        payload_schema, example_payload, status, created_by_kind, created_by_workspace_member_id, created_by_actor_id,
-        created_by_session_id, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())`,
-    [
-      sourceId,
-      workspaceId,
-      input.providerKind,
-      providerBinding.providerRef,
-      providerBinding.webhookEndpointId,
-      normalizedSourceKey,
-      input.name.trim(),
-      input.description.trim(),
-      input.recommendedUsage?.trim() || "",
-      JSON.stringify(input.payloadSchema || {}),
-      JSON.stringify(input.examplePayload || {}),
-      input.status || "active",
-      creator.kind,
-      creator.workspaceMemberId || null,
-      creator.actorId || null,
-      creator.sessionId || null,
-      JSON.stringify(input.metadata || {}),
-    ]
-  )
+  await db
+    .insertInto("automation_event_sources")
+    .values({
+      id: sourceId,
+      workspace_id: workspaceId,
+      provider_kind: input.providerKind,
+      provider_ref: providerBinding.providerRef,
+      webhook_endpoint_id: providerBinding.webhookEndpointId,
+      source_key: normalizedSourceKey,
+      name: input.name.trim(),
+      description: input.description.trim(),
+      recommended_usage: input.recommendedUsage?.trim() || "",
+      payload_schema: JSON.stringify(input.payloadSchema || {}),
+      example_payload: JSON.stringify(input.examplePayload || {}),
+      status: input.status || "active",
+      created_by_kind: creator.kind,
+      created_by_workspace_member_id: creator.workspaceMemberId || null,
+      created_by_actor_id: creator.actorId || null,
+      created_by_session_id: creator.sessionId || null,
+      metadata: JSON.stringify(input.metadata || {}),
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .execute()
 
-  await executeSql(
-    `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-     VALUES ($1, $2, $3, 'automation_event_source.create', 'automation_event_source', $4, $5)`,
-    [
-      workspaceId,
-      auditUserId,
-      creator.actorId || null,
-      sourceId,
-      JSON.stringify({
+  await db
+    .insertInto("audit_logs")
+    .values({
+      workspace_id: workspaceId,
+      user_id: auditUserId,
+      actor_id: creator.actorId || null,
+      action: "automation_event_source.create",
+      resource_type: "automation_event_source",
+      resource_id: sourceId,
+      details: JSON.stringify({
         providerKind: input.providerKind,
         providerRef: providerBinding.providerRef,
         sourceKey: normalizedSourceKey,
         recommendedUsage: input.recommendedUsage?.trim() || "",
         status: input.status || "active",
       }),
-    ]
-  )
+    })
+    .execute()
 
   const created = await getAutomationEventSource(workspaceId, sourceId)
   if (!created) {
@@ -2550,52 +2555,41 @@ export async function updateAutomationEventSource(
         )
   const nextStatus = input.status || existing.status
 
-  await executeSql(
-    `UPDATE automation_event_sources
-     SET provider_ref = $3,
-         webhook_endpoint_id = $4,
-         integration_binding_id = $5,
-         source_key = $6,
-         name = $7,
-         description = $8,
-         recommended_usage = $9,
-         payload_schema = $10,
-         example_payload = $11,
-         status = $12,
-         metadata = $13,
-         updated_at = NOW()
-     WHERE workspace_id = $1
-       AND id = $2`,
-    [
-      workspaceId,
-      eventSourceId,
-      providerBinding.providerRef,
-      providerBinding.webhookEndpointId,
-      existing.integration?.bindingId || null,
-      existing.sourceKey,
-      input.name?.trim() || existing.name,
-      input.description !== undefined
-        ? input.description.trim()
-        : existing.description,
-      input.recommendedUsage !== undefined
-        ? input.recommendedUsage.trim()
-        : existing.recommendedUsage || "",
-      JSON.stringify(
+  await db
+    .updateTable("automation_event_sources")
+    .set({
+      provider_ref: providerBinding.providerRef,
+      webhook_endpoint_id: providerBinding.webhookEndpointId,
+      integration_binding_id: existing.integration?.bindingId || null,
+      source_key: existing.sourceKey,
+      name: input.name?.trim() || existing.name,
+      description:
+        input.description !== undefined
+          ? input.description.trim()
+          : existing.description,
+      recommended_usage:
+        input.recommendedUsage !== undefined
+          ? input.recommendedUsage.trim()
+          : existing.recommendedUsage || "",
+      payload_schema: JSON.stringify(
         input.payloadSchema !== undefined
           ? input.payloadSchema
           : existing.payloadSchema
       ),
-      JSON.stringify(
+      example_payload: JSON.stringify(
         input.examplePayload !== undefined
           ? input.examplePayload
           : existing.examplePayload
       ),
-      nextStatus,
-      JSON.stringify(
+      status: nextStatus,
+      metadata: JSON.stringify(
         input.metadata !== undefined ? input.metadata : existing.metadata
       ),
-    ]
-  )
+      updated_at: sql`NOW()`,
+    })
+    .where("workspace_id", "=", workspaceId)
+    .where("id", "=", eventSourceId)
+    .execute()
 
   const integrationStatusChanged =
     existing.providerKind === "integration" &&
@@ -2622,15 +2616,16 @@ export async function updateAutomationEventSource(
     )
   }
 
-  await executeSql(
-    `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-     VALUES ($1, $2, $3, 'automation_event_source.update', 'automation_event_source', $4, $5)`,
-    [
-      workspaceId,
-      auditUserId,
-      operator.actorId || null,
-      eventSourceId,
-      JSON.stringify({
+  await db
+    .insertInto("audit_logs")
+    .values({
+      workspace_id: workspaceId,
+      user_id: auditUserId,
+      actor_id: operator.actorId || null,
+      action: "automation_event_source.update",
+      resource_type: "automation_event_source",
+      resource_id: eventSourceId,
+      details: JSON.stringify({
         status: nextStatus,
         providerRef: providerBinding.providerRef,
         sourceKey: existing.sourceKey,
@@ -2639,8 +2634,8 @@ export async function updateAutomationEventSource(
             ? input.recommendedUsage.trim()
             : existing.recommendedUsage || "",
       }),
-    ]
-  )
+    })
+    .execute()
 
   let updated = await getAutomationEventSource(workspaceId, eventSourceId)
   if (!updated) {
@@ -2662,14 +2657,15 @@ export async function archiveAutomationEventSource(
     throw new Error("Automation event source not found")
   }
 
-  await executeSql(
-    `UPDATE automation_event_sources
-     SET status = 'archived',
-         updated_at = NOW()
-    WHERE workspace_id = $1
-      AND id = $2`,
-    [workspaceId, eventSourceId]
-  )
+  await db
+    .updateTable("automation_event_sources")
+    .set({
+      status: "archived",
+      updated_at: sql`NOW()`,
+    })
+    .where("workspace_id", "=", workspaceId)
+    .where("id", "=", eventSourceId)
+    .execute()
 
   if (
     existing.providerKind === "integration" &&
@@ -2685,24 +2681,25 @@ export async function archiveAutomationEventSource(
     `Event source ${eventSourceId} was archived`
   )
 
-  await executeSql(
-    `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-     VALUES ($1, $2, $3, 'automation_event_source.archive', 'automation_event_source', $4, $5)`,
-    [
-      workspaceId,
-      auditUserId,
-      operator.actorId || null,
-      eventSourceId,
-      JSON.stringify({ archived: true }),
-    ]
-  )
+  await db
+    .insertInto("audit_logs")
+    .values({
+      workspace_id: workspaceId,
+      user_id: auditUserId,
+      actor_id: operator.actorId || null,
+      action: "automation_event_source.archive",
+      resource_type: "automation_event_source",
+      resource_id: eventSourceId,
+      details: JSON.stringify({ archived: true }),
+    })
+    .execute()
 }
 
 async function getAutomationEventSourceByWebhookPathToken(
   pathToken: string,
   sourceKey: string
 ) {
-  const result = await executeSql<
+  const result = await runQuery<
     AutomationEventSourceRow & {
       endpoint_secret_ciphertext: string
       endpoint_name: string
@@ -2730,7 +2727,7 @@ async function getAutomationEventSourceByWebhookPathToken(
 async function listIntegrationEventSourcesByWebhookPathToken(
   pathToken: string
 ) {
-  const result = await executeSql<
+  const result = await runQuery<
     AutomationEventSourceRow & {
       endpoint_secret_ciphertext: string
       endpoint_name: string
@@ -2758,17 +2755,16 @@ async function listIntegrationEventSourcesByWebhookPathToken(
 }
 
 async function persistAutomationTargets(
-  client: { query: (text: string, params?: any[]) => Promise<any> },
+  executor: Executor,
   tableName: "automation_delivery_targets",
   ruleId: string,
   targetParticipantIds: string[]
 ) {
-  await executeSqlOn(client, `DELETE FROM ${tableName} WHERE rule_id = $1`, [
+  await runnerFor(executor).run(`DELETE FROM ${tableName} WHERE rule_id = $1`, [
     ruleId,
   ])
   for (const targetParticipantId of targetParticipantIds) {
-    await executeSqlOn(
-      client,
+    await runnerFor(executor).run(
       `INSERT INTO ${tableName} (id, rule_id, target_participant_id, created_at)
        VALUES ($1, $2, $3, NOW())`,
       [uuidv4(), ruleId, targetParticipantId]
@@ -2777,20 +2773,21 @@ async function persistAutomationTargets(
 }
 
 async function updateRuleError(ruleId: string, errorMessage: string | null) {
-  await executeSql(
-    `UPDATE automation_rules
-     SET last_error_at = $2,
-         last_error_message = $3,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [ruleId, errorMessage ? nowISO() : null, errorMessage]
-  )
+  await db
+    .updateTable("automation_rules")
+    .set({
+      last_error_at: errorMessage ? nowISO() : null,
+      last_error_message: errorMessage,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", ruleId)
+    .execute()
 }
 
 async function expireAutomationRules(params: {
   referenceTime?: string
   workspaceId?: string
-  client?: QueryRunnerLike
+  client?: Executor
 }) {
   const runner = resolveQueryRunner(params.client)
   const referenceTime = params.referenceTime || nowISO()
@@ -2839,7 +2836,7 @@ async function expireAutomationRules(params: {
 
 async function pauseAutomationRulesForInactiveCreators(params: {
   workspaceId?: string
-  client?: QueryRunnerLike
+  client?: Executor
 }) {
   const runner = resolveQueryRunner(params.client)
   const result = await runner.run<{ id: string; workspace_id: string }>(
@@ -2877,7 +2874,7 @@ async function pauseAutomationRulesForInactiveCreators(params: {
 async function syncAutomationRuleLiveness(params: {
   referenceTime?: string
   workspaceId?: string
-  client?: QueryRunnerLike
+  client?: Executor
 }) {
   await expireAutomationRules(params)
   await pauseAutomationRulesForInactiveCreators({
@@ -2893,16 +2890,19 @@ async function applyAutomationPolicyAfterTrigger(params: {
   executionId: string
   completeNow?: boolean
   completionReason: "max_trigger_count" | "schedule_exhausted"
-  client?: QueryRunnerLike
+  client?: Executor
 }) {
-  const runner = resolveQueryRunner(params.client)
-  const policyResult = await runner.run<AutomationPolicyRow>(
-    `UPDATE automation_policies
-     SET trigger_count = trigger_count + 1,
-         updated_at = NOW()
-     WHERE rule_id = $1
-     RETURNING *`,
-    [params.ruleId]
+  const executor = params.client ?? db
+  const policyResult = await runBuilder(
+    executor,
+    executor
+      .updateTable("automation_policies")
+      .set({
+        trigger_count: sql`${sql.ref("trigger_count")} + 1`,
+        updated_at: sql`NOW()`,
+      })
+      .where("rule_id", "=", params.ruleId)
+      .returningAll()
   )
   const policy = policyResult.rows[0]
   if (!policy) {
@@ -2917,27 +2917,30 @@ async function applyAutomationPolicyAfterTrigger(params: {
     return
   }
 
-  await runner.run(
-    `UPDATE automation_rules
-     SET status = $2,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [params.ruleId, policy.completion_status]
-  )
-  await runner.run(
-    `UPDATE automation_policies
-     SET completed_at = COALESCE(completed_at, NOW()),
-         updated_at = NOW()
-     WHERE rule_id = $1`,
-    [params.ruleId]
-  )
-  await runner.run(
-    `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-     VALUES ($1, 'automation_rule.complete', 'automation_rule', $2, $3)`,
-    [
-      params.workspaceId,
-      params.ruleId,
-      JSON.stringify({
+  await executor
+    .updateTable("automation_rules")
+    .set({
+      status: policy.completion_status,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", params.ruleId)
+    .execute()
+  await executor
+    .updateTable("automation_policies")
+    .set({
+      completed_at: sql`COALESCE(${sql.ref("completed_at")}, NOW())`,
+      updated_at: sql`NOW()`,
+    })
+    .where("rule_id", "=", params.ruleId)
+    .execute()
+  await executor
+    .insertInto("audit_logs")
+    .values({
+      workspace_id: params.workspaceId,
+      action: "automation_rule.complete",
+      resource_type: "automation_rule",
+      resource_id: params.ruleId,
+      details: JSON.stringify({
         executionId: params.executionId,
         occurrenceId: params.occurrenceId,
         triggerCount: policy.trigger_count,
@@ -2947,28 +2950,30 @@ async function applyAutomationPolicyAfterTrigger(params: {
           ? "max_trigger_count"
           : params.completionReason,
       }),
-    ]
-  )
+    })
+    .execute()
 }
 
 async function touchWebhookReceived(endpointId: string) {
-  await executeSql(
-    `UPDATE automation_webhook_endpoints
-     SET last_received_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1`,
-    [endpointId]
-  )
+  await db
+    .updateTable("automation_webhook_endpoints")
+    .set({
+      last_received_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", endpointId)
+    .execute()
 }
 
 async function touchAutomationEventSourceTriggered(eventSourceId: string) {
-  await executeSql(
-    `UPDATE automation_event_sources
-     SET last_triggered_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1`,
-    [eventSourceId]
-  )
+  await db
+    .updateTable("automation_event_sources")
+    .set({
+      last_triggered_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", eventSourceId)
+    .execute()
 }
 
 async function resolveAutomationRulesForEvent(params: {
@@ -2977,7 +2982,7 @@ async function resolveAutomationRulesForEvent(params: {
   payload: Record<string, unknown>
   occurredAt: string
 }) {
-  const result = await executeSql<AutomationRuleRow & AutomationTriggerRow>(
+  const result = await runQuery<AutomationRuleRow & AutomationTriggerRow>(
     `SELECT ar.*, at.rule_id, at.trigger_kind, at.source_kind, at.event_source_id, at.source_locator, at.match_key, at.matcher,
             at.schedule_kind, at.schedule_expr, at.schedule_timezone, at.interval_seconds, at.starts_at,
             at.next_fire_at, at.last_fired_at, at.metadata AS trigger_metadata
@@ -3014,7 +3019,7 @@ async function createAutomationOccurrence(params: {
   sourceSnapshot?: Record<string, unknown>
   payload?: Record<string, unknown>
   occurredAt?: string
-  client?: QueryRunnerLike
+  client?: Executor
 }) {
   const runner = resolveQueryRunner(params.client)
   const occurredAt = params.occurredAt || nowISO()
@@ -3061,7 +3066,7 @@ async function createAutomationExecution(params: {
   workspaceId: string
   ruleId: string
   occurrenceId: string
-  client?: QueryRunnerLike
+  client?: Executor
 }) {
   const runner = resolveQueryRunner(params.client)
   const existing = await runner.run(
@@ -3103,26 +3108,23 @@ async function recordExecutionTarget(params: {
   status: AutomationExecutionStatus
   metadata?: Record<string, unknown>
 }) {
-  const result = await executeSql<AutomationTargetRow>(
-    `INSERT INTO automation_execution_targets
-       (id, execution_id, conversation_id, target_participant_id, session_id, target_actor_id, created_item_id, wakeup_id,
-        status, metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-     RETURNING *`,
-    [
-      uuidv4(),
-      params.executionId,
-      params.conversationId || null,
-      params.targetParticipantId || null,
-      params.sessionId || null,
-      params.targetActorId || null,
-      params.createdItemId || null,
-      params.wakeupId || null,
-      params.status,
-      JSON.stringify(params.metadata || {}),
-    ]
-  )
-  return result.rows[0]
+  await db
+    .insertInto("automation_execution_targets")
+    .values({
+      id: uuidv4(),
+      execution_id: params.executionId,
+      conversation_id: params.conversationId || null,
+      target_participant_id: params.targetParticipantId || null,
+      session_id: params.sessionId || null,
+      target_actor_id: params.targetActorId || null,
+      created_item_id: params.createdItemId || null,
+      wakeup_id: params.wakeupId || null,
+      status: params.status,
+      metadata: JSON.stringify(params.metadata || {}),
+      created_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .execute()
 }
 
 function buildAutomationNoticePayload(params: {
@@ -3180,12 +3182,13 @@ async function resolveOperatorUserId(rule: AutomationRule) {
     }
   }
 
-  const result = await executeSql<{ owner_id: string }>(
-    `SELECT owner_id
-     FROM workspaces
-     WHERE id = $1
-     LIMIT 1`,
-    [rule.workspaceId]
+  const result = await runBuilder(
+    db,
+    db
+      .selectFrom("workspaces")
+      .select("owner_id")
+      .where("id", "=", rule.workspaceId)
+      .limit(1)
   )
   return result.rows[0]?.owner_id || null
 }
@@ -3436,47 +3439,42 @@ export async function createAutomationRule(
     creatorActorId: creatorParticipant.actor_id as string | null | undefined,
   })
 
-  await transaction(async (client) => {
-    await executeSqlOn(
-      client,
-      `INSERT INTO automation_rules
-         (id, workspace_id, conversation_id, category, status, name, description, created_by_participant_id,
-          created_by_session_id, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
-      [
-        ruleId,
-        workspaceId,
-        input.conversationId,
+  await withDbTransaction(async (trx) => {
+    await trx
+      .insertInto("automation_rules")
+      .values({
+        id: ruleId,
+        workspace_id: workspaceId,
+        conversation_id: input.conversationId,
         category,
-        input.status || "active",
-        input.name.trim(),
-        (input.description || "").trim(),
-        creatorParticipant.id,
-        creator.sessionId || null,
-        JSON.stringify(input.metadata || {}),
-      ]
-    )
+        status: input.status || "active",
+        name: input.name.trim(),
+        description: (input.description || "").trim(),
+        created_by_participant_id: creatorParticipant.id,
+        created_by_session_id: creator.sessionId || null,
+        metadata: JSON.stringify(input.metadata || {}),
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .execute()
 
-    await executeSqlOn(
-      client,
-      `INSERT INTO automation_policies
-         (rule_id, active_from, active_until, max_trigger_count, trigger_count, completion_status, completed_at,
-          metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-      [
-        ruleId,
-        normalizedPolicy.active_from,
-        normalizedPolicy.active_until,
-        normalizedPolicy.max_trigger_count,
-        normalizedPolicy.trigger_count,
-        normalizedPolicy.completion_status,
-        normalizedPolicy.completed_at,
-        JSON.stringify(normalizedPolicy.metadata),
-      ]
-    )
+    await trx
+      .insertInto("automation_policies")
+      .values({
+        rule_id: ruleId,
+        active_from: normalizedPolicy.active_from,
+        active_until: normalizedPolicy.active_until,
+        max_trigger_count: normalizedPolicy.max_trigger_count,
+        trigger_count: normalizedPolicy.trigger_count,
+        completion_status: normalizedPolicy.completion_status,
+        completed_at: normalizedPolicy.completed_at,
+        metadata: JSON.stringify(normalizedPolicy.metadata),
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .execute()
 
-    await executeSqlOn(
-      client,
+    await runnerFor(trx).run(
       `INSERT INTO automation_triggers
          (rule_id, trigger_kind, source_kind, event_source_id, source_locator, match_key, matcher, schedule_kind, schedule_expr,
           schedule_timezone, interval_seconds, starts_at, next_fire_at, last_fired_at, metadata, created_at, updated_at)
@@ -3500,38 +3498,37 @@ export async function createAutomationRule(
       ]
     )
 
-    await executeSqlOn(
-      client,
-      `INSERT INTO automation_deliveries
-         (rule_id, message_text, wake_reason_text, message_blocks, target_policy, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
-      [
-        ruleId,
-        normalizedDelivery.message_text,
-        normalizedDelivery.wake_reason_text,
-        JSON.stringify(normalizedDelivery.message_blocks),
-        normalizedDelivery.target_policy,
-        JSON.stringify(normalizedDelivery.metadata),
-      ]
-    )
+    await trx
+      .insertInto("automation_deliveries")
+      .values({
+        rule_id: ruleId,
+        message_text: normalizedDelivery.message_text,
+        wake_reason_text: normalizedDelivery.wake_reason_text,
+        message_blocks: JSON.stringify(normalizedDelivery.message_blocks),
+        target_policy: normalizedDelivery.target_policy,
+        metadata: JSON.stringify(normalizedDelivery.metadata),
+        created_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .execute()
 
     await persistAutomationTargets(
-      client,
+      trx,
       "automation_delivery_targets",
       ruleId,
       normalizedDelivery.targetParticipantIds
     )
 
-    await executeSqlOn(
-      client,
-      `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-       VALUES ($1, $2, $3, 'automation_rule.create', 'automation_rule', $4, $5)`,
-      [
-        workspaceId,
-        auditUserId,
-        creator.actorId || null,
-        ruleId,
-        JSON.stringify({
+    await trx
+      .insertInto("audit_logs")
+      .values({
+        workspace_id: workspaceId,
+        user_id: auditUserId,
+        actor_id: creator.actorId || null,
+        action: "automation_rule.create",
+        resource_type: "automation_rule",
+        resource_id: ruleId,
+        details: JSON.stringify({
           category,
           triggerKind: normalizedTrigger.trigger_kind,
           policy: {
@@ -3546,8 +3543,8 @@ export async function createAutomationRule(
           targetPolicy: normalizedDelivery.target_policy,
           targetCount: normalizedDelivery.targetParticipantIds.length,
         }),
-      ]
-    )
+      })
+      .execute()
   })
 
   const [rule] = await loadAutomationRulesByIds(workspaceId, [ruleId])
@@ -3583,7 +3580,7 @@ export async function listAutomationRules(
     where += ` AND conversation_id = $${values.length}`
   }
 
-  const result = await executeSql<{ id: string }>(
+  const result = await runQuery<{ id: string }>(
     `SELECT id
      FROM automation_rules
      WHERE ${where}
@@ -3654,58 +3651,43 @@ export async function updateAutomationRule(
     creatorActorId: creatorParticipant.actor_id as string | null | undefined,
   })
 
-  await transaction(async (client) => {
+  await withDbTransaction(async (trx) => {
     const nextCategory: AutomationCategory =
       normalizedTrigger.trigger_kind === "schedule"
         ? "schedule"
         : "event_subscription"
 
-    await executeSqlOn(
-      client,
-      `UPDATE automation_rules
-       SET status = $2,
-           category = $3,
-           name = $4,
-           description = $5,
-           metadata = $6,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [
-        ruleId,
-        mergedInput.status || existing.status,
-        nextCategory,
-        mergedInput.name.trim(),
-        (mergedInput.description || "").trim(),
-        JSON.stringify(mergedInput.metadata || {}),
-      ]
-    )
+    await trx
+      .updateTable("automation_rules")
+      .set({
+        status: mergedInput.status || existing.status,
+        category: nextCategory,
+        name: mergedInput.name.trim(),
+        description: (mergedInput.description || "").trim(),
+        metadata: JSON.stringify(mergedInput.metadata || {}),
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", ruleId)
+      .execute()
 
-    await executeSqlOn(
-      client,
-      `UPDATE automation_policies
-       SET active_from = $2,
-           active_until = $3,
-           max_trigger_count = $4,
-           completion_status = $5,
-           completed_at = $6,
-           metadata = $7,
-           updated_at = NOW()
-       WHERE rule_id = $1`,
-      [
-        ruleId,
-        normalizedPolicy.active_from,
-        normalizedPolicy.active_until,
-        normalizedPolicy.max_trigger_count,
-        normalizedPolicy.completion_status,
-        mergedInput.status === "active"
-          ? null
-          : existing.policy.completedAt || null,
-        JSON.stringify(normalizedPolicy.metadata),
-      ]
-    )
+    await trx
+      .updateTable("automation_policies")
+      .set({
+        active_from: normalizedPolicy.active_from,
+        active_until: normalizedPolicy.active_until,
+        max_trigger_count: normalizedPolicy.max_trigger_count,
+        completion_status: normalizedPolicy.completion_status,
+        completed_at:
+          mergedInput.status === "active"
+            ? null
+            : existing.policy.completedAt || null,
+        metadata: JSON.stringify(normalizedPolicy.metadata),
+        updated_at: sql`NOW()`,
+      })
+      .where("rule_id", "=", ruleId)
+      .execute()
 
-    await executeSqlOn(
-      client,
+    await runnerFor(trx).run(
       `UPDATE automation_triggers
        SET trigger_kind = $2,
            source_kind = $3,
@@ -3740,43 +3722,36 @@ export async function updateAutomationRule(
       ]
     )
 
-    await executeSqlOn(
-      client,
-      `UPDATE automation_deliveries
-       SET message_text = $2,
-           wake_reason_text = $3,
-           message_blocks = $4,
-           target_policy = $5,
-           metadata = $6,
-           updated_at = NOW()
-       WHERE rule_id = $1`,
-      [
-        ruleId,
-        normalizedDelivery.message_text,
-        normalizedDelivery.wake_reason_text,
-        JSON.stringify(normalizedDelivery.message_blocks),
-        normalizedDelivery.target_policy,
-        JSON.stringify(normalizedDelivery.metadata),
-      ]
-    )
+    await trx
+      .updateTable("automation_deliveries")
+      .set({
+        message_text: normalizedDelivery.message_text,
+        wake_reason_text: normalizedDelivery.wake_reason_text,
+        message_blocks: JSON.stringify(normalizedDelivery.message_blocks),
+        target_policy: normalizedDelivery.target_policy,
+        metadata: JSON.stringify(normalizedDelivery.metadata),
+        updated_at: sql`NOW()`,
+      })
+      .where("rule_id", "=", ruleId)
+      .execute()
 
     await persistAutomationTargets(
-      client,
+      trx,
       "automation_delivery_targets",
       ruleId,
       normalizedDelivery.targetParticipantIds
     )
 
-    await executeSqlOn(
-      client,
-      `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-       VALUES ($1, $2, $3, 'automation_rule.update', 'automation_rule', $4, $5)`,
-      [
-        workspaceId,
-        auditUserId,
-        operator.actorId || null,
-        ruleId,
-        JSON.stringify({
+    await trx
+      .insertInto("audit_logs")
+      .values({
+        workspace_id: workspaceId,
+        user_id: auditUserId,
+        actor_id: operator.actorId || null,
+        action: "automation_rule.update",
+        resource_type: "automation_rule",
+        resource_id: ruleId,
+        details: JSON.stringify({
           triggerKind: normalizedTrigger.trigger_kind,
           policy: {
             activeFrom: normalizedPolicy.active_from,
@@ -3789,8 +3764,8 @@ export async function updateAutomationRule(
           targetPolicy: normalizedDelivery.target_policy,
           targetCount: normalizedDelivery.targetParticipantIds.length,
         }),
-      ]
-    )
+      })
+      .execute()
   })
 
   const updated = await getAutomationRule(workspaceId, ruleId)
@@ -3806,23 +3781,23 @@ export async function deleteAutomationRule(
   operator: AutomationOperatorInput
 ) {
   const auditUserId = await resolveAutomationAuditUserId(operator)
-  await executeSql(
-    `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-     VALUES ($1, $2, $3, 'automation_rule.delete', 'automation_rule', $4, $5)`,
-    [
-      workspaceId,
-      auditUserId,
-      operator.actorId || null,
-      ruleId,
-      JSON.stringify({ deleted: true }),
-    ]
-  )
-  await executeSql(
-    `DELETE FROM automation_rules
-     WHERE id = $1
-       AND workspace_id = $2`,
-    [ruleId, workspaceId]
-  )
+  await db
+    .insertInto("audit_logs")
+    .values({
+      workspace_id: workspaceId,
+      user_id: auditUserId,
+      actor_id: operator.actorId || null,
+      action: "automation_rule.delete",
+      resource_type: "automation_rule",
+      resource_id: ruleId,
+      details: JSON.stringify({ deleted: true }),
+    })
+    .execute()
+  await db
+    .deleteFrom("automation_rules")
+    .where("id", "=", ruleId)
+    .where("workspace_id", "=", workspaceId)
+    .execute()
 }
 
 export async function createAutomationWebhookEndpoint(
@@ -3834,7 +3809,7 @@ export async function createAutomationWebhookEndpoint(
   }
 ): Promise<AutomationWebhookEndpointCreateResult> {
   const secret = generateSecret()
-  const result = await executeSql<AutomationWebhookEndpointRow>(
+  const result = await runQuery<AutomationWebhookEndpointRow>(
     `INSERT INTO automation_webhook_endpoints
        (id, workspace_id, name, status, path_token, secret_ciphertext, secret_hint, metadata, created_by_workspace_member_id, created_at, updated_at)
      VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, NOW(), NOW())
@@ -3858,7 +3833,7 @@ export async function createAutomationWebhookEndpoint(
 }
 
 export async function listAutomationWebhookEndpoints(workspaceId: string) {
-  const result = await executeSql<AutomationWebhookEndpointRow>(
+  const result = await runQuery<AutomationWebhookEndpointRow>(
     `SELECT *
      FROM automation_webhook_endpoints
      WHERE workspace_id = $1
@@ -3884,7 +3859,7 @@ export async function listAutomationOccurrences(
   }
 
   values.push(Math.max(1, Math.min(filters?.limit || 50, 200)))
-  const result = await executeSql<AutomationOccurrenceRow>(
+  const result = await runQuery<AutomationOccurrenceRow>(
     `SELECT ao.*,
             aes.source_key AS event_source_key,
             aes.name AS event_source_name,
@@ -3921,21 +3896,21 @@ export async function ingestAutomationProviderEvent(params: {
   dedupeKey?: string
   occurredAt?: string
 }) {
-  const result = await executeSql<AutomationEventSourceRow>(
-    `SELECT *
-     FROM automation_event_sources
-     WHERE workspace_id = $1
-       AND provider_kind = $2
-       AND COALESCE(provider_ref, '') = COALESCE($3, '')
-       AND source_key = $4
-       AND status IN ('active', 'deprecated')
-     LIMIT 1`,
-    [
-      params.workspaceId,
-      params.providerKind,
-      params.providerRef || null,
-      params.sourceKey,
-    ]
+  const result = await runBuilder(
+    db,
+    db
+      .selectFrom("automation_event_sources")
+      .select("id")
+      .where("workspace_id", "=", params.workspaceId)
+      .where("provider_kind", "=", params.providerKind)
+      .where(
+        sql`COALESCE(provider_ref, '')`,
+        "=",
+        sql`COALESCE(${params.providerRef || null}, '')`
+      )
+      .where("source_key", "=", params.sourceKey)
+      .where("status", "in", ["active", "deprecated"])
+      .limit(1)
   )
   const eventSource = result.rows[0]
   if (!eventSource) {
@@ -4033,19 +4008,20 @@ export async function ingestAutomationEvent(input: AutomationEventEnvelope) {
   }
 
   await touchAutomationEventSourceTriggered(eventSource.id)
-  await executeSql(
-    `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
-     VALUES ($1, 'automation_event_source.trigger', 'automation_event_source', $2, $3)`,
-    [
-      input.workspaceId,
-      eventSource.id,
-      JSON.stringify({
+  await db
+    .insertInto("audit_logs")
+    .values({
+      workspace_id: input.workspaceId,
+      action: "automation_event_source.trigger",
+      resource_type: "automation_event_source",
+      resource_id: eventSource.id,
+      details: JSON.stringify({
         occurrenceId: occurrence.id,
         occurrenceTitle: decoratedOccurrence.displayTitle,
         executionCount: executions.length,
       }),
-    ]
-  )
+    })
+    .execute()
 
   return {
     occurrence: decoratedOccurrence,
@@ -4190,10 +4166,10 @@ export async function scheduleDueAutomationExecutions(
   const scheduledExecutions: string[] = []
   const batchSize = Math.max(1, Math.min(limit, MAX_SCHEDULER_BATCH_SIZE))
 
-  await transaction(async (client) => {
-    await syncAutomationRuleLiveness({ client })
+  await withDbTransaction(async (trx) => {
+    await syncAutomationRuleLiveness({ client: trx })
 
-    const dueResult = await executeSqlOn<{
+    const dueResult = await runnerFor(trx).run<{
       rule_id: string
       rule_name: string
       workspace_id: string
@@ -4207,7 +4183,6 @@ export async function scheduleDueAutomationExecutions(
       next_fire_at: string
       last_fired_at: string | null
     }>(
-      client,
       `SELECT at.rule_id, ar.name AS rule_name, ar.workspace_id, at.schedule_kind, at.schedule_expr, at.schedule_timezone,
               at.interval_seconds, at.starts_at, ap.active_from, ap.active_until, at.next_fire_at, at.last_fired_at
        FROM automation_triggers at
@@ -4246,14 +4221,14 @@ export async function scheduleDueAutomationExecutions(
         },
         payload: {},
         occurredAt: row.next_fire_at,
-        client,
+        client: trx,
       })
 
       const { execution, isNew } = await createAutomationExecution({
         workspaceId: row.workspace_id,
         ruleId: row.rule_id,
         occurrenceId: occurrence.id,
-        client,
+        client: trx,
       })
 
       const nextFireAt = computeNextFireAt({
@@ -4268,15 +4243,15 @@ export async function scheduleDueAutomationExecutions(
         lastFiredAt: row.next_fire_at,
       })
 
-      await executeSqlOn(
-        client,
-        `UPDATE automation_triggers
-         SET last_fired_at = $2,
-             next_fire_at = $3,
-             updated_at = NOW()
-         WHERE rule_id = $1`,
-        [row.rule_id, row.next_fire_at, nextFireAt]
-      )
+      await trx
+        .updateTable("automation_triggers")
+        .set({
+          last_fired_at: row.next_fire_at,
+          next_fire_at: nextFireAt,
+          updated_at: sql`NOW()`,
+        })
+        .where("rule_id", "=", row.rule_id)
+        .execute()
       if (isNew) {
         scheduledExecutions.push(execution.id)
       }
@@ -4289,7 +4264,7 @@ export async function scheduleDueAutomationExecutions(
 export async function processAutomationExecution(
   executionId: string
 ): Promise<ProcessAutomationExecutionResult> {
-  const executionResult = await executeSql<AutomationExecutionRow>(
+  const executionResult = await runQuery<AutomationExecutionRow>(
     `UPDATE automation_executions
      SET status = 'running',
          attempt_count = attempt_count + 1,
@@ -4302,12 +4277,13 @@ export async function processAutomationExecution(
   )
   const executionRow = executionResult.rows[0]
   if (!executionRow) {
-    const existingResult = await executeSql<AutomationExecutionRow>(
-      `SELECT *
-       FROM automation_executions
-       WHERE id = $1
-       LIMIT 1`,
-      [executionId]
+    const existingResult = await runBuilder(
+      db,
+      db
+        .selectFrom("automation_executions")
+        .select("id")
+        .where("id", "=", executionId)
+        .limit(1)
     )
     if (!existingResult.rows[0]) {
       throw new Error(`Automation execution ${executionId} not found`)
@@ -4319,7 +4295,7 @@ export async function processAutomationExecution(
   }
 
   const execution = mapExecutionRow(executionRow)
-  const occurrenceResult = await executeSql<AutomationOccurrenceRow>(
+  const occurrenceResult = await runQuery<AutomationOccurrenceRow>(
     `SELECT ao.*,
             aes.source_key AS event_source_key,
             aes.name AS event_source_name,
@@ -4346,15 +4322,16 @@ export async function processAutomationExecution(
 
   try {
     if (rule.status !== "active") {
-      await executeSql(
-        `UPDATE automation_executions
-         SET status = 'skipped',
-             error_message = $2,
-             completed_at = NOW(),
-             updated_at = NOW()
-         WHERE id = $1`,
-        [executionId, `Automation rule is ${rule.status}`]
-      )
+      await db
+        .updateTable("automation_executions")
+        .set({
+          status: "skipped",
+          error_message: `Automation rule is ${rule.status}`,
+          completed_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", executionId)
+        .execute()
       return {
         executionId,
         wakeupCount: 0,
@@ -4365,23 +4342,26 @@ export async function processAutomationExecution(
     const { restrictedAudienceParticipantIds, targetParticipants } =
       await resolveDeliveryTargets(rule)
     if (targetParticipants.length === 0) {
-      await executeSql(
-        `UPDATE automation_executions
-         SET status = 'skipped',
-             error_message = $2,
-             completed_at = NOW(),
-             updated_at = NOW()
-         WHERE id = $1`,
-        [executionId, "No active target participants matched this automation"]
-      )
-      await executeSql(
-        `UPDATE automation_rules
-         SET last_error_at = NULL,
-             last_error_message = NULL,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [rule.id]
-      )
+      await db
+        .updateTable("automation_executions")
+        .set({
+          status: "skipped",
+          error_message:
+            "No active target participants matched this automation",
+          completed_at: sql`NOW()`,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", executionId)
+        .execute()
+      await db
+        .updateTable("automation_rules")
+        .set({
+          last_error_at: null,
+          last_error_message: null,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", rule.id)
+        .execute()
       return {
         executionId,
         wakeupCount: 0,
@@ -4403,24 +4383,26 @@ export async function processAutomationExecution(
       targetParticipants,
     })
 
-    await executeSql(
-      `UPDATE automation_executions
-       SET status = 'completed',
-           error_message = NULL,
-           completed_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $1`,
-      [executionId]
-    )
-    await executeSql(
-      `UPDATE automation_rules
-       SET last_triggered_at = NOW(),
-           last_error_at = NULL,
-           last_error_message = NULL,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [rule.id]
-    )
+    await db
+      .updateTable("automation_executions")
+      .set({
+        status: "completed",
+        error_message: null,
+        completed_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", executionId)
+      .execute()
+    await db
+      .updateTable("automation_rules")
+      .set({
+        last_triggered_at: sql`NOW()`,
+        last_error_at: null,
+        last_error_message: null,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", rule.id)
+      .execute()
     await applyAutomationPolicyAfterTrigger({
       ruleId: rule.id,
       workspaceId: rule.workspaceId,
@@ -4433,23 +4415,24 @@ export async function processAutomationExecution(
           ? "schedule_exhausted"
           : "max_trigger_count",
     })
-    await executeSql(
-      `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
-       VALUES ($1, $2, $3, 'automation_rule.trigger', 'automation_rule', $4, $5)`,
-      [
-        rule.workspaceId,
-        (await resolveOperatorUserId(rule)) || null,
-        creatorParticipant?.actor_id || null,
-        rule.id,
-        JSON.stringify({
+    await db
+      .insertInto("audit_logs")
+      .values({
+        workspace_id: rule.workspaceId,
+        user_id: (await resolveOperatorUserId(rule)) || null,
+        actor_id: creatorParticipant?.actor_id || null,
+        action: "automation_rule.trigger",
+        resource_type: "automation_rule",
+        resource_id: rule.id,
+        details: JSON.stringify({
           executionId,
           occurrenceId: occurrence.id,
           createdItemId,
           wakeupCount,
           targetCount: targetParticipants.length,
         }),
-      ]
-    )
+      })
+      .execute()
 
     return {
       executionId,
@@ -4458,15 +4441,16 @@ export async function processAutomationExecution(
     }
   } catch (error: any) {
     const message = error instanceof Error ? error.message : String(error)
-    await executeSql(
-      `UPDATE automation_executions
-       SET status = 'failed',
-           error_message = $2,
-           completed_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $1`,
-      [executionId, message]
-    )
+    await db
+      .updateTable("automation_executions")
+      .set({
+        status: "failed",
+        error_message: message,
+        completed_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", executionId)
+      .execute()
     await updateRuleError(rule.id, message)
     throw error
   }
@@ -4477,7 +4461,7 @@ export async function listAutomationExecutions(
   ruleId: string,
   limit = 50
 ) {
-  const result = await executeSql<AutomationExecutionRow>(
+  const result = await runQuery<AutomationExecutionRow>(
     `SELECT ae.*,
             ar.name AS execution_rule_name,
             ao.occurred_at AS occurrence_occurred_at,

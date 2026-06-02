@@ -15,9 +15,11 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { actorRef, conversationRef } from "@synapse/shared"
 import { sql } from "kysely"
-import { db } from "../../infrastructure/database/kysely.js"
-import type { QueryExecutor } from "../../infrastructure/database/kysely.js"
-import { transaction, pool } from "../../infrastructure/database/index.js"
+import {
+  db,
+  withDbTransaction,
+  type Executor,
+} from "../../infrastructure/database/kysely.js"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
 import { startPairing, deleteDevice } from "../devices/service.js"
@@ -124,7 +126,7 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
         subpath: "conversation",
         ensure: async () =>
           (
-            await ensureFileSpace(pool, {
+            await ensureFileSpace(db, {
               workspaceId: ctx.workspaceId,
               owner: conversationRef(ctx.conversationId),
             })
@@ -134,7 +136,7 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
         subpath: "actor",
         ensure: async () =>
           (
-            await ensureFileSpace(pool, {
+            await ensureFileSpace(db, {
               workspaceId: ctx.workspaceId,
               owner: actorRef(ctx.actorId),
             })
@@ -144,7 +146,7 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
         subpath: "actor-conversation",
         ensure: async () =>
           (
-            await ensureFileSpace(pool, {
+            await ensureFileSpace(db, {
               workspaceId: ctx.workspaceId,
               owner: actorRef(ctx.actorId),
               scope: conversationRef(ctx.conversationId),
@@ -156,10 +158,10 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
   const out: SpaceSpec[] = []
   for (const s of specs) {
     const spaceId = await s.ensure()
-    const space = await getFileSpace(pool, spaceId)
+    const space = await getFileSpace(db, spaceId)
     const baseSnapshotId = space?.current_snapshot_id ?? null
     const baseManifestSha = baseSnapshotId
-      ? await getSnapshotManifestSha(pool, baseSnapshotId)
+      ? await getSnapshotManifestSha(db, baseSnapshotId)
       : null
     out.push({ subpath: s.subpath, spaceId, baseSnapshotId, baseManifestSha })
   }
@@ -183,7 +185,7 @@ export async function provisionSandbox(
   sessionId: string,
   options: ProvisionSandboxOptions = {}
 ): Promise<SandboxProvisionResult> {
-  const existing = await getActiveMountsForSession(pool, sessionId)
+  const existing = await getActiveMountsForSession(db, sessionId)
   if (existing.length > 0) {
     // Already provisioned this session — report the ACTUAL state, not a
     // hardcoded false: commandline is enabled iff the paired device exposes a
@@ -267,7 +269,7 @@ export async function provisionSandbox(
   for (const spec of specs) {
     const dir = mountDir(sessionId, spec.subpath)
     await mkdir(dir, { recursive: true })
-    const mount = await insertFileMount(pool, {
+    const mount = await insertFileMount(db, {
       workspaceId: ctx.workspaceId,
       sessionId,
       fileSpaceId: spec.spaceId,
@@ -355,7 +357,7 @@ export async function provisionSandbox(
 
     // Record device + pid on all mounts immediately (teardown/recovery need it).
     for (const mount of mounts) {
-      await updateFileMount(pool, mount.id, {
+      await updateFileMount(db, mount.id, {
         deviceId: paired.deviceId,
         hostPid: runHandle.pid,
       })
@@ -380,7 +382,7 @@ export async function provisionSandbox(
 
     // ⑨ mark mounts active + pin pairing session.
     for (const mount of mounts) {
-      await updateFileMount(pool, mount.id, { status: "active" })
+      await updateFileMount(db, mount.id, { status: "active" })
     }
 
     return {
@@ -415,7 +417,7 @@ export async function provisionSandbox(
     }
     await rm(sandboxRoot, { recursive: true, force: true }).catch(() => {})
     for (const mount of mounts) {
-      await updateFileMount(pool, mount.id, {
+      await updateFileMount(db, mount.id, {
         status: "failed",
         errorMessage: message,
       }).catch(() => {})
@@ -459,8 +461,8 @@ async function waitForCatalog(
  * globals; a test injects a pinned executor + matching runInTx + a stub sync.
  */
 export interface RefreshDeps {
-  dbh: QueryExecutor
-  runInTx: <T>(fn: (tx: QueryExecutor) => Promise<T>) => Promise<T>
+  dbh: Executor
+  runInTx: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T>
   sync: (input: {
     dir: string
     baseManifestSha256?: string
@@ -478,8 +480,8 @@ export interface RefreshDeps {
 
 function defaultRefreshDeps(): RefreshDeps {
   return {
-    dbh: pool,
-    runInTx: (fn) => transaction(fn as never) as never,
+    dbh: db,
+    runInTx: (fn) => withDbTransaction(fn),
     sync: syncDir,
     applyHead: applyHeadForConflicts,
   }
@@ -783,10 +785,10 @@ export interface PendingRefreshConflicts {
  * deterministically force a reconcile failure.
  */
 export interface CommitDeps {
-  /** Executor for non-transactional reads/updates (default: global pool). */
-  dbh: QueryExecutor
+  /** Executor for non-transactional reads/updates (default: top-level db). */
+  dbh: Executor
   /** Run `fn` in a DB transaction (default: the global `transaction` helper). */
-  runInTx: <T>(fn: (tx: QueryExecutor) => Promise<T>) => Promise<T>
+  runInTx: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T>
   /**
    * Resolve the session's workspace/conversation/actor (default: global kysely
    * db). Injected so a test on a single pinned/rolled-back connection can see
@@ -837,8 +839,8 @@ export interface CommitDeps {
 
 function defaultCommitDeps(): CommitDeps {
   return {
-    dbh: pool,
-    runInTx: (fn) => transaction(fn as never) as never,
+    dbh: db,
+    runInTx: (fn) => withDbTransaction(fn),
     loadCtx: loadSessionContext,
     reconcile: async (
       mount,
@@ -986,13 +988,13 @@ export function mergePendingConflicts(
 async function recordPendingCommitConflicts(
   sessionId: string,
   conflictsBySubpath: Record<string, PendingCommitConflict>,
-  runInTx: <T>(fn: (tx: QueryExecutor) => Promise<T>) => Promise<T> = (fn) =>
-    transaction(fn as never) as never
+  runInTx: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T> = (fn) =>
+    withDbTransaction(fn)
 ): Promise<void> {
   await runInTx(async (txq) => {
-    const existing = await txq.query(
-      `SELECT collaboration_state FROM sessions WHERE id = $1 FOR UPDATE`,
-      [sessionId]
+    const existing = await sql<{ collaboration_state: unknown }>`
+      SELECT collaboration_state FROM sessions WHERE id = ${sessionId} FOR UPDATE`.execute(
+      txq
     )
     const state = (existing.rows[0]?.collaboration_state ?? {}) as Record<
       string,
@@ -1000,14 +1002,12 @@ async function recordPendingCommitConflicts(
     >
     const prev = normalizePendingConflicts(state[PENDING_CONFLICTS_KEY])
     const merged = mergePendingConflicts(prev, conflictsBySubpath)
-    await txq.query(
-      `UPDATE sessions
+    await sql`
+      UPDATE sessions
        SET collaboration_state =
          COALESCE(collaboration_state, '{}'::jsonb)
-         || jsonb_build_object($2::text, $3::jsonb)
-       WHERE id = $1`,
-      [sessionId, PENDING_CONFLICTS_KEY, JSON.stringify(merged)]
-    )
+         || jsonb_build_object(${PENDING_CONFLICTS_KEY}::text, ${JSON.stringify(merged)}::jsonb)
+       WHERE id = ${sessionId}`.execute(txq)
   })
 }
 
@@ -1182,8 +1182,8 @@ async function recordPendingRefreshConflicts(
     PendingRefreshConflicts,
     "deferredConflictsBySubpath" | "sidecarsBySubpath"
   >,
-  runInTx: <T>(fn: (tx: QueryExecutor) => Promise<T>) => Promise<T> = (fn) =>
-    transaction(fn as never) as never
+  runInTx: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T> = (fn) =>
+    withDbTransaction(fn)
 ): Promise<void> {
   await runInTx((txq) =>
     recordPendingRefreshConflictsOn(txq, sessionId, incoming)
@@ -1198,16 +1198,16 @@ async function recordPendingRefreshConflicts(
  * so head!=base self-heals instead of silently degrading durability).
  */
 async function recordPendingRefreshConflictsOn(
-  txq: QueryExecutor,
+  txq: Executor,
   sessionId: string,
   incoming: Pick<
     PendingRefreshConflicts,
     "deferredConflictsBySubpath" | "sidecarsBySubpath"
   >
 ): Promise<void> {
-  const existing = await txq.query(
-    `SELECT collaboration_state FROM sessions WHERE id = $1 FOR UPDATE`,
-    [sessionId]
+  const existing = await sql<{ collaboration_state: unknown }>`
+    SELECT collaboration_state FROM sessions WHERE id = ${sessionId} FOR UPDATE`.execute(
+    txq
   )
   const state = (existing.rows[0]?.collaboration_state ?? {}) as Record<
     string,
@@ -1215,14 +1215,12 @@ async function recordPendingRefreshConflictsOn(
   >
   const prev = normalizePendingRefresh(state[PENDING_REFRESH_KEY])
   const merged = mergePendingRefreshConflicts(prev, incoming)
-  await txq.query(
-    `UPDATE sessions
+  await sql`
+    UPDATE sessions
        SET collaboration_state =
          COALESCE(collaboration_state, '{}'::jsonb)
-         || jsonb_build_object($2::text, $3::jsonb)
-       WHERE id = $1`,
-    [sessionId, PENDING_REFRESH_KEY, JSON.stringify(merged)]
-  )
+         || jsonb_build_object(${PENDING_REFRESH_KEY}::text, ${JSON.stringify(merged)}::jsonb)
+       WHERE id = ${sessionId}`.execute(txq)
 }
 
 /**
@@ -1499,7 +1497,7 @@ async function commitOneMount(
   }
 
   // Short locked txn: re-check head, ingest blobs, append snapshot. Use the
-  // pg-client transaction (a QueryExecutor) so space.ts helpers run on one
+  // pg-client transaction (a Executor) so space.ts helpers run on one
   // connection inside BEGIN/COMMIT.
   try {
     const snapshot = await deps.runInTx(async (txq) => {
@@ -1597,7 +1595,7 @@ export async function teardownSandbox(
   _options: TeardownSandboxOptions = {}
 ): Promise<void> {
   const ctx = await loadSessionContext(sessionId)
-  const mounts = await getActiveMountsForSession(pool, sessionId)
+  const mounts = await getActiveMountsForSession(db, sessionId)
   if (mounts.length === 0) return
 
   // ① commit ALL dirty spaces (incl /actor-conversation, and any /conversation
@@ -1642,7 +1640,7 @@ export async function teardownSandbox(
 
     // ④ close mounts.
     for (const mount of mounts) {
-      await updateFileMount(pool, mount.id, {
+      await updateFileMount(db, mount.id, {
         status: "closed",
         closedAt: true,
       }).catch(() => {})
@@ -1654,7 +1652,7 @@ export async function teardownSandbox(
     const message =
       commitError instanceof Error ? commitError.message : String(commitError)
     for (const mount of mounts) {
-      await updateFileMount(pool, mount.id, {
+      await updateFileMount(db, mount.id, {
         status: "failed",
         errorMessage: `teardown commit failed (live dir preserved at ${mount.materialized_dir}): ${message}`,
       }).catch(() => {})
@@ -1714,7 +1712,7 @@ export interface RecoverFailedMountsResult {
  * hand. Best-effort and idempotent: safe to call on every API startup.
  */
 export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsResult> {
-  const mounts = await getFailedRecoverableMounts(pool)
+  const mounts = await getFailedRecoverableMounts(db)
   let recovered = 0
   let stillFailed = 0
   for (const mount of mounts) {
@@ -1722,7 +1720,7 @@ export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsR
     // The dir may have been cleaned already (e.g. by a later successful run);
     // skip if it's gone — there's nothing to recover.
     if (!existsSync(mount.materialized_dir)) {
-      await updateFileMount(pool, mount.id, {
+      await updateFileMount(db, mount.id, {
         status: "closed",
         closedAt: true,
         errorMessage: "recovered: live dir already gone, nothing to commit",
@@ -1737,7 +1735,7 @@ export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsR
         defaultCommitDeps()
       )
       // Commit succeeded (or there was nothing new) → close + remove the dir.
-      await updateFileMount(pool, mount.id, {
+      await updateFileMount(db, mount.id, {
         status: "closed",
         closedAt: true,
         resultSnapshotId: result.snapshotId ?? mount.result_snapshot_id,

@@ -1,10 +1,10 @@
 import {
-  executeTakeFirst,
   db as defaultDb,
+  runBuilder,
 } from "../../infrastructure/database/kysely.js"
 import type {
+  Executor,
   KyselyDb,
-  QueryExecutor,
   TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import {
@@ -78,7 +78,7 @@ export async function buildResourceAccessBindingInsertValues(
  * `pg.PoolClient`-compatible variant of `buildResourceAccessBindingInsertValues`.
  */
 export async function buildResourceAccessBindingInsertValuesOn(
-  client: QueryExecutor,
+  client: Executor,
   input: {
     workspaceId: string
     resourceType: AccessBindableResourceType
@@ -125,17 +125,18 @@ export async function buildResourceAccessBindingInsertValuesOn(
 import type { AccessBindingRow } from "./bindings.js"
 
 export async function insertAccessBindingReturningIdOn(
-  client: QueryExecutor,
+  client: Executor,
   params: Parameters<typeof buildResourceAccessBindingInsertValuesOn>[1]
 ): Promise<string> {
   const values = await buildResourceAccessBindingInsertValuesOn(client, params)
-  const inserted = await executeTakeFirst<{ id: string }>(
+  const result = await runBuilder<{ id: string }>(
     client,
     defaultDb
       .insertInto("resource_access_bindings")
       .values(values)
       .returning("id")
   )
+  const inserted = result.rows[0]
   if (!inserted) {
     throw new Error("Failed to insert resource_access_bindings row")
   }
@@ -143,17 +144,18 @@ export async function insertAccessBindingReturningIdOn(
 }
 
 export async function insertAccessBindingReturningRowOn(
-  client: QueryExecutor,
+  client: Executor,
   params: Parameters<typeof buildResourceAccessBindingInsertValuesOn>[1]
 ): Promise<AccessBindingRow> {
   const values = await buildResourceAccessBindingInsertValuesOn(client, params)
-  const inserted = await executeTakeFirst<AccessBindingRow>(
+  const result = await runBuilder<AccessBindingRow>(
     client,
     defaultDb
       .insertInto("resource_access_bindings")
       .values(values)
       .returningAll()
   )
+  const inserted = result.rows[0]
   if (!inserted) {
     throw new Error("Failed to insert resource_access_bindings row")
   }
@@ -586,7 +588,7 @@ export async function loadAccessBindingRowsForResourcesAndContext(
  * resource.
  */
 export async function hasAnyBindingForResourceOn(
-  client: QueryExecutor,
+  client: Executor,
   input: {
     resourceType: AccessBindableResourceType
     resourceId: string
@@ -594,12 +596,14 @@ export async function hasAnyBindingForResourceOn(
   }
 ): Promise<boolean> {
   const column = resourceIdColumnForRaw(input.resourceType)
-  let sqlText = `SELECT 1 FROM resource_access_bindings WHERE ${column} = $1::uuid`
+  let builder = defaultDb
+    .selectFrom("resource_access_bindings")
+    .select(sql`1`.as("one"))
+    .where(sql.ref(column), "=", input.resourceId)
   if (input.activeOnly) {
-    sqlText += ` AND status = 'active'`
+    builder = builder.where("status", "=", "active")
   }
-  sqlText += ` LIMIT 1`
-  const result = await client.query(sqlText, [input.resourceId])
+  const result = await runBuilder(client, builder.limit(1))
   return result.rows.length > 0
 }
 
@@ -631,7 +635,7 @@ function resourceIdColumnForRaw(resourceType: AccessBindableResourceType) {
  * FROM` so NULL-vs-NULL and UUID-equality both work correctly.
  */
 export async function findActiveBindingIdByResourceAndSubject(
-  client: QueryExecutor,
+  client: Executor,
   input: {
     workspaceId: string
     resourceType: AccessBindableResourceType
@@ -641,22 +645,22 @@ export async function findActiveBindingIdByResourceAndSubject(
   }
 ): Promise<string | null> {
   const column = resourceIdColumnForRaw(input.resourceType)
-  const result = await client.query(
-    `SELECT id
-     FROM resource_access_bindings
-     WHERE workspace_id = $1
-       AND ${column} = $2::uuid
-       AND subject_id = $3::uuid
-       AND scope_subject_id IS NOT DISTINCT FROM $4::uuid
-       AND status = 'active'
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [
-      input.workspaceId,
-      input.resourceId,
-      input.subjectId,
-      input.scopeSubjectId ?? null,
-    ]
+  const result = await runBuilder<{ id: string }>(
+    client,
+    defaultDb
+      .selectFrom("resource_access_bindings")
+      .select("id")
+      .where("workspace_id", "=", input.workspaceId)
+      .where(sql.ref(column), "=", input.resourceId)
+      .where("subject_id", "=", input.subjectId)
+      .where(
+        sql`scope_subject_id IS NOT DISTINCT FROM ${
+          input.scopeSubjectId ?? null
+        }::uuid` as unknown as never
+      )
+      .where("status", "=", "active")
+      .orderBy("created_at", "desc")
+      .limit(1)
   )
   return result.rows[0]?.id ?? null
 }
@@ -688,17 +692,17 @@ export async function updateGrantConversationTypeMaskOverride(
  * Bulk revoke variant of `revokeGrant`.
  */
 export async function revokeGrantsByIdsOn(
-  client: QueryExecutor,
+  client: Executor,
   bindingIds: string[]
 ): Promise<void> {
   if (bindingIds.length === 0) return
-  await client.query(
-    `UPDATE resource_access_bindings
-     SET status = 'revoked',
-         revoked_at = NOW()
-     WHERE id = ANY($1::uuid[])
-       AND status = 'active'`,
-    [bindingIds]
+  await runBuilder(
+    client,
+    defaultDb
+      .updateTable("resource_access_bindings")
+      .set({ status: "revoked", revoked_at: sql`NOW()` })
+      .where("id", "in", bindingIds)
+      .where("status", "=", "active")
   )
 }
 
@@ -706,16 +710,18 @@ export async function revokeGrantsByIdsOn(
  * Hard-delete every binding pointing at a resource.
  */
 export async function hardDeleteBindingsForResourceOn(
-  client: QueryExecutor,
+  client: Executor,
   input: {
     resourceType: AccessBindableResourceType
     resourceId: string
   }
 ): Promise<void> {
   const column = resourceIdColumnForRaw(input.resourceType)
-  await client.query(
-    `DELETE FROM resource_access_bindings WHERE ${column} = $1::uuid`,
-    [input.resourceId]
+  await runBuilder(
+    client,
+    defaultDb
+      .deleteFrom("resource_access_bindings")
+      .where(sql.ref(column), "=", input.resourceId)
   )
 }
 

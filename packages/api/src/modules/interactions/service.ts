@@ -37,15 +37,12 @@ import type {
   RuntimeAuthorizationRequestedAction,
   SessionCollaborationState,
 } from "@synapse/shared/types"
-import { type Queryable } from "../../infrastructure/events/index.js"
-import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
-  executeCompiledQuery,
-  executeCompiledSql,
-  executeSql,
-  executeSqlOn,
-  executeTakeFirst,
+  runBuilder,
+  takeFirstOn,
+  withDbTransaction,
+  type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import {
@@ -65,7 +62,7 @@ import {
   updateConversationItemEventPayload,
 } from "../chat/service.js"
 import { getFileUrlById } from "../files/service.js"
-import { sql } from "kysely"
+import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import {
   createRuntimeAuthorizationGrant,
   type RuntimeAuthorizationGrantRecord,
@@ -76,6 +73,50 @@ import {
   parseSessionCollaborationState,
 } from "../session/collaboration-state.js"
 import { upsertInteractionTransportProjection } from "./transport-projections.js"
+
+/** Run raw SQL (text+params) on db / trx. */
+async function runOn<T = any>(
+  executor: Executor,
+  text: string,
+  params: readonly unknown[] = []
+): Promise<{ rows: T[]; rowCount?: number | null }> {
+  const result = await executor.executeQuery<T>(
+    CompiledQuery.raw(text, [...params])
+  )
+  return {
+    rows: result.rows as T[],
+    rowCount:
+      result.numAffectedRows === undefined
+        ? null
+        : Number(result.numAffectedRows),
+  }
+}
+
+/** `runOn` bound to the top-level db. */
+function runOnDb<T = any>(
+  text: string,
+  params: readonly unknown[] = []
+): Promise<{ rows: T[]; rowCount?: number | null }> {
+  return runOn<T>(db, text, params)
+}
+
+/**
+ * Run a pre-compiled query on an optional executor: native executeQuery for
+ * Kysely executors / top-level db (when undefined).
+ */
+async function runCompiledOn<T = any>(
+  executor: Executor | undefined,
+  compiled: CompiledQuery<T>
+): Promise<{ rows: T[]; rowCount?: number | null }> {
+  const result = await (executor ?? db).executeQuery(compiled)
+  return {
+    rows: result.rows as T[],
+    rowCount:
+      result.numAffectedRows === undefined
+        ? null
+        : Number(result.numAffectedRows),
+  }
+}
 
 type RawInteractionRow = {
   id: string
@@ -1177,7 +1218,7 @@ function buildInteractionSummary(
 
 async function getInteractionRowById(
   interactionId: string,
-  queryable?: Queryable
+  queryable?: Executor
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
@@ -1295,9 +1336,7 @@ async function getInteractionRowById(
      WHERE ir.id = ${interactionId}
      LIMIT 1
   `.compile(db)
-  const result = queryable
-    ? await executeCompiledSql<RawInteractionRow>(queryable, compiled)
-    : await db.executeQuery(compiled)
+  const result = await runCompiledOn<RawInteractionRow>(queryable, compiled)
   return result.rows[0] || null
 }
 
@@ -1337,7 +1376,7 @@ function parseStoredInteractionResolveResponse(
 async function getInteractionCommandRow(
   interactionId: string,
   commandId: string,
-  queryable?: Queryable
+  queryable?: Executor
 ) {
   const compiled = db
     .selectFrom("interaction_response_commands")
@@ -1346,15 +1385,16 @@ async function getInteractionCommandRow(
     .where("command_id", "=", commandId)
     .limit(1)
     .compile()
-  const result = queryable
-    ? await executeCompiledSql<RawInteractionCommandRow>(queryable, compiled)
-    : await db.executeQuery(compiled)
+  const result = await runCompiledOn<RawInteractionCommandRow>(
+    queryable,
+    compiled
+  )
   return result.rows[0] || null
 }
 
 async function getInteractionRowByIdForUpdate(
   interactionId: string,
-  queryable: Queryable
+  queryable: Executor
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
@@ -1473,15 +1513,12 @@ async function getInteractionRowByIdForUpdate(
      LIMIT 1
      FOR UPDATE OF ir
   `.compile(db)
-  const result = await executeCompiledSql<RawInteractionRow>(
-    queryable,
-    compiled
-  )
+  const result = await runCompiledOn<RawInteractionRow>(queryable, compiled)
   return result.rows[0] || null
 }
 
 async function insertInteractionCommandRow(
-  client: Queryable,
+  client: Executor,
   params: {
     interactionId: string
     commandId: string
@@ -1492,7 +1529,7 @@ async function insertInteractionCommandRow(
     createdByWorkspaceMemberId: string
   }
 ) {
-  await executeCompiledQuery(
+  await runBuilder(
     client,
     db.insertInto("interaction_response_commands").values({
       interaction_id: params.interactionId,
@@ -1512,7 +1549,7 @@ async function insertInteractionCommandRow(
 }
 
 async function appendInteractionUpdatedSyncEvent(
-  queryable: Queryable,
+  queryable: Executor,
   interaction: InteractionRequestSummary
 ) {
   const allRecipients = await listConversationRealtimeRecipients(
@@ -1551,7 +1588,7 @@ async function appendInteractionUpdatedSyncEvent(
 
 async function syncInteractionEventPayload(
   interaction: InteractionRequestSummary,
-  queryable?: Queryable
+  queryable?: Executor
 ) {
   if (!interaction.itemId) return
   await updateConversationItemEventPayload(
@@ -1910,7 +1947,7 @@ function buildRuntimeAuthorizationSupersededNotice(
 }
 
 async function insertInteractionRequest(
-  client: Queryable,
+  client: Executor,
   params: {
     workspaceId: string
     conversationId: string
@@ -1944,7 +1981,7 @@ async function insertInteractionRequest(
   // Returns the new id on a fresh insert, or null when the row already
   // existed at insert time. Callers MUST handle null by re-querying for
   // the conflict winner — see the create*InteractionRequest functions.
-  const created = await executeCompiledSql<{ id: string }>(
+  const created = await runCompiledOn<{ id: string }>(
     client,
     sql<{ id: string }>`
       INSERT INTO interaction_requests (
@@ -1990,7 +2027,7 @@ async function insertInteractionRequest(
  * the one the conflicting unique index pinned.
  */
 async function resolveInsertConflictWinner(
-  client: Queryable,
+  client: Executor,
   params: { workspaceId: string; requestKey: string; taskId?: string }
 ): Promise<string | null> {
   // Prefer the task-keyed lookup when available — for plan_approval /
@@ -2011,7 +2048,7 @@ async function resolveInsertConflictWinner(
 
 async function findInteractionIdByTaskId(
   taskId: string,
-  queryable?: Queryable
+  queryable?: Executor
 ) {
   const compiled = db
     .selectFrom("interaction_requests")
@@ -2019,16 +2056,14 @@ async function findInteractionIdByTaskId(
     .where("task_id", "=", taskId)
     .limit(1)
     .compile()
-  const result = queryable
-    ? await executeCompiledSql<{ id: string }>(queryable, compiled)
-    : await db.executeQuery(compiled)
+  const result = await runCompiledOn<{ id: string }>(queryable, compiled)
   return result.rows[0]?.id || null
 }
 
 async function findPendingInteractionIdByRequestKey(
   workspaceId: string,
   requestKey: string,
-  queryable?: Queryable
+  queryable?: Executor
 ) {
   const compiled = db
     .selectFrom("interaction_requests")
@@ -2038,20 +2073,18 @@ async function findPendingInteractionIdByRequestKey(
     .where("status", "=", "pending")
     .limit(1)
     .compile()
-  const result = queryable
-    ? await executeCompiledSql<{ id: string }>(queryable, compiled)
-    : await db.executeQuery(compiled)
+  const result = await runCompiledOn<{ id: string }>(queryable, compiled)
   return result.rows[0]?.id || null
 }
 
 async function insertUserInputInteractionDetails(
-  client: Queryable,
+  client: Executor,
   params: {
     interactionId: string
     promptPayload: Record<string, unknown>
   }
 ) {
-  await executeCompiledQuery(
+  await runBuilder(
     client,
     db.insertInto("interaction_user_input_requests").values({
       interaction_id: params.interactionId,
@@ -2066,13 +2099,13 @@ async function insertUserInputInteractionDetails(
 }
 
 async function insertPlanApprovalInteractionDetails(
-  client: Queryable,
+  client: Executor,
   params: {
     interactionId: string
     planPayload: Record<string, unknown>
   }
 ) {
-  await executeCompiledQuery(
+  await runBuilder(
     client,
     db.insertInto("interaction_plan_approval_requests").values({
       interaction_id: params.interactionId,
@@ -2087,7 +2120,7 @@ async function insertPlanApprovalInteractionDetails(
 }
 
 async function insertRuntimeAuthorizationInteractionDetails(
-  client: Queryable,
+  client: Executor,
   params: {
     interactionId: string
     deviceId: string
@@ -2123,7 +2156,7 @@ async function insertRuntimeAuthorizationInteractionDetails(
     principalConversationActorContextId?: string
   }
 ) {
-  await executeCompiledQuery(
+  await runBuilder(
     client,
     db.insertInto("interaction_runtime_authorization_requests").values({
       interaction_id: params.interactionId,
@@ -2159,11 +2192,11 @@ async function insertRuntimeAuthorizationInteractionDetails(
 }
 
 async function updateInteractionConversationItemId(
-  client: Queryable,
+  client: Executor,
   interactionId: string,
   conversationItemId: string
 ) {
-  const result = await executeCompiledQuery(
+  const result = await runBuilder(
     client,
     db
       .updateTable("interaction_requests")
@@ -2181,11 +2214,11 @@ async function updateInteractionConversationItemId(
 }
 
 async function updateInteractionRequestRow(
-  client: Queryable,
+  client: Executor,
   interactionId: string,
   values: Record<string, unknown>
 ) {
-  const result = await executeCompiledQuery(
+  const result = await runBuilder(
     client,
     db
       .updateTable("interaction_requests")
@@ -2200,13 +2233,13 @@ async function updateInteractionRequestRow(
 }
 
 async function updateInteractionResolutionPayload(
-  client: Queryable,
+  client: Executor,
   interactionKind: InteractionRequestKind,
   interactionId: string,
   payload: Record<string, unknown>
 ) {
   if (interactionKind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    const result = await executeCompiledQuery(
+    const result = await runBuilder(
       client,
       db
         .updateTable("interaction_user_input_requests")
@@ -2226,7 +2259,7 @@ async function updateInteractionResolutionPayload(
   }
 
   if (interactionKind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-    const result = await executeCompiledQuery(
+    const result = await runBuilder(
       client,
       db
         .updateTable("interaction_plan_approval_requests")
@@ -2245,7 +2278,7 @@ async function updateInteractionResolutionPayload(
     return
   }
 
-  const result = await executeCompiledQuery(
+  const result = await runBuilder(
     client,
     db
       .updateTable("interaction_runtime_authorization_requests")
@@ -2266,7 +2299,7 @@ async function updateInteractionResolutionPayload(
 export async function createUserInputInteractionRequest(
   params: CreateUserInputInteractionParams
 ) {
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     const requestKey = buildTaskInteractionRequestKey(params.taskId)
     const existingInteractionId =
       (await findInteractionIdByTaskId(params.taskId, client)) ||
@@ -2362,7 +2395,7 @@ export async function createUserInputInteractionRequest(
 export async function createRemoteAgentUserInputInteractionRequest(
   params: CreateRemoteAgentUserInputInteractionParams
 ) {
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     const requestKey = buildRemoteAgentInteractionRequestKey({
       remoteAgentRunId: params.remoteAgentRunId,
       kind: INTERACTION_REQUEST_KIND.USER_INPUT,
@@ -2464,7 +2497,7 @@ export async function createRemoteAgentUserInputInteractionRequest(
 export async function createPlanApprovalInteractionRequest(
   params: CreatePlanApprovalInteractionParams
 ) {
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     const requestKey = buildTaskInteractionRequestKey(params.taskId)
     const existingInteractionId =
       (await findInteractionIdByTaskId(params.taskId, client)) ||
@@ -2579,7 +2612,7 @@ export async function createPlanApprovalInteractionRequest(
 export async function createRemoteAgentPlanApprovalInteractionRequest(
   params: CreateRemoteAgentPlanApprovalInteractionParams
 ) {
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     const requestKey = buildRemoteAgentInteractionRequestKey({
       remoteAgentRunId: params.remoteAgentRunId,
       kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
@@ -2668,7 +2701,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       interactionId,
       created.item.id
     )
-    const contextUpsert = await executeSqlOn<{ remote_agent_id: string }>(
+    const contextUpsert = await runOn<{ remote_agent_id: string }>(
       client,
       `
         INSERT INTO remote_agent_conversation_contexts (
@@ -2720,7 +2753,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
 export async function createRuntimeAuthorizationInteractionRequest(
   params: CreateRuntimeAuthorizationInteractionParams
 ) {
-  return transaction(async (client) => {
+  return withDbTransaction(async (client) => {
     const dedupeKey = buildRuntimeAuthorizationDedupeKey({
       deviceId: params.deviceId,
       deviceCapabilityId: params.deviceCapabilityId,
@@ -2926,7 +2959,7 @@ export async function findOpenRuntimeAuthorizationInteraction(
 
 export async function getInteractionRequestSummary(
   interactionId: string,
-  queryable?: Queryable
+  queryable?: Executor
 ) {
   const row = await getInteractionRowById(interactionId, queryable)
   return row ? buildInteractionSummary(row) : null
@@ -2977,7 +3010,7 @@ export async function cancelInteractionRequest(
   }
 
   const resolutionPayload = parseJsonObject(existing.resolution_payload)
-  const interaction = await transaction(async (client) => {
+  const interaction = await withDbTransaction(async (client) => {
     await updateInteractionRequestRow(client, interactionId, {
       status: "cancelled",
       revision: sql`revision + 1`,
@@ -3140,18 +3173,14 @@ export async function canUserResolveInteraction(params: {
       return true
     }
 
-    const grant = await executeSql<{ workspace_member_id: string }>(
-      `
-        SELECT workspace_member_id
-        FROM remote_agent_group_interaction_grants
-        WHERE remote_agent_id = $1
-          AND workspace_member_id = $2
-        LIMIT 1
-      `,
-      [
-        interaction.requester.remoteAgentId,
-        viewerMembership.workspace_member_id,
-      ]
+    const grant = await runBuilder(
+      db,
+      db
+        .selectFrom("remote_agent_group_interaction_grants")
+        .select("workspace_member_id")
+        .where("remote_agent_id", "=", interaction.requester.remoteAgentId)
+        .where("workspace_member_id", "=", viewerMembership.workspace_member_id)
+        .limit(1)
     )
 
     return Boolean(grant.rows[0]?.workspace_member_id)
@@ -3414,7 +3443,7 @@ export async function resolveInteractionRequest(
   const normalizedCommandPayload =
     buildNormalizedInteractionCommandPayload(params)
 
-  const result = await transaction(async (client) => {
+  const result = await withDbTransaction(async (client) => {
     const locked = await getInteractionRowByIdForUpdate(
       params.interactionId,
       client
@@ -3469,7 +3498,7 @@ export async function resolveInteractionRequest(
       !locked.target_participant_id &&
       locked.requester_remote_agent_id
     ) {
-      const conversationRow = await executeTakeFirst(
+      const conversationRow = await takeFirstOn(
         client,
         db
           .selectFrom("conversations")
@@ -3481,16 +3510,22 @@ export async function resolveInteractionRequest(
         throw new Error(`Conversation ${locked.conversation_id} not found`)
       }
       if (conversationRow.kind !== "direct") {
-        const grantRow = await executeSqlOn<{ workspace_member_id: string }>(
+        const grantRow = await runBuilder(
           client,
-          `
-            SELECT workspace_member_id
-            FROM remote_agent_group_interaction_grants
-            WHERE remote_agent_id = $1
-              AND workspace_member_id = $2
-            LIMIT 1
-          `,
-          [locked.requester_remote_agent_id, params.resolverWorkspaceMemberId]
+          db
+            .selectFrom("remote_agent_group_interaction_grants")
+            .select("workspace_member_id")
+            .where(
+              "remote_agent_id",
+              "=",
+              locked.requester_remote_agent_id
+            )
+            .where(
+              "workspace_member_id",
+              "=",
+              params.resolverWorkspaceMemberId
+            )
+            .limit(1)
         )
         if (!grantRow.rows[0]?.workspace_member_id) {
           throw new Error(
@@ -3583,29 +3618,23 @@ export async function resolveInteractionRequest(
       }
 
       if (locked.remote_agent_run_id && locked.requester_remote_agent_id) {
-        await executeSqlOn(
-          client,
-          `
-            UPDATE remote_agent_conversation_contexts
-            SET collaboration_mode = $3,
-                collaboration_state = $4::jsonb,
-                active_plan_approval_interaction_id = NULL,
-                updated_at = NOW()
-            WHERE remote_agent_id = $1
-              AND conversation_id = $2
-          `,
-          [
-            locked.requester_remote_agent_id,
-            locked.conversation_id,
-            nextStatus === "approved" ? "default" : "plan_drafting",
-            JSON.stringify({}),
-          ]
-        )
+        await client
+          .updateTable("remote_agent_conversation_contexts")
+          .set({
+            collaboration_mode:
+              nextStatus === "approved" ? "default" : "plan_drafting",
+            collaboration_state: jsonbValue({}),
+            active_plan_approval_interaction_id: null,
+            updated_at: sql`NOW()`,
+          })
+          .where("remote_agent_id", "=", locked.requester_remote_agent_id)
+          .where("conversation_id", "=", locked.conversation_id)
+          .execute()
       } else {
         if (!locked.task_id) {
           throw new Error(`Interaction ${locked.id} is missing task governance`)
         }
-        const taskRow = await executeTakeFirst(
+        const taskRow = await takeFirstOn(
           client,
           db
             .selectFrom("tool_call_tasks")
@@ -3618,7 +3647,7 @@ export async function resolveInteractionRequest(
             `Plan approval interaction ${locked.id} is missing a session`
           )
         }
-        const sessionRow = await executeTakeFirst(
+        const sessionRow = await takeFirstOn(
           client,
           db
             .selectFrom("sessions as s")
@@ -4036,7 +4065,7 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
   }
 
   const resolutionPayload = parseJsonObject(existing.resolution_payload)
-  const interaction = await transaction(async (client) => {
+  const interaction = await withDbTransaction(async (client) => {
     await updateInteractionRequestRow(client, interactionId, {
       status: "superseded",
       revision: sql`revision + 1`,

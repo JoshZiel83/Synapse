@@ -2,11 +2,11 @@ import type { EventType, SystemEvent } from "@synapse/shared"
 import { sql } from "kysely"
 import { REDIS_CHANNELS, parseJsonObject } from "@synapse/shared"
 import { config } from "../../config/index.js"
-import { query, transaction } from "../database/index.js"
 import {
   db,
-  executeCompiledQuery,
-  executeCompiledSql,
+  runBuilder,
+  withDbTransaction,
+  type Executor,
   type TableInsert,
   type TableRow,
 } from "../database/kysely.js"
@@ -14,13 +14,6 @@ import { redisPub, redisSub } from "../redis/index.js"
 import { createLogger } from "../logger/index.js"
 
 const log = createLogger("events")
-
-export type Queryable = {
-  query: (
-    text: string,
-    params?: any[]
-  ) => Promise<{ rows: any[]; rowCount?: number | null }>
-}
 
 export type TransactionalRealtimeEventType = "chat.sync.event"
 
@@ -79,8 +72,8 @@ async function wait(ms: number) {
 }
 
 async function claimPendingRealtimeOutboxEntries(limit: number) {
-  return transaction(async (client) => {
-    const compiled = sql<RealtimeEventOutboxRow[]>`
+  return withDbTransaction(async (trx) => {
+    const result = await sql<RealtimeEventOutboxRow>`
       WITH claimed AS (
         SELECT id
         FROM realtime_event_outbox
@@ -104,11 +97,7 @@ async function claimPendingRealtimeOutboxEntries(limit: number) {
                 reo.recipient_workspace_member_id,
                 reo.payload,
                 reo.event_timestamp
-    `.compile(db)
-    const result = await executeCompiledSql<RealtimeEventOutboxRow>(
-      client,
-      compiled
-    )
+    `.execute(trx)
 
     return result.rows
   })
@@ -180,7 +169,7 @@ async function processRealtimeOutboxEntry(entry: RealtimeEventOutboxRow) {
 }
 
 export async function enqueueTransactionalEventDeliveries(
-  queryable: Queryable,
+  queryable: Executor,
   event: {
     type: TransactionalRealtimeEventType
     payload: Record<string, unknown>
@@ -201,7 +190,7 @@ export async function enqueueTransactionalEventDeliveries(
     return
   }
 
-  await executeCompiledQuery(
+  await runBuilder(
     queryable,
     db.insertInto("realtime_event_outbox").values(
       recipients.map((recipient) => ({
@@ -218,7 +207,7 @@ export async function enqueueTransactionalEventDeliveries(
 }
 
 export async function enqueueTransactionalEvent(
-  queryable: Queryable,
+  queryable: Executor,
   event: TransactionalRealtimeEvent
 ) {
   const recipientWorkspaceMemberId =
@@ -291,15 +280,16 @@ export async function gcRealtimeEventOutbox(
   // One DELETE statement on the pool — no need for an explicit
   // transaction. Indexed on (status, available_at, created_at) so the
   // status filter is cheap.
-  const result = await query(
-    `
-      DELETE FROM realtime_event_outbox
-       WHERE status = 'dispatched'
-         AND updated_at < NOW() - ($1 || ' hours')::interval
-    `,
-    [String(retentionHours)]
-  )
-  return result.rowCount ?? 0
+  const result = await db
+    .deleteFrom("realtime_event_outbox")
+    .where("status", "=", "dispatched")
+    .where(
+      "updated_at",
+      "<",
+      sql<Date>`NOW() - (${String(retentionHours)} || ' hours')::interval`
+    )
+    .executeTakeFirst()
+  return Number(result.numDeletedRows ?? 0)
 }
 
 async function runRealtimeOutboxDispatcherLoop() {

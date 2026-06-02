@@ -19,12 +19,12 @@ import type {
   AuthTransport,
   User,
 } from "@synapse/shared"
-import { query, transaction } from "../../infrastructure/database/index.js"
 import {
   db,
-  executeCompiledQuery,
-  executeTakeFirst,
-  type QueryExecutor,
+  runBuilder,
+  takeFirstOn,
+  withDbTransaction,
+  type Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
   disconnectSocketsForSession,
@@ -96,7 +96,7 @@ export interface AuthServiceResult {
   sessionPersistence: AuthSessionPersistence
 }
 
-type DatabaseExecutor = QueryExecutor
+type DatabaseExecutor = Executor
 
 interface AuthQrLoginRequestRow {
   id: string
@@ -224,7 +224,7 @@ function getQrLoginExpiryDate() {
 }
 
 function getDatabaseExecutor(executor?: DatabaseExecutor): DatabaseExecutor {
-  return executor ?? { query }
+  return executor ?? db
 }
 
 const userSelection = [
@@ -354,7 +354,7 @@ async function expireQrLoginRequestIfNeeded(
   }
 
   const runner = getDatabaseExecutor(executor)
-  const updated = await executeTakeFirst<AuthQrLoginRequestRow>(
+  const updated = await takeFirstOn<AuthQrLoginRequestRow>(
     runner,
     db
       .updateTable("auth_qr_login_requests")
@@ -393,7 +393,7 @@ async function insertSession(
   const ipAddress = extractIpAddress(input.request) ?? null
   const userAgent = extractUserAgent(input.request) ?? null
 
-  const row = await executeTakeFirst<{
+  const row = await takeFirstOn<{
     id: string
     client_type: AuthClientType
     transport: AuthTransport
@@ -448,7 +448,7 @@ async function getUserByEmail(
   executor?: DatabaseExecutor
 ): Promise<UserRow | null> {
   const runner = getDatabaseExecutor(executor)
-  return executeTakeFirst<UserRow>(
+  return takeFirstOn<UserRow>(
     runner,
     db
       .selectFrom("users")
@@ -462,7 +462,7 @@ async function getUserById(
   executor?: DatabaseExecutor
 ): Promise<UserRow | null> {
   const runner = getDatabaseExecutor(executor)
-  return executeTakeFirst<UserRow>(
+  return takeFirstOn<UserRow>(
     runner,
     db.selectFrom("users").select(userSelection).where("id", "=", userId)
   )
@@ -541,7 +541,7 @@ async function getQrLoginRequestById(
     statement = statement.forUpdate()
   }
 
-  return executeTakeFirst<AuthQrLoginRequestRow>(runner, statement)
+  return takeFirstOn<AuthQrLoginRequestRow>(runner, statement)
 }
 
 async function getQrLoginRequestByScanToken(
@@ -558,7 +558,7 @@ async function getQrLoginRequestByScanToken(
     statement = statement.forUpdate()
   }
 
-  return executeTakeFirst<AuthQrLoginRequestRow>(runner, statement)
+  return takeFirstOn<AuthQrLoginRequestRow>(runner, statement)
 }
 
 export function extractSessionTokenFromRequest(
@@ -670,40 +670,35 @@ export function createAuthService(_app: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
-    const userRow = await transaction(async (client) => {
-      const runner = { query: client.query.bind(client) as typeof query }
-      const row = await executeTakeFirst<UserRow>(
-        runner,
-        db
-          .insertInto("users")
-          .values({
-            email: normalizedEmail,
-            password_hash: passwordHash,
-            name: name.trim(),
-          })
-          .returning(userSelection)
-      )
+    const userRow = await withDbTransaction(async (trx) => {
+      const row = await trx
+        .insertInto("users")
+        .values({
+          email: normalizedEmail,
+          password_hash: passwordHash,
+          name: name.trim(),
+        })
+        .returning(userSelection)
+        .executeTakeFirst()
       if (!row) {
         throw new Error("Failed to create user")
       }
 
-      const avatarFile = await createGeneratedUserAvatarFile(client, {
+      const avatarFile = await createGeneratedUserAvatarFile(trx, {
         userId: row.id,
         name: row.name,
         email: row.email,
       })
 
-      const updatedUser = await executeTakeFirst<UserRow>(
-        runner,
-        db
-          .updateTable("users")
-          .set({
-            avatar_file_id: avatarFile.fileId,
-            updated_at: sql`NOW()`,
-          })
-          .where("id", "=", row.id)
-          .returning(userSelection)
-      )
+      const updatedUser = await trx
+        .updateTable("users")
+        .set({
+          avatar_file_id: avatarFile.fileId,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", row.id)
+        .returning(userSelection)
+        .executeTakeFirst()
       if (!updatedUser) {
         throw new Error("Failed to update user avatar")
       }
@@ -814,8 +809,8 @@ export function createAuthService(_app: FastifyInstance) {
     scanToken: string,
     userId: string
   ): Promise<AuthQrLoginResolveResponse> {
-    return transaction(async (client) => {
-      const runner = { query: client.query.bind(client) as typeof query }
+    return withDbTransaction(async (trx) => {
+      const runner = trx
       let row = await getQrLoginRequestByScanToken(scanToken, runner, true)
       if (!row) {
         throw new AuthError(
@@ -861,7 +856,7 @@ export function createAuthService(_app: FastifyInstance) {
 
       if (row.status === "pending_scan") {
         row =
-          (await executeTakeFirst<AuthQrLoginRequestRow>(
+          (await takeFirstOn<AuthQrLoginRequestRow>(
             runner,
             db
               .updateTable("auth_qr_login_requests")
@@ -892,8 +887,8 @@ export function createAuthService(_app: FastifyInstance) {
     userId: string,
     sessionPersistence: AuthSessionPersistence
   ): Promise<AuthQrLoginStatusResponse> {
-    return transaction(async (client) => {
-      const runner = { query: client.query.bind(client) as typeof query }
+    return withDbTransaction(async (trx) => {
+      const runner = trx
       let row = await getQrLoginRequestByScanToken(scanToken, runner, true)
       if (!row) {
         throw new AuthError(
@@ -939,7 +934,7 @@ export function createAuthService(_app: FastifyInstance) {
 
       if (row.status !== "approved") {
         row =
-          (await executeTakeFirst<AuthQrLoginRequestRow>(
+          (await takeFirstOn<AuthQrLoginRequestRow>(
             runner,
             db
               .updateTable("auth_qr_login_requests")
@@ -965,8 +960,8 @@ export function createAuthService(_app: FastifyInstance) {
     scanToken: string,
     userId: string
   ): Promise<AuthQrLoginStatusResponse> {
-    return transaction(async (client) => {
-      const runner = { query: client.query.bind(client) as typeof query }
+    return withDbTransaction(async (trx) => {
+      const runner = trx
       let row = await getQrLoginRequestByScanToken(scanToken, runner, true)
       if (!row) {
         throw new AuthError(
@@ -1012,7 +1007,7 @@ export function createAuthService(_app: FastifyInstance) {
 
       if (row.status !== "rejected") {
         row =
-          (await executeTakeFirst<AuthQrLoginRequestRow>(
+          (await takeFirstOn<AuthQrLoginRequestRow>(
             runner,
             db
               .updateTable("auth_qr_login_requests")
@@ -1037,8 +1032,8 @@ export function createAuthService(_app: FastifyInstance) {
     browserToken: string,
     request: FastifyRequest
   ): Promise<AuthServiceResult> {
-    return transaction(async (client) => {
-      const runner = { query: client.query.bind(client) as typeof query }
+    return withDbTransaction(async (trx) => {
+      const runner = trx
       let row = await getQrLoginRequestById(
         requestId,
         browserToken,
@@ -1113,7 +1108,7 @@ export function createAuthService(_app: FastifyInstance) {
         runner
       )
 
-      await executeCompiledQuery(
+      await runBuilder(
         runner,
         db
           .updateTable("auth_qr_login_requests")

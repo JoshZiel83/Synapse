@@ -140,13 +140,13 @@ test(
   "checkPermission: remote_agent subject matches a remote_agent-subject binding",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const wsId = await newWorkspace(db)
       const remoteAgentId = await newRemoteAgent(db, wsId)
       const targetActorId = await newActor(db, wsId)
 
       // Write a subject=remote_agent binding for an actor resource.
-      await insertAccessBindingReturningIdOn(client as any, {
+      await insertAccessBindingReturningIdOn(db, {
         workspaceId: wsId,
         resourceType: "actor",
         resourceId: targetActorId,
@@ -178,13 +178,13 @@ test(
   "checkPermission(remote_agent resource): remote_agent subject can match its own binding",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const wsId = await newWorkspace(db)
       const agentA = await newRemoteAgent(db, wsId)
       // Write a workspace-scoped binding on agentA (so workspace_member
       // subjects with the membership can use it). Then a separate grant
       // for agentA *itself* — exercising the new remote_agent branch.
-      await insertAccessBindingReturningIdOn(client as any, {
+      await insertAccessBindingReturningIdOn(db, {
         workspaceId: wsId,
         resourceType: "remote_agent",
         resourceId: agentA,
@@ -260,7 +260,7 @@ test(
   "loadAccessBindingRowsForResourcesAndContext: scoped binding hidden in wrong conversation",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const wsId = await newWorkspace(db)
       const targetActorId = await newActor(db, wsId)
       const subjectActor = await newActor(db, wsId)
@@ -268,7 +268,7 @@ test(
       const convB = await newConversation(db, wsId)
 
       // subject=actor + scope=conversation B
-      await insertAccessBindingReturningIdOn(client as any, {
+      await insertAccessBindingReturningIdOn(db, {
         workspaceId: wsId,
         resourceType: "actor",
         resourceId: targetActorId,

@@ -11,11 +11,9 @@
 // and device pairing to actually provision a sandbox.
 
 import { v4 as uuidv4 } from "uuid"
+import { sql } from "kysely"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
-import {
-  executeSqlOn,
-  type QueryExecutor,
-} from "../../infrastructure/database/kysely.js"
+import { type Executor } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 
 export class SandboxSpaceError extends Error {
@@ -85,7 +83,7 @@ export interface FileSnapshotRow {
  * FK forbids pointing at a non-existent snapshot.
  */
 export async function ensureFileSpace(
-  client: QueryExecutor,
+  client: Executor,
   input: {
     workspaceId: string
     owner: SubjectRef
@@ -124,17 +122,17 @@ export async function ensureFileSpace(
 
   // DO UPDATE (no-op) is required for RETURNING on the conflicting row; DO
   // NOTHING would skip RETURNING. Pick the matching partial-unique index.
+  // conflictClause is a fixed compile-time fragment (no external input) → sql.raw.
   const conflictClause = scopeSubjectId
     ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL`
     : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL`
-  const result = await executeSqlOn<FileSpaceRow>(
-    client,
-    `INSERT INTO file_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-     ON CONFLICT ${conflictClause}
-       DO UPDATE SET updated_at = file_spaces.updated_at
-     RETURNING id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, current_snapshot_id`,
-    [uuidv4(), input.workspaceId, ownerSubjectId, scopeSubjectId, namespaceKey]
+  const result = await sql<FileSpaceRow>`
+    INSERT INTO file_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
+    VALUES (${uuidv4()}, ${input.workspaceId}, ${ownerSubjectId}, ${scopeSubjectId}, ${namespaceKey}, NOW(), NOW())
+    ON CONFLICT ${sql.raw(conflictClause)}
+      DO UPDATE SET updated_at = file_spaces.updated_at
+    RETURNING id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, current_snapshot_id`.execute(
+    client
   )
   const row = result.rows[0]
   if (!row) {
@@ -145,15 +143,12 @@ export async function ensureFileSpace(
 
 /** Load a file_space by id. */
 export async function getFileSpace(
-  client: QueryExecutor,
+  client: Executor,
   fileSpaceId: string
 ): Promise<FileSpaceRow | null> {
-  const result = await executeSqlOn<FileSpaceRow>(
-    client,
-    `SELECT id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, current_snapshot_id
-     FROM file_spaces WHERE id = $1 LIMIT 1`,
-    [fileSpaceId]
-  )
+  const result = await sql<FileSpaceRow>`
+    SELECT id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, current_snapshot_id
+    FROM file_spaces WHERE id = ${fileSpaceId} LIMIT 1`.execute(client)
   return result.rows[0] ?? null
 }
 
@@ -163,7 +158,7 @@ export async function getFileSpace(
  * has two live mounts for the same space or subpath.
  */
 export async function insertFileMount(
-  client: QueryExecutor,
+  client: Executor,
   input: {
     workspaceId: string
     sessionId: string
@@ -175,27 +170,17 @@ export async function insertFileMount(
     materializedDir?: string | null
   }
 ): Promise<FileMountRow> {
-  const result = await executeSqlOn<FileMountRow>(
-    client,
-    `INSERT INTO file_mounts
-       (id, workspace_id, session_id, file_space_id, mount_subpath,
-        base_snapshot_id, pairing_session_id, refresh_policy, status,
-        materialized_dir, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'provisioning', $9, NOW(), NOW())
-     RETURNING id, workspace_id, session_id, file_space_id, mount_subpath,
-               device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
-               refresh_policy, status, materialized_dir, host_pid, error_message`,
-    [
-      uuidv4(),
-      input.workspaceId,
-      input.sessionId,
-      input.fileSpaceId,
-      input.mountSubpath,
-      input.baseSnapshotId,
-      input.pairingSessionId ?? null,
-      input.refreshPolicy ?? "per_turn",
-      input.materializedDir ?? null,
-    ]
+  const result = await sql<FileMountRow>`
+    INSERT INTO file_mounts
+      (id, workspace_id, session_id, file_space_id, mount_subpath,
+       base_snapshot_id, pairing_session_id, refresh_policy, status,
+       materialized_dir, created_at, updated_at)
+    VALUES (${uuidv4()}, ${input.workspaceId}, ${input.sessionId}, ${input.fileSpaceId}, ${input.mountSubpath},
+            ${input.baseSnapshotId}, ${input.pairingSessionId ?? null}, ${input.refreshPolicy ?? "per_turn"}, 'provisioning', ${input.materializedDir ?? null}, NOW(), NOW())
+    RETURNING id, workspace_id, session_id, file_space_id, mount_subpath,
+              device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
+              refresh_policy, status, materialized_dir, host_pid, error_message`.execute(
+    client
   )
   const row = result.rows[0]
   if (!row) throw new SandboxSpaceError("Failed to insert file_mount", 500)
@@ -204,7 +189,7 @@ export async function insertFileMount(
 
 /** Patch mutable columns on a file_mount (status/device/pid/snapshots/etc). */
 export async function updateFileMount(
-  client: QueryExecutor,
+  client: Executor,
   mountId: string,
   patch: Partial<{
     status: FileMountRow["status"]
@@ -217,12 +202,9 @@ export async function updateFileMount(
     closedAt: boolean // when true, set closed_at = NOW()
   }>
 ): Promise<void> {
-  const sets: string[] = ["updated_at = NOW()"]
-  const values: unknown[] = []
-  let i = 1
+  const sets = [sql`updated_at = NOW()`]
   const add = (col: string, val: unknown) => {
-    sets.push(`${col} = $${i++}`)
-    values.push(val)
+    sets.push(sql`${sql.ref(col)} = ${val}`)
   }
   if (patch.status !== undefined) add("status", patch.status)
   if (patch.deviceId !== undefined) add("device_id", patch.deviceId)
@@ -234,30 +216,24 @@ export async function updateFileMount(
   if (patch.materializedDir !== undefined)
     add("materialized_dir", patch.materializedDir)
   if (patch.errorMessage !== undefined) add("error_message", patch.errorMessage)
-  if (patch.closedAt) sets.push("closed_at = NOW()")
-  values.push(mountId)
-  await executeSqlOn(
-    client,
-    `UPDATE file_mounts SET ${sets.join(", ")} WHERE id = $${i}`,
-    values
+  if (patch.closedAt) sets.push(sql`closed_at = NOW()`)
+  await sql`UPDATE file_mounts SET ${sql.join(sets, sql`, `)} WHERE id = ${mountId}`.execute(
+    client
   )
 }
 
 /** Active (non-closed/failed) mounts for a session. */
 export async function getActiveMountsForSession(
-  client: QueryExecutor,
+  client: Executor,
   sessionId: string
 ): Promise<FileMountRow[]> {
-  const result = await executeSqlOn<FileMountRow>(
-    client,
-    `SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
-            device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
-            refresh_policy, status, materialized_dir, host_pid, error_message
-     FROM file_mounts
-     WHERE session_id = $1 AND status NOT IN ('closed', 'failed')
-     ORDER BY mount_subpath`,
-    [sessionId]
-  )
+  const result = await sql<FileMountRow>`
+    SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
+           device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
+           refresh_policy, status, materialized_dir, host_pid, error_message
+    FROM file_mounts
+    WHERE session_id = ${sessionId} AND status NOT IN ('closed', 'failed')
+    ORDER BY mount_subpath`.execute(client)
   return result.rows
 }
 
@@ -267,20 +243,17 @@ export async function getActiveMountsForSession(
  * session for the startup reconciler to retry. `limit` bounds a single sweep.
  */
 export async function getFailedRecoverableMounts(
-  client: QueryExecutor,
+  client: Executor,
   limit = 200
 ): Promise<FileMountRow[]> {
-  const result = await executeSqlOn<FileMountRow>(
-    client,
-    `SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
-            device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
-            refresh_policy, status, materialized_dir, host_pid, error_message
-     FROM file_mounts
-     WHERE status = 'failed' AND materialized_dir IS NOT NULL
-     ORDER BY updated_at ASC
-     LIMIT $1`,
-    [limit]
-  )
+  const result = await sql<FileMountRow>`
+    SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
+           device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
+           refresh_policy, status, materialized_dir, host_pid, error_message
+    FROM file_mounts
+    WHERE status = 'failed' AND materialized_dir IS NOT NULL
+    ORDER BY updated_at ASC
+    LIMIT ${limit}`.execute(client)
   return result.rows
 }
 
@@ -297,7 +270,7 @@ export async function getFailedRecoverableMounts(
  * (never blindly merge a stale manifest).
  */
 export async function appendSnapshot(
-  client: QueryExecutor,
+  client: Executor,
   input: {
     workspaceId: string
     fileSpaceId: string
@@ -310,10 +283,9 @@ export async function appendSnapshot(
   }
 ): Promise<FileSnapshotRow> {
   // Serialize per-space version assignment.
-  const locked = await executeSqlOn<{ current_snapshot_id: string | null }>(
-    client,
-    `SELECT current_snapshot_id FROM file_spaces WHERE id = $1 FOR UPDATE`,
-    [input.fileSpaceId]
+  const locked = await sql<{ current_snapshot_id: string | null }>`
+    SELECT current_snapshot_id FROM file_spaces WHERE id = ${input.fileSpaceId} FOR UPDATE`.execute(
+    client
   )
   if (locked.rows.length === 0) {
     throw new SandboxSpaceError(
@@ -329,70 +301,52 @@ export async function appendSnapshot(
     )
   }
 
-  const nextVersion = await executeSqlOn<{ v: string }>(
-    client,
-    `SELECT COALESCE(MAX(version), 0) + 1 AS v FROM file_snapshots WHERE file_space_id = $1`,
-    [input.fileSpaceId]
+  const nextVersion = await sql<{ v: string }>`
+    SELECT COALESCE(MAX(version), 0) + 1 AS v FROM file_snapshots WHERE file_space_id = ${input.fileSpaceId}`.execute(
+    client
   )
   const version = nextVersion.rows[0]?.v ?? "1"
 
   const snapId = uuidv4()
-  const inserted = await executeSqlOn<FileSnapshotRow>(
-    client,
-    `INSERT INTO file_snapshots
-       (id, workspace_id, file_space_id, parent_snapshot_id, version,
-        manifest_sha256, reason, entry_count, total_bytes,
-        created_by_session_id, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-     RETURNING id, workspace_id, file_space_id, parent_snapshot_id, version,
-               manifest_sha256, reason, entry_count, total_bytes`,
-    [
-      snapId,
-      input.workspaceId,
-      input.fileSpaceId,
-      input.expectedParentSnapshotId,
-      version,
-      input.manifestSha256,
-      input.reason ?? "session_commit",
-      input.entryCount,
-      input.totalBytes,
-      input.createdBySessionId ?? null,
-    ]
-  )
+  const inserted = await sql<FileSnapshotRow>`
+    INSERT INTO file_snapshots
+      (id, workspace_id, file_space_id, parent_snapshot_id, version,
+       manifest_sha256, reason, entry_count, total_bytes,
+       created_by_session_id, created_at)
+    VALUES (${snapId}, ${input.workspaceId}, ${input.fileSpaceId}, ${input.expectedParentSnapshotId}, ${version},
+            ${input.manifestSha256}, ${input.reason ?? "session_commit"}, ${input.entryCount}, ${input.totalBytes},
+            ${input.createdBySessionId ?? null}, NOW())
+    RETURNING id, workspace_id, file_space_id, parent_snapshot_id, version,
+              manifest_sha256, reason, entry_count, total_bytes`.execute(client)
   const row = inserted.rows[0]
   if (!row) throw new SandboxSpaceError("Failed to insert file_snapshot", 500)
 
-  await executeSqlOn(
-    client,
-    `UPDATE file_spaces SET current_snapshot_id = $1, updated_at = NOW() WHERE id = $2`,
-    [snapId, input.fileSpaceId]
+  await sql`
+    UPDATE file_spaces SET current_snapshot_id = ${snapId}, updated_at = NOW() WHERE id = ${input.fileSpaceId}`.execute(
+    client
   )
   return row
 }
 
 /** Upsert a content_blobs row (sha256 PK; dedup via ON CONFLICT DO NOTHING). */
 export async function ensureContentBlob(
-  client: QueryExecutor,
+  client: Executor,
   input: { sha256: string; sizeBytes: number; backend?: string }
 ): Promise<void> {
-  await executeSqlOn(
-    client,
-    `INSERT INTO content_blobs (sha256, size_bytes, backend, created_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT (sha256) DO NOTHING`,
-    [input.sha256, input.sizeBytes, input.backend ?? "local_cas"]
-  )
+  await sql`
+    INSERT INTO content_blobs (sha256, size_bytes, backend, created_at)
+    VALUES (${input.sha256}, ${input.sizeBytes}, ${input.backend ?? "local_cas"}, NOW())
+    ON CONFLICT (sha256) DO NOTHING`.execute(client)
 }
 
 /** Load a snapshot's manifest sha for a given snapshot id (within a space). */
 export async function getSnapshotManifestSha(
-  client: QueryExecutor,
+  client: Executor,
   snapshotId: string
 ): Promise<string | null> {
-  const result = await executeSqlOn<{ manifest_sha256: string }>(
-    client,
-    `SELECT manifest_sha256 FROM file_snapshots WHERE id = $1 LIMIT 1`,
-    [snapshotId]
+  const result = await sql<{ manifest_sha256: string }>`
+    SELECT manifest_sha256 FROM file_snapshots WHERE id = ${snapshotId} LIMIT 1`.execute(
+    client
   )
   return result.rows[0]?.manifest_sha256 ?? null
 }

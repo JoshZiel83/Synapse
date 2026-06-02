@@ -21,8 +21,8 @@ import {
  * append with head-moved detection — all against the real schema (triggers,
  * composite FKs, partial-uniques).
  *
- * Uses withTestDbAndClient: the pg.PoolClient is a QueryExecutor ({query}) for
- * space.ts; the Kysely handle inserts fixtures; both share one rolled-back txn.
+ * Uses withTestDbAndClient: the Kysely handle (db) is the Executor passed to
+ * space.ts and also inserts fixtures; all share one rolled-back txn.
  */
 
 const NS = "fss"
@@ -92,18 +92,18 @@ async function seedWorkspace(db: Kysely<any>) {
 }
 
 test("space.ts: ensureFileSpace creates 3 runtime spaces and is idempotent", async () => {
-  await withTestDbAndClient(async ({ db, client }) => {
+  await withTestDbAndClient(async ({ db }) => {
     const { workspaceId, actorId, conversationId } = await seedWorkspace(db)
 
-    const conv1 = await ensureFileSpace(client, {
+    const conv1 = await ensureFileSpace(db, {
       workspaceId,
       owner: conversationRef(conversationId),
     })
-    const actor1 = await ensureFileSpace(client, {
+    const actor1 = await ensureFileSpace(db, {
       workspaceId,
       owner: actorRef(actorId),
     })
-    const actorConv1 = await ensureFileSpace(client, {
+    const actorConv1 = await ensureFileSpace(db, {
       workspaceId,
       owner: actorRef(actorId),
       scope: conversationRef(conversationId),
@@ -114,11 +114,11 @@ test("space.ts: ensureFileSpace creates 3 runtime spaces and is idempotent", asy
     assert.notEqual(conv1.id, actorConv1.id)
     assert.equal(conv1.current_snapshot_id, null)
 
-    const conv2 = await ensureFileSpace(client, {
+    const conv2 = await ensureFileSpace(db, {
       workspaceId,
       owner: conversationRef(conversationId),
     })
-    const actorConv2 = await ensureFileSpace(client, {
+    const actorConv2 = await ensureFileSpace(db, {
       workspaceId,
       owner: actorRef(actorId),
       scope: conversationRef(conversationId),
@@ -129,11 +129,11 @@ test("space.ts: ensureFileSpace creates 3 runtime spaces and is idempotent", asy
 })
 
 test("space.ts: ensureFileSpace rejects a user-kind owner", async () => {
-  await withTestDbAndClient(async ({ db, client }) => {
+  await withTestDbAndClient(async ({ db }) => {
     const { workspaceId } = await seedWorkspace(db)
     await assert.rejects(
       () =>
-        ensureFileSpace(client, {
+        ensureFileSpace(db, {
           workspaceId,
           owner: {
             kind: "user",
@@ -146,15 +146,15 @@ test("space.ts: ensureFileSpace rejects a user-kind owner", async () => {
 })
 
 test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async () => {
-  await withTestDbAndClient(async ({ db, client }) => {
+  await withTestDbAndClient(async ({ db }) => {
     const { workspaceId, actorId, sessionId } = await seedWorkspace(db)
 
-    const space = await ensureFileSpace(client, {
+    const space = await ensureFileSpace(db, {
       workspaceId,
       owner: actorRef(actorId),
     })
 
-    const mount = await insertFileMount(client, {
+    const mount = await insertFileMount(db, {
       workspaceId,
       sessionId,
       fileSpaceId: space.id,
@@ -164,12 +164,12 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
     })
     assert.equal(mount.status, "provisioning")
 
-    const active = await getActiveMountsForSession(client, sessionId)
+    const active = await getActiveMountsForSession(db, sessionId)
     assert.equal(active.length, 1)
     assert.equal(active[0].id, mount.id)
 
-    await ensureContentBlob(client, { sha256: SHA("a"), sizeBytes: 10 })
-    const snap1 = await appendSnapshot(client, {
+    await ensureContentBlob(db, { sha256: SHA("a"), sizeBytes: 10 })
+    const snap1 = await appendSnapshot(db, {
       workspaceId,
       fileSpaceId: space.id,
       expectedParentSnapshotId: null,
@@ -180,11 +180,11 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
     })
     assert.equal(String(snap1.version), "1")
 
-    const afterV1 = await getFileSpace(client, space.id)
+    const afterV1 = await getFileSpace(db, space.id)
     assert.equal(afterV1?.current_snapshot_id, snap1.id)
 
-    await ensureContentBlob(client, { sha256: SHA("b"), sizeBytes: 20 })
-    const snap2 = await appendSnapshot(client, {
+    await ensureContentBlob(db, { sha256: SHA("b"), sizeBytes: 20 })
+    const snap2 = await appendSnapshot(db, {
       workspaceId,
       fileSpaceId: space.id,
       expectedParentSnapshotId: snap1.id,
@@ -195,10 +195,10 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
     assert.equal(String(snap2.version), "2")
     assert.equal(snap2.parent_snapshot_id, snap1.id)
 
-    await ensureContentBlob(client, { sha256: SHA("c"), sizeBytes: 30 })
+    await ensureContentBlob(db, { sha256: SHA("c"), sizeBytes: 30 })
     await assert.rejects(
       () =>
-        appendSnapshot(client, {
+        appendSnapshot(db, {
           workspaceId,
           fileSpaceId: space.id,
           expectedParentSnapshotId: snap1.id, // stale — head is snap2
@@ -211,37 +211,37 @@ test("space.ts: mount lifecycle + snapshot DAG + head-moved detection", async ()
         (err as SandboxSpaceError).status === 409
     )
 
-    await updateFileMount(client, mount.id, {
+    await updateFileMount(db, mount.id, {
       status: "closed",
       closedAt: true,
       resultSnapshotId: snap2.id,
     })
-    const afterClose = await getActiveMountsForSession(client, sessionId)
+    const afterClose = await getActiveMountsForSession(db, sessionId)
     assert.equal(afterClose.length, 0)
   })
 })
 
 test("space.ts: active partial-unique forbids two live mounts for one subpath", async () => {
-  await withTestDbAndClient(async ({ db, client }) => {
+  await withTestDbAndClient(async ({ db }) => {
     const { workspaceId, actorId, sessionId } = await seedWorkspace(db)
-    const space = await ensureFileSpace(client, {
+    const space = await ensureFileSpace(db, {
       workspaceId,
       owner: actorRef(actorId),
     })
-    await insertFileMount(client, {
+    await insertFileMount(db, {
       workspaceId,
       sessionId,
       fileSpaceId: space.id,
       mountSubpath: "actor",
       baseSnapshotId: null,
     })
-    const space2 = await ensureFileSpace(client, {
+    const space2 = await ensureFileSpace(db, {
       workspaceId,
       owner: actorRef(actorId),
       namespaceKey: "other",
     })
     await assert.rejects(() =>
-      insertFileMount(client, {
+      insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space2.id,

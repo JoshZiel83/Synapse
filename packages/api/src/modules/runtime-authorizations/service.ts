@@ -36,11 +36,10 @@ import { sql, type Selectable } from "kysely"
 import type { ZodIssue } from "zod"
 import {
   db,
-  executeCompiledQuery,
-  executeTakeFirst,
-  type DatabaseTransaction,
+  runBuilder,
+  takeFirstOn,
+  type Executor,
   type KyselyDb,
-  type QueryExecutor,
   type TableInsert,
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
@@ -48,11 +47,7 @@ import {
   BrowserGrantPolicyError,
   normalizeBrowserGrantPolicy,
 } from "@synapse/shared/access/policies"
-import {
-  upsertAccessSubject,
-  upsertAccessSubjectOn,
-  upsertAccessSubjectOnTrx,
-} from "../access/subject-registry.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   assertNoDeviceToolRevisionDrift,
   beginDeviceOperationOn,
@@ -60,21 +55,6 @@ import {
   type BeginOperationResult,
 } from "../devices/operations.js"
 import type { RuntimePrincipalContext } from "../access/subject-resolution.js"
-
-type Queryable = QueryExecutor
-
-function isQueryExecutor(value: unknown): value is QueryExecutor {
-  return typeof value === "object" && value !== null && "query" in value
-}
-
-function isKyselyTransaction(value: unknown): value is DatabaseTransaction {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !("query" in value) &&
-    "selectFrom" in value
-  )
-}
 
 function toIsoString(value: string | Date | null | undefined) {
   if (!value) return undefined
@@ -577,7 +557,7 @@ function normalizeCommandlineGrantSpec(
 
 export async function createRuntimeAuthorizationGrant(
   params: CreateRuntimeAuthorizationGrantParams,
-  executor?: Queryable | DatabaseTransaction
+  executor?: Executor
 ): Promise<RuntimeAuthorizationGrantRecord> {
   // subject-scope-refactor: whitelist gate BEFORE any side effect, so callers
   // can't slip through nonsense combinations like workspace_member+conversation.
@@ -596,14 +576,11 @@ export async function createRuntimeAuthorizationGrant(
   }
   const grantSpec = normalizeGrantSpecForInsert(parsedPolicy)
 
-  if (isKyselyTransaction(executor)) {
+  if (executor) {
+    // Every production caller threads a Kysely executor (interactions approval
+    // runs inside withDbTransaction → Transaction<Database>; the manual
+    // endpoint passes none).
     return createGrantInKyselyTx(executor, params, grantSpec)
-  }
-
-  // pg QueryExecutor path (interactions approval). Use upsertAccessSubjectOn /
-  // compiled SQL — single connection, atomic with the caller's pg transaction.
-  if (isQueryExecutor(executor)) {
-    return createGrantOnQx(executor, params, grantSpec)
   }
 
   // No transaction: normalize to a fresh Kysely transaction so we still run
@@ -615,13 +592,13 @@ export async function createRuntimeAuthorizationGrant(
 }
 
 async function createGrantInKyselyTx(
-  trx: DatabaseTransaction,
+  trx: Executor,
   params: CreateRuntimeAuthorizationGrantParams,
   grantSpec: SharedRuntimeAuthorizationGrantSpec
 ): Promise<RuntimeAuthorizationGrantRecord> {
-  const subjectId = await upsertAccessSubjectOnTrx(trx, params.subject)
+  const subjectId = await upsertAccessSubject(trx, params.subject)
   const scopeSubjectId = params.scope
-    ? await upsertAccessSubjectOnTrx(trx, params.scope)
+    ? await upsertAccessSubject(trx, params.scope)
     : null
   const inserted = await trx
     .insertInto("runtime_authorization_grants")
@@ -676,71 +653,9 @@ async function createGrantInKyselyTx(
   )
 }
 
-async function createGrantOnQx(
-  qx: QueryExecutor,
-  params: CreateRuntimeAuthorizationGrantParams,
-  grantSpec: SharedRuntimeAuthorizationGrantSpec
-): Promise<RuntimeAuthorizationGrantRecord> {
-  const subjectId = await upsertAccessSubjectOn(qx, params.subject)
-  const scopeSubjectId = params.scope
-    ? await upsertAccessSubjectOn(qx, params.scope)
-    : null
-  const insertStatement = db
-    .insertInto("runtime_authorization_grants")
-    .values({
-      workspace_id: params.workspaceId,
-      device_id: params.deviceId,
-      device_capability_id: params.deviceCapabilityId,
-      device_exposure_id: params.deviceExposureId,
-      subject_id: subjectId,
-      scope_subject_id: scopeSubjectId,
-      created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
-      source_interaction_id: params.sourceInteractionId || null,
-      source_task_id: params.sourceTaskId || null,
-      retention: params.retention,
-      status: "active",
-      policy:
-        grantSpec as unknown as TableInsert<"runtime_authorization_grants">["policy"],
-      source_retry_nonce: params.sourceRetryNonce || null,
-      source_runtime_session_id: params.sourceRuntimeSessionId || null,
-      source_request_args: (params.sourceRequestArgs ||
-        {}) as TableInsert<"runtime_authorization_grants">["source_request_args"],
-    })
-    .returning("id")
-  const inserted = await executeTakeFirst<{ id: string }>(qx, insertStatement)
-  if (!inserted) {
-    throw new Error("Failed to create runtime authorization grant")
-  }
-  const selectStatement = db
-    .selectFrom("runtime_authorization_grants as g")
-    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .leftJoin(
-      "access_subjects as scope_subj",
-      "scope_subj.id",
-      "g.scope_subject_id"
-    )
-    .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
-    .where("g.id", "=", inserted.id)
-    .limit(1)
-  const row = await executeTakeFirst<any>(qx, selectStatement)
-  if (!row) {
-    throw new Error("Failed to re-fetch inserted runtime authorization grant")
-  }
-  const candidate = rowToCandidate(row)
-  if (!candidate.policyValidationResult.ok) {
-    throw new InvalidGrantSubjectRowError(
-      `freshly-inserted grant ${inserted.id} fails policy validation: ${candidate.policyValidationResult.failure.kind}`
-    )
-  }
-  return mapRuntimeAuthorizationGrantCandidate(
-    candidate,
-    candidate.policyValidationResult.parsed
-  )
-}
-
 export async function getRuntimeAuthorizationGrant(
   id: string,
-  queryable?: Queryable
+  queryable?: Executor
 ): Promise<RuntimeAuthorizationGrantRecord | null> {
   const statement = db
     .selectFrom("runtime_authorization_grants as g")
@@ -753,8 +668,8 @@ export async function getRuntimeAuthorizationGrant(
     .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
     .where("g.id", "=", id)
     .limit(1)
-  const row = isQueryExecutor(queryable)
-    ? await executeTakeFirst<any>(queryable, statement)
+  const row = queryable
+    ? await takeFirstOn<any>(queryable, statement)
     : await statement.executeTakeFirst()
   if (!row) return null
   const candidate = rowToCandidate(row)
@@ -772,7 +687,7 @@ export async function getRuntimeAuthorizationGrant(
 
 export async function revokeRuntimeAuthorizationGrant(
   id: string,
-  queryable?: Queryable
+  queryable?: Executor
 ) {
   const statement = db
     .updateTable("runtime_authorization_grants")
@@ -783,8 +698,8 @@ export async function revokeRuntimeAuthorizationGrant(
     })
     .where("id", "=", id)
     .where("status", "=", "active")
-  if (isQueryExecutor(queryable)) {
-    await executeCompiledQuery(queryable, statement)
+  if (queryable) {
+    await runBuilder(queryable, statement)
     return
   }
   await statement.execute()
@@ -792,7 +707,7 @@ export async function revokeRuntimeAuthorizationGrant(
 
 export async function supersedeRuntimeAuthorizationGrant(
   id: string,
-  queryable?: Queryable
+  queryable?: Executor
 ) {
   const statement = db
     .updateTable("runtime_authorization_grants")
@@ -803,8 +718,8 @@ export async function supersedeRuntimeAuthorizationGrant(
     })
     .where("id", "=", id)
     .where("status", "=", "active")
-  if (isQueryExecutor(queryable)) {
-    await executeCompiledQuery(queryable, statement)
+  if (queryable) {
+    await runBuilder(queryable, statement)
     return
   }
   await statement.execute()
@@ -820,38 +735,11 @@ export async function supersedeRuntimeAuthorizationGrant(
 
 export async function consumeRuntimeAuthorizationGrant(
   id: string,
-  executor?: Queryable | DatabaseTransaction
+  executor?: Executor
 ): Promise<boolean> {
   // Use raw SQL for SKIP LOCKED semantics — Kysely's updateTable doesn't yet
   // expose a clean way to nest a FOR UPDATE SKIP LOCKED sub-select.
-  const text = `
-    UPDATE runtime_authorization_grants
-    SET status = 'consumed', consumed_at = NOW(), updated_at = NOW()
-    WHERE id = (
-      SELECT id FROM runtime_authorization_grants
-      WHERE id = $1 AND status = 'active'
-      FOR UPDATE SKIP LOCKED
-    )
-    RETURNING id
-  `
-  if (isKyselyTransaction(executor)) {
-    const result = await sql<{ id: string }>`
-      UPDATE runtime_authorization_grants
-      SET status = 'consumed', consumed_at = NOW(), updated_at = NOW()
-      WHERE id = (
-        SELECT id FROM runtime_authorization_grants
-        WHERE id = ${id} AND status = 'active'
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING id
-    `.execute(executor)
-    return result.rows.length > 0
-  }
-  if (isQueryExecutor(executor)) {
-    const result = await executor.query(text, [id])
-    return result.rows.length > 0
-  }
-  const result = await sql<{ id: string }>`
+  const statement = sql<{ id: string }>`
     UPDATE runtime_authorization_grants
     SET status = 'consumed', consumed_at = NOW(), updated_at = NOW()
     WHERE id = (
@@ -860,7 +748,8 @@ export async function consumeRuntimeAuthorizationGrant(
       FOR UPDATE SKIP LOCKED
     )
     RETURNING id
-  `.execute(db)
+  `
+  const result = await statement.execute(executor ?? db)
   return result.rows.length > 0
 }
 

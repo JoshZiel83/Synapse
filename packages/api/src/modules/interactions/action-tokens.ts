@@ -19,11 +19,13 @@
  * cached result).
  */
 
-import type { PoolClient } from "pg"
 import { v4 as uuidv4 } from "uuid"
+import { sql } from "kysely"
 import {
-  executeSql,
-  executeSqlOn,
+  db,
+  runBuilder,
+  type Executor,
+  type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 
 export interface ActionTokenPayload {
@@ -52,7 +54,7 @@ export interface ActionTokenRecord {
  * never outlive the underlying interaction.
  */
 export async function mintActionToken(
-  client: PoolClient,
+  executor: Executor,
   params: {
     interactionRequestId: string
     interactionExpiresAt: Date | string | null | undefined
@@ -68,20 +70,16 @@ export async function mintActionToken(
     twentyFourHours
   )
   const expiresAt = new Date(expiresAtMs)
-  await executeSqlOn(
-    client,
-    `
-      INSERT INTO interaction_action_tokens (
-        token, interaction_request_id, payload, expires_at
-      )
-      VALUES ($1, $2, $3::jsonb, $4)
-    `,
-    [
+  await runBuilder(
+    executor,
+    db.insertInto("interaction_action_tokens").values({
       token,
-      params.interactionRequestId,
-      JSON.stringify(params.payload),
-      expiresAt,
-    ]
+      interaction_request_id: params.interactionRequestId,
+      payload: sql`${JSON.stringify(
+        params.payload
+      )}::jsonb` as unknown as TableInsert<"interaction_action_tokens">["payload"],
+      expires_at: expiresAt,
+    })
   )
   return {
     token,
@@ -91,27 +89,16 @@ export async function mintActionToken(
   }
 }
 
-interface ActionTokenRow {
-  token: string
-  interaction_request_id: string
-  payload: unknown
-  expires_at: string | Date
-}
-
 export async function lookupActionToken(
   token: string
 ): Promise<ActionTokenRecord | null> {
   if (!token || typeof token !== "string") return null
-  const result = await executeSql<ActionTokenRow>(
-    `
-      SELECT token, interaction_request_id, payload, expires_at
-      FROM interaction_action_tokens
-      WHERE token = $1
-      LIMIT 1
-    `,
-    [token]
-  )
-  const row = result.rows[0]
+  const row = await db
+    .selectFrom("interaction_action_tokens")
+    .select(["token", "interaction_request_id", "payload", "expires_at"])
+    .where("token", "=", token)
+    .limit(1)
+    .executeTakeFirst()
   if (!row) return null
   const expiresAt =
     row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at)
@@ -119,7 +106,7 @@ export async function lookupActionToken(
   return {
     token: row.token,
     interactionRequestId: row.interaction_request_id,
-    payload: (row.payload ?? {}) as ActionTokenPayload,
+    payload: (row.payload ?? {}) as unknown as ActionTokenPayload,
     expiresAt,
   }
 }
@@ -130,11 +117,11 @@ export async function lookupActionToken(
  * separate cron because the volume is small.
  */
 export async function sweepExpiredActionTokens(): Promise<number> {
-  const result = await executeSql(
-    `DELETE FROM interaction_action_tokens WHERE expires_at < NOW()`,
-    []
-  )
-  return Number(result.rowCount ?? 0)
+  const result = await db
+    .deleteFrom("interaction_action_tokens")
+    .where("expires_at", "<", sql<Date>`NOW()`)
+    .executeTakeFirst()
+  return Number(result.numDeletedRows ?? 0)
 }
 
 function parseTimestamp(

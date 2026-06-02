@@ -6,17 +6,15 @@ import {
   type TaskNoticeStatus,
 } from "@synapse/shared"
 import type {
-  SessionsStatus,
   ToolCallTasksDeliveryPolicy,
   ToolCallTasksDispatchStatus,
   ToolCallTasksExecutorKind,
   ToolCallTasksStatus,
 } from "../../infrastructure/database/generated/db.js"
-import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
-  executeTakeFirst,
-  type QueryExecutor,
+  withDbTransaction,
+  type Executor,
   type TableInsert,
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
@@ -35,7 +33,6 @@ export type ToolCallTaskDispatchStatus = ToolCallTasksDispatchStatus
 export type ToolCallTaskDeliveryPolicy = ToolCallTasksDeliveryPolicy
 export type ToolCallTaskExecutorKind = ToolCallTasksExecutorKind
 
-type Queryable = QueryExecutor
 type ToolCallTaskRow = TableRow<"tool_call_tasks">
 type ToolCallTaskOutputChunkRow = Pick<
   TableRow<"tool_call_task_output_chunks">,
@@ -185,20 +182,15 @@ function mapToolCallTaskRow(
 }
 
 async function assertSessionAllowsToolCallTasks(
-  client: Queryable,
+  executor: Executor,
   sessionId: string
 ) {
-  const row = await executeTakeFirst<{
-    id: string
-    status: SessionsStatus
-  }>(
-    client,
-    db
-      .selectFrom("sessions")
-      .select(["id", "status"])
-      .where("id", "=", sessionId)
-      .limit(1)
-  )
+  const row = await executor
+    .selectFrom("sessions")
+    .select(["id", "status"])
+    .where("id", "=", sessionId)
+    .limit(1)
+    .executeTakeFirst()
   if (!row) {
     throw new Error(`Session ${sessionId} not found`)
   }
@@ -208,10 +200,10 @@ async function assertSessionAllowsToolCallTasks(
 }
 
 export async function insertToolCallTask(
-  client: Queryable,
+  executor: Executor,
   params: CreateToolCallTaskParams
 ) {
-  await assertSessionAllowsToolCallTasks(client, params.sessionId)
+  await assertSessionAllowsToolCallTasks(executor, params.sessionId)
 
   const row: TableInsert<"tool_call_tasks"> = {
     workspace_id: params.workspaceId,
@@ -239,12 +231,13 @@ export async function insertToolCallTask(
     retain_until: toDate(params.retainUntil),
   }
 
-  const createdRow = await executeTakeFirst<ToolCallTaskRow>(
-    client,
-    db.insertInto("tool_call_tasks").values(row).returningAll()
-  )
+  const createdRow = await executor
+    .insertInto("tool_call_tasks")
+    .values(row)
+    .returningAll()
+    .executeTakeFirst()
 
-  const record = mapToolCallTaskRow(createdRow)
+  const record = mapToolCallTaskRow(createdRow ?? null)
   if (!record) {
     throw new Error("Failed to create tool-call task")
   }
@@ -252,8 +245,8 @@ export async function insertToolCallTask(
 }
 
 export async function createToolCallTask(params: CreateToolCallTaskParams) {
-  const record = await transaction((client) =>
-    insertToolCallTask(client, params)
+  const record = await withDbTransaction((trx) =>
+    insertToolCallTask(trx, params)
   )
   await publishSessionRuntime(record.workspaceId, record.sessionId)
   return record

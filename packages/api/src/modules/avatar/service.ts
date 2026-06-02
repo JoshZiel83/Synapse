@@ -5,12 +5,7 @@ import {
   slugify,
   type SystemGeneratedFileOriginSystem,
 } from "@synapse/shared"
-import {
-  db,
-  executeCompiledQuery,
-  executeTakeFirst,
-  type QueryExecutor,
-} from "../../infrastructure/database/kysely.js"
+import { type Executor } from "../../infrastructure/database/kysely.js"
 import {
   getStableFileUrl,
   getStableFullFileUrl,
@@ -22,7 +17,7 @@ import {
   mimeToFileContentKind,
 } from "../files/service.js"
 
-type DatabaseExecutor = QueryExecutor
+type DatabaseExecutor = Executor
 
 export type PixelArtAvatarTheme = {
   accessories?: string[]
@@ -301,39 +296,35 @@ async function saveSvgAvatarFile(
     details: params.metadata,
   })
 
-  await executeCompiledQuery(
-    executor,
-    db
-      .insertInto("content_blobs")
-      .values({
-        sha256: blobRef.sha256,
-        size_bytes: String(blobRef.sizeBytes),
-        backend: "local_cas",
-        locator_json: {} as any,
-      })
-      .onConflict((oc) => oc.column("sha256").doNothing())
-  )
+  await executor
+    .insertInto("content_blobs")
+    .values({
+      sha256: blobRef.sha256,
+      size_bytes: String(blobRef.sizeBytes),
+      backend: "local_cas",
+      locator_json: {} as any,
+    })
+    .onConflict((oc) => oc.column("sha256").doNothing())
+    .execute()
 
-  const row = await executeTakeFirst<{ id: string }>(
-    executor,
-    db
-      .insertInto("file_assets")
-      .values({
-        workspace_id: params.workspaceId,
-        content_sha256: blobRef.sha256,
-        original_name: normalizedOriginalName,
-        mime_type: SVG_MIME_TYPE,
-        content_kind: mimeToFileContentKind(SVG_MIME_TYPE),
-        size_bytes: String(blobRef.sizeBytes),
-        uploader_user_id: params.uploaderUserId,
-        initiator_actor_id: origin.initiatorActorId ?? null,
-        source_family: origin.family,
-        source_system: origin.system,
-        parent_asset_id: origin.parentFileId ?? null,
-        details_json: (origin.details || {}) as any,
-      })
-      .returning("id")
-  )
+  const row = await executor
+    .insertInto("file_assets")
+    .values({
+      workspace_id: params.workspaceId,
+      content_sha256: blobRef.sha256,
+      original_name: normalizedOriginalName,
+      mime_type: SVG_MIME_TYPE,
+      content_kind: mimeToFileContentKind(SVG_MIME_TYPE),
+      size_bytes: String(blobRef.sizeBytes),
+      uploader_user_id: params.uploaderUserId,
+      initiator_actor_id: origin.initiatorActorId ?? null,
+      source_family: origin.family,
+      source_system: origin.system,
+      parent_asset_id: origin.parentFileId ?? null,
+      details_json: (origin.details || {}) as any,
+    })
+    .returning("id")
+    .executeTakeFirst()
   if (!row) {
     throw new Error("Failed to persist avatar file")
   }

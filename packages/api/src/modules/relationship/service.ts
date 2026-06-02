@@ -33,13 +33,10 @@ import {
   type RelationshipScanResponse,
   type RemoteAgentAccessRequestListResponse,
 } from "@synapse/shared"
-import { transaction } from "../../infrastructure/database/index.js"
-import { executeSqlOn } from "../../infrastructure/database/kysely.js"
 import {
   db,
-  executeSql,
-  executeCompiledQuery,
-  executeTakeFirst,
+  withDbTransaction,
+  type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import { getFileUrlById } from "../files/service.js"
 import {
@@ -53,7 +50,6 @@ import {
   deriveAccessPolicyMany,
   grantApprovedAccess,
   setAccessPolicy,
-  setAccessPolicyOn,
 } from "../access/default-access-policy.js"
 import {
   createChatConversation,
@@ -73,6 +69,22 @@ import {
   upsertAccessSubject,
   loadAccessSubject,
 } from "../access/subject-registry.js"
+
+/**
+ * Projection row for the entity_access_requests + access_subjects join used by
+ * the remote-agent access-request listing queries.
+ */
+type EntityAccessRequestJoinRow = Pick<
+  TableRow<"entity_access_requests">,
+  | "id"
+  | "workspace_id"
+  | "requester_workspace_member_id"
+  | "status"
+  | "resolved_by_workspace_member_id"
+  | "resolved_at"
+  | "created_at"
+  | "updated_at"
+> & { remote_agent_id: string | null }
 
 /**
  * P1b: translate a relationship target type (`member` | `actor` | `remote_agent`)
@@ -336,7 +348,7 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
 async function getRemoteAgentSummary(
   remoteAgentId: string
 ): Promise<RemoteAgentSummary | null> {
-  const result = await executeSql<{
+  const result = await sql<{
     remote_agent_id: string
     workspace_id: string
     workspace_name: string
@@ -347,8 +359,7 @@ async function getRemoteAgentSummary(
     avatar_file_id: string | null
     avatar_emoji: string | null
     is_public_shared: boolean
-  }>(
-    `
+  }>`
       SELECT
         ra.id AS remote_agent_id,
         ra.workspace_id,
@@ -362,12 +373,10 @@ async function getRemoteAgentSummary(
         ra.is_public_shared
       FROM remote_agents ra
       INNER JOIN workspaces w ON w.id = ra.workspace_id
-      WHERE ra.id = $1
+      WHERE ra.id = ${remoteAgentId}
         AND ra.is_active = TRUE
       LIMIT 1
-    `,
-    [remoteAgentId]
-  )
+    `.execute(db)
 
   const row = result.rows[0]
   if (!row) return null
@@ -607,18 +616,16 @@ async function updateActorAccessPolicy(params: {
   if (!actor || actor.workspace_id !== params.workspaceId) {
     throw new Error("Actor not found")
   }
-  await transaction(async (client) => {
-    await setAccessPolicyOn(client, {
+  await withDbTransaction(async (trx) => {
+    await setAccessPolicy(trx, {
       resourceType: "actor",
       resourceId: actor.id,
       workspaceId: actor.workspace_id,
       policy: params.accessPolicy,
       createdByWorkspaceMemberId: params.updatedByWorkspaceMemberId,
     })
-    await executeSqlOn(
-      client,
-      `UPDATE actors SET updated_at = NOW() WHERE id = $1`,
-      [actor.id]
+    await sql`UPDATE actors SET updated_at = NOW() WHERE id = ${actor.id}`.execute(
+      trx
     )
   })
   return {
@@ -1323,7 +1330,7 @@ async function buildContactHubEntryMap(params: {
       .where("a.is_active", "=", true)
       .orderBy("a.name", "asc")
       .execute(),
-    executeSql<{
+    sql<{
       remote_agent_id: string
       workspace_id: string
       workspace_name: string
@@ -1334,8 +1341,7 @@ async function buildContactHubEntryMap(params: {
       is_public_shared: boolean
       avatar_emoji: string | null
       avatar_file_id: string | null
-    }>(
-      `
+    }>`
           SELECT
             ra.id AS remote_agent_id,
             ra.workspace_id,
@@ -1349,12 +1355,10 @@ async function buildContactHubEntryMap(params: {
             ra.avatar_file_id
           FROM remote_agents ra
           INNER JOIN workspaces w ON w.id = ra.workspace_id
-          WHERE ra.workspace_id = $1
+          WHERE ra.workspace_id = ${params.workspaceId}
             AND ra.is_active = TRUE
           ORDER BY ra.name ASC, ra.created_at ASC
-        `,
-      [params.workspaceId]
-    ),
+        `.execute(db),
     db
       .selectFrom("workspace_friend_entries as e")
       .innerJoin("access_subjects as s", "s.id", "e.peer_subject_id")
@@ -1946,22 +1950,15 @@ export async function searchRelationshipsByIdentity(params: {
         kind: SUBJECT_KIND.REMOTE_AGENT,
         remoteAgentId: remoteAgent.remoteAgentId,
       })
-      const pendingRemoteAgentRequest = await executeSql<{ id: string }>(
-        `
+      const pendingRemoteAgentRequest = await sql<{ id: string }>`
           SELECT id
           FROM entity_access_requests
-          WHERE workspace_id = $1
-            AND target_subject_id = $2
-            AND requester_workspace_member_id = $3
+          WHERE workspace_id = ${params.workspaceId}
+            AND target_subject_id = ${remoteAgentSubjectId}
+            AND requester_workspace_member_id = ${viewerWorkspaceMember.workspaceMemberId}
             AND status = 'pending'
           LIMIT 1
-        `,
-        [
-          params.workspaceId,
-          remoteAgentSubjectId,
-          viewerWorkspaceMember.workspaceMemberId,
-        ]
-      )
+        `.execute(db)
       const accessState = await getRemoteAgentAccessState({
         workspaceId: params.workspaceId,
         userId: params.userId,
@@ -2794,18 +2791,15 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   }
 
   if (typeof params.isPublicShared === "boolean") {
-    const updateResult = await executeSql<{ is_public_shared: boolean }>(
-      `
+    const updateResult = await sql<{ is_public_shared: boolean }>`
         UPDATE remote_agents
-        SET is_public_shared = $3,
+        SET is_public_shared = ${params.isPublicShared},
             updated_at = NOW()
-        WHERE id = $1
-          AND workspace_id = $2
+        WHERE id = ${params.remoteAgentId}
+          AND workspace_id = ${params.workspaceId}
           AND is_active = TRUE
         RETURNING is_public_shared
-      `,
-      [params.remoteAgentId, params.workspaceId, params.isPublicShared]
-    )
+      `.execute(db)
     if (!updateResult.rows[0]) {
       throw new Error("Remote agent not found")
     }
@@ -3270,41 +3264,41 @@ export async function listRemoteAgentAccessRequests(params: {
   }
 
   const [incomingRows, outgoingRows] = await Promise.all([
-    executeSql<any>(
-      `
+    sql<EntityAccessRequestJoinRow>`
         SELECT ear.id, ear.workspace_id, ear.requester_workspace_member_id,
                ear.status, ear.resolved_by_workspace_member_id, ear.resolved_at,
                ear.created_at, ear.updated_at,
                subj.remote_agent_id AS remote_agent_id
         FROM entity_access_requests ear
         JOIN access_subjects subj ON subj.id = ear.target_subject_id
-        WHERE ear.workspace_id = $1
+        WHERE ear.workspace_id = ${params.workspaceId}
           AND ear.status = 'pending'
           AND subj.kind = 'remote_agent'
         ORDER BY ear.created_at DESC
-      `,
-      [params.workspaceId]
-    ).then((result) => result.rows),
-    executeSql<any>(
       `
+      .execute(db)
+      .then((result) => result.rows),
+    sql<EntityAccessRequestJoinRow>`
         SELECT ear.id, ear.workspace_id, ear.requester_workspace_member_id,
                ear.status, ear.resolved_by_workspace_member_id, ear.resolved_at,
                ear.created_at, ear.updated_at,
                subj.remote_agent_id AS remote_agent_id
         FROM entity_access_requests ear
         JOIN access_subjects subj ON subj.id = ear.target_subject_id
-        WHERE ear.workspace_id = $1
-          AND ear.requester_workspace_member_id = $2
+        WHERE ear.workspace_id = ${params.workspaceId}
+          AND ear.requester_workspace_member_id = ${viewerWorkspaceMember.workspaceMemberId}
           AND ear.status = 'pending'
           AND subj.kind = 'remote_agent'
         ORDER BY ear.created_at DESC
-      `,
-      [params.workspaceId, viewerWorkspaceMember.workspaceMemberId]
-    ).then((result) => result.rows),
+      `
+      .execute(db)
+      .then((result) => result.rows),
   ])
 
   const incoming = []
   for (const row of incomingRows) {
+    if (!row.remote_agent_id) continue
+    const remoteAgentId = row.remote_agent_id
     const canApprove = await authorizeAction(db, {
       subject: await resolveWorkspaceAccessSubject(
         db,
@@ -3312,7 +3306,7 @@ export async function listRemoteAgentAccessRequests(params: {
         params.userId
       ),
       action: "remote_agent.grant",
-      resourceId: row.remote_agent_id,
+      resourceId: remoteAgentId,
     })
     if (!canApprove) continue
     incoming.push({
@@ -3322,12 +3316,13 @@ export async function listRemoteAgentAccessRequests(params: {
       requester: await getWorkspaceMemberSummaryById(
         row.requester_workspace_member_id
       ),
-      remoteAgent: await getRemoteAgentSummary(row.remote_agent_id),
+      remoteAgent: await getRemoteAgentSummary(remoteAgentId),
     })
   }
 
   const outgoing = []
   for (const row of outgoingRows) {
+    if (!row.remote_agent_id) continue
     outgoing.push({
       id: row.id,
       status: row.status,
@@ -3430,18 +3425,24 @@ export async function resolveRemoteAgentAccessRequest(params: {
     throw new Error("Workspace member not found")
   }
 
-  const requestResult = await executeSql<any>(
-    `
+  const requestResult = await sql<{
+    id: string
+    workspace_id: string
+    requester_workspace_member_id: string
+    status: string
+    resolved_at: Date | null
+    resolved_by_workspace_member_id: string | null
+    remote_agent_id: string | null
+    target_kind: string
+  }>`
       SELECT ear.id, ear.workspace_id, ear.requester_workspace_member_id,
              ear.status, ear.resolved_at, ear.resolved_by_workspace_member_id,
              subj.remote_agent_id AS remote_agent_id, subj.kind AS target_kind
       FROM entity_access_requests ear
       JOIN access_subjects subj ON subj.id = ear.target_subject_id
-      WHERE ear.id = $1
+      WHERE ear.id = ${params.requestId}
       LIMIT 1
-    `,
-    [params.requestId]
-  )
+    `.execute(db)
   const request = requestResult.rows[0]
   if (
     !request ||
@@ -3476,22 +3477,15 @@ export async function resolveRemoteAgentAccessRequest(params: {
     })
   }
 
-  const updated = await executeSql<any>(
-    `
+  const updated = await sql<TableRow<"entity_access_requests">>`
       UPDATE entity_access_requests
-      SET status = $2,
-          resolved_by_workspace_member_id = $3,
+      SET status = ${params.decision === "approve" ? "approved" : "rejected"},
+          resolved_by_workspace_member_id = ${approverWorkspaceMember.workspaceMemberId},
           resolved_at = NOW(),
           updated_at = NOW()
-      WHERE id = $1
+      WHERE id = ${request.id}
       RETURNING *
-    `,
-    [
-      request.id,
-      params.decision === "approve" ? "approved" : "rejected",
-      approverWorkspaceMember.workspaceMemberId,
-    ]
-  )
+    `.execute(db)
   if (!updated.rows[0]) {
     throw new Error("Failed to resolve remote agent access request")
   }

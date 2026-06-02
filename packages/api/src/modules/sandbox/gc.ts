@@ -24,9 +24,8 @@
 // The sweep runs in the fs-helper (fs.cas.gc) which deletes blobs whose sha is
 // absent from the reachable set we pass.
 
-import { pool } from "../../infrastructure/database/index.js"
-import { executeSqlOn } from "../../infrastructure/database/kysely.js"
-import type { QueryExecutor } from "../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
+import { db, type Executor } from "../../infrastructure/database/kysely.js"
 import { readCasBlob } from "../../infrastructure/storage/index.js"
 import { parseManifestShas } from "../files/manifest-parse.js"
 import { gcCas } from "./materialize.js"
@@ -41,21 +40,19 @@ export interface GcResult {
 /**
  * Compute the reachable sha set and sweep the CAS. `dryRun` returns the
  * reachable set sizes without deleting (deletedCount=0). `dbh` overrides the
- * executor (e.g. a test transaction); defaults to the singleton pool.
+ * executor (e.g. a test transaction); defaults to the top-level db.
  */
 export async function runContentGc(
-  opts: { dryRun?: boolean; dbh?: QueryExecutor; graceSecs?: number } = {}
+  opts: { dryRun?: boolean; dbh?: Executor; graceSecs?: number } = {}
 ): Promise<GcResult> {
-  const dbh = opts.dbh ?? pool
+  const dbh = opts.dbh ?? db
   const reachable = new Set<string>()
   let manifestsExpanded = 0
   let manifestsUnreadable = 0
 
   // 1. Snapshots: manifest blob + every content sha inside each manifest.
-  const snapshots = await executeSqlOn<{ manifest_sha256: string }>(
-    dbh,
-    `SELECT DISTINCT manifest_sha256 FROM file_snapshots`
-  )
+  const snapshots = await sql<{ manifest_sha256: string }>`
+    SELECT DISTINCT manifest_sha256 FROM file_snapshots`.execute(dbh)
   for (const row of snapshots.rows) {
     const manifestSha = row.manifest_sha256
     if (!manifestSha) continue
@@ -77,10 +74,10 @@ export async function runContentGc(
     "tool_result_parts",
     "memory_item_parts",
     "context_archive_frame_parts",
-  ]) {
-    const parts = await executeSqlOn<{ ref_sha256: string }>(
-      dbh,
-      `SELECT DISTINCT ref_sha256 FROM ${table} WHERE ref_sha256 IS NOT NULL`
+  ] as const) {
+    const parts = await sql<{ ref_sha256: string }>`
+      SELECT DISTINCT ref_sha256 FROM ${sql.ref(table)} WHERE ref_sha256 IS NOT NULL`.execute(
+      dbh
     )
     for (const p of parts.rows) {
       if (p.ref_sha256) reachable.add(p.ref_sha256)
@@ -88,9 +85,9 @@ export async function runContentGc(
   }
 
   // 3. Entity assets by content.
-  const assets = await executeSqlOn<{ content_sha256: string }>(
-    dbh,
-    `SELECT DISTINCT content_sha256 FROM file_assets WHERE content_sha256 IS NOT NULL`
+  const assets = await sql<{ content_sha256: string }>`
+    SELECT DISTINCT content_sha256 FROM file_assets WHERE content_sha256 IS NOT NULL`.execute(
+    dbh
   )
   for (const a of assets.rows) {
     if (a.content_sha256) reachable.add(a.content_sha256)
@@ -128,16 +125,14 @@ const PENDING_REFRESH_KEY = "_sandboxPendingRefreshConflicts"
  * Tolerant of shape drift: only string contentSha on kind!="symlink" entries.
  */
 async function collectPendingSidecarShas(
-  dbh: QueryExecutor
+  dbh: Executor
 ): Promise<Set<string>> {
   const out = new Set<string>()
   // Only sessions that actually carry a pending store (keeps the scan cheap).
-  const rows = await executeSqlOn<{ collaboration_state: unknown }>(
-    dbh,
-    `SELECT collaboration_state FROM sessions
-       WHERE collaboration_state ? $1 OR collaboration_state ? $2`,
-    [PENDING_COMMIT_KEY, PENDING_REFRESH_KEY]
-  )
+  const rows = await sql<{ collaboration_state: unknown }>`
+    SELECT collaboration_state FROM sessions
+      WHERE collaboration_state ? ${PENDING_COMMIT_KEY}
+         OR collaboration_state ? ${PENDING_REFRESH_KEY}`.execute(dbh)
   for (const row of rows.rows) {
     const state = (row.collaboration_state ?? {}) as Record<string, unknown>
     // Commit store: { subpath: { paths, sidecars: [{contentSha,kind}] } }

@@ -211,15 +211,15 @@ test(
       const baseDir = join(work, "base")
       mkdirSync(baseDir, { recursive: true })
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ensureContentBlob(client, {
+      await ensureContentBlob(db, {
         sha256: baseScan.manifest_sha256,
         sizeBytes: 0,
       })
-      const space = await ensureFileSpace(client, {
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -230,11 +230,11 @@ test(
       const headDir = join(work, "head")
       mkdirSync(headDir, { recursive: true })
       const headScan = await scanCommitDir({ dir: headDir })
-      await ensureContentBlob(client, {
+      await ensureContentBlob(db, {
         sha256: headScan.manifest_sha256,
         sizeBytes: 0,
       })
-      await appendSnapshot(client, {
+      await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -245,7 +245,7 @@ test(
 
       const liveDir = join(work, "actor")
       mkdirSync(liveDir, { recursive: true })
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -260,8 +260,8 @@ test(
 
       // Inject a sync that reports a CONFLICT + sidecar (fully synced, ok).
       const depsOverride: Partial<RefreshDeps> = {
-        dbh: client as unknown as RefreshDeps["dbh"],
-        runInTx: async (fn) => fn(client as unknown as RefreshDeps["dbh"]),
+        dbh: db,
+        runInTx: async (fn) => fn(db),
         sync: async () => ({
           applied: [],
           deferred_conflicts: ["/x.txt"],
@@ -312,15 +312,15 @@ test(
       const baseDir = join(work, "base")
       mkdirSync(baseDir, { recursive: true })
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ensureContentBlob(client, {
+      await ensureContentBlob(db, {
         sha256: baseScan.manifest_sha256,
         sizeBytes: 0,
       })
-      const space = await ensureFileSpace(client, {
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -331,11 +331,11 @@ test(
       const headDir = join(work, "head")
       mkdirSync(headDir, { recursive: true })
       const headScan = await scanCommitDir({ dir: headDir })
-      await ensureContentBlob(client, {
+      await ensureContentBlob(db, {
         sha256: headScan.manifest_sha256,
         sizeBytes: 0,
       })
-      await appendSnapshot(client, {
+      await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -345,7 +345,7 @@ test(
       })
       const liveDir = join(work, "actor")
       mkdirSync(liveDir, { recursive: true })
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -363,7 +363,7 @@ test(
       // (round-11 #2), the failure must leave base UNADVANCED so head!=base
       // self-heals next turn (instead of silently dropping the durable notice).
       const depsOverride: Partial<RefreshDeps> = {
-        dbh: client as unknown as RefreshDeps["dbh"],
+        dbh: db,
         runInTx: async () => {
           throw new Error("simulated persist failure")
         },
@@ -418,17 +418,17 @@ test(
       mkdirSync(baseDir, { recursive: true })
       writeFileSync(join(baseDir, "x.txt"), "base")
       const baseScan = await scanCommitDir({ dir: baseDir })
-      await ensureContentBlob(client, {
+      await ensureContentBlob(db, {
         sha256: baseScan.manifest_sha256,
         sizeBytes: 0,
       })
       for (const b of baseScan.new_blobs)
-        await ensureContentBlob(client, { sha256: b, sizeBytes: 0 })
-      const space = await ensureFileSpace(client, {
+        await ensureContentBlob(db, { sha256: b, sizeBytes: 0 })
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
-      const baseSnap = await appendSnapshot(client, {
+      const baseSnap = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -442,13 +442,13 @@ test(
       mkdirSync(headDir, { recursive: true })
       writeFileSync(join(headDir, "x.txt"), "head")
       const headScan = await scanCommitDir({ dir: headDir })
-      await ensureContentBlob(client, {
+      await ensureContentBlob(db, {
         sha256: headScan.manifest_sha256,
         sizeBytes: 0,
       })
       for (const b of headScan.new_blobs)
-        await ensureContentBlob(client, { sha256: b, sizeBytes: 0 })
-      await appendSnapshot(client, {
+        await ensureContentBlob(db, { sha256: b, sizeBytes: 0 })
+      await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: baseSnap.id,
@@ -465,7 +465,7 @@ test(
         targetDir: liveDir,
       })
       writeFileSync(join(liveDir, "x.txt"), "local")
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -482,7 +482,7 @@ test(
       // durable persist (step 1) FAILS. applyHead must never run.
       let applyHeadCalled = false
       const result = await refreshSpaces(sessionId, {
-        dbh: client as never,
+        dbh: db,
         runInTx: async () => {
           throw new Error("simulated persist failure")
         },

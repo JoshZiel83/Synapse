@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { actorRef } from "@synapse/shared"
 import type { Kysely } from "kysely"
+import type { Executor } from "../../infrastructure/database/kysely.js"
 import { withTestDbAndClient } from "../../test/helpers/db.js"
 import {
   ensureFileSpace,
@@ -84,17 +85,14 @@ async function seed(db: Kysely<any>) {
   }
 }
 
-async function commitTree(
-  client: { query: (t: string, p?: any[]) => Promise<any> },
-  dir: string
-) {
+async function commitTree(executor: Executor, dir: string) {
   const scan = await scanCommitDir({ dir })
-  await ensureContentBlob(client, {
+  await ensureContentBlob(executor, {
     sha256: scan.manifest_sha256,
     sizeBytes: 0,
   })
   for (const blob of scan.new_blobs) {
-    await ensureContentBlob(client, { sha256: blob, sizeBytes: 0 })
+    await ensureContentBlob(executor, { sha256: blob, sizeBytes: 0 })
   }
   return scan
 }
@@ -103,9 +101,9 @@ test(
   "gc.ts: reachable set includes a pinned-base snapshot's content, not just heads",
   { skip: helperAvailable ? false : "fs-helper binary not built" },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const { workspaceId, actorId, sessionId } = await seed(db)
-      const space = await ensureFileSpace(client, {
+      const space = await ensureFileSpace(db, {
         workspaceId,
         owner: actorRef(actorId),
       })
@@ -116,8 +114,8 @@ test(
       const v1dir = join(work, "v1")
       mkdirSync(v1dir, { recursive: true })
       writeFileSync(join(v1dir, "base.txt"), `gc-base-${rid()}`)
-      const v1scan = await commitTree(client, v1dir)
-      const snap1 = await appendSnapshot(client, {
+      const v1scan = await commitTree(db, v1dir)
+      const snap1 = await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: null,
@@ -130,8 +128,8 @@ test(
       const v2dir = join(work, "v2")
       mkdirSync(v2dir, { recursive: true })
       writeFileSync(join(v2dir, "head.txt"), `gc-head-${rid()}`)
-      const v2scan = await commitTree(client, v2dir)
-      await appendSnapshot(client, {
+      const v2scan = await commitTree(db, v2dir)
+      await appendSnapshot(db, {
         workspaceId,
         fileSpaceId: space.id,
         expectedParentSnapshotId: snap1.id,
@@ -141,7 +139,7 @@ test(
       })
 
       // An active mount still pins v1 as base.
-      await insertFileMount(client, {
+      await insertFileMount(db, {
         workspaceId,
         sessionId,
         fileSpaceId: space.id,
@@ -162,7 +160,7 @@ test(
 
       // GC (dry-run, test txn) must mark BOTH manifests + BOTH content blobs
       // reachable — proving it expands every snapshot, not just the head.
-      const result = await runContentGc({ dryRun: true, dbh: client })
+      const result = await runContentGc({ dryRun: true, dbh: db })
       assert.equal(result.deletedCount, 0, "dry-run deletes nothing")
       assert.ok(result.manifestsExpanded >= 2, "expanded ≥2 snapshot manifests")
 
@@ -182,8 +180,8 @@ test(
   "gc.ts: dry-run over an empty DB reports zero reachable, deletes nothing",
   { skip: helperAvailable ? false : "fs-helper binary not built" },
   async () => {
-    await withTestDbAndClient(async ({ client }) => {
-      const result = await runContentGc({ dryRun: true, dbh: client })
+    await withTestDbAndClient(async ({ db }) => {
+      const result = await runContentGc({ dryRun: true, dbh: db })
       assert.equal(result.deletedCount, 0)
       assert.equal(result.reachableCount, 0)
     })
@@ -238,7 +236,7 @@ test(
       // Dry-run GC over the test txn: the pending sidecar blob MUST be reachable
       // (else a real sweep after the grace window would reap it, breaking the
       // round-11 re-materialize).
-      const result = await runContentGc({ dryRun: true, dbh: client })
+      const result = await runContentGc({ dryRun: true, dbh: db })
       assert.ok(
         result.reachableCount >= 1,
         "pending sidecar blob marked reachable"
@@ -277,7 +275,7 @@ test(
           }),
         ]
       )
-      const result2 = await runContentGc({ dryRun: true, dbh: client })
+      const result2 = await runContentGc({ dryRun: true, dbh: db })
       assert.ok(
         result2.reachableCount >= 1,
         "both stores' file sidecar blobs collected; symlink sidecar ignored"
