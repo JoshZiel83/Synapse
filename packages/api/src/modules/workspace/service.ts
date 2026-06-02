@@ -8,7 +8,6 @@ import {
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js"
-import { getFileUrl } from "../../infrastructure/storage/index.js"
 import { getFileUrlById } from "../files/service.js"
 import {
   INVITE_TRUST_LEVELS,

@@ -36,12 +36,6 @@ server {
         return 404;
     }
 
-    location /files/ {
-        proxy_pass http://synapse_api;
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
-    }
-
     location /api/ {
         proxy_pass http://synapse_api;
         proxy_read_timeout 120s;

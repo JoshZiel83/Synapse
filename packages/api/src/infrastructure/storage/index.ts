@@ -17,12 +17,15 @@ export const STORAGE_DIR =
 // CAS volume (env CONTENT_STORE_DIR overrides; defaults under STORAGE_DIR).
 export const CONTENT_STORE_DIR =
   process.env.CONTENT_STORE_DIR || path.join(STORAGE_DIR, 'cas');
-export const FILE_URL_PREFIX = '/files/';
+// Entity-asset read endpoint: GET /api/v1/files/<assetId>. Mounted under
+// /api/v1 (modules/files/index.ts) so it rides the same proxy every other
+// API route uses (Next dev rewrite of /api/v1/* + prod nginx `location
+// /api/`); a bare /files/ would not be proxied to the API. Keep this prefix
+// in lockstep with the route registration.
+export const FILE_URL_PREFIX = '/api/v1/files/';
 // Content-addressed read endpoint: GET /api/v1/content/<sha256>. Distinct from
-// /files/<assetId> (entity assets by id). file_ref blocks render by sha. Mounted
-// under /api/v1 so it rides the same proxy every other API route uses (Next dev
-// rewrite of /api/v1/* + prod nginx location /api/); a bare /content/ would not
-// be proxied.
+// /api/v1/files/<assetId> (entity assets by id). file_ref blocks render by
+// sha. Same /api/v1 rationale as above.
 export const CONTENT_URL_PREFIX = '/api/v1/content/';
 export const BASE_URL = (process.env.BASE_URL || 'http://localhost:3001').replace(/\/+$/, '');
 const MIME_ALIASES: Record<string, string> = {
@@ -347,16 +350,6 @@ export async function readCasBlob(sha256: string): Promise<Buffer> {
 /** Read a content blob as base64 by sha256. */
 export async function readCasBlobBase64(sha256: string): Promise<string> {
   return (await readCasBlob(sha256)).toString('base64');
-}
-
-/** Relative URL: /files/YYYY/MM/DD/uuid.ext */
-export function getFileUrl(storedName: string): string {
-  return FILE_URL_PREFIX + storedName;
-}
-
-/** Absolute URL: http://{BASE_URL}/files/... */
-export function getFullUrl(storedName: string): string {
-  return BASE_URL + FILE_URL_PREFIX + storedName;
 }
 
 export function getStableFileUrl(fileId: string): string {
