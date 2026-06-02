@@ -110,6 +110,20 @@ RUN node -e "require('@huggingface/transformers'); require('sharp'); require('te
 
 FROM node:20-bookworm-slim
 WORKDIR /app
+# Docker CLI (client only) for the DooD sandbox backend — it talks to the
+# host daemon via the mounted /var/run/docker.sock. Static binary; no daemon.
+ARG DOCKER_CLI_VERSION=27.5.1
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
+       -o /tmp/docker.tgz \
+  && tar -xzf /tmp/docker.tgz -C /tmp \
+  && mv /tmp/docker/docker /usr/local/bin/docker \
+  && chmod +x /usr/local/bin/docker \
+  && rm -rf /tmp/docker /tmp/docker.tgz \
+  && apt-get purge -y curl \
+  && apt-get autoremove -y \
+  && rm -rf /var/lib/apt/lists/*
 # Carry the whole built tree: node_modules (with @synapse symlinks + native
 # binaries), every package's dist/, and the baked /app/models. dist/index.js
 # resolves @synapse/device-protocol + @synapse/device-runtime via these symlinks.
