@@ -91,6 +91,14 @@ export interface ChatSocketDeps {
    *    again without the identity string changing.
    */
   authErrorIsFatal?: boolean
+  /**
+   * Only used when `authErrorIsFatal` is false (cookie auth). If set, after an
+   * `auth.error` the core schedules a periodic re-attempt every this-many ms (so
+   * a server-side cookie revalidation recovers realtime automatically, without
+   * waiting for a UI-driven `sync()`). Unset/0 = no periodic retry; only an
+   * explicit `sync()` resumes.
+   */
+  authErrorRetryMs?: number
 }
 
 export interface ChatSocketHandle {
@@ -139,6 +147,7 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
     deps.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS
   const pingWatchdogMs = deps.pingWatchdogMs ?? DEFAULT_PING_WATCHDOG_MS
   const authErrorIsFatal = deps.authErrorIsFatal ?? true
+  const authErrorRetryMs = deps.authErrorRetryMs ?? 0
 
   let running = false
   let socket: SocketLike | null = null
@@ -154,6 +163,8 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
   let reconnectAttempts = 0
   let reconnectTimer: TimerHandle = null
   let pingTimer: TimerHandle = null
+  /** Periodic re-attempt timer used after a non-fatal auth.error (cookie auth). */
+  let authRetryTimer: TimerHandle = null
   /** Set during intentional teardown so onclose does not schedule a reconnect. */
   let suppressReconnect = false
   /**
@@ -173,6 +184,32 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       deps.clearTimer(reconnectTimer)
       reconnectTimer = null
     }
+  }
+
+  function clearAuthRetryTimer() {
+    if (authRetryTimer !== null) {
+      deps.clearTimer(authRetryTimer)
+      authRetryTimer = null
+    }
+  }
+
+  /**
+   * After a non-fatal auth.error (cookie auth), optionally schedule a periodic
+   * re-attempt so a server-side cookie revalidation recovers realtime without
+   * waiting for a UI-driven sync().
+   */
+  function scheduleAuthRetry() {
+    if (authErrorRetryMs <= 0) return
+    clearAuthRetryTimer()
+    authRetryTimer = deps.setTimer(() => {
+      authRetryTimer = null
+      if (!running || !autoReconnectSuspended) return
+      // Lift the suspension for one fresh attempt; if it fails again, the
+      // auth.error handler will re-suspend and re-arm this timer.
+      autoReconnectSuspended = false
+      reconnectAttempts = 0
+      evaluate()
+    }, authErrorRetryMs)
   }
 
   function clearPingWatchdog() {
@@ -260,6 +297,8 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       if (type === "auth.ok") {
         authenticated = true
         reconnectAttempts = 0
+        autoReconnectSuspended = false
+        clearAuthRetryTimer()
         setState("open")
         syncSubscriptions()
         deps.onConnected()
@@ -274,8 +313,12 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
           fatalIdentity = authIdentity(auth)
         } else {
           // Cookie auth: just suspend the auto-reconnect loop. A later sync()
-          // (inputs changed, or the cookie refreshed) clears this and retries.
+          // (inputs changed, or the cookie refreshed) clears this and retries;
+          // optionally a periodic retry timer revives it automatically.
           autoReconnectSuspended = true
+          teardownSocket()
+          scheduleAuthRetry()
+          return
         }
         teardownSocket()
         return
@@ -380,6 +423,7 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
     },
     stop() {
       running = false
+      clearAuthRetryTimer()
       teardownSocket()
       activeIdentity = null
     },
@@ -391,6 +435,7 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       if (autoReconnectSuspended) {
         autoReconnectSuspended = false
         reconnectAttempts = 0
+        clearAuthRetryTimer()
       }
       evaluate()
     },

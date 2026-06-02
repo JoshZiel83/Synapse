@@ -13,6 +13,7 @@ function makeHarness(opts: {
   auth: ChatSocketAuth | null
   subscriptions: ChatSocketSubscription[]
   authErrorIsFatal?: boolean
+  authErrorRetryMs?: number
 }) {
   const sent: Array<Record<string, unknown>> = []
   const events: Array<Record<string, unknown>> = []
@@ -72,6 +73,7 @@ function makeHarness(opts: {
     onConnected: () => connectedCalls.push(connectedCalls.length),
     onStateChange: (s) => states.push(s),
     authErrorIsFatal: opts.authErrorIsFatal,
+    authErrorRetryMs: opts.authErrorRetryMs,
   })
 
   return {
@@ -226,6 +228,38 @@ test("non-fatal auth.error (cookie auth): a later sync() retries the SAME identi
     h.connectCount,
     2,
     "non-fatal auth.error must allow same-identity reconnect via sync()"
+  )
+})
+
+test("non-fatal auth.error with authErrorRetryMs auto-revives without a sync()", () => {
+  const h = makeHarness({
+    auth: { workspaceId: "ws1" },
+    subscriptions: [],
+    authErrorIsFatal: false,
+    authErrorRetryMs: 30_000,
+  })
+  h.handle.start()
+  h.last().open()
+  h.last().receive({ type: "auth.error" })
+  assert.equal(h.connectCount, 1)
+  // A retry timer is armed even though no sync() / input change happened.
+  assert.equal(h.pendingTimerCount() >= 1, true, "retry timer should be armed")
+
+  // Fire the retry timer: it should reconnect the same identity automatically.
+  h.flushTimers()
+  assert.equal(
+    h.connectCount,
+    2,
+    "authErrorRetryMs should auto-reconnect without sync()"
+  )
+
+  // If it fails again, it re-arms; a subsequent success clears it.
+  h.last().open()
+  h.last().receive({ type: "auth.ok" })
+  assert.equal(
+    h.pendingTimerCount() >= 1,
+    true,
+    "ping watchdog armed after auth.ok"
   )
 })
 
