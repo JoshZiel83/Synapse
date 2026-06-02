@@ -56,3 +56,55 @@ test("isCanonicalContentBlock: validator stays in sync with TRANSPORT_KINDS", ()
     )
   }
 })
+
+// ── file_ref blocks (file-service refactor) ──────────────────────────────────
+// Regression: isCanonicalContentBlock is used as a STRICT FILTER in
+// chat/event-registry.ts and chat/message-content.ts. After the FileRefBlock
+// redesign (sha256 mandatory, path optional, name replacing originalName,
+// fileId/url dropped) the guard MUST accept the new shape and reject the old —
+// otherwise every fileRefBlock() the system produces is silently dropped.
+
+function newFileRefBlock(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "fr-1",
+    type: "file_ref" as const,
+    sha256: "a".repeat(64),
+    path: "/conversation/x.txt",
+    mimeType: "text/plain",
+    name: "x.txt",
+    sizeBytes: 12,
+    category: "document" as const,
+    ...overrides,
+  }
+}
+
+test("isCanonicalContentBlock: accepts the redesigned file_ref shape (sha256/path/name)", () => {
+  assert.equal(isCanonicalContentBlock(newFileRefBlock()), true)
+})
+
+test("isCanonicalContentBlock: accepts a file_ref WITHOUT path (history ref)", () => {
+  const { path: _omit, ...noPath } = newFileRefBlock()
+  void _omit
+  assert.equal(isCanonicalContentBlock(noPath), true)
+})
+
+test("isCanonicalContentBlock: rejects a file_ref missing sha256", () => {
+  const { sha256: _omit, ...noSha } = newFileRefBlock()
+  void _omit
+  assert.equal(isCanonicalContentBlock(noSha), false)
+})
+
+test("isCanonicalContentBlock: rejects the OLD file_ref shape (fileId/url/originalName)", () => {
+  // The pre-refactor shape must no longer pass — it lacks sha256/name.
+  const oldShape = {
+    id: "fr-old",
+    type: "file_ref" as const,
+    fileId: "11111111-1111-1111-1111-111111111111",
+    url: "https://example/x",
+    mimeType: "text/plain",
+    originalName: "x.txt",
+    sizeBytes: 12,
+    category: "document" as const,
+  }
+  assert.equal(isCanonicalContentBlock(oldShape), false)
+})

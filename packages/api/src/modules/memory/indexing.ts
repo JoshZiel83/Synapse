@@ -29,7 +29,7 @@ function summarizeFileBlocks(blocks: CanonicalContentBlock[]) {
       (block): block is Extract<CanonicalContentBlock, { type: "file_ref" }> =>
         block.type === "file_ref"
     )
-    .map((block) => `${block.category}:${block.originalName}`)
+    .map((block) => `${block.category}:${block.name}`)
     .join("\n")
 }
 
@@ -345,21 +345,18 @@ async function loadMemoryItemIndexSource(memoryItemId: string) {
 
   const partsResult = await db
     .selectFrom("memory_item_parts as mip")
-    .leftJoin("files as f", "f.id", "mip.file_id")
     .select([
       "mip.id",
       "mip.memory_item_id",
       "mip.ordinal",
       "mip.part_type",
       "mip.text_value",
-      "mip.file_id",
+      "mip.ref_path",
+      "mip.ref_sha256",
       "mip.json_value",
       "mip.mime_type",
       "mip.name",
       "mip.metadata",
-      "f.original_name",
-      "f.mime_type as file_mime_type",
-      "f.size_bytes",
     ])
     .where("mip.memory_item_id", "=", memoryItemId)
     .orderBy("mip.ordinal", "asc")

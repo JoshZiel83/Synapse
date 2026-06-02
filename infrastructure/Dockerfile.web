@@ -9,13 +9,28 @@ RUN npm config set registry https://registry.npmmirror.com \
 
 COPY package.json package-lock.json ./
 COPY tsconfig.base.json ./
+# All workspace manifests must exist so `npm ci` can validate the lockfile,
+# even though this image only builds device-protocol + shared + web-next.
+COPY packages/device-protocol/package.json packages/device-protocol/
 COPY packages/shared/package.json packages/shared/
+COPY packages/device-runtime/package.json packages/device-runtime/
+COPY packages/device-sdk/package.json packages/device-sdk/
+COPY packages/device-runtime-bundles-linux-x64/package.json packages/device-runtime-bundles-linux-x64/
+COPY packages/device-runtime-bundles-linux-arm64/package.json packages/device-runtime-bundles-linux-arm64/
+COPY packages/device-runtime-bundles-darwin-x64/package.json packages/device-runtime-bundles-darwin-x64/
+COPY packages/device-runtime-bundles-darwin-arm64/package.json packages/device-runtime-bundles-darwin-arm64/
+COPY packages/device-runtime-bundles-win32-x64/package.json packages/device-runtime-bundles-win32-x64/
+COPY packages/device-runtime-bundles-win32-arm64/package.json packages/device-runtime-bundles-win32-arm64/
 COPY packages/api/package.json packages/api/
+COPY packages/remote-agent-daemon/package.json packages/remote-agent-daemon/
 COPY packages/web-next/package.json packages/web-next/
-RUN npm ci --workspace=packages/shared --workspace=packages/api --workspace=packages/web-next
+RUN npm ci --workspace=packages/device-protocol --workspace=packages/shared --workspace=packages/web-next
 
+# @synapse/shared value-imports @synapse/device-protocol/browser-tools, so
+# device-protocol must be built before shared (which web-next consumes).
+COPY packages/device-protocol/ packages/device-protocol/
 COPY packages/shared/ packages/shared/
-RUN npx tsc -b packages/shared
+RUN npm run build -w packages/device-protocol && npm run build -w packages/shared
 
 COPY packages/web-next/ packages/web-next/
 
@@ -37,6 +52,9 @@ FROM node:20-alpine
 WORKDIR /app/packages/web-next
 COPY --from=builder /app/node_modules /app/node_modules
 COPY --from=builder /app/packages/shared /app/packages/shared
+# node_modules has a @synapse/device-protocol symlink → packages/device-protocol;
+# copy the target so the symlink is not dangling at runtime.
+COPY --from=builder /app/packages/device-protocol /app/packages/device-protocol
 COPY --from=builder /app/packages/web-next/.next ./.next
 COPY --from=builder /app/packages/web-next/public ./public
 COPY --from=builder /app/packages/web-next/package.json ./package.json

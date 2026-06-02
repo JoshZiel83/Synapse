@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { after } from "node:test"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import {
@@ -24,7 +25,25 @@ type SharedTestDb = {
 }
 
 let sharedPromise: Promise<SharedTestDb> | null = null
-let shutdownRegistered = false
+
+// Register the teardown hook ONCE, at module-evaluation time (before any test
+// runs), so it attaches to the root suite and fires exactly once after ALL
+// tests in this file's process complete.
+//
+// Why not `process.on("beforeExit")` (the old approach): the unit `test` script
+// historically ran with `--test-force-exit`, which calls `process.exit()` —
+// and `beforeExit` never fires on `process.exit()`, so that hook was dead code
+// that leaked one container per test-file process.
+//
+// Why not register inside bootSharedTestDb(): an `after()` registered while a
+// test is executing attaches to THAT test, firing after the first test rather
+// than after the whole file. shutdownSharedTestDb() then nulls sharedPromise
+// and a later test re-boots a second container that nothing reaps. Registering
+// at the top level avoids that entirely.
+after(async () => {
+  const keepContainer = process.env.SYNAPSE_TEST_KEEP_CONTAINERS === "1"
+  await shutdownSharedTestDb({ keepContainer })
+})
 
 async function bootSharedTestDb(): Promise<SharedTestDb> {
   const image =
@@ -35,44 +54,64 @@ async function bootSharedTestDb(): Promise<SharedTestDb> {
     .withPassword("synapse_test")
     .start()
 
-  const pool = new Pool({
-    connectionString: container.getConnectionUri(),
-    max: 8,
-  })
-
-  const db = createDb(pool)
-
-  const schemaSql = readFileSync(SCHEMA_PATH, "utf-8")
-  const client = await pool.connect()
+  // The container is live from here on. Any failure building the pool or
+  // applying the schema must explicitly tear it down before rethrowing — the
+  // top-level `after()` only reaps whatever is stored in sharedPromise, and a
+  // failed boot never gets stored.
+  let pool: pg.Pool | undefined
   try {
-    await client.query(schemaSql)
-  } finally {
-    client.release()
-  }
-
-  if (!shutdownRegistered) {
-    shutdownRegistered = true
-    process.on("beforeExit", () => {
-      void shutdownSharedTestDb()
+    pool = new Pool({
+      connectionString: container.getConnectionUri(),
+      max: 8,
     })
-  }
 
-  return { container, pool, db, schemaApplied: true }
+    const db = createDb(pool)
+
+    const schemaSql = readFileSync(SCHEMA_PATH, "utf-8")
+    const client = await pool.connect()
+    try {
+      await client.query(schemaSql)
+    } finally {
+      client.release()
+    }
+
+    return { container, pool, db, schemaApplied: true }
+  } catch (err) {
+    await pool?.end().catch(() => {})
+    await container.stop().catch(() => {})
+    throw err
+  }
 }
 
 export async function getSharedTestDb(): Promise<SharedTestDb> {
   if (!sharedPromise) {
     sharedPromise = bootSharedTestDb()
   }
-  return sharedPromise
+  try {
+    return await sharedPromise
+  } catch (err) {
+    // A failed boot (including `container.start()` itself rejecting) must clear
+    // the memoized rejected promise so the next call can retry from scratch.
+    sharedPromise = null
+    throw err
+  }
 }
 
-async function shutdownSharedTestDb(): Promise<void> {
+async function shutdownSharedTestDb(
+  opts: { keepContainer?: boolean } = {}
+): Promise<void> {
   if (!sharedPromise) return
-  const { pool, container } = await sharedPromise
+  const shared = await sharedPromise.catch(() => null)
   sharedPromise = null
+  if (!shared) return
+  const { pool, container } = shared
+  // Always close the pool: its idle socket is the one un-unref'd handle keeping
+  // the event loop alive, so this is what lets the process exit on its own even
+  // in keep-container debug mode.
   await pool.end().catch(() => {})
-  await container.stop().catch(() => {})
+  if (!opts.keepContainer) {
+    await container.stop().catch(() => {})
+  }
 }
 
 /**

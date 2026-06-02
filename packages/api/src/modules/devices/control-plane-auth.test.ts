@@ -72,16 +72,18 @@ function signNonce(privateKey: any, nonce: string): string {
 }
 
 test("authenticateDeviceHello accepts a valid signature", async () => {
-  await withTestDb(async () => {
-    const { db } = await import("../../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
     const nonce = "0123456789abcdef"
-    const result = await authenticateDeviceHello({
-      deviceId: seed.deviceId,
-      serviceId: seed.serviceId,
-      signedChallenge: signNonce(seed.privateKey, nonce),
-      challengeNonce: nonce,
-    })
+    const result = await authenticateDeviceHello(
+      {
+        deviceId: seed.deviceId,
+        serviceId: seed.serviceId,
+        signedChallenge: signNonce(seed.privateKey, nonce),
+        challengeNonce: nonce,
+      },
+      db
+    )
     assert.equal(result.ok, true)
     if (result.ok) {
       assert.equal(result.deviceId, seed.deviceId)
@@ -91,64 +93,73 @@ test("authenticateDeviceHello accepts a valid signature", async () => {
 })
 
 test("authenticateDeviceHello rejects unknown device_id", async () => {
-  await withTestDb(async () => {
-    const result = await authenticateDeviceHello({
-      deviceId: randomUUID(),
-      serviceId: randomUUID(),
-      signedChallenge: "AAAA",
-      challengeNonce: "n",
-    })
+  await withTestDb(async (db) => {
+    const result = await authenticateDeviceHello(
+      {
+        deviceId: randomUUID(),
+        serviceId: randomUUID(),
+        signedChallenge: "AAAA",
+        challengeNonce: "n",
+      },
+      db
+    )
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.code, "device_not_found")
   })
 })
 
 test("authenticateDeviceHello rejects mismatched service/device pair", async () => {
-  await withTestDb(async () => {
-    const { db } = await import("../../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
-    const result = await authenticateDeviceHello({
-      deviceId: seed.deviceId,
-      serviceId: randomUUID(), // not a child of seed.deviceId
-      signedChallenge: "AAAA",
-      challengeNonce: "n",
-    })
+    const result = await authenticateDeviceHello(
+      {
+        deviceId: seed.deviceId,
+        serviceId: randomUUID(), // not a child of seed.deviceId
+        signedChallenge: "AAAA",
+        challengeNonce: "n",
+      },
+      db
+    )
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.code, "service_not_found")
   })
 })
 
 test("authenticateDeviceHello rejects a wrong signature", async () => {
-  await withTestDb(async () => {
-    const { db } = await import("../../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
     const wrongPrivate = generateKeyPairSync("ed25519").privateKey
-    const result = await authenticateDeviceHello({
-      deviceId: seed.deviceId,
-      serviceId: seed.serviceId,
-      signedChallenge: signNonce(wrongPrivate, "the-nonce"),
-      challengeNonce: "the-nonce",
-    })
+    const result = await authenticateDeviceHello(
+      {
+        deviceId: seed.deviceId,
+        serviceId: seed.serviceId,
+        signedChallenge: signNonce(wrongPrivate, "the-nonce"),
+        challengeNonce: "the-nonce",
+      },
+      db
+    )
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.code, "signature_invalid")
   })
 })
 
 test("authenticateDeviceHello rejects a revoked service key", async () => {
-  await withTestDb(async () => {
-    const { db } = await import("../../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const seed = await seedDeviceWithService(db)
     await db.executeQuery(
       sql`UPDATE device_service_keys SET revoked_at = NOW() WHERE service_id = ${seed.serviceId}`.compile(
         db
       )
     )
-    const result = await authenticateDeviceHello({
-      deviceId: seed.deviceId,
-      serviceId: seed.serviceId,
-      signedChallenge: signNonce(seed.privateKey, "n"),
-      challengeNonce: "n",
-    })
+    const result = await authenticateDeviceHello(
+      {
+        deviceId: seed.deviceId,
+        serviceId: seed.serviceId,
+        signedChallenge: signNonce(seed.privateKey, "n"),
+        challengeNonce: "n",
+      },
+      db
+    )
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.code, "service_key_missing")
   })

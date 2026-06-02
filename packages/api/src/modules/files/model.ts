@@ -48,10 +48,11 @@ export interface FileOriginInput extends FileCreateOriginInput {
 }
 
 export interface StoredFileRecord extends FileRecordView {
-  blobId: string
-  storageKey: string
-  bucket?: string | null
-  locator: Record<string, unknown>
+  // Content-addressed: the blob is fetched by sha256 (= FileRecordView.sha256)
+  // from the CAS. No separate blob row anymore (content_blobs is keyed by
+  // sha256), so the old blobId/storageKey/bucket/locator quadruple is gone.
+  // `assetId` mirrors `id` for callers that referenced the asset row id.
+  assetId: string
 }
 
 export function mimeToFileContentKind(mimeType: string): FileContentKind {

@@ -1,7 +1,8 @@
 // Spawn the API in-process by tsx, listening on a worktree-private port.
 // The API picks up env vars at startup; we wait for /api/v1/health.
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { spawn, type ChildProcessByStdio } from "node:child_process"
+import type { Readable } from "node:stream"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -10,12 +11,24 @@ import { fileURLToPath } from "node:url"
 const __dirname = fileURLToPath(new URL(".", import.meta.url))
 const WORKTREE_ROOT = join(__dirname, "../../../../..")
 
-export const TEST_API_PORT = 38091
 export const TEST_API_HOST = "127.0.0.1"
+// Per-worktree API port: derived from BASE_URL (run-test.sh exports
+// http://127.0.0.1:${INT_API_PORT}); falls back to the legacy 38091 only when
+// run outside the wrapper.
+function deriveApiPort(): number {
+  try {
+    const p = Number.parseInt(new URL(process.env.BASE_URL ?? "").port, 10)
+    if (Number.isFinite(p) && p > 0) return p
+  } catch {
+    // fall through to default
+  }
+  return 38091
+}
+export const TEST_API_PORT = deriveApiPort()
 export const TEST_API_BASE_URL = `http://${TEST_API_HOST}:${TEST_API_PORT}`
 
 export interface ApiHandle {
-  proc: ChildProcessWithoutNullStreams
+  proc: ChildProcessByStdio<null, Readable, Readable>
   port: number
   baseUrl: string
   storageDir: string

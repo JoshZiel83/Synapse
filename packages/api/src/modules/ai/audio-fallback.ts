@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
 import { config } from "../../config/index.js"
-import { readFileBufferById } from "../files/service.js"
+import { readContentBufferBySha } from "../files/service.js"
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
 type AudioFileBlock = FileRefBlock & { category: "audio" }
@@ -62,7 +62,7 @@ function normalizeTranscript(text: string): string {
 
 function guessExtension(block: AudioFileBlock): string {
   const byName = path
-    .extname(block.originalName || "")
+    .extname(block.name || "")
     .replace(".", "")
     .trim()
   if (byName) return byName
@@ -253,7 +253,7 @@ async function transcribeWithLocalSherpaOnnx(
       }
     }
 
-    const buffer = await readFileBufferById(block.fileId)
+    const buffer = await readContentBufferBySha(block.sha256)
     if (!buffer) {
       return {
         ok: false,
@@ -308,7 +308,7 @@ async function transcribeWithSherpaOnnx(
 async function getTranscript(
   block: AudioFileBlock
 ): Promise<AudioTranscriptResult> {
-  const cacheKey = `${config.audioFallback.provider}:${block.fileId}`
+  const cacheKey = `${config.audioFallback.provider}:${block.sha256}`
   let pending = transcriptCache.get(cacheKey)
   if (!pending) {
     pending = transcribeWithSherpaOnnx(block)
@@ -322,7 +322,7 @@ export async function buildAudioFallbackContext(
   reason: string
 ): Promise<string> {
   const transcript = await getTranscript(block)
-  const fileRef = `<FileRef id="${block.fileId}"/>`
+  const fileRef = `<FileRef id="${block.sha256}"/>`
   const lines = [
     `[Audio fallback] ${reason} The platform pre-transcribed this audio with the default sherpa-onnx transcriber before building this request.`,
     `Original audio FileRef: ${fileRef}`,

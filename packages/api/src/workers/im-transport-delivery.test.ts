@@ -314,11 +314,12 @@ test("item missing → skipped/item_missing_or_not_message", async () => {
   const updateCalls: any[] = []
   const deps = baseDeps({
     loadLink: async () => outboundLink(),
-    getBinding: async () => ({
-      account: { id: "acc-1", status: "active" },
-      endpoint: { id: "ep-1" },
-      outboundEnabled: true,
-    }),
+    getBinding: async () =>
+      ({
+        account: { id: "acc-1", status: "active" },
+        endpoint: { id: "ep-1" },
+        outboundEnabled: true,
+      }) as any,
     getItem: async () => null,
     updateStatus: async (params) => {
       updateCalls.push(params)
@@ -336,11 +337,12 @@ test("item kind != message → skipped/item_missing_or_not_message", async () =>
   const updateCalls: any[] = []
   const deps = baseDeps({
     loadLink: async () => outboundLink(),
-    getBinding: async () => ({
-      account: { id: "acc-1", status: "active" },
-      endpoint: { id: "ep-1" },
-      outboundEnabled: true,
-    }),
+    getBinding: async () =>
+      ({
+        account: { id: "acc-1", status: "active" },
+        endpoint: { id: "ep-1" },
+        outboundEnabled: true,
+      }) as any,
     getItem: async () => ({ kind: "event" }) as any,
     updateStatus: async (params) => {
       updateCalls.push(params)
@@ -357,11 +359,12 @@ test("external author → skipped/external_author", async () => {
   const updateCalls: any[] = []
   const deps = baseDeps({
     loadLink: async () => outboundLink(),
-    getBinding: async () => ({
-      account: { id: "acc-1", status: "active" },
-      endpoint: { id: "ep-1" },
-      outboundEnabled: true,
-    }),
+    getBinding: async () =>
+      ({
+        account: { id: "acc-1", status: "active" },
+        endpoint: { id: "ep-1" },
+        outboundEnabled: true,
+      }) as any,
     getItem: async () =>
       messageItem({ author: { participantType: "external" } }),
     updateStatus: async (params) => {
@@ -381,11 +384,12 @@ test("external author → skipped/external_author", async () => {
 function happyPathDepsExceptConnector(): Partial<Deps> {
   return {
     loadLink: async () => outboundLink(),
-    getBinding: async () => ({
-      account: { id: "acc-1", status: "active" },
-      endpoint: { id: "ep-1" },
-      outboundEnabled: true,
-    }),
+    getBinding: async () =>
+      ({
+        account: { id: "acc-1", status: "active" },
+        endpoint: { id: "ep-1" },
+        outboundEnabled: true,
+      }) as any,
     getItem: async () => messageItem(),
     decode: () =>
       ({
@@ -549,7 +553,7 @@ test(
       ...happyPathDepsExceptConnector(),
       getConnector: () =>
         recipientMetadataConnector({ requires: true, capture }),
-      loadRecipientAddress: async () => null,
+      loadRecipientAddress: async () => undefined,
       findExternalMessageIdForItem: async () => null,
       updateStatus: async () => null,
     })

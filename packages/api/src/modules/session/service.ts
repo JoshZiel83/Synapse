@@ -678,7 +678,6 @@ export async function getSessionMessages(
   const itemIds = items.map((row) => row.id)
   const partRows = await db
     .selectFrom("conversation_item_parts as cip")
-    .leftJoin("files as f", "f.id", "cip.file_id")
     .select([
       "cip.id",
       "cip.item_id",
@@ -687,11 +686,10 @@ export async function getSessionMessages(
       "cip.mime_type",
       "cip.text_value",
       "cip.json_value",
-      "cip.file_id",
+      "cip.ref_path",
+      "cip.ref_sha256",
       "cip.name",
-      "f.original_name",
-      "f.mime_type as file_mime_type",
-      "f.size_bytes",
+      "cip.metadata",
     ])
     .where("cip.item_id", "in", itemIds)
     .orderBy("cip.item_id", "asc")

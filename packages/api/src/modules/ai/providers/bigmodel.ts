@@ -31,7 +31,10 @@ import {
   buildBranchDeltaWindow,
   canResumeBranchFromWindow,
 } from "../engine-branches.js"
-import { getFullFileUrlById, readFileBufferById } from "../../files/service.js"
+import {
+  getFullContentUrlBySha,
+  readContentBufferBySha,
+} from "../../files/service.js"
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   "image/jpeg",
@@ -427,12 +430,12 @@ export class BigModelChatCompletionsProvider implements AIProvider {
                   { ...block, category: "image" },
                   "Image input is not enabled for this model configuration."
                 )
-              : `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
+              : `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)})]`
         nativeBlocks.push({ type: "text", text: desc })
         textParts.push(desc)
         const hint = this.buildFileRefHint(
-          block.fileId,
-          block.originalName,
+          block.sha256,
+          block.name,
           block.category
         )
         nativeBlocks.push({ type: "text", text: hint })
@@ -441,7 +444,7 @@ export class BigModelChatCompletionsProvider implements AIProvider {
       }
 
       try {
-        let buffer = await readFileBufferById(block.fileId)
+        let buffer = await readContentBufferBySha(block.sha256)
         if (!buffer) {
           throw new Error("file not found")
         }
@@ -466,7 +469,7 @@ export class BigModelChatCompletionsProvider implements AIProvider {
                   }
                 : {
                     type: "image_url",
-                    image_url: { url: getFullFileUrlById(block.fileId) },
+                    image_url: { url: getFullContentUrlBySha(block.sha256) },
                   }
             break
           case "audio": {
@@ -484,38 +487,38 @@ export class BigModelChatCompletionsProvider implements AIProvider {
           case "document":
             nativeBlock = {
               type: "file_url",
-              file_url: { url: getFullFileUrlById(block.fileId) },
+              file_url: { url: getFullContentUrlBySha(block.sha256) },
             }
             break
           case "video":
             nativeBlock = {
               type: "video_url",
-              video_url: { url: getFullFileUrlById(block.fileId) },
+              video_url: { url: getFullContentUrlBySha(block.sha256) },
             }
             break
         }
 
         if (nativeBlock) {
           nativeBlocks.push(nativeBlock)
-          textParts.push(`[${block.category}: ${block.originalName}]`)
+          textParts.push(`[${block.category}: ${block.name}]`)
         } else {
-          const desc = `[${block.category}: ${block.originalName} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`
+          const desc = `[${block.category}: ${block.name} (${block.mimeType}, ${formatBytes(block.sizeBytes)}) - provider does not support this type]`
           nativeBlocks.push({ type: "text", text: desc })
           textParts.push(desc)
         }
       } catch (err: any) {
         console.error(
-          `[bigmodel] Failed to resolve file_ref ${block.fileId}:`,
+          `[bigmodel] Failed to resolve file_ref ${block.sha256}:`,
           err.message
         )
-        const desc = `[${block.category}: ${block.originalName} (read failed)]`
+        const desc = `[${block.category}: ${block.name} (read failed)]`
         nativeBlocks.push({ type: "text", text: desc })
         textParts.push(desc)
       }
 
       const hint = this.buildFileRefHint(
-        block.fileId,
-        block.originalName,
+        block.sha256,
+        block.name,
         block.category
       )
       nativeBlocks.push({ type: "text", text: hint })

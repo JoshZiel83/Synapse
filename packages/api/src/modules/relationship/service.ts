@@ -293,7 +293,11 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
   const row = await db
     .selectFrom("actors as a")
     .innerJoin("workspaces as w", "w.id", "a.workspace_id")
-    .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+    .leftJoin(
+      "file_assets as avatar_file",
+      "avatar_file.id",
+      "a.avatar_file_id"
+    )
     .select([
       "a.id as actor_id",
       "a.workspace_id",
@@ -1298,7 +1302,11 @@ async function buildContactHubEntryMap(params: {
     db
       .selectFrom("actors as a")
       .innerJoin("workspaces as w", "w.id", "a.workspace_id")
-      .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+      .leftJoin(
+        "file_assets as avatar_file",
+        "avatar_file.id",
+        "a.avatar_file_id"
+      )
       .select([
         "a.id as actor_id",
         "a.workspace_id",

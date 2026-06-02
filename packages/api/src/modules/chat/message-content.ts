@@ -9,7 +9,6 @@ import {
   type CanonicalContentBlock,
   type CanonicalFileCategory,
 } from "@synapse/shared"
-import { getFileUrlById } from "../files/service.js"
 import {
   parseInlineReferenceSegments,
   resolveInlineReferenceSegments,
@@ -19,7 +18,8 @@ import {
 export type DraftConversationPart = {
   type: "text" | "file_ref" | "json"
   text?: string
-  fileId?: string
+  refPath?: string | null
+  refSha256?: string | null
   json?: unknown
   mimeType?: string
   name?: string
@@ -84,15 +84,16 @@ export function canonicalContentBlocksToDraftParts(
     if (block.type === "file_ref") {
       parts.push({
         type: "file_ref",
-        fileId: block.fileId,
+        refPath: block.path ?? null,
+        refSha256: block.sha256,
         mimeType: block.mimeType,
-        name: block.originalName,
+        name: block.name,
         metadata: {
-          id: block.fileId,
-          originalName: block.originalName,
+          sha256: block.sha256,
+          path: block.path,
+          name: block.name,
           mimeType: block.mimeType,
           sizeBytes: block.sizeBytes,
-          url: block.url,
           category: block.category,
         },
       })
@@ -130,24 +131,24 @@ export function draftPartsToCanonicalContentBlocks(
       continue
     }
 
-    if (part.type === "file_ref" && part.fileId) {
+    if (part.type === "file_ref" && part.refSha256) {
       const metadata = part.metadata || {}
       const mimeType =
         typeof metadata.mimeType === "string"
           ? metadata.mimeType
           : part.mimeType || "application/octet-stream"
+      const path =
+        part.refPath ??
+        (typeof metadata.path === "string" ? metadata.path : undefined)
       blocks.push(
         fileRefBlock({
-          fileId: part.fileId,
-          url:
-            typeof metadata.url === "string"
-              ? metadata.url
-              : getFileUrlById(part.fileId),
+          sha256: part.refSha256,
+          path: path ?? undefined,
           mimeType,
-          originalName:
-            typeof metadata.originalName === "string"
-              ? metadata.originalName
-              : part.name || "file",
+          name:
+            (typeof metadata.name === "string" ? metadata.name : undefined) ||
+            part.name ||
+            "file",
           sizeBytes: parseSizeBytes(metadata.sizeBytes),
           category:
             (metadata.category as
@@ -193,20 +194,25 @@ export function itemPartsToCanonicalContentBlocks(
       continue
     }
 
-    if (part.part_type === "file_ref" && part.file_id) {
+    if (part.part_type === "file_ref" && part.ref_sha256) {
       const metadata = parseJson(part.metadata)
       const mimeType =
-        part.file_mime_type || part.mime_type || "application/octet-stream"
+        part.mime_type ||
+        (typeof metadata.mimeType === "string" ? metadata.mimeType : null) ||
+        "application/octet-stream"
+      const path =
+        part.ref_path ??
+        (typeof metadata.path === "string" ? metadata.path : undefined)
       blocks.push(
         fileRefBlock({
-          fileId: part.file_id,
-          url:
-            typeof metadata.url === "string"
-              ? metadata.url
-              : getFileUrlById(part.file_id),
+          sha256: part.ref_sha256,
+          path: path ?? undefined,
           mimeType,
-          originalName: part.original_name || part.name || "file",
-          sizeBytes: parseSizeBytes(part.size_bytes ?? metadata.sizeBytes),
+          name:
+            part.name ||
+            (typeof metadata.name === "string" ? metadata.name : undefined) ||
+            "file",
+          sizeBytes: parseSizeBytes(metadata.sizeBytes),
           category:
             (metadata.category as
               | "image"

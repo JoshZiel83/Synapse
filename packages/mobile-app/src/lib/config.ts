@@ -48,6 +48,14 @@ export function resolveApiUrl(pathOrUrl: string) {
   }
 }
 
+// Content-addressed file ref render URL. file_ref blocks now carry a sha256
+// (+ optional path); bytes are served by GET /content/<sha256>. Returns
+// undefined when there is no sha256 to resolve.
+export function resolveContentUrl(sha256?: string | null) {
+  if (!sha256) return undefined
+  return `${API_BASE}/content/${sha256}`
+}
+
 export function getPlatformClientType() {
   if (Platform.OS === "ios") return "ios"
   if (Platform.OS === "android") return "android"

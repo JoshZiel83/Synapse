@@ -52,6 +52,11 @@ import {
 
 const NS = "batch14-regr"
 
+// RuntimeActorContext (which ProjectToolsInput extends) requires sessionId.
+// These regression tests don't exercise session-scoped behaviour, so a fixed
+// UUID-shaped placeholder keeps the fixtures realistic without affecting intent.
+const SESSION_ID = "00000000-0000-0000-0000-0000000000b1"
+
 function rid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
@@ -140,6 +145,7 @@ test(
       const wsSubject = await upsertAccessSubject(db, workspaceRef(wsId) as any)
       const input: ProjectToolsInput = {
         workspaceId: wsId,
+        sessionId: SESSION_ID,
         principal: { kind: "conversation", conversationId: convId },
         conversationId: convId,
         consumer: "chat_runtime",
@@ -178,6 +184,7 @@ test(
       )
       const input: ProjectToolsInput = {
         workspaceId: wsId,
+        sessionId: SESSION_ID,
         principal: { kind: "actor", actorId, conversationId: convId },
         conversationId: convId,
         consumer: "chat_runtime",
@@ -213,6 +220,7 @@ test(
       )
       const input: ProjectToolsInput = {
         workspaceId: wsId,
+        sessionId: SESSION_ID,
         principal: { kind: "actor", actorId, conversationId: convId },
         conversationId: convId,
         consumer: "chat_runtime",
@@ -243,6 +251,7 @@ test("Batch 14: buildRuntimeAuthorizationRequestParams round-trips scope + sanit
   const params = buildRuntimeAuthorizationRequestParams({
     projectInput: {
       workspaceId: "ws-1",
+      sessionId: SESSION_ID,
       principal: {
         kind: "actor",
         actorId: "actor-1",
@@ -267,6 +276,10 @@ test("Batch 14: buildRuntimeAuthorizationRequestParams round-trips scope + sanit
       input_schema: { type: "object" },
       capability_conversation_type_mask_override: null,
       device_conversation_type_mask_override: null,
+      exposure_stable_key: "builtin/commandline/run",
+      exposure_metadata: null,
+      device_platform: "linux",
+      device_arch: "x64",
     },
     toolName: "device__bash",
     sanitizedInput,
@@ -307,6 +320,7 @@ test("Batch 14: buildRuntimeAuthorizationRequestParams round-trips scope + sanit
   const noScope = buildRuntimeAuthorizationRequestParams({
     projectInput: {
       workspaceId: "ws-1",
+      sessionId: SESSION_ID,
       principal: { kind: "actor", actorId: "actor-1" },
       consumer: "chat_runtime",
     },
@@ -326,6 +340,10 @@ test("Batch 14: buildRuntimeAuthorizationRequestParams round-trips scope + sanit
       input_schema: { type: "object" },
       capability_conversation_type_mask_override: null,
       device_conversation_type_mask_override: null,
+      exposure_stable_key: "builtin/commandline/run",
+      exposure_metadata: null,
+      device_platform: "linux",
+      device_arch: "x64",
     },
     toolName: "device__bash",
     sanitizedInput: { command: "ls" },

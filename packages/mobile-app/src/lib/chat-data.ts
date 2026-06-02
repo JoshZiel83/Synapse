@@ -638,7 +638,7 @@ function summarizeFileCategories(blocks: CanonicalContentBlock[]) {
       case "audio":
         return "语音"
       default:
-        return files[0]!.originalName || "文件"
+        return files[0]!.name || "文件"
     }
   }
 

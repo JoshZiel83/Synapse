@@ -80,7 +80,10 @@ interface MockFetchOptions {
 function installFetchMock(options: MockFetchOptions) {
   const calls: FetchCall[] = []
   const previous = globalThis.fetch
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (
+    input: Parameters<typeof fetch>[0],
+    init?: RequestInit
+  ) => {
     const url = typeof input === "string" ? input : input.toString()
     const kind = classifyUrl(url)
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
@@ -170,6 +173,7 @@ test("outbound: sessionWebhook success returns synthetic 'dingtalk-session:' id"
       endpoint: groupEndpoint(),
       message: SIMPLE_MSG,
     })
+    assert.ok(r.externalMessageId)
     assert.ok(r.externalMessageId.startsWith("dingtalk-session:"))
     const kinds = mock.calls.map((c) => c.kind)
     assert.deepEqual(kinds, ["token", "webhook"])
@@ -311,6 +315,7 @@ test("outbound: OpenAPI success without processQueryKey → synthetic 'dingtalk-
       endpoint: groupEndpoint(),
       message: SIMPLE_MSG,
     })
+    assert.ok(r.externalMessageId)
     assert.ok(r.externalMessageId.startsWith("dingtalk-openapi:"))
   } finally {
     mock.restore()
@@ -369,6 +374,7 @@ test("outbound: direct + webhook succeeds + missing staffId → still succeeds (
       endpoint: directEndpoint(/* no lastSenderStaffId */),
       message: SIMPLE_MSG,
     })
+    assert.ok(r.externalMessageId)
     assert.ok(r.externalMessageId.startsWith("dingtalk-session:"))
     const kinds = mock.calls.map((c) => c.kind)
     assert.deepEqual(kinds, ["token", "webhook"])

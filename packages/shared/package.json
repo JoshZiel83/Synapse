@@ -66,6 +66,7 @@
     }
   },
   "scripts": {
+    "prebuild": "rm -rf dist tsconfig.build.tsbuildinfo",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc --watch",
     "test": "tsx --test \"src/**/*.test.ts\"",

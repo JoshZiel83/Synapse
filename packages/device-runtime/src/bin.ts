@@ -17,6 +17,7 @@ import { runDeviceRuntime } from "./runtime.js"
 import { bootstrapCloudDevice } from "./cloud-bootstrap.js"
 import { createFilesystemBuiltin } from "./builtins/filesystem.js"
 import { createCommandlineBuiltin } from "./builtins/commandline.js"
+import { bwrapAvailable } from "./terminal/sandbox-confinement.js"
 import { createCuaBuiltin } from "./builtins/cua.js"
 import { createBrowserBuiltin } from "./builtins/browser.js"
 import { createChromeDevtoolsMcpBuiltin } from "./builtins/chrome-devtools-mcp.js"
@@ -209,6 +210,14 @@ async function main() {
           process.env.SYNAPSE_DEVICE_FS_ALLOW_UNVERSIONED_WRITE,
         false
       )
+      // --cmd-sandbox: confine every commandline invocation in a bwrap jail
+      // rooted at the fs-root (no network, host FS unreachable outside the
+      // mount points). Set by the platform's sandbox provisioner. Linux-only.
+      const cmdSandbox = isOn(
+        getFlag(args.flags, "cmd-sandbox") ??
+          process.env.SYNAPSE_DEVICE_CMD_SANDBOX,
+        false
+      )
       const fsDisableLiveSearch = isOn(
         getFlag(args.flags, "fs-disable-live-search") ??
           process.env.SYNAPSE_DEVICE_FS_DISABLE_LIVE_SEARCH,
@@ -302,12 +311,10 @@ async function main() {
       // and run use the SAME --bundled-toolchain-dir / --toolchain-manifest
       // defaults; ToolchainManager.resolve hits whatever install-bundles
       // populated earlier.
-      const { detectTerminalEnvironment } = await import(
-        "./terminal/environment.js"
-      )
-      const { createToolchainManager } = await import(
-        "./terminal/toolchain-manager.js"
-      )
+      const { detectTerminalEnvironment } =
+        await import("./terminal/environment.js")
+      const { createToolchainManager } =
+        await import("./terminal/toolchain-manager.js")
       const { defaultPathResolver } = await import("./terminal/environment.js")
       const environment = await detectTerminalEnvironment()
       const manifestPath =
@@ -368,8 +375,34 @@ async function main() {
           helperRpcTimeoutMs: fsHelperRpcTimeoutMs,
           indexIgnore: fsIndexIgnore,
         }),
-        createCommandlineBuiltin({ environment, toolchainManager }),
       ]
+      // Commandline builtin. Fail-closed for sandbox runtimes: when --cmd-sandbox
+      // is set we MUST confine every command in a bwrap jail. If bwrap is not
+      // available on this host we do NOT register the commandline provider at
+      // all — exposing an unconfined commandline on a sandbox device (even if it
+      // were only reachable via a later/erroneous capability grant) would turn
+      // the sandbox shell into a host shell. Non-sandbox runtimes register the
+      // commandline builtin normally (their isolation model is the device itself).
+      if (cmdSandbox) {
+        if (bwrapAvailable()) {
+          providers.push(
+            createCommandlineBuiltin({
+              environment,
+              toolchainManager,
+              sandboxRoot: fsRoot,
+            })
+          )
+        } else {
+          console.warn(
+            "[synapse-device] --cmd-sandbox requested but bwrap is unavailable; " +
+              "NOT exposing a commandline tool (fail-closed). Only filesystem tools are available."
+          )
+        }
+      } else {
+        providers.push(
+          createCommandlineBuiltin({ environment, toolchainManager })
+        )
+      }
       const cuaHelperPath =
         getFlag(args.flags, "cua-helper") ??
         process.env.SYNAPSE_DEVICE_CUA_HELPER_PATH ??

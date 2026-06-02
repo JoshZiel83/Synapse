@@ -346,5 +346,111 @@
       "argvPrefix": ["-m", "pytest"]
     },
     "expected": true
+  },
+  {
+    "description": "sandbox grant allows any bash command whose cwd is inside a mount point",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "sandbox"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "curl http://evil.example",
+      "workingDirectory": "/conversation"
+    },
+    "expected": true
+  },
+  {
+    "description": "sandbox grant allows exec_file inside a mount point (command/argv ignored)",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "sandbox"
+        }
+      }
+    ],
+    "request": {
+      "executor": "exec_file",
+      "program": "python3",
+      "argvPrefix": ["-c", "print(1)"],
+      "workingDirectory": "/actor"
+    },
+    "expected": true
+  },
+  {
+    "description": "sandbox grant denies a command whose cwd is outside the mount points",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "sandbox"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls",
+      "workingDirectory": "/etc"
+    },
+    "expected": false
+  },
+  {
+    "description": "sandbox grant denies a command with no working directory (cannot prove it runs in the jail)",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "sandbox"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls",
+      "workingDirectory": ""
+    },
+    "expected": false
+  },
+  {
+    "description": "sandbox grant with a narrower workingDirectory cap denies cwd in a different mount",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "sandbox",
+          "workingDirectory": "/conversation"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls",
+      "workingDirectory": "/actor"
+    },
+    "expected": false
+  },
+  {
+    "description": "shell grant does NOT match an out-of-scope command just because cwd is a mount point (sandbox-only behavior)",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "exact",
+          "commandText": "ls"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "rm -rf /",
+      "workingDirectory": "/conversation"
+    },
+    "expected": false
   }
 ]

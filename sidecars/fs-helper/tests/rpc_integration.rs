@@ -5,6 +5,29 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
+/// Resolve the host path of the sidecar that a dir_sync result recorded for the
+/// given original VFS path, by reading `conflict_sidecars` (the sidecar storage
+/// name is an opaque, collision-free hash — round-9 #1 — so tests must NOT
+/// reconstruct it from the original tree path). Returns None if not reported.
+fn sidecar_host_for(
+    live: &std::path::Path,
+    result: &serde_json::Value,
+    original: &str,
+) -> Option<PathBuf> {
+    let arr = result["result"]["conflict_sidecars"].as_array()?;
+    let entry = arr
+        .iter()
+        .find(|c| c["original"].as_str() == Some(original))?;
+    let sidecar_vfs = entry["sidecar"].as_str()?;
+    let mut p = live.to_path_buf();
+    for seg in sidecar_vfs.trim_start_matches('/').split('/') {
+        if !seg.is_empty() {
+            p.push(seg);
+        }
+    }
+    Some(p)
+}
+
 fn build_binary() -> PathBuf {
     // The test harness rebuilds via cargo; just use the dev binary path.
     let mut p = std::env::current_exe().unwrap();
@@ -33,6 +56,29 @@ impl Helper {
             .arg("100")
             .arg("--keep-recent-versions")
             .arg("5")
+            .arg("--max-snapshot-bytes")
+            .arg("10485760")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
+        let stdout = cmd.stdout.take().unwrap();
+        Self {
+            child: cmd,
+            reader: BufReader::new(stdout),
+        }
+    }
+    /// Spawn with a --cas-dir so the cas/manifest/dir RPCs are available.
+    fn spawn_with_cas(root: &PathBuf, work: &PathBuf, cas: &PathBuf) -> Self {
+        let bin = build_binary();
+        let mut cmd = Command::new(&bin)
+            .arg("--root")
+            .arg(root)
+            .arg("--work-dir")
+            .arg(work)
+            .arg("--cas-dir")
+            .arg(cas)
             .arg("--max-snapshot-bytes")
             .arg("10485760")
             .stdin(Stdio::piped())
@@ -1423,6 +1469,1248 @@ fn fs_index_status_returns_quiet_stub_when_index_file_absent() {
     assert!(
         s["result"].get("doc_count_pending").is_none(),
         "absent-file stub must NOT re-introduce doc_count_pending: {s}",
+    );
+    helper.stop();
+}
+
+// ───────────────────── CAS + manifest (Step 1) ───────────────────────────────
+
+#[test]
+fn cas_put_has_and_dedup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let src = tmp.path().join("src.txt");
+    std::fs::write(&src, "cas-content").unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+    let r = helper.call(
+        1,
+        "fs.cas.put",
+        serde_json::json!({ "path": src.to_str().unwrap() }),
+    );
+    let sha = r["result"]["sha256"].as_str().unwrap().to_string();
+    assert_eq!(sha, sha256_hex(b"cas-content"), "{r}");
+    assert_eq!(r["result"]["dedup"], false, "{r}");
+    // has → true.
+    let h = helper.call(2, "fs.cas.has", serde_json::json!({ "sha256": sha }));
+    assert_eq!(h["result"]["exists"], true, "{h}");
+    // put again → dedup true.
+    let r2 = helper.call(
+        3,
+        "fs.cas.put",
+        serde_json::json!({ "path": src.to_str().unwrap() }),
+    );
+    assert_eq!(r2["result"]["dedup"], true, "{r2}");
+    // unknown sha → has false.
+    let h2 = helper.call(
+        4,
+        "fs.cas.has",
+        serde_json::json!({ "sha256": "0".repeat(64) }),
+    );
+    assert_eq!(h2["result"]["exists"], false, "{h2}");
+    helper.stop();
+}
+
+#[test]
+fn cas_rpcs_error_without_cas_dir() {
+    // Helper spawned WITHOUT --cas-dir must reject cas/manifest RPCs with
+    // invalid_params rather than panicking.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    let r = helper.call(
+        1,
+        "fs.cas.has",
+        serde_json::json!({ "sha256": "x".repeat(64) }),
+    );
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+    helper.stop();
+}
+
+#[test]
+fn manifest_scan_commit_then_materialize_roundtrip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    let live = tmp.path().join("live");
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    // Build a live tree: file, nested file, empty dir, symlink.
+    std::fs::create_dir_all(live.join("sub")).unwrap();
+    std::fs::create_dir_all(live.join("empty")).unwrap();
+    std::fs::write(live.join("top.txt"), "top-bytes").unwrap();
+    std::fs::write(live.join("sub/nested.txt"), "nested-bytes").unwrap();
+    std::os::unix::fs::symlink("top.txt", live.join("link")).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+    let r = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": live.to_str().unwrap() }),
+    );
+    let manifest_sha = r["result"]["manifest_sha256"].as_str().unwrap().to_string();
+    assert!(r["result"]["conflict_paths"].as_array().unwrap().is_empty());
+    // entries should include the empty dir and the symlink.
+    let entries = r["result"]["entries"].as_array().unwrap();
+    let kinds: std::collections::HashMap<String, String> = entries
+        .iter()
+        .map(|e| {
+            (
+                e["path"].as_str().unwrap().to_string(),
+                e["kind"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(kinds.get("/empty").map(|s| s.as_str()), Some("dir"), "{r}");
+    assert_eq!(kinds.get("/link").map(|s| s.as_str()), Some("symlink"), "{r}");
+    assert_eq!(kinds.get("/top.txt").map(|s| s.as_str()), Some("file"), "{r}");
+    // Materialize into a fresh dir.
+    let m = helper.call(
+        2,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": manifest_sha, "target_dir": out.to_str().unwrap() }),
+    );
+    assert!(m.get("error").is_none(), "{m}");
+    // Verify files round-trip byte-for-byte, empty dir exists, symlink points right.
+    assert_eq!(std::fs::read(out.join("top.txt")).unwrap(), b"top-bytes");
+    assert_eq!(std::fs::read(out.join("sub/nested.txt")).unwrap(), b"nested-bytes");
+    assert!(out.join("empty").is_dir(), "empty dir lost");
+    let link_meta = std::fs::symlink_metadata(out.join("link")).unwrap();
+    assert!(link_meta.file_type().is_symlink(), "symlink lost");
+    assert_eq!(std::fs::read_link(out.join("link")).unwrap().to_str(), Some("top.txt"));
+    helper.stop();
+}
+
+#[test]
+fn manifest_materialize_handles_type_changes_and_clears_stale() {
+    // A re-materialize must survive every file-type change (file→dir, dir→file,
+    // file→symlink, symlink→dir) AND clear stale files from a previous snapshot,
+    // not just fail or leave junk behind.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // Snapshot A: p1 is a FILE, p2 is a DIR (with a child), p3 is a FILE,
+    // plus a stale file that snapshot B will not contain.
+    let a = tmp.path().join("treeA");
+    std::fs::create_dir_all(a.join("p2")).unwrap();
+    std::fs::write(a.join("p1"), "file-content").unwrap();
+    std::fs::write(a.join("p2/child"), "child").unwrap();
+    std::fs::write(a.join("p3"), "p3-file").unwrap();
+    std::fs::write(a.join("stale.txt"), "stale").unwrap();
+    let sha_a = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": a.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Snapshot B: p1 is now a DIR, p2 is now a FILE, p3 is now a SYMLINK.
+    // stale.txt is gone.
+    let b = tmp.path().join("treeB");
+    std::fs::create_dir_all(b.join("p1")).unwrap();
+    std::fs::write(b.join("p1/inner"), "inner").unwrap();
+    std::fs::write(b.join("p2"), "now-a-file").unwrap();
+    std::os::unix::fs::symlink("p2", b.join("p3")).unwrap();
+    let sha_b = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": b.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Materialize A into `out`, then re-materialize B into the SAME dir.
+    let out = tmp.path().join("out");
+    let m1 = helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": sha_a, "target_dir": out.to_str().unwrap() }),
+    );
+    assert!(m1.get("error").is_none(), "{m1}");
+    assert!(out.join("p1").is_file());
+    assert!(out.join("p2").is_dir());
+    assert!(out.join("stale.txt").is_file());
+
+    let m2 = helper.call(
+        4,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": sha_b, "target_dir": out.to_str().unwrap() }),
+    );
+    assert!(m2.get("error").is_none(), "type-change re-materialize failed: {m2}");
+    // p1: file → dir.
+    assert!(out.join("p1").is_dir(), "p1 should now be a dir");
+    assert_eq!(std::fs::read(out.join("p1/inner")).unwrap(), b"inner");
+    // p2: dir → file.
+    assert!(out.join("p2").is_file(), "p2 should now be a file");
+    assert_eq!(std::fs::read(out.join("p2")).unwrap(), b"now-a-file");
+    // p3: file → symlink.
+    let p3 = std::fs::symlink_metadata(out.join("p3")).unwrap();
+    assert!(p3.file_type().is_symlink(), "p3 should now be a symlink");
+    // stale.txt cleared.
+    assert!(!out.join("stale.txt").exists(), "stale file not cleared");
+    helper.stop();
+}
+
+#[test]
+fn manifest_same_tree_committed_twice_yields_same_sha() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    let live = tmp.path().join("live");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(live.join("d")).unwrap();
+    std::fs::write(live.join("a.txt"), "aaa").unwrap();
+    std::fs::write(live.join("d/b.txt"), "bbb").unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+    let s1 = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": live.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let s2 = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": live.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(s1, s2, "identical tree must produce identical manifest sha");
+    helper.stop();
+}
+
+#[test]
+fn manifest_scan_commit_three_way_disjoint_and_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: {shared.txt=base, keep.txt=keep}
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    std::fs::write(base_dir.join("shared.txt"), "base").unwrap();
+    std::fs::write(base_dir.join("keep.txt"), "keep").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // latest (head advanced by "other writer"): shared.txt -> remote, +added.txt
+    let latest_dir = tmp.path().join("latest");
+    std::fs::create_dir_all(&latest_dir).unwrap();
+    std::fs::write(latest_dir.join("shared.txt"), "remote").unwrap();
+    std::fs::write(latest_dir.join("keep.txt"), "keep").unwrap();
+    std::fs::write(latest_dir.join("added.txt"), "added").unwrap();
+    let latest_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": latest_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // working (this actor's live dir, materialized from base, then edited):
+    // shared.txt -> local (conflict), +mine.txt (disjoint).
+    let work_dir = tmp.path().join("workdir");
+    std::fs::create_dir_all(&work_dir).unwrap();
+    std::fs::write(work_dir.join("shared.txt"), "local").unwrap();
+    std::fs::write(work_dir.join("keep.txt"), "keep").unwrap();
+    std::fs::write(work_dir.join("mine.txt"), "mine").unwrap();
+
+    let r = helper.call(
+        3,
+        "fs.manifest.scan_commit",
+        serde_json::json!({
+            "dir": work_dir.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "latest_manifest_sha256": latest_sha,
+        }),
+    );
+    // shared.txt is a conflict; mine.txt + added.txt both survive.
+    let conflicts: Vec<String> = r["result"]["conflict_paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(conflicts, vec!["/shared.txt".to_string()], "{r}");
+    let merged_sha = r["result"]["manifest_sha256"].as_str().unwrap().to_string();
+    // Materialize the merged result and check contents.
+    let out = tmp.path().join("merged_out");
+    helper.call(
+        4,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": merged_sha, "target_dir": out.to_str().unwrap() }),
+    );
+    // shared.txt keeps the remote (latest) value on conflict.
+    assert_eq!(std::fs::read(out.join("shared.txt")).unwrap(), b"remote", "conflict should keep latest");
+    // disjoint local change applied.
+    assert_eq!(std::fs::read(out.join("mine.txt")).unwrap(), b"mine");
+    // other writer's add preserved.
+    assert_eq!(std::fs::read(out.join("added.txt")).unwrap(), b"added");
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_merges_incoming_keeps_local_and_advances_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base = {a.txt=a, c.txt=c}
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    std::fs::write(base_dir.join("a.txt"), "a").unwrap();
+    std::fs::write(base_dir.join("c.txt"), "c").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head = {a.txt=a2 (changed), c.txt=c, newremote.txt=nr}
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("a.txt"), "a2").unwrap();
+    std::fs::write(head_dir.join("c.txt"), "c").unwrap();
+    std::fs::write(head_dir.join("newremote.txt"), "nr").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live = base + local edit to c.txt (locally dirty), materialized from base.
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("c.txt"), "c-local").unwrap();
+
+    // dir.sync from base → head: a.txt (not locally dirty) gets a2;
+    // newremote.txt added; c.txt left local (not touched by head, so applied?).
+    // head did NOT change c.txt, so it's not in incoming → local c-local stays.
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    let applied: Vec<String> = r["result"]["applied"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(applied.contains(&"/a.txt".to_string()), "{r}");
+    assert!(applied.contains(&"/newremote.txt".to_string()), "{r}");
+    assert_eq!(r["result"]["new_base_manifest_sha256"], head_sha, "{r}");
+    // live dir now: a.txt=a2 (synced), newremote.txt=nr (synced), c.txt=c-local (preserved).
+    assert_eq!(std::fs::read(live.join("a.txt")).unwrap(), b"a2");
+    assert_eq!(std::fs::read(live.join("newremote.txt")).unwrap(), b"nr");
+    assert_eq!(std::fs::read(live.join("c.txt")).unwrap(), b"c-local");
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_defers_conflict_on_same_path_local_and_incoming() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    std::fs::write(base_dir.join("x.txt"), "base").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("x.txt"), "head").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    // local edits x.txt too (conflict with head's edit).
+    std::fs::write(live.join("x.txt"), "local").unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    let deferred: Vec<String> = r["result"]["deferred_conflicts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(deferred, vec!["/x.txt".to_string()], "{r}");
+    // HEAD WINS: the live path now holds head's version (so a later commit sees
+    // working==head and the agent's reconciled re-edit commits cleanly, instead
+    // of being re-judged a conflict).
+    assert_eq!(std::fs::read(live.join("x.txt")).unwrap(), b"head");
+    // The agent's pre-conflict LOCAL version is preserved at the conflict
+    // sidecar so its work isn't lost (storage name is an opaque hash — resolve
+    // it via the reported conflict_sidecars).
+    let sidecar = sidecar_host_for(&live, &r, "/x.txt")
+        .expect("conflict sidecar reported for /x.txt");
+    assert!(sidecar.is_file(), "conflict sidecar not written: {r}");
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"local");
+    // The sidecar must NOT be committed: a scan of the live dir excludes the
+    // .synapse-conflicts namespace. Also: the live tree now matches head, so the
+    // scan finds no local change (committing here would be a no-op).
+    let scan = helper.call(
+        5,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": live.to_str().unwrap() }),
+    );
+    let paths: Vec<String> = scan["result"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !paths.iter().any(|p| p.starts_with("/.synapse-conflicts")),
+        "conflict sidecar leaked into the committed manifest: {paths:?}"
+    );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_tree_delete_conflict_preserves_local_subtree_files() {
+    // incoming deletes /dir; the agent locally edited /dir/local.txt. Head wins
+    // (so /dir is removed from the live tree), but the agent's /dir/local.txt
+    // MUST be preserved at a sidecar — not silently lost (round-6 #2).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: /dir/keep.txt exists.
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(base_dir.join("dir")).unwrap();
+    std::fs::write(base_dir.join("dir/keep.txt"), "k").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head: /dir removed entirely (a top-level file took its place is not even
+    // needed; just delete the dir).
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("other.txt"), "o").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live: materialized base, then agent ADDS /dir/local.txt (dirty subtree).
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("dir/local.txt"), "my-work").unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    // head wins: /dir is gone from the live tree.
+    assert!(!live.join("dir").exists(), "head-delete not applied: {r}");
+    // but the agent's local file is preserved at the sidecar (NOT lost).
+    let sidecar = sidecar_host_for(&live, &r, "/dir/local.txt")
+        .unwrap_or_else(|| panic!("local subtree file lost (no sidecar): {r}"));
+    assert!(
+        sidecar.is_file(),
+        "local subtree file lost (no sidecar): {r}"
+    );
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"my-work");
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_multilevel_overlap_sidecars_each_local_file_once() {
+    // round-7 #B: when head replaces a multi-level subtree, the same dirty local
+    // file overlaps MULTIPLE incoming conflict paths (/dir, /dir/sub,
+    // /dir/sub/x.txt). It must be sidecar'd and reported in conflict_sidecars
+    // exactly ONCE (no duplicates), or the caller's notice + sidecar-coverage
+    // check break.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: /dir/sub/x.txt (nested file → explicit /dir and /dir/sub entries).
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(base_dir.join("dir/sub")).unwrap();
+    std::fs::write(base_dir.join("dir/sub/x.txt"), "v0").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head: /dir is REPLACED by a regular file (kind change at /dir + deletes of
+    // /dir/sub and /dir/sub/x.txt) → 3 overlapping incoming paths.
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("dir"), "now-a-file").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live: materialize base, agent edits the nested file.
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("dir/sub/x.txt"), "my-edit").unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    // head wins: /dir is now a file holding head's bytes.
+    assert_eq!(std::fs::read(live.join("dir")).unwrap(), b"now-a-file");
+    // the agent's nested edit is preserved at the sidecar (exactly once).
+    let sidecar = sidecar_host_for(&live, &r, "/dir/sub/x.txt")
+        .expect("sidecar reported for /dir/sub/x.txt");
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"my-edit");
+    let sidecars = r["result"]["conflict_sidecars"].as_array().unwrap();
+    let for_file: Vec<_> = sidecars
+        .iter()
+        .filter(|c| c["original"].as_str() == Some("/dir/sub/x.txt"))
+        .collect();
+    assert_eq!(
+        for_file.len(),
+        1,
+        "the same local file must be reported in conflict_sidecars exactly once: {r}"
+    );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_sidecars_are_collision_free_for_overlapping_names() {
+    // round-9 #1: with TREE-MIRRORING sidecar names, preserving both /foo (a
+    // file) and /foo/bar.txt would collide — one's sidecar dir-vs-file would
+    // delete the other recovery copy. With flat hashed names every sidecar is a
+    // leaf directly under .synapse-conflicts, so BOTH survive. We exercise it via
+    // two SEPARATE refresh rounds against the same live dir (so both sidecars
+    // must coexist on disk afterward).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base A: /foo is a FILE.
+    let base_a = tmp.path().join("baseA");
+    std::fs::create_dir_all(&base_a).unwrap();
+    std::fs::write(base_a.join("foo"), "base-foo").unwrap();
+    let sha_a = helper.call(1, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_a.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+
+    // head A: /foo deleted (so the agent's local /foo edit conflicts).
+    let head_a = tmp.path().join("headA");
+    std::fs::create_dir_all(&head_a).unwrap();
+    std::fs::write(head_a.join("other"), "o").unwrap();
+    let head_a_sha = helper.call(2, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_a.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+
+    // live: materialize base A, agent edits /foo → conflict → sidecar of /foo.
+    let live = tmp.path().join("live");
+    helper.call(3, "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": sha_a, "target_dir": live.to_str().unwrap() }));
+    std::fs::write(live.join("foo"), "local-foo").unwrap();
+    let r1 = helper.call(4, "fs.dir.sync", serde_json::json!({
+        "dir": live.to_str().unwrap(),
+        "base_manifest_sha256": sha_a,
+        "to_manifest_sha256": head_a_sha,
+    }));
+    let foo_sidecar = sidecar_host_for(&live, &r1, "/foo")
+        .unwrap_or_else(|| panic!("/foo sidecar not reported: {r1}"));
+    assert_eq!(std::fs::read(&foo_sidecar).unwrap(), b"local-foo");
+
+    // Round 2 on the SAME live dir: now base is head_a (no /foo). Agent creates
+    // /foo/bar.txt (so /foo is now a DIRECTORY locally); head re-adds /foo as a
+    // file → conflict on the /foo subtree → sidecar of /foo/bar.txt.
+    let head_b = tmp.path().join("headB");
+    std::fs::create_dir_all(&head_b).unwrap();
+    std::fs::write(head_b.join("foo"), "head-foo-again").unwrap();
+    let head_b_sha = helper.call(5, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_b.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+    std::fs::create_dir_all(live.join("foo")).unwrap();
+    std::fs::write(live.join("foo/bar.txt"), "local-bar").unwrap();
+    let r2 = helper.call(6, "fs.dir.sync", serde_json::json!({
+        "dir": live.to_str().unwrap(),
+        "base_manifest_sha256": head_a_sha,
+        "to_manifest_sha256": head_b_sha,
+    }));
+    let bar_sidecar = sidecar_host_for(&live, &r2, "/foo/bar.txt")
+        .unwrap_or_else(|| panic!("/foo/bar.txt sidecar not reported: {r2}"));
+    assert_eq!(std::fs::read(&bar_sidecar).unwrap(), b"local-bar");
+
+    // THE KEY ASSERTION (round-9 #1): the FIRST round's /foo sidecar is STILL
+    // intact — flat hashed names mean the second round could not have deleted it
+    // to make room for /foo/bar.txt's sidecar.
+    assert!(
+        foo_sidecar.is_file(),
+        "the earlier /foo recovery copy was DELETED by a later overlapping sidecar"
+    );
+    assert_eq!(
+        std::fs::read(&foo_sidecar).unwrap(),
+        b"local-foo",
+        "the earlier /foo recovery copy was corrupted by a later overlapping sidecar"
+    );
+    // And the two sidecars are genuinely different host paths (no collision).
+    assert_ne!(foo_sidecar, bar_sidecar, "sidecar paths collided");
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_same_path_two_conflicts_keep_distinct_sidecars() {
+    // round-10 #2: two SEPARATE unconsumed conflicts on the SAME original path
+    // with DIFFERENT local content must land on DIFFERENT sidecar leaves — a
+    // later conflict must not overwrite the earlier, not-yet-consumed recovery
+    // copy. (Same original + same content would idempotently reuse one leaf.)
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: x.txt = "base".
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    std::fs::write(base_dir.join("x.txt"), "base").unwrap();
+    let base_sha = helper.call(1, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+
+    // head 1: x.txt = "H1".
+    let h1_dir = tmp.path().join("h1");
+    std::fs::create_dir_all(&h1_dir).unwrap();
+    std::fs::write(h1_dir.join("x.txt"), "H1").unwrap();
+    let h1_sha = helper.call(2, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": h1_dir.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+
+    // live: materialize base; agent edits x.txt = "L1" → conflict #1 vs H1.
+    let live = tmp.path().join("live");
+    helper.call(3, "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }));
+    std::fs::write(live.join("x.txt"), "L1").unwrap();
+    let r1 = helper.call(4, "fs.dir.sync", serde_json::json!({
+        "dir": live.to_str().unwrap(),
+        "base_manifest_sha256": base_sha,
+        "to_manifest_sha256": h1_sha,
+    }));
+    let sc1 = sidecar_host_for(&live, &r1, "/x.txt")
+        .unwrap_or_else(|| panic!("conflict #1 sidecar not reported: {r1}"));
+    assert_eq!(std::fs::read(&sc1).unwrap(), b"L1");
+
+    // Round 2 (base now H1): agent edits x.txt = "L2" → conflict #2 vs head H2.
+    // The first sidecar (L1) was never consumed and MUST still survive.
+    let h2_dir = tmp.path().join("h2");
+    std::fs::create_dir_all(&h2_dir).unwrap();
+    std::fs::write(h2_dir.join("x.txt"), "H2").unwrap();
+    let h2_sha = helper.call(5, "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": h2_dir.to_str().unwrap() }))["result"]
+        ["manifest_sha256"].as_str().unwrap().to_string();
+    std::fs::write(live.join("x.txt"), "L2").unwrap();
+    let r2 = helper.call(6, "fs.dir.sync", serde_json::json!({
+        "dir": live.to_str().unwrap(),
+        "base_manifest_sha256": h1_sha,
+        "to_manifest_sha256": h2_sha,
+    }));
+    let sc2 = sidecar_host_for(&live, &r2, "/x.txt")
+        .unwrap_or_else(|| panic!("conflict #2 sidecar not reported: {r2}"));
+    assert_eq!(std::fs::read(&sc2).unwrap(), b"L2");
+
+    // THE KEY ASSERTION (round-10 #2): distinct leaves; the FIRST unconsumed
+    // recovery copy (L1) is STILL intact after the second conflict.
+    assert_ne!(sc1, sc2, "same-path conflicts collided onto one sidecar leaf");
+    assert_eq!(
+        std::fs::read(&sc1).unwrap(),
+        b"L1",
+        "the earlier unconsumed recovery copy was overwritten by a later conflict"
+    );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_preserves_dirty_local_symlink_under_tree_conflict() {
+    // round-8 #3: a locally-added/modified SYMLINK under a head-deleted subtree
+    // must be sidecar'd too (not just regular files) — the manifest supports
+    // symlinks and they carry recoverable content (the target string).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: /dir/keep.txt.
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(base_dir.join("dir")).unwrap();
+    std::fs::write(base_dir.join("dir/keep.txt"), "k").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head: /dir deleted entirely.
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("other.txt"), "o").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live: materialize base, agent ADDS a symlink /dir/link -> ./keep.txt.
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::os::unix::fs::symlink("keep.txt", live.join("dir/link")).unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    // head wins: /dir is gone from the live tree.
+    assert!(!live.join("dir").exists(), "head-delete not applied: {r}");
+    // round-10 #3: the symlink sidecar is stored as an AGENT-READABLE JSON
+    // regular file (NOT a raw symlink, which the O_NOFOLLOW fs tools can't read),
+    // and the result reports kind="symlink".
+    let entry = r["result"]["conflict_sidecars"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["original"].as_str() == Some("/dir/link"))
+        .unwrap_or_else(|| panic!("symlink sidecar not reported: {r}"));
+    assert_eq!(entry["kind"].as_str(), Some("symlink"), "kind tag: {r}");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/link").unwrap();
+    let meta = std::fs::symlink_metadata(&sidecar)
+        .unwrap_or_else(|e| panic!("symlink sidecar missing ({e}): {r}"));
+    assert!(
+        meta.file_type().is_file(),
+        "symlink sidecar must be a readable regular file, not a raw symlink: {r}"
+    );
+    let body = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(
+        body.contains("\"kind\":\"symlink\"") && body.contains("\"target\":\"keep.txt\""),
+        "symlink sidecar JSON missing kind/target: {body}"
+    );
+    helper.stop();
+}
+
+#[test]
+fn sidecar_restore_rebuilds_file_and_symlink_after_teardown() {
+    // round-11 #1: after a teardown deletes the live dir, the durable pending
+    // notice still points at /.synapse-conflicts/<hash>. fs.sidecar.restore must
+    // rebuild the sidecar leaf from its CAS payload (file bytes by content_sha;
+    // symlink target as readable JSON) into a FRESH live dir.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // Put a file's bytes into CAS (simulating the scan that ingested them).
+    let src = tmp.path().join("payload.txt");
+    std::fs::write(&src, "preserved-bytes").unwrap();
+    let content_sha = helper.call(
+        1,
+        "fs.cas.put",
+        serde_json::json!({ "path": src.to_str().unwrap() }),
+    )["result"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A FRESH live dir (the old one was deleted by teardown).
+    let live = tmp.path().join("fresh-live");
+    std::fs::create_dir_all(&live).unwrap();
+
+    // Restore a FILE sidecar from CAS.
+    let r1 = helper.call(
+        2,
+        "fs.sidecar.restore",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "sidecar_vfs": "/.synapse-conflicts/filehash",
+            "kind": "file",
+            "content_sha": content_sha,
+        }),
+    );
+    assert!(r1.get("error").is_none(), "file restore errored: {r1}");
+    assert_eq!(
+        std::fs::read(live.join(".synapse-conflicts/filehash")).unwrap(),
+        b"preserved-bytes",
+        "file sidecar bytes not restored from CAS"
+    );
+
+    // Restore a SYMLINK sidecar from its target (as readable JSON regular file).
+    let r2 = helper.call(
+        3,
+        "fs.sidecar.restore",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "sidecar_vfs": "/.synapse-conflicts/linkhash",
+            "kind": "symlink",
+            "target": "../some/target",
+        }),
+    );
+    assert!(r2.get("error").is_none(), "symlink restore errored: {r2}");
+    let body =
+        std::fs::read_to_string(live.join(".synapse-conflicts/linkhash")).unwrap();
+    assert!(
+        body.contains("\"kind\":\"symlink\"")
+            && body.contains("\"target\":\"../some/target\""),
+        "symlink sidecar JSON not restored: {body}"
+    );
+    // It is a readable regular file (not a raw symlink).
+    let meta = std::fs::symlink_metadata(live.join(".synapse-conflicts/linkhash"))
+        .unwrap();
+    assert!(meta.file_type().is_file(), "restored symlink sidecar must be a file");
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_sidecar_write_clobbers_corrupted_conflicts_namespace() {
+    // round-8 #1 defense-in-depth: if an agent left a non-directory occupying
+    // the .synapse-conflicts scratch namespace, the sidecar write must NOT be
+    // wedged — the helper owns that namespace and may clobber it. The local
+    // file MUST still be preserved (never silently lost).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    // base: /dir/x.txt.
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(base_dir.join("dir")).unwrap();
+    std::fs::write(base_dir.join("dir/x.txt"), "v0").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head: /dir deleted.
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("other.txt"), "o").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live: materialize base, agent edits /dir/x.txt AND leaves a stray FILE at
+    // the scratch namespace root (.synapse-conflicts) that would block mkdir.
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("dir/x.txt"), "my-edit").unwrap();
+    std::fs::write(live.join(".synapse-conflicts"), "agent garbage").unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    // The sync must succeed (not error) and the local edit must be preserved.
+    assert!(r.get("error").is_none(), "dir_sync errored: {r}");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/x.txt")
+        .unwrap_or_else(|| panic!("sidecar not reported: {r}"));
+    assert_eq!(
+        std::fs::read(&sidecar).unwrap(),
+        b"my-edit",
+        "local edit not preserved through corrupted scratch namespace: {r}"
+    );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_sidecar_tolerates_preexisting_conflicts_dir() {
+    // round-8 follow-up: a PRE-EXISTING .synapse-conflicts directory (the common
+    // case after a prior conflict, or a concurrent sandbox creation) must NOT
+    // make the sidecar prepare over-throw on EEXIST. The sync must succeed and
+    // preserve the local edit.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(base_dir.join("dir")).unwrap();
+    std::fs::write(base_dir.join("dir/x.txt"), "v0").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("other.txt"), "o").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("dir/x.txt"), "my-edit").unwrap();
+    // Pre-create the scratch root (simulates a prior conflict / concurrent
+    // creator) so the root-dir ensure hits EEXIST.
+    std::fs::create_dir_all(live.join(".synapse-conflicts")).unwrap();
+
+    let r = helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    assert!(r.get("error").is_none(), "dir_sync over-threw on EEXIST: {r}");
+    let sidecar = sidecar_host_for(&live, &r, "/dir/x.txt")
+        .unwrap_or_else(|| panic!("sidecar not reported: {r}"));
+    assert_eq!(
+        std::fs::read(&sidecar).unwrap(),
+        b"my-edit",
+        "local edit not preserved with a pre-existing scratch dir: {r}"
+    );
+    helper.stop();
+}
+
+#[test]
+fn dir_sync_conflict_then_reconcile_commits_cleanly() {
+    // The round-4 dead-end regression: after a conflict (head wins in the live
+    // tree + base advances to head), the agent reconciles by writing a NEW
+    // merged value, and that re-edit must commit WITHOUT being re-judged a
+    // conflict against the same head.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+
+    let base_dir = tmp.path().join("base");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    std::fs::write(base_dir.join("x.txt"), "A").unwrap();
+    let base_sha = helper.call(
+        1,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": base_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // head changed x.txt to B.
+    let head_dir = tmp.path().join("head");
+    std::fs::create_dir_all(&head_dir).unwrap();
+    std::fs::write(head_dir.join("x.txt"), "B").unwrap();
+    let head_sha = helper.call(
+        2,
+        "fs.manifest.scan_commit",
+        serde_json::json!({ "dir": head_dir.to_str().unwrap() }),
+    )["result"]["manifest_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // live = materialized base, then agent edits x.txt to "local" (conflict).
+    let live = tmp.path().join("live");
+    helper.call(
+        3,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": base_sha, "target_dir": live.to_str().unwrap() }),
+    );
+    std::fs::write(live.join("x.txt"), "local").unwrap();
+
+    // refresh from base→head: head wins (live x.txt becomes "B"), local kept at
+    // the sidecar. The caller advances base to head.
+    helper.call(
+        4,
+        "fs.dir.sync",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": base_sha,
+            "to_manifest_sha256": head_sha,
+        }),
+    );
+    assert_eq!(std::fs::read(live.join("x.txt")).unwrap(), b"B");
+
+    // Agent reconciles: writes the merged value "C".
+    std::fs::write(live.join("x.txt"), "C").unwrap();
+
+    // Commit with base=head (advanced) and latest=head → C is a clean local
+    // change on head, NOT a conflict; the committed manifest holds "C".
+    let commit = helper.call(
+        5,
+        "fs.manifest.scan_commit",
+        serde_json::json!({
+            "dir": live.to_str().unwrap(),
+            "base_manifest_sha256": head_sha,
+            "latest_manifest_sha256": head_sha,
+        }),
+    );
+    let conflicts: Vec<String> = commit["result"]["conflict_paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        conflicts.is_empty(),
+        "reconciled re-edit must NOT re-conflict: {commit}"
+    );
+    let committed = commit["result"]["manifest_sha256"].as_str().unwrap();
+    // Re-materialize the committed manifest and confirm it holds "C".
+    let out = tmp.path().join("out");
+    helper.call(
+        6,
+        "fs.manifest.materialize",
+        serde_json::json!({ "manifest_sha256": committed, "target_dir": out.to_str().unwrap() }),
+    );
+    assert_eq!(std::fs::read(out.join("x.txt")).unwrap(), b"C");
+    helper.stop();
+}
+
+#[test]
+fn cas_gc_deletes_orphans_keeps_reachable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+    // Put two blobs.
+    let keep_src = tmp.path().join("keep.txt");
+    let orphan_src = tmp.path().join("orphan.txt");
+    std::fs::write(&keep_src, "keepme").unwrap();
+    std::fs::write(&orphan_src, "orphanme").unwrap();
+    let keep_sha = helper.call(1, "fs.cas.put", serde_json::json!({ "path": keep_src.to_str().unwrap() }))
+        ["result"]["sha256"].as_str().unwrap().to_string();
+    let orphan_sha = helper.call(2, "fs.cas.put", serde_json::json!({ "path": orphan_src.to_str().unwrap() }))
+        ["result"]["sha256"].as_str().unwrap().to_string();
+    // GC with grace_secs=0 (no young-blob protection) and reachable=[keep_sha]
+    // → orphan deleted immediately.
+    let g = helper.call(
+        3,
+        "fs.cas.gc",
+        serde_json::json!({ "reachable_sha256": [keep_sha.clone()], "grace_secs": 0 }),
+    );
+    assert_eq!(g["result"]["deleted_count"].as_u64(), Some(1), "{g}");
+    assert_eq!(helper.call(4, "fs.cas.has", serde_json::json!({ "sha256": keep_sha }))["result"]["exists"], true);
+    assert_eq!(helper.call(5, "fs.cas.has", serde_json::json!({ "sha256": orphan_sha }))["result"]["exists"], false);
+    helper.stop();
+}
+
+#[test]
+fn cas_gc_grace_window_protects_young_unreachable_blobs() {
+    // The commit/GC race guard: a freshly-written blob that is not (yet) in the
+    // reachable set must NOT be deleted while it's younger than grace_secs.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let cas = tmp.path().join("cas");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn_with_cas(&root, &work, &cas);
+    let young_src = tmp.path().join("young.txt");
+    std::fs::write(&young_src, "fresh-uncommitted").unwrap();
+    let young_sha = helper
+        .call(1, "fs.cas.put", serde_json::json!({ "path": young_src.to_str().unwrap() }))
+        ["result"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // GC with an EMPTY reachable set but a large grace window → the young blob
+    // is unreachable yet protected (deleted_count = 0).
+    let g = helper.call(
+        2,
+        "fs.cas.gc",
+        serde_json::json!({ "reachable_sha256": [], "grace_secs": 3600 }),
+    );
+    assert_eq!(g["result"]["deleted_count"].as_u64(), Some(0), "{g}");
+    assert_eq!(
+        helper.call(3, "fs.cas.has", serde_json::json!({ "sha256": young_sha }))["result"]["exists"],
+        true,
+        "young unreachable blob protected by the grace window"
     );
     helper.stop();
 }

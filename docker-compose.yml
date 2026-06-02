@@ -49,8 +49,6 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-synapse}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-synapse}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required. Run ./setup.sh first.}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required. Run ./setup.sh first.}
       APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL is required. Run ./setup.sh first.}
       BASE_URL: ${BASE_URL:?BASE_URL is required. Run ./setup.sh first.}
       NODE_ENV: production
@@ -58,8 +56,17 @@ services:
       HOST: "0.0.0.0"
       PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-demo@synapse.dev}
       STORAGE_DIR: /app/storage/files
-      MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: ${MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD:-true}
-      MEMORY_MODEL_CACHE_DIR: /app/storage/models/memory
+      # Embedding model + OCR data are baked into the image under /app/models
+      # (outside the api_storage volume mount, which would otherwise shadow
+      # them). Runtime model download is OFF — a missing model is a baked-in
+      # build failure, never a silent runtime degradation.
+      MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: ${MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD:-false}
+      MEMORY_MODEL_CACHE_DIR: /app/models/memory
+      TESSERACT_LANG_PATH: /app/models/tessdata
+      TESSERACT_LANGS: ${TESSERACT_LANGS:-chi_sim+chi_tra+eng+jpn}
+      # External-reachable registry URL the API embeds into the dashboard's
+      # one-click daemon install command. Empty => command omits --registry.
+      PUBLIC_NPM_REGISTRY_URL: ${PUBLIC_NPM_REGISTRY_URL:-}
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
@@ -123,6 +130,7 @@ services:
       SYNAPSE_WWW_DOMAIN: ${SYNAPSE_WWW_DOMAIN:?SYNAPSE_WWW_DOMAIN is required. Run ./setup.sh first.}
       SYNAPSE_MOBILE_SHORT_DOMAIN: ${SYNAPSE_MOBILE_SHORT_DOMAIN:?SYNAPSE_MOBILE_SHORT_DOMAIN is required. Run ./setup.sh first.}
       SYNAPSE_MOBILE_DOMAIN: ${SYNAPSE_MOBILE_DOMAIN:?SYNAPSE_MOBILE_DOMAIN is required. Run ./setup.sh first.}
+      SYNAPSE_REGISTRY_DOMAIN: ${SYNAPSE_REGISTRY_DOMAIN:?SYNAPSE_REGISTRY_DOMAIN is required. Run ./setup.sh first.}
       LETSENCRYPT_CERT_NAME: ${LETSENCRYPT_CERT_NAME:?LETSENCRYPT_CERT_NAME is required. Run ./setup.sh first.}
     volumes:
       - ./infrastructure/nginx/public.conf.template:/etc/nginx/templates/default.conf.template:ro
@@ -190,9 +198,30 @@ services:
     profiles:
       - devices
 
+  # Private npm registry (Verdaccio). Serves @synapse/* to end users and
+  # caches third-party deps from npmjs. Published at the registry subdomain
+  # via the public nginx (TLS terminated there); the 4873 host port is
+  # bound to loopback only so the registry is never directly exposed. The
+  # real registry hostname lives only in the gitignored .env
+  # (SYNAPSE_REGISTRY_DOMAIN / PUBLIC_NPM_REGISTRY_URL), never in the repo.
+  # See infra/verdaccio/README.md for publisher setup + the deny smoke test.
+  verdaccio:
+    image: verdaccio/verdaccio:6
+    container_name: synapse-verdaccio
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${VERDACCIO_PORT:-4873}:4873"
+    volumes:
+      - ./infra/verdaccio/config.yaml:/verdaccio/conf/config.yaml:ro
+      - ./infra/verdaccio/htpasswd:/verdaccio/conf/htpasswd
+      - verdaccio_storage:/verdaccio/storage
+    profiles:
+      - registry
+
 volumes:
   api_storage:
   certbot_etc:
   certbot_www:
   pgdata:
   redisdata:
+  verdaccio_storage:

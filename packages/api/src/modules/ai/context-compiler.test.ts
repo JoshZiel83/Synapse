@@ -149,13 +149,13 @@ test("tool_result_batch becomes role=tool_result ConversationMessage, preserves 
 test("tool_result_batch with file_ref content preserves file_ref shape (no extractText reflattening)", async () => {
   const fileRef: CanonicalContentBlock = {
     type: "file_ref",
-    id: "block-1",
-    fileId: "00000000-0000-4000-8000-000000000001",
-    url: "/files/00000000-0000-4000-8000-000000000001",
+    id: "00000000-0000-4000-8000-0000000000b1",
+    sha256: "0000000000000000000000000000000000000000000000000000000000000001",
+    path: "/conversation/x.png",
     mimeType: "image/png",
-    originalName: "x.png",
     sizeBytes: 64,
     category: "image",
+    name: "x.png",
   }
   const items: CanonicalContextItem[] = [
     {
@@ -178,7 +178,7 @@ test("tool_result_batch with file_ref content preserves file_ref shape (no extra
   const results = (messages[0] as any).results
   assert.equal(results[0].content.length, 1)
   assert.equal(results[0].content[0].type, "file_ref")
-  assert.equal(results[0].content[0].fileId, fileRef.fileId)
+  assert.equal(results[0].content[0].sha256, fileRef.sha256)
 })
 
 test("interleaved tool_call_batch → tool_result_batch → message keeps ordering", async () => {

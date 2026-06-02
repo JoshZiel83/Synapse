@@ -98,6 +98,124 @@ impl BlobStore {
         Ok(fs::read(&p)?)
     }
 
+    /// True if a blob with this sha256 is present.
+    pub fn exists(&self, sha256: &str) -> bool {
+        self.blob_path(sha256).exists()
+    }
+
+    /// Size in bytes of a stored blob, or None if absent.
+    pub fn size_of(&self, sha256: &str) -> Result<Option<u64>, RpcError> {
+        let p = self.blob_path(sha256);
+        match fs::metadata(&p) {
+            Ok(m) => Ok(Some(m.len())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Store in-memory bytes into the CAS with the same atomic + dedup
+    /// semantics as `put_streaming`. Used for manifest blobs computed in
+    /// memory by scan_commit. Returns (sha256, size, dedup_flag).
+    pub fn put_bytes(&self, bytes: &[u8]) -> Result<(String, u64, bool), RpcError> {
+        let sha = hex::encode(Sha256::digest(bytes));
+        let final_path = self.blob_path(&sha);
+        if let Some(parent) = final_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if final_path.exists() {
+            return Ok((sha, bytes.len() as u64, true));
+        }
+        let tmp_path = self.root.join(format!("incoming.{}", uuid_like()));
+        {
+            let mut tmp_file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .truncate(true)
+                .open(&tmp_path)?;
+            tmp_file.write_all(bytes)?;
+            tmp_file.sync_all()?;
+        }
+        if final_path.exists() {
+            let _ = fs::remove_file(&tmp_path);
+            return Ok((sha, bytes.len() as u64, true));
+        }
+        fs::rename(&tmp_path, &final_path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                fs::set_permissions(&final_path, fs::Permissions::from_mode(0o600));
+        }
+        Ok((sha, bytes.len() as u64, false))
+    }
+
+    /// Materialize a blob's bytes into `dest` as a regular file, creating
+    /// parent dirs, then set its permission bits to `mode`. Tries a reflink
+    /// (CoW clone — O(1), near-zero space) first on same-fs CoW filesystems
+    /// (btrfs/xfs/bcachefs); falls back to a full byte copy on EXDEV / ext4 /
+    /// any filesystem that doesn't support FICLONE. `dest` is a path the
+    /// supervisor controls (a materialized live dir), not user-supplied, so no
+    /// symlink-jail concerns here. We DELIBERATELY do not hardlink: the sandbox
+    /// runs under a different uid and CAS blobs are 0600 owned by the supervisor,
+    /// so a shared inode would be unreadable and any chmod would corrupt the CAS
+    /// blob's mode. A reflink is a distinct inode (independent mode + CoW data),
+    /// so it has neither problem.
+    pub fn copy_to(
+        &self,
+        sha256: &str,
+        dest: &Path,
+        mode: u32,
+    ) -> Result<(), RpcError> {
+        let src = self.blob_path(sha256);
+        if !src.exists() {
+            return Err(RpcError::NotFound(format!("blob {sha256}")));
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // Remove any pre-existing dest so copy is deterministic.
+        if dest.symlink_metadata().is_ok() {
+            let _ = fs::remove_file(dest);
+        }
+        if !try_reflink(&src, dest) {
+            fs::copy(&src, dest)?;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dest, fs::Permissions::from_mode(mode))?;
+        }
+        let _ = mode;
+        Ok(())
+    }
+
+    /// Every sha256 currently present in the store (walk blobs/<aa>/<sha>).
+    /// Used by GC mark-sweep. Ignores the transient `incoming.*` temp files
+    /// (they live directly under blobs/, not under a 2-char fan-out dir) and
+    /// any non-64-hex entries.
+    pub fn list_all(&self) -> Result<Vec<String>, RpcError> {
+        let mut out = Vec::new();
+        if !self.root.exists() {
+            return Ok(out);
+        }
+        for aa in fs::read_dir(&self.root)? {
+            let aa = aa?;
+            if !aa.file_type()?.is_dir() {
+                continue;
+            }
+            for f in fs::read_dir(aa.path())? {
+                let f = f?;
+                if let Some(name) = f.file_name().to_str() {
+                    if name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit())
+                    {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Stage a blob's contents into a tmp file with the given token. Used by
     /// restore tmp_token mode.
     pub fn stage_to(&self, sha256: &str, dest: &Path) -> Result<u64, RpcError> {
@@ -137,6 +255,47 @@ impl BlobStore {
             fs::remove_file(&p)?;
         }
         Ok(())
+    }
+
+    /// Age (seconds) since a blob's last modification, or None if it can't be
+    /// stat'd. Used by GC to protect just-written blobs from a concurrent sweep.
+    fn blob_age_secs(&self, sha256: &str) -> Option<u64> {
+        let meta = fs::metadata(self.blob_path(sha256)).ok()?;
+        let mtime = meta.modified().ok()?;
+        mtime.elapsed().ok().map(|d| d.as_secs())
+    }
+
+    /// GC mark-sweep with a grace window: delete every blob whose sha is NOT in
+    /// `reachable`, EXCEPT blobs modified within the last `grace_secs` seconds.
+    ///
+    /// The grace guard closes the commit/GC data-loss race: commit ingests new
+    /// blobs into the CAS BEFORE the snapshot row is committed, so for a brief
+    /// window a freshly-written blob is on disk but not yet DB-reachable. Without
+    /// the guard a concurrent GC would delete it and corrupt the in-flight
+    /// snapshot. `grace_secs` must exceed the longest plausible
+    /// scan→ingest→commit duration. Returns (deleted, skipped_young).
+    pub fn gc_sweep(
+        &self,
+        reachable: &std::collections::HashSet<String>,
+        grace_secs: u64,
+    ) -> Result<(u64, u64), RpcError> {
+        let mut deleted = 0u64;
+        let mut skipped_young = 0u64;
+        for sha in self.list_all()? {
+            if reachable.contains(&sha) {
+                continue;
+            }
+            // Protect blobs younger than the grace window (in-flight commits).
+            if let Some(age) = self.blob_age_secs(&sha) {
+                if age < grace_secs {
+                    skipped_young += 1;
+                    continue;
+                }
+            }
+            self.delete(&sha)?;
+            deleted += 1;
+        }
+        Ok((deleted, skipped_young))
     }
 }
 
@@ -185,4 +344,59 @@ fn uuid_like() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{:016x}{:08x}", nanos, std::process::id())
+}
+
+/// Attempt a reflink (CoW clone) of `src` → `dest` via the Linux FICLONE ioctl.
+/// Returns true on success. Returns false (caller falls back to a byte copy) on
+/// any failure: cross-filesystem (EXDEV), unsupported fs (ext4 → ENOTTY/EOPNOTSUPP),
+/// or non-Linux. `dest` must not already exist (caller removes it first).
+#[cfg(target_os = "linux")]
+fn try_reflink(src: &Path, dest: &Path) -> bool {
+    use std::os::unix::io::AsRawFd;
+
+    // FICLONE: clone the whole file. _IOW(0x94, 9, int) on Linux.
+    const FICLONE: std::os::raw::c_ulong = 0x4004_9409;
+
+    extern "C" {
+        fn ioctl(
+            fd: std::os::raw::c_int,
+            request: std::os::raw::c_ulong,
+            ...
+        ) -> std::os::raw::c_int;
+    }
+
+    let src_file = match fs::File::open(src) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let dest_file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dest)
+    {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    // SAFETY: both fds are valid for the duration of the call; FICLONE takes the
+    // source fd as its int argument and clones into the dest fd.
+    let rc = unsafe {
+        ioctl(
+            dest_file.as_raw_fd(),
+            FICLONE,
+            src_file.as_raw_fd() as std::os::raw::c_int,
+        )
+    };
+    if rc == 0 {
+        true
+    } else {
+        // Clone failed (EXDEV/ENOTTY/EOPNOTSUPP/...). Remove the empty dest we
+        // just created so the byte-copy fallback can recreate it cleanly.
+        let _ = fs::remove_file(dest);
+        false
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn try_reflink(_src: &Path, _dest: &Path) -> bool {
+    false
 }

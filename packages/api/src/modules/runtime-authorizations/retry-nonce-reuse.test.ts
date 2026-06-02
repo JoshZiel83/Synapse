@@ -33,9 +33,9 @@ function makeRuntimeAuthSummary(
     updatedAt: new Date().toISOString(),
     viewerCanResolve: true,
     requester: {
-      kind: "actor",
-      id: "00000000-0000-0000-0000-00000000000c",
-      displayName: "tester",
+      participantType: "actor",
+      actorId: "00000000-0000-0000-0000-00000000000c",
+      name: "tester",
     },
     runtimeAuthorization: {
       requestedToolName: "cua_click",

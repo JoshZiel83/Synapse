@@ -43,6 +43,21 @@ function buildAccount(): TransportAccountSummary {
   }
 }
 
+/**
+ * Delivery-link fields the worker injects into every OutboundSendInput.
+ * These tests don't exercise per-link metadata, so supply inert values:
+ * a stable link id, an empty metadata snapshot, first-attempt counter,
+ * and a no-op patch helper.
+ */
+function deliveryFields() {
+  return {
+    transportMessageLinkId: "link-1",
+    linkMetadata: {} as Record<string, unknown>,
+    attemptNumber: 0,
+    patchLinkMetadata: async () => {},
+  }
+}
+
 test.beforeEach(() => {
   _internals.resetForTests()
 })
@@ -62,6 +77,7 @@ test("externalMessageId fallback chain prefers headers.req_id (primary path)", a
     account: buildAccount(),
     endpoint: { endpointType: "direct", externalId: "u-1", metadata: {} },
     message: buildCanonicalMessage([{ type: "text", text: "hi" }]),
+    ...deliveryFields(),
   })
   assert.equal(result.externalMessageId, "req-primary")
   assert.equal(captured.chatid, "u-1")
@@ -80,6 +96,7 @@ test("externalMessageId falls back to body.msgid when req_id missing", async () 
     account: buildAccount(),
     endpoint: { endpointType: "direct", externalId: "u-1", metadata: {} },
     message: buildCanonicalMessage([{ type: "text", text: "y" }]),
+    ...deliveryFields(),
   })
   assert.equal(result.externalMessageId, "msg-from-body")
 })
@@ -96,8 +113,10 @@ test("externalMessageId falls back to fresh uuid when neither present", async ()
     account: buildAccount(),
     endpoint: { endpointType: "direct", externalId: "u-1", metadata: {} },
     message: buildCanonicalMessage([{ type: "text", text: "z" }]),
+    ...deliveryFields(),
   })
   // UUID v4 form 8-4-4-4-12
+  assert.ok(result.externalMessageId)
   assert.match(
     result.externalMessageId,
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -120,6 +139,7 @@ test("degradation strips image/file parts before render", async () => {
       { type: "image", fileRef: { url: "x" } },
       { type: "text", text: " after" },
     ]),
+    ...deliveryFields(),
   })
   // Capabilities have supportsImage:false → degraded to a system marker
   // text "[图片]" by `degradeForCapabilities`, then renderer concatenates.
@@ -140,6 +160,7 @@ test("chatid is endpoint.externalId regardless of direct/group", async () => {
     account: buildAccount(),
     endpoint: { endpointType: "group", externalId: "g-xyz", metadata: {} },
     message: buildCanonicalMessage([{ type: "text", text: "x" }]),
+    ...deliveryFields(),
   })
   assert.equal(captured.chatid, "g-xyz")
 })
