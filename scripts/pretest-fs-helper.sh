@@ -29,8 +29,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SIDECAR_DIR="$REPO_ROOT/sidecars/fs-helper"
 BIN="synapse-device-fs-helper"
+# Candidate binaries each consuming resolver would actually pick (must stay in
+# sync with resolveSidecarPath in
+# packages/device-runtime/src/builtins/fs-helper-resolve.ts and its two callers):
+#   - both resolvers honor the SYNAPSE_DEVICE_FS_HELPER_PATH override FIRST.
+#   - api resolveFsHelperPath (release profile, release-first): suffixes
+#       target/release, target/debug, then BARE (sidecars/fs-helper/<bin>).
+#   - device-runtime one-shot test (debug profile, newest-wins): suffixes
+#       target/debug, target/release (no bare).
+# Roots in the resolvers are just different relative spellings of $SIDECAR_DIR,
+# so the absolute candidate set under $SIDECAR_DIR is exhaustive here.
 RELEASE_BIN="$SIDECAR_DIR/target/release/$BIN"
 DEBUG_BIN="$SIDECAR_DIR/target/debug/$BIN"
+BARE_BIN="$SIDECAR_DIR/$BIN"
+ENV_BIN="${SYNAPSE_DEVICE_FS_HELPER_PATH:-}"
 
 profile="${1:-${FS_HELPER_PRETEST_PROFILE:-debug}}"
 case "$profile" in
@@ -55,13 +67,19 @@ if [[ ! -d "$SIDECAR_DIR" ]]; then
 fi
 
 if ! command -v cargo >/dev/null 2>&1; then
-  # Which candidate binaries would the consuming resolver actually pick?
-  #   release profile (api, release-first) → the release binary.
-  #   debug profile (device-runtime, newest-wins) → debug OR release.
+  # Enumerate exactly the candidates the chosen profile's resolver would pick,
+  # in priority order, so a skip is only taken when there is genuinely NOTHING
+  # to resolve (otherwise the suite would run a possibly-stale binary).
   existing=()
+  # Both resolvers honor the env override first.
+  [[ -n "$ENV_BIN" && -f "$ENV_BIN" ]] && existing+=("$ENV_BIN (SYNAPSE_DEVICE_FS_HELPER_PATH)")
   if [[ "$profile" == "release" ]]; then
+    # api release-first: release, debug, bare.
     [[ -f "$RELEASE_BIN" ]] && existing+=("$RELEASE_BIN")
+    [[ -f "$DEBUG_BIN" ]] && existing+=("$DEBUG_BIN")
+    [[ -f "$BARE_BIN" ]] && existing+=("$BARE_BIN")
   else
+    # device-runtime newest-wins: debug, release.
     [[ -f "$DEBUG_BIN" ]] && existing+=("$DEBUG_BIN")
     [[ -f "$RELEASE_BIN" ]] && existing+=("$RELEASE_BIN")
   fi
