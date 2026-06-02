@@ -139,10 +139,18 @@ function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
     }
     return v
   }
-  const tunnel =
-    (process.env.SYNAPSE_SANDBOX_TUNNEL || "none").toLowerCase() === "frp"
-      ? "frp"
-      : "none"
+  // SYNAPSE_SANDBOX_TUNNEL: unset → 'none' (no tunnel; catalog still syncs over
+  // the control-plane). Only 'none' | 'frp' are valid; anything else fails fast
+  // rather than silently degrading to no-tunnel (which would leave tools
+  // un-dispatchable with no obvious cause).
+  const tunnelRaw = (process.env.SYNAPSE_SANDBOX_TUNNEL || "none").toLowerCase()
+  if (tunnelRaw !== "none" && tunnelRaw !== "frp") {
+    throw new SandboxServiceError(
+      `SYNAPSE_SANDBOX_TUNNEL must be 'none' or 'frp' (got '${tunnelRaw}')`,
+      500
+    )
+  }
+  const tunnel: "none" | "frp" = tunnelRaw
   return {
     image: require_("SYNAPSE_SANDBOX_IMAGE"),
     network: require_("SYNAPSE_SANDBOX_DOCKER_NETWORK"),
@@ -189,26 +197,32 @@ function backendForKind(kind: SandboxBackendKind): SandboxBackend {
 /**
  * Rebuild a SandboxRef from the persisted file_mounts columns so teardown can
  * reconnect+kill a runtime started by another process / before a restart.
- * Returns null when there's no device to kill.
+ * Returns null only when there's nothing killable (no device, no container, no
+ * pid) — e.g. a mount that never got past materialize.
  */
 function buildSandboxRefFromMounts(
   sessionId: string,
   mounts: FileMountRow[]
 ): SandboxRef | null {
   const deviceId = mounts.find((m) => m.device_id)?.device_id ?? null
-  if (!deviceId) return null
-  const backend = (mounts.find((m) => m.sandbox_backend)?.sandbox_backend ??
-    "local") as SandboxBackendKind
   const sandboxResourceId =
     mounts.find((m) => m.sandbox_resource_id)?.sandbox_resource_id ?? ""
+  const hostPid = mounts.find((m) => m.host_pid)?.host_pid ?? undefined
+  // Nothing to kill (crash before any runtime was started). The caller still
+  // closes the mounts; there's no process/container to reap.
+  if (!deviceId && !sandboxResourceId && hostPid === undefined) return null
+  const backend = (mounts.find((m) => m.sandbox_backend)?.sandbox_backend ??
+    "local") as SandboxBackendKind
   const pairingSessionId =
     mounts.find((m) => m.pairing_session_id)?.pairing_session_id ?? undefined
-  const hostPid = mounts.find((m) => m.host_pid)?.host_pid ?? undefined
   return {
     backend,
     sandboxId: sessionId,
     sandboxResourceId,
-    deviceId,
+    // May be "" when the API crashed after the container started but before the
+    // device was claimed — the kill path (docker rm by resource id / pid) does
+    // not need it; revoke/deleteDevice in teardown is guarded separately.
+    deviceId: deviceId ?? "",
     pairingSessionId,
     hostPid: hostPid ?? undefined,
   }
@@ -244,11 +258,26 @@ async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
 
 /**
  * Startup reconciler: tear down sandboxes left dangling by a crash so the next
- * turn re-provisions cleanly. Two cases:
- *  - mounts in 'provisioning'/'committing' (a crash mid-flight) → teardown.
- *  - mounts 'active' but the runtime is dead → teardown (re-provision later).
- * Genuine orphans (a docker container labeled for a session with NO live mount)
- * are removed by removeOrphanSandboxContainers. Bounded; best-effort; logs.
+ * turn re-provisions cleanly. teardownSandbox() handles every crash-state via
+ * the persisted file_mounts columns — the recovery matrix it implements:
+ *
+ *   mount.status   device_id  sandbox_resource_id  →  teardown action
+ *   ------------   ---------  -------------------     ------------------------
+ *   provisioning   null       null                    nothing to kill; close mounts
+ *   provisioning   null       set (container up,      docker rm by resource id;
+ *                             pre-bootstrap)          close mounts (no device yet)
+ *   provisioning   set        set (bootstrapped,      kill runtime + deleteDevice
+ *                             pre-active)             + revoke grants; close mounts
+ *   active         set        set/null                normal teardown (commit→kill)
+ *   committing     set        set/null                commit completes then kill
+ *
+ * `buildSandboxRefFromMounts` returns a killable ref whenever ANY of device /
+ * container-id / pid is set (so a half-provisioned container is never leaked),
+ * with deviceId="" when the crash happened before the device was claimed.
+ * Genuine orphans (a container labeled for a session with NO live mount at all)
+ * are not enumerated here — they carry no DB row; a `docker rm` by the
+ * synapse.sandbox.session label is the operator-facing cleanup. Bounded;
+ * best-effort; logs.
  */
 export async function reconcileSandboxes(): Promise<void> {
   const rows = await db

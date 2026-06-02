@@ -5051,5 +5051,5 @@ CREATE INDEX idx_file_mounts_status ON file_mounts(status, created_at DESC);
 -- covers 'provisioning' rows left by a mid-provision crash.
 CREATE INDEX idx_file_mounts_live_backend
   ON file_mounts(sandbox_backend, sandbox_resource_id)
-  WHERE status NOT IN ('closed', 'failed');
+  WHERE sandbox_resource_id IS NOT NULL AND status NOT IN ('closed', 'failed');
 CREATE INDEX idx_file_mounts_space ON file_mounts(file_space_id);

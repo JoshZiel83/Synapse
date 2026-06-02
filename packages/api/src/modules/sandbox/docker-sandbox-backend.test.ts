@@ -197,6 +197,28 @@ test("docker connect(): rejects non-docker ref + requires a container id", async
   )
 })
 
+test("docker connect: empty deviceId still kills the container (half-provisioned crash recovery)", async () => {
+  const seen: string[][] = []
+  const { spawnImpl } = fakeDocker((args) => {
+    seen.push(args)
+    return { stdout: "" }
+  })
+  const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
+  // Crash between onResourceCreated and onDeviceClaimed: container id known,
+  // deviceId is "". teardown must still reap the container.
+  const handle = await backend.connect({
+    backend: "docker",
+    sandboxId: "sess-half",
+    sandboxResourceId: "container-half",
+    deviceId: "",
+  })
+  await handle.kill()
+  assert.ok(
+    seen.some((c) => c[0] === "rm" && c.includes("container-half")),
+    "container reaped even without a device id"
+  )
+})
+
 test("docker handle: kill() stops + removes the container; isRunning inspects", async () => {
   const seen: string[][] = []
   const { spawnImpl } = fakeDocker((args) => {
