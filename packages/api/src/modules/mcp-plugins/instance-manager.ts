@@ -3,9 +3,14 @@ import type { ToolDefinition } from "@synapse/shared"
 import type { CapabilityInvocationContext } from "@synapse/shared/types"
 import { redis } from "../../infrastructure/redis/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
-import { McpHttpClient } from "./mcp-client.js"
+import { McpRemoteClient, type RemoteMcpProtocol } from "./mcp-remote-client.js"
 import { McpStdioClient } from "./mcp-stdio-client.js"
 import { getBuiltinHandler } from "./builtin/index.js"
+import {
+  getTransportFactory,
+  registerTransport,
+} from "./transports/registry.js"
+import { getAuthSecretSerializer } from "./transports/auth-serializers.js"
 import { logEvent } from "./audit.js"
 import {
   getRuntimeNodeId,
@@ -27,9 +32,15 @@ const MCP_INSTANCE_TTL_ACTOR = 2 * 60 * 60 * 1000
 const MCP_INSTANCE_TTL_CONVERSATION = 1 * 60 * 60 * 1000
 const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000
 
-type InstanceTransport = "builtin" | "stdio" | "http" | "device" | string
+type InstanceTransport =
+  | "builtin"
+  | "stdio"
+  | "http"
+  | "sse"
+  | "device"
+  | string
 
-type McpInstanceParams = {
+export type McpInstanceParams = {
   pluginId: string
   installationId: string
   pluginSlug: string
@@ -83,6 +94,12 @@ type RemoteInstanceCommand =
     }
   | {
       command: "ensure_runtime_session"
+      params: McpInstanceParams
+      key: string
+      configHash: string
+    }
+  | {
+      command: "describe"
       params: McpInstanceParams
       key: string
       configHash: string
@@ -213,61 +230,230 @@ function stringifyTemplateValue(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function resolveTemplate(
-  template: string,
+class TemplateResolutionError extends Error {}
+
+/**
+ * Resolve a `${...}` expression against the instance config / env / runtime.
+ * Returns `undefined` when the source resolves to a missing value so the caller
+ * can decide whether that's a fail-closed error (required) or allowed (`?:`).
+ *
+ * Sources:
+ *  - `${config:a.b}`       → config.a.b (dotted)
+ *  - `${env:NAME}`         → process.env.NAME
+ *  - `${runtime:key}`      → non-sensitive runtime value (e.g. installationId)
+ *  - `${auth:field.path}`  → config.field.secretPayload.path (secretPayload
+ *                            implicit). Requires the auth_connection to be
+ *                            status==="active", else fail-closed.
+ *  - `${auth_b64:field}`   → base64 of config.field.secretPayload as a whole,
+ *                            after an optional per-field serializer hook.
+ *                            Also requires status==="active".
+ *  - Optional variants `${config?:...}` / `${env?:...}` allow empty.
+ */
+function resolveTemplateExpression(
+  expression: string,
+  ctx: TemplateContext
+): { value: string | undefined; optional: boolean } {
+  const optional = /^(config|env|runtime|auth|auth_b64)\?:/.test(expression)
+  const normalized = optional ? expression.replace("?:", ":") : expression
+
+  if (normalized.startsWith("env:")) {
+    const v = process.env[normalized.slice(4)]
+    return { value: v === undefined || v === "" ? undefined : v, optional }
+  }
+  if (normalized.startsWith("runtime:")) {
+    const v = ctx.runtime[normalized.slice(8)]
+    return { value: v ? String(v) : undefined, optional }
+  }
+  if (normalized.startsWith("config:")) {
+    const raw = getConfigValue(ctx.config, normalized.slice(7))
+    if (raw === undefined || raw === null) return { value: undefined, optional }
+    // boolean false / number 0 are present values, not "missing".
+    return { value: stringifyTemplateValue(raw), optional }
+  }
+  if (normalized.startsWith("auth:")) {
+    return {
+      value: resolveAuthExpression(normalized.slice(5), ctx),
+      optional,
+    }
+  }
+  if (normalized.startsWith("auth_b64:")) {
+    return {
+      value: resolveAuthB64Expression(normalized.slice(9), ctx),
+      optional,
+    }
+  }
+  return { value: undefined, optional }
+}
+
+function getAuthConnection(
+  field: string,
+  ctx: TemplateContext
+): Record<string, unknown> {
+  const conn = getConfigValue(ctx.config, field)
+  if (!conn || typeof conn !== "object" || Array.isArray(conn)) {
+    throw new TemplateResolutionError(
+      `Auth connection '${field}' is not configured`
+    )
+  }
+  const obj = conn as Record<string, unknown>
+  if (obj.status !== "active") {
+    // Fail-closed: never forward a stale/expired credential.
+    throw new TemplateResolutionError(
+      `Auth connection '${field}' is not active (status=${String(obj.status)})`
+    )
+  }
+  return obj
+}
+
+function resolveAuthExpression(
+  rest: string,
+  ctx: TemplateContext
+): string | undefined {
+  const dot = rest.indexOf(".")
+  const field = dot === -1 ? rest : rest.slice(0, dot)
+  const path = dot === -1 ? "" : rest.slice(dot + 1)
+  const conn = getAuthConnection(field, ctx)
+  const secret = conn.secretPayload
+  if (!secret || typeof secret !== "object") return undefined
+  const value = path
+    ? getConfigValue(secret as Record<string, unknown>, path)
+    : secret
+  if (value === undefined || value === null) return undefined
+  return stringifyTemplateValue(value)
+}
+
+function resolveAuthB64Expression(
+  field: string,
+  ctx: TemplateContext
+): string | undefined {
+  const conn = getAuthConnection(field, ctx)
+  let secret = conn.secretPayload
+  if (!secret || typeof secret !== "object") return undefined
+  // Per-driver serializer hook: lets a plugin (e.g. Mijia) transform the stored
+  // internal secret into the exact shape its sidecar expects before encoding.
+  const serializer = getAuthSecretSerializer(
+    typeof conn.driver === "string" ? conn.driver : undefined
+  )
+  if (serializer) {
+    secret = serializer(secret as Record<string, unknown>)
+  }
+  return Buffer.from(JSON.stringify(secret), "utf-8").toString("base64")
+}
+
+type TemplateContext = {
   config: Record<string, unknown>
-): string {
+  runtime: Record<string, unknown>
+}
+
+/**
+ * Render a template string. Each `${...}` is required by default — a missing
+ * value throws (fail-closed). Use `${source?:...}` to allow an empty value.
+ */
+function renderTemplate(template: string, ctx: TemplateContext): string {
   return template.replace(/\$\{([^}]+)\}/g, (_match, rawExpression: string) => {
     const expression = rawExpression.trim()
-    if (expression.startsWith("env:")) {
-      return process.env[expression.slice(4)] || ""
+    const { value, optional } = resolveTemplateExpression(expression, ctx)
+    if (value === undefined) {
+      if (optional) return ""
+      throw new TemplateResolutionError(
+        `Required template value '${expression}' could not be resolved`
+      )
     }
-    if (expression.startsWith("config:")) {
-      return stringifyTemplateValue(getConfigValue(config, expression.slice(7)))
-    }
-    return ""
+    return value
   })
 }
 
-function resolveHttpEntryPoint(
+type ResolvedRemoteEntryPoint = {
+  url: string
+  headers: Record<string, string>
+  protocol: RemoteMcpProtocol
+}
+
+/**
+ * Resolve a remote (http/sse) plugin entryPoint into a concrete URL + headers.
+ *
+ * entryPoint may be a bare URL string OR a JSON object:
+ *   { url|endpoint, headers?, query?, protocol? }
+ * All url/header/query values run through the template engine. `query` keys are
+ * injected via URL.searchParams.set (correct encoding; e.g. AMap `?key=`).
+ */
+function resolveRemoteEntryPoint(
   entryPoint: string,
-  config: Record<string, unknown>
-): { url: string; headers: Record<string, string> } {
+  ctx: TemplateContext,
+  defaultProtocol: RemoteMcpProtocol
+): ResolvedRemoteEntryPoint {
   const trimmed = entryPoint.trim()
   if (!trimmed) {
-    throw new Error("HTTP entry point is required")
+    throw new Error("Remote MCP entry point is required")
   }
 
-  if (trimmed.startsWith("{")) {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>
-    const url =
-      typeof parsed.url === "string"
-        ? resolveTemplate(parsed.url, config)
-        : typeof parsed.endpoint === "string"
-          ? resolveTemplate(parsed.endpoint, config)
-          : ""
-    if (!url) {
-      throw new Error("HTTP entry point JSON is missing url")
+  if (!trimmed.startsWith("{")) {
+    return {
+      url: renderTemplate(trimmed, ctx),
+      headers: {},
+      protocol: defaultProtocol,
     }
-    const headers =
-      parsed.headers &&
-      typeof parsed.headers === "object" &&
-      !Array.isArray(parsed.headers)
-        ? Object.fromEntries(
-            Object.entries(parsed.headers as Record<string, unknown>)
-              .filter(([, value]) => typeof value === "string")
-              .map(([key, value]) => [
-                key,
-                resolveTemplate(value as string, config),
-              ])
-          )
-        : {}
-    return { url, headers }
   }
 
-  return {
-    url: resolveTemplate(trimmed, config),
-    headers: {},
+  const parsed = JSON.parse(trimmed) as Record<string, unknown>
+  const baseUrl =
+    typeof parsed.url === "string"
+      ? renderTemplate(parsed.url, ctx)
+      : typeof parsed.endpoint === "string"
+        ? renderTemplate(parsed.endpoint, ctx)
+        : ""
+  if (!baseUrl) {
+    throw new Error("Remote MCP entry point JSON is missing url")
+  }
+
+  const headers: Record<string, string> =
+    parsed.headers &&
+    typeof parsed.headers === "object" &&
+    !Array.isArray(parsed.headers)
+      ? Object.fromEntries(
+          Object.entries(parsed.headers as Record<string, unknown>)
+            .filter(([, value]) => typeof value === "string")
+            .map(([key, value]) => [key, renderTemplate(value as string, ctx)])
+        )
+      : {}
+
+  const url = new URL(baseUrl)
+  if (
+    parsed.query &&
+    typeof parsed.query === "object" &&
+    !Array.isArray(parsed.query)
+  ) {
+    for (const [key, value] of Object.entries(
+      parsed.query as Record<string, unknown>
+    )) {
+      if (typeof value !== "string") continue
+      url.searchParams.set(key, renderTemplate(value, ctx))
+    }
+  }
+
+  const protocol: RemoteMcpProtocol =
+    parsed.protocol === "sse" || parsed.protocol === "streamable-http"
+      ? parsed.protocol
+      : defaultProtocol
+
+  return { url: url.toString(), headers, protocol }
+}
+
+/** Strip secret-bearing query params before logging an endpoint URL. */
+function redactUrlForLog(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl)
+    const SENSITIVE = new Set(["key", "token", "sig", "secret", "apikey"])
+    let redacted = false
+    for (const name of [...url.searchParams.keys()]) {
+      if (SENSITIVE.has(name.toLowerCase())) {
+        url.searchParams.set(name, "***")
+        redacted = true
+      }
+    }
+    return redacted ? url.toString() : rawUrl
+  } catch {
+    return rawUrl
   }
 }
 
@@ -449,23 +635,36 @@ async function createBuiltinInstance(
   }
 }
 
-async function createHttpInstance(
-  params: McpInstanceParams,
-  configHash: string
-): Promise<McpInstance> {
-  const apiKey = params.config.apiKey as string
-  const resolvedEntryPoint = resolveHttpEntryPoint(
-    params.entryPoint,
-    params.config
-  )
-  const headers: Record<string, string> = {
-    ...resolvedEntryPoint.headers,
+function buildTemplateContext(params: McpInstanceParams): TemplateContext {
+  return {
+    config: params.config,
+    runtime: {
+      installationId: params.installationId,
+      pluginId: params.pluginId,
+      workspaceId: params.workspaceId ?? "",
+      scopeId: params.scopeId,
+    },
   }
-  if (apiKey) {
-    headers.Authorization = headers.Authorization || `Bearer ${apiKey}`
-  }
+}
 
-  const client = new McpHttpClient(resolvedEntryPoint.url, headers)
+async function createRemoteInstance(
+  params: McpInstanceParams,
+  configHash: string,
+  defaultProtocol: RemoteMcpProtocol
+): Promise<McpInstance> {
+  const ctx = buildTemplateContext(params)
+  const resolved = resolveRemoteEntryPoint(
+    params.entryPoint,
+    ctx,
+    defaultProtocol
+  )
+  const safeEndpoint = redactUrlForLog(resolved.url)
+
+  const client = new McpRemoteClient(
+    resolved.url,
+    resolved.headers,
+    resolved.protocol
+  )
   try {
     const initResult = await client.initialize()
     logEvent({
@@ -473,9 +672,10 @@ async function createHttpInstance(
       pluginId: params.pluginId,
       eventType: "connection.init",
       eventData: {
-        endpoint: resolvedEntryPoint.url,
+        endpoint: safeEndpoint,
         success: true,
         serverInfo: initResult.serverInfo,
+        transport: resolved.protocol,
       },
     })
   } catch (error: any) {
@@ -483,16 +683,35 @@ async function createHttpInstance(
       workspaceId: params.workspaceId,
       pluginId: params.pluginId,
       eventType: "connection.error",
-      eventData: { endpoint: resolvedEntryPoint.url, error: error.message },
+      eventData: {
+        endpoint: safeEndpoint,
+        error: error?.message,
+        transport: resolved.protocol,
+      },
     })
+    await client.shutdown().catch(() => {})
     throw error
   }
 
+  // Fail-fast on tool discovery: these plugins ship empty static manifests, so
+  // silently degrading to [] would make the plugin's tools vanish. Surface the
+  // error (instance creation fails) instead.
   let tools: ToolDefinition[]
   try {
     tools = await client.listTools()
-  } catch {
-    tools = []
+  } catch (error: any) {
+    logEvent({
+      workspaceId: params.workspaceId,
+      pluginId: params.pluginId,
+      eventType: "connection.error",
+      eventData: {
+        endpoint: safeEndpoint,
+        error: `listTools failed: ${error?.message}`,
+        transport: resolved.protocol,
+      },
+    })
+    await client.shutdown().catch(() => {})
+    throw error
   }
 
   return {
@@ -500,7 +719,7 @@ async function createHttpInstance(
     installationId: params.installationId,
     pluginSlug: params.pluginSlug,
     orgSlug: params.orgSlug,
-    transport: "http",
+    transport: resolved.protocol === "sse" ? "sse" : "http",
     scope: params.scope,
     scopeId: params.scopeId,
     workspaceId: params.workspaceId,
@@ -580,21 +799,31 @@ async function createStdioInstance(
   }
 }
 
+// Register the built-in server transports. builtin/stdio keep their existing
+// behaviour; http/sse both route through the official-SDK remote client.
+registerTransport("builtin", (params, _key, configHash) =>
+  createBuiltinInstance(params, configHash)
+)
+registerTransport("stdio", (params, key, configHash) =>
+  createStdioInstance(params, configHash, key)
+)
+registerTransport("http", (params, _key, configHash) =>
+  createRemoteInstance(params, configHash, "streamable-http")
+)
+registerTransport("sse", (params, _key, configHash) =>
+  createRemoteInstance(params, configHash, "sse")
+)
+
 async function createTransportInstance(
   params: McpInstanceParams,
   key: string,
   configHash: string
 ) {
-  switch (params.transport) {
-    case "builtin":
-      return createBuiltinInstance(params, configHash)
-    case "stdio":
-      return createStdioInstance(params, configHash, key)
-    case "http":
-      return createHttpInstance(params, configHash)
-    default:
-      throw new Error(`Unsupported transport: ${params.transport}`)
+  const factory = getTransportFactory(params.transport)
+  if (!factory) {
+    throw new Error(`Unsupported transport: ${params.transport}`)
   }
+  return factory(params, key, configHash)
 }
 
 async function shutdownInstanceByKey(key: string, reason: string) {
@@ -684,14 +913,29 @@ async function createOwnedInstance(
   return wrapped
 }
 
-function createProxyInstance(
+async function createProxyInstance(
   params: McpInstanceParams,
   key: string,
   configHash: string
-): McpInstance {
+): Promise<McpInstance> {
   let runtimeSessionId: string | undefined
   const idleTtlMs = params.idleTtlMs ?? getTTLForScope(params.scope)
   const createdAt = Date.now()
+
+  // Fetch the resolved tool list from the lease owner BEFORE returning. The
+  // tool-resolver reads `runtimeInstance.tools` synchronously and remote
+  // plugins ship empty static manifests, so a proxy with tools:[] would make
+  // the plugin's tools vanish on non-owner nodes. A describe failure is treated
+  // like an init failure (throws / triggers owner re-resolution).
+  const describeResponse = await invokeDistributedInstanceCommand<{
+    tools: ToolDefinition[]
+  }>({
+    command: "describe",
+    params,
+    key,
+    configHash,
+  })
+  const tools = describeResponse.tools ?? []
 
   const proxy: McpInstance = {
     pluginId: params.pluginId,
@@ -703,7 +947,7 @@ function createProxyInstance(
     scopeId: params.scopeId,
     workspaceId: params.workspaceId,
     configHash,
-    tools: [],
+    tools,
     execute: async (toolName, input, executionContext) => {
       const response = await invokeDistributedInstanceCommand<{
         result: unknown
@@ -865,6 +1109,11 @@ async function handleLocalInstanceCommand(payload: RemoteInstanceCommand) {
           ? await instance.ensureRuntimeSession()
           : instance.getRuntimeSessionId?.(),
       }
+    case "describe":
+      // Owner-node tool discovery for proxies. The proxy node has no live
+      // client, and remote plugins ship empty static manifests, so it asks the
+      // lease owner for the resolved tool list.
+      return { tools: instance.tools }
     default:
       throw new Error(
         `Unsupported instance command '${(payload as { command: string }).command}'`
@@ -954,7 +1203,7 @@ export async function getOrCreateInstance(
     return ensureLocallyOwnedInstance(params, key, configHash)
   }
 
-  const proxy = createProxyInstance(params, key, configHash)
+  const proxy = await createProxyInstance(params, key, configHash)
   proxy.lastUsed = Date.now()
   resetTTL(key, proxy.idleTtlMs)
   return proxy

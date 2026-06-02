@@ -27,6 +27,7 @@ import type {
   PluginConfigFieldDefinition,
   PluginConfigFieldState,
   PluginInstallFlow,
+  PluginSpecTransport,
   ReuseScope,
   McpSetupStep,
   McpValidationRule,
@@ -171,7 +172,7 @@ type PluginCatalogRow = {
   version_metadata: unknown
   version_created_by_user_id: string | null
   version_created_at: string | null
-  spec_transport: "builtin" | "stdio" | "http" | "device" | null
+  spec_transport: PluginSpecTransport | null
   spec_entry_point: string | null
   spec_tool_manifest: unknown
   spec_config_schema: unknown
@@ -1324,7 +1325,7 @@ async function ensureCatalogItem(
     iconFileId?: string
     tags?: string[]
     isBuiltin?: boolean
-    transport: string
+    transport: PluginSpecTransport
     displayNameI18n?: Record<string, string>
     descriptionI18n?: Record<string, string>
     longDescriptionI18n?: Record<string, string>
@@ -1420,7 +1421,7 @@ async function upsertPluginVersion(
   itemId: string,
   input: {
     version?: string
-    transport: string
+    transport: PluginSpecTransport
     entryPoint?: string
     lifecycleScope?: ReuseScope
     supportedReuseScopes?: ReuseScope[]
@@ -1502,7 +1503,8 @@ async function upsertPluginVersion(
       supported_reuse_scopes: supportedReuseScopes.map((scope) =>
         internalReuseScope(scope)
       ),
-      requires_handshake: input.requiresHandshake ?? input.transport !== "builtin",
+      requires_handshake:
+        input.requiresHandshake ?? input.transport !== "builtin",
       metadata: sql`${JSON.stringify(metadata)}::jsonb`,
     })
     .onConflict((oc) =>
@@ -1682,7 +1684,7 @@ export async function createPlugin(data: {
   longDescription?: string
   iconFileId?: string
   version?: string
-  transport: string
+  transport: PluginSpecTransport
   entryPoint?: string
   lifecycleScope?: ReuseScope
   configSchema?: Record<string, unknown>
@@ -1712,7 +1714,11 @@ export async function createPlugin(data: {
   const itemId = await withDbTransaction(async (client) => {
     const catalogItemId = await ensureCatalogItem(client, data)
     await upsertPluginVersion(client, catalogItemId, data)
-    await assignPluginCategories(client, catalogItemId, data.categorySlugs || [])
+    await assignPluginCategories(
+      client,
+      catalogItemId,
+      data.categorySlugs || []
+    )
     return catalogItemId
   })
 

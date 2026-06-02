@@ -5,6 +5,7 @@ import path from "path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ToolDefinition } from "@synapse/shared"
+import { mapToolDefinitions } from "./mcp-tool-mapper.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 
 const log = createLogger("mcp.stdio")
@@ -135,61 +136,6 @@ function buildInstanceDirs(instanceKey: string) {
     state: path.join(root, "state"),
     tmp: path.join(root, "tmp"),
   }
-}
-
-function mapToolDefinitions(
-  tools: Array<{
-    name: string
-    description?: string
-    inputSchema?: {
-      type?: string
-      properties?: Record<
-        string,
-        {
-          type?: string
-          description?: string
-          enum?: string[]
-          items?: { type?: string; enum?: string[] }
-        }
-      >
-      required?: string[]
-    }
-  }>
-): ToolDefinition[] {
-  return tools.map((tool) => {
-    const properties: Record<
-      string,
-      ToolDefinition["parameters"]["properties"][string]
-    > = {}
-
-    for (const [key, value] of Object.entries(
-      tool.inputSchema?.properties || {}
-    )) {
-      properties[key] = {
-        type: value.type || "string",
-        description: value.description || "",
-        ...(value.enum ? { enum: value.enum } : {}),
-        ...(value.items
-          ? {
-              items: {
-                type: value.items.type || "string",
-                ...(value.items.enum ? { enum: value.items.enum } : {}),
-              },
-            }
-          : {}),
-      }
-    }
-
-    return {
-      name: tool.name,
-      description: tool.description || "",
-      parameters: {
-        type: "object",
-        properties,
-        required: tool.inputSchema?.required || [],
-      },
-    }
-  })
 }
 
 export class McpStdioClient {

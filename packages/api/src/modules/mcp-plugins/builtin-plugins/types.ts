@@ -4,6 +4,7 @@ import type {
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginInstallFlow,
+  PluginSpecTransport,
   ReuseScope,
   LocalizedText,
   McpSetupStep,
@@ -20,7 +21,7 @@ export interface BuiltinPluginSeed {
   longDescriptionI18n?: LocalizedText
   summaryI18n?: LocalizedText
   defaultLocale?: string
-  transport: string
+  transport: PluginSpecTransport
   entryPoint: string
   defaultInstanceScope: AttachmentTargetType
   defaultReuseScope: ReuseScope

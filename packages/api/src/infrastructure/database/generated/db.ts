@@ -245,7 +245,7 @@ export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation
 
 export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
-export type PluginPackageVersionSpecsTransport = "builtin" | "device" | "http" | "stdio";
+export type PluginPackageVersionSpecsTransport = "builtin" | "device" | "http" | "sse" | "stdio";
 
 export type PluginSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 

@@ -933,3 +933,33 @@ export const DEVICE_EXPOSURE_TRANSPORTS = [
   "sse",
   "custom",
 ] as const
+
+// Plugin transport tiers. Three distinct, non-overlapping sets so each
+// consumer references the one that matches its semantics:
+//  - MCP_SERVER_TRANSPORTS: transports the runtime instance-manager can
+//    actually start (in-process builtin, stdio child, remote http/sse). No
+//    "device" (that goes through the device-exposure path) and no "filesystem".
+//  - PLUGIN_SPEC_TRANSPORTS: the values stored in the DB catalog spec column
+//    (plugin_package_version_specs.transport) — adds "device".
+//  - PLUGIN_TRANSPORTS: the full application-level union — adds "filesystem".
+export const MCP_SERVER_TRANSPORTS = [
+  "builtin",
+  "stdio",
+  "http",
+  "sse",
+] as const
+export const PLUGIN_SPEC_TRANSPORTS = [
+  "builtin",
+  "stdio",
+  "http",
+  "sse",
+  "device",
+] as const
+export const PLUGIN_TRANSPORTS = [
+  "builtin",
+  "stdio",
+  "http",
+  "sse",
+  "device",
+  "filesystem",
+] as const

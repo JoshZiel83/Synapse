@@ -159,7 +159,9 @@ export class BigModelChatCompletionsProvider implements AIProvider {
         function: {
           name: tool.name,
           description: tool.description,
-          parameters: tool.parameters,
+          // Prefer lossless raw JSON Schema (remote/stdio MCP) over the lossy
+          // `parameters` projection.
+          parameters: tool.rawInputSchema ?? tool.parameters,
         },
       }))
       body.tool_choice = "auto"

@@ -1,14 +1,17 @@
-import { McpHttpClient } from "../../../mcp-client.js"
+import { McpRemoteClient } from "../../../mcp-remote-client.js"
 import { ToolDefinition } from "@synapse/shared"
 
 async function withMcpClient<T>(
   endpoint: string,
   apiKey: string,
-  fn: (client: McpHttpClient) => Promise<T>
+  fn: (client: McpRemoteClient) => Promise<T>
 ): Promise<T> {
-  const client = new McpHttpClient(endpoint, {
-    Authorization: `Bearer ${apiKey}`,
-  })
+  // zread is a Streamable HTTP MCP endpoint; connect() runs initialize.
+  const client = new McpRemoteClient(
+    endpoint,
+    { Authorization: `Bearer ${apiKey}` },
+    "streamable-http"
+  )
   await client.initialize()
   try {
     return await fn(client)

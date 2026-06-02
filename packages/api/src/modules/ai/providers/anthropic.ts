@@ -280,7 +280,9 @@ export class AnthropicProvider implements AIProvider {
         allTools.push({
           name: toolNameMaps.canonicalToAlias.get(t.name) || t.name,
           description: t.description,
-          input_schema: t.parameters,
+          // Prefer the lossless raw JSON Schema when present (remote/stdio MCP
+          // tools); fall back to the lossy `parameters` projection.
+          input_schema: t.rawInputSchema ?? t.parameters,
         })
       }
     }
