@@ -11,6 +11,10 @@ coverage/
 artifacts/
 
 .claude/*
+# ...but DO track the bundled impeccable design skill.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/impeccable/
 CLAUDE.md
 TARGET.md
 
