@@ -30,7 +30,12 @@ export const githubSeed: BuiltinOrgSeed = {
       ),
       defaultLocale: "en",
       transport: "http",
-      entryPoint: "https://api.githubcopilot.com/mcp/",
+      // Explicit Authorization header (the global apiKey→Bearer fallback was
+      // removed when the remote client became transport-pure).
+      entryPoint: JSON.stringify({
+        url: "https://api.githubcopilot.com/mcp/",
+        headers: { Authorization: "Bearer ${config:apiKey}" },
+      }),
       defaultInstanceScope: "workspace",
       defaultReuseScope: "conversation",
       requiresHandshake: false,

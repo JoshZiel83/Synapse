@@ -58,10 +58,8 @@ export async function initBuiltinRegistry(): Promise<void> {
   registerBuiltinHandler("z_ai/toolkit", mod.zAiToolkitHandler)
   const feishuMod = await import("./feishu/app/index.js")
   registerBuiltinHandler("feishu/app", feishuMod.feishuAppHandler)
-  const aminerMod = await import("./aminer/openapi/index.js")
-  registerBuiltinHandler("aminer/openapi", aminerMod.aminerOpenapiHandler)
-  const amapMod = await import("./amap/openapi/index.js")
-  registerBuiltinHandler("amap/openapi", amapMod.amapOpenapiHandler)
+  // aminer/openapi and amap/openapi are now remote MCP plugins (transport
+  // sse/http proxying the official servers) — no in-process handler.
   const mijiaMod = await import("./mijia/smarthome/index.js")
   registerBuiltinHandler("mijia/smarthome", mijiaMod.mijiaSmarthomeHandler)
 }
