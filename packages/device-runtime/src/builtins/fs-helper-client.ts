@@ -195,6 +195,12 @@ export function createFsHelperClient(
   // so a respawned handle is naturally treated as un-handshaked — the old
   // handle is GC'd, the new one isn't in the set, so request() re-handshakes.
   const handshaked = new WeakSet<SidecarHandle>()
+  // Handles deliberately discarded (e.g. failed the handshake). The exit
+  // handler checks this so a discard-stop is NOT counted toward the crash-park
+  // window — a proto mismatch is not a crash loop, and recovery is
+  // rebuild-then-respawn, so each later RPC must get a fresh spawn rather than
+  // hitting a parked client.
+  const discarded = new WeakSet<SidecarHandle>()
 
   if (!opts.helperPath || !existsSync(opts.helperPath)) {
     helperMissing = true
@@ -236,7 +242,9 @@ export function createFsHelperClient(
     handle = h
     if (h.on) {
       h.on("exit", (code) => {
-        const wasIntentional = stopped
+        // A deliberately discarded handle (handshake failure) must not count
+        // toward the crash-park window — recovery is rebuild + respawn.
+        const wasIntentional = stopped || discarded.has(h)
         handle = null
         if (wasIntentional) return
         const now = Date.now()
@@ -285,11 +293,32 @@ export function createFsHelperClient(
   }
 
   /**
+   * Tear down a handle we no longer trust (handshake failure / wedge): mark it
+   * discarded so the exit handler won't count it toward the park window, stop
+   * the process, and clear `handle` so the next RPC spawns a fresh one. This is
+   * what lets a rebuilt binary actually take over: without it, a proto-mismatch
+   * throw would leave the OLD process alive and every later RPC would reuse it
+   * until the whole device-runtime restarted.
+   */
+  function discardHandle(h: SidecarHandle): void {
+    discarded.add(h)
+    try {
+      void h.stop()
+    } catch {
+      /* swallow */
+    }
+    if (handle === h) handle = null
+  }
+
+  /**
    * Verify a freshly-spawned handle speaks our wire protocol before its first
    * real RPC. Calls h.request("fs.hello") DIRECTLY (not the gated request()
-   * below) to avoid recursing through the gate. Throws FsHelperProtoMismatchError
-   * on mismatch or on a pre-handshake binary (method_not_found). Idempotent per
-   * handle via the WeakSet.
+   * below) to avoid recursing through the gate. On ANY failure (version
+   * mismatch, pre-handshake binary, or timeout) the handle is discarded + the
+   * process stopped, so the next RPC spawns a fresh helper — a rebuilt binary
+   * is picked up without a device-runtime restart. Throws
+   * FsHelperProtoMismatchError for version/pre-handshake failures. Idempotent
+   * per handle via the WeakSet.
    */
   async function ensureHandshake(h: SidecarHandle): Promise<void> {
     if (handshaked.has(h)) return
@@ -298,12 +327,6 @@ export function createFsHelperClient(
     try {
       const hello = await new Promise<unknown>((resolve, reject) => {
         timer = setTimeout(() => {
-          try {
-            void h.stop()
-          } catch {
-            /* swallow */
-          }
-          handle = null
           reject(new FsHelperTimeoutError("fs.hello", ms))
         }, ms)
         h.request("fs.hello", {}).then(resolve, reject)
@@ -311,6 +334,9 @@ export function createFsHelperClient(
       assertFsHelperProto(hello)
       handshaked.add(h)
     } catch (err) {
+      // Failed/untrusted handshake → tear down so a rebuilt binary can take
+      // over on the next RPC (don't leave the old process serving).
+      discardHandle(h)
       // A pre-handshake binary answers method_not_found (-32601) → treat as a
       // proto mismatch (rebuild needed) rather than a generic RPC error.
       const m = (err as Error).message?.match(/^(-?\d+):\s*(.+)$/)

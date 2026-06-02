@@ -94,6 +94,82 @@ function makeFakeStart(): {
   }
 }
 
+interface HelloFakeChild {
+  handle: SidecarHandle
+  stopped: boolean
+  resolveRequest(method: string, result: unknown): void
+}
+
+/**
+ * Fake start whose fs.hello answer varies per spawn — drives the
+ * handshake-failure-then-recovery path. `helloPerStart[i]` is the hello result
+ * (or an Error to reject with) for the i-th spawned helper; out-of-range spawns
+ * reuse the last entry. Records whether each handle was stop()ed so a test can
+ * assert a failed-handshake handle is torn down.
+ */
+function makeHelloVaryingStart(helloPerStart: Array<unknown | Error>): {
+  start: (typeof import("../sidecar.js"))["startSidecar"]
+  children: HelloFakeChild[]
+} {
+  const children: HelloFakeChild[] = []
+  const start: (typeof import("../sidecar.js"))["startSidecar"] = () => {
+    const ee = new EventEmitter() as SidecarHandle
+    const pending = new Map<
+      string,
+      {
+        resolve: (v: unknown) => void
+        reject: (e: Error) => void
+        method: string
+      }
+    >()
+    let nextId = 0
+    const index = children.length
+    const handle = ee as unknown as SidecarHandle
+    const child: HelloFakeChild = {
+      handle,
+      stopped: false,
+      resolveRequest(method: string, result: unknown) {
+        for (const [id, entry] of pending) {
+          if (entry.method === method) {
+            pending.delete(id)
+            entry.resolve(result)
+            return
+          }
+        }
+      },
+    }
+    ;(
+      handle as unknown as {
+        request: (m: string, p?: unknown) => Promise<unknown>
+      }
+    ).request = (method: string) => {
+      if (method === "fs.hello") {
+        const hello = helloPerStart[Math.min(index, helloPerStart.length - 1)]
+        return hello instanceof Error
+          ? Promise.reject(hello)
+          : Promise.resolve(hello)
+      }
+      return new Promise((resolve, reject) => {
+        const id = String(++nextId)
+        pending.set(id, { resolve, reject, method })
+      })
+    }
+    ;(
+      handle as unknown as { notify: (m: string, p?: unknown) => void }
+    ).notify = () => {}
+    ;(handle as unknown as { stop: () => Promise<void> }).stop = async () => {
+      child.stopped = true
+      ee.emit("exit", 0)
+    }
+    children.push(child)
+    return handle
+  }
+  return {
+    start: start as unknown as (typeof import("../sidecar.js"))["startSidecar"],
+    children,
+  }
+}
+
 function makeClient(start: ReturnType<typeof makeFakeStart>["start"]) {
   return createFsHelperClient({
     helperPath: "/usr/bin/true",
@@ -164,4 +240,51 @@ test("FsHelperClient parks after second crash within 60s window", async () => {
     (e: unknown) => (e as Error).name === "FsHelperUnavailableError"
   )
   assert.equal(client.isAvailable(), false)
+})
+
+test("handshake mismatch tears down the helper; next RPC respawns and recovers", async () => {
+  // First spawn reports a wrong proto_version (a stale binary). After the
+  // operator rebuilds, the SECOND spawn reports the right version. The next
+  // RPC must spawn a fresh helper and succeed — not keep reusing the stale
+  // process.
+  const fake = makeHelloVaryingStart([
+    { proto_version: 999, crate_version: "stale" }, // 1st spawn: mismatch
+    { proto_version: 1, crate_version: "rebuilt" }, // 2nd spawn: good
+  ])
+  const client = makeClient(fake.start)
+
+  await assert.rejects(
+    client.historyList({ path: "/x" }),
+    (e: unknown) => (e as Error).name === "FsHelperProtoMismatchError"
+  )
+  // The mismatched handle was torn down (stopped + cleared), not left serving.
+  assert.equal(fake.children.length, 1)
+  assert.equal(fake.children[0]!.stopped, true, "stale handle must be stopped")
+
+  // Next RPC spawns a fresh helper (simulating the rebuilt binary) and works.
+  const p = client.historyList({ path: "/x" })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.equal(fake.children.length, 2, "a fresh helper must be spawned")
+  fake.children[1]!.resolveRequest("fs.history.list", { entries: [] })
+  await p
+})
+
+test("repeated handshake mismatch does NOT park the client", async () => {
+  // A proto mismatch is not a crash loop: tearing the handle down must not
+  // count toward the crash-park window, so the operator's rebuild is always
+  // picked up by the next RPC rather than hitting a parked client.
+  const fake = makeHelloVaryingStart([
+    { proto_version: 999, crate_version: "stale" }, // every spawn mismatches…
+  ])
+  const client = makeClient(fake.start)
+
+  for (let i = 0; i < 3; i++) {
+    await assert.rejects(
+      client.historyList({}),
+      (e: unknown) => (e as Error).name === "FsHelperProtoMismatchError"
+    )
+  }
+  // Still available (not parked) and it kept spawning fresh helpers each time.
+  assert.equal(client.isAvailable(), true)
+  assert.equal(fake.children.length, 3)
 })
