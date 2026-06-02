@@ -224,6 +224,32 @@ function isSessionLockLostError(error: unknown) {
   return error instanceof Error && error.name === "SessionLockLostError"
 }
 
+/**
+ * Pure decision for how a lock-loss turn recovers its wakeups. Extracted so the
+ * (subtle, concurrency-critical) policy is unit-testable without standing up
+ * the whole worker:
+ *
+ *  - replayUnsafe=false → restore the turn's attached wakeups to pending (the
+ *    new owner re-drives them; nothing non-idempotent ran).
+ *  - replayUnsafe=true  → drop the turn's attached wakeups (re-running would
+ *    replay a committed action/message).
+ *
+ * In BOTH cases, requeue iff wakeups remain pending afterward — these are late,
+ * independent wakeups not attached to this turn, so requeuing never replays it.
+ */
+export type LockLossWakeupAction = "restore" | "drop"
+
+export function decideLockLossRecovery(params: {
+  replayUnsafeStarted: boolean
+  /** Pending-wakeup count AFTER the restore/drop is applied. */
+  pendingAfterRecovery: number
+}): { wakeupAction: LockLossWakeupAction; requeue: boolean } {
+  return {
+    wakeupAction: params.replayUnsafeStarted ? "drop" : "restore",
+    requeue: params.pendingAfterRecovery > 0,
+  }
+}
+
 export function startSessionThinkingWorker() {
   const worker = new Worker(
     QUEUE_NAMES.SESSION_THINKING,
@@ -292,12 +318,13 @@ export function startSessionThinkingWorker() {
       // (the cooperative abort surfaces as a generic TurnInterruptedError, so
       // the error TYPE alone can't tell us the turn was aborted for lock loss).
       let lockLost = false
-      // Flips true the moment we begin applying side-effects (executeActorActions
-      // onward). Some actions are NON-idempotent (create_memory, rename_self,
-      // change_avatar), so once side-effects have started we must NOT
-      // restore-and-requeue on a lock loss — a re-run would replay them. Before
-      // side-effects start, restoring+requeuing is safe (nothing was committed).
-      let sideEffectsStarted = false
+      // Flips true once this turn performs a NON-idempotent write — i.e. it
+      // executed at least one action (create_memory / rename_self /
+      // change_avatar / …) OR persisted an assistant message. A pure-reasoning
+      // turn (no actions, no message) stays false. On a lock loss we restore+
+      // requeue ONLY while this is false; once a non-idempotent write has run, a
+      // re-run would replay it, so we drop the turn's wakeups instead.
+      let replayUnsafeStarted = false
       // Fenced lock-renew timer. Hoisted to handler scope and cleared in the
       // OUTER finally so renewal covers the WHOLE critical section — not just
       // actorThink, but executeActorActions + message persistence + turn/wakeup
@@ -1276,9 +1303,14 @@ export function startSessionThinkingWorker() {
 
         assertStillHoldLock()
 
-        // From here on we mutate external state (some non-idempotent). A lock
-        // loss past this point must NOT trigger a restore+requeue replay.
-        sideEffectsStarted = true
+        // Mark the turn "replay-unsafe" ONLY when it actually performs a
+        // non-idempotent write. A pure-reasoning turn with no actions runs
+        // executeActorActions as a no-op (and persists no message), so it stays
+        // replay-SAFE — losing the lock there must still restore+requeue its
+        // wakeups rather than drop them.
+        if (result.actions.length > 0) {
+          replayUnsafeStarted = true
+        }
         await executeActorActions(workspaceId, actorId, result.actions, {
           sessionId,
           turnId: turn.id,
@@ -1302,6 +1334,10 @@ export function startSessionThinkingWorker() {
         const hasMeta =
           Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined
         const messagePersistence = getAssistantSessionMessagePersistence(result)
+        // Persisting an assistant message is also a non-idempotent write.
+        if (messagePersistence.kind !== "none") {
+          replayUnsafeStarted = true
+        }
 
         assertStillHoldLock()
 
@@ -1416,34 +1452,43 @@ export function startSessionThinkingWorker() {
         // Lock lost: another worker now owns this session. How we recover
         // depends on whether we had begun applying side-effects:
         //
-        //  - NOT started: nothing external was committed, so RESTORE this turn's
+        //  - replay-SAFE (no non-idempotent write yet): RESTORE this turn's
         //    attached wakeups to `pending` (dropping them would silently lose
-        //    user-triggered wakeups — the new owner only reads `pending`) and
-        //    requeue so a worker re-drives them. Safe: no replay risk.
+        //    user-triggered wakeups — the new owner only reads `pending`).
         //
-        //  - ALREADY started: we may have committed NON-idempotent actions
-        //    (create_memory / rename_self / change_avatar / persisted messages).
-        //    Restoring+requeuing here would REPLAY them under the new owner. So
-        //    we DROP the wakeups instead and do NOT requeue — the actions this
-        //    turn already performed stand; we accept possibly not re-driving a
-        //    late-arriving wakeup over double-executing side-effects.
+        //  - replay-UNSAFE (already ran an action / persisted a message):
+        //    Restoring+requeuing the turn's OWN wakeups would REPLAY those
+        //    non-idempotent writes under the new owner. So we DROP this turn's
+        //    attached wakeups — the work it already did stands.
+        //
+        // In BOTH cases we then check for PENDING wakeups (these are LATE,
+        // independent wakeups that arrived during the turn and were never
+        // attached to it — enqueueSessionWakeup skips enqueuing a job while the
+        // session is running, relying on the owner to re-check at the end). If
+        // any remain pending we requeue so they get a driver. This never
+        // replays the current turn: in the unsafe case its own wakeups were
+        // dropped (not pending), so only the genuinely-unprocessed ones drive a
+        // re-run.
         //
         // Either way: mark the turn cancelled, do NOT write a terminal session
         // status (the new owner drives that).
         if (lockLostError) {
+          const wakeupAction: LockLossWakeupAction = replayUnsafeStarted
+            ? "drop"
+            : "restore"
           if (turn?.id) {
-            if (sideEffectsStarted) {
+            if (wakeupAction === "drop") {
               log.warn(
-                `Session ${sessionId} lost lock AFTER side-effects started; ` +
-                  `dropping wakeups (no replay) to avoid double-executing non-idempotent actions`
+                `Session ${sessionId} lost lock AFTER a non-idempotent write; ` +
+                  `dropping this turn's wakeups (no replay)`
               )
               await runCleanupStep(
-                `drop wakeups for turn ${turn.id} (lock lost mid-side-effects)`,
+                `drop wakeups for turn ${turn.id} (lock lost, replay-unsafe)`,
                 () => markTurnWakeupsDropped(turn.id)
               )
             } else {
               await runCleanupStep(
-                `restore wakeups for turn ${turn.id} (lock lost pre-side-effects)`,
+                `restore wakeups for turn ${turn.id} (lock lost, replay-safe)`,
                 () => restoreTurnWakeupsToPending(turn.id)
               )
             }
@@ -1453,16 +1498,20 @@ export function startSessionThinkingWorker() {
               })
             )
           }
-          // Only requeue when we restored wakeups (pre-side-effects). If we
-          // dropped them (post-side-effects), there is nothing safe to re-drive.
-          if (!sideEffectsStarted) {
-            const pendingAfterRestore = await getPendingWakeupCount(
-              sessionId
-            ).catch(() => 0)
-            if (pendingAfterRestore > 0) {
-              requeueAfterUnlock = true
-              requeueTrigger = "system_interrupt"
-            }
+          // Requeue decision (shared, unit-tested policy): requeue iff wakeups
+          // remain pending AFTER the restore/drop above. The current turn's
+          // wakeups are no longer pending in the unsafe case (dropped), so a
+          // re-run cannot replay it; it only drives genuinely-unprocessed input.
+          const pendingAfterRecovery = await getPendingWakeupCount(
+            sessionId
+          ).catch(() => 0)
+          const recovery = decideLockLossRecovery({
+            replayUnsafeStarted,
+            pendingAfterRecovery,
+          })
+          if (recovery.requeue) {
+            requeueAfterUnlock = true
+            requeueTrigger = "system_interrupt"
           }
           await runCleanupStep(
             `shutdown MCP tools for session ${sessionId}`,

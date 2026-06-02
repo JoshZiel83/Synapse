@@ -1,8 +1,11 @@
-import test from "node:test"
+import test, { after } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { sql } from "kysely"
-import { redis } from "../infrastructure/redis/index.js"
+import {
+  redis,
+  shutdownRedisConnections,
+} from "../infrastructure/redis/index.js"
 import {
   acquireLock,
   renewLock,
@@ -15,23 +18,30 @@ import {
   restoreTurnWakeupsToPending,
   getPendingWakeupCount,
 } from "../modules/session/runtime.js"
+import { decideLockLossRecovery } from "./session-thinking.js"
 
 /**
  * Two-worker concurrency integration test for the session lock + wakeup
  * recovery primitives that drive the session-thinking worker. Exercises the
  * REAL ioredis lock (SET NX PX + Lua CAS) and the REAL DB wakeup lifecycle —
  * the exact mechanisms that protect a session from being processed by two
- * workers at once.
+ * workers at once — PLUS the worker's lock-loss recovery POLICY
+ * (decideLockLossRecovery), so the replay-safe/unsafe + requeue decisions are
+ * directly covered (not just the underlying restore/drop primitives).
  *
  * Mirrors the worker's contract:
  *   - only one worker may hold a session's lock at a time;
  *   - a worker that lost the lock (renew → false) must NOT delete the new
  *     owner's lock (fenced release);
- *   - on lock loss BEFORE side-effects, the turn's wakeups are restored to
- *     pending so the new owner re-drives them;
- *   - on lock loss AFTER side-effects, the wakeups are dropped (no replay of
- *     non-idempotent actions).
+ *   - replay-SAFE lock loss restores wakeups → pending; replay-UNSAFE drops
+ *     them; either way it requeues iff wakeups remain pending.
  */
+
+// This suite materializes the shared ioredis singleton; close it so the test
+// process exits instead of hanging on the open connection.
+after(async () => {
+  await shutdownRedisConnections().catch(() => {})
+})
 
 const lockKey = (sessionId: string) => `synapse:session:lock:${sessionId}`
 const TTL = 30_000
@@ -145,29 +155,58 @@ async function insertPendingWakeup(db: any, sessionId: string) {
   )
 }
 
-test("lock lost BEFORE side-effects → wakeups restored to pending (new owner re-drives)", async () => {
+/**
+ * Apply the worker's lock-loss recovery policy end-to-end against the real DB:
+ * pick restore/drop via decideLockLossRecovery, apply it, then re-read pending
+ * and compute the requeue decision the same way the handler does.
+ */
+async function runLockLossRecovery(
+  sessionId: string,
+  turnId: string,
+  replayUnsafeStarted: boolean
+): Promise<{ wakeupAction: string; requeue: boolean }> {
+  const action = decideLockLossRecovery({
+    replayUnsafeStarted,
+    pendingAfterRecovery: 0, // provisional; recomputed after applying
+  }).wakeupAction
+  if (action === "drop") {
+    await markTurnWakeupsDropped(turnId)
+  } else {
+    await restoreTurnWakeupsToPending(turnId)
+  }
+  const pendingAfterRecovery = await getPendingWakeupCount(sessionId)
+  const recovery = decideLockLossRecovery({
+    replayUnsafeStarted,
+    pendingAfterRecovery,
+  })
+  return { wakeupAction: action, requeue: recovery.requeue }
+}
+
+test("lock lost while REPLAY-SAFE → restore wakeups + requeue (new owner re-drives)", async () => {
   await withTestDb(async () => {
     const { db } = await import("../infrastructure/database/kysely.js")
     const sessionId = await seedSession(db)
     await insertPendingWakeup(db, sessionId)
     await insertPendingWakeup(db, sessionId)
 
-    // Worker A claims the turn (attaches the pending wakeups).
     const turnId = randomUUID()
     await attachPendingWakeupsToTurn(sessionId, turnId)
     assert.equal(await getPendingWakeupCount(sessionId), 0)
 
-    // A loses the lock before any side-effects → restore path.
-    await restoreTurnWakeupsToPending(turnId)
+    const r = await runLockLossRecovery(sessionId, turnId, false)
+    assert.equal(r.wakeupAction, "restore")
     assert.equal(
       await getPendingWakeupCount(sessionId),
       2,
-      "new owner must see the 2 wakeups as pending again"
+      "restored wakeups must be pending again"
     )
+    assert.equal(r.requeue, true, "must requeue so the new owner drives them")
   })
 })
 
-test("lock lost AFTER side-effects → wakeups dropped (no non-idempotent replay)", async () => {
+test("pure-reasoning turn (no actions/message) is REPLAY-SAFE → wakeups restored not dropped", async () => {
+  // Regression for the bug where sideEffectsStarted flipped true even with zero
+  // actions, dropping a reasoning-only turn's input wakeups.
   await withTestDb(async () => {
     const { db } = await import("../infrastructure/database/kysely.js")
     const sessionId = await seedSession(db)
@@ -176,12 +215,63 @@ test("lock lost AFTER side-effects → wakeups dropped (no non-idempotent replay
     const turnId = randomUUID()
     await attachPendingWakeupsToTurn(sessionId, turnId)
 
-    // A had already started side-effects when it lost the lock → drop path.
-    await markTurnWakeupsDropped(turnId)
+    // replayUnsafeStarted stays false for a no-action, no-message turn.
+    const r = await runLockLossRecovery(sessionId, turnId, false)
+    assert.equal(r.wakeupAction, "restore")
+    assert.equal(
+      await getPendingWakeupCount(sessionId),
+      1,
+      "reasoning-only turn must NOT lose its input wakeup"
+    )
+    assert.equal(r.requeue, true)
+  })
+})
+
+test("lock lost while REPLAY-UNSAFE → drop this turn's wakeups (no replay)", async () => {
+  await withTestDb(async () => {
+    const { db } = await import("../infrastructure/database/kysely.js")
+    const sessionId = await seedSession(db)
+    await insertPendingWakeup(db, sessionId)
+
+    const turnId = randomUUID()
+    await attachPendingWakeupsToTurn(sessionId, turnId)
+
+    const r = await runLockLossRecovery(sessionId, turnId, true)
+    assert.equal(r.wakeupAction, "drop")
     assert.equal(
       await getPendingWakeupCount(sessionId),
       0,
-      "post-side-effect loss must NOT restore wakeups (would replay actions)"
+      "replay-unsafe loss must NOT restore this turn's wakeups"
+    )
+    assert.equal(r.requeue, false, "nothing else pending → no requeue")
+  })
+})
+
+test("REPLAY-UNSAFE loss still requeues for LATE independent pending wakeups", async () => {
+  // Regression for the bug where post-side-effect loss skipped the pending
+  // check, stranding a message that arrived mid-turn (never attached to it).
+  await withTestDb(async () => {
+    const { db } = await import("../infrastructure/database/kysely.js")
+    const sessionId = await seedSession(db)
+    await insertPendingWakeup(db, sessionId) // this turn's input
+
+    const turnId = randomUUID()
+    await attachPendingWakeupsToTurn(sessionId, turnId)
+
+    // A LATE wakeup arrives mid-turn (not attached to this turn).
+    await insertPendingWakeup(db, sessionId)
+
+    const r = await runLockLossRecovery(sessionId, turnId, true)
+    assert.equal(r.wakeupAction, "drop") // this turn's own wakeup dropped
+    assert.equal(
+      await getPendingWakeupCount(sessionId),
+      1,
+      "the late independent wakeup is still pending"
+    )
+    assert.equal(
+      r.requeue,
+      true,
+      "must requeue to drive the late wakeup — without replaying this turn"
     )
   })
 })
