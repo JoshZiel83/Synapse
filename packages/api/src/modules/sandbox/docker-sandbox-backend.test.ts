@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import {
   createDockerSandboxBackend,
+  createDockerReconnectBackend,
   reapDockerSandboxOrphans,
 } from "./docker-sandbox-backend.js"
 import { SandboxBackendError, type SandboxSpec } from "./sandbox-backend.js"
@@ -153,6 +154,7 @@ test("docker create(): tunnel=frp injects SYNAPSE_TUNNEL_* env", async () => {
     ...baseOpts,
     tunnel: "frp",
     tunnelAuthToken: "tok-123",
+    tunnelInternalBaseUrl: "http://my-edge.example:8080",
     spawnImpl,
     createPairing: fakePairing(),
     pollBootstrapConsumed: async () => ({
@@ -173,6 +175,101 @@ test("docker create(): tunnel=frp injects SYNAPSE_TUNNEL_* env", async () => {
   assert.ok(
     runArgs.some((a) => a === "SYNAPSE_TUNNEL_VHOST_HOST=tunnel-edge"),
     "vhost pinned to tunnel-edge"
+  )
+  assert.ok(
+    runArgs.some(
+      (a) =>
+        a === "SYNAPSE_TUNNEL_INTERNAL_BASE_URL=http://my-edge.example:8080"
+    ),
+    "internal base url passed through for a non-default edge"
+  )
+})
+
+test("docker create(): omits SYNAPSE_TUNNEL_INTERNAL_BASE_URL when not configured", async () => {
+  const { spawnImpl, calls } = fakeDocker((args) => {
+    if (args[0] === "inspect") return { code: 1 }
+    if (args[0] === "run") return { stdout: "cid\n" }
+    return { stdout: "" }
+  })
+  const backend = createDockerSandboxBackend({
+    ...baseOpts,
+    tunnel: "frp",
+    tunnelAuthToken: "tok-123",
+    spawnImpl,
+    createPairing: fakePairing(),
+    pollBootstrapConsumed: async () => ({
+      deviceId: "d",
+      deviceServiceId: "s",
+    }),
+  })
+  await backend.create(baseSpec())
+  const runArgs = calls.find((c) => c[0] === "run")!
+  assert.ok(
+    !runArgs.some((a) => a.startsWith("SYNAPSE_TUNNEL_INTERNAL_BASE_URL=")),
+    "no internal-base-url env when unset (adapter falls back to the default)"
+  )
+})
+
+// ── R4 #2: a connect-only docker backend needs no provision env.
+
+test("createDockerReconnectBackend: connect + kill by container id (no provision opts)", async () => {
+  const seen: string[][] = []
+  const { spawnImpl } = fakeDocker((args) => {
+    seen.push(args)
+    if (args[0] === "inspect") return { stdout: "true\n" }
+    return { stdout: "" }
+  })
+  // Note: NO image/network/volume/frp opts — just the spawn seam.
+  const backend = createDockerReconnectBackend({ spawnImpl })
+  const handle = await backend.connect({
+    backend: "docker",
+    sandboxId: "sess-reconnect",
+    sandboxResourceId: "container-reconnect",
+    deviceId: "dev-x",
+  })
+  assert.equal(await handle.isRunning(), true)
+  await handle.kill()
+  assert.ok(
+    seen.some((c) => c[0] === "stop" && c.includes("container-reconnect")),
+    "docker stop called via reconnect backend"
+  )
+  assert.ok(
+    seen.some((c) => c[0] === "rm" && c.includes("container-reconnect")),
+    "docker rm called via reconnect backend"
+  )
+})
+
+test("createDockerReconnectBackend: create() is unsupported (connect-only)", async () => {
+  const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
+  const backend = createDockerReconnectBackend({ spawnImpl })
+  await assert.rejects(
+    () => backend.create(baseSpec()),
+    /connect-only|unsupported/
+  )
+})
+
+test("createDockerReconnectBackend: rejects a non-docker ref + a ref without container id", async () => {
+  const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
+  const backend = createDockerReconnectBackend({ spawnImpl })
+  await assert.rejects(
+    () =>
+      backend.connect({
+        backend: "local",
+        sandboxId: "s",
+        sandboxResourceId: "c",
+        deviceId: "d",
+      }),
+    SandboxBackendError
+  )
+  await assert.rejects(
+    () =>
+      backend.connect({
+        backend: "docker",
+        sandboxId: "s",
+        sandboxResourceId: "",
+        deviceId: "d",
+      }),
+    /no container id/
   )
 })
 

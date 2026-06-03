@@ -355,6 +355,14 @@ Notes:
   remount the volume or change `STORAGE_DIR` so the storage dir no longer sits
   under the mount point, set `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT` accordingly —
   otherwise provisioning fails loudly rather than mounting the wrong directory.
+- **Custom tunnel edge:** the sandbox runtime registers its dispatch endpoint as
+  `<internal-base>/d/<token>`, and the server only accepts an `internal_url`
+  whose origin matches `SYNAPSE_DEVICE_TUNNEL_EDGE_URL`. Both default to the
+  reference `http://tunnel-edge:8080`. If you run the frp edge under a different
+  host/port, set `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` (the docker backend forwards it
+  to the container as the internal base automatically) **and**
+  `SYNAPSE_TUNNEL_VHOST_HOST` so the frps Host route matches — otherwise
+  `device.tunnel.up` is rejected by the origin check.
 
 ## 9. Troubleshooting
 

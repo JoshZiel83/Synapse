@@ -47,6 +47,13 @@ export interface DockerSandboxBackendOptions {
   tunnelServerPort?: string
   tunnelAuthToken?: string
   tunnelVhostHost?: string
+  /**
+   * API-reachable base URL the container's runtime registers as its internalUrl
+   * (must match the server's SYNAPSE_DEVICE_TUNNEL_EDGE_URL origin). When unset
+   * the runtime's frp adapter defaults to http://tunnel-edge:8080. Pass this for
+   * any non-default edge so registration isn't rejected by the origin check.
+   */
+  tunnelInternalBaseUrl?: string
   /** Max ms to wait for the container to consume its bootstrap token. */
   bootstrapTimeoutMs?: number
   /** UID to run the container as (must match the API's uid for shared-volume
@@ -219,6 +226,53 @@ export function createDockerSandboxBackend(
   }
 }
 
+/**
+ * A CONNECT-ONLY docker backend for teardown / cross-process kill / liveness.
+ * Unlike createDockerSandboxBackend it needs NONE of the provision env (image /
+ * network / volume / frp token) — connect()/isRunning()/kill() only shell out to
+ * `docker inspect|stop|rm` against the persisted container id. This is what
+ * teardown + isSandboxRuntimeAlive use so a docker sandbox is still reapable
+ * after the API has fallen back to the local backend, disabled sandboxes, or
+ * lost its FRP_SHARED_TOKEN — none of which should strand a running container.
+ *
+ * create() is intentionally unsupported (throws): a reconnect backend never
+ * stands a new sandbox up.
+ */
+export function createDockerReconnectBackend(
+  opts: { spawnImpl?: SpawnImpl } = {}
+): SandboxBackend {
+  const spawnImpl = opts.spawnImpl ?? nodeSpawn
+  const docker = (args: string[]) => runDocker(spawnImpl, args)
+  return {
+    kind: "docker",
+    async create(): Promise<SandboxHandle> {
+      throw new SandboxBackendError(
+        "createDockerReconnectBackend.create() is unsupported — it is connect-only"
+      )
+    },
+    async connect(ref: SandboxRef): Promise<SandboxHandle> {
+      if (ref.backend !== "docker") {
+        throw new SandboxBackendError(
+          `docker backend cannot connect to a ${ref.backend} sandbox`
+        )
+      }
+      if (!ref.sandboxResourceId) {
+        throw new SandboxBackendError(
+          "docker connect: SandboxRef has no container id (sandboxResourceId)"
+        )
+      }
+      return makeDockerHandle({
+        docker,
+        sessionId: ref.sandboxId,
+        containerId: ref.sandboxResourceId,
+        deviceId: ref.deviceId,
+        deviceServiceId: ref.deviceServiceId ?? "",
+        pairingSessionId: ref.pairingSessionId,
+      })
+    },
+  }
+}
+
 function buildDockerRunArgs(params: {
   opts: DockerSandboxBackendOptions
   spec: SandboxSpec
@@ -243,9 +297,13 @@ function buildDockerRunArgs(params: {
     env.SYNAPSE_TUNNEL_SERVER_PORT = opts.tunnelServerPort ?? "7000"
     if (opts.tunnelAuthToken)
       env.SYNAPSE_TUNNEL_AUTH_TOKEN = opts.tunnelAuthToken
-    // The handle internalUrl is hardcoded to tunnel-edge:8080, so the vhost
-    // host must be tunnel-edge for frps Host-routing to match.
+    // The frps Host route matches on vhostHost, and the runtime registers an
+    // internalUrl whose origin the server validates against its own
+    // SYNAPSE_DEVICE_TUNNEL_EDGE_URL. Both default to the reference tunnel-edge
+    // layout; pass non-default values through so a custom edge isn't rejected.
     env.SYNAPSE_TUNNEL_VHOST_HOST = opts.tunnelVhostHost ?? "tunnel-edge"
+    if (opts.tunnelInternalBaseUrl)
+      env.SYNAPSE_TUNNEL_INTERNAL_BASE_URL = opts.tunnelInternalBaseUrl
   } else {
     // Defensive: the docker backend is selected with tunnel=frp only (enforced
     // by dockerBackendOptionsFromEnv). A 'none' here would boot a container the

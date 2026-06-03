@@ -549,6 +549,12 @@ async function main() {
       const tunnelRegistrationToken =
         getFlag(args.flags, "tunnel-registration-token") ??
         process.env.SYNAPSE_TUNNEL_REGISTRATION_TOKEN
+      // API-reachable base URL the server registers as internalUrl. Must match
+      // the server's SYNAPSE_DEVICE_TUNNEL_EDGE_URL origin. Optional — the
+      // adapter defaults to http://tunnel-edge:8080 (reference compose).
+      const tunnelInternalBaseUrl =
+        getFlag(args.flags, "tunnel-internal-base-url") ??
+        process.env.SYNAPSE_TUNNEL_INTERNAL_BASE_URL
       const hasFrpFacts = Boolean(
         tunnelServerAddr &&
         tunnelServerPortRaw &&
@@ -604,6 +610,7 @@ async function main() {
             serverPort: tunnelServerPort,
             authToken: tunnelAuthToken!,
             vhostHost: tunnelVhost!,
+            internalBaseUrl: tunnelInternalBaseUrl,
             frpcPath: getFlag(args.flags, "frpc-path") ?? "frpc",
             onUnexpectedExit: ({ code, signal }) => {
               runtimeRef.handle?.notifyTunnelDown(

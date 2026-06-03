@@ -58,6 +58,7 @@ import {
 } from "./sandbox-backend.js"
 import {
   createDockerSandboxBackend,
+  createDockerReconnectBackend,
   reapDockerSandboxOrphans,
   type DockerSandboxBackendOptions,
 } from "./docker-sandbox-backend.js"
@@ -168,6 +169,11 @@ export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
     tunnelServerPort: process.env.SYNAPSE_TUNNEL_SERVER_PORT?.trim(),
     tunnelAuthToken,
     tunnelVhostHost: process.env.SYNAPSE_TUNNEL_VHOST_HOST?.trim(),
+    // The container registers this as its internalUrl; the server validates the
+    // origin against SYNAPSE_DEVICE_TUNNEL_EDGE_URL. Default to that same env so
+    // a custom edge URL is honored end-to-end (origins match by construction);
+    // unset → the runtime adapter falls back to http://tunnel-edge:8080.
+    tunnelInternalBaseUrl: process.env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim(),
     runAsUid: process.env.SYNAPSE_SANDBOX_RUN_AS_UID
       ? Number(process.env.SYNAPSE_SANDBOX_RUN_AS_UID)
       : undefined,
@@ -182,12 +188,17 @@ interface SessionContext {
 
 /**
  * A backend usable for `connect()` only (teardown / cross-process kill), built
- * from the persisted SandboxRef kind. `create()` is never called on these, so
- * the local backend's pairing dep is a throwing stub.
+ * from the persisted SandboxRef kind. `create()` is never called on these.
+ *
+ * Crucially this must NOT depend on the current provision env: a docker sandbox
+ * has to stay reapable even after the API fell back to the local backend, had
+ * sandboxes disabled, or lost its FRP_SHARED_TOKEN — so we use the connect-only
+ * docker backend (docker CLI + persisted container id, no image/network/volume/
+ * frp config), never createDockerSandboxBackend(dockerBackendOptionsFromEnv()).
  */
 function backendForKind(kind: SandboxBackendKind): SandboxBackend {
   if (kind === "docker") {
-    return createDockerSandboxBackend(dockerBackendOptionsFromEnv())
+    return createDockerReconnectBackend()
   }
   return createLocalSandboxBackend({
     hostProvider: createLocalHostProvider(),
@@ -318,11 +329,25 @@ export async function reconcileSandboxes(): Promise<void> {
   }
 
   // Reap label-only Docker orphans (the crash window the DB sweep above can't
-  // see). Only meaningful when the docker backend is active; the local backend
-  // has no containers.
-  if (
+  // see). We must NOT gate this solely on the CURRENT env being docker: a host
+  // that ran docker sandboxes and then fell back to local (or temporarily lost
+  // its frp/token env) would otherwise leak every container. Fire when the
+  // current backend is docker OR the DB shows this host has ever run a docker
+  // sandbox (any file_mounts row with sandbox_backend='docker'). Pure-local
+  // deployments (no such row, env=local) skip the docker call entirely.
+  const envIsDocker =
     (process.env.SYNAPSE_SANDBOX_BACKEND || "local").toLowerCase() === "docker"
-  ) {
+  const hasDockerMountHistory = envIsDocker
+    ? true
+    : Boolean(
+        await db
+          .selectFrom("file_mounts")
+          .select("id")
+          .where("sandbox_backend", "=", "docker")
+          .limit(1)
+          .executeTakeFirst()
+      )
+  if (hasDockerMountHistory) {
     try {
       const { removed } = await reapDockerSandboxOrphans(liveSessionIds)
       if (removed.length > 0) {
@@ -502,11 +527,48 @@ export async function provisionSandbox(
   // (the materialized live dirs are preserved across teardown's commit path).
   const allActive =
     existing.length > 0 && existing.every((m) => m.status === "active")
+  // Fast path also requires a DISPATCHABLE tunnel endpoint, not just a live
+  // runtime. After an API restart the in-memory DeviceTunnelRegistry is empty
+  // even though the runtime/container is still alive and reconnecting over the
+  // control-plane; returning here would hand back a sandbox whose every
+  // dispatchSyncTool call fails with no_tunnel_endpoint. So when the runtime is
+  // alive we additionally wait (briefly) for the device_runtime service to
+  // re-register its endpoint. If it never does, we DON'T fast-path — we fall
+  // through to the stale-mount teardown + re-provision below.
+  let fastPathOk = false
   if (
     existing.length > 0 &&
     allActive &&
     (await isSandboxRuntimeAlive(existing))
   ) {
+    const deviceIdForEndpoint =
+      existing.find((m) => m.device_id)?.device_id ?? ""
+    const serviceId = deviceIdForEndpoint
+      ? await resolveDeviceRuntimeServiceId(deviceIdForEndpoint)
+      : null
+    if (serviceId) {
+      const tunnelTimeoutMs = options.tunnelTimeoutMs ?? 30_000
+      if (tunnelTimeoutMs <= 0) {
+        // Tests opt out of the endpoint wait entirely.
+        fastPathOk = true
+      } else {
+        try {
+          await waitForTunnelEndpoint(serviceId, { timeoutMs: tunnelTimeoutMs })
+          fastPathOk = true
+        } catch {
+          // Endpoint never re-registered → the live runtime is unreachable for
+          // dispatch. Fall through to teardown + re-provision (a fresh sandbox
+          // that DOES register an endpoint before going active).
+          console.warn(
+            `[sandbox] fast path: session ${sessionId} runtime is alive but no tunnel ` +
+              `endpoint re-registered within ${tunnelTimeoutMs}ms; tearing down + re-provisioning`
+          )
+          fastPathOk = false
+        }
+      }
+    }
+  }
+  if (fastPathOk) {
     // Already provisioned this session — report the ACTUAL state, not a
     // hardcoded false. Use the SAME source of truth as the cold provision path
     // (resolveDeviceBuiltinIds → commandlineCapabilityId != null): an ACTIVE
@@ -577,13 +639,14 @@ export async function provisionSandbox(
     }
   }
 
-  // There are live mounts but they're not all-active-and-alive (a prior provision
-  // crashed mid-flight, or the runtime died behind active mounts). Recover by
-  // tearing the stale sandbox down first — teardown commits any dirty state,
-  // kills the (possibly dead) runtime via the persisted backend, and closes the
-  // mounts — so the fresh provision below starts from a clean slate. Live dirs
-  // are preserved by teardown's commit path; their content is re-materialized
-  // from CAS on re-provision.
+  // There are live mounts but the fast path declined them: a prior provision
+  // crashed mid-flight, the runtime died behind active mounts, OR the runtime is
+  // alive but never re-registered a dispatchable tunnel endpoint (post-restart).
+  // Recover by tearing the stale sandbox down first — teardown commits any dirty
+  // state, kills the (possibly dead) runtime via the persisted backend, and
+  // closes the mounts — so the fresh provision below starts from a clean slate.
+  // Live dirs are preserved by teardown's commit path; their content is
+  // re-materialized from CAS on re-provision.
   if (existing.length > 0) {
     console.warn(
       `[sandbox] session ${sessionId} has ${existing.length} stale/dead mount(s); tearing down before re-provision`
@@ -856,6 +919,26 @@ async function waitForTunnelEndpoint(
     await new Promise((r) => setTimeout(r, pollMs))
   }
 }
+
+/**
+ * Resolve the device_runtime service id for a device (the id dispatchSyncTool
+ * keys the tunnel registry on). Returns null if the device has no device_runtime
+ * service yet. Mirrors the lookup the docker bootstrap poller + dispatch use.
+ */
+async function resolveDeviceRuntimeServiceId(
+  deviceId: string
+): Promise<string | null> {
+  const svc = await db
+    .selectFrom("device_services")
+    .select("id")
+    .where("device_id", "=", deviceId)
+    .where("service_kind", "=", "device_runtime")
+    .orderBy("created_at", "desc")
+    .limit(1)
+    .executeTakeFirst()
+  return (svc?.id as string | undefined) ?? null
+}
+
 export interface RefreshDeps {
   dbh: Executor
   runInTx: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T>
