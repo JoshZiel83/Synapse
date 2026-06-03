@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify"
 import {
-  AUTH_SESSION_COOKIE_NAME,
   WS_AUTH_TIMEOUT,
   WS_HEARTBEAT_INTERVAL,
   type RealtimeAsrClientMessage,
   type RealtimeAsrSocketEvent,
 } from "@synapse/shared"
-import { authenticateSessionToken } from "../../modules/auth/service.js"
+import {
+  authenticateSessionFromHeaders,
+  authenticateSessionToken,
+} from "../../modules/auth/service.js"
 import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js"
 import { VolcengineRealtimeAsrSession } from "../../modules/asr/service.js"
 import { isShuttingDown } from "../shutdown/state.js"
@@ -45,19 +47,6 @@ function toAudioBuffer(raw: unknown) {
   }
 
   return Buffer.from(raw as Uint8Array)
-}
-
-function parseCookieHeader(cookieHeader: string | string[] | undefined) {
-  const source = Array.isArray(cookieHeader)
-    ? cookieHeader.join(";")
-    : cookieHeader || ""
-  return source.split(";").reduce<Record<string, string>>((acc, part) => {
-    const [key, ...rest] = part.split("=")
-    const trimmedKey = key?.trim()
-    if (!trimmedKey) return acc
-    acc[trimmedKey] = decodeURIComponent(rest.join("=").trim())
-    return acc
-  }, {})
 }
 
 function safeSendAsrEvent(clientId: string, event: RealtimeAsrSocketEvent) {
@@ -151,10 +140,6 @@ export function setupAsrWebSocket(app: FastifyInstance) {
       }
     }, WS_AUTH_TIMEOUT)
 
-    const cookieToken = parseCookieHeader(req.headers.cookie)[
-      AUTH_SESSION_COOKIE_NAME
-    ]
-
     socket.on("message", async (raw: any, isBinary: boolean) => {
       if (isBinary) {
         if (!client.authenticated) {
@@ -202,25 +187,25 @@ export function setupAsrWebSocket(app: FastifyInstance) {
       }
 
       if (message.type === "auth") {
-        const token =
+        const frameToken =
           typeof message.token === "string" && message.token.trim().length > 0
             ? message.token.trim()
-            : cookieToken
+            : ""
         const workspaceId =
           typeof message.workspaceId === "string"
             ? message.workspaceId.trim()
             : ""
 
-        if (!token) {
-          closeAsrClient(clientId, "No session provided")
-          return
-        }
         if (!workspaceId) {
           closeAsrClient(clientId, "workspaceId is required")
           return
         }
 
-        const authenticated = await authenticateSessionToken(token)
+        // Two auth paths (see websocket/index.ts): native bearer token in the
+        // auth frame, or the signed session cookie on the upgrade headers.
+        const authenticated = frameToken
+          ? await authenticateSessionToken(frameToken)
+          : await authenticateSessionFromHeaders(req.headers)
         if (!authenticated) {
           closeAsrClient(clientId, "Invalid or expired session")
           return

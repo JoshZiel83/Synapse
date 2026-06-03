@@ -11,6 +11,7 @@ import { createLogger } from "../../infrastructure/logger/index.js"
 import { createGeneratedUserAvatarFile } from "../avatar/service.js"
 import { AUTH_SESSION_MAX_AGE_SECONDS } from "@synapse/shared"
 import { disconnectSocketsForSession } from "../../infrastructure/websocket/auth-session-registry.js"
+import { deviceSessionCookie } from "./device-session-cookie.js"
 
 const log = createLogger("auth.better-auth")
 
@@ -362,6 +363,7 @@ export const auth = betterAuth({
   plugins: [
     bearer(),
     expo(),
+    deviceSessionCookie(),
     deviceAuthorization({
       expiresIn: "10m",
       interval: "5s",
