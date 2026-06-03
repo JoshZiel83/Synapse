@@ -300,10 +300,21 @@ an isolated runtime. Two backends, selected by `SYNAPSE_SANDBOX_BACKEND`:
 
 - **`local`** (default) — a same-host `device-runtime` child process. Command
   confinement needs `bwrap` on the API host; absent it, the sandbox is
-  file-only (fail-closed).
+  file-only (fail-closed). The runtime exposes its MCP host to the API over a
+  **direct loopback** endpoint (`--tunnel-mode=noop` → `http://127.0.0.1:<port>`);
+  the server accepts that loopback URL only for a live local sandbox (no frpc).
 - **`docker`** — the per-session `device-runtime` runs in its own cloud-sandbox
   container (DooD via the host docker socket), reached over the frp tunnel.
   Command confinement (bwrap) and network isolation live in that container.
+  Because the container is on an internal-only network with no co-located
+  loopback path, the docker backend **requires** `SYNAPSE_SANDBOX_TUNNEL=frp`
+  and `FRP_SHARED_TOKEN`; any other value fails fast at provision rather than
+  booting a sandbox whose tools can never be dispatched.
+
+In both cases provisioning waits for the device to register its tunnel endpoint
+(`device.tunnel.up`) before activating the sandbox or granting tools — a sandbox
+that never becomes dispatchable fails provisioning instead of silently looking
+"online" while every tool call returns `no_tunnel_endpoint`.
 
 Enable the docker backend:
 

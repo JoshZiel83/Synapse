@@ -22,6 +22,7 @@ import { createCuaBuiltin } from "./builtins/cua.js"
 import { createBrowserBuiltin } from "./builtins/browser.js"
 import { createChromeDevtoolsMcpBuiltin } from "./builtins/chrome-devtools-mcp.js"
 import { createFrpTunnelAdapter } from "./tunnel/frp.js"
+import { createNoopTunnelAdapter } from "./tunnel/noop.js"
 import {
   defaultPrestageDirs,
   installBundles,
@@ -517,11 +518,22 @@ async function main() {
           process.env.SYNAPSE_DEVICE_TRUSTED_SERVER_KEYS ??
           ""
       )
-      // Auto-wire the frp tunnel when the operator provides the edge config.
-      // Without this, the runtime would connect to the control-plane but
-      // never register a tunnel endpoint, and every dispatched tool call
-      // would fail with no_tunnel_endpoint. The four flags can all come
-      // from env (SYNAPSE_TUNNEL_*) so packaged binaries don't need flags.
+      // Wire the tunnel that exposes the MCP host's loopback port to the API.
+      // WITHOUT a tunnel the runtime connects to the control-plane but never
+      // registers a tunnel endpoint, so every dispatched tool call fails with
+      // no_tunnel_endpoint — the runtime LOOKS online but no tool can run.
+      //
+      // Mode is explicit (--tunnel-mode / SYNAPSE_TUNNEL_MODE), one of:
+      //   frp  — reverse-tunnel via frpc to the operator's frp edge (the
+      //          production cloud/docker path). Requires the four tunnel-* facts.
+      //   noop — return a direct loopback URL (http://127.0.0.1:<port>) for an
+      //          API co-located with the runtime (the local sandbox backend).
+      //          NO frpc; the server only accepts this for live local sandboxes.
+      //   none — register no endpoint (control-plane only; catalog visible but
+      //          no tool dispatch). The honest default for a plain `run`.
+      // Default is inferred for backward-compat: if the four frp facts are all
+      // present, frp; otherwise none. Auto-noop is deliberately NOT a default —
+      // a silent loopback would mask a missing-frp misconfiguration in prod.
       const tunnelServerAddr =
         getFlag(args.flags, "tunnel-server-addr") ??
         process.env.SYNAPSE_TUNNEL_SERVER_ADDR
@@ -537,6 +549,27 @@ async function main() {
       const tunnelRegistrationToken =
         getFlag(args.flags, "tunnel-registration-token") ??
         process.env.SYNAPSE_TUNNEL_REGISTRATION_TOKEN
+      const hasFrpFacts = Boolean(
+        tunnelServerAddr &&
+        tunnelServerPortRaw &&
+        tunnelAuthToken &&
+        tunnelVhost
+      )
+      const tunnelModeRaw = (
+        getFlag(args.flags, "tunnel-mode") ??
+        process.env.SYNAPSE_TUNNEL_MODE ??
+        (hasFrpFacts ? "frp" : "none")
+      ).toLowerCase()
+      if (
+        tunnelModeRaw !== "frp" &&
+        tunnelModeRaw !== "noop" &&
+        tunnelModeRaw !== "none"
+      ) {
+        throw new Error(
+          `--tunnel-mode must be 'frp', 'noop', or 'none' (got '${tunnelModeRaw}')`
+        )
+      }
+      const tunnelMode = tunnelModeRaw as "frp" | "noop" | "none"
       let tunnel: { adapter: any; registrationToken: string } | undefined
       // Server-issued tunnel path token (delivered via device.hello ack)
       // takes precedence; the env-supplied registrationToken is a fallback
@@ -552,31 +585,49 @@ async function main() {
       const runtimeRef: {
         handle: { notifyTunnelDown(reason: string): void } | null
       } = { handle: null }
-      if (
-        tunnelServerAddr &&
-        tunnelServerPortRaw &&
-        tunnelAuthToken &&
-        tunnelVhost
-      ) {
-        const tunnelServerPort = Number.parseInt(tunnelServerPortRaw, 10)
-        if (Number.isFinite(tunnelServerPort)) {
-          tunnel = {
-            adapter: createFrpTunnelAdapter({
-              serverAddr: tunnelServerAddr,
-              serverPort: tunnelServerPort,
-              authToken: tunnelAuthToken,
-              vhostHost: tunnelVhost,
-              frpcPath: getFlag(args.flags, "frpc-path") ?? "frpc",
-              onUnexpectedExit: ({ code, signal }) => {
-                runtimeRef.handle?.notifyTunnelDown(
-                  `frpc exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`
-                )
-              },
-            }),
-            registrationToken: tunnelRegistrationToken ?? "",
-          }
+      if (tunnelMode === "frp") {
+        if (!hasFrpFacts) {
+          throw new Error(
+            "--tunnel-mode=frp requires tunnel-server-addr, tunnel-server-port, " +
+              "tunnel-auth-token and tunnel-vhost (flags or SYNAPSE_TUNNEL_* env)"
+          )
+        }
+        const tunnelServerPort = Number.parseInt(tunnelServerPortRaw!, 10)
+        if (!Number.isFinite(tunnelServerPort)) {
+          throw new Error(
+            `--tunnel-server-port must be a number (got '${tunnelServerPortRaw}')`
+          )
+        }
+        tunnel = {
+          adapter: createFrpTunnelAdapter({
+            serverAddr: tunnelServerAddr!,
+            serverPort: tunnelServerPort,
+            authToken: tunnelAuthToken!,
+            vhostHost: tunnelVhost!,
+            frpcPath: getFlag(args.flags, "frpc-path") ?? "frpc",
+            onUnexpectedExit: ({ code, signal }) => {
+              runtimeRef.handle?.notifyTunnelDown(
+                `frpc exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`
+              )
+            },
+          }),
+          registrationToken: tunnelRegistrationToken ?? "",
+        }
+      } else if (tunnelMode === "noop") {
+        // Direct loopback for a co-located API (local sandbox backend). The
+        // loopbackHost lets a docker-internal name be substituted if ever
+        // needed; default 127.0.0.1 is what the server's local-sandbox SSRF
+        // branch accepts.
+        tunnel = {
+          adapter: createNoopTunnelAdapter({
+            loopbackHost:
+              getFlag(args.flags, "tunnel-loopback-host") ??
+              process.env.SYNAPSE_TUNNEL_LOOPBACK_HOST,
+          }),
+          registrationToken: tunnelRegistrationToken ?? "",
         }
       }
+      // tunnelMode === "none" → tunnel stays undefined (no endpoint registered).
       const handle = await runDeviceRuntime({
         serverOrigin,
         broker,

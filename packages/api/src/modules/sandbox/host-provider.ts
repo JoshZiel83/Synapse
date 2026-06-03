@@ -168,6 +168,13 @@ export function createLocalHostProvider(opts?: {
         // per-write history. Disable history but keep write tools visible.
         "--fs-disable-history",
         "--fs-allow-unversioned-write",
+        // The local backend's runtime is a same-host child of the API, so it
+        // exposes its MCP host over a direct loopback URL (no frpc). The server
+        // accepts this loopback endpoint only for live local sandboxes (see the
+        // local-sandbox branch in validateTunnelInternalUrl). Without an
+        // explicit tunnel mode the runtime would register NO endpoint and every
+        // sandbox tool dispatch would fail with no_tunnel_endpoint.
+        "--tunnel-mode=noop",
         `--server=${params.serverOrigin}`,
       ]
       const child = spawnImpl(process.execPath, args, {

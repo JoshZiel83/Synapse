@@ -58,7 +58,10 @@ const baseOpts = {
   network: "synapse-sandbox-egress",
   storageVolume: "synapse_api_storage",
   serverOrigin: "http://api:3001",
-  tunnel: "none" as const,
+  // Docker sandboxes are reachable only over frp (no co-located loopback), so
+  // the backend always runs with tunnel=frp + a shared token.
+  tunnel: "frp" as const,
+  tunnelAuthToken: "tok-base",
 }
 
 // A deterministic pairing stub so create() runs without a live DB.
@@ -132,8 +135,8 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
     "share-net env"
   )
   assert.ok(
-    !runArgs.some((a) => a.startsWith("SYNAPSE_TUNNEL_")),
-    "tunnel env omitted when tunnel=none"
+    runArgs.some((a) => a === "SYNAPSE_TUNNEL_MODE=frp"),
+    "explicit frp tunnel mode env (never falls back to noop inside the container)"
   )
   assert.equal(handle.backend, "docker")
   assert.equal(handle.sandboxResourceId, "container-abc123")

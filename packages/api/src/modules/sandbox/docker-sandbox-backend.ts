@@ -236,6 +236,9 @@ function buildDockerRunArgs(params: {
     SYNAPSE_DEVICE_CMD_SANDBOX_SHARE_NET: "1",
   }
   if (opts.tunnel === "frp") {
+    // Explicit mode so the runtime never falls back to none/noop inside the
+    // container (where loopback would be useless — the API is off-box).
+    env.SYNAPSE_TUNNEL_MODE = "frp"
     env.SYNAPSE_TUNNEL_SERVER_ADDR = opts.tunnelServerAddr ?? "tunnel-edge"
     env.SYNAPSE_TUNNEL_SERVER_PORT = opts.tunnelServerPort ?? "7000"
     if (opts.tunnelAuthToken)
@@ -243,6 +246,14 @@ function buildDockerRunArgs(params: {
     // The handle internalUrl is hardcoded to tunnel-edge:8080, so the vhost
     // host must be tunnel-edge for frps Host-routing to match.
     env.SYNAPSE_TUNNEL_VHOST_HOST = opts.tunnelVhostHost ?? "tunnel-edge"
+  } else {
+    // Defensive: the docker backend is selected with tunnel=frp only (enforced
+    // by dockerBackendOptionsFromEnv). A 'none' here would boot a container the
+    // API can never dispatch to, so refuse rather than ship a dead sandbox.
+    throw new SandboxBackendError(
+      `docker backend requires tunnel='frp' (got '${opts.tunnel}'); a docker ` +
+        `sandbox has no co-located loopback path`
+    )
   }
 
   const args = [

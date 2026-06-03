@@ -72,7 +72,11 @@ services:
       # (+ run the 'sandbox' build + tunnel-edge) to enable containerized sandboxes.
       SYNAPSE_SANDBOX_ENABLED: ${SYNAPSE_SANDBOX_ENABLED:-false}
       SYNAPSE_SANDBOX_BACKEND: ${SYNAPSE_SANDBOX_BACKEND:-local}
-      SYNAPSE_SANDBOX_TUNNEL: ${SYNAPSE_SANDBOX_TUNNEL:-none}
+      # The docker backend is reachable ONLY over the frp tunnel (the container
+      # is on an internal-only network), so it requires SYNAPSE_SANDBOX_TUNNEL=frp
+      # + FRP_SHARED_TOKEN — anything else fails fast at provision. The local
+      # backend ignores this (its runtime uses a direct loopback endpoint).
+      SYNAPSE_SANDBOX_TUNNEL: ${SYNAPSE_SANDBOX_TUNNEL:-frp}
       SYNAPSE_SANDBOX_IMAGE: ${SYNAPSE_SANDBOX_IMAGE:-synapse-device-runtime:latest}
       SYNAPSE_SANDBOX_DOCKER_NETWORK: ${SYNAPSE_SANDBOX_DOCKER_NETWORK:-synapse-sandbox-egress}
       SYNAPSE_SANDBOX_STORAGE_VOLUME: ${SYNAPSE_SANDBOX_STORAGE_VOLUME:-synapse_api_storage}

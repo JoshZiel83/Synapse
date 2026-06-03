@@ -23,6 +23,7 @@ import {
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
 import { startPairing, deleteDevice } from "../devices/service.js"
+import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
 import {
   ensureFileSpace,
   insertFileMount,
@@ -127,8 +128,9 @@ function selectSandboxBackend(
 }
 
 /** Build the docker backend options from env. The image/network/volume are
- *  required when docker is selected; missing values fail loudly. */
-function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
+ *  required when docker is selected; missing values fail loudly. Exported for
+ *  unit tests (the fail-fast tunnel/token contract). */
+export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
   const require_ = (name: string): string => {
     const v = process.env[name]?.trim()
     if (!v) {
@@ -139,18 +141,22 @@ function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
     }
     return v
   }
-  // SYNAPSE_SANDBOX_TUNNEL: unset → 'none' (no tunnel; catalog still syncs over
-  // the control-plane). Only 'none' | 'frp' are valid; anything else fails fast
-  // rather than silently degrading to no-tunnel (which would leave tools
-  // un-dispatchable with no obvious cause).
-  const tunnelRaw = (process.env.SYNAPSE_SANDBOX_TUNNEL || "none").toLowerCase()
-  if (tunnelRaw !== "none" && tunnelRaw !== "frp") {
+  // The docker sandbox runs on an internal-only network and is reachable from
+  // the API ONLY through the frp tunnel — there is no co-located loopback path
+  // (that's the local backend). So docker REQUIRES tunnel=frp with a full edge
+  // config; anything else (none / missing FRP_SHARED_TOKEN / missing edge) is a
+  // misconfiguration that would provision a sandbox whose tools can never be
+  // dispatched. Fail fast at selection time rather than after a useless boot.
+  const tunnelRaw = (process.env.SYNAPSE_SANDBOX_TUNNEL || "frp").toLowerCase()
+  if (tunnelRaw !== "frp") {
     throw new SandboxServiceError(
-      `SYNAPSE_SANDBOX_TUNNEL must be 'none' or 'frp' (got '${tunnelRaw}')`,
+      `SYNAPSE_SANDBOX_TUNNEL must be 'frp' when SYNAPSE_SANDBOX_BACKEND=docker ` +
+        `(got '${tunnelRaw}') — the docker sandbox is only reachable over the frp tunnel`,
       500
     )
   }
-  const tunnel: "none" | "frp" = tunnelRaw
+  const tunnel: "frp" = "frp"
+  const tunnelAuthToken = require_("FRP_SHARED_TOKEN")
   return {
     image: require_("SYNAPSE_SANDBOX_IMAGE"),
     network: require_("SYNAPSE_SANDBOX_DOCKER_NETWORK"),
@@ -160,7 +166,7 @@ function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
     tunnel,
     tunnelServerAddr: process.env.SYNAPSE_TUNNEL_SERVER_ADDR?.trim(),
     tunnelServerPort: process.env.SYNAPSE_TUNNEL_SERVER_PORT?.trim(),
-    tunnelAuthToken: process.env.FRP_SHARED_TOKEN?.trim(),
+    tunnelAuthToken,
     tunnelVhostHost: process.env.SYNAPSE_TUNNEL_VHOST_HOST?.trim(),
     runAsUid: process.env.SYNAPSE_SANDBOX_RUN_AS_UID
       ? Number(process.env.SYNAPSE_SANDBOX_RUN_AS_UID)
@@ -465,6 +471,14 @@ export interface ProvisionSandboxOptions {
   sandboxBackend?: SandboxBackend
   /** Max ms to wait for the device catalog to sync. */
   catalogTimeoutMs?: number
+  /**
+   * Max ms to wait for the device's tunnel endpoint to register in the
+   * DeviceTunnelRegistry (after catalog). A sandbox whose endpoint never
+   * registers can't dispatch ANY tool, so provision fails+cleans rather than
+   * marking such mounts active. Default 30s; set 0 to skip the wait (only for
+   * tests that don't dispatch).
+   */
+  tunnelTimeoutMs?: number
   createdByWorkspaceMemberId?: string | null
 }
 
@@ -494,20 +508,25 @@ export async function provisionSandbox(
     (await isSandboxRuntimeAlive(existing))
   ) {
     // Already provisioned this session — report the ACTUAL state, not a
-    // hardcoded false: commandline is enabled iff the paired device exposes a
-    // commandline builtin (it only does so when bwrap confinement was available
-    // at spawn — see the fail-closed gate in bin.ts).
+    // hardcoded false. Use the SAME source of truth as the cold provision path
+    // (resolveDeviceBuiltinIds → commandlineCapabilityId != null): an ACTIVE
+    // commandline capability joined to its exposure, not merely a row in
+    // device_exposures. A bare exposure check is looser — it would report
+    // commandline "enabled" for a device whose capability was revoked or whose
+    // exposure never went healthy, misleading the UI/caller.
     const deviceId = existing.find((m) => m.device_id)?.device_id ?? ""
     let commandlineEnabled = false
     if (deviceId) {
-      const cmd = await db
-        .selectFrom("device_exposures")
-        .select("id")
-        .where("device_id", "=", deviceId)
-        .where("builtin_kind", "=", "commandline")
-        .limit(1)
-        .executeTakeFirst()
-      commandlineEnabled = Boolean(cmd)
+      try {
+        const builtins = await resolveDeviceBuiltinIds(deviceId)
+        commandlineEnabled = builtins.commandlineCapabilityId != null
+      } catch {
+        // resolveDeviceBuiltinIds throws only when the filesystem capability is
+        // absent (catalog not synced) — for a live, all-active sandbox that
+        // shouldn't happen, but treat it as "no commandline" rather than fail
+        // the fast path.
+        commandlineEnabled = false
+      }
     }
     // P1/P2: do NOT hardcode sidecarRestoreOk=true on the fast path. A prior
     // provision this session may have failed to restore some sidecars (e.g. the
@@ -698,6 +717,21 @@ export async function provisionSandbox(
       timeoutMs: options.catalogTimeoutMs ?? 30_000,
     })
 
+    // ⑦b wait for the device's tunnel endpoint to register. EVERY sandbox tool
+    // call is dispatched via DeviceTunnelRegistry.resolve(deviceServiceId) —
+    // catalog sync alone does NOT prove the device is reachable. Without this
+    // wait, provision would mark mounts active + grant tools for a sandbox whose
+    // every dispatch returns no_tunnel_endpoint (a silent "provisioned but
+    // unusable"). On timeout we fall through to the catch, which tears the whole
+    // half-built sandbox down. Skippable (tunnelTimeoutMs=0) for tests that
+    // don't dispatch.
+    const tunnelTimeoutMs = options.tunnelTimeoutMs ?? 30_000
+    if (tunnelTimeoutMs > 0) {
+      await waitForTunnelEndpoint(handle.deviceServiceId, {
+        timeoutMs: tunnelTimeoutMs,
+      })
+    }
+
     // ⑧ build both authorization layers (once, full capability list).
     // The device fail-closes at boot: it advertises a commandline builtin in its
     // catalog ONLY when ITS OWN host can confine commands (bwrap+userns). So the
@@ -794,9 +828,34 @@ async function waitForCatalog(
 }
 
 /**
- * Test seam for refreshSpaces (mirrors CommitDeps). Defaults bind to production
- * globals; a test injects a pinned executor + matching runInTx + a stub sync.
+ * Poll the in-process DeviceTunnelRegistry until this service's tunnel endpoint
+ * is registered (the device-runtime sent device.tunnel.up and it passed the
+ * SSRF/token gate), or time out. A sandbox whose endpoint never appears can't
+ * dispatch any tool, so a timeout aborts provision (the caller's catch tears
+ * the half-built sandbox down). An empty deviceServiceId (shouldn't happen for a
+ * freshly created handle) is treated as "never registers" → times out.
  */
+async function waitForTunnelEndpoint(
+  deviceServiceId: string,
+  opts: { timeoutMs: number; pollMs?: number }
+): Promise<void> {
+  const pollMs = opts.pollMs ?? 250
+  const deadline = Date.now() + opts.timeoutMs
+  const registry = getDeviceTunnelRegistry()
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (deviceServiceId && registry.resolve(deviceServiceId)) return
+    if (Date.now() >= deadline) {
+      throw new SandboxServiceError(
+        `device_service ${deviceServiceId || "(none)"} did not register a tunnel ` +
+          `endpoint within ${opts.timeoutMs}ms — the sandbox would be unreachable ` +
+          `for tool dispatch`,
+        504
+      )
+    }
+    await new Promise((r) => setTimeout(r, pollMs))
+  }
+}
 export interface RefreshDeps {
   dbh: Executor
   runInTx: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T>
@@ -2059,53 +2118,138 @@ export interface RecoverFailedMountsResult {
  * mount's snapshot is appended and the mount is closed + its live dir removed;
  * on repeated failure it's left 'failed' for the next sweep / manual triage.
  *
+ * SAFETY (round-3 #2): teardown swallows a failed kill, so a 'failed' mount may
+ * still have a LIVE runtime/command writing into its live dir. Committing then
+ * would snapshot a moving target. Before committing a session's mounts we
+ * confirm the runtime is gone — and if it isn't, we try once more to kill it via
+ * the persisted ref; if it's STILL alive we skip that session this round (leaving
+ * it 'failed' for the next sweep) rather than snapshot a dir under active write.
+ *
  * This is the code-level recovery entry for the "preserve on commit failure"
  * teardown path — without it a failed mount's data would only be recoverable by
  * hand. Best-effort and idempotent: safe to call on every API startup.
  */
 export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsResult> {
   const mounts = await getFailedRecoverableMounts(db)
+  // Group by session so we make the live-runtime decision ONCE per runtime (the
+  // runtime is per-session, not per-mount) before touching any of its dirs.
+  const bySession = new Map<string, FileMountRow[]>()
+  for (const mount of mounts) {
+    const sid = mount.session_id as string
+    const list = bySession.get(sid)
+    if (list) list.push(mount)
+    else bySession.set(sid, [mount])
+  }
+
   let recovered = 0
   let stillFailed = 0
-  for (const mount of mounts) {
-    if (!mount.materialized_dir) continue
-    // The dir may have been cleaned already (e.g. by a later successful run);
-    // skip if it's gone — there's nothing to recover.
-    if (!existsSync(mount.materialized_dir)) {
-      await updateFileMount(db, mount.id, {
-        status: "closed",
-        closedAt: true,
-        errorMessage: "recovered: live dir already gone, nothing to commit",
-      }).catch(() => {})
+  for (const [sessionId, sessionMounts] of bySession) {
+    // Confirm the runtime is stopped before snapshotting. If it's still alive
+    // (teardown's kill was swallowed), make ONE more attempt to stop it via the
+    // persisted ref, then re-check. A runtime that survives both is left for the
+    // next sweep — never committed under it.
+    const stopped = await ensureRuntimeStoppedForRecovery(
+      sessionId,
+      sessionMounts
+    )
+    if (!stopped) {
+      stillFailed += sessionMounts.length
+      console.error(
+        `[sandbox] recovery: runtime for session ${sessionId} is still alive after a kill attempt; ` +
+          `leaving ${sessionMounts.length} mount(s) 'failed' rather than snapshot a live dir`
+      )
       continue
     }
-    try {
-      const result = await commitOneMount(
-        mount.workspace_id,
-        mount.session_id,
-        mount,
-        defaultCommitDeps()
-      )
-      // Commit succeeded (or there was nothing new) → close + remove the dir.
-      await updateFileMount(db, mount.id, {
-        status: "closed",
-        closedAt: true,
-        resultSnapshotId: result.snapshotId ?? mount.result_snapshot_id,
-        errorMessage: result.conflicts.length
-          ? `recovered with conflicts: ${result.conflicts.join(", ")}`
-          : null,
-      })
-      await rm(mount.materialized_dir, { recursive: true, force: true }).catch(
-        () => {}
-      )
-      recovered++
-    } catch (err) {
-      stillFailed++
-      console.error(
-        `[sandbox] recovery commit still failing for mount ${mount.id}:`,
-        err
-      )
+    for (const mount of sessionMounts) {
+      const outcome = await recoverOneFailedMount(mount)
+      if (outcome === "recovered") recovered++
+      else if (outcome === "stillFailed") stillFailed++
+      // "skipped" (live dir already gone) counts as neither — it's a clean close.
     }
   }
   return { attempted: mounts.length, recovered, stillFailed }
+}
+
+/**
+ * Confirm the per-session sandbox runtime is NOT alive before recovery commits
+ * snapshot its live dirs. Returns true when it's already gone or we successfully
+ * killed it; false when it's still alive after a kill attempt (caller must skip).
+ */
+async function ensureRuntimeStoppedForRecovery(
+  sessionId: string,
+  mounts: FileMountRow[]
+): Promise<boolean> {
+  if (!(await isSandboxRuntimeAlive(mounts))) return true
+  // Still alive — try to stop it. Prefer the in-process handle; else rebuild a
+  // ref and kill via the owning backend (docker rm / pid signal).
+  console.warn(
+    `[sandbox] recovery: runtime for session ${sessionId} is still alive; attempting to stop before commit`
+  )
+  const liveHandle = liveSandboxHandles.get(sessionId)
+  if (liveHandle) {
+    await liveHandle.kill().catch(() => {})
+    liveSandboxHandles.delete(sessionId)
+  } else {
+    const ref = buildSandboxRefFromMounts(sessionId, mounts)
+    if (ref) {
+      try {
+        const handle = await backendForKind(ref.backend).connect(ref)
+        await handle.kill()
+      } catch (err) {
+        console.error(
+          `[sandbox] recovery: could not kill runtime for ${sessionId}:`,
+          err
+        )
+        if (ref.hostPid) killPid(ref.hostPid)
+      }
+    }
+  }
+  // Re-check: killing is async (docker rm / SIGTERM grace), so a still-true here
+  // means we shouldn't risk a commit this round.
+  return !(await isSandboxRuntimeAlive(mounts))
+}
+
+/** Recover a single failed mount (caller has already confirmed the runtime is
+ *  stopped). Returns the outcome for the recovered/stillFailed tally. */
+async function recoverOneFailedMount(
+  mount: FileMountRow
+): Promise<"recovered" | "stillFailed" | "skipped"> {
+  if (!mount.materialized_dir) return "skipped"
+  // The dir may have been cleaned already (e.g. by a later successful run);
+  // skip if it's gone — there's nothing to recover.
+  if (!existsSync(mount.materialized_dir)) {
+    await updateFileMount(db, mount.id, {
+      status: "closed",
+      closedAt: true,
+      errorMessage: "recovered: live dir already gone, nothing to commit",
+    }).catch(() => {})
+    return "skipped"
+  }
+  try {
+    const result = await commitOneMount(
+      mount.workspace_id,
+      mount.session_id,
+      mount,
+      defaultCommitDeps()
+    )
+    // Commit succeeded (or there was nothing new) → close + remove the dir.
+    await updateFileMount(db, mount.id, {
+      status: "closed",
+      closedAt: true,
+      resultSnapshotId: result.snapshotId ?? mount.result_snapshot_id,
+      errorMessage: result.conflicts.length
+        ? `recovered with conflicts: ${result.conflicts.join(", ")}`
+        : null,
+    })
+    await rm(mount.materialized_dir, { recursive: true, force: true }).catch(
+      () => {}
+    )
+    return "recovered"
+  } catch (err) {
+    console.error(
+      `[sandbox] recovery commit still failing for mount ${mount.id}:`,
+      err
+    )
+    return "stillFailed"
+  }
 }
