@@ -1,0 +1,196 @@
+{
+  "name": "mijia-mcp-server",
+  "version": "2.0.0",
+  "description": "Productized Mijia MCP server built on top of mijia-api 3.x with layered capability control for reusable device capabilities, homes, and scenes.",
+  "author": "Mijia MCP Team",
+  "license": "MIT",
+  "capabilities": {
+    "resources": {
+      "subscribe": false,
+      "listChanged": false
+    },
+    "tools": {
+      "listChanged": false
+    },
+    "logging": {
+      "level": "info"
+    }
+  },
+  "resources": [
+    {
+      "uri": "mijia://service",
+      "name": "Service Status",
+      "description": "Server metadata, auth file path, and runtime status",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "mijia://homes",
+      "name": "Homes",
+      "description": "All homes and rooms in a user-friendly format",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "mijia://devices",
+      "name": "Devices",
+      "description": "All devices with room and home information",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "mijia://scenes",
+      "name": "Scenes",
+      "description": "All scenes across all homes",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "mijia://capabilities",
+      "name": "Capability Catalog",
+      "description": "Standardized capability classes and preferred product-level tools",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "mijia://tooling",
+      "name": "Tool Catalog",
+      "description": "Everyday tools, advanced tools, and the recommended workflow for clients",
+      "mimeType": "application/json"
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_service_status",
+      "description": "Get connection, auth, file location, and runtime status",
+      "category": "service"
+    },
+    {
+      "name": "reconnect_service",
+      "description": "Reconnect the service and optionally force QR login",
+      "category": "service"
+    },
+    {
+      "name": "clear_saved_login",
+      "description": "Clear saved login credentials so the next connect uses QR login",
+      "category": "service"
+    },
+    {
+      "name": "list_homes",
+      "description": "List all homes and rooms with room-level device counts; can act as a fallback when home overview is unavailable",
+      "category": "home"
+    },
+    {
+      "name": "refresh_devices",
+      "description": "Refresh homes, devices, and room mappings from Mijia cloud",
+      "category": "service"
+    },
+    {
+      "name": "get_tool_catalog",
+      "description": "Return the recommended everyday tools, advanced tools, and workflow",
+      "category": "service"
+    },
+    {
+      "name": "get_home_overview",
+      "description": "Return a room-first overview of homes and devices for everyday browsing",
+      "category": "home"
+    },
+    {
+      "name": "list_devices",
+      "description": "List devices by name, room, home, model, and online status",
+      "category": "device"
+    },
+    {
+      "name": "get_device",
+      "description": "Resolve a single device and return summary, capabilities, and common state",
+      "category": "device"
+    },
+    {
+      "name": "get_device_status",
+      "description": "Return current state and recommended next actions for one device",
+      "category": "device"
+    },
+    {
+      "name": "get_device_capabilities",
+      "description": "Resolve a single device and return a standardized capability schema for stable client routing",
+      "category": "device"
+    },
+    {
+      "name": "control_device",
+      "description": "Unified device control entry point built on capability abstractions such as power, brightness, color temperature, target temperature, and mode",
+      "category": "device"
+    },
+    {
+      "name": "control_by_intent",
+      "description": "Route a natural-language-like smart-home request to the best product tool",
+      "category": "device"
+    },
+    {
+      "name": "turn_on_device",
+      "description": "Turn on a device",
+      "category": "device"
+    },
+    {
+      "name": "turn_off_device",
+      "description": "Turn off a device",
+      "category": "device"
+    },
+    {
+      "name": "set_brightness",
+      "description": "Set brightness for any brightness-capable device",
+      "category": "device"
+    },
+    {
+      "name": "set_color_temperature",
+      "description": "Set color temperature for any color-temperature-capable device",
+      "category": "device"
+    },
+    {
+      "name": "set_target_temperature",
+      "description": "Set target temperature for any target-temperature-capable device",
+      "category": "device"
+    },
+    {
+      "name": "set_hvac_mode",
+      "description": "Set mode for any mode-capable device such as an air conditioner, fan, or purifier",
+      "category": "device"
+    },
+    {
+      "name": "set_fan_speed",
+      "description": "Set fan speed for any fan-speed-capable device such as a fan, air conditioner, or purifier",
+      "category": "device"
+    },
+    {
+      "name": "set_cover_position",
+      "description": "Set position for any cover-capable device such as a curtain or blind",
+      "category": "device"
+    },
+    {
+      "name": "list_scenes",
+      "description": "List scenes globally or within a home",
+      "category": "scene"
+    },
+    {
+      "name": "execute_scene",
+      "description": "Execute a scene by scene name or scene id",
+      "category": "scene"
+    },
+    {
+      "name": "get_consumable_items",
+      "description": "Get consumable items globally or within a home",
+      "category": "home"
+    },
+    {
+      "name": "ping",
+      "description": "Test server connectivity",
+      "category": "service"
+    }
+  ],
+  "configuration": {
+    "environment_variables": ["MIJIA_ENABLE_QR", "MIJIA_LOG_LEVEL"]
+  },
+  "transport": {
+    "type": "stdio",
+    "description": "Communicate using standard input/output"
+  },
+  "protocol": {
+    "name": "Model Context Protocol",
+    "version": "2024-11-05",
+    "transport": "JSON-RPC 2.0"
+  }
+}

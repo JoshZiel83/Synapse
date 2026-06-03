@@ -195,6 +195,41 @@ and the `prepublish-guard` refuses any tarball containing `.map` files, so
 no sourcemaps are ever published. Back up the `verdaccio_storage` volume —
 losing it loses every published version (npm forbids re-publishing a version).
 
+## 5c. Mijia MCP sidecar (optional)
+
+The Mijia (Xiaomi smart-home) builtin plugin proxies a containerized,
+multi-tenant MCP sidecar (`sidecars/mijia-mcp/`, a fork of `javen-yan/miot-mcp`;
+see `sidecars/mijia-mcp/UPSTREAM.md`). It runs as the `mijia-mcp` service behind
+the `mijia` compose profile, internal-network only (no host port). Per-request
+Xiaomi credentials arrive in the `X-Mijia-Auth` header from the API — nothing is
+baked into the image, and the service deliberately does NOT receive `.env`
+(its environment is an explicit allowlist).
+
+The API reaches it at `http://mijia-mcp:8765/mcp/` via `MIJIA_MCP_URL`. This is
+**empty by default** — the Mijia builtin plugin is only seeded when `MIJIA_MCP_URL`
+is set, so a plain `--profile production` deployment never surfaces a Mijia plugin
+that would fail at connect time against a sidecar you didn't start. To enable,
+set it in `.env` and bring up the sidecar with the `mijia` profile:
+
+```bash
+echo 'MIJIA_MCP_URL=http://mijia-mcp:8765/mcp/' >> .env
+docker compose --profile production --profile mijia up -d --build mijia-mcp api
+# re-seed builtin MCP plugins so the Mijia plugin appears in the catalog
+# (db:bootstrap:runtime is schema-only and does NOT run the builtin seed):
+docker compose --profile production run --rm api npm run db:seed:builtin-mcp -w packages/api
+```
+
+Rebuild after changes:
+
+```bash
+docker compose --profile production --profile mijia up -d --build mijia-mcp
+```
+
+Login (QR) happens on the Synapse side (the `mijia_qr_login` auth driver); the
+sidecar only consumes the resulting credentials per request. One installation
+binds one Mi Home account (shared by that installation's authorized members);
+members who need their own account create a separate installation.
+
 ## 6. Start Production
 
 Start or update the TLS public stack:
@@ -292,6 +327,90 @@ Check certificate and OCSP stapling:
 set -a; . ./.env; set +a
 openssl s_client -connect "${SYNAPSE_PUBLIC_DOMAIN}:443" -servername "$SYNAPSE_PUBLIC_DOMAIN" -status </dev/null
 ```
+
+## 8b. Server-side actor isolation (sandbox)
+
+Per-session actor sandboxes run each actor turn's filesystem + command tools in
+an isolated runtime. Two backends, selected by `SYNAPSE_SANDBOX_BACKEND`:
+
+- **`local`** (default) — a same-host `device-runtime` child process. Command
+  confinement needs `bwrap` on the API host; absent it, the sandbox is
+  file-only (fail-closed). The runtime exposes its MCP host to the API over a
+  **direct loopback** endpoint (`--tunnel-mode=noop` → `http://127.0.0.1:<port>`);
+  the server accepts that loopback URL only for a live local sandbox (no frpc).
+- **`docker`** — the per-session `device-runtime` runs in its own cloud-sandbox
+  container (DooD via the host docker socket), reached over the frp tunnel.
+  Command confinement (bwrap) and network isolation live in that container.
+  Because the container is on an internal-only network with no co-located
+  loopback path, the docker backend **requires** `SYNAPSE_SANDBOX_TUNNEL=frp`
+  and `FRP_SHARED_TOKEN`; any other value fails fast at provision rather than
+  booting a sandbox whose tools can never be dispatched.
+
+In both cases provisioning waits for the device to register its tunnel endpoint
+(`device.tunnel.up`) before activating the sandbox or granting tools — a sandbox
+that never becomes dispatchable fails provisioning instead of silently looking
+"online" while every tool call returns `no_tunnel_endpoint`.
+
+Enable the docker backend:
+
+```bash
+# 1. Build the cloud-sandbox image (self-contained; compiles TS + Rust inside).
+docker compose --profile sandbox-build build sandbox-image
+
+# 2. In .env (setup.sh already generated the signing key + frp token):
+#      SYNAPSE_SANDBOX_ENABLED=true
+#      SYNAPSE_SANDBOX_BACKEND=docker
+#      SYNAPSE_SANDBOX_TUNNEL=frp
+#    (SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY + FRP_SHARED_TOKEN must be set.)
+
+# 3. Bring up the API + the tunnel edge WITH the docker-backend override, which
+#    is what adds the host docker socket to the API container (see note below).
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.sandbox-docker.yml \
+  --profile production up -d api tunnel-edge
+```
+
+Notes:
+
+- The host docker socket is **opt-in**, not in the base compose. The base
+  `docker-compose.yml` deliberately does NOT mount `/var/run/docker.sock` into
+  the API container — doing so unconditionally would give every production API
+  container host-root-equivalent access even with sandboxes disabled or on the
+  default `local` backend. The `docker-compose.sandbox-docker.yml` override
+  appends the socket mount; layer it (`-f ... -f docker-compose.sandbox-docker.yml`)
+  only when `SYNAPSE_SANDBOX_BACKEND=docker`. The backend only ever runs the
+  pinned `SYNAPSE_SANDBOX_IMAGE` with a fixed argument list; a docker-socket-proxy
+  is the recommended hardening for multi-tenant hosts.
+- Sandbox containers join the **internal** `synapse-sandbox-egress` network: they
+  reach the API + tunnel-edge but have **no public egress and no DB/Redis
+  access** — so a confined command (which shares the container's netns) can't
+  reach the internet or the database.
+- `bwrap` runs without `CAP_NET_ADMIN` (`--unshare-net` is gated off via
+  `--cmd-sandbox-share-net`; network isolation is the container's job). The
+  backend sets `seccomp=unconfined`, `apparmor=unconfined`, `CAP_SYS_ADMIN`
+  per sandbox container — the API container keeps the default profile.
+- **Storage volume layout:** each sandbox container mounts only its own session
+  subpath of the shared `api_storage` volume. The API derives that subpath from
+  `STORAGE_DIR` relative to the volume's mount point inside the API container
+  (default `/app/storage`; override with `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT`).
+  In the reference compose `STORAGE_DIR=/app/storage/files` and the volume mounts
+  at `/app/storage`, so the subpath is `files/sandboxes/<sessionId>`. If you
+  remount the volume or change `STORAGE_DIR` so the storage dir no longer sits
+  under the mount point, set `SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT` accordingly —
+  otherwise provisioning fails loudly rather than mounting the wrong directory.
+- **Custom tunnel edge:** the sandbox runtime registers its dispatch endpoint as
+  `<internal-base>/d/<token>`, and the server only accepts an `internal_url`
+  whose origin matches `SYNAPSE_DEVICE_TUNNEL_EDGE_URL`. Both default to the
+  reference `http://tunnel-edge:8080`. If you run the frp edge under a different
+  host/port, set `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` (the docker backend forwards it
+  to the container as the internal base automatically) **and**
+  `SYNAPSE_TUNNEL_VHOST_HOST` so the frps Host route matches. The docker backend
+  **fails fast when it is selected** (the first sandbox provision after the API
+  starts, i.e. backend selection — not a separate startup pre-check) if the
+  `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` host and `SYNAPSE_TUNNEL_VHOST_HOST` disagree
+  (a mismatch would make every sandbox dispatch fail to route), so the two must
+  be configured together.
 
 ## 9. Troubleshooting
 

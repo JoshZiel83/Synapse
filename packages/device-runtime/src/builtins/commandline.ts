@@ -174,6 +174,14 @@ export interface CommandlineBuiltinOptions {
    * Linux-only. Absent = normal host execution.
    */
   sandboxRoot?: string
+  /**
+   * When true, the bwrap jail does NOT `--unshare-net` (shares the runtime's
+   * network namespace). Only meaningful with `sandboxRoot`. Set when network
+   * isolation is delegated to the container layer (Docker without
+   * CAP_NET_ADMIN, where `--unshare-net`'s loopback bring-up fails). Default
+   * false = isolated empty netns. See SandboxConfinement.shareNet.
+   */
+  sandboxShareNet?: boolean
 }
 
 export function createCommandlineBuiltin(
@@ -469,6 +477,7 @@ export function createCommandlineBuiltin(
           // resolvedWorkingDirectory is defaulted to DEFAULT_SANDBOX_CWD above
           // for sandbox requests, so it's always set here.
           cwd: resolvedWorkingDirectory || DEFAULT_SANDBOX_CWD,
+          shareNet: opts.sandboxShareNet,
         })
         // bwrap sets the in-jail cwd via --chdir; the bwrap process itself runs
         // from the sandbox root on the host.

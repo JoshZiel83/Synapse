@@ -6,6 +6,11 @@
 import { existsSync } from "node:fs"
 import type { SidecarHandle } from "../sidecar.js"
 import { startSidecar } from "../sidecar.js"
+import {
+  FS_HELPER_PROTO_VERSION,
+  FsHelperProtoMismatchError,
+  assertFsHelperProto,
+} from "./fs-helper-resolve.js"
 import type {
   HistorySnapshotInput,
   HistorySnapshotResult,
@@ -186,6 +191,16 @@ export function createFsHelperClient(
   let stopped = false
   let history: RestartHistory = { lastRestartAt: null, parked: false }
   let helperMissing = false
+  // Handles that have completed the fs.hello handshake. A WeakSet (not a bool)
+  // so a respawned handle is naturally treated as un-handshaked — the old
+  // handle is GC'd, the new one isn't in the set, so request() re-handshakes.
+  const handshaked = new WeakSet<SidecarHandle>()
+  // Handles deliberately discarded (e.g. failed the handshake). The exit
+  // handler checks this so a discard-stop is NOT counted toward the crash-park
+  // window — a proto mismatch is not a crash loop, and recovery is
+  // rebuild-then-respawn, so each later RPC must get a fresh spawn rather than
+  // hitting a parked client.
+  const discarded = new WeakSet<SidecarHandle>()
 
   if (!opts.helperPath || !existsSync(opts.helperPath)) {
     helperMissing = true
@@ -227,7 +242,9 @@ export function createFsHelperClient(
     handle = h
     if (h.on) {
       h.on("exit", (code) => {
-        const wasIntentional = stopped
+        // A deliberately discarded handle (handshake failure) must not count
+        // toward the crash-park window — recovery is rebuild + respawn.
+        const wasIntentional = stopped || discarded.has(h)
         handle = null
         if (wasIntentional) return
         const now = Date.now()
@@ -275,8 +292,83 @@ export function createFsHelperClient(
     return METHOD_TIMEOUT_OVERRIDES[method] ?? defaultTimeoutMs
   }
 
+  /**
+   * Tear down a handle we no longer trust (handshake failure / wedge): stop the
+   * process and clear `handle` so the next RPC spawns a fresh one. This is what
+   * lets a rebuilt binary actually take over — without it a proto-mismatch throw
+   * would leave the OLD process alive and every later RPC would reuse it until
+   * the whole device-runtime restarted.
+   *
+   * `skipPark` controls crash-park accounting:
+   *   - true  → STALE-BINARY failure (wrong proto_version / pre-handshake
+   *     binary). Not a crash loop; recovery is rebuild + respawn, so mark the
+   *     handle discarded and the exit handler skips the park window.
+   *   - false → TIMEOUT / wedge / generic startup error. This IS crash-loop-
+   *     like, so leave it OUT of `discarded` and let the exit handler count it
+   *     toward the park window — repeated wedges must still park.
+   */
+  function discardHandle(h: SidecarHandle, skipPark: boolean): void {
+    if (skipPark) discarded.add(h)
+    try {
+      void h.stop()
+    } catch {
+      /* swallow */
+    }
+    if (handle === h) handle = null
+  }
+
+  /**
+   * Verify a freshly-spawned handle speaks our wire protocol before its first
+   * real RPC. Calls h.request("fs.hello") DIRECTLY (not the gated request()
+   * below) to avoid recursing through the gate. On ANY failure the handle is
+   * torn down so the next RPC spawns a fresh helper, but only a STALE-BINARY
+   * failure (proto mismatch / pre-handshake binary) skips crash-park accounting
+   * — a timeout/wedge still counts toward the park window so a stuck helper
+   * can't be re-spawned forever. Throws FsHelperProtoMismatchError for
+   * version/pre-handshake failures. Idempotent per handle via the WeakSet.
+   */
+  async function ensureHandshake(h: SidecarHandle): Promise<void> {
+    if (handshaked.has(h)) return
+    const ms = timeoutMs("fs.hello")
+    let timer: NodeJS.Timeout | null = null
+    try {
+      const hello = await new Promise<unknown>((resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new FsHelperTimeoutError("fs.hello", ms))
+        }, ms)
+        h.request("fs.hello", {}).then(resolve, reject)
+      })
+      assertFsHelperProto(hello)
+      handshaked.add(h)
+    } catch (err) {
+      // Classify: a stale-binary handshake failure (wrong proto_version, or a
+      // pre-handshake binary answering method_not_found -32601) is NOT a crash
+      // loop — recovery is rebuild + respawn, so it must skip the park window.
+      // Anything else (fs.hello timeout/wedge, other RPC error, spawn failure)
+      // IS crash-loop-like and must count toward park.
+      const isProtoMismatch = err instanceof FsHelperProtoMismatchError
+      const m = (err as Error).message?.match(/^(-?\d+):\s*(.+)$/)
+      const isMethodNotFound = !!m && Number.parseInt(m[1]!, 10) === -32601
+      const staleBinary = isProtoMismatch || isMethodNotFound
+
+      discardHandle(h, staleBinary)
+
+      if (isMethodNotFound) {
+        throw new FsHelperProtoMismatchError(
+          FS_HELPER_PROTO_VERSION,
+          undefined,
+          undefined
+        )
+      }
+      throw err
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   async function request<T>(method: string, params: unknown): Promise<T> {
     const h = ensureHandle()
+    await ensureHandshake(h)
     const ms = timeoutMs(method)
     let timer: NodeJS.Timeout | null = null
     try {

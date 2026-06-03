@@ -1,0 +1,16 @@
+.venv
+auth_data.json
+__pycache__
+.vscode
+.idea
+.env
+dist
+# Build artifacts
+build/
+dist/
+*.egg-info/
+miot_agent.egg-info/
+miot_mcp.egg-info/
+
+# PyPI publishing
+.pypirc

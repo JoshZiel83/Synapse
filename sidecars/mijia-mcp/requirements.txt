@@ -1,0 +1,21 @@
+# Pinned to versions verified against this sidecar's low-level Server +
+# StreamableHTTPSessionManager usage. The MCP Python SDK's low-level API has
+# shifted across versions, so keep these constrained and re-verify on bump.
+
+# MCP Python SDK (low-level Server + StreamableHTTPSessionManager)
+mcp==1.27.2
+
+# Xiaomi Mijia cloud API (QR login, RC4 signing, miot-spec) — the whole point
+# of vendoring miot-mcp instead of hand-rolling.
+mijiaAPI==3.1.0
+
+# Streamable-HTTP ASGI stack (added by this fork; upstream is stdio-only).
+uvicorn==0.48.0
+starlette==1.2.1
+
+# Image processing for QR generation (upstream deps).
+Pillow==12.2.0
+qrcode[pil]==8.2
+
+# Build backend.
+setuptools==78.1.1

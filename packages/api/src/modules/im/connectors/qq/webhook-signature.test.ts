@@ -6,17 +6,17 @@ import {
   verifyEd25519BusinessEvent,
 } from "./webhook-signature.js"
 
-const SECRET = "DG5g3B4j9X2KOErG"
+const SECRET = "DG5g3B4j9X2KOErG" // gitleaks:allow — test-only fixture, not a real secret
 
 test("URL-verification signature is deterministic", () => {
   const sig = signEd25519UrlVerification({
     secret: SECRET,
-    plainToken: "Arq0D5A61EgUu4OxUvOp",
+    plainToken: "Arq0D5A61EgUu4OxUvOp", // gitleaks:allow — test-only fixture
     eventTs: "1725442341",
   })
   const sig2 = signEd25519UrlVerification({
     secret: SECRET,
-    plainToken: "Arq0D5A61EgUu4OxUvOp",
+    plainToken: "Arq0D5A61EgUu4OxUvOp", // gitleaks:allow — test-only fixture
     eventTs: "1725442341",
   })
   assert.equal(sig, sig2)

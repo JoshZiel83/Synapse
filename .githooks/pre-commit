@@ -15,3 +15,23 @@ if [ ! -x "node_modules/.bin/lint-staged" ]; then
 fi
 
 npm run format:staged
+
+# Secret scan AFTER formatting: lint-staged may rewrite + re-stage files, so we
+# scan the final staged content that will actually be committed. Bypass for one
+# commit with SYNAPSE_SKIP_GITLEAKS=1 (CI still enforces — never push secrets).
+if [ "${SYNAPSE_SKIP_GITLEAKS:-0}" = "1" ]; then
+  echo "pre-commit: skipping gitleaks (SYNAPSE_SKIP_GITLEAKS=1). CI will still scan — do not push secrets." >&2
+else
+  if ! gitleaks_bin="$(bash scripts/ensure-gitleaks.sh)"; then
+    echo "pre-commit: could not obtain gitleaks. Set SYNAPSE_SKIP_GITLEAKS=1 to bypass once (CI still enforces). See docs/secret-scanning.md" >&2
+    exit 1
+  fi
+  # Scan only the staged diff; do NOT use the baseline here (it is for CI's
+  # full-history scan). .gitleaks.toml is auto-detected from the repo root.
+  if ! "$gitleaks_bin" git --pre-commit --staged --redact --no-banner; then
+    echo "pre-commit: possible secret detected, or gitleaks failed to run." >&2
+    echo "  - false positive? add an allowlist entry or inline 'gitleaks:allow' (TS/JS: // gitleaks:allow). See docs/secret-scanning.md" >&2
+    echo "  - see details (unredacted): \"$gitleaks_bin\" git --pre-commit --staged --no-banner -v" >&2
+    exit 1
+  fi
+fi

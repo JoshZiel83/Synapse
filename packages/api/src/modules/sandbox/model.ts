@@ -1,6 +1,4 @@
-// Shared types + capability probes for the sandbox manager.
-
-import { execFileSync } from "node:child_process"
+// Shared types for the sandbox manager.
 
 /**
  * Conflict-sidecar path prefix WITHIN a mount. On a refresh conflict, dir_sync
@@ -59,42 +57,4 @@ export interface SandboxProvisionResult {
    * sidecarRestoreOk is true.
    */
   failedSidecars: SidecarRestoreFailure[]
-}
-
-let cachedSandboxCommandlineAvailable: boolean | null = null
-
-/**
- * Whether the host can run bwrap-confined commands (Linux + bwrap binary +
- * user namespaces). When false the sandbox is provisioned fail-closed: only the
- * filesystem tools (which carry their own VFS root jail) are authorized — the
- * commandline capability + grant are never created, so an unconfined shell can
- * never reach the host.
- *
- * Probed once and cached: a `bwrap --version` that succeeds proves the binary
- * exists and basic userns setup works enough to exec it. We deliberately keep
- * the probe cheap; the real confinement flags are applied at spawn time (Step
- * 10) and a spawn failure there is also fail-closed.
- */
-export function isSandboxCommandlineAvailable(): boolean {
-  if (cachedSandboxCommandlineAvailable !== null) {
-    return cachedSandboxCommandlineAvailable
-  }
-  if (process.platform !== "linux") {
-    cachedSandboxCommandlineAvailable = false
-    return false
-  }
-  try {
-    execFileSync("bwrap", ["--version"], { stdio: "ignore" })
-    cachedSandboxCommandlineAvailable = true
-  } catch {
-    cachedSandboxCommandlineAvailable = false
-  }
-  return cachedSandboxCommandlineAvailable
-}
-
-/** Test seam: override/reset the cached bwrap probe. */
-export function __setSandboxCommandlineAvailableForTest(
-  value: boolean | null
-): void {
-  cachedSandboxCommandlineAvailable = value
 }

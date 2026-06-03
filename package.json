@@ -28,6 +28,7 @@
     "format:staged": "lint-staged",
     "build:cua-helper": "bash scripts/build-cua-helper.sh",
     "build:fs-helper": "bash scripts/build-fs-helper.sh",
+    "verify:fs-helper": "bash scripts/verify-fs-helper.sh",
     "build": "npm run build:cua-helper && npm run build:fs-helper && npm run build -w packages/device-protocol && npm run build -w packages/shared && npm run build -w packages/device-runtime && npm run build -w packages/device-sdk && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
     "build:shared": "npm run build -w packages/shared",
     "build:device-protocol": "npm run build -w packages/device-protocol",
@@ -55,7 +56,7 @@
     "react-dom": "^19.2.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@modelcontextprotocol/sdk@^1.27.1": {
+    "@modelcontextprotocol/sdk@^1.29.0": {
       "zod": "4.3.6"
     }
   },

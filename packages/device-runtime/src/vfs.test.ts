@@ -87,7 +87,7 @@ test("VfsService list_dir uses lstat — symlink kind exposed, target metadata w
   // leak its size + mtime through fs.stat().
   const secretDir = mkdtempSync(join(tmpdir(), "synapse-vfs-secret-"))
   const secretPath = join(secretDir, "secret.txt")
-  writeFileSync(secretPath, "leak-this-is-30-bytes-of-secret")
+  writeFileSync(secretPath, "leak-this-is-30-bytes-of-secret") // gitleaks:allow — test-only fixture
   try {
     mkdirSync(join(root, "public"))
     writeFileSync(join(root, "public", "real.txt"), "ok")

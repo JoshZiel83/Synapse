@@ -5,6 +5,11 @@ dist/
 .env
 .env.local
 .env.*.local
+# Ignore all other dotenv variants (e.g. .env.production, .env.staging)…
+.env.*
+# …but keep example templates trackable, including nested ones.
+!.env.example
+!**/.env.example
 *.log
 .DS_Store
 coverage/

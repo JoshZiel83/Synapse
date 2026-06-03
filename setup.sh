@@ -131,6 +131,19 @@ generate_password() {
   openssl rand -base64 32 | tr -d '/+=' | head -c 32
 }
 
+# Ed25519 signing key for device-dispatch envelopes, base64-encoded so it fits
+# on a single .env line (envelope-signer decodes base64 PEM). Reuse an existing
+# value across re-runs (rotating it would orphan already-paired devices).
+SANDBOX_SIGNING_KEY="$(read_env_value SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY)"
+if [ -z "$SANDBOX_SIGNING_KEY" ]; then
+  SANDBOX_SIGNING_KEY="$(openssl genpkey -algorithm Ed25519 2>/dev/null | base64 | tr -d '\n')"
+fi
+# Shared frp token (frps + frpc + the sandbox backend must all agree).
+FRP_SHARED_TOKEN_VALUE="$(read_env_value FRP_SHARED_TOKEN)"
+if [ -z "$FRP_SHARED_TOKEN_VALUE" ]; then
+  FRP_SHARED_TOKEN_VALUE="$(openssl rand -hex 32)"
+fi
+
 upsert_env_var() {
   local file="$1"
   local key="$2"
@@ -258,6 +271,18 @@ FEISHU_APP_ID=
 FEISHU_APP_SECRET=
 FEISHU_INTL=false
 
+# Server-side actor isolation (sandbox). Off by default; flip ENABLED + BACKEND
+# to turn on. Signing key is base64-encoded PEM (single line).
+#   local  → SYNAPSE_SANDBOX_TUNNEL is ignored (direct loopback endpoint).
+#   docker → requires SYNAPSE_SANDBOX_TUNNEL=frp + FRP_SHARED_TOKEN, AND layering
+#            docker-compose.sandbox-docker.yml to mount the host docker socket.
+#            See deploy.md §8b.
+SYNAPSE_SANDBOX_ENABLED=false
+SYNAPSE_SANDBOX_BACKEND=local
+SYNAPSE_SANDBOX_TUNNEL=none
+SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY=$SANDBOX_SIGNING_KEY
+FRP_SHARED_TOKEN=$FRP_SHARED_TOKEN_VALUE
+
 # Deployment domains
 SYNAPSE_DEPLOY_MODE=$DEPLOY_MODE
 SYNAPSE_PUBLIC_HOST=$PUBLIC_HOST
@@ -334,6 +359,9 @@ upsert_env_var "$ENV_FILE" SYNAPSE_PUBLIC_HOST "$PUBLIC_HOST"
 upsert_env_var "$ENV_FILE" SYNAPSE_HTTP_PORT "$HTTP_PORT"
 upsert_env_var "$ENV_FILE" SYNAPSE_PUBLIC_DOMAIN "$DOMAIN"
 upsert_env_var "$ENV_FILE" SYNAPSE_WWW_DOMAIN "$WWW_DOMAIN"
+# Sandbox secrets — added to existing .env files too (don't rotate if present).
+upsert_env_var "$ENV_FILE" SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY "$SANDBOX_SIGNING_KEY"
+upsert_env_var "$ENV_FILE" FRP_SHARED_TOKEN "$FRP_SHARED_TOKEN_VALUE"
 upsert_env_var "$ENV_FILE" SYNAPSE_MOBILE_SHORT_DOMAIN "$MOBILE_SHORT_DOMAIN"
 upsert_env_var "$ENV_FILE" SYNAPSE_MOBILE_DOMAIN "$MOBILE_DOMAIN"
 upsert_env_var "$ENV_FILE" SYNAPSE_REGISTRY_DOMAIN "$REGISTRY_DOMAIN"

@@ -13,7 +13,7 @@ after(async () => {
   await shutdownRedisConnections().catch(() => {})
 })
 
-const SECRET = "DG5g3B4j9X2KOErG"
+const SECRET = "DG5g3B4j9X2KOErG" // gitleaks:allow — test-only fixture, not a real secret
 
 function buildAccount(
   overrides: Partial<{
@@ -67,17 +67,17 @@ function buildInput(
 test("op=13 URL verification returns signed plain_token", async () => {
   const body = {
     op: QQ_OP.WEBHOOK_VERIFY,
-    d: { plain_token: "Arq0D5A61EgUu4OxUvOp", event_ts: "1725442341" },
+    d: { plain_token: "Arq0D5A61EgUu4OxUvOp", event_ts: "1725442341" }, // gitleaks:allow — test-only fixture
   }
   const res = await handleQqWebhook(buildInput(body))
   assert.equal(res.statusCode, 200)
   const out = res.body as { plain_token: string; signature: string }
-  assert.equal(out.plain_token, "Arq0D5A61EgUu4OxUvOp")
+  assert.equal(out.plain_token, "Arq0D5A61EgUu4OxUvOp") // gitleaks:allow — test-only fixture
   assert.equal(out.signature.length, 128)
   // Signature must match what we'd compute independently
   const expected = signEd25519UrlVerification({
     secret: SECRET,
-    plainToken: "Arq0D5A61EgUu4OxUvOp",
+    plainToken: "Arq0D5A61EgUu4OxUvOp", // gitleaks:allow — test-only fixture
     eventTs: "1725442341",
   })
   assert.equal(out.signature, expected)

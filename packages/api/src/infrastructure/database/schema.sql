@@ -30,7 +30,7 @@ CREATE TYPE catalog_items_source_kind AS ENUM ('builtin', 'official', 'workspace
 CREATE TYPE catalog_items_visibility AS ENUM ('public', 'workspace', 'private');
 CREATE TYPE catalog_versions_status AS ENUM ('draft', 'active', 'deprecated', 'archived');
 CREATE TYPE catalog_version_files_file_role AS ENUM ('document', 'reference', 'script', 'image', 'json', 'binary');
-CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'device');
+CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'sse', 'device');
 CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'workspace_member');
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
@@ -5050,6 +5050,16 @@ CREATE TABLE file_mounts (
   status file_mount_status NOT NULL DEFAULT 'provisioning',
   materialized_dir TEXT,
   host_pid INT,
+  -- Which sandbox backend owns the runtime, and that backend's resource id.
+  -- Persisted so teardown/reconnect picks the right backend regardless of the
+  -- API's current SYNAPSE_SANDBOX_BACKEND env (a sandbox created under docker
+  -- must be torn down as docker even if the env later says local). NULL backend
+  -- = legacy/local rows that predate this column. host_pid stays the local
+  -- backend's resource handle; sandbox_resource_id carries docker container id
+  -- (and future k8s pod / vm id).
+  sandbox_backend TEXT
+    CHECK (sandbox_backend IS NULL OR sandbox_backend IN ('local', 'docker')),
+  sandbox_resource_id TEXT,
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -5072,4 +5082,11 @@ CREATE UNIQUE INDEX uq_file_mounts_active_session_subpath
   WHERE status NOT IN ('closed', 'failed');
 CREATE INDEX idx_file_mounts_device ON file_mounts(device_id) WHERE device_id IS NOT NULL;
 CREATE INDEX idx_file_mounts_status ON file_mounts(status, created_at DESC);
+-- The startup reconciler scans live (non-closed/failed) mounts by backend to
+-- reconcile against actually-running sandbox resources (e.g. docker containers).
+-- Partial on the same "live" predicate as the uniqueness indexes so it also
+-- covers 'provisioning' rows left by a mid-provision crash.
+CREATE INDEX idx_file_mounts_live_backend
+  ON file_mounts(sandbox_backend, sandbox_resource_id)
+  WHERE sandbox_resource_id IS NOT NULL AND status NOT IN ('closed', 'failed');
 CREATE INDEX idx_file_mounts_space ON file_mounts(file_space_id);

@@ -3,9 +3,18 @@ import type { ToolDefinition } from "@synapse/shared"
 import type { CapabilityInvocationContext } from "@synapse/shared/types"
 import { redis } from "../../infrastructure/redis/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
-import { McpHttpClient } from "./mcp-client.js"
+import { McpRemoteClient, type RemoteMcpProtocol } from "./mcp-remote-client.js"
 import { McpStdioClient } from "./mcp-stdio-client.js"
 import { getBuiltinHandler } from "./builtin/index.js"
+import {
+  getTransportFactory,
+  registerTransport,
+} from "./transports/registry.js"
+import {
+  resolveRemoteEntryPoint,
+  redactUrlForLog,
+  type TemplateContext,
+} from "./transports/entrypoint.js"
 import { logEvent } from "./audit.js"
 import {
   getRuntimeNodeId,
@@ -27,9 +36,15 @@ const MCP_INSTANCE_TTL_ACTOR = 2 * 60 * 60 * 1000
 const MCP_INSTANCE_TTL_CONVERSATION = 1 * 60 * 60 * 1000
 const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000
 
-type InstanceTransport = "builtin" | "stdio" | "http" | "device" | string
+type InstanceTransport =
+  | "builtin"
+  | "stdio"
+  | "http"
+  | "sse"
+  | "device"
+  | string
 
-type McpInstanceParams = {
+export type McpInstanceParams = {
   pluginId: string
   installationId: string
   pluginSlug: string
@@ -83,6 +98,12 @@ type RemoteInstanceCommand =
     }
   | {
       command: "ensure_runtime_session"
+      params: McpInstanceParams
+      key: string
+      configHash: string
+    }
+  | {
+      command: "describe"
       params: McpInstanceParams
       key: string
       configHash: string
@@ -183,92 +204,6 @@ function runtimeLeaseKey(instanceKey: string) {
 
 function runtimeLeaseMetaKey(instanceKey: string) {
   return `mcp:runtime:lease-meta:${instanceKey}`
-}
-
-function getConfigValue(
-  config: Record<string, unknown>,
-  pathExpression: string
-): unknown {
-  const pathParts = pathExpression.split(".").filter(Boolean)
-  let current: unknown = config
-  for (const segment of pathParts) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
-      return undefined
-    }
-    current = (current as Record<string, unknown>)[segment]
-  }
-  return current
-}
-
-function stringifyTemplateValue(value: unknown): string {
-  if (value === undefined || value === null) {
-    return ""
-  }
-  if (typeof value === "string") {
-    return value
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value)
-  }
-  return JSON.stringify(value)
-}
-
-function resolveTemplate(
-  template: string,
-  config: Record<string, unknown>
-): string {
-  return template.replace(/\$\{([^}]+)\}/g, (_match, rawExpression: string) => {
-    const expression = rawExpression.trim()
-    if (expression.startsWith("env:")) {
-      return process.env[expression.slice(4)] || ""
-    }
-    if (expression.startsWith("config:")) {
-      return stringifyTemplateValue(getConfigValue(config, expression.slice(7)))
-    }
-    return ""
-  })
-}
-
-function resolveHttpEntryPoint(
-  entryPoint: string,
-  config: Record<string, unknown>
-): { url: string; headers: Record<string, string> } {
-  const trimmed = entryPoint.trim()
-  if (!trimmed) {
-    throw new Error("HTTP entry point is required")
-  }
-
-  if (trimmed.startsWith("{")) {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>
-    const url =
-      typeof parsed.url === "string"
-        ? resolveTemplate(parsed.url, config)
-        : typeof parsed.endpoint === "string"
-          ? resolveTemplate(parsed.endpoint, config)
-          : ""
-    if (!url) {
-      throw new Error("HTTP entry point JSON is missing url")
-    }
-    const headers =
-      parsed.headers &&
-      typeof parsed.headers === "object" &&
-      !Array.isArray(parsed.headers)
-        ? Object.fromEntries(
-            Object.entries(parsed.headers as Record<string, unknown>)
-              .filter(([, value]) => typeof value === "string")
-              .map(([key, value]) => [
-                key,
-                resolveTemplate(value as string, config),
-              ])
-          )
-        : {}
-    return { url, headers }
-  }
-
-  return {
-    url: resolveTemplate(trimmed, config),
-    headers: {},
-  }
 }
 
 function getTTLForScope(scope: string): number {
@@ -449,23 +384,36 @@ async function createBuiltinInstance(
   }
 }
 
-async function createHttpInstance(
-  params: McpInstanceParams,
-  configHash: string
-): Promise<McpInstance> {
-  const apiKey = params.config.apiKey as string
-  const resolvedEntryPoint = resolveHttpEntryPoint(
-    params.entryPoint,
-    params.config
-  )
-  const headers: Record<string, string> = {
-    ...resolvedEntryPoint.headers,
+function buildTemplateContext(params: McpInstanceParams): TemplateContext {
+  return {
+    config: params.config,
+    runtime: {
+      installationId: params.installationId,
+      pluginId: params.pluginId,
+      workspaceId: params.workspaceId ?? "",
+      scopeId: params.scopeId,
+    },
   }
-  if (apiKey) {
-    headers.Authorization = headers.Authorization || `Bearer ${apiKey}`
-  }
+}
 
-  const client = new McpHttpClient(resolvedEntryPoint.url, headers)
+async function createRemoteInstance(
+  params: McpInstanceParams,
+  configHash: string,
+  defaultProtocol: RemoteMcpProtocol
+): Promise<McpInstance> {
+  const ctx = buildTemplateContext(params)
+  const resolved = resolveRemoteEntryPoint(
+    params.entryPoint,
+    ctx,
+    defaultProtocol
+  )
+  const safeEndpoint = redactUrlForLog(resolved.url)
+
+  const client = new McpRemoteClient(
+    resolved.url,
+    resolved.headers,
+    resolved.protocol
+  )
   try {
     const initResult = await client.initialize()
     logEvent({
@@ -473,9 +421,10 @@ async function createHttpInstance(
       pluginId: params.pluginId,
       eventType: "connection.init",
       eventData: {
-        endpoint: resolvedEntryPoint.url,
+        endpoint: safeEndpoint,
         success: true,
         serverInfo: initResult.serverInfo,
+        transport: resolved.protocol,
       },
     })
   } catch (error: any) {
@@ -483,16 +432,35 @@ async function createHttpInstance(
       workspaceId: params.workspaceId,
       pluginId: params.pluginId,
       eventType: "connection.error",
-      eventData: { endpoint: resolvedEntryPoint.url, error: error.message },
+      eventData: {
+        endpoint: safeEndpoint,
+        error: error?.message,
+        transport: resolved.protocol,
+      },
     })
+    await client.shutdown().catch(() => {})
     throw error
   }
 
+  // Fail-fast on tool discovery: these plugins ship empty static manifests, so
+  // silently degrading to [] would make the plugin's tools vanish. Surface the
+  // error (instance creation fails) instead.
   let tools: ToolDefinition[]
   try {
     tools = await client.listTools()
-  } catch {
-    tools = []
+  } catch (error: any) {
+    logEvent({
+      workspaceId: params.workspaceId,
+      pluginId: params.pluginId,
+      eventType: "connection.error",
+      eventData: {
+        endpoint: safeEndpoint,
+        error: `listTools failed: ${error?.message}`,
+        transport: resolved.protocol,
+      },
+    })
+    await client.shutdown().catch(() => {})
+    throw error
   }
 
   return {
@@ -500,7 +468,7 @@ async function createHttpInstance(
     installationId: params.installationId,
     pluginSlug: params.pluginSlug,
     orgSlug: params.orgSlug,
-    transport: "http",
+    transport: resolved.protocol === "sse" ? "sse" : "http",
     scope: params.scope,
     scopeId: params.scopeId,
     workspaceId: params.workspaceId,
@@ -580,21 +548,31 @@ async function createStdioInstance(
   }
 }
 
+// Register the built-in server transports. builtin/stdio keep their existing
+// behaviour; http/sse both route through the official-SDK remote client.
+registerTransport("builtin", (params, _key, configHash) =>
+  createBuiltinInstance(params, configHash)
+)
+registerTransport("stdio", (params, key, configHash) =>
+  createStdioInstance(params, configHash, key)
+)
+registerTransport("http", (params, _key, configHash) =>
+  createRemoteInstance(params, configHash, "streamable-http")
+)
+registerTransport("sse", (params, _key, configHash) =>
+  createRemoteInstance(params, configHash, "sse")
+)
+
 async function createTransportInstance(
   params: McpInstanceParams,
   key: string,
   configHash: string
 ) {
-  switch (params.transport) {
-    case "builtin":
-      return createBuiltinInstance(params, configHash)
-    case "stdio":
-      return createStdioInstance(params, configHash, key)
-    case "http":
-      return createHttpInstance(params, configHash)
-    default:
-      throw new Error(`Unsupported transport: ${params.transport}`)
+  const factory = getTransportFactory(params.transport)
+  if (!factory) {
+    throw new Error(`Unsupported transport: ${params.transport}`)
   }
+  return factory(params, key, configHash)
 }
 
 async function shutdownInstanceByKey(key: string, reason: string) {
@@ -642,7 +620,19 @@ async function createOwnedInstance(
   configHash: string,
   leaseToken?: string
 ) {
-  const underlying = await createTransportInstance(params, key, configHash)
+  let underlying: McpInstance
+  try {
+    underlying = await createTransportInstance(params, key, configHash)
+  } catch (error) {
+    // Transport creation (e.g. remote init / fail-fast listTools) threw before
+    // any state was registered, so shutdownInstanceByKey will never run to
+    // release the lease. Release it here so a transient connection failure does
+    // not pin this instance key until the Redis lease TTL expires.
+    if (leaseToken) {
+      await releaseRuntimeLease(key, leaseToken).catch(() => undefined)
+    }
+    throw error
+  }
   const wrapped: McpInstance = {
     ...underlying,
     shutdown: async () => {
@@ -684,14 +674,29 @@ async function createOwnedInstance(
   return wrapped
 }
 
-function createProxyInstance(
+async function createProxyInstance(
   params: McpInstanceParams,
   key: string,
   configHash: string
-): McpInstance {
+): Promise<McpInstance> {
   let runtimeSessionId: string | undefined
   const idleTtlMs = params.idleTtlMs ?? getTTLForScope(params.scope)
   const createdAt = Date.now()
+
+  // Fetch the resolved tool list from the lease owner BEFORE returning. The
+  // tool-resolver reads `runtimeInstance.tools` synchronously and remote
+  // plugins ship empty static manifests, so a proxy with tools:[] would make
+  // the plugin's tools vanish on non-owner nodes. A describe failure is treated
+  // like an init failure (throws / triggers owner re-resolution).
+  const describeResponse = await invokeDistributedInstanceCommand<{
+    tools: ToolDefinition[]
+  }>({
+    command: "describe",
+    params,
+    key,
+    configHash,
+  })
+  const tools = describeResponse.tools ?? []
 
   const proxy: McpInstance = {
     pluginId: params.pluginId,
@@ -703,7 +708,7 @@ function createProxyInstance(
     scopeId: params.scopeId,
     workspaceId: params.workspaceId,
     configHash,
-    tools: [],
+    tools,
     execute: async (toolName, input, executionContext) => {
       const response = await invokeDistributedInstanceCommand<{
         result: unknown
@@ -865,6 +870,11 @@ async function handleLocalInstanceCommand(payload: RemoteInstanceCommand) {
           ? await instance.ensureRuntimeSession()
           : instance.getRuntimeSessionId?.(),
       }
+    case "describe":
+      // Owner-node tool discovery for proxies. The proxy node has no live
+      // client, and remote plugins ship empty static manifests, so it asks the
+      // lease owner for the resolved tool list.
+      return { tools: instance.tools }
     default:
       throw new Error(
         `Unsupported instance command '${(payload as { command: string }).command}'`
@@ -954,7 +964,7 @@ export async function getOrCreateInstance(
     return ensureLocallyOwnedInstance(params, key, configHash)
   }
 
-  const proxy = createProxyInstance(params, key, configHash)
+  const proxy = await createProxyInstance(params, key, configHash)
   proxy.lastUsed = Date.now()
   resetTTL(key, proxy.idleTtlMs)
   return proxy

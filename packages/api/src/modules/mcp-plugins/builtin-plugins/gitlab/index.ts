@@ -30,7 +30,10 @@ export const gitlabSeed: BuiltinOrgSeed = {
       ),
       defaultLocale: "en",
       transport: "http",
-      entryPoint: '{"url":"${config:baseUrl}/api/v4/mcp"}',
+      // Explicit Authorization header (the global apiKey→Bearer fallback was
+      // removed when the remote client became transport-pure).
+      entryPoint:
+        '{"url":"${config:baseUrl}/api/v4/mcp","headers":{"Authorization":"Bearer ${config:apiKey}"}}',
       defaultInstanceScope: "workspace",
       defaultReuseScope: "conversation",
       requiresHandshake: false,

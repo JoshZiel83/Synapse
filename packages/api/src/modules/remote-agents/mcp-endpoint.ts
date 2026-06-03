@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto"
 import type { FastifyRequest, FastifyReply } from "fastify"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
+import {
+  isInitializeRequest,
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js"
 import { textBlock, type ToolDefinition } from "@synapse/shared"
 import { z } from "zod"
 import {
@@ -36,9 +40,33 @@ type ActiveTransport = {
 const transportsBySessionId = new Map<string, ActiveTransport>()
 const IDLE_TIMEOUT_MS = 10 * 60_000
 
+type McpToolResult = {
+  content: Array<Record<string, unknown>>
+  isError?: boolean
+  structuredContent?: Record<string, unknown>
+}
+
+/**
+ * A registered tool in the unified reverse-MCP registry.
+ *
+ * `inputSchema` is the JSON Schema advertised to the caller via tools/list —
+ * for IM tools it is derived once from `zodSchema` (so the SAME schema both
+ * validates input and is advertised); for projected plugin/device tools it is
+ * the tool's lossless `rawInputSchema` (or the lossy `parameters` projection as
+ * a fallback). When `zodSchema` is present, call_tool validates input against it
+ * BEFORE dispatch — projected tools are validated downstream by their executor.
+ */
+type RegisteredTool = {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+  zodSchema?: z.ZodType
+  handler: (input: Record<string, unknown>) => Promise<McpToolResult>
+}
+
 function jsonToolResult<T extends Record<string, unknown>>(
   structuredContent: T
-) {
+): McpToolResult {
   return {
     content: [
       {
@@ -50,47 +78,23 @@ function jsonToolResult<T extends Record<string, unknown>>(
   }
 }
 
-function jsonSchemaPropertyToZod(prop: unknown): z.ZodType {
-  if (!prop || typeof prop !== "object") return z.any()
-  const p = prop as { type?: string | string[]; enum?: unknown[] }
-  if (Array.isArray(p.enum) && p.enum.every((v) => typeof v === "string")) {
-    return z.enum(p.enum as [string, ...string[]])
-  }
-  const t = Array.isArray(p.type) ? p.type[0] : p.type
-  switch (t) {
-    case "string":
-      return z.string()
-    case "number":
-    case "integer":
-      return z.number()
-    case "boolean":
-      return z.boolean()
-    case "array":
-      return z.array(z.any())
-    case "object":
-      return z.record(z.string(), z.any())
-    default:
-      return z.any()
-  }
-}
+const EMPTY_OBJECT_SCHEMA = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+} as const
 
-function toolDefinitionToZodShape(
-  def: ToolDefinition
-): Record<string, z.ZodType> {
-  const shape: Record<string, z.ZodType> = {}
-  const required = new Set(def.parameters?.required ?? [])
-  for (const [key, prop] of Object.entries(def.parameters?.properties ?? {})) {
-    const base = jsonSchemaPropertyToZod(prop)
-    shape[key] = required.has(key) ? base : base.optional()
-  }
-  return shape
+/** Convert a Zod object shape into a JSON Schema for tools/list advertising. */
+function zodShapeToJsonSchema(
+  shape: Record<string, z.ZodType>
+): Record<string, unknown> {
+  const obj = z.object(shape)
+  return z.toJSONSchema(obj) as Record<string, unknown>
 }
 
 // PR #14: surface a [device:<name>] / [plugin:<name>] / [skill:<name>]
 // origin badge in the tool description so reverse-MCP callers can attribute
-// results back to the source. Tool definitions carry source kind in the
-// ToolDefinition.source field today; v3 will additionally carry
-// device-attributed bindings via capability-projection (PR #7).
+// results back to the source.
 function describeToolOrigin(def: ToolDefinition): string {
   const meta = def as unknown as {
     source?: { kind?: string; displayName?: string; deviceName?: string }
@@ -115,43 +119,43 @@ function describeToolOrigin(def: ToolDefinition): string {
   }
 }
 
-function registerImTools(params: {
-  server: McpServer
+function buildImTools(params: {
   remoteAgentId: string
   conversationId: string
   machineKey: string
-}) {
-  const { server } = params
-  server.registerTool(
-    "list_conversations",
-    {
-      description:
-        "List conversations this remote agent participates in, including unread counts.",
-      inputSchema: {},
-      outputSchema: { conversations: z.array(z.any()) },
-    },
-    async () => {
+}): RegisteredTool[] {
+  const tools: RegisteredTool[] = []
+
+  const listConversationsSchema: Record<string, z.ZodType> = {}
+  tools.push({
+    name: "list_conversations",
+    description:
+      "List conversations this remote agent participates in, including unread counts.",
+    inputSchema: EMPTY_OBJECT_SCHEMA,
+    zodSchema: z.object(listConversationsSchema),
+    handler: async () => {
       const result = await listRemoteAgentConversations({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
       })
       return jsonToolResult(result)
-    }
-  )
-
-  server.registerTool(
-    "check_messages",
-    {
-      description:
-        "Return pending message deliveries for the conversation this MCP session is bound to.",
-      inputSchema: { limit: z.number().int().min(1).max(500).optional() },
-      outputSchema: { deliveries: z.array(z.any()) },
     },
-    async ({ limit }) => {
+  })
+
+  const checkMessagesShape = {
+    limit: z.number().int().min(1).max(500).optional(),
+  }
+  tools.push({
+    name: "check_messages",
+    description:
+      "Return pending message deliveries for the conversation this MCP session is bound to.",
+    inputSchema: zodShapeToJsonSchema(checkMessagesShape),
+    zodSchema: z.object(checkMessagesShape),
+    handler: async (input) => {
+      const { limit } = input as { limit?: number }
       // Scoping to params.conversationId is load-bearing for session
       // isolation: a per-conversation runtime asking the IM surface for
-      // "what's queued?" must never see another conversation's deliveries,
-      // even though the underlying remote_agent participates in many.
+      // "what's queued?" must never see another conversation's deliveries.
       const result = await checkRemoteAgentMessages({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
@@ -159,22 +163,26 @@ function registerImTools(params: {
         limit,
       })
       return jsonToolResult(result)
-    }
-  )
-
-  server.registerTool(
-    "read_history",
-    {
-      description:
-        "Read visible conversation history for the conversation bound to this MCP session.",
-      inputSchema: {
-        afterSequence: z.number().int().min(0).optional(),
-        beforeSequence: z.number().int().min(0).optional(),
-        limit: z.number().int().min(1).max(200).optional(),
-      },
-      outputSchema: { items: z.array(z.any()) },
     },
-    async ({ afterSequence, beforeSequence, limit }) => {
+  })
+
+  const readHistoryShape = {
+    afterSequence: z.number().int().min(0).optional(),
+    beforeSequence: z.number().int().min(0).optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  }
+  tools.push({
+    name: "read_history",
+    description:
+      "Read visible conversation history for the conversation bound to this MCP session.",
+    inputSchema: zodShapeToJsonSchema(readHistoryShape),
+    zodSchema: z.object(readHistoryShape),
+    handler: async (input) => {
+      const { afterSequence, beforeSequence, limit } = input as {
+        afterSequence?: number
+        beforeSequence?: number
+        limit?: number
+      }
       const result = await getRemoteAgentConversationHistory({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
@@ -212,21 +220,24 @@ function registerImTools(params: {
         })
       }
       return jsonToolResult(result)
-    }
-  )
-
-  server.registerTool(
-    "send_message",
-    {
-      description:
-        "Send a text reply into the bound Synapse conversation as this remote agent.",
-      inputSchema: {
-        content: z.string().trim().min(1).max(20000),
-        replyToItemId: z.uuid().optional(),
-      },
-      outputSchema: { item: z.any() },
     },
-    async ({ content, replyToItemId }) => {
+  })
+
+  const sendMessageShape = {
+    content: z.string().trim().min(1).max(20000),
+    replyToItemId: z.uuid().optional(),
+  }
+  tools.push({
+    name: "send_message",
+    description:
+      "Send a text reply into the bound Synapse conversation as this remote agent.",
+    inputSchema: zodShapeToJsonSchema(sendMessageShape),
+    zodSchema: z.object(sendMessageShape),
+    handler: async (input) => {
+      const { content, replyToItemId } = input as {
+        content: string
+        replyToItemId?: string
+      }
       const result = await sendRemoteAgentConversationMessage({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
@@ -236,20 +247,20 @@ function registerImTools(params: {
         replyToItemId,
       })
       return jsonToolResult({ item: result.item })
-    }
-  )
-
-  server.registerTool(
-    "search_messages",
-    {
-      description: "Search visible messages inside the bound conversation.",
-      inputSchema: {
-        query: z.string().trim().min(1).max(512),
-        limit: z.number().int().min(1).max(100).optional(),
-      },
-      outputSchema: { matches: z.array(z.any()) },
     },
-    async ({ query, limit }) => {
+  })
+
+  const searchMessagesShape = {
+    query: z.string().trim().min(1).max(512),
+    limit: z.number().int().min(1).max(100).optional(),
+  }
+  tools.push({
+    name: "search_messages",
+    description: "Search visible messages inside the bound conversation.",
+    inputSchema: zodShapeToJsonSchema(searchMessagesShape),
+    zodSchema: z.object(searchMessagesShape),
+    handler: async (input) => {
+      const { query, limit } = input as { query: string; limit?: number }
       const result = await searchRemoteAgentMessages({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
@@ -258,31 +269,22 @@ function registerImTools(params: {
         limit,
       })
       return jsonToolResult(result)
-    }
-  )
+    },
+  })
+
+  return tools
 }
 
-async function registerResolvedTools(params: {
-  server: McpServer
+async function buildResolvedTools(params: {
   workspaceId: string
   remoteAgentId: string
   conversationId: string
   conversationKind: "direct" | "group"
   isImConversation: boolean
   sessionKey: string
-}): Promise<() => Promise<void>> {
+}): Promise<{ tools: RegisteredTool[]; shutdown: () => Promise<void> }> {
   // The resolver evaluates resource_access_bindings exactly like an actor
-  // would (workspace + conversation grants for the remote-agent path) and
-  // returns ready-to-execute plugin + device_capability tool definitions.
-  // We mount each one as a passthrough that calls back into the same
-  // executor.
-  //
-  // conversationKind + isImConversation are LOAD-BEARING here: the
-  // resolver's conversation_type mask filter (loadVisiblePlugins +
-  // projectDeviceTools) rejects rows that don't match the conversation
-  // type, and shared/utils:maskAllowsConversationType returns false when
-  // the kind is missing. Without these values plugin / device tools
-  // would be silently filtered out even when authorization passes.
+  // would and returns ready-to-execute plugin + device_capability tools.
   const resolved = await projectToolsForPrincipal({
     workspaceId: params.workspaceId,
     principal: {
@@ -296,49 +298,112 @@ async function registerResolvedTools(params: {
     consumer: "reverse_mcp",
     sessionId: params.sessionKey,
   })
+
+  const tools: RegisteredTool[] = []
   for (const def of resolved.tools as ToolDefinition[]) {
-    try {
-      // Augment description with a [device:Name] / [plugin:Name] /
-      // [skill:Name] origin badge so the remote agent (and the conversation
-      // transcript surface) can attribute tool results back to their device.
-      // The ToolDefinition.namespacedToolName carries the source kind prefix
-      // for plugin/device tools; we surface that as a leading bracketed tag.
-      const originBadge = describeToolOrigin(def)
-      const decoratedDescription = originBadge
-        ? `${originBadge} ${def.description ?? ""}`.trim()
-        : def.description
-      params.server.registerTool(
-        def.name,
-        {
-          description: decoratedDescription,
-          inputSchema: toolDefinitionToZodShape(def),
-        },
-        async (input: Record<string, unknown>) => {
-          const output = await resolved.executor(def.name, input ?? {})
-          return {
-            content: Array.isArray(output.content)
-              ? (output.content as any)
-              : [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify(output, null, 2),
-                  },
-                ],
-            isError: output.isError ?? undefined,
-          }
+    const originBadge = describeToolOrigin(def)
+    const decoratedDescription = originBadge
+      ? `${originBadge} ${def.description ?? ""}`.trim()
+      : (def.description ?? "")
+    // Prefer the lossless raw JSON Schema; fall back to the lossy `parameters`
+    // projection. Projected tools are NOT re-validated here — their executor
+    // performs domain validation downstream.
+    const inputSchema: Record<string, unknown> =
+      def.rawInputSchema ?? (def.parameters as Record<string, unknown>)
+    tools.push({
+      name: def.name,
+      description: decoratedDescription,
+      inputSchema,
+      handler: async (input) => {
+        const output = await resolved.executor(def.name, input ?? {})
+        return {
+          content: Array.isArray(output.content)
+            ? (output.content as unknown as Array<Record<string, unknown>>)
+            : [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify(output, null, 2),
+                },
+              ],
+          isError: output.isError ?? undefined,
         }
-      )
-    } catch (error) {
-      log.warn(
-        {
-          toolName: def.name,
-          err: error instanceof Error ? error.message : error,
-        },
-        "[remote-agent mcp] tool registration skipped"
-      )
-    }
+      },
+    })
   }
-  return resolved.shutdown
+  return { tools, shutdown: resolved.shutdown }
+}
+
+/**
+ * Register a single unified tool registry on the low-level Server via
+ * setRequestHandler(ListTools/CallTool). This replaces per-tool
+ * `registerTool(...)` so projected tools can advertise their full raw JSON
+ * Schema without being forced through a lossy Zod round-trip, while IM tools
+ * keep their Zod validation.
+ */
+function installUnifiedToolRegistry(
+  server: McpServer,
+  tools: RegisteredTool[]
+): void {
+  const byName = new Map(tools.map((t) => [t.name, t]))
+  // Low-level handlers live on McpServer.server.
+  const lowLevel = server.server
+  lowLevel.registerCapabilities({ tools: {} })
+
+  lowLevel.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    })),
+  }))
+
+  lowLevel.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const tool = byName.get(request.params.name)
+    if (!tool) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Unknown tool: ${request.params.name}`,
+          },
+        ],
+        isError: true,
+      }
+    }
+    const rawArgs = (request.params.arguments ?? {}) as Record<string, unknown>
+    let args = rawArgs
+    // IM tools validate input against their Zod schema before dispatch (the
+    // old registerTool() did this automatically; the low-level path must do it
+    // explicitly so bad input is rejected, not silently accepted).
+    if (tool.zodSchema) {
+      const parsed = tool.zodSchema.safeParse(rawArgs)
+      if (!parsed.success) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Invalid arguments for ${tool.name}: ${parsed.error.message}`,
+            },
+          ],
+          isError: true,
+        }
+      }
+      args = parsed.data as Record<string, unknown>
+    }
+    try {
+      return await tool.handler(args)
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: error instanceof Error ? error.message : String(error),
+          },
+        ],
+        isError: true,
+      }
+    }
+  })
 }
 
 function reapIdleTransports() {
@@ -370,40 +435,29 @@ async function createSessionTransport(params: {
   conversationKind: "direct" | "group"
   isImConversation: boolean
 }): Promise<ActiveTransport> {
-  // sessionId is used downstream as a cache scope (device-tool runtime
-  // context map keys, "session:<id>:turn:<uuid>" reuse keys) AND
-  // historically fed into a UUID-typed column lookup in subject-
-  // resolution. The subject-resolution path is now gated on actorId so
-  // non-UUID values are safe there, but we still hand the resolver a
-  // real UUID so any future caller that treats
-  // sessionId as a UUID does not silently break the reverse-MCP surface.
   const sessionKey = randomUUID()
   const server = new McpServer(
     { name: "synapse", version: "0.1.0" },
     { capabilities: { logging: {} } }
   )
-  registerImTools({
-    server,
+  const imTools = buildImTools({
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     machineKey: params.machineKey,
   })
-  // Deliberately NOT wrapped in try/catch: an earlier version swallowed the
-  // resolver failure and mounted only the IM tools, which meant a UUID-column
-  // crash in the resolver looked like a clean tools/list to the caller while
-  // plugin / device_capability grants silently disappeared. Re-throwing here
-  // makes the failure surface as an initialize HTTP 500 — the loud failure
-  // mode is the correct one for the "tool projection" acceptance point in
-  // the plan.
-  const pluginShutdown = await registerResolvedTools({
-    server,
-    workspaceId: params.workspaceId,
-    remoteAgentId: params.remoteAgentId,
-    conversationId: params.conversationId,
-    conversationKind: params.conversationKind,
-    isImConversation: params.isImConversation,
-    sessionKey,
-  })
+  // Deliberately NOT wrapped in try/catch: a resolver failure must surface as
+  // an initialize HTTP 500, not silently drop plugin/device grants.
+  const { tools: resolvedTools, shutdown: pluginShutdown } =
+    await buildResolvedTools({
+      workspaceId: params.workspaceId,
+      remoteAgentId: params.remoteAgentId,
+      conversationId: params.conversationId,
+      conversationKind: params.conversationKind,
+      isImConversation: params.isImConversation,
+      sessionKey,
+    })
+  installUnifiedToolRegistry(server, [...imTools, ...resolvedTools])
+
   let storedSessionId: string | undefined
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
@@ -456,12 +510,8 @@ export async function handleRemoteAgentMcpRequest(
   const machineKey = getMachineKeyFromHeaders(request)
   // Authentication (machineKey) and authorization (conversation belongs to
   // this remote_agent) are split deliberately:
-  //   - 401 means "we couldn't identify the caller" → bad/missing machineKey,
-  //     or the machine isn't bound to this remote_agent at all.
+  //   - 401 means "we couldn't identify the caller"
   //   - 403 means "you authenticated fine, but the conversation isn't yours"
-  //     → the remote_agent isn't an active participant of that conversation.
-  // Treating both as 401 would let a leaked machineKey probe the
-  // conversation-id space and learn which ones exist by status code alone.
   let workspaceId: string
   try {
     const auth = await authenticateMachineForRemoteAgent({
@@ -500,8 +550,7 @@ export async function handleRemoteAgentMcpRequest(
         active.conversationId !== request.params.conversationId)
     ) {
       // Mcp-Session-Id is global. Cross-(agent, conversation) reuse would let
-      // a different agent's session be commandeered just by including the id;
-      // refuse instead of silently routing.
+      // a different agent's session be commandeered just by including the id.
       return reply.code(404).send({ error: "Unknown MCP session id" })
     }
   }

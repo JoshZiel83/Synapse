@@ -18,8 +18,11 @@ import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
 import {
   normalizeMijiaLocale,
   progressMijiaQrLoginSession,
+  refreshMijiaSessionTokens,
   startMijiaQrLoginSession,
 } from "./mijia/auth.js"
+import { persistMijiaConnectionState } from "./mijia/connection-store.js"
+import type { MijiaAuthState } from "./mijia/types.js"
 import {
   progressFeishuCliSetup,
   refreshFeishuUserAccessToken,
@@ -1272,6 +1275,20 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
   return getConnectionRow(row.id)
 }
 
+// Proactive resolve-time refresh for Mijia. The Mijia plugin proxies a
+// stateless multi-tenant sidecar that has nowhere to persist a refreshed
+// serviceToken, so the refresh must happen here (Synapse owns the encrypted
+// connection store) before the credentials are forwarded. The decrypted
+// secret_payload is the internal MijiaAuthState.
+async function refreshMijiaConnection(row: PluginConnectionRow) {
+  const secretPayload = asObject(decryptDeep(asObject(row.secret_payload)))
+  const nextState = await refreshMijiaSessionTokens(
+    secretPayload as unknown as MijiaAuthState
+  )
+  await persistMijiaConnectionState(row.id, nextState)
+  return getConnectionRow(row.id)
+}
+
 async function ensureFreshPluginConnection(row: PluginConnectionRow) {
   if (
     row.status !== "active" ||
@@ -1307,7 +1324,7 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
       case "oauth2_authorization_code_pkce":
         return await refreshOAuthConnection(binding, row, configData)
       case "mijia_qr_login":
-        return row
+        return await refreshMijiaConnection(row)
       case "feishu_cli_setup":
         return await refreshFeishuConnection(row)
       default:
@@ -2030,9 +2047,14 @@ export async function resolveAuthConnectionRefs(
     const row = await ensureFreshPluginConnection(
       await getConnectionRow(ref.connectionId)
     )
-    const secretPayload = asObject(decryptDeep(asObject(row.secret_payload)))
+    let secretPayload = asObject(decryptDeep(asObject(row.secret_payload)))
     if (row.status !== "active") {
-      delete secretPayload.accessToken
+      // Fail-closed: never forward a non-active connection's secrets. Clear the
+      // whole payload (not just OAuth's accessToken) so drivers like Mijia,
+      // whose secret is the full session dict, can't leak a stale serviceToken.
+      // The entryPoint template layer also gates ${auth:*}/${auth_b64:*} on an
+      // active status; this is defense in depth.
+      secretPayload = {}
     }
     resolved[key] = {
       type: "auth_connection",

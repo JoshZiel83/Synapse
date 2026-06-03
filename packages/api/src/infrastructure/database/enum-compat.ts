@@ -46,6 +46,8 @@ import {
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
+  PLUGIN_SPEC_TRANSPORTS,
+  DEVICE_EXPOSURE_TRANSPORTS,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
   TRANSPORT_ACCOUNT_STATUSES,
@@ -54,6 +56,7 @@ import {
   TRANSPORT_KINDS,
   WORKSPACE_ACCESS_KEYS,
 } from "@synapse/shared/constants"
+import type { DeviceExposureTransport as DeviceProtocolExposureTransport } from "@synapse/device-protocol"
 import type {
   CatalogVersionFilesFileRole,
   ActorsRole,
@@ -93,6 +96,7 @@ import type {
   SessionWakeupsSourceType,
   SessionWakeupsStatus,
   ToolCallTasksStatus,
+  PluginPackageVersionSpecsTransport,
   TransportAccountsConnectionMode,
   TransportAccountsInboundActorMode,
   TransportAccountsOwnerScope,
@@ -109,6 +113,23 @@ type Assert<T extends true> = T
 
 type _InviteTrustLevelMatchesDb = Assert<
   IsEqual<InviteTrustLevel, WorkspaceInvitesTrustLevel>
+>
+// Plugin catalog spec transport set must equal the DB enum
+// (plugin_package_version_specs.transport). Adding "sse" to the shared tuple
+// and the schema.sql ENUM keeps these in lockstep.
+type _PluginSpecTransportMatchesDb = Assert<
+  IsEqual<
+    (typeof PLUGIN_SPEC_TRANSPORTS)[number],
+    PluginPackageVersionSpecsTransport
+  >
+>
+// The device-exposure transport tuple is duplicated across the @synapse/shared
+// and @synapse/device-protocol package boundaries; assert they never drift.
+type _DeviceExposureTransportSharedMatchesProtocol = Assert<
+  IsEqual<
+    (typeof DEVICE_EXPOSURE_TRANSPORTS)[number],
+    DeviceProtocolExposureTransport
+  >
 >
 type _PlatformAccessKeyMatchesDb = Assert<
   IsEqual<

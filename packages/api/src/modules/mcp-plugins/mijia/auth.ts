@@ -17,6 +17,12 @@ const MIJIA_APP_BASE_URL = "https://api.mijia.tech/app"
 const MIJIA_QR_URL = "https://account.xiaomi.com/longPolling/loginUrl"
 const MIJIA_SERVICE_LOGIN_URL = "https://account.xiaomi.com/pass/serviceLogin"
 const DEFAULT_QR_TTL_MS = 10 * 60_000
+// Xiaomi service tokens are long-lived; we treat a fresh login OR a successful
+// refresh as good for 30 days and extend expireTime accordingly. The
+// resolve-time refresh (ensureFreshPluginConnection) fires within 60s of this,
+// so without extending it on refresh the connection would re-refresh on every
+// resolve and eventually be marked expired.
+const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000
 const SERVICE_TOKEN_COOKIE_NAME = "serviceToken"
 const YET_ANOTHER_SERVICE_TOKEN = "yetAnotherServiceToken"
 
@@ -506,7 +512,7 @@ export async function progressMijiaQrLoginSession(input: {
     ),
     serviceToken,
     yetAnotherServiceToken: jar.get(YET_ANOTHER_SERVICE_TOKEN) || serviceToken,
-    expireTime: Date.now() + 30 * 24 * 60 * 60 * 1_000,
+    expireTime: Date.now() + SESSION_LIFETIME_MS,
     saveTime: Date.now(),
   }
 
@@ -574,10 +580,51 @@ export async function refreshMijiaSessionTokens(authState: MijiaAuthState) {
       serviceData.ssecurity.trim().length > 0
         ? serviceData.ssecurity
         : authState.ssecurity,
+    // Extend the lifetime on successful refresh; otherwise the stale expireTime
+    // keeps the connection perpetually within the refresh window.
+    expireTime: Date.now() + SESSION_LIFETIME_MS,
     saveTime: Date.now(),
   } satisfies MijiaAuthState
 }
 
 export function getMijiaAppBaseUrl() {
   return MIJIA_APP_BASE_URL
+}
+
+/**
+ * Serialize the internal MijiaAuthState into the canonical auth dict that the
+ * upstream mijiaAPI (and the mijia-mcp sidecar) expects.
+ *
+ * The internal state uses `userAgent`/`passO`; mijiaAPI's `available` check and
+ * request signing hard-require `ua`/`pass_o` (plus userId/cUserId/serviceToken/
+ * ssecurity). We map field names without mutating the stored state so that
+ * refreshMijiaSessionTokens (which reads the internal shape) keeps working.
+ *
+ * This is registered as the auth-secret serializer for the `mijia_qr_login`
+ * driver, so `${auth_b64:mijiaAccount}` in the seed entryPoint base64-encodes
+ * THIS shape rather than the raw internal state.
+ */
+export function serializeMijiaAuthForMiot(
+  state: Record<string, unknown>
+): Record<string, unknown> {
+  const s = state as Partial<MijiaAuthState> & Record<string, unknown>
+  const out: Record<string, unknown> = {
+    ua: s.userAgent,
+    deviceId: s.deviceId,
+    pass_o: s.passO,
+    userId: s.userId,
+    cUserId: s.cUserId,
+    serviceToken: s.serviceToken,
+    ssecurity: s.ssecurity,
+    passToken: s.passToken,
+    psecurity: s.psecurity,
+    nonce: s.nonce,
+    expireTime: s.expireTime,
+    saveTime: s.saveTime,
+  }
+  // Drop undefined keys so the JSON the sidecar receives is clean.
+  for (const key of Object.keys(out)) {
+    if (out[key] === undefined) delete out[key]
+  }
+  return out
 }

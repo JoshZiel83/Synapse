@@ -237,7 +237,7 @@ export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation
 
 export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
-export type PluginPackageVersionSpecsTransport = "builtin" | "device" | "http" | "stdio";
+export type PluginPackageVersionSpecsTransport = "builtin" | "device" | "http" | "sse" | "stdio";
 
 export type PluginSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
@@ -1322,6 +1322,8 @@ export interface FileMounts {
   pairing_session_id: string | null;
   refresh_policy: Generated<string>;
   result_snapshot_id: string | null;
+  sandbox_backend: string | null;
+  sandbox_resource_id: string | null;
   session_id: string;
   status: Generated<FileMountStatus>;
   updated_at: Generated<Timestamp>;

@@ -25,6 +25,7 @@
 ## Docker 生产部署约定
 
 - 生产环境以 `docker compose --profile production` 为统一部署入口，不再以宿主机 `systemd` 管理 API、桌面 Web 或移动 Web 进程。
+- 可选 sidecar 用独立 profile 叠加：私有 npm registry 用 `registry`；Mijia 米家 MCP sidecar 用 `mijia`（内网专用，凭据按请求经 header 传入，不读 `.env`），例如 `docker compose --profile production --profile mijia up -d --build mijia-mcp api`。详见 deploy.md §5c 与 `sidecars/mijia-mcp/UPSTREAM.md`。
 - 修改任何会影响生产运行的代码、配置、数据库访问、权限逻辑、前端构建产物或 nginx 路由后，都需要重新构建并拉起对应 Compose 服务，不能只假设热更新或旧容器会自动生效。
 - 常用检查命令：
   - `docker compose --profile production ps`

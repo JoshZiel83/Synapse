@@ -129,7 +129,9 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
         function: {
           name: t.name,
           description: t.description,
-          parameters: t.parameters,
+          // Prefer lossless raw JSON Schema (remote/stdio MCP) over the lossy
+          // `parameters` projection.
+          parameters: t.rawInputSchema ?? t.parameters,
         },
       }))
       body.tool_choice = "auto"

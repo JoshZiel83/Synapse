@@ -29,7 +29,7 @@ import {
   DeviceHelloParamsSchema,
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
-import { db } from "../../infrastructure/database/kysely.js"
+import { db, type KyselyDb } from "../../infrastructure/database/kysely.js"
 import { persistCatalogSync } from "./catalog-sync.js"
 import { authenticateDeviceHello } from "./control-plane-auth.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
@@ -128,33 +128,80 @@ function writePersistResult(
  *      device's tunnel route by registering an internal_url that includes
  *      a peer's well-known path segment.
  */
-async function validateTunnelInternalUrl(args: {
+/**
+ * Validate a device-supplied tunnel internal_url before registering it in the
+ * DeviceTunnelRegistry. Exported for unit tests; the control-plane handler is
+ * the only production caller. Two accept paths:
+ *  - frp edge: origin matches SYNAPSE_DEVICE_TUNNEL_EDGE_URL + /d/<token> bound
+ *    to this service (production cloud/docker).
+ *  - local loopback: strict literal 127.0.0.1/[::1] http URL, no path/creds,
+ *    accepted ONLY for a device with a live local sandbox mount.
+ */
+export async function validateTunnelInternalUrl(args: {
   candidate: string
   deviceServiceId: string
+  /** Executor seam (defaults to the global db); tests inject a testcontainer db. */
+  executor?: KyselyDb
 }): Promise<{ ok: true } | { ok: false; message: string }> {
-  const trustedPrefix = process.env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim()
-  if (!trustedPrefix) {
-    return {
-      ok: false,
-      message:
-        "SYNAPSE_DEVICE_TUNNEL_EDGE_URL not configured — refusing to register any device tunnel endpoint",
-    }
-  }
+  const executor = args.executor ?? db
   let candidateUrl: URL
-  let trustedUrl: URL
   try {
     candidateUrl = new URL(args.candidate)
-    trustedUrl = new URL(trustedPrefix)
   } catch {
     return { ok: false, message: "internal_url must be a valid http(s) URL" }
   }
-  if (candidateUrl.origin !== trustedUrl.origin) {
+
+  // A URL carrying credentials (user:pass@host) is never accepted — it can
+  // smuggle auth into the dispatcher's fetch and muddies origin checks.
+  if (candidateUrl.username || candidateUrl.password) {
     return {
       ok: false,
-      message: `internal_url origin ${candidateUrl.origin} is not under the trusted tunnel edge ${trustedUrl.origin}`,
+      message: "internal_url must not contain credentials",
     }
   }
-  const tokenMatch = /\/d\/([^/]+)/.exec(candidateUrl.pathname)
+
+  const trustedPrefix = process.env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim()
+  // The frp edge path: candidate must sit under the trusted edge origin and
+  // carry a /d/<token> route bound to THIS service. This is the production
+  // cloud/docker path.
+  if (trustedPrefix) {
+    let trustedUrl: URL | null = null
+    try {
+      trustedUrl = new URL(trustedPrefix)
+    } catch {
+      trustedUrl = null
+    }
+    if (trustedUrl && candidateUrl.origin === trustedUrl.origin) {
+      return validateFrpEdgeUrl({
+        candidateUrl,
+        deviceServiceId: args.deviceServiceId,
+        executor,
+      })
+    }
+  }
+
+  // The local-sandbox loopback path: a same-host device-runtime started by the
+  // LOCAL sandbox backend exposes its MCP host directly on loopback (no frpc).
+  // Accept it ONLY when the candidate is a strict literal-loopback http URL AND
+  // this service belongs to a device with a LIVE local sandbox mount — so a
+  // compromised cloud/remote device can never point the dispatcher at the API
+  // host's own loopback (SSRF) by claiming a loopback endpoint.
+  return validateLocalLoopbackUrl({
+    candidateUrl,
+    deviceServiceId: args.deviceServiceId,
+    hadTrustedPrefix: Boolean(trustedPrefix),
+    executor,
+  })
+}
+
+/** frp edge: origin already matched the trusted edge; require /d/<token> bound
+ *  to this service (the server issues the token in the device.hello ack). */
+async function validateFrpEdgeUrl(args: {
+  candidateUrl: URL
+  deviceServiceId: string
+  executor: KyselyDb
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const tokenMatch = /\/d\/([^/]+)/.exec(args.candidateUrl.pathname)
   if (!tokenMatch) {
     return {
       ok: false,
@@ -166,7 +213,7 @@ async function validateTunnelInternalUrl(args: {
   // it on the device_services row. Any mismatch means either the device is
   // out of sync (re-registered without re-reading the ack) or is attempting
   // to claim a peer's route — either way we reject.
-  const row = await db
+  const row = await args.executor
     .selectFrom("device_services")
     .select(["tunnel_path_token"])
     .where("id", "=", args.deviceServiceId)
@@ -184,6 +231,72 @@ async function validateTunnelInternalUrl(args: {
       ok: false,
       message:
         "internal_url tunnel path token does not match the token bound to this device_service",
+    }
+  }
+  return { ok: true }
+}
+
+/** Hostnames we accept as direct loopback for the local sandbox backend.
+ *  Strict literals only — NOT "localhost" (which can resolve to a non-loopback
+ *  address via /etc/hosts) and NOT any private/metadata IP. */
+const LOCAL_LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "::1"])
+
+/** Local-sandbox loopback: accept http://127.0.0.1:<port> (or [::1]) only when
+ *  the service maps to a device with a LIVE local sandbox mount. */
+async function validateLocalLoopbackUrl(args: {
+  candidateUrl: URL
+  deviceServiceId: string
+  hadTrustedPrefix: boolean
+  executor: KyselyDb
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { candidateUrl } = args
+  if (candidateUrl.protocol !== "http:") {
+    return {
+      ok: false,
+      message:
+        "local sandbox loopback internal_url must use http (got " +
+        `${candidateUrl.protocol})`,
+    }
+  }
+  // URL.hostname strips brackets from IPv6; rebuild the bracketed form so the
+  // literal set matches what a URL like http://[::1]:port yields.
+  const host = candidateUrl.hostname
+  const isLoopback =
+    LOCAL_LOOPBACK_HOSTS.has(host) || LOCAL_LOOPBACK_HOSTS.has(`[${host}]`)
+  if (!isLoopback) {
+    return {
+      ok: false,
+      message: args.hadTrustedPrefix
+        ? `internal_url origin ${candidateUrl.origin} is neither the trusted tunnel edge nor a local-sandbox loopback`
+        : "SYNAPSE_DEVICE_TUNNEL_EDGE_URL not configured and internal_url is not a local-sandbox loopback — refusing to register",
+    }
+  }
+  // The loopback path must be empty/root — a loopback URL carries no /d/<token>
+  // route and shouldn't smuggle a path either.
+  if (candidateUrl.pathname && candidateUrl.pathname !== "/") {
+    return {
+      ok: false,
+      message: "local sandbox loopback internal_url must not carry a path",
+    }
+  }
+  // Bind the loopback grant to a LIVE local sandbox: this device must own a
+  // file_mounts row with sandbox_backend='local' that isn't closed/failed. Raw
+  // status comparison (matching getActiveMountsForSession) so the file_mount_status
+  // enum compares against literals without a parameterized-text cast mismatch.
+  const liveLocalMount = await args.executor
+    .selectFrom("file_mounts as m")
+    .innerJoin("device_services as s", "s.device_id", "m.device_id")
+    .select("m.id")
+    .where("s.id", "=", args.deviceServiceId)
+    .where("m.sandbox_backend", "=", "local")
+    .where(sql<boolean>`m.status NOT IN ('closed', 'failed')`)
+    .limit(1)
+    .executeTakeFirst()
+  if (!liveLocalMount) {
+    return {
+      ok: false,
+      message:
+        "loopback internal_url is only accepted for a device with a live local sandbox mount",
     }
   }
   return { ok: true }
