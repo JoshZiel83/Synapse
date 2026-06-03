@@ -1,0 +1,29 @@
+# gitleaks configuration for Synapse.
+# Extends the bundled default ruleset; adds NARROW allowlists for known,
+# reviewed false positives only. Do not broaden these to whole directories or
+# whole file types (e.g. all *.test.ts, all .env.example) — that creates blind
+# spots where a real secret could hide. For one-off test fixtures, prefer an
+# inline `// gitleaks:allow` comment on the offending line instead.
+#
+# Historical findings that pre-date this config (e.g. a key already removed from
+# HEAD but still in git history) are handled by .gitleaks-baseline.json in CI,
+# NOT here. See docs/secret-scanning.md.
+
+[extend]
+useDefault = true
+
+# The clawhub scan-skill ships a secret-detection ruleset whose source literally
+# contains key SHAPES (AKIA…, sk-…, xox…, BEGIN PRIVATE KEY). The whole file is
+# pattern definitions, so a file-scoped allowlist is appropriate here.
+[[allowlists]]
+description = "scan-skill ruleset: file is by-design full of key-shaped patterns"
+paths = ['''\.setup/skills/clawhub/skills/scan-skill/scripts/patterns\.py$''']
+
+# security-auditor SKILL.md has exactly ONE documentation example key. Scope the
+# allowlist to that file AND that specific literal — not the whole file — so a
+# different real key added later would still be caught.
+[[allowlists]]
+description = "security-auditor SKILL.md: single doc-example key"
+condition = "AND"
+paths = ['''\.setup/skills/clawhub/skills/security-auditor/SKILL\.md$''']
+regexes = ['''sk-1234567890abcdef''']
