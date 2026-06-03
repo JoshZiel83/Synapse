@@ -201,12 +201,12 @@ export const auth = betterAuth({
       // The DB generates every id (DEFAULT uuid_generate_v4()); BA must not.
       generateId: false,
     },
-    cookies: {
-      // Keep the canonical session cookie name. Better Auth still adds the
-      // __Secure- prefix automatically in production; business code never reads
-      // the cookie by name (it calls auth.api.getSession / forwards headers).
-      session_token: { name: "synapse_session" },
-    },
+    // Keep Better Auth's DEFAULT cookie name (better-auth.session_token, with an
+    // automatic __Secure- prefix in production). We do NOT rename it: business
+    // code never reads the cookie by name (it calls auth.api.getSession /
+    // forwards headers), and @better-auth/expo's cookie-jar only persists
+    // cookies whose name matches its prefix or ends in `session_token` — a
+    // custom name would silently break native session capture.
   },
 
   session: {

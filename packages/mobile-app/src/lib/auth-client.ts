@@ -74,8 +74,10 @@ export function getSessionBearerToken(): string | null {
     if (eq === -1) continue
     const name = part.slice(0, eq).trim()
     const value = part.slice(eq + 1).trim()
-    // Match the session cookie regardless of the production __Secure- prefix.
-    if (name === "synapse_session" || name === "__Secure-synapse_session") {
+    // Match Better Auth's session cookie by suffix so it works regardless of
+    // the production `__Secure-` prefix (e.g. better-auth.session_token /
+    // __Secure-better-auth.session_token).
+    if (name.endsWith("session_token")) {
       return value || null
     }
   }

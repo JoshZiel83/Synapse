@@ -262,17 +262,34 @@ class ApiClient {
       body: JSON.stringify({ client_id: "synapse-web" }),
     })
   }
-  pollDeviceToken(
+  async pollDeviceToken(
     deviceCode: string
   ): Promise<{ access_token?: string; error?: string }> {
-    return this.fetch("/auth/device/token", {
-      method: "POST",
-      body: JSON.stringify({
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        device_code: deviceCode,
-        client_id: "synapse-web",
-      }),
-    })
+    // RFC 8628: the device token endpoint returns HTTP 400 with an OAuth error
+    // body for the normal-flow states (authorization_pending / slow_down) as
+    // well as terminal ones (access_denied / expired_token). Our fetch wrapper
+    // throws on any non-2xx, so unwrap the error body here and surface it as a
+    // value instead of letting the poller treat "still pending" as a failure.
+    try {
+      return await this.fetch("/auth/device/token", {
+        method: "POST",
+        body: JSON.stringify({
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+          device_code: deviceCode,
+          client_id: "synapse-web",
+        }),
+      })
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const details = err.details as { error?: string } | undefined
+        const oauthError =
+          (details && typeof details.error === "string" && details.error) ||
+          err.code ||
+          "invalid_grant"
+        return { error: oauthError }
+      }
+      throw err
+    }
   }
   exchangeDeviceSession(accessToken: string) {
     return this.fetch("/auth/device/session-cookie", {

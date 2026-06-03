@@ -267,6 +267,10 @@ VOLCENGINE_ASR_IDLE_TIMEOUT_MS=15000
 NEXT_PUBLIC_API_URL=/api/v1
 NEXT_PUBLIC_WS_URL=$WS_URL
 EXPO_PUBLIC_API_URL=$APP_URL/api/v1
+# Public origin Better Auth is mounted on for the mobile app. Leave empty for
+# same-origin deploys (falls back to the API origin); set it only when the
+# browser-facing public origin differs from the internal API origin.
+EXPO_PUBLIC_AUTH_ORIGIN=
 EXPO_BASE_URL=/mobile
 
 # AI provider

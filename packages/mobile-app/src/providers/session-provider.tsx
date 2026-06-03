@@ -105,7 +105,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [queryClient])
 
   const refreshSession = useCallback(async () => {
-    const storedToken = await readStoredValue(SESSION_TOKEN_KEY)
+    // Prefer our persisted bearer token; otherwise fall back to the Better Auth
+    // expo cookie-jar (this is how an OAuth/deep-link return surfaces a session
+    // that was established by the browser flow, not by our email sign-in).
+    let storedToken = await readStoredValue(SESSION_TOKEN_KEY)
+    if (!storedToken) {
+      const jarToken = getSessionBearerToken()
+      if (jarToken) {
+        storedToken = jarToken
+        await persistSessionToken(jarToken)
+      }
+    }
     if (!storedToken) {
       applySession({ token: null }, setState)
       return
@@ -146,13 +156,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [clearSession])
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await authClient.signIn.email({ email, password })
+    const { data, error } = await authClient.signIn.email({ email, password })
     if (error) {
       throw new ApiError(error.message ?? "Sign in failed", error.status ?? 401)
     }
-    // The expo cookie-jar stored the session cookie; surface its value as the
-    // bearer token the REST/WS layers attach.
-    const token = getSessionBearerToken()
+    // Prefer the token from the response body; fall back to the expo cookie-jar.
+    // This is the bearer token the REST/WS layers attach.
+    const token = data?.token ?? getSessionBearerToken()
     await persistSessionToken(token)
     setApiAuthToken(token)
     const me = await api.getMe()
@@ -161,14 +171,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const signUp = useCallback(
     async (name: string, email: string, password: string) => {
-      const { error } = await authClient.signUp.email({ name, email, password })
+      const { data, error } = await authClient.signUp.email({
+        name,
+        email,
+        password,
+      })
       if (error) {
         throw new ApiError(
           error.message ?? "Sign up failed",
           error.status ?? 400
         )
       }
-      const token = getSessionBearerToken()
+      const token = data?.token ?? getSessionBearerToken()
       await persistSessionToken(token)
       setApiAuthToken(token)
       const me = await api.getMe()
