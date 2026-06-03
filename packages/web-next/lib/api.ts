@@ -267,9 +267,11 @@ class ApiClient {
   ): Promise<{ access_token?: string; error?: string }> {
     // RFC 8628: the device token endpoint returns HTTP 400 with an OAuth error
     // body for the normal-flow states (authorization_pending / slow_down) as
-    // well as terminal ones (access_denied / expired_token). Our fetch wrapper
-    // throws on any non-2xx, so unwrap the error body here and surface it as a
-    // value instead of letting the poller treat "still pending" as a failure.
+    // well as terminal ones (access_denied / expired_token / invalid_grant).
+    // Our fetch wrapper throws on any non-2xx, so unwrap ONLY those known
+    // 400-status device errors and surface them as a value. Anything else
+    // (500/502, proxy failure, a non-device error) re-throws so the poller
+    // shows a real failure instead of masking it as "expired".
     try {
       return await this.fetch("/auth/device/token", {
         method: "POST",
@@ -280,13 +282,19 @@ class ApiClient {
         }),
       })
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (err instanceof ApiError && err.status === 400) {
         const details = err.details as { error?: string } | undefined
-        const oauthError =
-          (details && typeof details.error === "string" && details.error) ||
-          err.code ||
-          "invalid_grant"
-        return { error: oauthError }
+        const oauthError = details?.error
+        const KNOWN_DEVICE_ERRORS = new Set([
+          "authorization_pending",
+          "slow_down",
+          "expired_token",
+          "access_denied",
+          "invalid_grant",
+        ])
+        if (oauthError && KNOWN_DEVICE_ERRORS.has(oauthError)) {
+          return { error: oauthError }
+        }
       }
       throw err
     }

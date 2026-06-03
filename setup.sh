@@ -179,6 +179,47 @@ upsert_env_var() {
   fi
 }
 
+# Ensure a comma-separated env var CONTAINS each required token, preserving any
+# extra values the operator added. Used for AUTH_TRUSTED_ORIGINS so an existing
+# .env (created before this var existed, or customized) still trusts the app
+# URL + the mobile app scheme — otherwise @better-auth/expo can't return the
+# session on a native OAuth deep-link callback. Adds the key if missing.
+ensure_csv_env_contains() {
+  local file="$1"
+  local key="$2"
+  shift 2
+  local required=("$@")
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  local current=""
+  if grep -q "^${key}=" "$file"; then
+    current="$(sed -n "s/^${key}=//p" "$file" | tail -n 1)"
+  fi
+
+  # Split current on commas into a set; append any required token not present.
+  local merged="$current"
+  local token
+  for token in "${required[@]}"; do
+    case ",${merged}," in
+      *",${token},"*) : ;; # already present
+      *)
+        if [ -z "$merged" ]; then
+          merged="$token"
+        else
+          merged="${merged},${token}"
+        fi
+        ;;
+    esac
+  done
+
+  if [ "$merged" != "$current" ]; then
+    upsert_env_var "$file" "$key" "$merged"
+  fi
+}
+
 ROOT_ENV_CREATED=false
 WEB_ENV_CREATED=false
 ENV_FILES_UPDATED=false
@@ -307,6 +348,9 @@ upsert_env_var "$ENV_FILE" NEXT_PUBLIC_APP_URL "$APP_URL"
 upsert_env_var "$ENV_FILE" NEXT_PUBLIC_SITE_URL "$APP_URL"
 upsert_env_var "$ENV_FILE" EXPO_PUBLIC_API_URL "$APP_URL/api/v1"
 upsert_env_var "$ENV_FILE" EXPO_BASE_URL "/mobile"
+# Merge (not overwrite) so existing/customized .env files still trust the app
+# URL + the mobile app scheme required for native Feishu OAuth deep-link return.
+ensure_csv_env_contains "$ENV_FILE" AUTH_TRUSTED_ORIGINS "$APP_URL" "synapse://"
 
 if [ ! -f "$WEB_ENV_FILE" ]; then
   mkdir -p "$(dirname "$WEB_ENV_FILE")"
