@@ -127,7 +127,7 @@ $downloadUrls = @(
     ('https://downloads.sourceforge.net/project/nsis/NSIS%203/{0}/nsis-{0}.zip' -f $version),
     ('https://sourceforge.net/projects/nsis/files/NSIS%203/{0}/nsis-{0}.zip/download' -f $version)
 )
-$downloadRoot = Join-Path $env:RUNNER_TEMP 'synapse-relay-nsis'
+$downloadRoot = Join-Path $env:RUNNER_TEMP 'synapse-nsis'
 $archivePath = Join-Path $downloadRoot ('nsis-{0}.zip' -f $version)
 $extractRoot = Join-Path $downloadRoot ('nsis-{0}' -f $version)
 

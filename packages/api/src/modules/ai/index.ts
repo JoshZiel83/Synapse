@@ -411,7 +411,7 @@ async function loadToolResolveConversationParticipants(params: {
 // Best-effort origin synthesizer for situations where we know a tool is in
 // the MCP family (because it has a namespaced `org__plugin__tool` shape)
 // but we couldn't get to the real instance.transport to distinguish
-// remote/relay/callable. Used in the replan-skip path of appendMcpFailureResult
+// remote/device/callable. Used in the replan-skip path of appendMcpFailureResult
 // where the tool didn't actually run.
 function deriveOriginFromNamespacedToolName(
   namespacedToolName: string

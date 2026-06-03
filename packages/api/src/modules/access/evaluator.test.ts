@@ -1226,3 +1226,171 @@ async function seedOwnerMemberAndGuest(db: AnyDb) {
   )
   return { workspaceId, ownerMemberId, guestMemberId }
 }
+
+// ---- device permission regression coverage (relay→device naming drift) ----
+//
+// Inserts a device owned by `ownerMemberId` (or by nobody) so the
+// non-ownership branch of hasDevicePermission is the one under test: the
+// `manage_devices` workspace-permission lookup. Before the fix, evaluator.ts
+// queried the stale `manage_relays` key, which is absent from the rules table,
+// so evaluateWorkspacePermission returned false for EVERY non-owner — silently
+// denying workspace admins and device_admin keyholders.
+async function insertDevice(
+  db: AnyDb,
+  workspaceId: string,
+  ownerWorkspaceMemberId: string | null
+): Promise<{ deviceId: string; exposureId: string; capabilityId: string }> {
+  const suffix = Math.random().toString(36).slice(2, 10)
+  const dev = await db
+    .insertInto("devices")
+    .values({
+      workspace_id: workspaceId,
+      owner_workspace_member_id: ownerWorkspaceMemberId,
+      title: "regression device",
+      public_key: `pk-${suffix}`,
+      public_key_fingerprint: `fp-${suffix}`,
+      trust_status: "trusted",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const svc = await db
+    .insertInto("device_services")
+    .values({
+      device_id: dev.id as string,
+      service_kind: "device_runtime",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const exp = await db
+    .insertInto("device_exposures")
+    .values({
+      device_id: dev.id as string,
+      service_id: svc.id as string,
+      stable_key: `exp-${suffix}`,
+      display_name: "regression exposure",
+      transport: "stdio",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const cap = await db
+    .insertInto("device_capabilities")
+    .values({
+      workspace_id: workspaceId,
+      exposure_id: exp.id as string,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return {
+    deviceId: dev.id as string,
+    exposureId: exp.id as string,
+    capabilityId: cap.id as string,
+  }
+}
+
+async function grantWorkspaceAccessKey(
+  db: AnyDb,
+  workspaceMemberId: string,
+  accessKey: string
+): Promise<void> {
+  await db
+    .insertInto("workspace_access_bindings")
+    .values({ workspace_member_id: workspaceMemberId, access_key: accessKey })
+    .execute()
+}
+
+test(
+  "checkPermission(device.manage) is granted to a device_admin keyholder for a device they do not own",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, ownerMemberId, guestMemberId } =
+        await seedOwnerMemberAndGuest(db)
+      // Device owned by the workspace owner; the guest is NOT the device owner.
+      const { deviceId } = await insertDevice(db, workspaceId, ownerMemberId)
+      // Without the key the guest is denied (ownership-only fallback).
+      const beforeKey = await checkPermission(db, {
+        resourceType: "device",
+        resourceId: deviceId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(beforeKey, false)
+      // Granting device_admin must flip it to allowed via manage_devices.
+      await grantWorkspaceAccessKey(db, guestMemberId, "device_admin")
+      const afterKey = await checkPermission(db, {
+        resourceType: "device",
+        resourceId: deviceId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(afterKey, true)
+    })
+  }
+)
+
+test(
+  "checkPermission(device.*) is granted to the workspace admin owner and to the device owner, denied to a plain non-owner member",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, ownerMemberId, guestMemberId } =
+        await seedOwnerMemberAndGuest(db)
+      // Device owned by the guest member (a non-admin).
+      const { deviceId, exposureId, capabilityId } = await insertDevice(
+        db,
+        workspaceId,
+        guestMemberId
+      )
+      // Workspace owner (admin) can manage any device via adminGrants.
+      for (const permission of ["view", "manage", "delete"] as const) {
+        const adminOk = await checkPermission(db, {
+          resourceType: "device",
+          resourceId: deviceId,
+          permission,
+          subject: { type: "workspace_member", id: ownerMemberId },
+        })
+        assert.equal(adminOk, true, `admin ${permission}`)
+      }
+      // Device owner can manage their own device.
+      const ownerOk = await checkPermission(db, {
+        resourceType: "device",
+        resourceId: deviceId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(ownerOk, true)
+      // Exposure + capability handlers delegate to the same device check, so
+      // the admin reaches them too (regression: the capability manage path also
+      // used the stale manage_relays key).
+      const adminExposure = await checkPermission(db, {
+        resourceType: "device_exposure",
+        resourceId: exposureId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: ownerMemberId },
+      })
+      assert.equal(adminExposure, true)
+      const adminCapability = await checkPermission(db, {
+        resourceType: "device_capability",
+        resourceId: capabilityId,
+        permission: "edit",
+        subject: { type: "workspace_member", id: ownerMemberId },
+      })
+      assert.equal(adminCapability, true)
+      // A plain member who neither owns the device nor holds device_admin is
+      // denied — confirms the fix did not over-grant.
+      const strangerUserId = await insertUser(db)
+      const strangerMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        strangerUserId
+      )
+      const strangerDenied = await checkPermission(db, {
+        resourceType: "device",
+        resourceId: deviceId,
+        permission: "manage",
+        subject: { type: "workspace_member", id: strangerMemberId },
+      })
+      assert.equal(strangerDenied, false)
+    })
+  }
+)

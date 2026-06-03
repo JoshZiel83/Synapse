@@ -4,8 +4,8 @@ set -euo pipefail
 # One-shot verification of the synapse-device-fs-helper sidecar end to end:
 # builds the shipping (release) binary, runs the Rust tests (incl. the fs.hello
 # handshake), then the TS suites that exercise the binary. Meant to be called by
-# a CI runner or by hand — this repo uses scripted "non-GitHub CI" (see
-# relay/NON_GITHUB_CI.md) rather than .github/workflows.
+# a CI runner or by hand — this repo uses scripted "non-GitHub CI" rather than
+# .github/workflows.
 #
 # Env knobs:
 #   ALLOW_MISSING_FS_HELPER=1  passthrough to the release build (degrade to a

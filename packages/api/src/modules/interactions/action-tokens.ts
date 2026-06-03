@@ -31,7 +31,7 @@ import {
 export interface ActionTokenPayload {
   /** One of the option labels we offered (e.g. "allow_once", "deny"). */
   decision: string
-  /** Optional preset id (relay/runtime-authorization preset selection). */
+  /** Optional preset id (runtime-authorization preset selection). */
   preset?: string
   /** Optional grant option id when the user picks among grant_options. */
   selectedGrantOptionId?: string
