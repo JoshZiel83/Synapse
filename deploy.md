@@ -371,9 +371,11 @@ Notes:
   host/port, set `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` (the docker backend forwards it
   to the container as the internal base automatically) **and**
   `SYNAPSE_TUNNEL_VHOST_HOST` so the frps Host route matches. The docker backend
-  **fails fast at startup** if the `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` host and
-  `SYNAPSE_TUNNEL_VHOST_HOST` disagree (a mismatch would make every sandbox
-  dispatch fail to route), so the two must be configured together.
+  **fails fast when it is selected** (the first sandbox provision after the API
+  starts, i.e. backend selection — not a separate startup pre-check) if the
+  `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` host and `SYNAPSE_TUNNEL_VHOST_HOST` disagree
+  (a mismatch would make every sandbox dispatch fail to route), so the two must
+  be configured together.
 
 ## 9. Troubleshooting
 
