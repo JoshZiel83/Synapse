@@ -94,10 +94,42 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 cd "$SIDECAR_DIR"
-if cargo build "${cargo_args[@]}" 2>&1; then
-  echo "[pretest-fs-helper.sh] fs-helper up to date ($profile)"
-  exit 0
+# Pin the output dir to where the resolver looks, so a stray CARGO_TARGET_DIR
+# can't send the fresh binary somewhere the suite will never resolve. --target-dir
+# overrides both the CARGO_TARGET_DIR env var and any [build] target-dir config.
+if ! cargo build "${cargo_args[@]}" --target-dir "$SIDECAR_DIR/target" 2>&1; then
+  echo "[pretest-fs-helper.sh] ERROR: fs-helper build failed. Fix the Rust source above, or set ALLOW_MISSING_FS_HELPER=1 to run tests against the existing/absent binary." >&2
+  exit 1
 fi
 
-echo "[pretest-fs-helper.sh] ERROR: fs-helper build failed. Fix the Rust source above, or set ALLOW_MISSING_FS_HELPER=1 to run tests against the existing/absent binary." >&2
-exit 1
+# Post-build verification (defence in depth). Two invariants:
+#   1. The path this profile builds now EXISTS — proves --target-dir actually
+#      wrote where the resolver looks (a CARGO_TARGET_DIR redirect would leave it
+#      missing).
+#   2. The resolver picks something at least as fresh as what we just built — so
+#      the fresh binary can't be shadowed by an OLDER one. (For release-first
+#      that's TARGET itself; for the debug profile's newest-wins it may be a
+#      legitimately-newer release sibling, which is correct and must be allowed.)
+post="$(npx --no-install tsx "$RESOLVE_CLI" "$profile" "$SIDECAR_DIR")" || {
+  echo "[pretest-fs-helper.sh] ERROR: could not re-query the resolver after build." >&2
+  exit 1
+}
+eval "$post"
+if [[ ! -f "$TARGET" ]]; then
+  echo "[pretest-fs-helper.sh] ERROR: cargo reported success but $TARGET is missing" >&2
+  echo "  (CARGO_TARGET_DIR or a [build] target-dir redirecting the output?)." >&2
+  exit 1
+fi
+if [[ -z "$RESOLVED" ]]; then
+  echo "[pretest-fs-helper.sh] ERROR: built $TARGET but the resolver picks nothing." >&2
+  exit 1
+fi
+# RESOLVED must not be OLDER than the freshly-built TARGET.
+if [[ "$RESOLVED" != "$TARGET" && "$RESOLVED" -ot "$TARGET" ]]; then
+  echo "[pretest-fs-helper.sh] ERROR: built $TARGET but the resolver would run an OLDER binary:" >&2
+  echo "  $RESOLVED" >&2
+  echo "  The fresh build would be shadowed by a stale one. Refusing to claim freshness." >&2
+  exit 1
+fi
+echo "[pretest-fs-helper.sh] fs-helper up to date ($profile)"
+exit 0

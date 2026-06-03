@@ -36,8 +36,16 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 cd "$SIDECAR_DIR"
-if cargo build --release 2>&1; then
-  echo "[build-fs-helper.sh] built $SIDECAR_DIR/target/release/synapse-device-fs-helper"
+# Pin the output dir so a stray CARGO_TARGET_DIR (or [build] target-dir config)
+# can't redirect the release binary away from where every resolver looks
+# ($SIDECAR_DIR/target/release/...). --target-dir overrides both.
+if cargo build --release --target-dir "$SIDECAR_DIR/target" 2>&1; then
+  out="$SIDECAR_DIR/target/release/synapse-device-fs-helper"
+  if [[ ! -x "$out" ]]; then
+    echo "[build-fs-helper.sh] ERROR: cargo reported success but $out is missing." >&2
+    exit 1
+  fi
+  echo "[build-fs-helper.sh] built $out"
   exit 0
 fi
 

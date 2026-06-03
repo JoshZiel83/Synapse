@@ -114,6 +114,84 @@ expect "absent + debug profile, only RELEASE on disk → FAIL" 1 absent debug   
 expect "absent + nothing on disk → skip"                     0 absent release "" --
 expect "absent + nothing on disk, debug → skip"              0 absent debug   "" --
 
+# --- cargo-PRESENT build cases incl. CARGO_TARGET_DIR (the round-6 finding) ----
+# A PATH with a FAKE cargo (honors --target-dir) plus node/npx/tsx for the
+# resolver CLI, so we can exercise the real build + post-build verification path
+# hermetically. The fake writes a stub binary to <target-dir>/<profile>/<bin>.
+FAKE_CARGO_BIN="$(mktemp -d)"
+for t in bash sh dirname pwd command echo printf cat mktemp rm realpath ls node npx npm env grep sed head tail cut tr stat mkdir chmod; do
+  s="$(command -v "$t" 2>/dev/null)" && [[ -n "$s" ]] && ln -sf "$s" "$FAKE_CARGO_BIN/$t" 2>/dev/null
+done
+# Honest fake cargo: respects --target-dir (overrides CARGO_TARGET_DIR like real cargo).
+cat >"$FAKE_CARGO_BIN/cargo" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+profile=debug; tdir="${CARGO_TARGET_DIR:-target}"
+args=("$@"); i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  case "${args[$i]}" in
+    --release) profile=release ;;
+    --target-dir) i=$((i+1)); tdir="${args[$i]}" ;;
+  esac
+  i=$((i+1))
+done
+mkdir -p "$tdir/$profile"
+printf '#!/bin/sh\nexit 0\n' >"$tdir/$profile/synapse-device-fs-helper"
+chmod +x "$tdir/$profile/synapse-device-fs-helper"
+FAKE
+chmod +x "$FAKE_CARGO_BIN/cargo"
+
+run_fake_cargo() { # <profile> [extra env assignments...]
+  local prof="$1"; shift
+  local fix; fix="$(mktemp -d)"
+  env "PATH=$FAKE_CARGO_BIN" "FS_HELPER_SIDECAR_DIR=$fix" "$@" \
+    bash "$PRETEST" "$prof" >/dev/null 2>&1
+  local rc=$?
+  # Report whether the pinned target got the binary, for the caller to assert.
+  [[ -x "$fix/target/$prof/synapse-device-fs-helper" ]] && PINNED_OK=1 || PINNED_OK=0
+  rm -rf "$fix"
+  return $rc
+}
+
+# (a) normal fake build → success, binary in pinned target.
+if run_fake_cargo release && [[ "$PINNED_OK" == "1" ]]; then
+  echo "ok   - cargo present: build lands in pinned target (release)"; pass=$((pass+1))
+else echo "FAIL - cargo present: build/pinned-target (release)"; fail=$((fail+1)); fi
+
+# (b) CARGO_TARGET_DIR set to elsewhere, but --target-dir overrides it → success,
+#     binary still in the pinned target the resolver looks at (the finding).
+ALT_TD="$(mktemp -d)/elsewhere"
+if run_fake_cargo release "CARGO_TARGET_DIR=$ALT_TD" \
+   && [[ "$PINNED_OK" == "1" ]] && [[ ! -e "$ALT_TD/release/synapse-device-fs-helper" ]]; then
+  echo "ok   - cargo present: CARGO_TARGET_DIR cannot redirect away from pinned target"; pass=$((pass+1))
+else echo "FAIL - cargo present: CARGO_TARGET_DIR redirect not neutralized"; fail=$((fail+1)); fi
+rm -rf "$(dirname "$ALT_TD")"
+
+# (c) a BAD cargo that ignores --target-dir and writes to CARGO_TARGET_DIR only →
+#     post-build existence check must FAIL (the pinned target stays empty).
+BAD_CARGO_BIN="$(mktemp -d)"
+for t in bash sh dirname pwd command echo printf cat mktemp rm realpath ls node npx npm env grep sed head tail cut tr stat mkdir chmod; do
+  s="$(command -v "$t" 2>/dev/null)" && [[ -n "$s" ]] && ln -sf "$s" "$BAD_CARGO_BIN/$t" 2>/dev/null
+done
+cat >"$BAD_CARGO_BIN/cargo" <<'BAD'
+#!/usr/bin/env bash
+set -euo pipefail
+profile=debug; [[ "$*" == *--release* ]] && profile=release
+tdir="${CARGO_TARGET_DIR:?bad cargo needs CARGO_TARGET_DIR}"   # ignores --target-dir
+mkdir -p "$tdir/$profile"
+printf '#!/bin/sh\nexit 0\n' >"$tdir/$profile/synapse-device-fs-helper"
+chmod +x "$tdir/$profile/synapse-device-fs-helper"
+BAD
+chmod +x "$BAD_CARGO_BIN/cargo"
+BAD_FIX="$(mktemp -d)"; BAD_TD="$(mktemp -d)/redirected"
+env "PATH=$BAD_CARGO_BIN" "FS_HELPER_SIDECAR_DIR=$BAD_FIX" "CARGO_TARGET_DIR=$BAD_TD" \
+  bash "$PRETEST" release >/dev/null 2>&1
+bad_rc=$?
+if [[ "$bad_rc" != "0" ]]; then
+  echo "ok   - cargo present: build that misses the pinned target FAILs post-build check (exit $bad_rc)"; pass=$((pass+1))
+else echo "FAIL - cargo present: missed pinned target was not caught"; fail=$((fail+1)); fi
+rm -rf "$BAD_FIX" "$(dirname "$BAD_TD")" "$BAD_CARGO_BIN" "$FAKE_CARGO_BIN"
+
 # --- misc guards --------------------------------------------------------------
 expect "unknown profile → exit 2" 2 present bogus "" --
 ALLOW_MISSING_FS_HELPER=1 bash "$PRETEST" release >/dev/null 2>&1 \
