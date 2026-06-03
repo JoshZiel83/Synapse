@@ -166,6 +166,10 @@ class ApiClient {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       headers,
+      // On the Expo-web target the cookie-jar is empty (no Bearer header), so
+      // rely on the browser's session cookie — which is only sent with
+      // credentials:"include". Native uses the Authorization: Bearer header.
+      ...(Platform.OS === "web" ? { credentials: "include" as const } : {}),
     })
 
     if (response.status === 204) {
@@ -672,6 +676,10 @@ class ApiClient {
       }
 
       xhr.open("POST", `${API_BASE}/workspaces/${workspaceId}/files`)
+      // Expo-web relies on the browser session cookie (no Bearer header there).
+      if (Platform.OS === "web") {
+        xhr.withCredentials = true
+      }
       headers.forEach((value, key) => {
         xhr.setRequestHeader(key, value)
       })

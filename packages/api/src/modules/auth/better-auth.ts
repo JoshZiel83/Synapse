@@ -155,10 +155,10 @@ function buildFeishuProvider() {
         feishuTenantKey: profile.tenant_key,
       }
     },
-    // Persist the Feishu ids onto the user row. Crucially does NOT return `id`
-    // (returning an id here would override account.accountId, which must stay
-    // union_id from getUserInfo). Cast: these are additionalFields, not part of
-    // Better Auth's base User type that mapProfileToUser is declared to return.
+    // Persist the Feishu ids onto the user row. account.accountId always comes
+    // from getUserInfo's `id` (= union_id), so we deliberately do NOT return an
+    // `id`/`email` here (only the extra user columns). Cast: these are
+    // additionalFields, not part of Better Auth's base User type.
     mapProfileToUser: (profile: Record<string, unknown>) =>
       ({
         feishuOpenId: profile.feishuOpenId as string | undefined,
