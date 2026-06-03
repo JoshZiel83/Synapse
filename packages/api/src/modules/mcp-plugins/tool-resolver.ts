@@ -1,8 +1,11 @@
 import { randomUUID } from "crypto"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
+  MCP_SERVER_TRANSPORTS,
   maskAllowsConversationType,
   resolveNarrowedConversationTypeMask,
+  type McpServerTransport,
+  type PluginSpecTransport,
   type ToolDefinition,
   type ToolResultOrigin,
 } from "@synapse/shared"
@@ -63,7 +66,7 @@ type VisiblePluginRow = {
   catalog_item_id: string
   item_slug: string
   publisher_slug: string
-  transport: "builtin" | "stdio" | "http"
+  transport: PluginSpecTransport
   entry_point: string | null
   tool_manifest: unknown
   reuse_scope:
@@ -539,6 +542,16 @@ async function resolveTools(
       continue
     }
 
+    // Narrow to runtime-startable server transports. The catalog spec column
+    // also allows "device", which is served by the separate device-exposure
+    // path, not the instance-manager — never forward it to getOrCreateInstance.
+    if (
+      !(MCP_SERVER_TRANSPORTS as readonly string[]).includes(plugin.transport)
+    ) {
+      continue
+    }
+    const serverTransport = plugin.transport as McpServerTransport
+
     const namespace = buildPluginNamespace(plugin, duplicateBaseNamespaces)
 
     try {
@@ -549,7 +562,7 @@ async function resolveTools(
         installationId: resolved.installationId,
         pluginSlug: plugin.item_slug,
         orgSlug: plugin.publisher_slug || "plugin",
-        transport: plugin.transport,
+        transport: serverTransport,
         entryPoint: plugin.entry_point || "",
         scope: reuseScope,
         scopeId: resolveReuseOwnerKey(reuseScope, params, turnOwnerKey),

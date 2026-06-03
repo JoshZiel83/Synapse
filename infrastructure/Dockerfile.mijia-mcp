@@ -1,0 +1,44 @@
+# Mijia MCP sidecar — multi-tenant Streamable-HTTP server wrapping mijiaAPI.
+#
+# Build context is the repo root:
+#   docker build -f infrastructure/Dockerfile.mijia-mcp -t synapse-mijia-mcp .
+#
+# Per-request Xiaomi credentials arrive in the X-Mijia-Auth header; nothing is
+# baked into the image. Runs as a non-root user; tenant auth files live under
+# an isolated, 0700 temp root (MIJIA_TENANT_ROOT).
+
+FROM python:3.12-slim AS base
+
+# China mirror for resilient installs (matches the Node images' npmmirror use).
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+WORKDIR /app
+
+# Install pinned deps first for layer caching.
+COPY sidecars/mijia-mcp/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Vendored fork source.
+COPY sidecars/mijia-mcp/ ./
+
+# Non-root runtime user; isolated writable tenant root.
+RUN useradd --create-home --uid 10001 mijia \
+  && mkdir -p /data/tenants \
+  && chown -R mijia:mijia /app /data
+USER mijia
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    MIJIA_QR_OPEN_MODE=none \
+    MIJIA_LOG_LEVEL=info \
+    MIJIA_TENANT_ROOT=/data/tenants \
+    FASTMCP_HOST=0.0.0.0 \
+    FASTMCP_PORT=8765
+
+EXPOSE 8765
+
+# Lightweight liveness probe against the /healthz route.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3).status==200 else 1)" || exit 1
+
+CMD ["python", "-m", "mcp_server.http_server"]

@@ -35,6 +35,10 @@ import {
   FILE_STORAGE_BACKENDS,
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   CONVERSATION_TYPE_KEYS,
+  DEVICE_EXPOSURE_TRANSPORTS,
+  MCP_SERVER_TRANSPORTS,
+  PLUGIN_SPEC_TRANSPORTS,
+  PLUGIN_TRANSPORTS,
   INVITE_TRUST_LEVELS,
   INTERACTION_DECISIONS,
   INTERACTION_INPUT_QUESTION_TYPES,
@@ -2204,6 +2208,14 @@ export interface ToolDefinition {
     properties: Record<string, ToolParameterProperty>
     required: string[]
   }
+  // Full, lossless JSON Schema for the tool input, when available. The lossy
+  // `parameters` shape above drops nested object properties, oneOf/anyOf,
+  // format, min/max, defaults, $ref, deep array items, etc. Remote MCP tools
+  // (and stdio MCP servers) carry rich schemas, so the mapper stores the
+  // server's raw `inputSchema` here verbatim. Consumers that forward tools to
+  // a model (LLM providers, the reverse-MCP endpoint) MUST prefer
+  // `rawInputSchema` when present and fall back to `parameters` otherwise.
+  rawInputSchema?: Record<string, unknown>
   // Origin metadata so consumers that surface tools to a model (e.g. the
   // reverse-MCP endpoint that exposes Synapse tools to a remote agent) can
   // render a "[device:Name]" / "[plugin:Name]" attribution. Optional because
@@ -2391,12 +2403,16 @@ export interface AIResponse {
 // ============================================================
 
 export type MarketplaceItemKind = "plugin" | "skill" | "actor" | "model"
-export type PluginTransport =
-  | "builtin"
-  | "stdio"
-  | "http"
-  | "device"
-  | "filesystem"
+// Plugin transport tiers — single source of truth in constants/enums.ts.
+// McpServerTransport: what the runtime instance-manager can start.
+// PluginSpecTransport: the DB catalog spec column (adds "device").
+// PluginTransport: full application union (adds "filesystem").
+// DeviceExposureTransport: the device-exposure transport set (has "custom").
+export type McpServerTransport = (typeof MCP_SERVER_TRANSPORTS)[number]
+export type PluginSpecTransport = (typeof PLUGIN_SPEC_TRANSPORTS)[number]
+export type PluginTransport = (typeof PLUGIN_TRANSPORTS)[number]
+export type DeviceExposureTransport =
+  (typeof DEVICE_EXPOSURE_TRANSPORTS)[number]
 export type ConversationTypeKey = (typeof CONVERSATION_TYPE_KEYS)[number]
 export type ConversationTypeMask = number
 export type CapabilityConversationTypePolicyResourceFamily =
@@ -3075,7 +3091,8 @@ export interface InstalledSkill {
   mirrorSource?: SkillMirrorSourceSummary
 }
 
-export type McpTransport = Exclude<PluginTransport, "filesystem">
+// Catalog-spec transport set (= PluginTransport minus "filesystem").
+export type McpTransport = PluginSpecTransport
 export type McpLifecycleScope = ReuseScope
 export type McpAttachmentTargetType = AttachmentTargetType
 
@@ -3096,7 +3113,7 @@ export interface McpDeviceServer {
   id: string
   deviceId: string
   name: string
-  transport: "builtin" | "stdio" | "http"
+  transport: DeviceExposureTransport
   command?: string
   endpoint?: string
   envVars: Record<string, unknown>
@@ -5542,7 +5559,7 @@ export interface PluginRuntimePermissionRecord {
 
 export interface PluginPackageVersionSpecRecord {
   catalogVersionId: string
-  transport: "builtin" | "stdio" | "http" | "device"
+  transport: PluginSpecTransport
   entryPoint?: string
   toolManifest: MarketplaceTool[]
   configSchema: Record<string, unknown>

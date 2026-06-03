@@ -67,6 +67,12 @@ services:
       # External-reachable registry URL the API embeds into the dashboard's
       # one-click daemon install command. Empty => command omits --registry.
       PUBLIC_NPM_REGISTRY_URL: ${PUBLIC_NPM_REGISTRY_URL:-}
+      # Internal URL of the optional Mijia MCP sidecar (gated by the `mijia`
+      # compose profile). The Mijia builtin plugin is only SEEDED when this is
+      # set, so leave it empty unless you actually run the sidecar. To enable:
+      # set MIJIA_MCP_URL=http://mijia-mcp:8765/mcp/ in .env and start with
+      # `--profile production --profile mijia`.
+      MIJIA_MCP_URL: ${MIJIA_MCP_URL:-}
       # --- server-side actor isolation (sandbox) ---
       # Off by default. Set SYNAPSE_SANDBOX_ENABLED=true + SANDBOX_BACKEND=docker
       # (+ run the 'sandbox' build + tunnel-edge) to enable containerized sandboxes.
@@ -115,6 +121,33 @@ services:
         condition: service_healthy
     profiles:
       - production
+
+  # Optional Mijia (Xiaomi smart-home) MCP sidecar. Multi-tenant: per-request
+  # Xiaomi credentials arrive in the X-Mijia-Auth header from the API; nothing
+  # is stored here long-term. Internal-only (no host port). Gate with the
+  # `mijia` profile, e.g.:
+  #   docker compose --profile production --profile mijia up -d --build mijia-mcp api
+  mijia-mcp:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.mijia-mcp
+    container_name: synapse-mijia-mcp
+    restart: unless-stopped
+    # Explicit env allowlist — deliberately NOT env_file:[.env], so the sidecar
+    # never receives DB/JWT/OAuth/third-party secrets. Xiaomi creds come per
+    # request via headers, not env.
+    environment:
+      FASTMCP_HOST: "0.0.0.0"
+      FASTMCP_PORT: "8765"
+      MIJIA_QR_OPEN_MODE: none
+      MIJIA_LOG_LEVEL: ${MIJIA_LOG_LEVEL:-info}
+      MIJIA_TENANT_ROOT: /data/tenants
+    # Internal network only — reachable by the api container at
+    # http://mijia-mcp:8765/mcp/, not exposed to the host.
+    expose:
+      - "8765"
+    profiles:
+      - mijia
 
   web:
     build:

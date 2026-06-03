@@ -195,6 +195,41 @@ and the `prepublish-guard` refuses any tarball containing `.map` files, so
 no sourcemaps are ever published. Back up the `verdaccio_storage` volume —
 losing it loses every published version (npm forbids re-publishing a version).
 
+## 5c. Mijia MCP sidecar (optional)
+
+The Mijia (Xiaomi smart-home) builtin plugin proxies a containerized,
+multi-tenant MCP sidecar (`sidecars/mijia-mcp/`, a fork of `javen-yan/miot-mcp`;
+see `sidecars/mijia-mcp/UPSTREAM.md`). It runs as the `mijia-mcp` service behind
+the `mijia` compose profile, internal-network only (no host port). Per-request
+Xiaomi credentials arrive in the `X-Mijia-Auth` header from the API — nothing is
+baked into the image, and the service deliberately does NOT receive `.env`
+(its environment is an explicit allowlist).
+
+The API reaches it at `http://mijia-mcp:8765/mcp/` via `MIJIA_MCP_URL`. This is
+**empty by default** — the Mijia builtin plugin is only seeded when `MIJIA_MCP_URL`
+is set, so a plain `--profile production` deployment never surfaces a Mijia plugin
+that would fail at connect time against a sidecar you didn't start. To enable,
+set it in `.env` and bring up the sidecar with the `mijia` profile:
+
+```bash
+echo 'MIJIA_MCP_URL=http://mijia-mcp:8765/mcp/' >> .env
+docker compose --profile production --profile mijia up -d --build mijia-mcp api
+# re-seed builtin MCP plugins so the Mijia plugin appears in the catalog
+# (db:bootstrap:runtime is schema-only and does NOT run the builtin seed):
+docker compose --profile production run --rm api npm run db:seed:builtin-mcp -w packages/api
+```
+
+Rebuild after changes:
+
+```bash
+docker compose --profile production --profile mijia up -d --build mijia-mcp
+```
+
+Login (QR) happens on the Synapse side (the `mijia_qr_login` auth driver); the
+sidecar only consumes the resulting credentials per request. One installation
+binds one Mi Home account (shared by that installation's authorized members);
+members who need their own account create a separate installation.
+
 ## 6. Start Production
 
 Start or update the TLS public stack:
