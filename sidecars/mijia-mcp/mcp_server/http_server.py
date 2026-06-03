@@ -149,6 +149,17 @@ class _AdapterRegistry:
 
     def __init__(self, root: Path):
         self._root = root
+        # Stateless guarantee: a fresh process owns NO in-memory entries, so any
+        # tenant dir already on disk is necessarily orphaned from a prior
+        # crash/kill/restart (the container's writable layer survives those).
+        # Purge the whole root before accepting requests so stale auth_data.json
+        # credentials never linger. Best-effort: a failure to remove is logged
+        # but does not block startup (per-tenant 0600 files are still isolated).
+        if root.exists():
+            try:
+                shutil.rmtree(root)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to purge stale tenant root %s: %s", root, exc)
         self._root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._lock = threading.Lock()
         self._by_tenant: dict[str, _AdapterEntry] = {}
