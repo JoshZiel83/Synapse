@@ -988,6 +988,53 @@ export function commandlinePolicyMatches(
 export type MatcherResult = "match" | "no_match" | "corrupt"
 
 /**
+ * Shared capability-dispatch core for both the tri-state and the boolean
+ * matcher. Given an already-hydrated grant spec (policy validation passed) and
+ * a requested action of the SAME capability, returns whether the grant's
+ * policy covers the action.
+ *
+ * Both `runtimeAuthorizationGrantMatchesTriState` and
+ * `runtimeAuthorizationGrantMatches` route through here so the per-capability
+ * allow logic lives in exactly ONE place — previously the two functions
+ * duplicated this switch and could silently drift.
+ *
+ * The caller is responsible for the capability-equality guard before calling
+ * (both wrappers short-circuit on `grant.capability !== action.capability`).
+ */
+function grantSpecCoversAction(
+  grant: SharedRuntimeAuthorizationGrantSpec,
+  requestedAction: RuntimeAuthorizationRequestedAction,
+  opts: { platform?: "win32" | "linux" | "darwin" } = {}
+): boolean {
+  switch (grant.capability) {
+    case "filesystem":
+      return filesystemPolicyMatches(grant, requestedAction)
+    case "cua":
+      return Boolean(
+        grant.cua &&
+        requestedAction.cua &&
+        sharedCuaPolicyAllows(
+          { access: grant.cua.access },
+          requestedAction.cua.access
+        )
+      )
+    case "browser":
+      // Runtime-resolved browser targets (current page / page_id / all pages)
+      // have no origin at projection time — the device resolves the active
+      // URL and does the scope check itself. For those we use
+      // prefilterBrowserGrants (action + operation coverage, URL deferred);
+      // for "args"-sourced targets we do the full origin/host/domain check.
+      return isRuntimeResolvedBrowserTarget(requestedAction)
+        ? prefilterBrowserGrants(grant, requestedAction)
+        : browserPolicyMatches(grant, requestedAction)
+    case "commandline":
+      return commandlinePolicyMatches(grant, requestedAction, opts)
+    default:
+      return false
+  }
+}
+
+/**
  * Three-state matcher: distinguishes "policy structurally valid but doesn't
  * cover this action" (no_match → skip candidate, try next) from "policy data
  * is corrupt" (corrupt → DENY immediately, do NOT fall back to wider grants).
@@ -1005,38 +1052,7 @@ export function runtimeAuthorizationGrantMatchesTriState(
   if (grant.capability !== requestedAction.capability) {
     return "no_match"
   }
-  let matched = false
-  switch (grant.capability) {
-    case "filesystem":
-      matched = filesystemPolicyMatches(grant, requestedAction)
-      break
-    case "cua":
-      matched = Boolean(
-        grant.cua &&
-        requestedAction.cua &&
-        sharedCuaPolicyAllows(
-          { access: grant.cua.access },
-          requestedAction.cua.access
-        )
-      )
-      break
-    case "browser":
-      // Runtime-resolved browser targets (current page / page_id / all pages)
-      // have no origin at projection time — the device resolves the active
-      // URL and does the scope check itself. For those we use
-      // prefilterBrowserGrants (action + operation coverage, URL deferred);
-      // for "args"-sourced targets we do the full origin/host/domain check.
-      matched = isRuntimeResolvedBrowserTarget(requestedAction)
-        ? prefilterBrowserGrants(grant, requestedAction)
-        : browserPolicyMatches(grant, requestedAction)
-      break
-    case "commandline":
-      matched = commandlinePolicyMatches(grant, requestedAction)
-      break
-    default:
-      matched = false
-  }
-  return matched ? "match" : "no_match"
+  return grantSpecCoversAction(grant, requestedAction) ? "match" : "no_match"
 }
 
 // Kept for backward compat with auto-retry.ts (which uses the post-mapper
@@ -1050,27 +1066,7 @@ export function runtimeAuthorizationGrantMatches(
   if (grant.capability !== requestedAction.capability) {
     return false
   }
-  switch (grant.capability) {
-    case "filesystem":
-      return filesystemPolicyMatches(grant, requestedAction)
-    case "cua":
-      return Boolean(
-        grant.cua &&
-        requestedAction.cua &&
-        sharedCuaPolicyAllows(
-          { access: grant.cua.access },
-          requestedAction.cua.access
-        )
-      )
-    case "browser":
-      return isRuntimeResolvedBrowserTarget(requestedAction)
-        ? prefilterBrowserGrants(grant, requestedAction)
-        : browserPolicyMatches(grant, requestedAction)
-    case "commandline":
-      return commandlinePolicyMatches(grant, requestedAction, opts)
-    default:
-      return false
-  }
+  return grantSpecCoversAction(grant, requestedAction, opts)
 }
 
 // ============================================================================

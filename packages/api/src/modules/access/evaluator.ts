@@ -827,6 +827,76 @@ async function listManageableRelayCapabilityIds(
   return rows.map((row) => row.id)
 }
 
+/**
+ * 3d: shared access skeleton for the workspace-bound, bindable, "manage-or-grant"
+ * resources — installed_skill / plugin_installation / device_capability. Once
+ * the resource row is loaded (which is the only genuinely per-resource step:
+ * different table / columns / active predicate), all three resolved access
+ * identically:
+ *   1. for the "use"-like (grantable) permissions, an explicit
+ *      resource_access_bindings grant short-circuits to allow;
+ *   2. otherwise only a workspace_member in the SAME workspace passes, and only
+ *      if they hold the manage access key OR created the resource.
+ * The callers differ ONLY in (table-loaded) workspaceId, the creator member id,
+ * the manage access key, and which permissions are grantable — all passed in.
+ *
+ * Actor / remote_agent are intentionally NOT routed through this: they carry a
+ * canUse-vs-canManage permission split, an actor-acts-on-itself principal
+ * branch, and (for remote_agent) a cross-workspace public-shared grant path
+ * that fold workspace membership into canManage rather than gating on it — none
+ * of which this skeleton models. Unifying them here would change their
+ * semantics, so they keep their own bodies.
+ */
+async function resolveBindableResourceAccess(
+  db: KyselyDb,
+  params: {
+    resourceType: BindableResourceTypeLocal
+    resourceId: string
+    workspaceId: string
+    creatorMemberId: string | null
+    manageAccessKey: string
+    grantablePermissions: readonly string[]
+    subject: PermissionSubject
+    permission: string
+    runtimeScopeSubjectIds?: readonly string[]
+    runtimeSubjectIds?: readonly string[]
+  }
+): Promise<boolean> {
+  // (1) explicit-grant short-circuit for the use-like permissions.
+  if (params.grantablePermissions.includes(params.permission)) {
+    if (
+      await hasResourceGrant(
+        db,
+        params.resourceType,
+        params.resourceId,
+        params.subject,
+        params.runtimeScopeSubjectIds,
+        params.runtimeSubjectIds
+      )
+    ) {
+      return true
+    }
+  }
+
+  // (2) manage path — workspace_member in the same workspace, holding the
+  // manage key or being the creator. Mirrors the historical
+  // `if (permission===view|use) return canManage; return canManage` tails,
+  // which returned canManage for every permission.
+  if (params.subject.type !== "workspace_member") {
+    return false
+  }
+
+  const access = await loadWorkspaceMemberAccess(db, params.subject.id)
+  if (!access || access.workspaceId !== params.workspaceId) {
+    return false
+  }
+
+  return (
+    workspacePermissionFromAccess(access, params.manageAccessKey) ||
+    params.creatorMemberId === access.id
+  )
+}
+
 async function hasInstalledSkillPermission(
   db: KyselyDb,
   subject: PermissionSubject,
@@ -845,37 +915,18 @@ async function hasInstalledSkillPermission(
     return false
   }
 
-  if (permission === "use" || permission === "view") {
-    if (
-      await hasResourceGrant(
-        db,
-        "installed_skill",
-        skillId,
-        subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds
-      )
-    ) {
-      return true
-    }
-  }
-
-  if (subject.type !== "workspace_member") {
-    return false
-  }
-
-  const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== row.workspace_id) {
-    return false
-  }
-
-  const canManage =
-    workspacePermissionFromAccess(access, "manage_skills") ||
-    row.created_by_workspace_member_id === access.id
-  if (permission === "view" || permission === "use") {
-    return canManage
-  }
-  return canManage
+  return resolveBindableResourceAccess(db, {
+    resourceType: "installed_skill",
+    resourceId: skillId,
+    workspaceId: row.workspace_id,
+    creatorMemberId: row.created_by_workspace_member_id,
+    manageAccessKey: "manage_skills",
+    grantablePermissions: ["use", "view"],
+    subject,
+    permission,
+    runtimeScopeSubjectIds,
+    runtimeSubjectIds,
+  })
 }
 
 async function hasPluginInstallationPermission(
@@ -896,37 +947,18 @@ async function hasPluginInstallationPermission(
     return false
   }
 
-  if (permission === "use" || permission === "view") {
-    if (
-      await hasResourceGrant(
-        db,
-        "plugin_installation",
-        installationId,
-        subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds
-      )
-    ) {
-      return true
-    }
-  }
-
-  if (subject.type !== "workspace_member") {
-    return false
-  }
-
-  const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== row.workspace_id) {
-    return false
-  }
-
-  const canManage =
-    workspacePermissionFromAccess(access, "manage_plugins") ||
-    row.installed_by_workspace_member_id === access.id
-  if (permission === "view" || permission === "use") {
-    return canManage
-  }
-  return canManage
+  return resolveBindableResourceAccess(db, {
+    resourceType: "plugin_installation",
+    resourceId: installationId,
+    workspaceId: row.workspace_id,
+    creatorMemberId: row.installed_by_workspace_member_id,
+    manageAccessKey: "manage_plugins",
+    grantablePermissions: ["use", "view"],
+    subject,
+    permission,
+    runtimeScopeSubjectIds,
+    runtimeSubjectIds,
+  })
 }
 
 async function hasRelayDevicePermission(
@@ -1029,46 +1061,18 @@ async function hasRelayCapabilityPermission(
     return false
   }
 
-  if (
-    permission === "use" ||
-    permission === "view" ||
-    permission === "request_runtime_authorization"
-  ) {
-    if (
-      await hasResourceGrant(
-        db,
-        "device_capability",
-        capabilityId,
-        subject,
-        runtimeScopeSubjectIds,
-        runtimeSubjectIds
-      )
-    ) {
-      return true
-    }
-  }
-
-  if (subject.type !== "workspace_member") {
-    return false
-  }
-
-  const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== row.workspace_id) {
-    return false
-  }
-
-  const canManage =
-    workspacePermissionFromAccess(access, "manage_relays") ||
-    row.owner_workspace_member_id === access.id
-
-  if (
-    permission === "view" ||
-    permission === "use" ||
-    permission === "request_runtime_authorization"
-  ) {
-    return canManage
-  }
-  return canManage
+  return resolveBindableResourceAccess(db, {
+    resourceType: "device_capability",
+    resourceId: capabilityId,
+    workspaceId: row.workspace_id,
+    creatorMemberId: row.owner_workspace_member_id,
+    manageAccessKey: "manage_relays",
+    grantablePermissions: ["use", "view", "request_runtime_authorization"],
+    subject,
+    permission,
+    runtimeScopeSubjectIds,
+    runtimeSubjectIds,
+  })
 }
 
 async function listActorIds(
