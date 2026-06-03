@@ -6,6 +6,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import { EmailField } from "@/components/email-field"
 import { Button, Field, ScreenScroll } from "@/components/ui"
+import { authClient } from "@/lib/auth-client"
 import { useSession } from "@/providers/session-provider"
 import { theme } from "@/theme/tokens"
 import { APP_NAME } from "@shared"
@@ -17,7 +18,7 @@ function getErrorMessage(error: unknown) {
 
 export default function LoginScreen() {
   const router = useRouter()
-  const { signIn } = useSession()
+  const { signIn, refreshSession } = useSession()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [acceptedPolicy, setAcceptedPolicy] = useState(false)
@@ -40,6 +41,34 @@ export default function LoginScreen() {
 
     try {
       await signIn(email.trim(), password)
+      router.replace("/")
+    } catch (nextError) {
+      setError(getErrorMessage(nextError))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleFeishuLogin() {
+    if (!acceptedPolicy) {
+      setError("请先勾选隐私政策与用户协议。")
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      // Native: opens the system browser and returns via the app scheme deep
+      // link. callbackURL MUST start with "/" so @better-auth/expo rewrites it
+      // to the app scheme (otherwise BA falls back to the public web URL).
+      const { error: oauthError } = await authClient.signIn.oauth2({
+        providerId: "feishu",
+        callbackURL: "/",
+      })
+      if (oauthError) {
+        setError(getErrorMessage(oauthError))
+        return
+      }
+      await refreshSession()
       router.replace("/")
     } catch (nextError) {
       setError(getErrorMessage(nextError))
@@ -117,6 +146,13 @@ export default function LoginScreen() {
           <Button
             label={submitting ? "登录中..." : "登录"}
             onPress={() => void handleLogin()}
+            disabled={submitting}
+          />
+
+          <Button
+            label="使用飞书登录"
+            variant="secondary"
+            onPress={() => void handleFeishuLogin()}
             disabled={submitting}
           />
 

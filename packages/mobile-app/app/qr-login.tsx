@@ -11,91 +11,76 @@ import {
   ScreenScroll,
   SectionHeader,
 } from "@/components/ui"
-import { api } from "@/lib/api"
+import { authClient } from "@/lib/auth-client"
 import { useSession } from "@/providers/session-provider"
 import { theme } from "@/theme/tokens"
-import type {
-  AuthQrLoginResolveResponse,
-  AuthSessionPersistence,
-} from "@shared"
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message
   return "无法读取二维码登录请求。"
 }
 
-function formatTimestamp(timestamp: string) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(timestamp))
-}
+type DeviceStatus = "claiming" | "pending" | "approved" | "denied" | "error"
 
 export default function QrLoginScreen() {
-  const { token } = useLocalSearchParams<{ token?: string }>()
+  // The QR encodes Better Auth's verification_uri_complete; the scanner passes
+  // the extracted user_code (legacy `token` param name kept for compatibility).
+  const params = useLocalSearchParams<{ user_code?: string; token?: string }>()
+  const userCode = params.user_code ?? params.token
   const { user } = useSession()
-  const [data, setData] = useState<AuthQrLoginResolveResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [status, setStatus] = useState<DeviceStatus>("claiming")
   const [error, setError] = useState<string | null>(null)
-  const [action, setAction] = useState<
-    "persistent" | "temporary" | "reject" | null
-  >(null)
+  const [action, setAction] = useState<"approve" | "deny" | null>(null)
 
   useEffect(() => {
-    if (!token) {
-      setError("缺少二维码登录 token。")
-      setLoading(false)
+    if (!userCode) {
+      setError("缺少设备登录验证码。")
+      setStatus("error")
       return
     }
-
-    const safeToken = token
     let cancelled = false
 
-    async function loadRequest() {
-      setLoading(true)
-      setError(null)
-
+    // GET /device claims the pending code for THIS (authenticated) session so a
+    // subsequent approve is bound to the right user.
+    async function claim() {
       try {
-        const response = await api.resolveQrLogin(safeToken)
-        if (!cancelled) {
-          setData(response)
+        const { error: claimError } = await authClient.device({
+          query: { user_code: userCode as string },
+        })
+        if (cancelled) return
+        if (claimError) {
+          setError(getErrorMessage(claimError))
+          setStatus("error")
+          return
         }
+        setStatus("pending")
       } catch (nextError) {
         if (!cancelled) {
           setError(getErrorMessage(nextError))
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
+          setStatus("error")
         }
       }
     }
 
-    void loadRequest()
-
+    void claim()
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [userCode])
 
-  async function handleApprove(sessionPersistence: AuthSessionPersistence) {
-    if (!token) return
-
-    setAction(sessionPersistence)
+  async function handleApprove() {
+    if (!userCode) return
+    setAction("approve")
     setError(null)
-
     try {
-      const result = await api.approveQrLogin(token, sessionPersistence)
-      setData((current) =>
-        current
-          ? {
-              ...current,
-              request: result.request,
-            }
-          : null
-      )
+      const { error: approveError } = await authClient.device.approve({
+        userCode,
+      })
+      if (approveError) {
+        setError(getErrorMessage(approveError))
+      } else {
+        setStatus("approved")
+      }
     } catch (nextError) {
       setError(getErrorMessage(nextError))
     } finally {
@@ -104,21 +89,16 @@ export default function QrLoginScreen() {
   }
 
   async function handleReject() {
-    if (!token) return
-
-    setAction("reject")
+    if (!userCode) return
+    setAction("deny")
     setError(null)
-
     try {
-      const result = await api.rejectQrLogin(token)
-      setData((current) =>
-        current
-          ? {
-              ...current,
-              request: result.request,
-            }
-          : null
-      )
+      const { error: denyError } = await authClient.device.deny({ userCode })
+      if (denyError) {
+        setError(getErrorMessage(denyError))
+      } else {
+        setStatus("denied")
+      }
     } catch (nextError) {
       setError(getErrorMessage(nextError))
     } finally {
@@ -126,26 +106,23 @@ export default function QrLoginScreen() {
     }
   }
 
-  const request = data?.request
-  const confirmation = data?.confirmation
-
   return (
     <ScreenScroll bottomPadding={32}>
       <SectionHeader
         eyebrow="Verification"
         title="确认 Web 登录"
-        subtitle="确认这次桌面端登录请求是否可信。你可以选择长期保持登录，或只授权临时会话。"
+        subtitle="确认这次桌面端登录请求是否由你本人发起。请核对验证码与电脑屏幕上显示的一致。"
       />
 
-      {loading ? (
+      {status === "claiming" ? (
         <Card>
           <LoadingBlock label="正在读取登录请求..." />
         </Card>
-      ) : error || !request ? (
+      ) : status === "error" ? (
         <EmptyState
           icon="shield-off"
           title="无法确认这个登录"
-          description={error || "二维码登录请求不存在或已经失效。"}
+          description={error || "设备登录请求不存在或已经失效。"}
         />
       ) : (
         <Card style={styles.confirmCard}>
@@ -153,9 +130,9 @@ export default function QrLoginScreen() {
             <View style={styles.headlineIcon}>
               <Feather
                 name={
-                  request.status === "approved" || request.status === "consumed"
+                  status === "approved"
                     ? "check-circle"
-                    : request.status === "rejected"
+                    : status === "denied"
                       ? "x-circle"
                       : "monitor"
                 }
@@ -165,32 +142,22 @@ export default function QrLoginScreen() {
             </View>
             <View style={styles.headlineText}>
               <Text style={styles.title}>
-                {request.status === "pending_confirm"
+                {status === "pending"
                   ? "桌面端正在等待你的确认"
-                  : request.status === "approved" ||
-                      request.status === "consumed"
+                  : status === "approved"
                     ? "这次 Web 登录已批准"
                     : "这次 Web 登录已拒绝"}
               </Text>
               <Text style={styles.subtitle}>
-                {request.status === "pending_confirm"
-                  ? `浏览器设备：${confirmation?.browserLabel ?? request.browserLabel}`
+                {status === "pending"
+                  ? "请核对下方验证码与电脑上显示的一致，再批准登录。"
                   : "如果这是你本人操作，现在可以回到电脑继续使用。"}
               </Text>
             </View>
           </View>
 
           <View style={styles.metaGrid}>
-            <MetaRow
-              label="浏览器"
-              value={confirmation?.browserLabel ?? request.browserLabel}
-            />
-            <MetaRow
-              label="请求时间"
-              value={formatTimestamp(
-                confirmation?.requestedAt ?? request.createdAt
-              )}
-            />
+            <MetaRow label="验证码" value={userCode ?? "-"} />
             <MetaRow
               label="当前账号"
               value={user?.name || user?.email || "当前账号"}
@@ -198,10 +165,9 @@ export default function QrLoginScreen() {
             <MetaRow
               label="状态"
               value={
-                request.status === "pending_confirm"
+                status === "pending"
                   ? "待确认"
-                  : request.status === "approved" ||
-                      request.status === "consumed"
+                  : status === "approved"
                     ? "已批准"
                     : "已拒绝"
               }
@@ -210,22 +176,16 @@ export default function QrLoginScreen() {
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          {request.status === "pending_confirm" ? (
+          {status === "pending" ? (
             <View style={styles.actions}>
               <Button
-                label={action === "persistent" ? "批准中..." : "保持登录"}
+                label={action === "approve" ? "批准中..." : "批准登录"}
                 icon="shield"
-                onPress={() => void handleApprove("persistent")}
+                onPress={() => void handleApprove()}
                 disabled={action !== null}
               />
               <Button
-                label={action === "temporary" ? "批准中..." : "临时登录"}
-                variant="secondary"
-                onPress={() => void handleApprove("temporary")}
-                disabled={action !== null}
-              />
-              <Button
-                label={action === "reject" ? "拒绝中..." : "拒绝此次登录"}
+                label={action === "deny" ? "拒绝中..." : "拒绝此次登录"}
                 variant="ghost"
                 icon="x"
                 onPress={() => void handleReject()}

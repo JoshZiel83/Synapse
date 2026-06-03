@@ -15,6 +15,7 @@ import {
   setApiAuthToken,
   setApiUnauthorizedHandler,
 } from "@/lib/api"
+import { authClient, getSessionBearerToken } from "@/lib/auth-client"
 import { createChatPersistence } from "@/lib/chat-persistence"
 import { SESSION_TOKEN_KEY } from "@/lib/storage-keys"
 import {
@@ -145,55 +146,40 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [clearSession])
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const response = await api.login(email, password)
-    if (!response.sessionToken) {
-      throw new ApiError(
-        "The server did not return a mobile session token.",
-        500
-      )
+    const { error } = await authClient.signIn.email({ email, password })
+    if (error) {
+      throw new ApiError(error.message ?? "Sign in failed", error.status ?? 401)
     }
-
-    await persistSessionToken(response.sessionToken)
-    applySession(
-      {
-        token: response.sessionToken,
-        response: {
-          user: response.user,
-          session: response.session,
-        },
-      },
-      setState
-    )
+    // The expo cookie-jar stored the session cookie; surface its value as the
+    // bearer token the REST/WS layers attach.
+    const token = getSessionBearerToken()
+    await persistSessionToken(token)
+    setApiAuthToken(token)
+    const me = await api.getMe()
+    applySession({ token, response: me }, setState)
   }, [])
 
   const signUp = useCallback(
     async (name: string, email: string, password: string) => {
-      const response = await api.register(name, email, password)
-      if (!response.sessionToken) {
+      const { error } = await authClient.signUp.email({ name, email, password })
+      if (error) {
         throw new ApiError(
-          "The server did not return a mobile session token.",
-          500
+          error.message ?? "Sign up failed",
+          error.status ?? 400
         )
       }
-
-      await persistSessionToken(response.sessionToken)
-      applySession(
-        {
-          token: response.sessionToken,
-          response: {
-            user: response.user,
-            session: response.session,
-          },
-        },
-        setState
-      )
+      const token = getSessionBearerToken()
+      await persistSessionToken(token)
+      setApiAuthToken(token)
+      const me = await api.getMe()
+      applySession({ token, response: me }, setState)
     },
     []
   )
 
   const signOut = useCallback(async () => {
     try {
-      await api.logout()
+      await authClient.signOut()
     } catch {
       // Ignore sign out transport issues and clear the local token anyway.
     }

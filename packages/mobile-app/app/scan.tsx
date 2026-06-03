@@ -87,8 +87,8 @@ export default function UnifiedScanScreen() {
     await handleRelationshipResult(result)
   }
 
-  async function routeLoginToken(token: string) {
-    router.replace(`/qr-login?token=${encodeURIComponent(token)}`)
+  async function routeLoginUserCode(userCode: string) {
+    router.replace(`/qr-login?user_code=${encodeURIComponent(userCode)}`)
   }
 
   async function processParsedPayload(parsed: ParsedSynapseQrPayload) {
@@ -97,30 +97,14 @@ export default function UnifiedScanScreen() {
     setHint(null)
 
     try {
-      if (parsed.kind === "login") {
-        await routeLoginToken(parsed.token)
-        return
-      }
-
       if (parsed.kind === "relationship") {
         await handleRelationshipToken(parsed.token)
         return
       }
 
-      try {
-        await api.resolveQrLogin(parsed.token)
-        await routeLoginToken(parsed.token)
-        return
-      } catch (loginError) {
-        if (
-          loginError instanceof ApiError &&
-          loginError.status !== 400 &&
-          loginError.status !== 404
-        ) {
-          throw loginError
-        }
-      }
-
+      // Other kinds (legacy login token / generic) are treated as relationship
+      // tokens; device-login QR codes carry a user_code URL and are handled in
+      // handleScan before reaching here.
       await handleRelationshipToken(parsed.token)
     } catch (nextError) {
       setError(
@@ -133,8 +117,27 @@ export default function UnifiedScanScreen() {
     }
   }
 
+  /**
+   * Better Auth deviceAuthorization QR codes encode a verification_uri_complete
+   * URL carrying a `user_code` query param. Detect that and return the code.
+   */
+  function extractDeviceUserCode(data: string): string | null {
+    try {
+      const url = new URL(data)
+      return url.searchParams.get("user_code")
+    } catch {
+      return null
+    }
+  }
+
   function handleScan(payload: { data: string }) {
     if (locked) return
+
+    const deviceUserCode = extractDeviceUserCode(payload.data)
+    if (deviceUserCode) {
+      void routeLoginUserCode(deviceUserCode)
+      return
+    }
 
     const parsed = parseSynapseQrPayload(payload.data)
     if (!parsed) {
@@ -150,10 +153,10 @@ export default function UnifiedScanScreen() {
     const kind =
       typeof params.kind === "string" ? params.kind.trim().toLowerCase() : ""
     if (!token || locked) return
-    if (kind !== "login" && kind !== "relationship") return
+    if (kind !== "relationship") return
 
     void processParsedPayload({
-      kind: kind as "login" | "relationship",
+      kind: "relationship",
       token,
     })
   }, [locked, params.kind, params.token, workspaceId])
