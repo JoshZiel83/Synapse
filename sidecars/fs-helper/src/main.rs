@@ -468,6 +468,14 @@ async fn dispatch(
         "fs.dir.apply_head" => dir_apply_head(&state, params).await,
         "fs.manifest.cleanup" => manifest_cleanup(&state, params).await,
         "fs.sidecar.restore" => sidecar_restore(&state, params).await,
+        // Handshake: no State/CAS needed, so it answers even without
+        // --cas-dir. Ignores params (forward-compatible). TS clients call this
+        // first on every (re)spawn and fail loud if proto_version mismatches.
+        "fs.hello" => Ok(serde_json::to_value(rpc::HelloResult {
+            proto_version: rpc::PROTO_VERSION,
+            crate_version: env!("CARGO_PKG_VERSION").to_string(),
+        })
+        .unwrap()),
         other => Err(RpcError::MethodNotFound(other.to_string())),
     }
 }

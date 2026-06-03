@@ -12,6 +12,11 @@
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { createInterface, type Interface } from "node:readline"
+import {
+  FS_HELPER_PROTO_VERSION,
+  FsHelperProtoMismatchError,
+  assertFsHelperProto,
+} from "./fs-helper-resolve.js"
 import type {
   CasGcInput,
   CasGcResult,
@@ -172,6 +177,31 @@ export class OneShotFsHelper {
     })
   }
 
+  /**
+   * Verify the spawned binary speaks our wire protocol before any real RPC.
+   * Throws FsHelperProtoMismatchError on version mismatch, or if the binary
+   * predates the handshake (method_not_found). Call once, right after spawn —
+   * withOneShotFsHelper does this automatically.
+   */
+  async handshake(): Promise<void> {
+    let hello: unknown
+    try {
+      hello = await this.request("fs.hello", {})
+    } catch (err) {
+      // A pre-handshake binary has no fs.hello → method_not_found (-32601).
+      // Surface that as a proto mismatch (rebuild needed), not a generic error.
+      if (err instanceof OneShotFsHelperError && err.rpcCode === -32601) {
+        throw new FsHelperProtoMismatchError(
+          FS_HELPER_PROTO_VERSION,
+          undefined,
+          undefined
+        )
+      }
+      throw err
+    }
+    assertFsHelperProto(hello)
+  }
+
   casPut(input: CasPutInput): Promise<CasPutResult> {
     return this.request("fs.cas.put", input)
   }
@@ -238,6 +268,7 @@ export async function withOneShotFsHelper<T>(
 ): Promise<T> {
   const helper = new OneShotFsHelper(opts)
   try {
+    await helper.handshake()
     return await fn(helper)
   } finally {
     await helper.close()

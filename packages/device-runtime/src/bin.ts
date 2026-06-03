@@ -38,6 +38,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { CatalogProvider } from "./types.js"
 import type { TerminalPlatform } from "./terminal/types.js"
+import { resolveSidecarPath } from "./builtins/fs-helper-resolve.js"
 
 // Argv parsing + getFlag live in cli-args.ts so unit tests can
 // exercise the parsing rules without triggering bin.ts's top-level
@@ -61,43 +62,44 @@ function getBoolFlag(
 
 /**
  * Look for synapse-device-cua-helper alongside the runtime install. Returns
- * the first existing path; null if none found. Covers two common layouts:
+ * the first existing path; undefined if none found. Covers two common layouts:
  *   1. Monorepo dev: <repo>/sidecars/cua/synapse-device-cua-helper
  *   2. Packaged release: <bin-dir>/synapse-device-cua-helper next to the
  *      `synapse-device` JS bundle.
  */
 function autoDiscoverCuaHelperPath(): string | undefined {
-  return autoDiscoverSidecarPath("cua", "synapse-device-cua-helper")
+  return resolveSidecarPath({
+    roots: sidecarRoots("cua"),
+    // cua ships a flat binary (no target/release layout): bare name only.
+    suffixes: ["synapse-device-cua-helper"],
+    mode: "release-first",
+  })
 }
 
 function autoDiscoverFsHelperPath(): string | undefined {
-  return autoDiscoverSidecarPath("fs-helper", "synapse-device-fs-helper", [
-    join("target", "release", "synapse-device-fs-helper"),
-    "synapse-device-fs-helper",
-  ])
+  return resolveSidecarPath({
+    roots: sidecarRoots("fs-helper"),
+    suffixes: [
+      join("target", "release", "synapse-device-fs-helper"),
+      "synapse-device-fs-helper",
+    ],
+    mode: "release-first",
+  })
 }
 
-function autoDiscoverSidecarPath(
-  sidecarDir: string,
-  binName: string,
-  extraSuffixes: string[] = [binName]
-): string | undefined {
+/**
+ * Candidate roots for a sidecar dir, anchored on this file's location:
+ *   - <repo>/sidecars/<dir> at the two monorepo depths (src vs dist), and
+ *   - the bin directory itself (packaged release: binary flat next to the JS
+ *     bundle), so a bare-name suffix resolves alongside the install.
+ */
+function sidecarRoots(sidecarDir: string): string[] {
   const here = dirname(fileURLToPath(import.meta.url))
-  const roots = [
+  return [
     resolve(here, "..", "..", "..", "sidecars", sidecarDir),
     resolve(here, "..", "..", "sidecars", sidecarDir),
     here,
   ]
-  for (const root of roots) {
-    for (const suffix of extraSuffixes) {
-      const candidate = join(root, suffix)
-      if (existsSync(candidate)) return candidate
-    }
-  }
-  // Plain binName alongside the JS bundle.
-  const flat = join(here, binName)
-  if (existsSync(flat)) return flat
-  return undefined
 }
 
 function isOn(value: string | undefined, fallback: boolean): boolean {
