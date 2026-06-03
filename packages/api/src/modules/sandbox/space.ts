@@ -59,6 +59,8 @@ export interface FileMountRow {
   status: "provisioning" | "active" | "committing" | "closed" | "failed"
   materialized_dir: string | null
   host_pid: number | null
+  sandbox_backend: "local" | "docker" | null
+  sandbox_resource_id: string | null
   error_message: string | null
 }
 
@@ -168,18 +170,20 @@ export async function insertFileMount(
     pairingSessionId?: string | null
     refreshPolicy?: "per_turn" | "on_teardown"
     materializedDir?: string | null
+    sandboxBackend?: "local" | "docker" | null
   }
 ): Promise<FileMountRow> {
   const result = await sql<FileMountRow>`
     INSERT INTO file_mounts
       (id, workspace_id, session_id, file_space_id, mount_subpath,
        base_snapshot_id, pairing_session_id, refresh_policy, status,
-       materialized_dir, created_at, updated_at)
+       materialized_dir, sandbox_backend, created_at, updated_at)
     VALUES (${uuidv4()}, ${input.workspaceId}, ${input.sessionId}, ${input.fileSpaceId}, ${input.mountSubpath},
-            ${input.baseSnapshotId}, ${input.pairingSessionId ?? null}, ${input.refreshPolicy ?? "per_turn"}, 'provisioning', ${input.materializedDir ?? null}, NOW(), NOW())
+            ${input.baseSnapshotId}, ${input.pairingSessionId ?? null}, ${input.refreshPolicy ?? "per_turn"}, 'provisioning', ${input.materializedDir ?? null}, ${input.sandboxBackend ?? null}, NOW(), NOW())
     RETURNING id, workspace_id, session_id, file_space_id, mount_subpath,
               device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
-              refresh_policy, status, materialized_dir, host_pid, error_message`.execute(
+              refresh_policy, status, materialized_dir, host_pid,
+              sandbox_backend, sandbox_resource_id, error_message`.execute(
     client
   )
   const row = result.rows[0]
@@ -195,6 +199,9 @@ export async function updateFileMount(
     status: FileMountRow["status"]
     deviceId: string | null
     hostPid: number | null
+    pairingSessionId: string | null
+    sandboxBackend: "local" | "docker" | null
+    sandboxResourceId: string | null
     baseSnapshotId: string | null
     resultSnapshotId: string | null
     materializedDir: string | null
@@ -209,6 +216,12 @@ export async function updateFileMount(
   if (patch.status !== undefined) add("status", patch.status)
   if (patch.deviceId !== undefined) add("device_id", patch.deviceId)
   if (patch.hostPid !== undefined) add("host_pid", patch.hostPid)
+  if (patch.pairingSessionId !== undefined)
+    add("pairing_session_id", patch.pairingSessionId)
+  if (patch.sandboxBackend !== undefined)
+    add("sandbox_backend", patch.sandboxBackend)
+  if (patch.sandboxResourceId !== undefined)
+    add("sandbox_resource_id", patch.sandboxResourceId)
   if (patch.baseSnapshotId !== undefined)
     add("base_snapshot_id", patch.baseSnapshotId)
   if (patch.resultSnapshotId !== undefined)
@@ -230,7 +243,8 @@ export async function getActiveMountsForSession(
   const result = await sql<FileMountRow>`
     SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
            device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
-           refresh_policy, status, materialized_dir, host_pid, error_message
+           refresh_policy, status, materialized_dir, host_pid,
+           sandbox_backend, sandbox_resource_id, error_message
     FROM file_mounts
     WHERE session_id = ${sessionId} AND status NOT IN ('closed', 'failed')
     ORDER BY mount_subpath`.execute(client)
@@ -249,7 +263,8 @@ export async function getFailedRecoverableMounts(
   const result = await sql<FileMountRow>`
     SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
            device_id, pairing_session_id, base_snapshot_id, result_snapshot_id,
-           refresh_policy, status, materialized_dir, host_pid, error_message
+           refresh_policy, status, materialized_dir, host_pid,
+           sandbox_backend, sandbox_resource_id, error_message
     FROM file_mounts
     WHERE status = 'failed' AND materialized_dir IS NOT NULL
     ORDER BY updated_at ASC

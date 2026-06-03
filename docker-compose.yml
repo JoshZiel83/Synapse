@@ -73,10 +73,47 @@ services:
       # set MIJIA_MCP_URL=http://mijia-mcp:8765/mcp/ in .env and start with
       # `--profile production --profile mijia`.
       MIJIA_MCP_URL: ${MIJIA_MCP_URL:-}
+      # --- server-side actor isolation (sandbox) ---
+      # Off by default. Set SYNAPSE_SANDBOX_ENABLED=true + SANDBOX_BACKEND=docker
+      # (+ run the 'sandbox' build + tunnel-edge) to enable containerized sandboxes.
+      SYNAPSE_SANDBOX_ENABLED: ${SYNAPSE_SANDBOX_ENABLED:-false}
+      SYNAPSE_SANDBOX_BACKEND: ${SYNAPSE_SANDBOX_BACKEND:-local}
+      # The docker backend is reachable ONLY over the frp tunnel (the container
+      # is on an internal-only network), so it requires SYNAPSE_SANDBOX_TUNNEL=frp
+      # + FRP_SHARED_TOKEN — anything else fails fast at provision. The local
+      # backend ignores this (its runtime uses a direct loopback endpoint).
+      SYNAPSE_SANDBOX_TUNNEL: ${SYNAPSE_SANDBOX_TUNNEL:-frp}
+      SYNAPSE_SANDBOX_IMAGE: ${SYNAPSE_SANDBOX_IMAGE:-synapse-device-runtime:latest}
+      SYNAPSE_SANDBOX_DOCKER_NETWORK: ${SYNAPSE_SANDBOX_DOCKER_NETWORK:-synapse-sandbox-egress}
+      SYNAPSE_SANDBOX_STORAGE_VOLUME: ${SYNAPSE_SANDBOX_STORAGE_VOLUME:-synapse_api_storage}
+      # Where api_storage is mounted INSIDE this container. The API derives each
+      # sandbox's volume-subpath as STORAGE_DIR relative to this path (here
+      # STORAGE_DIR=/app/storage/files under /app/storage → files/sandboxes/<id>).
+      # Only override if you remount the volume elsewhere.
+      SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT: ${SYNAPSE_SANDBOX_STORAGE_VOLUME_MOUNT:-/app/storage}
+      # Internal address the sandbox container dials back to (NOT the public
+      # APP_BASE_URL — the sandbox is on an internal-only network).
+      SYNAPSE_SANDBOX_SERVER_ORIGIN: ${SYNAPSE_SANDBOX_SERVER_ORIGIN:-http://api:3001}
+      # Tunnel + signing for device dispatch (required when sandbox+tunnel on).
+      SYNAPSE_DEVICE_TUNNEL_EDGE_URL: ${SYNAPSE_DEVICE_TUNNEL_EDGE_URL:-http://tunnel-edge:8080}
+      SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY: ${SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY:-}
+      SYNAPSE_TUNNEL_VHOST_HOST: ${SYNAPSE_TUNNEL_VHOST_HOST:-tunnel-edge}
+      FRP_SHARED_TOKEN: ${FRP_SHARED_TOKEN:-}
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
       - api_storage:/app/storage
+      # NOTE: the docker SandboxBackend (DooD) needs the host docker socket, but
+      # it is NOT mounted here — that would give EVERY production API container
+      # host-root-equivalent access even though sandboxes default to
+      # local/disabled. The socket is opt-in via the dedicated override:
+      #   docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml ...
+      # which appends the socket mount. See deploy.md §8b.
+    networks:
+      # Keep the default network (postgres/redis/web) AND join the sandbox
+      # egress network so the API is reachable from sandbox containers.
+      - default
+      - synapse-sandbox-egress
     depends_on:
       postgres:
         condition: service_healthy
@@ -219,17 +256,26 @@ services:
     container_name: synapse-tunnel-edge
     restart: unless-stopped
     command: ["frps", "-c", "/etc/frp/frps.toml"]
+    environment:
+      # frps.toml renders auth.token from {{ .Envs.FRP_SHARED_TOKEN }}.
+      FRP_SHARED_TOKEN: ${FRP_SHARED_TOKEN:-}
     volumes:
       - ./infrastructure/frp/frps.toml:/etc/frp/frps.toml:ro
     ports:
       # Public control listener — frpc dials this from anywhere.
       - "${SYNAPSE_TUNNEL_EDGE_PORT:-7000}:7000"
       # vhost HTTP — proxied device MCP endpoints. NOT bound to a host port;
-      # only reachable via the synapse internal network.
+      # only reachable via the synapse internal networks.
     networks:
+      # default → reachable by the API for dispatch; sandbox-egress → reachable
+      # by frpc inside sandbox containers.
       - default
+      - synapse-sandbox-egress
     profiles:
+      # Sandboxed actor execution dispatches device tools through this edge, so
+      # it must run in production too (not only the standalone 'devices' demo).
       - devices
+      - production
 
   # Private npm registry (Verdaccio). Serves @synapse/* to end users and
   # caches third-party deps from npmjs. Published at the registry subdomain
@@ -251,10 +297,37 @@ services:
     profiles:
       - registry
 
+  # Build-only: produces the cloud-sandbox image the docker SandboxBackend runs
+  # via DooD. NOT a long-running service. Build it with:
+  #   docker compose --profile sandbox-build build sandbox-image
+  # then set SYNAPSE_SANDBOX_IMAGE=synapse-device-runtime:latest. Self-contained
+  # multi-stage (compiles TS + Rust inside), so no host prebuild is needed.
+  sandbox-image:
+    image: ${SYNAPSE_SANDBOX_IMAGE:-synapse-device-runtime:latest}
+    build:
+      context: .
+      dockerfile: packages/device-runtime/docker/Dockerfile
+    profiles:
+      - sandbox-build
+
 volumes:
+  # Fixed name so the docker SandboxBackend's `--mount src=...` resolves the
+  # volume regardless of the compose project prefix.
   api_storage:
+    name: synapse_api_storage
   certbot_etc:
   certbot_www:
   pgdata:
   redisdata:
   verdaccio_storage:
+
+networks:
+  default:
+  # Internal-only network for sandbox containers: reaches the API + tunnel-edge
+  # (frpc/control-plane), but has NO public egress (internal: true) and is NOT
+  # joined by postgres/redis — so a confined command sharing the container's
+  # netns (--cmd-sandbox-share-net) can't reach the DB or the internet. Fixed
+  # name so the backend's `docker run --network` matches.
+  synapse-sandbox-egress:
+    name: synapse-sandbox-egress
+    internal: true

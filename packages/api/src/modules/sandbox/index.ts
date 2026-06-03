@@ -10,6 +10,7 @@ export {
   commitSpaces,
   teardownSandbox,
   recoverFailedSandboxMounts,
+  reconcileSandboxes,
   peekPendingCommitConflicts,
   clearPendingCommitConflicts,
   peekPendingRefreshConflicts,
@@ -26,7 +27,6 @@ export {
   type RecoverFailedMountsResult,
 } from "./service.js"
 export {
-  isSandboxCommandlineAvailable,
   CONFLICT_SIDECAR_PREFIX,
   type SandboxProvisionResult,
   type SidecarRestoreFailure,

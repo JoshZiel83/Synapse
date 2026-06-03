@@ -35,6 +35,16 @@ export interface FrpTunnelAdapterOptions {
    */
   vhostHost: string
   /**
+   * The API-reachable base URL the server registers as this device's
+   * internalUrl. Its origin MUST match the server's SYNAPSE_DEVICE_TUNNEL_EDGE_URL
+   * (the server rejects a mismatched origin), and host:port must reach the frps
+   * vhost HTTP port. Defaults to `http://tunnel-edge:8080` (the reference compose
+   * layout). Set this whenever the edge isn't the default `tunnel-edge:8080`,
+   * otherwise device.tunnel.up is rejected or the Host route won't match frps.
+   * The `/d/<registrationToken>` segment is appended automatically.
+   */
+  internalBaseUrl?: string
+  /**
    * How long start() waits after spawn() before declaring the tunnel
    * "started". If frpc exits within this window we treat the start as a
    * configuration / auth / connectivity failure and throw — the alternative
@@ -127,9 +137,12 @@ export function createFrpTunnelAdapter(
         })
       )
 
+      const internalBase = (
+        opts.internalBaseUrl ?? "http://tunnel-edge:8080"
+      ).replace(/\/+$/, "")
       const handle: TunnelHandle = {
         deviceServiceId: startOpts.deviceServiceId,
-        internalUrl: `http://tunnel-edge:8080/d/${startOpts.registrationToken}`,
+        internalUrl: `${internalBase}/d/${startOpts.registrationToken}`,
       }
       const frpcPath = opts.frpcPath ?? "frpc"
       // spawn() returns synchronously and the child becomes "alive" only

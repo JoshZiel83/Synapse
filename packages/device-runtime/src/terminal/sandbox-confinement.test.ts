@@ -45,6 +45,26 @@ test("buildBwrapArgs: includes the core isolation flags + cwd + terminator", () 
   }
 })
 
+test("buildBwrapArgs: shareNet gate omits --unshare-net but keeps other unshares", () => {
+  const isolated = buildBwrapArgs({ sandboxRoot: "/nonexistent-sandbox" })
+  assert.ok(isolated.includes("--unshare-net"), "default: net is unshared")
+
+  const shared = buildBwrapArgs({
+    sandboxRoot: "/nonexistent-sandbox",
+    shareNet: true,
+  })
+  assert.ok(
+    !shared.includes("--unshare-net"),
+    "shareNet: --unshare-net omitted (container-layer isolation)"
+  )
+  // The rest of the jail is unchanged — only the net namespace is shared.
+  assert.ok(shared.includes("--unshare-pid"), "pid still unshared")
+  assert.ok(shared.includes("--unshare-ipc"), "ipc still unshared")
+  assert.ok(shared.includes("--die-with-parent"), "die-with-parent kept")
+  assert.ok(shared.includes("--new-session"), "new-session kept")
+  assert.equal(shared[shared.length - 1], "--", "ends with -- terminator")
+})
+
 test("wrapDescriptorWithBwrap: program is the absolute bwrap path, original command trails", () => {
   const wrapped = wrapDescriptorWithBwrap(
     { program: "/bin/echo", args: ["hi"], stdio: ["ignore", "pipe", "pipe"] },

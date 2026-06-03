@@ -154,6 +154,34 @@ fn history_snapshot_and_restore_round_trip() {
 }
 
 #[test]
+fn hello_handshake_answers_without_cas() {
+    // fs.hello must work on a helper started WITHOUT --cas-dir (Helper::spawn),
+    // because the long-lived client may run without cas. It reports the wire
+    // proto version TS clients pin and the crate version.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    let resp = helper.call(1, "fs.hello", serde_json::json!({}));
+    let result = &resp["result"];
+    assert_eq!(
+        result["proto_version"].as_u64(),
+        Some(1),
+        "proto_version must match rpc::PROTO_VERSION: {resp}"
+    );
+    let crate_version = result["crate_version"]
+        .as_str()
+        .expect("crate_version string");
+    assert!(!crate_version.is_empty(), "crate_version non-empty: {resp}");
+    // Forward-compatible: extra params are ignored, not rejected.
+    let resp2 = helper.call(2, "fs.hello", serde_json::json!({ "ignored": true }));
+    assert_eq!(resp2["result"]["proto_version"].as_u64(), Some(1));
+    helper.stop();
+}
+
+#[test]
 fn cross_path_diff_rejected_with_not_found() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");

@@ -6,40 +6,29 @@ import {
   writeFileSync,
   readFileSync,
   existsSync,
-  statSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { withOneShotFsHelper } from "./one-shot-fs-helper.js"
+import { resolveFsHelperForProfile } from "./fs-helper-resolve.js"
 
-// Locate the built Rust binary. Tests run from the package dir; the binary
-// lives at <repo>/sidecars/fs-helper/target/{debug,release}/...
+// Locate the built Rust binary via the shared single-source-of-truth resolver
+// in the "debug" profile (newest-wins: rebuilding one profile must not be
+// shadowed by a stale build of the other). process.cwd() is the package dir
+// under `npm test -w packages/device-runtime` or the repo root under the root
+// test script — derive the sidecar dir for both layouts and take the first that
+// resolves.
 function findHelperBinary(): string | null {
-  // Explicit override wins (also how the api sandbox tests can be pointed at a
-  // specific build).
-  const fromEnv = process.env.SYNAPSE_DEVICE_FS_HELPER_PATH?.trim()
-  if (fromEnv && existsSync(fromEnv)) return fromEnv
-
-  // process.cwd() is the package dir under `npm test -w packages/device-runtime`
-  // or the repo root under the root test script — probe both. Both debug and
-  // release builds may exist; pick the NEWEST so a stale build of one profile
-  // can't shadow a current build of the other (the bug that made these tests
-  // fail with a clap "unexpected argument --cas-dir" against a pre-CAS binary).
-  const candidates = [
-    "sidecars/fs-helper/target/debug/synapse-device-fs-helper",
-    "sidecars/fs-helper/target/release/synapse-device-fs-helper",
-    "../../sidecars/fs-helper/target/debug/synapse-device-fs-helper",
-    "../../sidecars/fs-helper/target/release/synapse-device-fs-helper",
-  ].map((rel) => join(process.cwd(), rel))
-
-  let best: { path: string; mtimeMs: number } | null = null
-  for (const c of candidates) {
-    if (!existsSync(c)) continue
-    const mtimeMs = statSync(c).mtimeMs
-    if (!best || mtimeMs > best.mtimeMs) best = { path: c, mtimeMs }
+  const sidecarDirs = [
+    join(process.cwd(), "sidecars/fs-helper"), // repo-root cwd
+    join(process.cwd(), "../../sidecars/fs-helper"), // package-dir cwd
+  ]
+  for (const dir of sidecarDirs) {
+    const found = resolveFsHelperForProfile("debug", dir)
+    if (found) return found
   }
-  return best?.path ?? null
+  return null
 }
 
 const HELPER = findHelperBinary()
