@@ -3,9 +3,8 @@ import { bearer, genericOAuth } from "better-auth/plugins"
 import { deviceAuthorization } from "better-auth/plugins"
 import { getOAuth2Tokens } from "better-auth/oauth2"
 import { expo } from "@better-auth/expo"
-import { PostgresDialect } from "kysely"
 import { config } from "../../config/index.js"
-import { pool } from "../../infrastructure/database/index.js"
+import { createBetterAuthDialect } from "../../infrastructure/database/kysely.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { createGeneratedUserAvatarFile } from "../avatar/service.js"
@@ -188,10 +187,11 @@ export const auth = betterAuth({
   ),
 
   database: {
-    // Reuse the app's existing pg pool. type:"postgres" is required for the
-    // adapter to enable UUID/JSON support and let the DB generate ids;
-    // transaction:true makes the credential/OAuth multi-write atomic.
-    dialect: new PostgresDialect({ pool }),
+    // Reuse the app's existing pg pool via a Kysely PostgresDialect (exposed by
+    // the database layer so the bare pool stays sealed there). type:"postgres"
+    // is required for the adapter to enable UUID/JSON support and let the DB
+    // generate ids; transaction:true makes the credential/OAuth multi-write atomic.
+    dialect: createBetterAuthDialect(),
     type: "postgres",
     transaction: true,
   },
