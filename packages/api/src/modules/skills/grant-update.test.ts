@@ -75,7 +75,6 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
     .values({
       email: `${rid()}@${NS}`,
       name: "owner",
-      password_hash: "x",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -127,7 +126,6 @@ async function newInstalledSkill(
     .values({
       email: `${rid()}@${NS}`,
       name: "creator",
-      password_hash: "x",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -319,7 +317,6 @@ async function newPluginInstallation(
     .values({
       email: `${rid()}@${NS}-plg`,
       name: "installer",
-      password_hash: "x",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -454,7 +451,6 @@ test(
         .values({
           email: `${rid()}@${NS}-wm`,
           name: "member",
-          password_hash: "x",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -670,7 +666,6 @@ async function newMemberInWorkspace(
     .values({
       email: `${email}-${rid()}@${NS}`,
       name: email,
-      password_hash: "x",
     })
     .returning("id")
     .executeTakeFirstOrThrow()

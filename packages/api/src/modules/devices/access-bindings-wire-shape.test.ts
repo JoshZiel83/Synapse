@@ -239,7 +239,6 @@ test(
         .values({
           email: `${rid()}@batch19`,
           name: "u",
-          password_hash: "x",
         })
         .returning("id")
         .executeTakeFirstOrThrow()

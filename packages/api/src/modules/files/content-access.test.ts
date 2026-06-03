@@ -27,7 +27,7 @@ function rid(): string {
 async function newUser(db: Kysely<any>): Promise<string> {
   const u = await db
     .insertInto("users")
-    .values({ email: `${rid()}@${NS}`, name: "u", password_hash: "x" })
+    .values({ email: `${rid()}@${NS}`, name: "u" })
     .returning("id")
     .executeTakeFirstOrThrow()
   return u.id as string
@@ -367,7 +367,7 @@ const SHA_M = "e".repeat(64)
 async function seedPrivateMemoryRef(db: Kysely<any>) {
   const owner = await db
     .insertInto("users")
-    .values({ email: `${rid()}@mem`, name: "u", password_hash: "x" })
+    .values({ email: `${rid()}@mem`, name: "u" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db
@@ -378,7 +378,7 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
   // A workspace MEMBER who is not the memory owner.
   const memberUser = await db
     .insertInto("users")
-    .values({ email: `${rid()}@mem`, name: "m", password_hash: "x" })
+    .values({ email: `${rid()}@mem`, name: "m" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
@@ -528,7 +528,7 @@ async function seedFileSpaceRef(
 ) {
   const owner = await db
     .insertInto("users")
-    .values({ email: `${rid()}@fs`, name: "u", password_hash: "x" })
+    .values({ email: `${rid()}@fs`, name: "u" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db
@@ -538,7 +538,7 @@ async function seedFileSpaceRef(
     .executeTakeFirstOrThrow()
   const memberUser = await db
     .insertInto("users")
-    .values({ email: `${rid()}@fs`, name: "m", password_hash: "x" })
+    .values({ email: `${rid()}@fs`, name: "m" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
@@ -734,7 +734,7 @@ test("contentAccessResolver: library-global (workspace_id NULL) asset is readabl
   await withTestDb(async (db) => {
     const stranger = await db
       .insertInto("users")
-      .values({ email: `${rid()}@glob`, name: "s", password_hash: "x" })
+      .values({ email: `${rid()}@glob`, name: "s" })
       .returning("id")
       .executeTakeFirstOrThrow()
     const SHA_G = "1234".repeat(16)
@@ -773,7 +773,7 @@ const SHA_CS = "c0ffee".repeat(10) + "abcd" // 64 hex chars
 async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
   const owner = await db
     .insertInto("users")
-    .values({ email: `${rid()}@cs`, name: "o", password_hash: "x" })
+    .values({ email: `${rid()}@cs`, name: "o" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db
@@ -783,7 +783,7 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
     .executeTakeFirstOrThrow()
   const memberUser = await db
     .insertInto("users")
-    .values({ email: `${rid()}@cs`, name: "m", password_hash: "x" })
+    .values({ email: `${rid()}@cs`, name: "m" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
@@ -930,7 +930,7 @@ test("contentAccessResolver: scope=A memory space is NOT owner-readable from ?co
     // Member-owned memory space scoped to conversation A; the member reads from B.
     const ownerUser = await db
       .insertInto("users")
-      .values({ email: `${rid()}@cm`, name: "o", password_hash: "x" })
+      .values({ email: `${rid()}@cm`, name: "o" })
       .returning("id")
       .executeTakeFirstOrThrow()
     const ws = await db
@@ -1035,7 +1035,7 @@ test("contentAccessResolver: context-archive ref is narrowed by ?conv=", async (
     const SHA_AR = "ar".repeat(32)
     const user = await db
       .insertInto("users")
-      .values({ email: `${rid()}@ar`, name: "u", password_hash: "x" })
+      .values({ email: `${rid()}@ar`, name: "u" })
       .returning("id")
       .executeTakeFirstOrThrow()
     const ws = await db

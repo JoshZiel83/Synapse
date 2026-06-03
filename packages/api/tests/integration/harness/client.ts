@@ -109,18 +109,17 @@ export async function registerTestUser(
   const name = options?.name ?? `Test ${email}`
 
   const registerRes = await baseClient.json<{
+    token?: string
     user: { id: string; email: string; name: string }
-    session: { transport: string }
-    sessionToken?: string
-  }>("/auth/register", {
+  }>("/auth/sign-up/email", {
     method: "POST",
-    json: { email, password, name, transport: "token" },
+    json: { email, password, name },
   })
 
-  const sessionToken = registerRes.sessionToken
+  const sessionToken = registerRes.token
   if (!sessionToken) {
     throw new Error(
-      "register response missing sessionToken; did you pass transport: 'token'?"
+      "sign-up response missing session token; is emailAndPassword.autoSignIn enabled?"
     )
   }
   return {

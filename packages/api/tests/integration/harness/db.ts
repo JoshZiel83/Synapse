@@ -176,14 +176,6 @@ function generateSessionToken(): string {
   return crypto.randomBytes(48).toString("base64url")
 }
 
-function tokenHash(token: string): string {
-  return crypto.createHash("sha256").update(token).digest("hex")
-}
-
-function tokenHint(token: string): string {
-  return token.slice(0, 8)
-}
-
 export async function seedMinimal(
   opts: {
     email?: string
@@ -205,10 +197,10 @@ export async function seedMinimal(
 
   return withTestClient(async (client) => {
     const userRow = await client.query<{ id: string }>(
-      `INSERT INTO users (email, name, password_hash)
-       VALUES ($1, $2, $3)
+      `INSERT INTO users (email, name, email_verified)
+       VALUES ($1, $2, TRUE)
        RETURNING id`,
-      [email, "CB Test User", "test-not-a-real-hash"]
+      [email, "CB Test User"]
     )
     const userId = userRow.rows[0].id
 
@@ -228,15 +220,13 @@ export async function seedMinimal(
     )
     const workspaceMemberId = memberRow.rows[0].id
 
+    // Mint a Better Auth session directly. BA's session table stores the raw
+    // token (no hash); the harness client sends it as `Authorization: Bearer
+    // <token>`, which the bearer() plugin resolves via a token lookup.
     await client.query(
-      `INSERT INTO auth_sessions (user_id, client_type, transport, token_hash, token_hint, expires_at)
-       VALUES ($1, 'web', 'token', $2, $3, $4)`,
-      [
-        userId,
-        tokenHash(sessionToken),
-        tokenHint(sessionToken),
-        sessionExpiresAt,
-      ]
+      `INSERT INTO session (user_id, token, expires_at)
+       VALUES ($1, $2, $3)`,
+      [userId, sessionToken, sessionExpiresAt]
     )
 
     return {

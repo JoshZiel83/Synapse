@@ -27,7 +27,7 @@ async function seedDeviceWithBuiltins(
 ) {
   const user = await db
     .insertInto("users")
-    .values({ email: `${rid()}@${NS}`, name: "u", password_hash: "x" })
+    .values({ email: `${rid()}@${NS}`, name: "u" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db
@@ -119,7 +119,7 @@ test("grants.ts: resolveDeviceBuiltinIds throws when filesystem capability is ab
     // A device with no exposures at all.
     const user = await db
       .insertInto("users")
-      .values({ email: `${rid()}@${NS}`, name: "u", password_hash: "x" })
+      .values({ email: `${rid()}@${NS}`, name: "u" })
       .returning("id")
       .executeTakeFirstOrThrow()
     const ws = await db

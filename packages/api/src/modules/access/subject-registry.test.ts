@@ -606,7 +606,6 @@ async function insertUser(
     .values({
       email: `${Math.random().toString(36).slice(2, 8)}-${email}`,
       name: "test user",
-      password_hash: "unused-hash",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
