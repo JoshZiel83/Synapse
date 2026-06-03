@@ -1,9 +1,6 @@
 import type {
   ActorDocVisibility,
   ActorRole,
-  AuthClientType,
-  AuthSessionPersistence,
-  AuthTransport,
   InviteTrustLevel,
   MemoryCategory,
   MemoryIndexStatus,
@@ -72,9 +69,6 @@ import type {
   AutomationTriggersScheduleKind,
   AutomationTriggersSourceKind,
   AutomationTriggersTriggerKind,
-  AuthQrLoginRequestsApprovedSessionPersistence,
-  AuthSessionsClientType,
-  AuthSessionsTransport,
   InteractionRequestsStatus,
   MemoryItemsCategory,
   MemoryItemsIndexStatus,
@@ -113,15 +107,6 @@ type IsEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 
 type Assert<T extends true> = T
 
-type _AuthClientTypeMatchesDb = Assert<
-  IsEqual<AuthClientType, AuthSessionsClientType>
->
-type _AuthTransportMatchesDb = Assert<
-  IsEqual<AuthTransport, AuthSessionsTransport>
->
-type _AuthSessionPersistenceMatchesDb = Assert<
-  IsEqual<AuthSessionPersistence, AuthQrLoginRequestsApprovedSessionPersistence>
->
 type _InviteTrustLevelMatchesDb = Assert<
   IsEqual<InviteTrustLevel, WorkspaceInvitesTrustLevel>
 >

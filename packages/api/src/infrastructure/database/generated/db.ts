@@ -21,14 +21,6 @@ export type ArrayTypeImpl<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S[], I[], U[]>
   : T[];
 
-export type AuthQrLoginRequestsApprovedSessionPersistence = "persistent" | "temporary";
-
-export type AuthQrLoginRequestsStatus = "approved" | "consumed" | "expired" | "pending_confirm" | "pending_scan" | "rejected";
-
-export type AuthSessionsClientType = "android" | "api" | "cli" | "ios" | "web" | "windows";
-
-export type AuthSessionsTransport = "cookie" | "token";
-
 export type AutomationDeliveriesTargetPolicy = "all_members" | "specified_members";
 
 export type AutomationEventSourcesCreatedByKind = "session" | "system" | "workspace_member";
@@ -384,6 +376,22 @@ export interface AccessSubjects {
   workspace_member_id: string | null;
 }
 
+export interface Account {
+  access_token: string | null;
+  access_token_expires_at: Timestamp | null;
+  account_id: string;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  id_token: string | null;
+  password: string | null;
+  provider_id: string;
+  refresh_token: string | null;
+  refresh_token_expires_at: Timestamp | null;
+  scope: string | null;
+  updated_at: Generated<Timestamp>;
+  user_id: string;
+}
+
 export interface ActorModelGroupAssignments {
   actor_id: string;
   created_at: Generated<Timestamp | null>;
@@ -483,45 +491,6 @@ export interface AuditLogs {
   resource_type: string;
   user_id: string | null;
   workspace_id: string | null;
-}
-
-export interface AuthQrLoginRequests {
-  approved_at: Timestamp | null;
-  approved_by_user_id: string | null;
-  approved_session_persistence: AuthQrLoginRequestsApprovedSessionPersistence | null;
-  browser_ip_address: string | null;
-  browser_label: string;
-  browser_token_hash: string;
-  browser_user_agent: string | null;
-  consumed_at: Timestamp | null;
-  created_at: Generated<Timestamp | null>;
-  expires_at: Timestamp;
-  id: Generated<string>;
-  rejected_at: Timestamp | null;
-  resolver_user_id: string | null;
-  scan_token_hash: string;
-  scanned_at: Timestamp | null;
-  status: Generated<AuthQrLoginRequestsStatus>;
-  updated_at: Generated<Timestamp | null>;
-}
-
-export interface AuthSessions {
-  client_type: Generated<AuthSessionsClientType>;
-  created_at: Generated<Timestamp | null>;
-  device_name: string | null;
-  expires_at: Timestamp;
-  id: Generated<string>;
-  ip_address: string | null;
-  last_seen_at: Generated<Timestamp | null>;
-  platform: string | null;
-  revoke_reason: string | null;
-  revoked_at: Timestamp | null;
-  token_hash: string;
-  token_hint: string;
-  transport: Generated<AuthSessionsTransport>;
-  updated_at: Generated<Timestamp | null>;
-  user_agent: string | null;
-  user_id: string;
 }
 
 export interface AutomationDeliveries {
@@ -1017,6 +986,21 @@ export interface DeviceCatalogRevisions {
   schema_hash: string;
   status: Generated<DeviceCatalogRevisionsStatus>;
   updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceCode {
+  client_id: string | null;
+  created_at: Generated<Timestamp>;
+  device_code: string;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  last_polled_at: Timestamp | null;
+  polling_interval: number | null;
+  scope: string | null;
+  status: string;
+  updated_at: Generated<Timestamp>;
+  user_code: string;
+  user_id: string | null;
 }
 
 export interface DeviceControlPlaneSessions {
@@ -2069,6 +2053,23 @@ export interface RuntimeEvents {
   workspace_id: string | null;
 }
 
+export interface SchemaMigrations {
+  applied_at: Generated<Timestamp>;
+  description: Generated<string>;
+  version: string;
+}
+
+export interface Session {
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  ip_address: string | null;
+  token: string;
+  updated_at: Generated<Timestamp>;
+  user_agent: string | null;
+  user_id: string;
+}
+
 export interface SessionContextStates {
   active_private_archive_point_id: string | null;
   session_id: string;
@@ -2405,12 +2406,25 @@ export interface Turns {
 
 export interface Users {
   avatar_file_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Timestamp>;
   email: string;
+  email_verified: Generated<boolean>;
+  feishu_open_id: string | null;
+  feishu_tenant_key: string | null;
+  feishu_union_id: string | null;
   id: Generated<string>;
+  image: string | null;
   name: string;
-  password_hash: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface Verification {
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  identifier: string;
+  updated_at: Generated<Timestamp>;
+  value: string;
 }
 
 export interface WorkspaceAccessBindings {
@@ -2533,6 +2547,7 @@ export interface Workspaces {
 
 export interface DB {
   access_subjects: AccessSubjects;
+  account: Account;
   actor_model_group_assignments: ActorModelGroupAssignments;
   actor_source_refs: ActorSourceRefs;
   actor_template_version_specs: ActorTemplateVersionSpecs;
@@ -2540,8 +2555,6 @@ export interface DB {
   actor_versions: ActorVersions;
   actors: Actors;
   audit_logs: AuditLogs;
-  auth_qr_login_requests: AuthQrLoginRequests;
-  auth_sessions: AuthSessions;
   automation_deliveries: AutomationDeliveries;
   automation_delivery_targets: AutomationDeliveryTargets;
   automation_event_sources: AutomationEventSources;
@@ -2582,6 +2595,7 @@ export interface DB {
   conversations: Conversations;
   device_capabilities: DeviceCapabilities;
   device_catalog_revisions: DeviceCatalogRevisions;
+  device_code: DeviceCode;
   device_control_plane_sessions: DeviceControlPlaneSessions;
   device_exposures: DeviceExposures;
   device_operation_attempts: DeviceOperationAttempts;
@@ -2651,6 +2665,8 @@ export interface DB {
   resource_access_bindings: ResourceAccessBindings;
   runtime_authorization_grants: RuntimeAuthorizationGrants;
   runtime_events: RuntimeEvents;
+  schema_migrations: SchemaMigrations;
+  session: Session;
   session_context_states: SessionContextStates;
   session_engine_branches: SessionEngineBranches;
   session_interrupts: SessionInterrupts;
@@ -2674,6 +2690,7 @@ export interface DB {
   transport_message_links: TransportMessageLinks;
   turns: Turns;
   users: Users;
+  verification: Verification;
   workspace_access_bindings: WorkspaceAccessBindings;
   workspace_capability_conversation_type_policies: WorkspaceCapabilityConversationTypePolicies;
   workspace_friend_entries: WorkspaceFriendEntries;
