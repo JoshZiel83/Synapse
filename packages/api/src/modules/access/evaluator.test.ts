@@ -1394,3 +1394,51 @@ test(
     })
   }
 )
+
+test(
+  "lookupResources(device_capability.view) returns a non-owned active capability for a device_admin keyholder but not for a plain member",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, ownerMemberId, guestMemberId } =
+        await seedOwnerMemberAndGuest(db)
+      // Capability on a device owned by the workspace owner — the guest is NOT
+      // the device owner, so visibility hinges on the manage_devices listing
+      // path (listManageableCapabilityIds), the same broken-then-fixed key.
+      const { capabilityId } = await insertDevice(
+        db,
+        workspaceId,
+        ownerMemberId
+      )
+
+      // Plain member without device_admin: the manageable-listing falls back to
+      // own-device only, so a non-owned capability is NOT enumerated. (It also
+      // has no resource grant, so the granted-ids leg returns nothing.)
+      const beforeKey = await lookupResources(db, {
+        resourceType: "device_capability",
+        permission: "view",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(beforeKey.includes(capabilityId), false)
+
+      // Granting device_admin must surface the non-owned active capability via
+      // listManageableCapabilityIds (regression: with the stale manage_relays
+      // key this listing silently returned own-device only for everyone).
+      await grantWorkspaceAccessKey(db, guestMemberId, "device_admin")
+      const afterKey = await lookupResources(db, {
+        resourceType: "device_capability",
+        permission: "view",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.ok(afterKey.includes(capabilityId))
+
+      // Workspace owner (admin) sees it via the adminGrants path too.
+      const adminIds = await lookupResources(db, {
+        resourceType: "device_capability",
+        permission: "view",
+        subject: { type: "workspace_member", id: ownerMemberId },
+      })
+      assert.ok(adminIds.includes(capabilityId))
+    })
+  }
+)

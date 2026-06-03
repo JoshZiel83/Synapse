@@ -7,7 +7,7 @@ import { CANONICAL_FILE_CATEGORIES } from "../constants/enums.js"
  * Lives in shared so server controllers, future client-side guards, and
  * tooling all validate against the same shape. Before this module the
  * schema was inlined inside packages/api/src/modules/chat/controller.ts;
- * any second consumer (a CLI ingest path, a relay-imported message
+ * any second consumer (a CLI ingest path, an IM-imported message
  * pipeline, anything) had to either redeclare it or skip validation.
  *
  * Notes:

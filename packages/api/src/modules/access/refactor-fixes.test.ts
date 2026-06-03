@@ -21,7 +21,7 @@ import { insertMemoryAccessGrant } from "../memory/access-grant-storage.js"
  * Regression suite for the PR1-7 follow-up fixes (P0 grant REST holes,
  * grants not wired into reads, scope leak in
  * loadAccessBindingRowsForResourcesAndContext, remote_agent evaluator
- * branch, principal workspace validation, relay CAC allowlist).
+ * branch, principal workspace validation, device CAC allowlist).
  */
 
 const NS = "fixes"
