@@ -8,6 +8,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PRETEST="$SCRIPT_DIR/pretest-fs-helper.sh"
 BIN="synapse-device-fs-helper"
 
@@ -119,7 +120,7 @@ expect "absent + nothing on disk, debug → skip"              0 absent debug   
 # resolver CLI, so we can exercise the real build + post-build verification path
 # hermetically. The fake writes a stub binary to <target-dir>/<profile>/<bin>.
 FAKE_CARGO_BIN="$(mktemp -d)"
-for t in bash sh dirname pwd command echo printf cat mktemp rm realpath ls node npx npm env grep sed head tail cut tr stat mkdir chmod; do
+for t in bash sh dirname pwd command echo printf cat mktemp rm realpath ls node npx npm env grep sed head tail cut tr stat mkdir chmod touch; do
   s="$(command -v "$t" 2>/dev/null)" && [[ -n "$s" ]] && ln -sf "$s" "$FAKE_CARGO_BIN/$t" 2>/dev/null
 done
 # Honest fake cargo: respects --target-dir (overrides CARGO_TARGET_DIR like real cargo).
@@ -167,10 +168,63 @@ if run_fake_cargo release "CARGO_TARGET_DIR=$ALT_TD" \
 else echo "FAIL - cargo present: CARGO_TARGET_DIR redirect not neutralized"; fail=$((fail+1)); fi
 rm -rf "$(dirname "$ALT_TD")"
 
+# (b2) the round-7 finding: debug profile (newest-wins) with a NEWER release
+# sibling, and a cargo no-op that does NOT rewrite the debug binary (fingerprint
+# hit → old mtime preserved). Without the post-build touch+exact-match the
+# resolver would pick the newer release and the script would still claim fresh.
+# A no-op-aware fake cargo: only (re)writes if the output is missing.
+NOOP_CARGO_BIN="$(mktemp -d)"
+for t in bash sh dirname pwd command echo printf cat mktemp rm realpath ls node npx npm env grep sed head tail cut tr stat mkdir chmod touch; do
+  s="$(command -v "$t" 2>/dev/null)" && [[ -n "$s" ]] && ln -sf "$s" "$NOOP_CARGO_BIN/$t" 2>/dev/null
+done
+cat >"$NOOP_CARGO_BIN/cargo" <<'NOOP'
+#!/usr/bin/env bash
+set -euo pipefail
+profile=debug; tdir="${CARGO_TARGET_DIR:-target}"
+args=("$@"); i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  case "${args[$i]}" in
+    --release) profile=release ;;
+    --target-dir) i=$((i+1)); tdir="${args[$i]}" ;;
+  esac
+  i=$((i+1))
+done
+out="$tdir/$profile/synapse-device-fs-helper"
+# Fingerprint hit: leave an existing binary untouched (preserve its old mtime).
+if [[ ! -e "$out" ]]; then
+  mkdir -p "$tdir/$profile"
+  printf '#!/bin/sh\nexit 0\n' >"$out"; chmod +x "$out"
+fi
+NOOP
+chmod +x "$NOOP_CARGO_BIN/cargo"
+
+NOOP_FIX="$(mktemp -d)"
+mkdir -p "$NOOP_FIX/target/debug" "$NOOP_FIX/target/release"
+printf '#!/bin/sh\nexit 0\n' >"$NOOP_FIX/target/debug/synapse-device-fs-helper"
+chmod +x "$NOOP_FIX/target/debug/synapse-device-fs-helper"
+printf '#!/bin/sh\nexit 0\n' >"$NOOP_FIX/target/release/synapse-device-fs-helper"
+chmod +x "$NOOP_FIX/target/release/synapse-device-fs-helper"
+# Make release strictly NEWER than debug (the shadowing setup).
+touch -d "2020-01-01" "$NOOP_FIX/target/debug/synapse-device-fs-helper"
+touch -d "2020-06-01" "$NOOP_FIX/target/release/synapse-device-fs-helper"
+env "PATH=$NOOP_CARGO_BIN" "FS_HELPER_SIDECAR_DIR=$NOOP_FIX" bash "$PRETEST" debug >/dev/null 2>&1
+noop_rc=$?
+# After: the resolver (debug, newest-wins) must now pick the DEBUG target, because
+# pretest touched it newest. Query via the real CLI.
+noop_resolved="$(env "PATH=$NOOP_CARGO_BIN" npx --no-install tsx \
+  "$REPO_ROOT/packages/device-runtime/src/builtins/fs-helper-resolve-cli.ts" debug "$NOOP_FIX" \
+  2>/dev/null | sed -n "s/^RESOLVED=//p" | tr -d "'")"
+if [[ "$noop_rc" == "0" && "$noop_resolved" == "$NOOP_FIX/target/debug/synapse-device-fs-helper" ]]; then
+  echo "ok   - cargo no-op: newer release sibling does NOT shadow the debug build"; pass=$((pass+1))
+else
+  echo "FAIL - cargo no-op: debug rc=$noop_rc resolved=$noop_resolved"; fail=$((fail+1))
+fi
+rm -rf "$NOOP_FIX" "$NOOP_CARGO_BIN"
+
 # (c) a BAD cargo that ignores --target-dir and writes to CARGO_TARGET_DIR only →
 #     post-build existence check must FAIL (the pinned target stays empty).
 BAD_CARGO_BIN="$(mktemp -d)"
-for t in bash sh dirname pwd command echo printf cat mktemp rm realpath ls node npx npm env grep sed head tail cut tr stat mkdir chmod; do
+for t in bash sh dirname pwd command echo printf cat mktemp rm realpath ls node npx npm env grep sed head tail cut tr stat mkdir chmod touch; do
   s="$(command -v "$t" 2>/dev/null)" && [[ -n "$s" ]] && ln -sf "$s" "$BAD_CARGO_BIN/$t" 2>/dev/null
 done
 cat >"$BAD_CARGO_BIN/cargo" <<'BAD'
