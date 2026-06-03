@@ -214,8 +214,9 @@ set it in `.env` and bring up the sidecar with the `mijia` profile:
 ```bash
 echo 'MIJIA_MCP_URL=http://mijia-mcp:8765/mcp/' >> .env
 docker compose --profile production --profile mijia up -d --build mijia-mcp api
-# re-seed so the Mijia plugin appears (or run the normal seed step):
-docker compose --profile production run --rm api npm run db:bootstrap:runtime -w packages/api
+# re-seed builtin MCP plugins so the Mijia plugin appears in the catalog
+# (db:bootstrap:runtime is schema-only and does NOT run the builtin seed):
+docker compose --profile production run --rm api npm run db:seed:builtin-mcp -w packages/api
 ```
 
 Rebuild after changes:
