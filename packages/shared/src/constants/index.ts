@@ -2,10 +2,11 @@ export const APP_NAME = "Synapse"
 export const API_VERSION = "v1"
 export const API_PREFIX = `/api/${API_VERSION}`
 
-export const AUTH_SESSION_COOKIE_NAME = "synapse_session"
+// Session lifetime fed into Better Auth's session.expiresIn (30 days). The
+// session cookie NAME is intentionally not exported: Better Auth owns the
+// cookie and adds a `__Secure-` prefix in production, so no business code may
+// reference it by a fixed name — use auth.api.getSession / forward headers.
 export const AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
-export const AUTH_SESSION_TOUCH_INTERVAL_SECONDS = 60
-export const AUTH_QR_LOGIN_REQUEST_TTL_SECONDS = 3 * 60
 
 export const DEFAULT_PAGE_SIZE = 20
 export const MAX_PAGE_SIZE = 100

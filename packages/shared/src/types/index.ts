@@ -7,10 +7,6 @@ import {
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
   ATTACHMENT_TARGET_TYPES,
-  AUTH_CLIENT_TYPES,
-  AUTH_QR_LOGIN_STATUSES,
-  AUTH_SESSION_PERSISTENCES,
-  AUTH_TRANSPORTS,
   CANONICAL_FILE_CATEGORIES,
   CONVERSATION_ITEM_ROLES,
   CONVERSATION_ITEM_SCOPES,
@@ -134,61 +130,23 @@ export interface User {
   updatedAt: Timestamp
 }
 
-export type AuthClientType = (typeof AUTH_CLIENT_TYPES)[number]
-export type AuthTransport = (typeof AUTH_TRANSPORTS)[number]
-export type AuthSessionPersistence = (typeof AUTH_SESSION_PERSISTENCES)[number]
-
+/**
+ * Authentication is provided by Better Auth. The legacy client-type / transport
+ * / session-persistence / QR-login shapes were removed when the hand-rolled
+ * auth layer was replaced; clients talk to Better Auth's native endpoints and
+ * use the `better-auth` client's own types for sessions/accounts.
+ *
+ * `AuthSessionSummary` / `AuthResponse` are retained only as the shape of the
+ * custom GET /api/v1/auth/me endpoint (which preserves `{ user, session }` for
+ * the web proxy guard and clients). `session` carries just the BA session id.
+ */
 export interface AuthSessionSummary {
   id: UUID
-  clientType: AuthClientType
-  transport: AuthTransport
-  deviceName?: string
-  platform?: string
-  current: boolean
-  createdAt: Timestamp
-  lastSeenAt: Timestamp
-  expiresAt: Timestamp
-  revokedAt?: Timestamp
 }
 
 export interface AuthResponse {
   user: User
   session: AuthSessionSummary
-  sessionToken?: string
-}
-
-export type AuthQrLoginStatus = (typeof AUTH_QR_LOGIN_STATUSES)[number]
-
-export interface AuthQrLoginRequestSummary {
-  id: UUID
-  status: AuthQrLoginStatus
-  browserLabel: string
-  approvedSessionPersistence?: AuthSessionPersistence
-  createdAt: Timestamp
-  expiresAt: Timestamp
-  scannedAt?: Timestamp
-  approvedAt?: Timestamp
-  rejectedAt?: Timestamp
-  consumedAt?: Timestamp
-}
-
-export interface AuthQrLoginCreateResponse {
-  request: AuthQrLoginRequestSummary
-  scanToken: string
-  browserToken: string
-}
-
-export interface AuthQrLoginStatusResponse {
-  request: AuthQrLoginRequestSummary
-}
-
-export interface AuthQrLoginResolveResponse {
-  request: AuthQrLoginRequestSummary
-  confirmation: {
-    browserLabel: string
-    requestedAt: Timestamp
-    expiresAt: Timestamp
-  }
 }
 
 // ============ Workspace ============

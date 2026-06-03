@@ -1,5 +1,3 @@
-export const AUTH_SESSION_COOKIE_NAME = "synapse_session"
-
 export function normalizeRedirectTarget(input: string | null | undefined) {
   if (!input) return null
 
