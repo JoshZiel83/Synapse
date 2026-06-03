@@ -25,6 +25,16 @@ export interface SandboxConfinement {
   readonlyBinds?: string[]
   /** In-container working directory (default /conversation). */
   cwd?: string
+  /**
+   * When true, do NOT add `--unshare-net` — the confined command shares the
+   * device-runtime's network namespace instead of getting an isolated one.
+   * Network isolation is then the deployment's responsibility (e.g. the
+   * sandbox runs in a container on an `internal` docker network with no public
+   * egress). This is REQUIRED under Docker where bwrap's `--unshare-net`
+   * loopback bring-up fails without CAP_NET_ADMIN ("loopback: Failed
+   * RTM_NEWADDR"). Default false = keep the stronger kernel-level no-network.
+   */
+  shareNet?: boolean
 }
 
 // The fixed mount points a sandbox device-runtime exposes (must match
@@ -73,8 +83,15 @@ export function bwrapAvailable(): boolean {
  * writable mount can't be shadowed by a broad ro-bind.
  */
 export function buildBwrapArgs(confinement: SandboxConfinement): string[] {
-  const args: string[] = [
-    "--unshare-net", // no network
+  const args: string[] = []
+  // Network isolation: kernel-level by default (own empty netns). When
+  // shareNet is set (Docker, no CAP_NET_ADMIN), omit it and rely on the
+  // container's network for isolation. Must be first so the rest of the
+  // namespace/mount setup is unaffected by its presence/absence.
+  if (!confinement.shareNet) {
+    args.push("--unshare-net") // no network
+  }
+  args.push(
     "--unshare-pid", // own pid namespace
     "--unshare-uts",
     "--unshare-ipc",
@@ -85,8 +102,8 @@ export function buildBwrapArgs(confinement: SandboxConfinement): string[] {
     "--dev",
     "/dev",
     "--tmpfs",
-    "/tmp",
-  ]
+    "/tmp"
+  )
 
   // Read-only system + toolchain binds (only those that exist).
   for (const p of SYSTEM_RO_PATHS) {

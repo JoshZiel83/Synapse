@@ -300,3 +300,76 @@ test("happy path: start/rotateToken/stop on the same handle delivers SIGHUP + SI
     }
   }
 })
+
+// ── R4 #3: internalUrl is configurable (was hardcoded http://tunnel-edge:8080).
+
+test("frp start(): internalUrl defaults to http://tunnel-edge:8080/d/<token>", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frp-url-default-"))
+  const logPath = join(dir, "stub.log")
+  const stub = writeStubBinary(logPath)
+  try {
+    const adapter = createFrpTunnelAdapter({
+      frpcPath: stub.binPath,
+      serverAddr: "127.0.0.1",
+      serverPort: 7000,
+      authToken: "t",
+      vhostHost: "tunnel-edge",
+      startupGraceMs: 200,
+    })
+    const handle = await adapter.start({
+      deviceServiceId: "svc-url-1",
+      localPort: 14010,
+      registrationToken: "tok-default",
+    })
+    assert.equal(
+      handle.internalUrl,
+      "http://tunnel-edge:8080/d/tok-default",
+      "default internal base preserved"
+    )
+    await adapter.stop(handle)
+    await new Promise((resolve) => setTimeout(resolve, STUB_SETTLE_MS))
+  } finally {
+    stub.cleanup()
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* best-effort */
+    }
+  }
+})
+
+test("frp start(): internalBaseUrl override is honored (custom edge) + trailing slash trimmed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frp-url-custom-"))
+  const logPath = join(dir, "stub.log")
+  const stub = writeStubBinary(logPath)
+  try {
+    const adapter = createFrpTunnelAdapter({
+      frpcPath: stub.binPath,
+      serverAddr: "127.0.0.1",
+      serverPort: 7000,
+      authToken: "t",
+      vhostHost: "edge.example.com",
+      internalBaseUrl: "https://edge.example.com:9443/",
+      startupGraceMs: 200,
+    })
+    const handle = await adapter.start({
+      deviceServiceId: "svc-url-2",
+      localPort: 14011,
+      registrationToken: "tok-custom",
+    })
+    assert.equal(
+      handle.internalUrl,
+      "https://edge.example.com:9443/d/tok-custom",
+      "custom base used + single /d/ join (no double slash)"
+    )
+    await adapter.stop(handle)
+    await new Promise((resolve) => setTimeout(resolve, STUB_SETTLE_MS))
+  } finally {
+    stub.cleanup()
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* best-effort */
+    }
+  }
+})

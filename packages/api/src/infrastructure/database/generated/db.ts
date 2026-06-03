@@ -1338,6 +1338,8 @@ export interface FileMounts {
   pairing_session_id: string | null;
   refresh_policy: Generated<string>;
   result_snapshot_id: string | null;
+  sandbox_backend: string | null;
+  sandbox_resource_id: string | null;
   session_id: string;
   status: Generated<FileMountStatus>;
   updated_at: Generated<Timestamp>;
@@ -2069,6 +2071,12 @@ export interface RuntimeEvents {
   workspace_id: string | null;
 }
 
+export interface SchemaMigrations {
+  applied_at: Generated<Timestamp>;
+  description: Generated<string>;
+  version: string;
+}
+
 export interface SessionContextStates {
   active_private_archive_point_id: string | null;
   session_id: string;
@@ -2651,6 +2659,7 @@ export interface DB {
   resource_access_bindings: ResourceAccessBindings;
   runtime_authorization_grants: RuntimeAuthorizationGrants;
   runtime_events: RuntimeEvents;
+  schema_migrations: SchemaMigrations;
   session_context_states: SessionContextStates;
   session_engine_branches: SessionEngineBranches;
   session_interrupts: SessionInterrupts;

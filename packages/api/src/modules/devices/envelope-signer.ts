@@ -20,13 +20,24 @@ let cached: LoadedSigner | null = null
 
 function readKeyMaterial(): string | null {
   const env = process.env.SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY
-  if (env && env.includes("BEGIN PRIVATE KEY")) {
+  if (!env || env.length === 0) return null
+  // Accept a verbatim PEM (multi-line) …
+  if (env.includes("BEGIN PRIVATE KEY")) {
     return env
   }
-  // PEM may be base64-blob in the env; decode and re-inject the PEM headers
-  // is not v3 scope — the operator-facing contract is "drop the PEM in
-  // verbatim, including the BEGIN/END markers".
-  return env && env.length > 0 ? env : null
+  // … or a base64-encoded PEM (single-line — friendly to flat .env files,
+  // which can't hold a multi-line value). Decode and verify it's a PEM.
+  try {
+    const decoded = Buffer.from(env, "base64").toString("utf8")
+    if (decoded.includes("BEGIN PRIVATE KEY")) {
+      return decoded
+    }
+  } catch {
+    /* not base64 — fall through */
+  }
+  // Last resort: hand it to createPrivateKey as-is (lets the caller surface a
+  // precise error). Non-empty already checked above.
+  return env
 }
 
 export function loadEnvelopeSigner(): LoadedSigner {
