@@ -158,6 +158,38 @@ export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
   }
   const tunnel: "frp" = "frp"
   const tunnelAuthToken = require_("FRP_SHARED_TOKEN")
+  const tunnelVhostHost = process.env.SYNAPSE_TUNNEL_VHOST_HOST?.trim()
+  const tunnelInternalBaseUrl =
+    process.env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim()
+  // Edge/vhost consistency: frps routes by the HTTP Host header, which frpc sets
+  // to SYNAPSE_TUNNEL_VHOST_HOST; the API reaches the device by fetching
+  // SYNAPSE_DEVICE_TUNNEL_EDGE_URL, whose Host header is that URL's hostname. If
+  // the two disagree the route silently won't match (or registration is rejected
+  // by the server's origin check). Both default to `tunnel-edge`, so they only
+  // diverge under explicit custom config — fail fast there instead of shipping a
+  // sandbox whose dispatch 404s at the edge. (effective vhost = explicit value
+  // or the tunnel-edge default the docker backend injects; effective edge host =
+  // hostname of the explicit edge URL, else the adapter's tunnel-edge default.)
+  const effectiveVhost = tunnelVhostHost || "tunnel-edge"
+  let effectiveEdgeHost = "tunnel-edge"
+  if (tunnelInternalBaseUrl) {
+    try {
+      effectiveEdgeHost = new URL(tunnelInternalBaseUrl).hostname
+    } catch {
+      throw new SandboxServiceError(
+        `SYNAPSE_DEVICE_TUNNEL_EDGE_URL is not a valid URL: '${tunnelInternalBaseUrl}'`,
+        500
+      )
+    }
+  }
+  if (effectiveEdgeHost !== effectiveVhost) {
+    throw new SandboxServiceError(
+      `SYNAPSE_DEVICE_TUNNEL_EDGE_URL host ('${effectiveEdgeHost}') must match ` +
+        `SYNAPSE_TUNNEL_VHOST_HOST ('${effectiveVhost}') — frps routes by the ` +
+        `vhost Host header, so a mismatch makes every sandbox dispatch fail to route`,
+      500
+    )
+  }
   return {
     image: require_("SYNAPSE_SANDBOX_IMAGE"),
     network: require_("SYNAPSE_SANDBOX_DOCKER_NETWORK"),
@@ -168,12 +200,12 @@ export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
     tunnelServerAddr: process.env.SYNAPSE_TUNNEL_SERVER_ADDR?.trim(),
     tunnelServerPort: process.env.SYNAPSE_TUNNEL_SERVER_PORT?.trim(),
     tunnelAuthToken,
-    tunnelVhostHost: process.env.SYNAPSE_TUNNEL_VHOST_HOST?.trim(),
+    tunnelVhostHost,
     // The container registers this as its internalUrl; the server validates the
     // origin against SYNAPSE_DEVICE_TUNNEL_EDGE_URL. Default to that same env so
     // a custom edge URL is honored end-to-end (origins match by construction);
     // unset → the runtime adapter falls back to http://tunnel-edge:8080.
-    tunnelInternalBaseUrl: process.env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim(),
+    tunnelInternalBaseUrl,
     runAsUid: process.env.SYNAPSE_SANDBOX_RUN_AS_UID
       ? Number(process.env.SYNAPSE_SANDBOX_RUN_AS_UID)
       : undefined,
@@ -543,30 +575,11 @@ export async function provisionSandbox(
   ) {
     const deviceIdForEndpoint =
       existing.find((m) => m.device_id)?.device_id ?? ""
-    const serviceId = deviceIdForEndpoint
-      ? await resolveDeviceRuntimeServiceId(deviceIdForEndpoint)
-      : null
-    if (serviceId) {
-      const tunnelTimeoutMs = options.tunnelTimeoutMs ?? 30_000
-      if (tunnelTimeoutMs <= 0) {
-        // Tests opt out of the endpoint wait entirely.
-        fastPathOk = true
-      } else {
-        try {
-          await waitForTunnelEndpoint(serviceId, { timeoutMs: tunnelTimeoutMs })
-          fastPathOk = true
-        } catch {
-          // Endpoint never re-registered → the live runtime is unreachable for
-          // dispatch. Fall through to teardown + re-provision (a fresh sandbox
-          // that DOES register an endpoint before going active).
-          console.warn(
-            `[sandbox] fast path: session ${sessionId} runtime is alive but no tunnel ` +
-              `endpoint re-registered within ${tunnelTimeoutMs}ms; tearing down + re-provisioning`
-          )
-          fastPathOk = false
-        }
-      }
-    }
+    fastPathOk = await fastPathEndpointReady({
+      sessionId,
+      deviceId: deviceIdForEndpoint,
+      tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
+    })
   }
   if (fastPathOk) {
     // Already provisioned this session — report the ACTUAL state, not a
@@ -897,8 +910,9 @@ async function waitForCatalog(
  * dispatch any tool, so a timeout aborts provision (the caller's catch tears
  * the half-built sandbox down). An empty deviceServiceId (shouldn't happen for a
  * freshly created handle) is treated as "never registers" → times out.
+ * Exported for the fast-path endpoint integration test.
  */
-async function waitForTunnelEndpoint(
+export async function waitForTunnelEndpoint(
   deviceServiceId: string,
   opts: { timeoutMs: number; pollMs?: number }
 ): Promise<void> {
@@ -937,6 +951,57 @@ async function resolveDeviceRuntimeServiceId(
     .limit(1)
     .executeTakeFirst()
   return (svc?.id as string | undefined) ?? null
+}
+
+/** Injectable seams for {@link fastPathEndpointReady} (tests stub these so the
+ *  empty-registry → timeout → reprovision branch is exercised without a DB). */
+export interface FastPathEndpointDeps {
+  resolveServiceId: (deviceId: string) => Promise<string | null>
+  waitForEndpoint: (serviceId: string, timeoutMs: number) => Promise<void>
+}
+
+function defaultFastPathEndpointDeps(): FastPathEndpointDeps {
+  return {
+    resolveServiceId: resolveDeviceRuntimeServiceId,
+    waitForEndpoint: (serviceId, timeoutMs) =>
+      waitForTunnelEndpoint(serviceId, { timeoutMs }),
+  }
+}
+
+/**
+ * Decide whether the fast path may reuse an existing live sandbox: it can ONLY
+ * when the device's runtime service has a dispatchable tunnel endpoint. After an
+ * API restart the in-memory DeviceTunnelRegistry is empty even though the
+ * runtime/container is still alive, so we wait (briefly) for re-registration.
+ * Returns false (→ caller tears down + re-provisions) when there is no
+ * device_runtime service or the endpoint never (re)registers within the timeout.
+ * tunnelTimeoutMs<=0 skips the wait entirely (tests that don't dispatch).
+ *
+ * Exported with injectable deps so the empty-registry timeout path is unit
+ * testable without standing up a full sandbox.
+ */
+export async function fastPathEndpointReady(
+  args: { sessionId: string; deviceId: string; tunnelTimeoutMs: number },
+  deps: FastPathEndpointDeps = defaultFastPathEndpointDeps()
+): Promise<boolean> {
+  const serviceId = args.deviceId
+    ? await deps.resolveServiceId(args.deviceId)
+    : null
+  if (!serviceId) return false
+  if (args.tunnelTimeoutMs <= 0) return true
+  try {
+    await deps.waitForEndpoint(serviceId, args.tunnelTimeoutMs)
+    return true
+  } catch {
+    // Endpoint never re-registered → the live runtime is unreachable for
+    // dispatch. The caller falls through to teardown + re-provision (a fresh
+    // sandbox that DOES register an endpoint before going active).
+    console.warn(
+      `[sandbox] fast path: session ${args.sessionId} runtime is alive but no tunnel ` +
+        `endpoint re-registered within ${args.tunnelTimeoutMs}ms; tearing down + re-provisioning`
+    )
+    return false
+  }
 }
 
 export interface RefreshDeps {

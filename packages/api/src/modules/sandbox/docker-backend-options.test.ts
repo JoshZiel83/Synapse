@@ -21,6 +21,8 @@ const TUNNEL_KEYS = [
   "FRP_SHARED_TOKEN",
   "SYNAPSE_SANDBOX_TUNNEL",
   "SYNAPSE_SANDBOX_SERVER_ORIGIN",
+  "SYNAPSE_DEVICE_TUNNEL_EDGE_URL",
+  "SYNAPSE_TUNNEL_VHOST_HOST",
 ] as const
 
 function withEnv<T>(
@@ -86,6 +88,80 @@ test("dockerBackendOptionsFromEnv: missing FRP_SHARED_TOKEN fails fast", () => {
         () => dockerBackendOptionsFromEnv(),
         /FRP_SHARED_TOKEN is required/
       )
+    }
+  )
+})
+
+// ── R5 residual #2: edge URL host must agree with the frps vhost host.
+
+test("dockerBackendOptionsFromEnv: defaults agree (no edge/vhost set → tunnel-edge)", () => {
+  withEnv(
+    {
+      ...REQUIRED,
+      SYNAPSE_DEVICE_TUNNEL_EDGE_URL: undefined,
+      SYNAPSE_TUNNEL_VHOST_HOST: undefined,
+    },
+    () => {
+      const opts = dockerBackendOptionsFromEnv()
+      assert.equal(opts.tunnelVhostHost, undefined)
+      assert.equal(opts.tunnelInternalBaseUrl, undefined)
+    }
+  )
+})
+
+test("dockerBackendOptionsFromEnv: matching custom edge host + vhost is accepted", () => {
+  withEnv(
+    {
+      ...REQUIRED,
+      SYNAPSE_DEVICE_TUNNEL_EDGE_URL: "https://edge.example.com:9443",
+      SYNAPSE_TUNNEL_VHOST_HOST: "edge.example.com",
+    },
+    () => {
+      const opts = dockerBackendOptionsFromEnv()
+      assert.equal(opts.tunnelInternalBaseUrl, "https://edge.example.com:9443")
+      assert.equal(opts.tunnelVhostHost, "edge.example.com")
+    }
+  )
+})
+
+test("dockerBackendOptionsFromEnv: edge host vs vhost mismatch fails fast", () => {
+  withEnv(
+    {
+      ...REQUIRED,
+      SYNAPSE_DEVICE_TUNNEL_EDGE_URL: "https://edge.example.com:9443",
+      SYNAPSE_TUNNEL_VHOST_HOST: "some-other-host",
+    },
+    () => {
+      assert.throws(
+        () => dockerBackendOptionsFromEnv(),
+        /must match SYNAPSE_TUNNEL_VHOST_HOST|routes by the vhost/
+      )
+    }
+  )
+})
+
+test("dockerBackendOptionsFromEnv: custom edge with NO vhost set mismatches the tunnel-edge default", () => {
+  // vhost defaults to 'tunnel-edge'; a custom edge host won't match it.
+  withEnv(
+    {
+      ...REQUIRED,
+      SYNAPSE_DEVICE_TUNNEL_EDGE_URL: "http://edge.example.com:8080",
+      SYNAPSE_TUNNEL_VHOST_HOST: undefined,
+    },
+    () => {
+      assert.throws(
+        () => dockerBackendOptionsFromEnv(),
+        /must match SYNAPSE_TUNNEL_VHOST_HOST/
+      )
+    }
+  )
+})
+
+test("dockerBackendOptionsFromEnv: an unparseable edge URL fails fast", () => {
+  withEnv(
+    { ...REQUIRED, SYNAPSE_DEVICE_TUNNEL_EDGE_URL: "://not a url" },
+    () => {
+      assert.throws(() => dockerBackendOptionsFromEnv(), /not a valid URL/)
     }
   )
 })

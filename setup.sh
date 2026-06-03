@@ -220,6 +220,10 @@ MCP_ENCRYPTION_KEY=$MCP_ENCRYPTION_KEY
 
 # Server-side actor isolation (sandbox). Off by default; flip ENABLED + BACKEND
 # to turn on. Signing key is base64-encoded PEM (single line).
+#   local  → SYNAPSE_SANDBOX_TUNNEL is ignored (direct loopback endpoint).
+#   docker → requires SYNAPSE_SANDBOX_TUNNEL=frp + FRP_SHARED_TOKEN, AND layering
+#            docker-compose.sandbox-docker.yml to mount the host docker socket.
+#            See deploy.md §8b.
 SYNAPSE_SANDBOX_ENABLED=false
 SYNAPSE_SANDBOX_BACKEND=local
 SYNAPSE_SANDBOX_TUNNEL=none

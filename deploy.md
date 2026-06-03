@@ -328,16 +328,25 @@ docker compose --profile sandbox-build build sandbox-image
 #      SYNAPSE_SANDBOX_TUNNEL=frp
 #    (SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY + FRP_SHARED_TOKEN must be set.)
 
-# 3. Bring up the API + the tunnel edge.
-docker compose --profile production up -d api tunnel-edge
+# 3. Bring up the API + the tunnel edge WITH the docker-backend override, which
+#    is what adds the host docker socket to the API container (see note below).
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.sandbox-docker.yml \
+  --profile production up -d api tunnel-edge
 ```
 
 Notes:
 
-- The API container mounts `/var/run/docker.sock` to launch sandbox containers.
-  That socket is host-root-equivalent — the backend only ever runs the pinned
-  `SYNAPSE_SANDBOX_IMAGE` with a fixed argument list. A docker-socket-proxy is
-  the recommended hardening for multi-tenant hosts.
+- The host docker socket is **opt-in**, not in the base compose. The base
+  `docker-compose.yml` deliberately does NOT mount `/var/run/docker.sock` into
+  the API container — doing so unconditionally would give every production API
+  container host-root-equivalent access even with sandboxes disabled or on the
+  default `local` backend. The `docker-compose.sandbox-docker.yml` override
+  appends the socket mount; layer it (`-f ... -f docker-compose.sandbox-docker.yml`)
+  only when `SYNAPSE_SANDBOX_BACKEND=docker`. The backend only ever runs the
+  pinned `SYNAPSE_SANDBOX_IMAGE` with a fixed argument list; a docker-socket-proxy
+  is the recommended hardening for multi-tenant hosts.
 - Sandbox containers join the **internal** `synapse-sandbox-egress` network: they
   reach the API + tunnel-edge but have **no public egress and no DB/Redis
   access** — so a confined command (which shares the container's netns) can't
@@ -361,8 +370,10 @@ Notes:
   reference `http://tunnel-edge:8080`. If you run the frp edge under a different
   host/port, set `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` (the docker backend forwards it
   to the container as the internal base automatically) **and**
-  `SYNAPSE_TUNNEL_VHOST_HOST` so the frps Host route matches — otherwise
-  `device.tunnel.up` is rejected by the origin check.
+  `SYNAPSE_TUNNEL_VHOST_HOST` so the frps Host route matches. The docker backend
+  **fails fast at startup** if the `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` host and
+  `SYNAPSE_TUNNEL_VHOST_HOST` disagree (a mismatch would make every sandbox
+  dispatch fail to route), so the two must be configured together.
 
 ## 9. Troubleshooting
 

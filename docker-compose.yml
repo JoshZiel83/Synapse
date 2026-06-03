@@ -97,10 +97,12 @@ services:
       - "127.0.0.1:3001:3001"
     volumes:
       - api_storage:/app/storage
-      # DooD: the docker SandboxBackend runs cloud-sandbox containers via the
-      # host daemon. Mounted read-write; the backend only ever runs the pinned
-      # SYNAPSE_SANDBOX_IMAGE with a fixed arg allowlist.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # NOTE: the docker SandboxBackend (DooD) needs the host docker socket, but
+      # it is NOT mounted here — that would give EVERY production API container
+      # host-root-equivalent access even though sandboxes default to
+      # local/disabled. The socket is opt-in via the dedicated override:
+      #   docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml ...
+      # which appends the socket mount. See deploy.md §8b.
     networks:
       # Keep the default network (postgres/redis/web) AND join the sandbox
       # egress network so the API is reachable from sandbox containers.
