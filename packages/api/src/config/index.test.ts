@@ -68,3 +68,17 @@ test("NODE_ENV accepts arbitrary deployment values (e.g. staging)", () => {
   assert.equal(typeof config.nodeEnv, "string")
   assert.ok(config.nodeEnv.length > 0)
 })
+
+test("auth config is well-formed (Better Auth)", () => {
+  // The session signing secret must resolve to a non-empty string (first
+  // non-empty of BETTER_AUTH_SECRET / AUTH_SECRET / APP_SECRET, else the dev
+  // fallback). An empty BETTER_AUTH_SECRET= must NOT win over a later candidate.
+  assert.equal(typeof config.auth.secret, "string")
+  assert.ok(config.auth.secret.length > 0)
+  assert.equal(typeof config.auth.baseUrl, "string")
+  assert.ok(config.auth.baseUrl.length > 0)
+  assert.ok(Array.isArray(config.auth.trustedOrigins))
+  assert.equal(typeof config.feishu.appId, "string")
+  assert.equal(typeof config.feishu.appSecret, "string")
+  assert.equal(typeof config.feishu.intl, "boolean")
+})
