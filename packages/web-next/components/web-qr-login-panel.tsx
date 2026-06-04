@@ -131,9 +131,9 @@ export function WebQrLoginPanel({ redirect }: { redirect: string | null }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex min-h-64 flex-col items-center justify-center gap-4 rounded-3xl border border-border/70 bg-white p-6 shadow-sm">
+      <div className="flex min-h-64 flex-col items-center justify-center gap-4 p-2">
         {deviceState === "loading" ? (
-          <div className="flex flex-col items-center gap-3 text-sm text-slate-500">
+          <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
             <LoaderCircle className="size-5 animate-spin" />
             <span>Generating secure QR code...</span>
           </div>
@@ -145,20 +145,20 @@ export function WebQrLoginPanel({ redirect }: { redirect: string | null }) {
               width={220}
               height={220}
               unoptimized
-              className="size-[220px] rounded-[20px]"
+              className="size-[220px]"
             />
-            <p className="text-sm font-medium text-slate-500">
+            <p className="text-sm font-medium text-muted-foreground">
               Scan with the Synapse app, then approve
             </p>
           </>
         ) : (
           <div className="space-y-2 px-4 text-center">
-            <p className="text-sm font-medium text-slate-900">
+            <p className="text-sm font-medium text-foreground">
               {deviceState === "approved" && "Confirmation received"}
               {deviceState === "expired" && "QR code expired"}
               {deviceState === "error" && "Unable to generate QR code"}
             </p>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-muted-foreground">
               {deviceState === "approved" &&
                 "One moment while we finish signing you in."}
               {deviceState === "expired" &&
