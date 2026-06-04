@@ -9,11 +9,17 @@ import { z } from "zod"
 
 import { api } from "@/lib/api"
 import { normalizeRedirectTarget } from "@/lib/auth"
-import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
-import { AuthConversationPreview } from "@/components/auth-conversation-preview"
+import { AuthShell } from "@/components/auth-shell"
+import { FeishuSignInButton } from "@/components/feishu-sign-in-button"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Field,
@@ -21,6 +27,7 @@ import {
   FieldError,
   FieldGroup,
   FieldLabel,
+  FieldSeparator,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -34,10 +41,7 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>
 
-export function LoginForm({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+export function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirect = normalizeRedirectTarget(searchParams.get("redirect"))
@@ -73,171 +77,139 @@ export function LoginForm({
     }
   })
 
-  async function handleFeishuLogin() {
-    setSubmitError("")
-    try {
-      const callbackURL = redirect ?? "/dashboard"
-      const { url } = await api.startOAuth("feishu", callbackURL)
-      window.location.href = url
-    } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : "Feishu sign-in failed"
-      )
-    }
-  }
-
   return (
-    <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card className="overflow-hidden p-0">
-        <CardContent className="grid p-0 md:grid-cols-2">
-          <div className="p-6 md:p-8">
-            <Tabs defaultValue="password" className="flex flex-col gap-6">
-              <div className="flex flex-col items-center text-center">
-                <h1 className="text-2xl font-bold">Welcome back</h1>
-              </div>
+    <AuthShell>
+      <Card>
+        <CardHeader className="text-center">
+          <CardTitle className="text-xl">Welcome back</CardTitle>
+          <CardDescription>Sign in to your Synapse workspace</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue="password" className="flex flex-col gap-6">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="password">Password</TabsTrigger>
+              <TabsTrigger value="qr">Scan QR</TabsTrigger>
+            </TabsList>
 
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="password">Password</TabsTrigger>
-                <TabsTrigger value="qr">Scan QR</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="password" className="mt-0">
-                <form method="post" onSubmit={onSubmit} noValidate>
-                  <FieldGroup>
-                    <Field data-invalid={Boolean(errors.email) || undefined}>
-                      <FieldLabel htmlFor="email">Email</FieldLabel>
-                      <Controller
-                        control={control}
-                        name="email"
-                        render={({ field }) => (
-                          <Input
-                            {...field}
-                            id="email"
-                            type="email"
-                            placeholder="you@example.com"
-                            autoComplete="email"
-                            aria-invalid={Boolean(errors.email) || undefined}
-                          />
-                        )}
-                      />
-                      <FieldError
-                        errors={
-                          errors.email
-                            ? [{ message: errors.email.message }]
-                            : undefined
-                        }
-                      />
-                    </Field>
-                    <Field data-invalid={Boolean(errors.password) || undefined}>
-                      <div className="flex items-center">
-                        <FieldLabel htmlFor="password">Password</FieldLabel>
-                        <Link
-                          href="/login"
-                          className="ms-auto text-sm underline-offset-2 hover:underline"
-                        >
-                          Forgot your password?
-                        </Link>
-                      </div>
-                      <Controller
-                        control={control}
-                        name="password"
-                        render={({ field }) => (
-                          <Input
-                            {...field}
-                            id="password"
-                            type="password"
-                            autoComplete="current-password"
-                            aria-invalid={Boolean(errors.password) || undefined}
-                          />
-                        )}
-                      />
-                      <FieldError
-                        errors={
-                          errors.password
-                            ? [{ message: errors.password.message }]
-                            : submitError
-                              ? [{ message: submitError }]
-                              : undefined
-                        }
-                      />
-                    </Field>
-                    <Field>
-                      <label className="flex items-center gap-3">
-                        <Controller
-                          control={control}
-                          name="temporaryLogin"
-                          render={({ field }) => (
-                            <Checkbox
-                              checked={field.value}
-                              onCheckedChange={(checked) =>
-                                field.onChange(checked === true)
-                              }
-                            />
-                          )}
+            <TabsContent value="password" className="mt-0">
+              <form method="post" onSubmit={onSubmit} noValidate>
+                <FieldGroup>
+                  <Field>
+                    <FeishuSignInButton
+                      redirect={redirect}
+                      disabled={isSubmitting}
+                      onError={setSubmitError}
+                    />
+                  </Field>
+                  <FieldSeparator>Or continue with email</FieldSeparator>
+                  <Field data-invalid={Boolean(errors.email) || undefined}>
+                    <FieldLabel htmlFor="email">Email</FieldLabel>
+                    <Controller
+                      control={control}
+                      name="email"
+                      render={({ field }) => (
+                        <Input
+                          {...field}
+                          id="email"
+                          type="email"
+                          placeholder="you@example.com"
+                          autoComplete="email"
+                          aria-invalid={Boolean(errors.email) || undefined}
                         />
-                        <span className="text-sm font-medium text-foreground">
-                          Temporary login
-                        </span>
-                      </label>
-                    </Field>
-                    <Field>
-                      <Button
-                        type="submit"
-                        disabled={isSubmitting}
-                        className="w-full"
-                      >
-                        {isSubmitting ? "Signing in..." : "Sign in"}
-                      </Button>
-                    </Field>
-                    <Field>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="w-full"
-                        onClick={handleFeishuLogin}
-                        disabled={isSubmitting}
-                      >
-                        Continue with Feishu
-                      </Button>
-                    </Field>
-                    <FieldDescription className="text-center">
-                      Don&apos;t have an account?{" "}
+                      )}
+                    />
+                    <FieldError
+                      errors={
+                        errors.email
+                          ? [{ message: errors.email.message }]
+                          : undefined
+                      }
+                    />
+                  </Field>
+                  <Field data-invalid={Boolean(errors.password) || undefined}>
+                    <div className="flex items-center">
+                      <FieldLabel htmlFor="password">Password</FieldLabel>
                       <Link
-                        href={
-                          redirect
-                            ? `/register?redirect=${encodeURIComponent(redirect)}`
-                            : "/register"
-                        }
-                        className="underline-offset-2 hover:underline"
+                        href="/login"
+                        className="ms-auto text-sm underline-offset-2 hover:underline"
                       >
-                        Sign up
+                        Forgot your password?
                       </Link>
-                    </FieldDescription>
-                  </FieldGroup>
-                </form>
-              </TabsContent>
+                    </div>
+                    <Controller
+                      control={control}
+                      name="password"
+                      render={({ field }) => (
+                        <Input
+                          {...field}
+                          id="password"
+                          type="password"
+                          autoComplete="current-password"
+                          aria-invalid={Boolean(errors.password) || undefined}
+                        />
+                      )}
+                    />
+                    <FieldError
+                      errors={
+                        errors.password
+                          ? [{ message: errors.password.message }]
+                          : submitError
+                            ? [{ message: submitError }]
+                            : undefined
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <label className="flex items-center gap-3">
+                      <Controller
+                        control={control}
+                        name="temporaryLogin"
+                        render={({ field }) => (
+                          <Checkbox
+                            checked={field.value}
+                            onCheckedChange={(checked) =>
+                              field.onChange(checked === true)
+                            }
+                          />
+                        )}
+                      />
+                      <span className="text-sm font-medium text-foreground">
+                        Temporary login
+                      </span>
+                    </label>
+                  </Field>
+                  <Field>
+                    <Button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="w-full"
+                    >
+                      {isSubmitting ? "Signing in..." : "Sign in"}
+                    </Button>
+                  </Field>
+                  <FieldDescription className="text-center">
+                    Don&apos;t have an account?{" "}
+                    <Link
+                      href={
+                        redirect
+                          ? `/register?redirect=${encodeURIComponent(redirect)}`
+                          : "/register"
+                      }
+                      className="underline-offset-2 hover:underline"
+                    >
+                      Sign up
+                    </Link>
+                  </FieldDescription>
+                </FieldGroup>
+              </form>
+            </TabsContent>
 
-              <TabsContent value="qr" className="mt-0">
-                <WebQrLoginPanel redirect={redirect} />
-              </TabsContent>
-            </Tabs>
-          </div>
-          <div className="relative hidden bg-muted md:block">
-            <AuthConversationPreview />
-          </div>
+            <TabsContent value="qr" className="mt-0">
+              <WebQrLoginPanel redirect={redirect} />
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
-      <FieldDescription className="px-6 text-center">
-        By clicking continue, you agree to our{" "}
-        <Link href="/login" className="underline-offset-2 hover:underline">
-          Terms of Service
-        </Link>{" "}
-        and{" "}
-        <Link href="/login" className="underline-offset-2 hover:underline">
-          Privacy Policy
-        </Link>
-        .
-      </FieldDescription>
-    </div>
+    </AuthShell>
   )
 }

@@ -8,17 +8,24 @@ import { standardSchemaResolver } from "@hookform/resolvers/standard-schema"
 import { z } from "zod"
 
 import { normalizeRedirectTarget } from "@/lib/auth"
-import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
-import { AuthConversationPreview } from "@/components/auth-conversation-preview"
+import { AuthShell } from "@/components/auth-shell"
+import { FeishuSignInButton } from "@/components/feishu-sign-in-button"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Field,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
+  FieldSeparator,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 
@@ -36,10 +43,7 @@ const signupSchema = z
 
 type SignupFormValues = z.infer<typeof signupSchema>
 
-export function SignupForm({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+export function SignupForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirect = normalizeRedirectTarget(searchParams.get("redirect"))
@@ -71,19 +75,25 @@ export function SignupForm({
   })
 
   return (
-    <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card className="overflow-hidden p-0">
-        <CardContent className="grid p-0 md:grid-cols-2">
-          <form
-            className="p-6 md:p-8"
-            method="post"
-            onSubmit={onSubmit}
-            noValidate
-          >
+    <AuthShell>
+      <Card>
+        <CardHeader className="text-center">
+          <CardTitle className="text-xl">Create your account</CardTitle>
+          <CardDescription>
+            Start collaborating in your Synapse workspace
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form method="post" onSubmit={onSubmit} noValidate>
             <FieldGroup>
-              <div className="flex flex-col items-center text-center">
-                <h1 className="text-2xl font-bold">Create your account</h1>
-              </div>
+              <Field>
+                <FeishuSignInButton
+                  redirect={redirect}
+                  disabled={isSubmitting}
+                  onError={setSubmitError}
+                />
+              </Field>
+              <FieldSeparator>Or sign up with email</FieldSeparator>
               <Field data-invalid={Boolean(errors.name) || undefined}>
                 <FieldLabel htmlFor="name">Full name</FieldLabel>
                 <Controller
@@ -207,22 +217,8 @@ export function SignupForm({
               </FieldDescription>
             </FieldGroup>
           </form>
-          <div className="relative hidden bg-muted md:block">
-            <AuthConversationPreview />
-          </div>
         </CardContent>
       </Card>
-      <FieldDescription className="px-6 text-center">
-        By clicking continue, you agree to our{" "}
-        <Link href="/login" className="underline-offset-2 hover:underline">
-          Terms of Service
-        </Link>{" "}
-        and{" "}
-        <Link href="/login" className="underline-offset-2 hover:underline">
-          Privacy Policy
-        </Link>
-        .
-      </FieldDescription>
-    </div>
+    </AuthShell>
   )
 }
