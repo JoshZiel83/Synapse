@@ -43,6 +43,35 @@ type FeishuUserInfo = {
 }
 
 /**
+ * Resolve the email to hand Better Auth for a Feishu profile.
+ *
+ * Feishu commonly returns email as an EMPTY STRING (not null/absent) when the
+ * user has no email or the `contact:user.email:readonly` scope wasn't granted.
+ * `??` only falls through on null/undefined, so a naive `profile.email ??
+ * synthetic` keeps the empty string — and BA's generic-oauth callback then sees
+ * a falsy email and aborts the whole login with `email_is_missing`
+ * (routes.mjs: `email = mapUser.email ? … : userInfo.email`).
+ *
+ * So treat empty/whitespace as absent and synthesize a stable, unverified
+ * placeholder (`<open_id|union_id>@feishu.local`) as the last resort. The
+ * synthetic address is marked emailVerified:false by the caller so it can never
+ * auto-link to (or auto-grant admin via) a real account.
+ */
+export function resolveFeishuEmail(profile: {
+  email?: string
+  enterprise_email?: string
+  open_id?: string
+  union_id?: string
+}): string {
+  const firstNonBlank = (...values: Array<string | undefined>) =>
+    values.find((v) => typeof v === "string" && v.trim() !== "")?.trim()
+  return (
+    firstNonBlank(profile.email, profile.enterprise_email) ??
+    `${profile.open_id ?? profile.union_id}@feishu.local`
+  )
+}
+
+/**
  * Build the genericOAuth Feishu provider. Returns `null` when Feishu is not
  * configured so we don't register a half-wired provider that 400s on use.
  */
@@ -139,9 +168,10 @@ function buildFeishuProvider() {
         )
         return null
       }
-      const realEmail = profile.email ?? profile.enterprise_email
-      const email =
-        realEmail ?? `${profile.open_id ?? profile.union_id}@feishu.local`
+      // Feishu often returns an EMPTY-STRING email; resolveFeishuEmail treats
+      // blank as absent and synthesizes a stable unverified placeholder so BA
+      // never aborts the callback with `email_is_missing`.
+      const email = resolveFeishuEmail(profile)
       return {
         id: profile.union_id,
         name: profile.name ?? profile.en_name ?? "Feishu user",
