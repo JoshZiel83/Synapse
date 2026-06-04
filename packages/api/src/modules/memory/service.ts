@@ -1832,8 +1832,11 @@ export async function updateMemory(
         .where("workspace_id", "=", workspaceId)
     )
 
-    await trx.executeQuery(
-      db.deleteFrom("memory_item_parts").where("memory_item_id", "=", memoryId)
+    // Content set-replace: memory_item_parts is aggregate-internal detail; the
+    // physical delete goes through the SECURITY DEFINER fn (sd_reject_delete
+    // forbids a naked DELETE on this persistent child table). Design §7.5/§11.
+    await sql`SELECT sd_replace_memory_item_parts(${memoryId}::uuid)`.execute(
+      trx
     )
     await insertMemoryParts(trx, memoryId, normalizedContent.parts)
     await maybeMarkSuperseded(trx, input.supersedesMemoryId)
@@ -1853,12 +1856,17 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
     throw new MemoryError("Memory not found", 404)
   }
   await withDbTransaction(async (trx) => {
+    // Soft delete (design §7.4): flip deleted_at. memory_item_parts/chunks stay
+    // as aggregate-internal detail until offline purge; hard delete is forbidden
+    // by sd_reject_delete.
     const deleted = await trx
-      .deleteFrom("memory_items")
+      .updateTable("memory_items")
+      .set({ deleted_at: new Date() })
       .where("workspace_id", "=", workspaceId)
       .where("id", "=", memoryId)
+      .where("deleted_at", "is", null)
       .executeTakeFirst()
-    if (!deleted.numDeletedRows) {
+    if (!deleted.numUpdatedRows) {
       throw new MemoryError("Memory not found", 404)
     }
   })

@@ -5162,6 +5162,20 @@ ALTER TABLE devices ADD COLUMN source_session_id UUID;
 -- Source of truth: soft-delete-table-classification.yml. Regenerate with
 -- `node scripts/cutover-emit-ddl.mjs`. See docs/soft-delete-design.md §7.
 
+-- 0. Privileged delete roles (NOLOGIN). SECURITY DEFINER cleanup/purge
+-- functions are owned by synapse_purge_fn_owner; the reject-delete guard
+-- recognizes these as current_user (design §7.5.1). Idempotent.
+DO $sd_roles$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'synapse_purge_fn_owner') THEN
+    CREATE ROLE synapse_purge_fn_owner NOLOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'synapse_purge_role') THEN
+    CREATE ROLE synapse_purge_role NOLOGIN;
+  END IF;
+END
+$sd_roles$;
+
 -- 1/2. Partial unique indexes (business keys survive soft delete) ---------
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_live ON users (email) WHERE deleted_at IS NULL;
@@ -5755,6 +5769,115 @@ DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_webhook_endpoint_id O
 CREATE TRIGGER sd_fk_live_automation_event_sources_webhook_endpoint_id BEFORE INSERT OR UPDATE OF webhook_endpoint_id ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_webhook_endpoints', 'webhook_endpoint_id', 'id');
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_integration_binding_id ON automation_event_sources;
 CREATE TRIGGER sd_fk_live_automation_event_sources_integration_binding_id BEFORE INSERT OR UPDATE OF integration_binding_id ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_integration_bindings', 'integration_binding_id', 'id');
+
+-- 4.5 SECURITY DEFINER controlled-delete functions (design §7.5/§11).
+-- app role gets EXECUTE; functions run as synapse_purge_fn_owner so the
+-- reject-delete guard permits the delete. Fixed search_path; audited.
+CREATE OR REPLACE FUNCTION sd_replace_memory_item_parts(p_memory_item_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM memory_item_parts WHERE memory_item_id = p_memory_item_id;
+END;
+$$;
+ALTER FUNCTION sd_replace_memory_item_parts(uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_replace_memory_item_parts(uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_detach_participant_address(p_participant_id uuid, p_transport_address_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM conversation_participant_addresses WHERE conversation_participant_id = p_participant_id AND transport_address_id = p_transport_address_id;
+END;
+$$;
+ALTER FUNCTION sd_detach_participant_address(uuid, uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_detach_participant_address(uuid, uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_detach_device_service(p_service_id uuid, p_device_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM device_services WHERE id = p_service_id AND device_id = p_device_id;
+END;
+$$;
+ALTER FUNCTION sd_detach_device_service(uuid, uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_detach_device_service(uuid, uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_clear_member_preferences(p_workspace_member_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM workspace_member_preferences WHERE workspace_member_id = p_workspace_member_id;
+END;
+$$;
+ALTER FUNCTION sd_clear_member_preferences(uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_clear_member_preferences(uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_replace_actor_model_groups(p_actor_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM actor_model_group_assignments WHERE actor_id = p_actor_id;
+END;
+$$;
+ALTER FUNCTION sd_replace_actor_model_groups(uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_replace_actor_model_groups(uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_replace_group_actor_assignments(p_group_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM actor_model_group_assignments WHERE group_id = p_group_id;
+END;
+$$;
+ALTER FUNCTION sd_replace_group_actor_assignments(uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_replace_group_actor_assignments(uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_replace_plugin_runtime_permissions(p_catalog_version_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM plugin_version_runtime_permissions WHERE catalog_version_id = p_catalog_version_id;
+END;
+$$;
+ALTER FUNCTION sd_replace_plugin_runtime_permissions(uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_replace_plugin_runtime_permissions(uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_replace_catalog_item_categories(p_catalog_item_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM catalog_item_categories WHERE catalog_item_id = p_catalog_item_id;
+END;
+$$;
+ALTER FUNCTION sd_replace_catalog_item_categories(uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_replace_catalog_item_categories(uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_replace_remote_agent_group_grants(p_remote_agent_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM remote_agent_group_interaction_grants WHERE remote_agent_id = p_remote_agent_id;
+END;
+$$;
+ALTER FUNCTION sd_replace_remote_agent_group_grants(uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_replace_remote_agent_group_grants(uuid) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_replace_memory_item_chunks(p_memory_item_id uuid, p_index_version int)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM memory_item_chunks WHERE memory_item_id = p_memory_item_id AND index_version = p_index_version;
+END;
+$$;
+ALTER FUNCTION sd_replace_memory_item_chunks(uuid, int) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_replace_memory_item_chunks(uuid, int) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_gc_expired_action_tokens()
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM interaction_action_tokens WHERE expires_at < NOW();
+END;
+$$;
+ALTER FUNCTION sd_gc_expired_action_tokens() OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_gc_expired_action_tokens() FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_gc_dispatched_outbox(p_older_than timestamptz)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM realtime_event_outbox WHERE status = 'dispatched' AND created_at < p_older_than;
+END;
+$$;
+ALTER FUNCTION sd_gc_dispatched_outbox(timestamptz) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_gc_dispatched_outbox(timestamptz) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION sd_delete_chat_push_token(p_token_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  DELETE FROM chat_push_tokens WHERE id = p_token_id;
+END;
+$$;
+ALTER FUNCTION sd_delete_chat_push_token(uuid) OWNER TO synapse_purge_fn_owner;
+REVOKE EXECUTE ON FUNCTION sd_delete_chat_push_token(uuid) FROM PUBLIC;
+GRANT SELECT, DELETE ON memory_item_parts, conversation_participant_addresses, device_services, workspace_member_preferences, actor_model_group_assignments, plugin_version_runtime_permissions, catalog_item_categories, remote_agent_group_interaction_grants, memory_item_chunks, interaction_action_tokens, realtime_event_outbox, chat_push_tokens TO synapse_purge_fn_owner;
 
 -- 5. Live views: canonical read surface that hides soft-deleted rows.
 -- Single-table views over a base table are auto-updatable; WITH CASCADED

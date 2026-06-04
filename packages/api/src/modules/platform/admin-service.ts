@@ -41,6 +41,7 @@ export async function hasPlatformAccess(
     .select("user_id")
     .where("user_id", "=", userId)
     .where("access_key", "in", accessKeys)
+    .where("status", "=", "active")
     .limit(1)
     .executeTakeFirst()
   return Boolean(row)
@@ -103,6 +104,18 @@ export async function grantPlatformAccess(input: {
 }) {
   await ensureUserExists(input.userId)
 
+  // Re-grant must revive a revoked row (design §6.2). "Already granted" = an
+  // existing ACTIVE row; a revoked row is updated back to active.
+  const existing = await db
+    .selectFrom("platform_access_bindings")
+    .select("status")
+    .where("user_id", "=", input.userId)
+    .where("access_key", "=", input.accessKey)
+    .executeTakeFirst()
+  if (existing?.status === "active") {
+    throw new Error("Access already granted")
+  }
+
   const row = await db
     .insertInto("platform_access_bindings")
     .values({
@@ -111,7 +124,15 @@ export async function grantPlatformAccess(input: {
       source: "manual",
       assigned_by_user_id: input.assignedByUserId,
     })
-    .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
+    .onConflict((oc) =>
+      oc.columns(["user_id", "access_key"]).doUpdateSet({
+        status: "active",
+        revoked_at: null,
+        source: "manual",
+        assigned_by_user_id: input.assignedByUserId,
+        updated_at: sql`NOW()`,
+      })
+    )
     .returningAll()
     .executeTakeFirst()
 
@@ -142,7 +163,13 @@ export async function ensureSeedPlatformAdminForUser(user: UserIdentity) {
       source,
       assigned_by_user_id: null,
     })
-    .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
+    .onConflict((oc) =>
+      oc.columns(["user_id", "access_key"]).doUpdateSet({
+        status: "active",
+        revoked_at: null,
+        updated_at: sql`NOW()`,
+      })
+    )
     .execute()
 
   return true
@@ -157,6 +184,7 @@ export async function revokePlatformAccess(
     .select("source")
     .where("user_id", "=", userId)
     .where("access_key", "=", accessKey)
+    .where("status", "=", "active")
     .limit(1)
     .executeTakeFirst()
 
@@ -168,10 +196,13 @@ export async function revokePlatformAccess(
     throw new Error("Config-managed access cannot be revoked manually")
   }
 
+  // Soft revoke (design §6.2): status flip, not hard delete (sd_reject_delete).
   await db
-    .deleteFrom("platform_access_bindings")
+    .updateTable("platform_access_bindings")
+    .set({ status: "revoked", revoked_at: sql`NOW()` })
     .where("user_id", "=", userId)
     .where("access_key", "=", accessKey)
+    .where("status", "=", "active")
     .execute()
 }
 
@@ -188,7 +219,14 @@ export async function ensureConfiguredPlatformAdminForUser(user: UserIdentity) {
       source: "config",
       assigned_by_user_id: null,
     })
-    .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
+    .onConflict((oc) =>
+      oc.columns(["user_id", "access_key"]).doUpdateSet({
+        status: "active",
+        revoked_at: null,
+        source: "config",
+        updated_at: sql`NOW()`,
+      })
+    )
     .execute()
 
   return true
@@ -212,19 +250,25 @@ export async function syncConfiguredPlatformAdmins() {
 
   await withDbTransaction(async (trx) => {
     if (matchedUserIds.length === 0) {
+      // Config reconcile: revoke all config-managed super_admin grants (status
+      // flip, not hard delete — sd_reject_delete). §6.2.
       await trx
-        .deleteFrom("platform_access_bindings")
+        .updateTable("platform_access_bindings")
+        .set({ status: "revoked", revoked_at: sql`NOW()` })
         .where("source", "=", "config")
         .where("access_key", "=", "super_admin")
+        .where("status", "=", "active")
         .execute()
       return
     }
 
     await trx
-      .deleteFrom("platform_access_bindings")
+      .updateTable("platform_access_bindings")
+      .set({ status: "revoked", revoked_at: sql`NOW()` })
       .where("source", "=", "config")
       .where("access_key", "=", "super_admin")
       .where("user_id", "not in", matchedUserIds)
+      .where("status", "=", "active")
       .execute()
     await trx
       .insertInto("platform_access_bindings")
@@ -236,13 +280,21 @@ export async function syncConfiguredPlatformAdmins() {
           assigned_by_user_id: null,
         }))
       )
-      .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
+      .onConflict((oc) =>
+        oc.columns(["user_id", "access_key"]).doUpdateSet({
+          status: "active",
+          revoked_at: null,
+          source: "config",
+          updated_at: sql`NOW()`,
+        })
+      )
       .execute()
   })
   const platformAdminCount = await db
     .selectFrom("platform_access_bindings")
     .select(({ fn }) => fn.countAll<string>().as("count"))
     .where("access_key", "=", "super_admin")
+    .where("status", "=", "active")
     .executeTakeFirstOrThrow()
 
   return {

@@ -3504,10 +3504,14 @@ export async function uninstallInstalledSkill(
       }
     }
 
+    // Soft delete (design §7.4): flip deleted_at (hard delete forbidden by
+    // sd_reject_delete). Bindings revoked below.
     await client
-      .deleteFrom("installed_skills")
+      .updateTable("installed_skills")
+      .set({ deleted_at: sql`NOW()` })
       .where("id", "=", installedSkillId)
       .where("workspace_id", "=", workspaceId)
+      .where("deleted_at", "is", null)
       .execute()
 
     await hardDeleteBindingsForResourceOn(client, {

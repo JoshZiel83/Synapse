@@ -707,7 +707,11 @@ export async function revokeGrantsByIdsOn(
 }
 
 /**
- * Hard-delete every binding pointing at a resource.
+ * Revoke every binding pointing at a resource (soft-delete world: design §7.4).
+ * Was a hard DELETE; resource_access_bindings is a status-flip junction, and
+ * naked DELETE is forbidden by sd_reject_delete. Callers that "remove a
+ * resource's bindings" (plugin/skill uninstall) get the same observable effect —
+ * the bindings are no longer active — while history is preserved.
  */
 export async function hardDeleteBindingsForResourceOn(
   client: Executor,
@@ -720,13 +724,15 @@ export async function hardDeleteBindingsForResourceOn(
   await runBuilder(
     client,
     defaultDb
-      .deleteFrom("resource_access_bindings")
+      .updateTable("resource_access_bindings")
+      .set({ status: "revoked", revoked_at: sql`NOW()` })
       .where(sql.ref(column), "=", input.resourceId)
+      .where("status", "=", "active")
   )
 }
 
 /**
- * Hard-delete bindings for a resource — Kysely flavour.
+ * Revoke bindings for a resource — Kysely flavour (see above; was hard delete).
  */
 export async function hardDeleteBindingsForResource(
   db: KyselyDb,
@@ -737,8 +743,10 @@ export async function hardDeleteBindingsForResource(
 ): Promise<void> {
   const column = resourceIdColumnForRaw(input.resourceType)
   await db
-    .deleteFrom("resource_access_bindings")
+    .updateTable("resource_access_bindings")
+    .set({ status: "revoked", revoked_at: sql`NOW()` })
     .where(sql.ref(column), "=", input.resourceId)
+    .where("status", "=", "active")
     .execute()
 }
 

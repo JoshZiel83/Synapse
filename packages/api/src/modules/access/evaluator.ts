@@ -99,6 +99,7 @@ async function loadWorkspaceMemberAccess(
     .selectFrom("workspace_access_bindings")
     .select("access_key")
     .where("workspace_member_id", "=", workspaceMemberId)
+    .where("status", "=", "active")
     .execute()
 
   return {
@@ -167,6 +168,7 @@ async function loadPlatformAccessKeysForUser(db: KyselyDb, userId: string) {
     .selectFrom("platform_access_bindings")
     .select("access_key")
     .where("user_id", "=", userId)
+    .where("status", "=", "active")
     .execute()
   return rows.map((row) => row.access_key)
 }

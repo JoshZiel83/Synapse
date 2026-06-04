@@ -1526,10 +1526,11 @@ async function upsertPluginVersion(
     )
     .execute()
 
-  await ex
-    .deleteFrom("plugin_version_runtime_permissions")
-    .where("catalog_version_id", "=", versionId)
-    .execute()
+  // set-replace of a derived config table → SECURITY DEFINER fn (naked DELETE
+  // forbidden by sd_reject_delete; design §7.5).
+  await sql`SELECT sd_replace_plugin_runtime_permissions(${versionId}::uuid)`.execute(
+    ex
+  )
 
   for (const permissionKey of input.authorization?.requiredPermissions || []) {
     await ex
@@ -1560,10 +1561,10 @@ async function assignPluginCategories(
   itemId: string,
   categorySlugs: string[]
 ) {
-  await ex
-    .deleteFrom("catalog_item_categories")
-    .where("catalog_item_id", "=", itemId)
-    .execute()
+  // set-replace of a derived join table → SECURITY DEFINER fn (design §7.5).
+  await sql`SELECT sd_replace_catalog_item_categories(${itemId}::uuid)`.execute(
+    ex
+  )
 
   if (categorySlugs.length === 0) return
 
@@ -2048,9 +2049,15 @@ export async function uninstallPluginUnified(installId: string) {
       resourceId: installId,
     })
 
+    // Soft delete (design §7.4): flip deleted_at instead of hard delete (which
+    // sd_reject_delete forbids). Bindings are revoked above.
     await runBuilder(
       client,
-      db.deleteFrom("plugin_installations").where("id", "=", installId)
+      db
+        .updateTable("plugin_installations")
+        .set({ deleted_at: sql`NOW()` })
+        .where("id", "=", installId)
+        .where("deleted_at", "is", null)
     )
   })
 

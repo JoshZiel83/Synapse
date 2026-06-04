@@ -1414,10 +1414,14 @@ export async function deleteActor(
       return { deleted: false }
     }
 
+    // Soft delete (design §7.4): flip deleted_at. The actor's access_subjects row
+    // stays (immutable registry, §5); hard delete is forbidden by sd_reject_delete.
     await runner(
-      `DELETE FROM actors
+      `UPDATE actors
+         SET deleted_at = NOW(), updated_at = NOW()
        WHERE id = $1
-         AND workspace_id = $2`,
+         AND workspace_id = $2
+         AND deleted_at IS NULL`,
       [actorId, workspaceId]
     )
 

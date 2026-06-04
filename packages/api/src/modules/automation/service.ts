@@ -2001,7 +2001,8 @@ async function ensureAutomationIntegrationBinding(params: {
             integrationTargetId: targetId,
             integrationTargetLabel: targetLabel,
           }),
-          created_by_workspace_member_id: params.creator.workspaceMemberId || null,
+          created_by_workspace_member_id:
+            params.creator.workspaceMemberId || null,
           created_at: sql`NOW()`,
           updated_at: sql`NOW()`,
         })
@@ -2359,10 +2360,15 @@ async function createIntegrationAutomationEventSource(
       await reconcileIntegrationBindingWebhook(binding.id)
     }
   } catch (error) {
+    // Saga compensating rollback: the just-created event source never became
+    // usable. Soft-delete it (hard delete forbidden by sd_reject_delete); an
+    // offline purge reclaims the tombstone later.
     await db
-      .deleteFrom("automation_event_sources")
+      .updateTable("automation_event_sources")
+      .set({ deleted_at: sql`NOW()` })
       .where("workspace_id", "=", workspaceId)
       .where("id", "=", sourceId)
+      .where("deleted_at", "is", null)
       .execute()
       .catch(() => undefined)
     throw error
@@ -3793,10 +3799,14 @@ export async function deleteAutomationRule(
       details: JSON.stringify({ deleted: true }),
     })
     .execute()
+  // Soft delete (design §7.4): flip deleted_at (hard delete forbidden by
+  // sd_reject_delete).
   await db
-    .deleteFrom("automation_rules")
+    .updateTable("automation_rules")
+    .set({ deleted_at: sql`NOW()` })
     .where("id", "=", ruleId)
     .where("workspace_id", "=", workspaceId)
+    .where("deleted_at", "is", null)
     .execute()
 }
 

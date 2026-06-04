@@ -561,10 +561,11 @@ export async function updateWorkspaceChiefActorPreference(
 ): Promise<WorkspaceChiefActorPreference> {
   const member = await requireWorkspaceMemberRowByUserId(workspaceId, userId)
   if (!chiefActorId) {
-    await db
-      .deleteFrom("workspace_member_preferences")
-      .where("workspace_member_id", "=", member.id)
-      .execute()
+    // Clearing a preference physically removes the child row; routed through the
+    // SECURITY DEFINER fn since sd_reject_delete forbids a naked DELETE (§7.5).
+    await sql`SELECT sd_clear_member_preferences(${member.id}::uuid)`.execute(
+      db
+    )
 
     return {
       workspaceId,
@@ -683,6 +684,7 @@ export async function listMembers(workspaceId: string) {
         "access_keys"
       ),
     ])
+    .where("status", "=", "active")
     .groupBy(["workspace_member_id"])
     .as("access_map")
 
@@ -774,6 +776,20 @@ export async function grantWorkspaceAccess(input: {
     throw new Error("Workspace member is not part of this workspace")
   }
 
+  // Re-grant must revive a previously-revoked row (design §6.2): the composite
+  // PK is kept, so onConflict updates status back to 'active' rather than
+  // doNothing (which would let a revoked row permanently block re-granting).
+  // "Already granted" is now detected by checking the pre-existing active state.
+  const existing = await db
+    .selectFrom("workspace_access_bindings")
+    .select(["status"])
+    .where("workspace_member_id", "=", input.workspaceMemberId)
+    .where("access_key", "=", input.accessKey)
+    .executeTakeFirst()
+  if (existing?.status === "active") {
+    throw new Error("Access already granted")
+  }
+
   const row = await db
     .insertInto("workspace_access_bindings")
     .values({
@@ -782,7 +798,12 @@ export async function grantWorkspaceAccess(input: {
       assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
     })
     .onConflict((oc) =>
-      oc.columns(["workspace_member_id", "access_key"]).doNothing()
+      oc.columns(["workspace_member_id", "access_key"]).doUpdateSet({
+        status: "active",
+        revoked_at: null,
+        assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
+        updated_at: sql`NOW()`,
+      })
     )
     .returningAll()
     .executeTakeFirst()
@@ -812,10 +833,18 @@ export async function revokeWorkspaceAccess(
     throw new Error("Access grant not found")
   }
 
+  // Soft revoke (design §6.2 option A): flip status instead of hard-deleting the
+  // row (which sd_reject_delete forbids). Re-granting revives the row. The
+  // revoker identity is not threaded to this layer; audit_logs records the actor.
   const row = await db
-    .deleteFrom("workspace_access_bindings")
+    .updateTable("workspace_access_bindings")
+    .set({
+      status: "revoked",
+      revoked_at: sql`NOW()`,
+    })
     .where("workspace_member_id", "=", workspaceMemberId)
     .where("access_key", "=", accessKey)
+    .where("status", "=", "active")
     .returning(["workspace_member_id", "access_key"])
     .executeTakeFirst()
 

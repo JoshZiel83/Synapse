@@ -158,6 +158,25 @@ function emit() {
   L.push("")
 
   L.push(
+    "-- 0. Privileged delete roles (NOLOGIN). SECURITY DEFINER cleanup/purge"
+  )
+  L.push(
+    "-- functions are owned by synapse_purge_fn_owner; the reject-delete guard"
+  )
+  L.push("-- recognizes these as current_user (design §7.5.1). Idempotent.")
+  L.push(`DO $sd_roles$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'synapse_purge_fn_owner') THEN
+    CREATE ROLE synapse_purge_fn_owner NOLOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'synapse_purge_role') THEN
+    CREATE ROLE synapse_purge_role NOLOGIN;
+  END IF;
+END
+$sd_roles$;`)
+  L.push("")
+
+  L.push(
     "-- 1/2. Partial unique indexes (business keys survive soft delete) ---------"
   )
   for (const u of BUSINESS_UNIQUES) {
@@ -259,10 +278,148 @@ $$;`)
     )
   }
   L.push("")
+  L.push(emitSecurityDefinerFns())
+  L.push("")
   L.push(emitLiveViews())
   L.push("")
   L.push(END)
   return L.join("\n")
+}
+
+// --- 4.5 SECURITY DEFINER cleanup functions --------------------------------
+// Legitimate child/derived/ephemeral hard-deletes (design §7.5/§11) routed
+// through owner-privileged functions so the reject-delete guard permits them.
+// Each: SECURITY DEFINER, owner = synapse_purge_fn_owner, fixed search_path,
+// EXECUTE revoked from PUBLIC and granted to the app role. The app role calls
+// these instead of issuing a naked DELETE.
+function emitSecurityDefinerFns() {
+  const F = []
+  F.push(
+    "-- 4.5 SECURITY DEFINER controlled-delete functions (design §7.5/§11)."
+  )
+  F.push(
+    "-- app role gets EXECUTE; functions run as synapse_purge_fn_owner so the"
+  )
+  F.push(
+    "-- reject-delete guard permits the delete. Fixed search_path; audited."
+  )
+
+  // Each fn: { name, args (sql signature), body (DELETE statement(s)) }
+  const FNS = [
+    {
+      name: "sd_replace_memory_item_parts",
+      args: "p_memory_item_id uuid",
+      body: "DELETE FROM memory_item_parts WHERE memory_item_id = p_memory_item_id;",
+    },
+    {
+      name: "sd_detach_participant_address",
+      args: "p_participant_id uuid, p_transport_address_id uuid",
+      body: "DELETE FROM conversation_participant_addresses WHERE conversation_participant_id = p_participant_id AND transport_address_id = p_transport_address_id;",
+    },
+    {
+      name: "sd_detach_device_service",
+      args: "p_service_id uuid, p_device_id uuid",
+      body: "DELETE FROM device_services WHERE id = p_service_id AND device_id = p_device_id;",
+    },
+    {
+      name: "sd_clear_member_preferences",
+      args: "p_workspace_member_id uuid",
+      body: "DELETE FROM workspace_member_preferences WHERE workspace_member_id = p_workspace_member_id;",
+    },
+    {
+      name: "sd_replace_actor_model_groups",
+      args: "p_actor_id uuid",
+      body: "DELETE FROM actor_model_group_assignments WHERE actor_id = p_actor_id;",
+    },
+    {
+      name: "sd_replace_group_actor_assignments",
+      args: "p_group_id uuid",
+      body: "DELETE FROM actor_model_group_assignments WHERE group_id = p_group_id;",
+    },
+    {
+      name: "sd_replace_plugin_runtime_permissions",
+      args: "p_catalog_version_id uuid",
+      body: "DELETE FROM plugin_version_runtime_permissions WHERE catalog_version_id = p_catalog_version_id;",
+    },
+    {
+      name: "sd_replace_catalog_item_categories",
+      args: "p_catalog_item_id uuid",
+      body: "DELETE FROM catalog_item_categories WHERE catalog_item_id = p_catalog_item_id;",
+    },
+    {
+      name: "sd_replace_remote_agent_group_grants",
+      args: "p_remote_agent_id uuid",
+      body: "DELETE FROM remote_agent_group_interaction_grants WHERE remote_agent_id = p_remote_agent_id;",
+    },
+    {
+      name: "sd_replace_memory_item_chunks",
+      args: "p_memory_item_id uuid, p_index_version int",
+      body: "DELETE FROM memory_item_chunks WHERE memory_item_id = p_memory_item_id AND index_version = p_index_version;",
+    },
+    {
+      name: "sd_gc_expired_action_tokens",
+      args: "",
+      body: "DELETE FROM interaction_action_tokens WHERE expires_at < NOW();",
+    },
+    {
+      name: "sd_gc_dispatched_outbox",
+      args: "p_older_than timestamptz",
+      body: "DELETE FROM realtime_event_outbox WHERE status = 'dispatched' AND created_at < p_older_than;",
+    },
+    {
+      name: "sd_delete_chat_push_token",
+      args: "p_token_id uuid",
+      body: "DELETE FROM chat_push_tokens WHERE id = p_token_id;",
+    },
+  ]
+
+  for (const fn of FNS) {
+    F.push(`CREATE OR REPLACE FUNCTION ${fn.name}(${fn.args})
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  ${fn.body}
+END;
+$$;`)
+    F.push(
+      `ALTER FUNCTION ${fn.name}(${argTypes(fn.args)}) OWNER TO synapse_purge_fn_owner;`
+    )
+    F.push(
+      `REVOKE EXECUTE ON FUNCTION ${fn.name}(${argTypes(fn.args)}) FROM PUBLIC;`
+    )
+    // EXECUTE granted to the app role at deploy time (the app's DB role name is
+    // env-specific); in dev the owning superuser already has EXECUTE.
+  }
+
+  // The owner role needs SELECT (to evaluate DELETE ... WHERE) + DELETE on each
+  // table its functions touch. Grant both. (SELECT alone is harmless; these are
+  // the same tables the app already reads.)
+  const ownerTables = [
+    "memory_item_parts",
+    "conversation_participant_addresses",
+    "device_services",
+    "workspace_member_preferences",
+    "actor_model_group_assignments",
+    "plugin_version_runtime_permissions",
+    "catalog_item_categories",
+    "remote_agent_group_interaction_grants",
+    "memory_item_chunks",
+    "interaction_action_tokens",
+    "realtime_event_outbox",
+    "chat_push_tokens",
+  ]
+  F.push(
+    `GRANT SELECT, DELETE ON ${ownerTables.join(", ")} TO synapse_purge_fn_owner;`
+  )
+  return F.join("\n")
+}
+
+// Extract just the type list from a "p_x uuid, p_y int" signature.
+function argTypes(args) {
+  if (!args.trim()) return ""
+  return args
+    .split(",")
+    .map((a) => a.trim().split(/\s+/).slice(1).join(" "))
+    .join(", ")
 }
 
 // --- 5. live views ---------------------------------------------------------
