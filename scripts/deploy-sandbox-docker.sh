@@ -18,11 +18,12 @@ set -euo pipefail
 #      container would dial itself) or a public domain (no egress). Compose reads
 #      the SHELL env before .env, so we check the shell value too, and strip a
 #      stale loopback left in .env by a prior local-backend run.
-#   5. Build api (baked fs-helper) + the cloud-sandbox image + tunnel-edge, then
-#      bring up api + tunnel-edge WITH the docker-socket override.
+#   5. Build all three images (api + cloud-sandbox + tunnel-edge), then bring up
+#      api + tunnel-edge WITH the docker-socket override.
 #
-# Failure handling: .env is backed up before any edit and restored on failure /
-# interruption, so a half-switched env is never left behind.
+# Failure handling: .env is backed up OUTSIDE the repo (so the secret-bearing copy
+# never enters a docker build context) and restored on failure / interruption, so
+# a half-switched env is never left behind.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -41,8 +42,24 @@ for required in POSTGRES_PASSWORD REDIS_PASSWORD APP_BASE_URL BASE_URL; do
   [ -n "$val" ] || die "$required missing/empty in .env — run ./setup.sh first."
 done
 
-# Back up .env; restore on any failure unless we mark success.
-ENV_BACKUP="$(mktemp "${ENV_FILE}.predeploy.XXXXXX")"
+# 1b. Reject conflicting shell env for the managed flags. Compose interpolates
+#     ${VAR} from the shell BEFORE .env, so a stray shell export would override
+#     what we write to .env and make the running container disagree with our logs
+#     (e.g. shell SYNAPSE_SANDBOX_BACKEND=local while .env says docker). Demand any
+#     set shell value match the target. (The origin shell value is handled in #4.)
+assert_shell_flag() {
+  local name="$1" want="$2" cur
+  cur="$(trim "$(printenv "$name" 2>/dev/null || true)")"
+  [ -z "$cur" ] || [ "$cur" = "$want" ] || \
+    die "shell env $name='$cur' would override .env (compose precedence); unset it or set it to '$want' before deploying."
+}
+assert_shell_flag SYNAPSE_SANDBOX_ENABLED true
+assert_shell_flag SYNAPSE_SANDBOX_BACKEND docker
+assert_shell_flag SYNAPSE_SANDBOX_TUNNEL frp
+
+# Back up .env OUTSIDE the repo (mktemp default $TMPDIR) so the secret-bearing
+# copy never enters a docker build context; restore on failure unless marked OK.
+ENV_BACKUP="$(mktemp "${TMPDIR:-/tmp}/synapse-env-predeploy.XXXXXX")"
 cp -p "$ENV_FILE" "$ENV_BACKUP"
 SUCCESS=0
 cleanup() {
@@ -98,6 +115,9 @@ log "building api image (baked fs-helper)..."
 docker compose --profile production build api
 log "building cloud-sandbox image (synapse-device-runtime:latest)..."
 docker compose --profile sandbox-build build sandbox-image
+log "building tunnel-edge (frps) image..."
+docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml \
+  --profile production build tunnel-edge
 log "starting api + tunnel-edge with the docker-backend override..."
 docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml \
   --profile production up -d api tunnel-edge

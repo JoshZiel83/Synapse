@@ -11,10 +11,15 @@ storage
 **/target
 # Never ship secrets into the build context. Docker does NOT read .gitignore,
 # so .env files (root + nested worktrees + infra/) must be excluded here.
-# .env.example templates are deliberately NOT matched and still ship.
+# `.env.*` also covers transient backups (e.g. .env.predeploy.*) the deploy
+# scripts could create. `.env.example` templates are explicitly re-allowed so
+# they still ship.
 .env
 **/.env
-**/.env.local
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
 # Local dev scratch that would otherwise bloat the context by tens of GB.
 .claude/
 .worktrees/

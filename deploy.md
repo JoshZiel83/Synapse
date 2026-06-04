@@ -469,10 +469,12 @@ override, which also injects `SYNAPSE_SANDBOX_SERVER_ORIGIN=http://127.0.0.1:300
 shared with the docker backend (which needs an internal address instead).
 
 ```bash
-# One-shot helper: baseline-.env check → ensure secrets → set ENABLED/BACKEND=local
-# → build api → up api+tunnel-edge with the local override → bwrap exec smoke test.
-# Backs up .env first and restores it on any failure, so a half-switched
-# local+privileged state is never left behind.
+# One-shot helper: baseline-.env check → reject conflicting shell-env flags →
+# ensure secrets → set ENABLED/BACKEND=local → build api → bwrap smoke in a
+# THROWAWAY container → only then up api+tunnel-edge with the local override.
+# Running the smoke BEFORE bring-up means a cap-stack failure never leaves a
+# running local+privileged API; .env is backed up (outside the repo) and
+# restored on any failure.
 bash scripts/deploy-sandbox-local.sh
 
 # Or just the smoke test against a throwaway container (builds the image, proves a
