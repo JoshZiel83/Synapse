@@ -1,6 +1,6 @@
 // Minimal MCP stdio server framework — newline-delimited JSON-RPC 2.0.
-// Used by integration tests to spawn a controllable MCP server that the
-// real synapse-relay binary can connect to via stdio transport.
+// Used by integration tests to spawn a controllable MCP server that an
+// MCP stdio client can connect to via stdio transport.
 //
 // Usage:
 //   import { runMcpServer } from "./lib/mcp-stdio.mjs"
