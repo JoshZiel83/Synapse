@@ -3,10 +3,6 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "vector";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
-CREATE TYPE auth_sessions_client_type AS ENUM ('web', 'android', 'windows', 'ios', 'cli', 'api');
-CREATE TYPE auth_sessions_transport AS ENUM ('cookie', 'token');
-CREATE TYPE auth_qr_login_requests_status AS ENUM ('pending_scan', 'pending_confirm', 'approved', 'rejected', 'expired', 'consumed');
-CREATE TYPE auth_qr_login_requests_approved_session_persistence AS ENUM ('persistent', 'temporary');
 CREATE TYPE platform_access_bindings_access_key AS ENUM ('super_admin', 'workspace_admin', 'model_admin', 'support', 'auditor');
 CREATE TYPE platform_access_bindings_source AS ENUM ('config', 'manual');
 CREATE TYPE workspace_members_trust_level AS ENUM ('admin', 'member', 'guest');
@@ -212,65 +208,106 @@ CREATE TYPE device_runtime_sessions_status AS ENUM ('open', 'closing', 'closed',
 CREATE TYPE device_runtime_session_services_status AS ENUM ('open', 'closed');
 
 -- ============ Users ============
+-- Account/identity model is provided by Better Auth (better-auth@1.6.13). The
+-- four BA core tables (users/account/session/verification) plus the
+-- device_code table (deviceAuthorization plugin) are hand-written here in
+-- snake_case and Better Auth is configured (modelName + per-field `fields`) to
+-- map onto them. BA never auto-migrates at runtime, so this single schema.sql
+-- stays the source of truth. generateId:false => BA omits `id` on INSERT, so
+-- every BA table's id MUST carry a DB-side DEFAULT uuid_generate_v4().
+-- Password lives in `account` (credential provider), NOT on users.
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   email VARCHAR(255) UNIQUE NOT NULL,
   name VARCHAR(255) NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
+  email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  -- BA core `image` (avatar URL from OAuth providers). Kept separate from
+  -- avatar_file_id (Synapse's generated-avatar file id) on purpose: URL vs UUID.
+  image TEXT,
   avatar_file_id UUID,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  -- Feishu identity surfaced onto the user row via BA additionalFields
+  -- (account.account_id holds the stable union_id; these are convenience copies).
+  feishu_open_id VARCHAR(255),
+  feishu_union_id VARCHAR(255),
+  feishu_tenant_key VARCHAR(255),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_users_email ON users(email);
 
--- ============ Auth Sessions ============
-CREATE TABLE auth_sessions (
+-- ============ Better Auth: account (sign-in methods + provider tokens) ============
+-- One row per (provider_id, account_id). For the credential provider,
+-- account_id = users.id and `password` holds the BA scrypt hash. For OAuth
+-- providers (feishu), account_id = the provider's stable subject (union_id) and
+-- the *_token columns hold the (encrypted) provider tokens.
+CREATE TABLE account (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  account_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  access_token TEXT,
+  refresh_token TEXT,
+  id_token TEXT,
+  access_token_expires_at TIMESTAMPTZ,
+  refresh_token_expires_at TIMESTAMPTZ,
+  scope TEXT,
+  password TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_account_provider_account UNIQUE (provider_id, account_id)
+);
+
+CREATE INDEX idx_account_user ON account(user_id);
+
+-- ============ Better Auth: session ============
+CREATE TABLE session (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  client_type auth_sessions_client_type NOT NULL DEFAULT 'web',
-  transport auth_sessions_transport NOT NULL DEFAULT 'cookie',
-  device_name VARCHAR(255),
-  platform VARCHAR(120),
-  token_hash VARCHAR(128) UNIQUE NOT NULL,
-  token_hint VARCHAR(16) NOT NULL,
-  ip_address VARCHAR(120),
+  token VARCHAR(255) UNIQUE NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  ip_address TEXT,
   user_agent TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  last_seen_at TIMESTAMPTZ DEFAULT NOW(),
-  expires_at TIMESTAMPTZ NOT NULL,
-  revoked_at TIMESTAMPTZ,
-  revoke_reason VARCHAR(50)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_id, created_at DESC);
-CREATE INDEX idx_auth_sessions_expires ON auth_sessions(expires_at);
+CREATE INDEX idx_session_user ON session(user_id);
+CREATE INDEX idx_session_token ON session(token);
 
-CREATE TABLE auth_qr_login_requests (
+-- ============ Better Auth: verification (email/token verification) ============
+CREATE TABLE verification (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  scan_token_hash VARCHAR(128) UNIQUE NOT NULL,
-  browser_token_hash VARCHAR(128) UNIQUE NOT NULL,
-  status auth_qr_login_requests_status NOT NULL DEFAULT 'pending_scan',
-  browser_ip_address VARCHAR(120),
-  browser_user_agent TEXT,
-  browser_label VARCHAR(160) NOT NULL,
-  approved_session_persistence auth_qr_login_requests_approved_session_persistence,
-  resolver_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  scanned_at TIMESTAMPTZ,
-  approved_at TIMESTAMPTZ,
-  rejected_at TIMESTAMPTZ,
-  consumed_at TIMESTAMPTZ,
+  identifier TEXT NOT NULL,
+  value TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_auth_qr_login_requests_expires
-  ON auth_qr_login_requests(expires_at);
-CREATE INDEX idx_auth_qr_login_requests_resolver
-  ON auth_qr_login_requests(resolver_user_id, created_at DESC);
+CREATE INDEX idx_verification_identifier ON verification(identifier);
+
+-- ============ Better Auth: device_code (deviceAuthorization, RFC 8628) ============
+-- Backs cross-device QR login: web shows verification_uri_complete (encoding
+-- user_code) as a QR, an already-authenticated mobile device claims+approves it.
+CREATE TABLE device_code (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  device_code TEXT NOT NULL,
+  user_code TEXT NOT NULL,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL,
+  last_polled_at TIMESTAMPTZ,
+  polling_interval INT,
+  client_id TEXT,
+  scope TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_device_code_device_code UNIQUE (device_code),
+  CONSTRAINT uq_device_code_user_code UNIQUE (user_code)
+);
+
+CREATE INDEX idx_device_code_expires ON device_code(expires_at);
 
 -- ============ Workspaces ============
 CREATE TABLE workspaces (

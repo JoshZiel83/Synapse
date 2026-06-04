@@ -1,22 +1,3 @@
-export const AUTH_CLIENT_TYPES = [
-  "web",
-  "android",
-  "windows",
-  "ios",
-  "cli",
-  "api",
-] as const
-export const AUTH_TRANSPORTS = ["cookie", "token"] as const
-export const AUTH_SESSION_PERSISTENCES = ["persistent", "temporary"] as const
-export const AUTH_QR_LOGIN_STATUSES = [
-  "pending_scan",
-  "pending_confirm",
-  "approved",
-  "rejected",
-  "expired",
-  "consumed",
-] as const
-
 export const INVITE_TRUST_LEVELS = ["admin", "member", "guest"] as const
 export const PLATFORM_ACCESS_KEYS = [
   "super_admin",

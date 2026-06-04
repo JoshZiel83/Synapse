@@ -27,6 +27,16 @@ export function createDb(pgPool: pg.Pool): KyselyDb {
 
 export const db: KyselyDb = createDb(pool)
 
+/**
+ * A Kysely PostgresDialect over the shared connection pool, for libraries that
+ * take a dialect rather than the Kysely instance (e.g. Better Auth's adapter).
+ * Exposing the dialect here keeps the bare `pool` sealed inside the database
+ * layer — business modules import this instead of reaching for `pool`.
+ */
+export function createBetterAuthDialect(): PostgresDialect {
+  return new PostgresDialect({ pool })
+}
+
 export type TableRow<T extends keyof Database> = Selectable<Database[T]>
 export type TableInsert<T extends keyof Database> = Insertable<Database[T]>
 export type TableUpdate<T extends keyof Database> = Updateable<Database[T]>

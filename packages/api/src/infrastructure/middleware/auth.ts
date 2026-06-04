@@ -1,5 +1,4 @@
 import type { FastifyReply, FastifyRequest } from "fastify"
-import { AUTH_SESSION_COOKIE_NAME } from "@synapse/shared"
 import { authenticateRequestSession } from "../../modules/auth/service.js"
 
 async function attachAuthenticatedRequest(request: FastifyRequest) {
@@ -21,10 +20,10 @@ export async function authMiddleware(
   const authenticated = await attachAuthenticatedRequest(request)
   if (authenticated) return
 
-  if (request.cookies?.[AUTH_SESSION_COOKIE_NAME]) {
-    reply.clearCookie(AUTH_SESSION_COOKIE_NAME, { path: "/" })
-  }
-
+  // Note: we no longer clear a cookie by name here. Better Auth's session
+  // cookie carries an environment-dependent `__Secure-` prefix in production,
+  // so business code must not assume a fixed cookie name; an unauthenticated
+  // request simply gets a 401 and the client re-authenticates.
   return reply.status(401).send({
     error: "Authentication required",
     code: "UNAUTHENTICATED",

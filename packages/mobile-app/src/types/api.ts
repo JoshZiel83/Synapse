@@ -1,8 +1,6 @@
 import type {
   Actor,
   ActorAccessRequestListResponse,
-  AuthQrLoginResolveResponse,
-  AuthQrLoginStatusResponse,
   AuthResponse,
   AuthSessionSummary,
   ContactHubDetailResponse,
@@ -93,8 +91,6 @@ export interface FriendIdProfileView {
 export type {
   Actor,
   ActorAccessRequestListResponse,
-  AuthQrLoginResolveResponse,
-  AuthQrLoginStatusResponse,
   AuthResponse,
   ContactHubDetailResponse,
   ContactHubEntryView,

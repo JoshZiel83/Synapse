@@ -33,8 +33,8 @@ test(
   async () => {
     await withTestDb(async (db) => {
       await sql`
-        INSERT INTO users (email, name, password_hash)
-        VALUES ('rollback-probe@example.test', 'rollback probe', 'unused-hash')
+        INSERT INTO users (email, name)
+        VALUES ('rollback-probe@example.test', 'rollback probe')
       `.execute(db)
 
       const after = await sql<{ count: string }>`

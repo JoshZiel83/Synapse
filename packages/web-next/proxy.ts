@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
-import { AUTH_SESSION_COOKIE_NAME, buildLoginRedirect } from "./lib/auth"
+import { buildLoginRedirect } from "./lib/auth"
 import { buildApiProxyUrl } from "./lib/api-origin"
 import { isMobileUserAgent } from "./lib/is-mobile-user-agent"
 
@@ -74,29 +74,25 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
-  const sessionCookie = request.cookies.get(AUTH_SESSION_COOKIE_NAME)?.value
-  if (sessionCookie) {
-    try {
-      const authResponse = await hasValidSession(request)
-      if (authResponse.ok) {
-        return NextResponse.next()
-      }
-
-      if (authResponse.status !== 401) {
-        return NextResponse.next()
-      }
-    } catch {
+  // We can't cheaply pre-check a session cookie by name: Better Auth's session
+  // cookie carries an environment-dependent `__Secure-` prefix, so just ask the
+  // backend. /auth/me returns 401 when there is no valid session; on a non-401
+  // (e.g. backend hiccup) or transport error we fail OPEN to avoid bouncing a
+  // logged-in user — server layouts still enforce auth authoritatively.
+  try {
+    const authResponse = await hasValidSession(request)
+    if (authResponse.ok) {
       return NextResponse.next()
     }
+    if (authResponse.status !== 401) {
+      return NextResponse.next()
+    }
+  } catch {
+    return NextResponse.next()
   }
 
   const redirectUrl = buildLoginRedirect(`${pathname}${search}`)
-  const response = NextResponse.redirect(new URL(redirectUrl, request.url))
-  response.cookies.set(AUTH_SESSION_COOKIE_NAME, "", {
-    path: "/",
-    maxAge: 0,
-  })
-  return response
+  return NextResponse.redirect(new URL(redirectUrl, request.url))
 }
 
 export const config = {

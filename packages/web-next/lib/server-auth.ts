@@ -3,7 +3,6 @@ import "server-only"
 import { cache } from "react"
 import { cookies, headers } from "next/headers"
 import type { AuthSessionSummary, User } from "@synapse/shared"
-import { AUTH_SESSION_COOKIE_NAME } from "@synapse/shared"
 import { buildApiProxyUrl } from "@/lib/api-origin"
 
 export interface ServerAuthState {
@@ -14,7 +13,10 @@ export interface ServerAuthState {
 
 export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
   const cookieStore = await cookies()
-  if (!cookieStore.get(AUTH_SESSION_COOKIE_NAME)?.value) {
+  // No cheap cookie-name precheck: Better Auth's session cookie carries an
+  // environment-dependent `__Secure-` prefix. If there are no cookies at all we
+  // can still short-circuit, otherwise ask the backend.
+  if (cookieStore.getAll().length === 0) {
     return { status: "unauthenticated", user: null, session: null }
   }
 

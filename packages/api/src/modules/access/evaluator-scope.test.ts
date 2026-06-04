@@ -29,7 +29,6 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
     .values({
       email: `${rid()}@${NS}`,
       name: "owner",
-      password_hash: "x",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -69,7 +68,6 @@ async function newWorkspaceMember(
     .values({
       email: `${rid()}@${NS}`,
       name: "member",
-      password_hash: "x",
     })
     .returning("id")
     .executeTakeFirstOrThrow()

@@ -52,7 +52,6 @@ import {
   startTransportRuntimeManager,
   stopTransportRuntimeManager,
 } from "./modules/im/runtime.js"
-import { syncConfiguredPlatformAdmins } from "./modules/platform/admin-service.js"
 import { initBuiltinRegistry } from "./modules/mcp-plugins/builtin/index.js"
 import {
   initInstanceManagerListeners,
@@ -218,15 +217,13 @@ async function main() {
     startChatDedupCounterLogger()
   }
 
-  try {
-    const platformAdmins = await syncConfiguredPlatformAdmins()
-    log.info(
-      `Platform admins synchronized (configuredEmails=${platformAdmins.configuredEmailCount}, matchedUsers=${platformAdmins.matchedUserCount}, platformAdmins=${platformAdmins.platformAdminCount})`
-    )
-  } catch (err) {
-    log.error({ err }, "Failed to synchronize platform admins")
-    process.exit(1)
-  }
+  // NOTE: startup config-email -> super_admin auto-grant was intentionally
+  // removed. Granting super_admin merely because a registering user's email
+  // matches PLATFORM_ADMIN_EMAILS is a privilege-escalation hole (it does not
+  // prove email ownership, and email verification is not yet wired). Platform
+  // admins are now provisioned only via seed / explicit bootstrap
+  // (ensureSeedPlatformAdminForUser). Reintroduce a verified-email-gated grant
+  // once email verification delivery exists.
 
   // Register modules
   await app.register(authModule)

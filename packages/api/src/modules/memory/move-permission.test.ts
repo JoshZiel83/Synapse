@@ -50,7 +50,6 @@ async function newWorkspace(
     .values({
       email: `${rid()}@${NS}`,
       name: "owner",
-      password_hash: "x",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -76,7 +75,6 @@ async function newMember(
     .values({
       email: `${rid()}@${NS}`,
       name: "member",
-      password_hash: "x",
     })
     .returning("id")
     .executeTakeFirstOrThrow()

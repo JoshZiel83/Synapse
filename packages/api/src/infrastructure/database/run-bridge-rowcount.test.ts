@@ -19,7 +19,6 @@ async function seedUser(database: typeof db): Promise<string> {
     .values({
       email: `rb-${Math.random().toString(36).slice(2, 10)}@example.test`,
       name: "runBuilder rowCount test",
-      password_hash: "unused",
     })
     .returning("id")
     .executeTakeFirstOrThrow()

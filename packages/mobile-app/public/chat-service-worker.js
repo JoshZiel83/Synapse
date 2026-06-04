@@ -62,7 +62,7 @@
     }
   });
 
-  // ../../node_modules/idb/build/index.js
+  // node_modules/idb/build/index.js
   var instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
   var idbProxyableTypes;
   var cursorAdvanceMethods;
@@ -1356,7 +1356,6 @@
   var API_VERSION = "v1";
   var API_PREFIX = `/api/${API_VERSION}`;
   var AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
-  var AUTH_QR_LOGIN_REQUEST_TTL_SECONDS = 3 * 60;
   var MCP_INSTANCE_TTL = {
     actor: 30 * 60 * 1e3,
     // 30 minutes

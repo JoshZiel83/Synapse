@@ -119,7 +119,7 @@ async function seedSession(db: any): Promise<string> {
   const conversationId = randomUUID()
   const sessionId = randomUUID()
   await db.executeQuery(
-    sql`INSERT INTO users (id, email, name, password_hash) VALUES (${userId}, ${userId + "@test"}, 'tester', 'x')`.compile(
+    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${userId + "@test"}, 'tester')`.compile(
       db
     )
   )

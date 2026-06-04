@@ -1,6 +1,6 @@
 import crypto from "node:crypto"
 import fs from "node:fs/promises"
-import bcryptjs from "bcryptjs"
+import { hashPassword } from "better-auth/crypto"
 import { basename, dirname, extname, resolve } from "node:path"
 import { fileURLToPath } from "url"
 import { SUBJECT_KIND, textBlocks } from "@synapse/shared"
@@ -20,7 +20,51 @@ import {
   seedOfficialRuntimeActors,
 } from "./seeds/actors/seed-official-actors.js"
 
-const { hash } = bcryptjs
+/**
+ * Idempotently seed a Better-Auth credential user: the `users` row + a
+ * `credential` `account` row (account_id = user id) carrying the BA scrypt
+ * password hash + a generated avatar. We write directly (not via signUpEmail)
+ * to stay idempotent and avoid minting a throwaway seed session; that means the
+ * BA user.create.after avatar hook does NOT fire, so we generate the avatar here.
+ */
+async function seedCredentialUser(input: {
+  email: string
+  name: string
+  password: string
+  emailVerified?: boolean
+}): Promise<{ id: string }> {
+  const passwordHash = await hashPassword(input.password)
+  const userRow = await sql<{ id: string }>`
+    INSERT INTO users (email, name, email_verified)
+    VALUES (${input.email}, ${input.name}, ${input.emailVerified ?? true})
+    ON CONFLICT (email) DO UPDATE SET
+      name = EXCLUDED.name,
+      email_verified = EXCLUDED.email_verified,
+      updated_at = NOW()
+    RETURNING id`.execute(db)
+  const userId = userRow.rows[0]!.id
+
+  await sql`
+    INSERT INTO account (account_id, provider_id, user_id, password)
+    VALUES (${userId}, 'credential', ${userId}, ${passwordHash})
+    ON CONFLICT (provider_id, account_id) DO UPDATE SET
+      password = EXCLUDED.password,
+      updated_at = NOW()`.execute(db)
+
+  const avatar = await createGeneratedUserAvatarFile(db, {
+    userId,
+    name: input.name,
+    email: input.email,
+  })
+  await sql`
+    UPDATE users
+    SET avatar_file_id = ${avatar.fileId},
+        updated_at = NOW()
+    WHERE id = ${userId} AND avatar_file_id IS NULL`.execute(db)
+
+  return { id: userId }
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const CLAWHUB_SKILLS_DIR = resolve(
@@ -548,53 +592,26 @@ export async function seedDatabase() {
   console.log("Seeding refactored database...")
   await ensureStorageDir()
 
-  const passwordHash = await hash("demo1234", 10)
-  const userResult = await sql<{ id: string }>`
-    INSERT INTO users (email, name, password_hash)
-    VALUES ('demo@synapse.dev', 'Demo User', ${passwordHash})
-    ON CONFLICT (email) DO UPDATE SET
-      name = EXCLUDED.name,
-      password_hash = EXCLUDED.password_hash,
-      updated_at = NOW()
-    RETURNING id`.execute(db)
-  const userId = userResult.rows[0]!.id
-
-  const demoUserAvatar = await createGeneratedUserAvatarFile(db, {
-    userId,
-    name: "Demo User",
+  const { id: userId } = await seedCredentialUser({
     email: "demo@synapse.dev",
+    name: "Demo User",
+    password: "demo1234",
+    emailVerified: true,
   })
-  await sql`
-    UPDATE users
-    SET avatar_file_id = ${demoUserAvatar.fileId},
-        updated_at = NOW()
-    WHERE id = ${userId}`.execute(db)
 
+  // Seed/bootstrap is the ONLY path that grants platform super_admin (see the
+  // removed startup config-email auto-grant in index.ts).
   await ensureSeedPlatformAdminForUser({
     id: userId,
     email: "demo@synapse.dev",
   })
 
-  const ordinaryUserResult = await sql<{ id: string }>`
-    INSERT INTO users (email, name, password_hash)
-    VALUES ('yihang@synapse.dev', 'Yihang', ${passwordHash})
-    ON CONFLICT (email) DO UPDATE SET
-      name = EXCLUDED.name,
-      password_hash = EXCLUDED.password_hash,
-      updated_at = NOW()
-    RETURNING id`.execute(db)
-  const ordinaryUserId = ordinaryUserResult.rows[0]!.id
-
-  const ordinaryUserAvatar = await createGeneratedUserAvatarFile(db, {
-    userId: ordinaryUserId,
-    name: "Yihang",
+  const { id: ordinaryUserId } = await seedCredentialUser({
     email: "yihang@synapse.dev",
+    name: "Yihang",
+    password: "demo1234",
+    emailVerified: true,
   })
-  await sql`
-    UPDATE users
-    SET avatar_file_id = ${ordinaryUserAvatar.fileId},
-        updated_at = NOW()
-    WHERE id = ${ordinaryUserId}`.execute(db)
 
   await seedPlatformDefaultGroup()
 

@@ -51,7 +51,7 @@ async function seedService(
   const workspaceId = randomUUID()
   const userId = randomUUID()
   await db.executeQuery(
-    sql`INSERT INTO users (id, email, name, password_hash) VALUES (${userId}, ${userId + "@test"}, 'tester', 'x')`.compile(
+    sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${userId + "@test"}, 'tester')`.compile(
       db
     )
   )

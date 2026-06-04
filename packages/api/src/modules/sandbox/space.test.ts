@@ -35,7 +35,7 @@ function rid(): string {
 async function seedWorkspace(db: Kysely<any>) {
   const user = await db
     .insertInto("users")
-    .values({ email: `${rid()}@${NS}`, name: "owner", password_hash: "x" })
+    .values({ email: `${rid()}@${NS}`, name: "owner" })
     .returning("id")
     .executeTakeFirstOrThrow()
   const ws = await db

@@ -180,6 +180,7 @@ services:
       dockerfile: infrastructure/Dockerfile.mobile-web
       args:
         EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:?EXPO_PUBLIC_API_URL is required. Run ./setup.sh first.}
+        EXPO_PUBLIC_AUTH_ORIGIN: ${EXPO_PUBLIC_AUTH_ORIGIN:-}
         EXPO_BASE_URL: ${EXPO_BASE_URL:-/mobile}
     container_name: synapse-mobile-web
     restart: unless-stopped

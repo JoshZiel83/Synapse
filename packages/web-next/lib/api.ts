@@ -11,14 +11,7 @@ import type {
   ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
   AttachmentTarget,
-  AuthClientType,
-  AuthQrLoginCreateResponse,
-  AuthQrLoginResolveResponse,
-  AuthQrLoginStatusResponse,
   AuthResponse,
-  AuthSessionPersistence,
-  AuthSessionSummary,
-  AuthTransport,
   ActorPackageRecord,
   AutomationEventSource,
   AutomationExecution,
@@ -139,11 +132,11 @@ export class ApiError extends Error {
 }
 
 export interface AuthMutationOptions {
-  clientType?: AuthClientType
-  transport?: AuthTransport
-  sessionPersistence?: AuthSessionPersistence
-  deviceName?: string
-  platform?: string
+  /**
+   * Maps to Better Auth's `rememberMe`. A "temporary" login (rememberMe:false)
+   * yields a session-scoped cookie. Defaults to a persistent login.
+   */
+  temporary?: boolean
 }
 
 export interface WorkspaceListResponse {
@@ -207,99 +200,123 @@ class ApiClient {
     return data
   }
 
-  // Auth
-  register(
+  // Auth — Better Auth native endpoints (mounted under /api/v1/auth).
+  // On the web the session is delivered as an httpOnly cookie; the response
+  // body carries the user. We normalize to { user } so the auth store keeps a
+  // stable shape.
+  async register(
     email: string,
     password: string,
     name: string,
-    options: AuthMutationOptions = {}
+    _options: AuthMutationOptions = {}
   ): Promise<AuthResponse> {
-    return this.fetch("/auth/register", {
+    const res = await this.fetch("/auth/sign-up/email", {
       method: "POST",
-      body: JSON.stringify({
-        email,
-        password,
-        name,
-        clientType: options.clientType ?? "web",
-        transport: options.transport ?? "cookie",
-        sessionPersistence: options.sessionPersistence,
-        deviceName: options.deviceName,
-        platform: options.platform,
-      }),
+      body: JSON.stringify({ email, password, name }),
     })
+    return { user: res.user, session: res.session ?? { id: "" } }
   }
-  login(
+  async login(
     email: string,
     password: string,
     options: AuthMutationOptions = {}
   ): Promise<AuthResponse> {
-    return this.fetch("/auth/login", {
+    const res = await this.fetch("/auth/sign-in/email", {
       method: "POST",
       body: JSON.stringify({
         email,
         password,
-        clientType: options.clientType ?? "web",
-        transport: options.transport ?? "cookie",
-        sessionPersistence: options.sessionPersistence,
-        deviceName: options.deviceName,
-        platform: options.platform,
+        rememberMe: options.temporary ? false : true,
       }),
     })
-  }
-  createQrLoginRequest(): Promise<AuthQrLoginCreateResponse> {
-    return this.fetch("/auth/qr-login/requests", { method: "POST", body: "{}" })
-  }
-  getQrLoginRequestStatus(
-    requestId: string,
-    browserToken: string
-  ): Promise<AuthQrLoginStatusResponse> {
-    return this.fetch(`/auth/qr-login/requests/${requestId}/status`, {
-      headers: {
-        "x-browser-token": browserToken,
-      },
-    })
-  }
-  resolveQrLogin(token: string): Promise<AuthQrLoginResolveResponse> {
-    return this.fetch("/auth/qr-login/resolve", {
-      method: "POST",
-      body: JSON.stringify({ token }),
-    })
-  }
-  approveQrLogin(
-    token: string,
-    sessionPersistence: AuthSessionPersistence
-  ): Promise<AuthQrLoginStatusResponse> {
-    return this.fetch("/auth/qr-login/approve", {
-      method: "POST",
-      body: JSON.stringify({ token, sessionPersistence }),
-    })
-  }
-  rejectQrLogin(token: string): Promise<AuthQrLoginStatusResponse> {
-    return this.fetch("/auth/qr-login/reject", {
-      method: "POST",
-      body: JSON.stringify({ token }),
-    })
-  }
-  finalizeQrLogin(
-    requestId: string,
-    browserToken: string
-  ): Promise<AuthResponse> {
-    return this.fetch(`/auth/qr-login/requests/${requestId}/finalize`, {
-      method: "POST",
-      body: JSON.stringify({ browserToken }),
-    })
+    return { user: res.user, session: res.session ?? { id: "" } }
   }
   logout() {
-    return this.fetch("/auth/logout", { method: "POST" })
+    return this.fetch("/auth/sign-out", { method: "POST" })
   }
   logoutAll() {
-    return this.fetch("/auth/logout-all", { method: "POST" })
+    return this.fetch("/auth/revoke-sessions", { method: "POST" })
   }
-  getSessions(): Promise<{ sessions: AuthSessionSummary[] }> {
-    return this.fetch("/auth/sessions")
+  listSessions() {
+    return this.fetch("/auth/list-sessions")
   }
-  revokeSession(sessionId: string) {
-    return this.fetch(`/auth/sessions/${sessionId}`, { method: "DELETE" })
+  revokeSession(token: string) {
+    return this.fetch("/auth/revoke-session", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    })
+  }
+  // Cross-device QR login (Better Auth deviceAuthorization plugin). The desktop
+  // requests a device code, renders verification_uri_complete as a QR, polls
+  // for the token, then exchanges it for the session cookie via the bridge.
+  requestDeviceCode(): Promise<{
+    device_code: string
+    user_code: string
+    verification_uri: string
+    verification_uri_complete: string
+    expires_in: number
+    interval: number
+  }> {
+    return this.fetch("/auth/device/code", {
+      method: "POST",
+      body: JSON.stringify({ client_id: "synapse-web" }),
+    })
+  }
+  async pollDeviceToken(
+    deviceCode: string
+  ): Promise<{ access_token?: string; error?: string }> {
+    // RFC 8628: the device token endpoint returns HTTP 400 with an OAuth error
+    // body for the normal-flow states (authorization_pending / slow_down) as
+    // well as terminal ones (access_denied / expired_token / invalid_grant).
+    // Our fetch wrapper throws on any non-2xx, so unwrap ONLY those known
+    // 400-status device errors and surface them as a value. Anything else
+    // (500/502, proxy failure, a non-device error) re-throws so the poller
+    // shows a real failure instead of masking it as "expired".
+    try {
+      return await this.fetch("/auth/device/token", {
+        method: "POST",
+        body: JSON.stringify({
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+          device_code: deviceCode,
+          client_id: "synapse-web",
+        }),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 400) {
+        const details = err.details as { error?: string } | undefined
+        const oauthError = details?.error
+        const KNOWN_DEVICE_ERRORS = new Set([
+          "authorization_pending",
+          "slow_down",
+          "expired_token",
+          "access_denied",
+          "invalid_grant",
+        ])
+        if (oauthError && KNOWN_DEVICE_ERRORS.has(oauthError)) {
+          return { error: oauthError }
+        }
+      }
+      throw err
+    }
+  }
+  exchangeDeviceSession(accessToken: string) {
+    return this.fetch("/auth/device/session-cookie", {
+      method: "POST",
+      body: JSON.stringify({ access_token: accessToken }),
+    })
+  }
+  // Start a generic-OAuth (e.g. Feishu) sign-in. Better Auth returns a
+  // redirect URL the browser should navigate to (disableRedirect lets us drive
+  // the navigation ourselves rather than relying on the client redirect plugin).
+  async startOAuth(
+    providerId: string,
+    callbackURL: string
+  ): Promise<{ url: string }> {
+    const res = await this.fetch("/auth/sign-in/oauth2", {
+      method: "POST",
+      body: JSON.stringify({ providerId, callbackURL, disableRedirect: true }),
+    })
+    return { url: res.url }
   }
   getMe() {
     return this.fetch("/auth/me")

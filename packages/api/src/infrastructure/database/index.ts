@@ -34,8 +34,8 @@ type RequiredSchemaIssue = {
 const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
   {
     table: "users",
-    requiredColumns: ["id", "email", "password_hash"],
-    reason: "auth and seed users",
+    requiredColumns: ["id", "email", "email_verified"],
+    reason: "auth and seed users (Better Auth user table)",
   },
   {
     table: "workspaces",
@@ -123,17 +123,24 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "workspace access bindings",
   },
   {
-    table: "auth_qr_login_requests",
-    requiredColumns: [
-      "id",
-      "scan_token_hash",
-      "browser_token_hash",
-      "status",
-      "browser_label",
-      "approved_session_persistence",
-      "expires_at",
-    ],
-    reason: "web QR login requests",
+    table: "account",
+    requiredColumns: ["id", "account_id", "provider_id", "user_id"],
+    reason: "Better Auth account table (credentials + OAuth identities)",
+  },
+  {
+    table: "session",
+    requiredColumns: ["id", "user_id", "token", "expires_at"],
+    reason: "Better Auth session table",
+  },
+  {
+    table: "verification",
+    requiredColumns: ["id", "identifier", "value", "expires_at"],
+    reason: "Better Auth verification table",
+  },
+  {
+    table: "device_code",
+    requiredColumns: ["id", "device_code", "user_code", "status", "expires_at"],
+    reason: "Better Auth deviceAuthorization (cross-device QR login)",
   },
   {
     table: "realtime_event_outbox",

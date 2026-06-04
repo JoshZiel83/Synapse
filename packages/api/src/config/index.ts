@@ -140,6 +140,25 @@ const envSchema = z
 
     PLATFORM_ADMIN_EMAILS: withDefault(z.string(), ""),
 
+    // ===== Better Auth =====
+    // Session signing secret. Falls back through AUTH_SECRET / APP_SECRET so a
+    // single deployment secret can cover both BA and the legacy crypto layer.
+    // All three are optional here (empty allowed) and resolved to the first
+    // non-empty value below; production missing-secret is enforced in
+    // superRefine (NOT via `??`, which would accept an empty string).
+    BETTER_AUTH_SECRET: z.string().optional(),
+    AUTH_SECRET: z.string().optional(),
+    // Browser-facing public origin BA mounts under (redirect_uri + state/session
+    // cookies bind to this). MUST be the origin users actually hit (proxies
+    // /api/v1 -> API), not the internal API origin. Falls back to app.baseUrl.
+    AUTH_TRUSTED_ORIGINS: withDefault(z.string(), ""),
+
+    // ===== Feishu / Lark OAuth (genericOAuth provider) =====
+    FEISHU_APP_ID: withDefault(z.string(), ""),
+    FEISHU_APP_SECRET: withDefault(z.string(), ""),
+    // "true" => Lark international (open.larksuite.com); else Feishu (open.feishu.cn).
+    FEISHU_INTL: z.string().optional(),
+
     LOG_LEVEL: z.string().optional(),
 
     // Secret-at-rest master passphrase (crypto/index.ts). Required in production
@@ -161,7 +180,41 @@ const envSchema = z
           "encrypt sensitive plugin/IM credentials at rest",
       })
     }
+    // Better Auth needs a stable signing secret in production. Resolve the same
+    // first-non-empty fallback used below; "" must NOT count as a valid secret.
+    if (env.NODE_ENV === "production") {
+      const authSecret = firstNonEmpty([
+        env.BETTER_AUTH_SECRET,
+        env.AUTH_SECRET,
+        env.APP_SECRET,
+      ])
+      if (!authSecret) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["BETTER_AUTH_SECRET"],
+          message:
+            "BETTER_AUTH_SECRET (or AUTH_SECRET / APP_SECRET) is required in " +
+            "production to sign auth sessions",
+        })
+      }
+    }
   })
+
+/**
+ * First trim-non-empty string, or undefined. Used for secret fallback so a
+ * present-but-empty env var (e.g. `BETTER_AUTH_SECRET=`) correctly falls through
+ * to the next candidate instead of being treated as a valid empty secret (which
+ * `a ?? b ?? c` would do).
+ */
+function firstNonEmpty(
+  values: ReadonlyArray<string | undefined>
+): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim()
+    if (trimmed) return trimmed
+  }
+  return undefined
+}
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
   const parsed = envSchema.safeParse(process.env)
@@ -314,5 +367,29 @@ export const config = {
     adminEmails: env.PLATFORM_ADMIN_EMAILS.split(",")
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
+  },
+  auth: {
+    // Session signing secret: first non-empty of the three candidates. In
+    // development a deterministic dev secret is used so local sessions survive
+    // restarts; production missing-secret is rejected at startup (superRefine).
+    secret:
+      firstNonEmpty([
+        env.BETTER_AUTH_SECRET,
+        env.AUTH_SECRET,
+        env.APP_SECRET,
+      ]) ?? "dev-insecure-better-auth-secret",
+    // Public browser origin BA mounts under (drives OAuth redirect_uri + the
+    // origin where session/state cookies land). Defaults to app.baseUrl.
+    baseUrl:
+      env.APP_BASE_URL ||
+      env.NEXT_PUBLIC_APP_URL ||
+      env.NEXT_PUBLIC_SITE_URL ||
+      "http://localhost:3001",
+    trustedOrigins: splitList(env.AUTH_TRUSTED_ORIGINS),
+  },
+  feishu: {
+    appId: env.FEISHU_APP_ID,
+    appSecret: env.FEISHU_APP_SECRET,
+    intl: env.FEISHU_INTL === "true",
   },
 } as const

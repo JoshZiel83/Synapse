@@ -17,7 +17,6 @@ async function insertUser(db: AnyDb): Promise<string> {
     .values({
       email: `u-${Math.random().toString(36).slice(2, 10)}@example.test`,
       name: "test user",
-      password_hash: "unused-hash",
     })
     .returning("id")
     .executeTakeFirstOrThrow()

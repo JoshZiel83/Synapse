@@ -42,8 +42,13 @@ WORKDIR /app
 COPY packages/mobile-app/ packages/mobile-app/
 
 ARG EXPO_PUBLIC_API_URL
+ARG EXPO_PUBLIC_AUTH_ORIGIN
 ARG EXPO_BASE_URL=/mobile
 ENV EXPO_PUBLIC_API_URL=${EXPO_PUBLIC_API_URL}
+# Public origin Better Auth is mounted on. Optional: defaults to the API origin
+# when unset (fine for same-origin deploys); set it when the browser-facing
+# public origin differs from the internal API origin.
+ENV EXPO_PUBLIC_AUTH_ORIGIN=${EXPO_PUBLIC_AUTH_ORIGIN}
 ENV EXPO_BASE_URL=${EXPO_BASE_URL}
 ENV NODE_ENV=production
 

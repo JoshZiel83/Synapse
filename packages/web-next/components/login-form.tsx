@@ -57,7 +57,7 @@ export function LoginForm({
     setSubmitError("")
     try {
       await login(values.email, values.password, {
-        sessionPersistence: values.temporaryLogin ? "temporary" : "persistent",
+        temporary: values.temporaryLogin,
       })
 
       if (redirect) {
@@ -72,6 +72,19 @@ export function LoginForm({
       setSubmitError(err instanceof Error ? err.message : "Login failed")
     }
   })
+
+  async function handleFeishuLogin() {
+    setSubmitError("")
+    try {
+      const callbackURL = redirect ?? "/dashboard"
+      const { url } = await api.startOAuth("feishu", callbackURL)
+      window.location.href = url
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Feishu sign-in failed"
+      )
+    }
+  }
 
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
@@ -174,6 +187,17 @@ export function LoginForm({
                         className="w-full"
                       >
                         {isSubmitting ? "Signing in..." : "Sign in"}
+                      </Button>
+                    </Field>
+                    <Field>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={handleFeishuLogin}
+                        disabled={isSubmitting}
+                      >
+                        Continue with Feishu
                       </Button>
                     </Field>
                     <FieldDescription className="text-center">

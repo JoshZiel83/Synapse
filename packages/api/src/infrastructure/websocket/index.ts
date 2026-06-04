@@ -1,9 +1,5 @@
 import type { FastifyInstance } from "fastify"
-import {
-  AUTH_SESSION_COOKIE_NAME,
-  WS_AUTH_TIMEOUT,
-  WS_HEARTBEAT_INTERVAL,
-} from "@synapse/shared"
+import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from "@synapse/shared"
 import type {
   ChatSocketEvent,
   ConversationFeedEventPayloadMap,
@@ -14,7 +10,10 @@ import type {
 import { onEvent } from "../events/index.js"
 import { handleRemoteAgentDaemonConnection } from "../../modules/remote-agents/service.js"
 import { isShuttingDown } from "../shutdown/state.js"
-import { authenticateSessionToken } from "../../modules/auth/service.js"
+import {
+  authenticateSessionFromHeaders,
+  authenticateSessionToken,
+} from "../../modules/auth/service.js"
 import { getConversationParticipant } from "../../modules/chat/service.js"
 import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js"
 import { enrichInteractionForUser } from "../../modules/interactions/service.js"
@@ -54,19 +53,6 @@ interface WSClient {
 const clients: Map<string, WSClient> = new Map()
 
 let appRef: FastifyInstance | null = null
-
-function parseCookieHeader(cookieHeader: string | string[] | undefined) {
-  const source = Array.isArray(cookieHeader)
-    ? cookieHeader.join(";")
-    : cookieHeader || ""
-  return source.split(";").reduce<Record<string, string>>((acc, part) => {
-    const [key, ...rest] = part.split("=")
-    const trimmedKey = key?.trim()
-    if (!trimmedKey) return acc
-    acc[trimmedKey] = decodeURIComponent(rest.join("=").trim())
-    return acc
-  }, {})
-}
 
 async function canWorkspaceMemberAccessConversation(
   conversationId: string,
@@ -415,34 +401,34 @@ export function setupWebSocket(app: FastifyInstance) {
       }
     }, WS_AUTH_TIMEOUT)
 
-    const cookieToken = parseCookieHeader(req.headers.cookie)[
-      AUTH_SESSION_COOKIE_NAME
-    ]
-
     socket.on("message", async (raw: any) => {
       try {
         const msg = JSON.parse(raw.toString()) as Record<string, unknown>
 
         if (msg.type === "auth") {
-          const token =
+          const frameToken =
             typeof msg.token === "string" && msg.token.trim().length > 0
               ? msg.token.trim()
-              : cookieToken
+              : ""
           const workspaceId =
             typeof msg.workspaceId === "string" && msg.workspaceId.trim()
               ? msg.workspaceId.trim()
               : ""
 
-          if (!token) {
-            closeClient(clientId, "No session provided")
-            return
-          }
           if (!workspaceId) {
             closeClient(clientId, "workspaceId is required")
             return
           }
 
-          const authenticated = await authenticateSessionToken(token)
+          // Two auth paths (the session cookie name is unknowable here because
+          // of Better Auth's production __Secure- prefix, so we never parse it):
+          //  - native clients carry the BA session token in the auth frame ->
+          //    validate it as a bearer token;
+          //  - web / Expo web rely on the signed session cookie carried on the
+          //    upgrade request -> validate from the handshake headers.
+          const authenticated = frameToken
+            ? await authenticateSessionToken(frameToken)
+            : await authenticateSessionFromHeaders(req.headers)
           if (!authenticated) {
             closeClient(clientId, "Invalid or expired session")
             return

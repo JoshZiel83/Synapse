@@ -15,6 +15,7 @@ import {
   setApiAuthToken,
   setApiUnauthorizedHandler,
 } from "@/lib/api"
+import { authClient, getSessionBearerToken } from "@/lib/auth-client"
 import { createChatPersistence } from "@/lib/chat-persistence"
 import { SESSION_TOKEN_KEY } from "@/lib/storage-keys"
 import {
@@ -104,7 +105,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [queryClient])
 
   const refreshSession = useCallback(async () => {
-    const storedToken = await readStoredValue(SESSION_TOKEN_KEY)
+    // Prefer our persisted bearer token; otherwise fall back to the Better Auth
+    // expo cookie-jar (this is how an OAuth/deep-link return surfaces a session
+    // that was established by the browser flow, not by our email sign-in).
+    let storedToken = await readStoredValue(SESSION_TOKEN_KEY)
+    if (!storedToken) {
+      const jarToken = getSessionBearerToken()
+      if (jarToken) {
+        storedToken = jarToken
+        await persistSessionToken(jarToken)
+      }
+    }
     if (!storedToken) {
       applySession({ token: null }, setState)
       return
@@ -145,55 +156,44 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [clearSession])
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const response = await api.login(email, password)
-    if (!response.sessionToken) {
-      throw new ApiError(
-        "The server did not return a mobile session token.",
-        500
-      )
+    const { data, error } = await authClient.signIn.email({ email, password })
+    if (error) {
+      throw new ApiError(error.message ?? "Sign in failed", error.status ?? 401)
     }
-
-    await persistSessionToken(response.sessionToken)
-    applySession(
-      {
-        token: response.sessionToken,
-        response: {
-          user: response.user,
-          session: response.session,
-        },
-      },
-      setState
-    )
+    // Prefer the token from the response body; fall back to the expo cookie-jar.
+    // This is the bearer token the REST/WS layers attach.
+    const token = data?.token ?? getSessionBearerToken()
+    await persistSessionToken(token)
+    setApiAuthToken(token)
+    const me = await api.getMe()
+    applySession({ token, response: me }, setState)
   }, [])
 
   const signUp = useCallback(
     async (name: string, email: string, password: string) => {
-      const response = await api.register(name, email, password)
-      if (!response.sessionToken) {
+      const { data, error } = await authClient.signUp.email({
+        name,
+        email,
+        password,
+      })
+      if (error) {
         throw new ApiError(
-          "The server did not return a mobile session token.",
-          500
+          error.message ?? "Sign up failed",
+          error.status ?? 400
         )
       }
-
-      await persistSessionToken(response.sessionToken)
-      applySession(
-        {
-          token: response.sessionToken,
-          response: {
-            user: response.user,
-            session: response.session,
-          },
-        },
-        setState
-      )
+      const token = data?.token ?? getSessionBearerToken()
+      await persistSessionToken(token)
+      setApiAuthToken(token)
+      const me = await api.getMe()
+      applySession({ token, response: me }, setState)
     },
     []
   )
 
   const signOut = useCallback(async () => {
     try {
-      await api.logout()
+      await authClient.signOut()
     } catch {
       // Ignore sign out transport issues and clear the local token anyway.
     }

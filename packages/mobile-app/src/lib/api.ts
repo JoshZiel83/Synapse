@@ -1,11 +1,9 @@
-import Constants from "expo-constants"
 import {
   FILE_ORIGIN_SYSTEMS,
   isChatInteractionResolveConflictResponse,
 } from "@shared"
 import type {
   ActorRuntimeTurnActivityDetail,
-  AuthSessionPersistence,
   CanonicalContentBlock,
   ChatBootstrapResponse,
   ChatClientInstanceCreateInput,
@@ -27,19 +25,11 @@ import type {
 } from "@shared"
 import { Platform } from "react-native"
 
-import {
-  API_BASE,
-  getDeviceLabel,
-  getPlatformClientType,
-  resolveApiUrl,
-} from "@/lib/config"
+import { API_BASE, resolveApiUrl } from "@/lib/config"
 import type {
   ActorAccessRequestListResponse,
   ActorListResponse,
   AuthMeResponse,
-  AuthQrLoginResolveResponse,
-  AuthQrLoginStatusResponse,
-  AuthResponse,
   ContactHubDetailResponse,
   ContactHubEntryView,
   ContactHubResponse,
@@ -176,6 +166,10 @@ class ApiClient {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       headers,
+      // On the Expo-web target the cookie-jar is empty (no Bearer header), so
+      // rely on the browser's session cookie — which is only sent with
+      // credentials:"include". Native uses the Authorization: Bearer header.
+      ...(Platform.OS === "web" ? { credentials: "include" as const } : {}),
     })
 
     if (response.status === 204) {
@@ -200,48 +194,6 @@ class ApiClient {
     }
 
     return data as T
-  }
-
-  login(email: string, password: string): Promise<AuthResponse> {
-    return this.request<AuthResponse>("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({
-        email,
-        password,
-        clientType: getPlatformClientType(),
-        transport: "token",
-        sessionPersistence: "persistent",
-        deviceName: getDeviceLabel(),
-        platform: `${Platform.OS} / Expo ${Constants.expoVersion ?? "runtime"}`,
-      }),
-    })
-  }
-
-  register(
-    name: string,
-    email: string,
-    password: string
-  ): Promise<AuthResponse> {
-    return this.request<AuthResponse>("/auth/register", {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        email,
-        password,
-        clientType: getPlatformClientType(),
-        transport: "token",
-        sessionPersistence: "persistent",
-        deviceName: getDeviceLabel(),
-        platform: `${Platform.OS} / Expo ${Constants.expoVersion ?? "runtime"}`,
-      }),
-    })
-  }
-
-  logout() {
-    return this.request<void>("/auth/logout", {
-      method: "POST",
-      body: "{}",
-    })
   }
 
   getMe(): Promise<AuthMeResponse> {
@@ -724,6 +676,10 @@ class ApiClient {
       }
 
       xhr.open("POST", `${API_BASE}/workspaces/${workspaceId}/files`)
+      // Expo-web relies on the browser session cookie (no Bearer header there).
+      if (Platform.OS === "web") {
+        xhr.withCredentials = true
+      }
       headers.forEach((value, key) => {
         xhr.setRequestHeader(key, value)
       })
@@ -790,30 +746,6 @@ class ApiClient {
       }
 
       xhr.send(formData)
-    })
-  }
-
-  resolveQrLogin(token: string): Promise<AuthQrLoginResolveResponse> {
-    return this.request<AuthQrLoginResolveResponse>("/auth/qr-login/resolve", {
-      method: "POST",
-      body: JSON.stringify({ token }),
-    })
-  }
-
-  approveQrLogin(
-    token: string,
-    sessionPersistence: AuthSessionPersistence
-  ): Promise<AuthQrLoginStatusResponse> {
-    return this.request<AuthQrLoginStatusResponse>("/auth/qr-login/approve", {
-      method: "POST",
-      body: JSON.stringify({ token, sessionPersistence }),
-    })
-  }
-
-  rejectQrLogin(token: string): Promise<AuthQrLoginStatusResponse> {
-    return this.request<AuthQrLoginStatusResponse>("/auth/qr-login/reject", {
-      method: "POST",
-      body: JSON.stringify({ token }),
     })
   }
 }
