@@ -461,16 +461,16 @@ test(
   }
 )
 
-// RF2: a standalone binding delete is rejected while the conversation still has
-// external participants (IM-only artifacts would be orphaned). The guard is a
-// DEFERRABLE constraint trigger, so we force it with SET CONSTRAINTS ALL
-// IMMEDIATE (it would otherwise only fire at COMMIT, which the test tx never
-// reaches).
+// RF2 (soft-delete cutover): conversation_transport_bindings is a persistent
+// child — a naked hard delete is now forbidden by sd_reject_delete (the old
+// tg_binding_delete_guard orphan-protection is subsumed; the binding is never
+// hard-deleted in production). IM-artifact teardown happens by soft-deleting the
+// conversation, not by deleting the binding row.
 test(
-  "standalone binding delete is rejected while external participants remain",
+  "standalone binding delete is rejected (soft-delete: hard delete forbidden)",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db, client }) => {
+    await withTestDbAndClient(async ({ db }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const conversationId = await insertConversation(db, workspaceId)
@@ -479,24 +479,22 @@ test(
       const addrA = await insertAddress(db, workspaceId, accountA)
       await addExternalParticipant(conversationId, addrA, db)
 
-      await db
-        .deleteFrom("conversation_transport_bindings")
-        .where("conversation_id", "=", conversationId)
-        .execute()
-
       await assert.rejects(
-        client.query("SET CONSTRAINTS ALL IMMEDIATE"),
-        /cannot be deleted while/
+        db
+          .deleteFrom("conversation_transport_bindings")
+          .where("conversation_id", "=", conversationId)
+          .execute(),
+        /hard delete of conversation_transport_bindings is forbidden/
       )
     })
   }
 )
 
-// RF2: deleting the conversation cascades to binding + participants + addresses
-// within one transaction; the deferred delete guard sees the conversation gone
-// and allows it.
+// RF2 (soft-delete cutover): conversations are soft-deleted, never hard-deleted.
+// A hard delete is rejected; soft delete flips deleted_at and the conversation
+// disappears from conversations_live while child rows are preserved for audit.
 test(
-  "deleting the conversation cascades through the binding (deferred guard allows it)",
+  "conversation hard delete is rejected; soft delete hides it from _live",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db, client }) => {
@@ -508,21 +506,40 @@ test(
       const addrA = await insertAddress(db, workspaceId, accountA)
       await addExternalParticipant(conversationId, addrA, db)
 
+      // Wrap the rejected delete in a savepoint so its abort doesn't poison the
+      // outer test transaction.
+      await client.query("SAVEPOINT sd_probe")
+      await assert.rejects(
+        db
+          .deleteFrom("conversations")
+          .where("id", "=", conversationId)
+          .execute(),
+        /hard delete of conversations is forbidden/
+      )
+      await client.query("ROLLBACK TO SAVEPOINT sd_probe")
+
       await db
-        .deleteFrom("conversations")
+        .updateTable("conversations")
+        .set({ deleted_at: new Date() })
         .where("id", "=", conversationId)
         .execute()
-
-      // Force the deferred binding-delete guard to run now: the conversation is
-      // gone, so it must allow the cascaded binding deletion (no throw).
-      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-
+      const live = await db
+        .selectFrom("conversations_live")
+        .select("id")
+        .where("id", "=", conversationId)
+        .executeTakeFirst()
+      assert.equal(
+        live,
+        undefined,
+        "soft-deleted conversation hidden from _live"
+      )
+      // binding row preserved (no cascade)
       const binding = await db
         .selectFrom("conversation_transport_bindings")
         .select("id")
         .where("conversation_id", "=", conversationId)
         .executeTakeFirst()
-      assert.equal(binding, undefined)
+      assert.ok(binding, "binding row preserved (no hard cascade)")
     })
   }
 )
@@ -576,15 +593,15 @@ test(
   }
 )
 
-// RR1: a conversation that has been referenced by a kind='conversation' access
-// subject (scope grant / memory subject) must still be deletable — the
-// composite FK access_subjects(conversation_id, workspace_id) -> conversations
-// is ON DELETE CASCADE, not NO ACTION.
+// RR1 (soft-delete cutover): a conversation referenced by a kind='conversation'
+// access subject is soft-deleted, not hard-deleted. The subject row is an
+// immutable identity-registry entry and is PRESERVED (no cascade) so historical
+// scope grants / memory subjects keep resolving.
 test(
-  "conversation with a conversation-subject is still deletable (FK cascade)",
+  "conversation with a conversation-subject: hard delete rejected, subject preserved on soft delete",
   { timeout: 5 * 60_000 },
   async () => {
-    await withTestDbAndClient(async ({ db }) => {
+    await withTestDbAndClient(async ({ db, client }) => {
       const userId = await insertUser(db)
       const workspaceId = await insertWorkspace(db, userId)
       const conversationId = await insertConversation(db, workspaceId)
@@ -597,18 +614,29 @@ test(
       })
       assert.ok(subjectId)
 
-      // Deleting the conversation must succeed and cascade to its subject row.
+      // Hard delete is forbidden (savepoint so the abort doesn't poison the tx).
+      await client.query("SAVEPOINT sd_probe")
+      await assert.rejects(
+        db
+          .deleteFrom("conversations")
+          .where("id", "=", conversationId)
+          .execute(),
+        /hard delete of conversations is forbidden/
+      )
+      await client.query("ROLLBACK TO SAVEPOINT sd_probe")
+
+      // Soft delete succeeds; the subject row is preserved (immutable registry).
       await db
-        .deleteFrom("conversations")
+        .updateTable("conversations")
+        .set({ deleted_at: new Date() })
         .where("id", "=", conversationId)
         .execute()
-
       const subj = await db
         .selectFrom("access_subjects")
         .select("id")
         .where("id", "=", subjectId)
         .executeTakeFirst()
-      assert.equal(subj, undefined)
+      assert.ok(subj, "conversation subject preserved (no cascade)")
     })
   }
 )

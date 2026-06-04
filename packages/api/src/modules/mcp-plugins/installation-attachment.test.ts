@@ -224,7 +224,7 @@ test(
 )
 
 test(
-  "plugin_installations.attachment_subject_id FK cascades on access_subjects delete",
+  "soft-delete: member hard delete forbidden; access_subjects + plugin_installation preserved",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -242,19 +242,40 @@ test(
         catalogItemId: catalog.itemId,
         catalogVersionId: catalog.versionId,
       })
-      // Deleting the member cascades to access_subjects (subject.workspace_member_id
-      // has ON DELETE CASCADE), which in turn cascades to plugin_installations
-      // (deferred FK ON DELETE CASCADE).
+      // Soft-delete world (design §0/§5/§7): there is NO DB cascade. Hard-deleting
+      // the member is forbidden by sd_reject_delete; the member is status-flipped,
+      // its access_subjects row is preserved (immutable registry), and the
+      // plugin_installation row survives (no cascade) — it is soft-deleted by the
+      // uninstall path, not removed by member deletion.
+      await sql`SAVEPOINT sd_probe`.execute(db)
+      await assert.rejects(
+        db.deleteFrom("workspace_members").where("id", "=", memberId).execute(),
+        /hard delete of workspace_members is forbidden/
+      )
+      await sql`ROLLBACK TO SAVEPOINT sd_probe`.execute(db)
+
       await db
-        .deleteFrom("workspace_members")
+        .updateTable("workspace_members")
+        .set({ status: "removed", removed_at: new Date() })
         .where("id", "=", memberId)
         .execute()
+
+      const subj = await db
+        .selectFrom("access_subjects")
+        .select("id")
+        .where("id", "=", subjectId)
+        .execute()
+      assert.equal(subj.length, 1, "access_subjects row preserved")
       const remaining = await db
         .selectFrom("plugin_installations")
         .select("id")
         .where("id", "=", installationId)
         .execute()
-      assert.equal(remaining.length, 0)
+      assert.equal(
+        remaining.length,
+        1,
+        "plugin_installation preserved (no cascade)"
+      )
     })
   }
 )
