@@ -29,6 +29,7 @@
     "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
   },
   "dependencies": {
+    "@better-auth/core": "1.6.13",
     "@better-auth/expo": "1.6.13",
     "@dicebear/collection": "^9.4.2",
     "@dicebear/core": "^9.4.2",
