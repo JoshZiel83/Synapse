@@ -158,11 +158,10 @@ topology lives in this repo.
 
 ```bash
 # Optional LLM smoke — drives an Anthropic-compatible endpoint.
-# Configure with LLM_SMOKE_BASE_URL + LLM_SMOKE_API_KEY (preferred, test-scoped).
-# AI_BASE_URL + AI_API_KEY are still accepted as a LEGACY fallback for this
-# smoke test only — the app itself no longer reads any AI_* env vars to pick a
-# model (models come from configured model groups). The test skips cleanly if
-# neither pair is set. Optional LLM_SMOKE_MODEL overrides the model.
+# Configure with LLM_SMOKE_BASE_URL + LLM_SMOKE_API_KEY (test-scoped). The app
+# no longer reads any AI_* env vars to pick a model (models come from configured
+# model groups), so this smoke test no longer falls back to AI_*. The test skips
+# cleanly if the pair is not set. Optional LLM_SMOKE_MODEL overrides the model.
 # Any proxy requirement should be handled at the environment level via
 # HTTPS_PROXY / HTTP_PROXY — the test is unaware of any specific topology.
 LLM_SMOKE_BASE_URL=https://example.invalid/ai-gateway \

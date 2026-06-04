@@ -16,12 +16,10 @@
 // parse). The canonical content blocks pipeline is exhaustively covered
 // by the other integration tests.
 //
-// Configure via either pair:
-//   LLM_SMOKE_BASE_URL + LLM_SMOKE_API_KEY  (preferred — test-scoped)
-//   AI_BASE_URL        + AI_API_KEY         (LEGACY fallback for THIS test
-//                                            only — the app itself no longer
-//                                            reads any AI_* env to pick a model;
-//                                            models come from model groups)
+// Configure via the test-scoped pair:
+//   LLM_SMOKE_BASE_URL + LLM_SMOKE_API_KEY
+// (The app no longer reads any AI_* env to pick a model — models come from
+// configured model groups — so this test no longer falls back to AI_*.)
 // Optional: LLM_SMOKE_MODEL (default: claude-haiku-4-5-20251001).
 //
 // If the deployment requires a proxy or tunnel to reach the endpoint,
@@ -36,23 +34,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-const BASE_URL = (
-  process.env.LLM_SMOKE_BASE_URL ||
-  process.env.AI_BASE_URL ||
-  ""
-).trim()
-const KEY = (
-  process.env.LLM_SMOKE_API_KEY ||
-  process.env.AI_API_KEY ||
-  ""
-).trim()
+const BASE_URL = (process.env.LLM_SMOKE_BASE_URL || "").trim()
+const KEY = (process.env.LLM_SMOKE_API_KEY || "").trim()
 const MODEL = process.env.LLM_SMOKE_MODEL || "claude-haiku-4-5-20251001"
 
 test("LLM smoke: configured base URL responds with a non-empty assistant message", async (t) => {
   if (!BASE_URL || !KEY) {
-    t.skip(
-      "LLM_SMOKE_BASE_URL / LLM_SMOKE_API_KEY (or AI_BASE_URL / AI_API_KEY) not set; skipping LLM smoke"
-    )
+    t.skip("LLM_SMOKE_BASE_URL / LLM_SMOKE_API_KEY not set; skipping LLM smoke")
     return
   }
 
