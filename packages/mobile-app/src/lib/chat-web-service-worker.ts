@@ -1,4 +1,4 @@
-import { API_BASE } from "@/lib/config"
+import { getApiBase } from "@/lib/config"
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
   CHAT_WEB_SERVICE_WORKER_FILENAME,
@@ -94,7 +94,7 @@ function bindLifecycle(registration: ServiceWorkerRegistration) {
       payload: {
         token: authContext.token,
         workspaceId: authContext.workspaceId,
-        apiBase: API_BASE,
+        apiBase: getApiBase(),
       },
     }).then(() => registerOneOffSync())
   })
@@ -238,7 +238,7 @@ export async function syncChatServiceWorkerAuthContext(input: {
     payload: {
       token: input.token,
       workspaceId: input.workspaceId,
-      apiBase: API_BASE,
+      apiBase: getApiBase(),
     },
   })
 

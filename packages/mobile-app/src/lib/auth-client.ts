@@ -7,7 +7,7 @@ import {
 import * as SecureStore from "expo-secure-store"
 import { Platform } from "react-native"
 
-import { AUTH_ORIGIN } from "@/lib/config"
+import { getAuthBaseURLForClient } from "@/lib/config"
 
 /**
  * Platform-aware synchronous storage for the Expo cookie-jar.
@@ -37,23 +37,40 @@ const authStorage =
           SecureStore.setItem(key, value),
       }
 
-export const authClient = createAuthClient({
-  // Public origin Better Auth is mounted on; basePath rides the same /api/v1
-  // path the rest of the app uses (the BA client default is /api/auth).
-  baseURL: AUTH_ORIGIN,
-  basePath: "/api/v1/auth",
-  plugins: [
-    expoClient({
-      scheme: "synapse",
-      storagePrefix: "synapse",
-      storage: authStorage,
-    }),
-    genericOAuthClient(),
-    deviceAuthorizationClient(),
-  ],
-})
+// Lazily constructed so this module can be imported during Expo web static
+// prerender (and with any env) without running createAuthClient at load. The
+// factory wrapper preserves the plugin-derived action types (signIn.oauth2,
+// device, ...) that a bare `ReturnType<typeof createAuthClient>` would lose.
+function createConfiguredAuthClient() {
+  return createAuthClient({
+    // Public origin Better Auth is mounted on; basePath rides the same /api/v1
+    // path the rest of the app uses (the BA client default is /api/auth).
+    // Resolved lazily: an absolute origin when configured, or undefined so BA
+    // self-derives at construction without throwing (never a relative string).
+    baseURL: getAuthBaseURLForClient(),
+    basePath: "/api/v1/auth",
+    plugins: [
+      expoClient({
+        scheme: "synapse",
+        storagePrefix: "synapse",
+        storage: authStorage,
+      }),
+      genericOAuthClient(),
+      deviceAuthorizationClient(),
+    ],
+  })
+}
 
-export const { signIn, signUp, signOut, useSession, getCookie } = authClient
+type AuthClient = ReturnType<typeof createConfiguredAuthClient>
+
+let cachedAuthClient: AuthClient | undefined
+
+export function getAuthClient(): AuthClient {
+  if (!cachedAuthClient) {
+    cachedAuthClient = createConfiguredAuthClient()
+  }
+  return cachedAuthClient
+}
 
 /**
  * Extract the single Better Auth session-cookie VALUE from the cookie-jar's
@@ -67,7 +84,7 @@ export const { signIn, signUp, signOut, useSession, getCookie } = authClient
  * cookie store) or when no session cookie is present.
  */
 export function getSessionBearerToken(): string | null {
-  const header = getCookie()
+  const header = getAuthClient().getCookie()
   if (!header) return null
   for (const part of header.split(";")) {
     const eq = part.indexOf("=")

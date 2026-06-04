@@ -11,8 +11,9 @@ import {
   ScreenScroll,
   SectionHeader,
 } from "@/components/ui"
-import { authClient } from "@/lib/auth-client"
+import { getAuthClient } from "@/lib/auth-client"
 import { getAuthErrorMessage } from "@/lib/auth-errors"
+import { assertAuthConfigured } from "@/lib/config"
 import { useSession } from "@/providers/session-provider"
 import { theme } from "@/theme/tokens"
 
@@ -44,7 +45,8 @@ export default function QrLoginScreen() {
     // subsequent approve is bound to the right user.
     async function claim() {
       try {
-        const { error: claimError } = await authClient.device({
+        assertAuthConfigured()
+        const { error: claimError } = await getAuthClient().device({
           query: { user_code: userCode as string },
         })
         if (cancelled) return
@@ -73,7 +75,8 @@ export default function QrLoginScreen() {
     setAction("approve")
     setError(null)
     try {
-      const { error: approveError } = await authClient.device.approve({
+      assertAuthConfigured()
+      const { error: approveError } = await getAuthClient().device.approve({
         userCode,
       })
       if (approveError) {
@@ -93,7 +96,10 @@ export default function QrLoginScreen() {
     setAction("deny")
     setError(null)
     try {
-      const { error: denyError } = await authClient.device.deny({ userCode })
+      assertAuthConfigured()
+      const { error: denyError } = await getAuthClient().device.deny({
+        userCode,
+      })
       if (denyError) {
         setError(getErrorMessage(denyError))
       } else {

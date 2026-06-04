@@ -15,7 +15,8 @@ import {
   setApiAuthToken,
   setApiUnauthorizedHandler,
 } from "@/lib/api"
-import { authClient, getSessionBearerToken } from "@/lib/auth-client"
+import { getAuthClient, getSessionBearerToken } from "@/lib/auth-client"
+import { assertAuthConfigured, hasValidAuthNetworkConfig } from "@/lib/config"
 import { createChatPersistence } from "@/lib/chat-persistence"
 import { SESSION_TOKEN_KEY } from "@/lib/storage-keys"
 import {
@@ -156,7 +157,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [clearSession])
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { data, error } = await authClient.signIn.email({ email, password })
+    assertAuthConfigured()
+    const { data, error } = await getAuthClient().signIn.email({
+      email,
+      password,
+    })
     if (error) {
       throw new ApiError(
         error.message ?? "Sign in failed",
@@ -175,7 +180,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const signUp = useCallback(
     async (name: string, email: string, password: string) => {
-      const { data, error } = await authClient.signUp.email({
+      assertAuthConfigured()
+      const { data, error } = await getAuthClient().signUp.email({
         name,
         email,
         password,
@@ -197,10 +203,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   )
 
   const signOut = useCallback(async () => {
-    try {
-      await authClient.signOut()
-    } catch {
-      // Ignore sign out transport issues and clear the local token anyway.
+    // Best-effort remote sign-out only when the config is complete and valid;
+    // otherwise skip the network call (a missing/malformed base URL would make
+    // better-auth fall back to the wrong endpoint) and just clear local state.
+    if (hasValidAuthNetworkConfig()) {
+      try {
+        await getAuthClient().signOut()
+      } catch {
+        // Ignore sign out transport issues and clear the local token anyway.
+      }
     }
 
     await clearSession()

@@ -6,8 +6,9 @@ import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import { EmailField } from "@/components/email-field"
 import { Button, Field, ScreenScroll } from "@/components/ui"
-import { authClient } from "@/lib/auth-client"
+import { getAuthClient } from "@/lib/auth-client"
 import { getAuthErrorMessage } from "@/lib/auth-errors"
+import { assertAuthConfigured } from "@/lib/config"
 import { useSession } from "@/providers/session-provider"
 import { theme } from "@/theme/tokens"
 import { APP_NAME } from "@shared"
@@ -53,10 +54,14 @@ export default function LoginScreen() {
     setSubmitting(true)
     setError(null)
     try {
+      // Fail loud before opening the browser: an unset/malformed API or
+      // AUTH_ORIGIN must surface as a config error here, not silently redirect
+      // through better-auth's fallback origin.
+      assertAuthConfigured()
       // Native: opens the system browser and returns via the app scheme deep
       // link. callbackURL MUST start with "/" so @better-auth/expo rewrites it
       // to the app scheme (otherwise BA falls back to the public web URL).
-      const { error: oauthError } = await authClient.signIn.oauth2({
+      const { error: oauthError } = await getAuthClient().signIn.oauth2({
         providerId: "feishu",
         callbackURL: "/",
       })

@@ -25,7 +25,7 @@ import type {
 } from "@shared"
 import { Platform } from "react-native"
 
-import { API_BASE, resolveApiUrl } from "@/lib/config"
+import { getApiBase, resolveApiUrl } from "@/lib/config"
 import type {
   ActorAccessRequestListResponse,
   ActorListResponse,
@@ -163,7 +163,7 @@ class ApiClient {
       )
     }
 
-    const response = await fetch(`${API_BASE}${path}`, {
+    const response = await fetch(`${getApiBase()}${path}`, {
       ...options,
       headers,
       // On the Expo-web target the cookie-jar is empty (no Bearer header), so
@@ -675,7 +675,7 @@ class ApiClient {
         resolve(value)
       }
 
-      xhr.open("POST", `${API_BASE}/workspaces/${workspaceId}/files`)
+      xhr.open("POST", `${getApiBase()}/workspaces/${workspaceId}/files`)
       // Expo-web relies on the browser session cookie (no Bearer header there).
       if (Platform.OS === "web") {
         xhr.withCredentials = true

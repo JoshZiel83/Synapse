@@ -14,7 +14,7 @@ import {
   SectionTitleRow,
 } from "@/components/ui"
 import { api } from "@/lib/api"
-import { API_BASE } from "@/lib/config"
+import { getApiBaseForDisplay } from "@/lib/config"
 import { useSession } from "@/providers/session-provider"
 import { useWorkspace } from "@/providers/workspace-provider"
 import { theme } from "@/theme/tokens"
@@ -284,7 +284,7 @@ export default function MeTabScreen() {
             onPress={() => void signOut()}
           />
         </View>
-        <Text style={styles.connectionHint}>API：{API_BASE}</Text>
+        <Text style={styles.connectionHint}>API：{getApiBaseForDisplay()}</Text>
       </SectionBlock>
     </ScreenScroll>
   )
