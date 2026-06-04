@@ -402,6 +402,26 @@ export const auth = betterAuth({
       },
     },
     session: {
+      create: {
+        before: async (session: Record<string, unknown>) => {
+          // Soft delete (design §8.4): block minting a session for a soft-deleted
+          // user. Covers ALL session-creation paths (sign-in, OAuth callback, and
+          // crucially the device-authorization flow, which resolves the user via
+          // findUserById — which does NOT filter deleted_at — then createSession).
+          const userId = session.userId as string | undefined
+          if (!userId) return undefined
+          const live = await db
+            .selectFrom("users")
+            .select("id")
+            .where("id", "=", userId)
+            .where("deleted_at", "is", null)
+            .executeTakeFirst()
+          if (!live) {
+            throw new Error("Cannot create a session for a deleted user")
+          }
+          return undefined
+        },
+      },
       delete: {
         after: async (session: { id: string }) => {
           // Disconnect any live WebSockets bound to a revoked session. Fires for
@@ -416,6 +436,23 @@ export const auth = betterAuth({
               "Failed to disconnect sockets after session delete (non-fatal)"
             )
           }
+        },
+      },
+    },
+    // Soft delete (design §8.2): `account` is a soft-delete root, NOT a BA
+    // direct-delete table. Better Auth's internal deleteAccount/deleteAccounts
+    // (unlinkAccount, deleteUser) physically remove account rows. Block them at
+    // the hook: account removal must go through the app's markUserDeleted
+    // orchestration (anonymize + soft-delete in one transaction), never a naked
+    // physical delete. Returning false aborts the delete (fail-closed). The DB
+    // reject-delete trigger on `account` is the backstop.
+    account: {
+      delete: {
+        before: async () => {
+          // Always refuse BA-driven account deletion. This is fail-closed only —
+          // it does NOT perform the soft-delete (deleteManyWithHooks short-
+          // circuits on the first false), which markUserDeleted handles.
+          return false
         },
       },
     },

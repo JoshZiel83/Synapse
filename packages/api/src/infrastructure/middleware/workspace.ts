@@ -21,6 +21,8 @@ export async function workspaceMiddleware(
     .select(["id", "workspace_id", "user_id", "trust_level"])
     .where("workspace_id", "=", workspaceId)
     .where("user_id", "=", user.userId)
+    // Soft delete (design §8.4): a left/removed member must lose workspace access.
+    .where("status", "=", "active")
     .executeTakeFirst()
 
   ;(request as any).workspaceMember = member ?? null
