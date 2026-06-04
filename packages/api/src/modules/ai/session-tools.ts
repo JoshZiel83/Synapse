@@ -2299,8 +2299,10 @@ export function registerCallableToolPlugins(): void {
         throwToolError(`Task "${task.id}" does not support cancellation.`)
       }
 
-      // Device-runtime v3: device_mcp executor was deleted along with the relay
-      // subsystem; only human-interaction tasks reach the cancel path now.
+      // Only human-interaction tasks (runtime_authorization, interaction_user_input,
+      // plan_approval) are created with supportsCancel: true, so past the guard above
+      // the task is necessarily one of those. device_mcp tasks never set supportsCancel
+      // and are rejected by the guard before reaching here.
       const updated = await cancelHumanInteractionTask(task, reason)
       const current = await loadSessionTaskOrThrow(context.sessionId, task.id)
       const interaction =

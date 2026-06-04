@@ -792,7 +792,7 @@ async function listManageablePluginInstallationIds(
   return rows.map((row) => row.id)
 }
 
-async function listManageableRelayCapabilityIds(
+async function listManageableCapabilityIds(
   db: KyselyDb,
   subject: PermissionSubject,
   limit?: number
@@ -819,7 +819,7 @@ async function listManageableRelayCapabilityIds(
     .where("capability.status", "=", "active")
     .orderBy("capability.updated_at", "desc")
 
-  if (!workspacePermissionFromAccess(access, "manage_relays")) {
+  if (!workspacePermissionFromAccess(access, "manage_devices")) {
     query = query.where("device.owner_workspace_member_id", "=", access.id)
   }
 
@@ -929,7 +929,7 @@ async function hasPluginInstallationPermission(
   return canManage
 }
 
-async function hasRelayDevicePermission(
+async function hasDevicePermission(
   db: KyselyDb,
   subject: PermissionSubject,
   deviceId: string,
@@ -962,7 +962,7 @@ async function hasRelayDevicePermission(
   }
 
   const canManage =
-    workspacePermissionFromAccess(access, "manage_relays") ||
+    workspacePermissionFromAccess(access, "manage_devices") ||
     row.owner_workspace_member_id === access.id
 
   switch (permission) {
@@ -976,7 +976,7 @@ async function hasRelayDevicePermission(
   }
 }
 
-async function hasRelayExposurePermission(
+async function hasExposurePermission(
   db: KyselyDb,
   subject: PermissionSubject,
   exposureId: string,
@@ -992,7 +992,7 @@ async function hasRelayExposurePermission(
   if (!row?.device_id) {
     return false
   }
-  return hasRelayDevicePermission(
+  return hasDevicePermission(
     db,
     subject,
     row.device_id,
@@ -1000,7 +1000,7 @@ async function hasRelayExposurePermission(
   )
 }
 
-async function hasRelayCapabilityPermission(
+async function hasCapabilityPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   capabilityId: string,
@@ -1058,7 +1058,7 @@ async function hasRelayCapabilityPermission(
   }
 
   const canManage =
-    workspacePermissionFromAccess(access, "manage_relays") ||
+    workspacePermissionFromAccess(access, "manage_devices") ||
     row.owner_workspace_member_id === access.id
 
   if (
@@ -1911,21 +1911,21 @@ export async function checkPermission(
         params.runtimeSubjectIds
       )
     case "device":
-      return hasRelayDevicePermission(
+      return hasDevicePermission(
         db,
         params.subject,
         params.resourceId,
         params.permission
       )
     case "device_exposure":
-      return hasRelayExposurePermission(
+      return hasExposurePermission(
         db,
         params.subject,
         params.resourceId,
         params.permission
       )
     case "device_capability":
-      return hasRelayCapabilityPermission(
+      return hasCapabilityPermission(
         db,
         params.subject,
         params.resourceId,
@@ -2063,7 +2063,7 @@ export async function lookupResources(
                 params.runtimeScopeSubjectIds,
                 params.runtimeSubjectIds
               ),
-              await listManageableRelayCapabilityIds(
+              await listManageableCapabilityIds(
                 db,
                 params.subject,
                 params.limit

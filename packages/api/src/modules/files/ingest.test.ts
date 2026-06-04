@@ -1,8 +1,7 @@
 // Unit tests for the unified tool-output ingest funnel.
 //
 // Storage is dependency-injected via IngestContext.storage so these tests
-// don't touch disk/DB. End-to-end binary persistence is covered by the
-// integration test at packages/api/tests/integration/ingest-via-relay.test.ts.
+// don't touch disk/DB.
 import test from "node:test"
 import assert from "node:assert/strict"
 

@@ -5,7 +5,7 @@
  * declared text/file_ref/mention zod schemas locally and built the
  * discriminated union inline. The S5 plan called for
  * CanonicalContentBlockSchema in @synapse/shared so any future consumer
- * (relay-imported messages, ingest CLI, etc.) validates against the
+ * (IM-imported messages, ingest CLI, etc.) validates against the
  * exact same shape the chat HTTP API enforces. This guard ensures the
  * canonical schema stays in shared and the API controller doesn't drift
  * back to re-declaring it.
