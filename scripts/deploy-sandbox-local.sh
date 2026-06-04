@@ -51,9 +51,11 @@ done
 assert_shell_flag SYNAPSE_SANDBOX_ENABLED true
 assert_shell_flag SYNAPSE_SANDBOX_BACKEND local
 
-# Capture how the API is running BEFORE we touch anything, so a failed deploy can
-# roll it back to its real pre-deploy form (absent | base | docker | local).
-PREDEPLOY_API_FORM="$(predeploy_api_form)"
+# Snapshot how api + tunnel-edge exist BEFORE we touch anything, so a failed
+# deploy can restore each to its exact pre-deploy state (absent / stopped /
+# running, and the api's override form).
+PREDEPLOY_API_SNAPSHOT="$(predeploy_api_snapshot)"
+PREDEPLOY_TUNNEL_SNAPSHOT="$(predeploy_tunnel_snapshot)"
 
 # Back up .env to a path GUARANTEED outside the repo, so the secret-bearing copy
 # can never enter a docker build context. We don't trust $TMPDIR (a caller could
@@ -68,9 +70,10 @@ case "$(realpath "$ENV_BACKUP")" in
 esac
 cp -p "$ENV_FILE" "$ENV_BACKUP"
 
-# Track whether we (re)started the API this run, so a FINAL bring-up failure can
-# roll the running container back to its pre-deploy form. Set to 1 before API up.
+# Track which services we (re)started this run, so a FINAL bring-up failure rolls
+# each back to its pre-deploy snapshot. Set to 1 right before each `up`.
 API_STARTED=0
+TUNNEL_STARTED=0
 SUCCESS=0
 cleanup() {
   if [ "$SUCCESS" -ne 1 ]; then
@@ -78,13 +81,16 @@ cleanup() {
       cp -p "$ENV_BACKUP" "$ENV_FILE"
       log "deploy failed — restored the original .env (sandbox flags reverted)."
     fi
+    # Roll api FIRST (depends on nothing), then tunnel-edge. Each restores its
+    # exact pre-deploy snapshot; rollback_* unset managed vars so compose honors
+    # the restored .env, not a shell flag we accepted for THIS deploy.
     if [ "$API_STARTED" -eq 1 ]; then
-      # Bring the API back to the form it had before this run (matches the
-      # restored .env): re-up in the captured form, or remove it if it didn't
-      # exist pre-deploy. rollback_api unsets all managed vars so compose honors
-      # the restored .env, not a shell flag we accepted for THIS deploy.
-      rollback_api "$PREDEPLOY_API_FORM" \
+      rollback_api "$PREDEPLOY_API_SNAPSHOT" \
         || log "WARNING: could not auto-roll-back the API container — check 'docker compose ps' and re-run with the restored .env."
+    fi
+    if [ "$TUNNEL_STARTED" -eq 1 ]; then
+      rollback_tunnel "$PREDEPLOY_TUNNEL_SNAPSHOT" \
+        || log "WARNING: could not auto-roll-back tunnel-edge — check 'docker compose ps'."
     fi
   fi
   rm -f "$ENV_BACKUP"
@@ -128,6 +134,7 @@ bash "$SCRIPT_DIR/sandbox-local-smoke.sh"
 #    is flagged so the cleanup trap can roll it back on a bring-up failure.
 log "starting tunnel-edge..."
 "${COMPOSE[@]}" build tunnel-edge
+TUNNEL_STARTED=1
 "${COMPOSE[@]}" up -d tunnel-edge
 log "starting api with the local override (SYS_ADMIN/NET_ADMIN)..."
 API_STARTED=1

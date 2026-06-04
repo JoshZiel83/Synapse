@@ -31,24 +31,28 @@ assert_shell_secret() {
   fi
 }
 
-# ── pre-deploy form capture + form-aware rollback ─────────────────────────────
-# The running API's compose "form" (which override files were layered) is
-# independent of .env's backend. On a failed deploy we must restore the form the
-# API had BEFORE this run — not blindly drop to base — else the running container
-# won't match the restored .env (a pre-existing docker deploy would lose its
-# socket, a pre-existing local deploy its caps). And if the API did NOT exist
-# before this run, rolling back must REMOVE the one we created, not start a new
-# base API. So we capture four states: absent | base | docker | local.
+# ── pre-deploy snapshot + state-aware rollback ────────────────────────────────
+# A failed deploy must restore each touched service to EXACTLY its pre-deploy
+# state — not just "running in the right form". Three axes matter:
+#   - existence:  absent vs present (rollback of an absent svc = remove it);
+#   - run state:  a present container may be running OR deliberately stopped
+#                 (docker inspect succeeds either way) — rolling a stopped svc
+#                 back up would wrongly start it;
+#   - api form:   which override was layered (docker.sock / SYS_ADMIN / base),
+#                 since that's independent of .env and must match the restored .env.
+# We snapshot a compact string per service and replay it on failure with all
+# managed vars UNSET (so compose honors the restored .env, not a shell flag we
+# accepted because it equalled THIS deploy's target).
 
-# Echo how `synapse-api` exists RIGHT NOW (call before the deploy mutates it):
-#   absent  — no such container
-#   docker  — running with the host docker.sock mounted (docker-backend override)
-#   local   — running with SYS_ADMIN (containerized-local override)
-#   base    — running with neither (plain compose)
-predeploy_api_form() {
-  local exists sock caps
-  exists="$(docker inspect synapse-api --format '1' 2>/dev/null || true)"
-  [ -n "$exists" ] || { printf 'absent'; return; }
+# api snapshot:  "absent" | "stopped:<form>" | "running:<form>"  (form ∈ base|docker|local)
+# tunnel-edge:   "absent" | "stopped"        | "running"          (overrides don't touch it)
+
+_container_running() { # name → "true"/"false"/"" (absent)
+  docker inspect "$1" --format '{{.State.Running}}' 2>/dev/null || true
+}
+
+_api_form() { # base | docker | local (assumes the container exists)
+  local sock caps
   sock="$(docker inspect synapse-api \
     --format '{{range .Mounts}}{{if eq .Destination "/var/run/docker.sock"}}1{{end}}{{end}}' 2>/dev/null || true)"
   caps="$(docker inspect synapse-api \
@@ -58,7 +62,20 @@ predeploy_api_form() {
   else printf 'base'; fi
 }
 
-# The docker-compose `-f ...` args for a captured form (empty for base/absent).
+predeploy_api_snapshot() {
+  local running; running="$(_container_running synapse-api)"
+  [ -n "$running" ] || { printf 'absent'; return; }
+  if [ "$running" = "true" ]; then printf 'running:%s' "$(_api_form)"
+  else printf 'stopped:%s' "$(_api_form)"; fi
+}
+
+predeploy_tunnel_snapshot() {
+  local running; running="$(_container_running synapse-tunnel-edge)"
+  [ -n "$running" ] || { printf 'absent'; return; }
+  [ "$running" = "true" ] && printf 'running' || printf 'stopped'
+}
+
+# The docker-compose `-f ...` args for a captured api form (empty for base/absent).
 compose_args_for_form() {
   case "$1" in
     docker) printf '%s' "-f docker-compose.yml -f docker-compose.sandbox-docker.yml" ;;
@@ -67,26 +84,48 @@ compose_args_for_form() {
   esac
 }
 
-# Roll the API back to its pre-deploy form, run with ALL managed vars UNSET so
-# compose honors the restored .env (not a shell flag we accepted because it
-# equalled THIS deploy's target — which is the opposite of the rollback target).
-# `absent` → stop+remove the API we created this run; otherwise re-up in the
-# captured form. Best-effort; the caller logs a warning on failure.
-rollback_api() {
-  local form="$1" args
-  if [ "$form" = "absent" ]; then
-    log "rolling back: the API did not exist before this run — removing the one just created."
-    env -u SYNAPSE_SANDBOX_ENABLED -u SYNAPSE_SANDBOX_BACKEND -u SYNAPSE_SANDBOX_TUNNEL \
-        -u SYNAPSE_SANDBOX_SERVER_ORIGIN \
-      docker compose --profile production rm -sf api >/dev/null 2>&1 \
-      || return 1
-    return 0
-  fi
-  args="$(compose_args_for_form "$form")"
-  log "rolling the running API back to its pre-deploy form (${form})..."
-  # shellcheck disable=SC2086
+# Run docker compose with all managed sandbox vars UNSET (so the restored .env
+# wins over any shell flag). Usage: _compose_clean <-f args...> -- <compose args...>
+_compose_clean() {
   env -u SYNAPSE_SANDBOX_ENABLED -u SYNAPSE_SANDBOX_BACKEND -u SYNAPSE_SANDBOX_TUNNEL \
       -u SYNAPSE_SANDBOX_SERVER_ORIGIN \
-    docker compose $args --profile production up -d api >/dev/null 2>&1
+    docker compose "$@" >/dev/null 2>&1
+}
+
+# Restore synapse-api to a snapshot ("absent" | "stopped:<form>" | "running:<form>").
+rollback_api() {
+  local snap="$1" form
+  case "$snap" in
+    absent)
+      log "rolling back: the API did not exist before this run — removing the one just created."
+      _compose_clean --profile production rm -sf api ;;
+    stopped:*)
+      form="${snap#stopped:}"
+      log "rolling back: the API was stopped before this run — restoring it (form ${form}) then stopping."
+      # Recreate in the right form so its config matches the restored .env, then
+      # stop it again so we don't leave a service running that was down before.
+      # shellcheck disable=SC2086
+      _compose_clean $(compose_args_for_form "$form") --profile production up -d --no-start api \
+        && _compose_clean --profile production stop api ;;
+    running:*)
+      form="${snap#running:}"
+      log "rolling the running API back to its pre-deploy form (${form})..."
+      # shellcheck disable=SC2086
+      _compose_clean $(compose_args_for_form "$form") --profile production up -d api ;;
+    *) return 1 ;;
+  esac
+}
+
+# Restore synapse-tunnel-edge to a snapshot ("absent" | "stopped" | "running").
+# Overrides don't change tunnel-edge, so base compose args suffice.
+rollback_tunnel() {
+  case "$1" in
+    absent)  log "rolling back: tunnel-edge did not exist before this run — removing it."
+             _compose_clean --profile production rm -sf tunnel-edge ;;
+    stopped) log "rolling back: tunnel-edge was stopped before this run — stopping it again."
+             _compose_clean --profile production stop tunnel-edge ;;
+    running) : ;;  # was already running; leave it.
+    *) return 1 ;;
+  esac
 }
 
