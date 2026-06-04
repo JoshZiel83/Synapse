@@ -101,6 +101,10 @@ services:
       FRP_SHARED_TOKEN: ${FRP_SHARED_TOKEN:-}
     ports:
       - "127.0.0.1:3001:3001"
+    extra_hosts:
+      # Lets the API reach an AI base URL served on the host (configured via
+      # AI_BASE_URL in .env, e.g. http://host.docker.internal:<port>).
+      - "host.docker.internal:host-gateway"
     volumes:
       - api_storage:/app/storage
       # NOTE: the docker SandboxBackend (DooD) needs the host docker socket, but
