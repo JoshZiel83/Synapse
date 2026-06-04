@@ -35,6 +35,8 @@ COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.sandbox-local.ym
 log() { echo "[deploy-sandbox-local] $*" >&2; }
 die() { echo "[deploy-sandbox-local] ERROR: $*" >&2; exit 1; }
 trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+# shellcheck source=lib-sandbox-deploy.sh
+. "$SCRIPT_DIR/lib-sandbox-deploy.sh"
 
 # 1. Baseline .env fail-fast.
 [ -f "$ENV_FILE" ] || die ".env not found — run ./setup.sh first."
@@ -43,20 +45,15 @@ for required in POSTGRES_PASSWORD REDIS_PASSWORD APP_BASE_URL BASE_URL; do
   [ -n "$val" ] || die "$required missing/empty in .env — run ./setup.sh first (it generates the deploy baseline)."
 done
 
-# 2. Reject conflicting shell env. Compose interpolates ${VAR} from the shell
-#    first, then .env — so a shell export of a managed flag would override what we
-#    write to .env and make the running container disagree with our logs. Demand
-#    the shell value (if set) match what we're about to deploy.
-assert_shell_flag() {
-  local name="$1" want="$2" cur
-  cur="$(trim "$(printenv "$name" 2>/dev/null || true)")"
-  [ -z "$cur" ] || [ "$cur" = "$want" ] || \
-    die "shell env $name='$cur' would override .env (compose precedence); unset it or set it to '$want' before deploying."
-}
+# 2. Reject conflicting shell env (raw-exact — a set-empty shell var makes compose
+#    use the default, ignoring .env). A shell loopback origin is fine for local
+#    (the override sets it anyway), so origin is left unconstrained here.
 assert_shell_flag SYNAPSE_SANDBOX_ENABLED true
 assert_shell_flag SYNAPSE_SANDBOX_BACKEND local
-# A shell loopback origin is fine for local (the override sets it anyway); only a
-# non-loopback custom value would be surprising. Leave it unconstrained here.
+
+# Capture how the API is running BEFORE we touch anything, so a failed deploy can
+# roll it back to its real pre-deploy form (not blindly to base compose).
+PREDEPLOY_API_ARGS="$(predeploy_api_compose_args)"
 
 # Back up .env to a path GUARANTEED outside the repo, so the secret-bearing copy
 # can never enter a docker build context. We don't trust $TMPDIR (a caller could
@@ -72,8 +69,7 @@ esac
 cp -p "$ENV_FILE" "$ENV_BACKUP"
 
 # Track whether we (re)started the API this run, so a FINAL bring-up failure can
-# roll the running container back to the restored .env instead of leaving it
-# half-switched (local + privileged). Set to 1 right before the API `up`.
+# roll the running container back to its pre-deploy form. Set to 1 before API up.
 API_STARTED=0
 SUCCESS=0
 cleanup() {
@@ -83,11 +79,12 @@ cleanup() {
       log "deploy failed — restored the original .env (sandbox flags reverted)."
     fi
     if [ "$API_STARTED" -eq 1 ]; then
-      # The API may be running with the local override (SYS_ADMIN/NET_ADMIN). Bring
-      # it back up from the BASE compose only (no override) so it matches the
-      # restored .env — i.e. drop the privileged caps. Best-effort.
-      log "rolling the running API back to the pre-deploy config (base compose, no override)..."
-      docker compose --profile production up -d api >/dev/null 2>&1 \
+      # Bring the API back to the form it had before this run (matches the
+      # restored .env): the captured pre-deploy override args, or base compose if
+      # it was running plain. Best-effort.
+      log "rolling the running API back to its pre-deploy form (${PREDEPLOY_API_ARGS:-base compose})..."
+      # shellcheck disable=SC2086
+      docker compose $PREDEPLOY_API_ARGS --profile production up -d api >/dev/null 2>&1 \
         || log "WARNING: could not auto-roll-back the API container — check 'docker compose ps' and re-run with the restored .env."
     fi
   fi
@@ -98,23 +95,11 @@ trap cleanup EXIT
 # 3. Ensure sandbox secrets (signing key + frp token).
 bash "$SCRIPT_DIR/ensure-sandbox-secrets.sh"
 
-# 3b. Reject empty/conflicting shell secrets. FRP_SHARED_TOKEN and
-#     SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY are also ${...:-} in compose (shell wins
-#     over .env), so a stray `FRP_SHARED_TOKEN=` in the shell would blank the
-#     secret even though .env has it. Demand any set shell value be non-empty AND
-#     match what we just ensured in .env.
-assert_shell_matches_env() {
-  local name="$1" shellval envval
-  # Distinguish "unset" from "set-but-empty": only guard when the var is present.
-  if [ -n "${!name+x}" ]; then
-    shellval="$(trim "${!name}")"
-    envval="$(trim "$(sed -n "s/^$name=//p" "$ENV_FILE" | tail -n 1)")"
-    [ -n "$shellval" ] || die "shell env $name is set but EMPTY; compose would use the empty value over .env. Unset it before deploying."
-    [ "$shellval" = "$envval" ] || die "shell env $name differs from .env; compose would use the shell value. Unset it (or align it) before deploying."
-  fi
-}
-assert_shell_matches_env FRP_SHARED_TOKEN
-assert_shell_matches_env SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY
+# 3b. Reject empty/conflicting shell secrets (raw-exact: tunnel-edge gets the
+#     token verbatim while the API trims it, so a padded shell token breaks frp
+#     auth; a set-empty one blanks the secret via the compose default).
+assert_shell_secret FRP_SHARED_TOKEN
+assert_shell_secret SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY
 
 # 4. Switch ONLY the mode flags (idempotent in-place upsert). Deliberately NOT
 #    SYNAPSE_SANDBOX_SERVER_ORIGIN — that loopback lives in the override only.
