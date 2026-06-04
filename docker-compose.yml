@@ -257,10 +257,16 @@ services:
   # network (only the API container reaches them). See
   # docs/device-runtime-v3.md §4.4 / §7.3.
   tunnel-edge:
-    image: snowdreamtech/frp:0.65.0
+    # Built locally from the official frp release tarball (see
+    # infrastructure/Dockerfile.frps) instead of the Docker Hub
+    # snowdreamtech/frp image, which is not reliably pullable in all networks.
+    image: synapse-tunnel-edge:0.65.0
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.frps
     container_name: synapse-tunnel-edge
     restart: unless-stopped
-    command: ["frps", "-c", "/etc/frp/frps.toml"]
+    # The image ENTRYPOINT already runs `frps -c /etc/frp/frps.toml`.
     environment:
       # frps.toml renders auth.token from {{ .Envs.FRP_SHARED_TOKEN }}.
       FRP_SHARED_TOKEN: ${FRP_SHARED_TOKEN:-}

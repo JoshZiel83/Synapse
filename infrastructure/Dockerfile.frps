@@ -1,0 +1,27 @@
+# Reverse-tunnel edge (frps) built from the OFFICIAL frp release tarball.
+#
+# Replaces the Docker Hub `snowdreamtech/frp` image, which is not always
+# pullable (mirror 403s / Hub auth in some networks). frp is a single static Go
+# binary, so we fetch the same upstream release the cloud-sandbox image trusts
+# for `frpc` (packages/device-runtime/docker/Dockerfile) and extract `frps`.
+# Keep FRP_VERSION in sync with frpc there + frps.toml's expected schema.
+
+FROM debian:bookworm-slim
+ARG FRP_VERSION=0.65.0
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && curl -fSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz" \
+       -o /tmp/frp.tgz \
+  && tar -xzf /tmp/frp.tgz -C /tmp \
+  && mv "/tmp/frp_${FRP_VERSION}_linux_amd64/frps" /usr/local/bin/frps \
+  && chmod +x /usr/local/bin/frps \
+  && rm -rf /tmp/frp.tgz "/tmp/frp_${FRP_VERSION}_linux_amd64" \
+  && apt-get purge -y curl \
+  && apt-get autoremove -y \
+  && rm -rf /var/lib/apt/lists/*
+
+# frps renders its config via frp's OWN Go-template engine ({{ .Envs.* }}), so
+# FRP_SHARED_TOKEN must be present in the environment at runtime (the compose
+# service injects it). Config is bind-mounted at /etc/frp/frps.toml.
+ENTRYPOINT ["frps"]
+CMD ["-c", "/etc/frp/frps.toml"]
