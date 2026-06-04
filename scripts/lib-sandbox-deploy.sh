@@ -117,14 +117,22 @@ rollback_api() {
 }
 
 # Restore synapse-tunnel-edge to a snapshot ("absent" | "stopped" | "running").
-# Overrides don't change tunnel-edge, so base compose args suffice.
+# Overrides don't change tunnel-edge, so base compose args suffice. Note `up -d`
+# RECREATES a container whose image/config changed (stop old → start new), so a
+# mid-`up` failure can leave a previously-running tunnel-edge DOWN — hence the
+# `running` branch must re-assert `up` (idempotent), not no-op.
 rollback_tunnel() {
   case "$1" in
     absent)  log "rolling back: tunnel-edge did not exist before this run — removing it."
              _compose_clean --profile production rm -sf tunnel-edge ;;
-    stopped) log "rolling back: tunnel-edge was stopped before this run — stopping it again."
-             _compose_clean --profile production stop tunnel-edge ;;
-    running) : ;;  # was already running; leave it.
+    stopped) log "rolling back: tunnel-edge was stopped before this run — restoring it stopped."
+             # Mirror the API stopped path: ensure the container exists in the
+             # compose-defined config, then ensure it is stopped (not left running
+             # by a partial up).
+             _compose_clean --profile production up -d --no-start tunnel-edge \
+               && _compose_clean --profile production stop tunnel-edge ;;
+    running) log "rolling back: re-asserting tunnel-edge running (a failed up may have replaced/stopped it)..."
+             _compose_clean --profile production up -d tunnel-edge ;;
     *) return 1 ;;
   esac
 }
