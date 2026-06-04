@@ -6,6 +6,7 @@ import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "./subject-registry.js"
 import {
   buildRuntimePrincipalContext,
+  buildRuntimePrincipalContextOn,
   isSubjectActiveConversationParticipant,
 } from "./subject-resolution.js"
 
@@ -289,6 +290,93 @@ test(
           otherActorSubject
         ),
         false
+      )
+    })
+  }
+)
+
+/**
+ * 3b: buildRuntimePrincipalContextOn is the pg-form dual used by the approval
+ * flow — it runs against the SAME open transaction/connection as the caller so
+ * it must see writes made earlier on that handle, including ones not yet
+ * committed. This was previously untested (only the Kysely form had coverage).
+ * `withTestDb` already hands `db` to us as a transaction-scoped executor, so we
+ * pass it straight in as the `Executor` and assert:
+ *   1. a participant row INSERTed earlier on this handle is visible to the
+ *      builder (the conversation subject shows up); and
+ *   2. the result matches the Kysely-form builder on the same handle (parity —
+ *      proves the shared core behaves identically through both wrappers).
+ */
+test(
+  "buildRuntimePrincipalContextOn: sees a participant written earlier on the same transaction handle",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const wsId = await newWorkspace(db)
+      const actorId = await newActor(db, wsId)
+      const convId = await newConversation(db, wsId)
+      const convSubject = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: convId,
+      })
+      await addActorParticipant(db, convId, actorId)
+
+      // `db` here is the test's open transaction handle — exactly the kind of
+      // Executor the approval flow passes. The participant INSERT above lives
+      // on the same handle and is uncommitted; the On builder must still see it.
+      const onCtx = await buildRuntimePrincipalContextOn(db, {
+        principal: actorRef(actorId),
+        workspaceId: wsId,
+        conversationId: convId,
+      })
+      assert.ok(
+        onCtx.runtimeSubjectIds.includes(convSubject),
+        "participant written on the same handle should make the conversation subject visible"
+      )
+      assert.equal(onCtx.activeConversationSubjectId, convSubject)
+
+      // Parity with the Kysely form on the same handle.
+      const kyselyCtx = await buildRuntimePrincipalContext(db, {
+        principal: actorRef(actorId),
+        workspaceId: wsId,
+        conversationId: convId,
+      })
+      assert.equal(kyselyCtx.activeConversationSubjectId, convSubject)
+      assert.deepEqual(
+        [...onCtx.runtimeSubjectIds].sort(),
+        [...kyselyCtx.runtimeSubjectIds].sort()
+      )
+      assert.deepEqual(
+        [...onCtx.runtimeScopeSubjectIds].sort(),
+        [...kyselyCtx.runtimeScopeSubjectIds].sort()
+      )
+    })
+  }
+)
+
+/**
+ * 3b: the `...On` form must enforce the SAME cross-workspace delegation guard
+ * as the Kysely form (a member from another workspace is rejected). Confirms
+ * the collapse onto buildRuntimePrincipalContextCore did not drop the invariant
+ * on the pg-form path.
+ */
+test(
+  "buildRuntimePrincipalContextOn: cross-workspace delegated member is rejected",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const wsA = await newWorkspace(db)
+      const wsB = await newWorkspace(db)
+      const memberInB = await newWorkspaceMember(db, wsB)
+      const actorInA = await newActor(db, wsA)
+
+      await assert.rejects(
+        buildRuntimePrincipalContextOn(db, {
+          principal: actorRef(actorInA),
+          workspaceId: wsA,
+          delegatedWorkspaceMemberId: memberInB,
+        }),
+        /belongs to workspace.*not/
       )
     })
   }

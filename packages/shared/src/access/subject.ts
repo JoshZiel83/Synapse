@@ -11,6 +11,18 @@
 
 import { SUBJECT_KIND, type SubjectKind } from "./enums.js"
 
+/**
+ * Exhaustiveness helper. Calling `assertNever(x)` is a COMPILE error unless
+ * `x` has been narrowed to `never` — i.e. every variant of a discriminated
+ * union has been handled in the preceding `switch`. When a new `SubjectKind`
+ * is added to `SubjectRef`, every eligibility predicate that routes its
+ * fall-through here stops compiling, forcing an explicit decision instead of
+ * silently defaulting to `false` (fail-closed-but-invisible).
+ */
+function assertNever(value: never): never {
+  throw new Error(`Unhandled subject kind: ${String(value)}`)
+}
+
 export type SubjectRef =
   | {
       readonly kind: typeof SUBJECT_KIND.WORKSPACE
@@ -263,16 +275,30 @@ export function parseSubjectKey(key: string): SubjectRef | null {
   }
 }
 
-export function dedupeSubjects(refs: readonly SubjectRef[]): SubjectRef[] {
+/**
+ * Generic stable de-duplication: keeps the first occurrence of each item by
+ * `keyFn(item)`, preserving order. Single source of the dedupe ALGORITHM so
+ * callers only supply a key function — `dedupeSubjects` (below) and the
+ * `PermissionSubject` de-dup in the access module both route through here
+ * instead of hand-rolling the same `Set<string>` loop twice.
+ */
+export function dedupeBy<T>(
+  items: readonly T[],
+  keyFn: (item: T) => string
+): T[] {
   const seen = new Set<string>()
-  const out: SubjectRef[] = []
-  for (const ref of refs) {
-    const key = subjectKey(ref)
+  const out: T[] = []
+  for (const item of items) {
+    const key = keyFn(item)
     if (seen.has(key)) continue
     seen.add(key)
-    out.push(ref)
+    out.push(item)
   }
   return out
+}
+
+export function dedupeSubjects(refs: readonly SubjectRef[]): SubjectRef[] {
+  return dedupeBy(refs, subjectKey)
 }
 
 // ---------- Scope eligibility (PR1 additive) ----------
@@ -286,10 +312,20 @@ export function dedupeSubjects(refs: readonly SubjectRef[]): SubjectRef[] {
  * table lands.
  */
 export function isScopeEligibleSubject(ref: SubjectRef): boolean {
-  return (
-    ref.kind === SUBJECT_KIND.WORKSPACE ||
-    ref.kind === SUBJECT_KIND.CONVERSATION
-  )
+  switch (ref.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+    case SUBJECT_KIND.CONVERSATION:
+      return true
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.PLATFORM:
+      return false
+    default:
+      return assertNever(ref)
+  }
 }
 
 /**
@@ -301,13 +337,20 @@ export function isScopeEligibleSubject(ref: SubjectRef): boolean {
  * Mirrors the `is_workspace_bound_subject_kind` SQL helper.
  */
 export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
-  return (
-    ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
-    ref.kind === SUBJECT_KIND.ACTOR ||
-    ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
-    ref.kind === SUBJECT_KIND.WORKSPACE ||
-    ref.kind === SUBJECT_KIND.CONVERSATION
-  )
+  switch (ref.kind) {
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
+    case SUBJECT_KIND.WORKSPACE:
+    case SUBJECT_KIND.CONVERSATION:
+      return true
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.PLATFORM:
+      return false
+    default:
+      return assertNever(ref)
+  }
 }
 
 /**
@@ -326,13 +369,20 @@ export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
  * `owner = actor + scope = conversation`, not as a `user` owner.
  */
 export function isMemoryOwnerSubjectKind(ref: SubjectRef): boolean {
-  return (
-    ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
-    ref.kind === SUBJECT_KIND.ACTOR ||
-    ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
-    ref.kind === SUBJECT_KIND.WORKSPACE ||
-    ref.kind === SUBJECT_KIND.CONVERSATION
-  )
+  switch (ref.kind) {
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
+    case SUBJECT_KIND.WORKSPACE:
+    case SUBJECT_KIND.CONVERSATION:
+      return true
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.PLATFORM:
+      return false
+    default:
+      return assertNever(ref)
+  }
 }
 
 // ---------- Scoped target types (PR1 additive — not replacing legacy yet) ----------

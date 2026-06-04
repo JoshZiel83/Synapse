@@ -527,6 +527,87 @@ test(
   }
 )
 
+// 3d hardening: the bindable "manage-or-grant" resources (installed_skill /
+// plugin_installation / device_capability) historically returned `canManage`
+// for ANY permission string — i.e. an unknown/typo'd permission was fail-OPEN
+// to workspace managers and the resource creator. resolveBindableResourceAccess
+// now gates on an explicit manageablePermissions whitelist, so an unknown
+// permission denies even for the owner/creator, matching the `default: return
+// false` arms of the actor/remote_agent/device helpers. device_capability
+// shares the identical code path, so these skill/plugin cases cover its logic.
+test(
+  "checkPermission(installed_skill, <unknown permission>) is fail-closed even for the owner/creator",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, ownerMemberId } = await seedOwnerMemberAndGuest(db)
+      const skillId = await insertInstalledSkill(db, workspaceId, ownerMemberId)
+      // Sanity: the owner DOES have a known permission (proves the principal
+      // is otherwise privileged, so the denial below is about the permission).
+      assert.equal(
+        await checkPermission(db, {
+          resourceType: "installed_skill",
+          resourceId: skillId,
+          permission: "edit",
+          subject: { type: "workspace_member", id: ownerMemberId },
+        }),
+        true
+      )
+      for (const permission of ["frobnicate", "", "USE", "delete_all"]) {
+        const denied = await checkPermission(db, {
+          resourceType: "installed_skill",
+          resourceId: skillId,
+          permission,
+          subject: { type: "workspace_member", id: ownerMemberId },
+        })
+        assert.equal(
+          denied,
+          false,
+          `unknown installed_skill permission "${permission}" must fail-closed`
+        )
+      }
+    })
+  }
+)
+
+test(
+  "checkPermission(plugin_installation, <unknown permission>) is fail-closed even for the owner/creator",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, ownerMemberId } = await seedOwnerMemberAndGuest(db)
+      const skillId = await insertInstalledSkill(db, workspaceId, ownerMemberId)
+      const installationId = await insertPluginInstallation(db, {
+        workspaceId,
+        installedByMemberId: ownerMemberId,
+        attachmentTargetSkillId: skillId,
+      })
+      assert.equal(
+        await checkPermission(db, {
+          resourceType: "plugin_installation",
+          resourceId: installationId,
+          permission: "delete",
+          subject: { type: "workspace_member", id: ownerMemberId },
+        }),
+        true
+      )
+      for (const permission of ["frobnicate", "", "USE", "manage"]) {
+        const denied = await checkPermission(db, {
+          resourceType: "plugin_installation",
+          resourceId: installationId,
+          permission,
+          subject: { type: "workspace_member", id: ownerMemberId },
+        })
+        assert.equal(
+          denied,
+          false,
+          `unknown plugin_installation permission "${permission}" must fail-closed`
+        )
+      }
+    })
+  }
+)
+
 test(
   "checkPermission(automation_event_source.*) is denied without a binding (and the route falls through to default false)",
   { timeout: 5 * 60_000 },
