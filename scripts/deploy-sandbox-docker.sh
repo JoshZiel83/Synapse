@@ -51,8 +51,8 @@ assert_shell_flag SYNAPSE_SANDBOX_BACKEND docker
 assert_shell_flag SYNAPSE_SANDBOX_TUNNEL frp
 
 # Capture how the API is running BEFORE we touch anything, so a failed deploy can
-# roll it back to its real pre-deploy form (not blindly to base compose).
-PREDEPLOY_API_ARGS="$(predeploy_api_compose_args)"
+# roll it back to its real pre-deploy form (absent | base | docker | local).
+PREDEPLOY_API_FORM="$(predeploy_api_form)"
 
 # Back up .env to a path GUARANTEED outside the repo (don't trust $TMPDIR — a
 # caller could point it inside the tree, leaking the secret-bearing copy into a
@@ -78,10 +78,10 @@ cleanup() {
     fi
     if [ "$API_STARTED" -eq 1 ]; then
       # Bring the API back to the form it had before this run (matches the
-      # restored .env): the captured pre-deploy override args, or base if plain.
-      log "rolling the running API back to its pre-deploy form (${PREDEPLOY_API_ARGS:-base compose})..."
-      # shellcheck disable=SC2086
-      docker compose $PREDEPLOY_API_ARGS --profile production up -d api >/dev/null 2>&1 \
+      # restored .env): re-up in the captured form, or remove it if it didn't
+      # exist pre-deploy. rollback_api unsets all managed vars so compose honors
+      # the restored .env, not a shell flag we accepted for THIS deploy.
+      rollback_api "$PREDEPLOY_API_FORM" \
         || log "WARNING: could not auto-roll-back the API container — check 'docker compose ps' and re-run with the restored .env."
     fi
   fi

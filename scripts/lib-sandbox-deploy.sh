@@ -35,24 +35,58 @@ assert_shell_secret() {
 # The running API's compose "form" (which override files were layered) is
 # independent of .env's backend. On a failed deploy we must restore the form the
 # API had BEFORE this run — not blindly drop to base — else the running container
-# won't match the restored .env (e.g. a pre-existing docker deploy would lose its
-# socket, a pre-existing local deploy its caps). We infer the form by inspecting
-# the live container and emit the matching `-f` args.
+# won't match the restored .env (a pre-existing docker deploy would lose its
+# socket, a pre-existing local deploy its caps). And if the API did NOT exist
+# before this run, rolling back must REMOVE the one we created, not start a new
+# base API. So we capture four states: absent | base | docker | local.
 
-# Echo the docker-compose `-f ...` args matching how `synapse-api` is CURRENTLY
-# running: docker.sock mounted → the docker override; SYS_ADMIN cap → the local
-# override; neither → base only. Empty output = base compose. If the API isn't
-# running, also empty (nothing to match).
-predeploy_api_compose_args() {
-  local sock caps
+# Echo how `synapse-api` exists RIGHT NOW (call before the deploy mutates it):
+#   absent  — no such container
+#   docker  — running with the host docker.sock mounted (docker-backend override)
+#   local   — running with SYS_ADMIN (containerized-local override)
+#   base    — running with neither (plain compose)
+predeploy_api_form() {
+  local exists sock caps
+  exists="$(docker inspect synapse-api --format '1' 2>/dev/null || true)"
+  [ -n "$exists" ] || { printf 'absent'; return; }
   sock="$(docker inspect synapse-api \
     --format '{{range .Mounts}}{{if eq .Destination "/var/run/docker.sock"}}1{{end}}{{end}}' 2>/dev/null || true)"
   caps="$(docker inspect synapse-api \
     --format '{{range .HostConfig.CapAdd}}{{.}} {{end}}' 2>/dev/null || true)"
-  if [ -n "$sock" ]; then
-    printf '%s' "-f docker-compose.yml -f docker-compose.sandbox-docker.yml"
-  elif printf '%s' "$caps" | grep -qiE 'SYS_ADMIN'; then
-    printf '%s' "-f docker-compose.yml -f docker-compose.sandbox-local.yml"
-  fi
-  # else: base — print nothing.
+  if [ -n "$sock" ]; then printf 'docker'
+  elif printf '%s' "$caps" | grep -qiE 'SYS_ADMIN'; then printf 'local'
+  else printf 'base'; fi
 }
+
+# The docker-compose `-f ...` args for a captured form (empty for base/absent).
+compose_args_for_form() {
+  case "$1" in
+    docker) printf '%s' "-f docker-compose.yml -f docker-compose.sandbox-docker.yml" ;;
+    local)  printf '%s' "-f docker-compose.yml -f docker-compose.sandbox-local.yml" ;;
+    *)      : ;;  # base / absent → no override args
+  esac
+}
+
+# Roll the API back to its pre-deploy form, run with ALL managed vars UNSET so
+# compose honors the restored .env (not a shell flag we accepted because it
+# equalled THIS deploy's target — which is the opposite of the rollback target).
+# `absent` → stop+remove the API we created this run; otherwise re-up in the
+# captured form. Best-effort; the caller logs a warning on failure.
+rollback_api() {
+  local form="$1" args
+  if [ "$form" = "absent" ]; then
+    log "rolling back: the API did not exist before this run — removing the one just created."
+    env -u SYNAPSE_SANDBOX_ENABLED -u SYNAPSE_SANDBOX_BACKEND -u SYNAPSE_SANDBOX_TUNNEL \
+        -u SYNAPSE_SANDBOX_SERVER_ORIGIN \
+      docker compose --profile production rm -sf api >/dev/null 2>&1 \
+      || return 1
+    return 0
+  fi
+  args="$(compose_args_for_form "$form")"
+  log "rolling the running API back to its pre-deploy form (${form})..."
+  # shellcheck disable=SC2086
+  env -u SYNAPSE_SANDBOX_ENABLED -u SYNAPSE_SANDBOX_BACKEND -u SYNAPSE_SANDBOX_TUNNEL \
+      -u SYNAPSE_SANDBOX_SERVER_ORIGIN \
+    docker compose $args --profile production up -d api >/dev/null 2>&1
+}
+
