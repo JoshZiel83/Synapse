@@ -30,6 +30,10 @@
     "db:rebuild:runtime": "tsx src/infrastructure/database/rebuild.ts",
     "db:codegen": "node scripts/db-codegen.mjs",
     "db:codegen:verify": "npm run db:codegen -- --verify",
+    "db:purge:retention": "tsx src/infrastructure/database/purge.ts retention",
+    "db:purge:workspace": "tsx src/infrastructure/database/purge.ts workspace",
+    "gen:cutover-ddl": "node scripts/cutover-emit-ddl.mjs",
+    "gen:purge-ddl": "node scripts/cutover-emit-purge.mjs",
     "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
   },
   "dependencies": {

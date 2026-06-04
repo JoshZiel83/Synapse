@@ -385,3 +385,81 @@ test(
     })
   }
 )
+
+test(
+  "offline purge: sd_purge_workspace hard-erases a soft-deleted tenant",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      await insertMember(db, ws, u, "admin")
+      const actorId = await insertActor(db, ws)
+      // soft-delete the tenant first (normal flow), then offline hard-erase
+      await markWorkspaceDeleted(db, ws)
+      await sql`SELECT sd_purge_workspace(${ws}::uuid)`.execute(db)
+      const wsRows = await db
+        .selectFrom("workspaces")
+        .select("id")
+        .where("id", "=", ws)
+        .execute()
+      const actorRows = await db
+        .selectFrom("actors")
+        .select("id")
+        .where("id", "=", actorId)
+        .execute()
+      assert.equal(wsRows.length, 0, "workspace row physically gone")
+      assert.equal(actorRows.length, 0, "actor row physically gone")
+    })
+  }
+)
+
+test(
+  "offline purge: sd_purge_expired_soft_deleted removes old soft-deleted rows only",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const subj = await db
+        .insertInto("access_subjects")
+        .values({ kind: "workspace", workspace_id: ws })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      // one old soft-deleted, one live memory_space
+      await db
+        .insertInto("memory_spaces")
+        .values({
+          workspace_id: ws,
+          owner_subject_id: subj.id,
+          namespace_key: "old",
+          deleted_at: new Date(Date.now() - 100 * 864e5),
+        })
+        .execute()
+      await db
+        .insertInto("memory_spaces")
+        .values({
+          workspace_id: ws,
+          owner_subject_id: subj.id,
+          namespace_key: "live",
+        })
+        .execute()
+
+      await sql`SELECT sd_purge_expired_soft_deleted(${new Date(Date.now() - 30 * 864e5).toISOString()}::timestamptz)`.execute(
+        db
+      )
+
+      const rows = await db
+        .selectFrom("memory_spaces")
+        .select(["namespace_key"])
+        .where("workspace_id", "=", ws)
+        .execute()
+      const keys = rows.map((r) => r.namespace_key).sort()
+      assert.deepEqual(
+        keys,
+        ["live"],
+        "only the old soft-deleted row was purged"
+      )
+    })
+  }
+)
