@@ -7,14 +7,10 @@ import { Pressable, StyleSheet, Text, View } from "react-native"
 import { EmailField } from "@/components/email-field"
 import { Button, Field, ScreenScroll } from "@/components/ui"
 import { authClient } from "@/lib/auth-client"
+import { getAuthErrorMessage } from "@/lib/auth-errors"
 import { useSession } from "@/providers/session-provider"
 import { theme } from "@/theme/tokens"
 import { APP_NAME } from "@shared"
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message
-  return "登录失败，请检查邮箱和密码。"
-}
 
 export default function LoginScreen() {
   const router = useRouter()
@@ -43,7 +39,7 @@ export default function LoginScreen() {
       await signIn(email.trim(), password)
       router.replace("/")
     } catch (nextError) {
-      setError(getErrorMessage(nextError))
+      setError(getAuthErrorMessage(nextError))
     } finally {
       setSubmitting(false)
     }
@@ -65,13 +61,13 @@ export default function LoginScreen() {
         callbackURL: "/",
       })
       if (oauthError) {
-        setError(getErrorMessage(oauthError))
+        setError(getAuthErrorMessage(oauthError, "飞书登录失败，请稍后再试。"))
         return
       }
       await refreshSession()
       router.replace("/")
     } catch (nextError) {
-      setError(getErrorMessage(nextError))
+      setError(getAuthErrorMessage(nextError, "飞书登录失败，请稍后再试。"))
     } finally {
       setSubmitting(false)
     }

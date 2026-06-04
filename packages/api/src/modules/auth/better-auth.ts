@@ -231,12 +231,29 @@ export const auth = betterAuth({
       // The DB generates every id (DEFAULT uuid_generate_v4()); BA must not.
       generateId: false,
     },
+    // Behind nginx the socket peer is the proxy, not the user. Trust the
+    // X-Forwarded-For nginx already sets (infrastructure/nginx/*.conf.template)
+    // so rate-limit buckets key off the real client IP — otherwise every user
+    // shares one bucket and the sign-in limiter becomes a global fuse.
+    ipAddress: {
+      ipAddressHeaders: ["x-forwarded-for"],
+    },
     // Keep Better Auth's DEFAULT cookie name (better-auth.session_token, with an
     // automatic __Secure- prefix in production). We do NOT rename it: business
     // code never reads the cookie by name (it calls auth.api.getSession /
     // forwards headers), and @better-auth/expo's cookie-jar only persists
     // cookies whose name matches its prefix or ends in `session_token` — a
     // custom name would silently break native session capture.
+  },
+
+  // Throttle credential endpoints. Better Auth's built-in limiter only
+  // auto-enables in production; turn it on explicitly so dev/staging behave the
+  // same and the 429 path is testable. The default per-path rules already cap
+  // /sign-in & /sign-up at 3 requests / 10s. Storage defaults to in-memory,
+  // which is correct for the single api container; a multi-replica deploy would
+  // point this at Redis (infrastructure/redis) via secondaryStorage.
+  rateLimit: {
+    enabled: true,
   },
 
   session: {

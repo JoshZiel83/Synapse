@@ -6,7 +6,9 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { useForm, Controller } from "react-hook-form"
 import { standardSchemaResolver } from "@hookform/resolvers/standard-schema"
 import { z } from "zod"
+import { Loader2 } from "lucide-react"
 
+import { getAuthErrorMessage } from "@/lib/auth-errors"
 import { normalizeRedirectTarget } from "@/lib/auth"
 import { useAuthStore } from "@/stores/auth-store"
 import { AuthShell } from "@/components/auth-shell"
@@ -27,7 +29,9 @@ import {
   FieldLabel,
   FieldSeparator,
 } from "@/components/ui/field"
+import { EmailInput } from "@/components/ui/email-input"
 import { Input } from "@/components/ui/input"
+import { PasswordInput } from "@/components/ui/password-input"
 
 const signupSchema = z
   .object({
@@ -70,7 +74,7 @@ export function SignupForm() {
       await register(values.email, values.password, values.name)
       router.push(redirect ?? "/welcome")
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "Registration failed")
+      setSubmitError(getAuthErrorMessage(err))
     }
   })
 
@@ -106,6 +110,7 @@ export function SignupForm() {
                       type="text"
                       placeholder="Jane Doe"
                       autoComplete="name"
+                      autoFocus
                       aria-invalid={Boolean(errors.name) || undefined}
                     />
                   )}
@@ -122,10 +127,9 @@ export function SignupForm() {
                   control={control}
                   name="email"
                   render={({ field }) => (
-                    <Input
+                    <EmailInput
                       {...field}
                       id="email"
-                      type="email"
                       placeholder="you@example.com"
                       autoComplete="email"
                       aria-invalid={Boolean(errors.email) || undefined}
@@ -148,10 +152,9 @@ export function SignupForm() {
                       control={control}
                       name="password"
                       render={({ field }) => (
-                        <Input
+                        <PasswordInput
                           {...field}
                           id="password"
-                          type="password"
                           autoComplete="new-password"
                           aria-invalid={Boolean(errors.password) || undefined}
                         />
@@ -168,10 +171,9 @@ export function SignupForm() {
                       control={control}
                       name="confirmPassword"
                       render={({ field }) => (
-                        <Input
+                        <PasswordInput
                           {...field}
                           id="confirm-password"
-                          type="password"
                           autoComplete="new-password"
                           aria-invalid={
                             Boolean(errors.confirmPassword) || undefined
@@ -199,7 +201,14 @@ export function SignupForm() {
                   disabled={isSubmitting}
                   className="w-full"
                 >
-                  {isSubmitting ? "Creating account..." : "Create account"}
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" aria-hidden />
+                      Creating account...
+                    </>
+                  ) : (
+                    "Create account"
+                  )}
                 </Button>
               </Field>
               <FieldDescription className="text-center">

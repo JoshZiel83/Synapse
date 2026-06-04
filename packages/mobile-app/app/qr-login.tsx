@@ -12,12 +12,12 @@ import {
   SectionHeader,
 } from "@/components/ui"
 import { authClient } from "@/lib/auth-client"
+import { getAuthErrorMessage } from "@/lib/auth-errors"
 import { useSession } from "@/providers/session-provider"
 import { theme } from "@/theme/tokens"
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message
-  return "无法读取二维码登录请求。"
+  return getAuthErrorMessage(error, "无法读取二维码登录请求。")
 }
 
 type DeviceStatus = "claiming" | "pending" | "approved" | "denied" | "error"

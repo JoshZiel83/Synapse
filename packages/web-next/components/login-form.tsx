@@ -6,9 +6,10 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { useForm, Controller } from "react-hook-form"
 import { standardSchemaResolver } from "@hookform/resolvers/standard-schema"
 import { z } from "zod"
-import { Monitor, QrCode } from "lucide-react"
+import { Loader2, Monitor, QrCode } from "lucide-react"
 
 import { api } from "@/lib/api"
+import { getAuthErrorMessage } from "@/lib/auth-errors"
 import { normalizeRedirectTarget } from "@/lib/auth"
 import { useAuthStore } from "@/stores/auth-store"
 import { AuthShell } from "@/components/auth-shell"
@@ -30,7 +31,8 @@ import {
   FieldLabel,
   FieldSeparator,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { EmailInput } from "@/components/ui/email-input"
+import { PasswordInput } from "@/components/ui/password-input"
 import { WebQrLoginPanel } from "@/components/web-qr-login-panel"
 
 const loginSchema = z.object({
@@ -106,7 +108,7 @@ export function LoginForm() {
       const workspaces = result?.data ?? result ?? []
       router.push(workspaces.length === 0 ? "/welcome" : "/dashboard")
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "Login failed")
+      setSubmitError(getAuthErrorMessage(err))
     }
   })
 
@@ -145,12 +147,12 @@ export function LoginForm() {
                     control={control}
                     name="email"
                     render={({ field }) => (
-                      <Input
+                      <EmailInput
                         {...field}
                         id="email"
-                        type="email"
                         placeholder="you@example.com"
                         autoComplete="email"
+                        autoFocus
                         aria-invalid={Boolean(errors.email) || undefined}
                       />
                     )}
@@ -177,10 +179,9 @@ export function LoginForm() {
                     control={control}
                     name="password"
                     render={({ field }) => (
-                      <Input
+                      <PasswordInput
                         {...field}
                         id="password"
-                        type="password"
                         autoComplete="current-password"
                         aria-invalid={Boolean(errors.password) || undefined}
                       />
@@ -221,7 +222,14 @@ export function LoginForm() {
                     disabled={isSubmitting}
                     className="w-full"
                   >
-                    {isSubmitting ? "Signing in..." : "Sign in"}
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" aria-hidden />
+                        Signing in...
+                      </>
+                    ) : (
+                      "Sign in"
+                    )}
                   </Button>
                 </Field>
                 <FieldDescription className="text-center">

@@ -158,7 +158,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (email: string, password: string) => {
     const { data, error } = await authClient.signIn.email({ email, password })
     if (error) {
-      throw new ApiError(error.message ?? "Sign in failed", error.status ?? 401)
+      throw new ApiError(
+        error.message ?? "Sign in failed",
+        error.status ?? 401,
+        error.code
+      )
     }
     // Prefer the token from the response body; fall back to the expo cookie-jar.
     // This is the bearer token the REST/WS layers attach.
@@ -179,7 +183,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (error) {
         throw new ApiError(
           error.message ?? "Sign up failed",
-          error.status ?? 400
+          error.status ?? 400,
+          error.code
         )
       }
       const token = data?.token ?? getSessionBearerToken()

@@ -1,8 +1,10 @@
 "use client"
 
 import { useState } from "react"
+import { Loader2 } from "lucide-react"
 
 import { api } from "@/lib/api"
+import { getAuthErrorMessage } from "@/lib/auth-errors"
 import { FeishuIcon } from "@/components/brand-icons"
 import { Button } from "@/components/ui/button"
 
@@ -29,7 +31,7 @@ export function FeishuSignInButton({
       window.location.href = url
     } catch (err) {
       setIsRedirecting(false)
-      onError(err instanceof Error ? err.message : "Feishu sign-in failed")
+      onError(getAuthErrorMessage(err))
     }
   }
 
@@ -41,7 +43,11 @@ export function FeishuSignInButton({
       onClick={handleClick}
       disabled={disabled || isRedirecting}
     >
-      <FeishuIcon className="size-4" />
+      {isRedirecting ? (
+        <Loader2 className="size-4 animate-spin" aria-hidden />
+      ) : (
+        <FeishuIcon className="size-4" />
+      )}
       Continue with Feishu
     </Button>
   )

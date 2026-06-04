@@ -6,14 +6,10 @@ import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import { Button, Field, ScreenScroll } from "@/components/ui"
 import { EmailField } from "@/components/email-field"
+import { getAuthErrorMessage } from "@/lib/auth-errors"
 import { useSession } from "@/providers/session-provider"
 import { theme } from "@/theme/tokens"
 import { APP_NAME } from "@shared"
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message
-  return "注册失败，请检查填写信息。"
-}
 
 export default function RegisterScreen() {
   const router = useRouter()
@@ -48,7 +44,7 @@ export default function RegisterScreen() {
       await signUp(name.trim(), email.trim(), password)
       router.replace("/")
     } catch (nextError) {
-      setError(getErrorMessage(nextError))
+      setError(getAuthErrorMessage(nextError, "注册失败，请检查填写信息。"))
     } finally {
       setSubmitting(false)
     }
