@@ -153,7 +153,7 @@ npm run dev:web
 
 如果你本机的 Docker 需要更高权限，请把上面的 `docker compose` 命令改成 `sudo docker compose`。
 
-如果希望让 Actor 和聊天真正调用模型，请先编辑根目录 `.env`，配置 `AI_PROVIDER`、`AI_API_KEY`、`AI_BASE_URL`、`AI_MODEL` 等参数。
+如果希望让 Actor 和聊天真正调用模型，请先配置至少一个 platform 模型组：把 `packages/api/config/model-groups.yaml.example` 复制为 `packages/api/config/model-groups.yaml`，在根目录 `.env` 中填好其中引用的 `${ENV}` 变量（如 `ANTHROPIC_API_KEY`），然后运行 `npm run db:rebuild`（会自动导入）或单独运行 `npm run db:seed:model-groups`。
 
 ### 可选：重建并写入演示数据
 

@@ -74,7 +74,7 @@ This creates `.env` and `packages/web-next/.env.local`. Do not commit either fil
 - `LETSENCRYPT_EMAIL`
 - `PUBLIC_NPM_REGISTRY_URL`
 
-Before using real AI or ASR flows, fill the relevant provider variables in `.env`, including `AI_PROVIDER`, `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, and the Volcengine ASR variables if ASR is required.
+Before using real AI flows, configure at least one platform model group: copy `packages/api/config/model-groups.yaml.example` to `packages/api/config/model-groups.yaml`, fill the referenced `${ENV}` variables (e.g. `ANTHROPIC_API_KEY`) in `.env`, and apply it via `db:rebuild` (which imports it automatically) or `npm run db:seed:model-groups`. For ASR, fill the Volcengine ASR variables in `.env` if ASR is required.
 
 ## 4. Build and Initialize
 

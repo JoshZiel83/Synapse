@@ -49,6 +49,7 @@
     "db:bootstrap": "npm run db:bootstrap -w packages/api",
     "db:codegen": "npm run db:codegen -w packages/api",
     "db:seed": "npm run db:seed -w packages/api",
+    "db:seed:model-groups": "npm run db:seed:model-groups -w packages/api",
     "db:rebuild": "npm run db:rebuild -w packages/api"
   },
   "overrides": {

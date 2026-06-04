@@ -102,11 +102,18 @@ services:
     ports:
       - "127.0.0.1:3001:3001"
     extra_hosts:
-      # Lets the API reach an AI base URL served on the host (configured via
-      # AI_BASE_URL in .env, e.g. http://host.docker.internal:<port>).
+      # Lets the API reach an AI base URL served on the host (set a model item's
+      # baseUrl in packages/api/config/model-groups.yaml to
+      # http://host.docker.internal:<port>).
       - "host.docker.internal:host-gateway"
     volumes:
       - api_storage:/app/storage
+      # Declarative model-groups config, mounted read-only so the importer
+      # (db:rebuild / db:seed:model-groups) reads the operator's real file at
+      # /app/packages/api/config/model-groups.yaml. The real .yaml is gitignored
+      # + dockerignored (kept out of the image); secrets stay in env_file via
+      # ${ENV} interpolation. Follows the verdaccio/frp/nginx config-mount idiom.
+      - ./packages/api/config:/app/packages/api/config:ro
       # NOTE: the docker SandboxBackend (DooD) needs the host docker socket, but
       # it is NOT mounted here — that would give EVERY production API container
       # host-root-equivalent access even though sandboxes default to

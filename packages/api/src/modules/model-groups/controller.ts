@@ -1,12 +1,6 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
-import {
-  MODEL_GROUP_GRANT_SCOPES,
-  MODEL_GROUP_ROUTING_STRATEGIES,
-  isKnownModelEngineKind,
-  isKnownModelProviderType,
-} from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
@@ -38,92 +32,14 @@ import {
   updateModelItem,
 } from "./service.js"
 
-const routingStrategyEnum = z.enum(MODEL_GROUP_ROUTING_STRATEGIES)
-const providerTypeSchema = z
-  .string()
-  .min(1)
-  .refine(isKnownModelProviderType, "Unknown provider type")
-const engineKindSchema = z
-  .string()
-  .min(1)
-  .refine(isKnownModelEngineKind, "Unknown engine kind")
-const grantScopeEnum = z.enum(MODEL_GROUP_GRANT_SCOPES)
-
-const attemptPolicySchema = z.looseObject({
-  maxAttemptsTotal: z.number().int().positive().optional(),
-  maxAttemptsPerBinding: z.number().int().positive().optional(),
-  timeoutMsPerAttempt: z.number().int().positive().optional(),
-  continueOn: z.array(z.string()).optional(),
-  stopOn: z.array(z.string()).optional(),
-  retryBackoffMs: z.array(z.number().int().min(0)).optional(),
-})
-
-const createGroupSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().optional(),
-  routingStrategy: routingStrategyEnum.optional(),
-  attemptPolicy: attemptPolicySchema.optional(),
-  isDefault: z.boolean().optional(),
-})
-
-const updateGroupSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  description: z.string().optional(),
-  routingStrategy: routingStrategyEnum.optional(),
-  attemptPolicy: attemptPolicySchema.optional(),
-  isDefault: z.boolean().optional(),
-  isActive: z.boolean().optional(),
-})
-
-const addItemSchema = z.object({
-  displayName: z.string().min(1).max(255),
-  priority: z.number().int().optional(),
-  weight: z.number().int().min(0).max(1000).optional(),
-  providerType: providerTypeSchema,
-  engineKind: engineKindSchema.optional(),
-  apiKey: z.string().min(1),
-  baseUrl: z.string().min(1),
-  modelName: z.string().min(1),
-  maxTokens: z.number().int().positive().optional(),
-  capabilityTags: z.array(z.string()).optional(),
-  extraConfig: z.record(z.string(), z.unknown()).optional(),
-  requestTimeoutMs: z.number().int().positive().optional(),
-  maxRetries: z.number().int().min(0).optional(),
-})
-
-const updateItemSchema = z.object({
-  displayName: z.string().min(1).max(255).optional(),
-  priority: z.number().int().optional(),
-  weight: z.number().int().min(0).max(1000).optional(),
-  isEnabled: z.boolean().optional(),
-  providerType: providerTypeSchema.optional(),
-  engineKind: engineKindSchema.optional(),
-  apiKey: z.string().min(1).optional(),
-  baseUrl: z.string().min(1).optional(),
-  modelName: z.string().min(1).optional(),
-  maxTokens: z.number().int().positive().optional(),
-  capabilityTags: z.array(z.string()).optional(),
-  extraConfig: z.record(z.string(), z.unknown()).optional(),
-  requestTimeoutMs: z.number().int().positive().optional(),
-  maxRetries: z.number().int().min(0).optional(),
-})
-
-const setActorGroupsSchema = z.object({
-  groups: z.array(
-    z.object({
-      groupId: z.uuid(),
-      priority: z.number().int(),
-    })
-  ),
-})
-
-const issueGrantSchema = z.object({
-  grantScope: grantScopeEnum,
-  workspaceId: z.uuid().optional(),
-  workspaceMemberId: z.uuid().optional(),
-  actorId: z.uuid().optional(),
-  reason: z.string().max(1000).optional(),
-})
+import {
+  addItemSchema,
+  createGroupSchema,
+  issueGrantSchema,
+  setActorGroupsSchema,
+  updateGroupSchema,
+  updateItemSchema,
+} from "./schemas.js"
 
 function handleError(error: unknown, reply: FastifyReply) {
   if (error instanceof ModelGroupError) {

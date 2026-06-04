@@ -22,6 +22,7 @@
     "db:bootstrap:runtime": "tsx src/infrastructure/database/bootstrap.ts",
     "db:seed": "tsx src/infrastructure/database/seed.ts",
     "db:seed:builtin-mcp": "tsx src/infrastructure/database/seed-builtin-mcp-plugins.ts",
+    "db:seed:model-groups": "tsx src/infrastructure/database/seed-model-groups/cli.ts",
     "db:rebuild": "tsx src/infrastructure/database/rebuild.ts && npm run db:codegen",
     "db:rebuild:runtime": "tsx src/infrastructure/database/rebuild.ts",
     "db:codegen": "node scripts/db-codegen.mjs",

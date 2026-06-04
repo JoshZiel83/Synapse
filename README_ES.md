@@ -153,7 +153,7 @@ Luego abre:
 
 Si tu entorno local de Docker requiere privilegios elevados, ejecuta `docker compose` con `sudo`.
 
-Para que los flujos de chat y los Actors usen modelos reales, edita `.env` y configura `AI_PROVIDER`, `AI_API_KEY`, `AI_BASE_URL` y `AI_MODEL`.
+Para que los flujos de chat y los Actors usen modelos reales, configura al menos un grupo de modelos de plataforma: copia `packages/api/config/model-groups.yaml.example` a `packages/api/config/model-groups.yaml`, completa las variables `${ENV}` referenciadas (p. ej. `ANTHROPIC_API_KEY`) en `.env` y aplícalo con `npm run db:rebuild` (que lo importa automáticamente) o `npm run db:seed:model-groups`.
 
 ### Opcional: reconstruir y sembrar un entorno de demo
 
