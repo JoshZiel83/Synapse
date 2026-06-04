@@ -308,13 +308,24 @@ class ApiClient {
   // Start a generic-OAuth (e.g. Feishu) sign-in. Better Auth returns a
   // redirect URL the browser should navigate to (disableRedirect lets us drive
   // the navigation ourselves rather than relying on the client redirect plugin).
+  // errorCallbackURL is where Better Auth redirects on failure (?error=...);
+  // pass it so popup/redirect flows land on a page we control instead of
+  // Better Auth's default ${baseURL}/error (which 404s here).
   async startOAuth(
     providerId: string,
-    callbackURL: string
+    callbackURL: string,
+    opts: { errorCallbackURL?: string } = {}
   ): Promise<{ url: string }> {
     const res = await this.fetch("/auth/sign-in/oauth2", {
       method: "POST",
-      body: JSON.stringify({ providerId, callbackURL, disableRedirect: true }),
+      body: JSON.stringify({
+        providerId,
+        callbackURL,
+        ...(opts.errorCallbackURL
+          ? { errorCallbackURL: opts.errorCallbackURL }
+          : {}),
+        disableRedirect: true,
+      }),
     })
     return { url: res.url }
   }

@@ -15,7 +15,11 @@ import {
   setApiAuthToken,
   setApiUnauthorizedHandler,
 } from "@/lib/api"
-import { getAuthClient, getSessionBearerToken } from "@/lib/auth-client"
+import {
+  clearExpoAuthJar,
+  getAuthClient,
+  getSessionBearerToken,
+} from "@/lib/auth-client"
 import { assertAuthConfigured, hasValidAuthNetworkConfig } from "@/lib/config"
 import { createChatPersistence } from "@/lib/chat-persistence"
 import { SESSION_TOKEN_KEY } from "@/lib/storage-keys"
@@ -39,6 +43,16 @@ interface SessionContextValue {
   signUp: (name: string, email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   refreshSession: () => Promise<void>
+  /**
+   * Strict session check for the OAuth return: resolves true ONLY when a token
+   * exists AND `getMe()` succeeds. No token, 401/403, or a network failure all
+   * resolve false (and do not mark the session authenticated). Distinct from
+   * `refreshSession`, which keeps an authenticated session through a network
+   * blip — the OAuth path must not treat "couldn't verify" as success.
+   */
+  verifyOAuthSession: () => Promise<boolean>
+  /** Wipe any local session before starting an OAuth attempt (see usage). */
+  clearLocalSessionForOAuth: () => Promise<void>
   updateProfile: (data: {
     name?: string
     avatarFileId?: string | null
@@ -149,6 +163,45 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     void refreshSession()
   }, [refreshSession])
 
+  // Wipe every local trace of a session before an OAuth attempt: our persisted
+  // token + provider state + query cache (via clearSession), plus the Better
+  // Auth expo cookie-jar / session cache. Otherwise a leftover session from a
+  // previous login could make verifyOAuthSession() succeed even after the user
+  // cancelled this OAuth flow.
+  const clearLocalSessionForOAuth = useCallback(async () => {
+    await clearSession()
+    clearExpoAuthJar()
+  }, [clearSession])
+
+  // Strict post-OAuth check (see SessionContextValue). Only a token + a
+  // successful getMe() counts as signed in; everything else is false and leaves
+  // the session unauthenticated.
+  const verifyOAuthSession = useCallback(async () => {
+    let token = await readStoredValue(SESSION_TOKEN_KEY)
+    if (!token) {
+      const jarToken = getSessionBearerToken()
+      if (jarToken) {
+        token = jarToken
+        await persistSessionToken(jarToken)
+      }
+    }
+    if (!token) {
+      applySession({ token: null }, setState)
+      return false
+    }
+
+    setApiAuthToken(token)
+    try {
+      const response = await api.getMe()
+      applySession({ token, response }, setState)
+      return true
+    } catch {
+      // Any failure (401/403, network, anything) is NOT a successful sign-in.
+      await clearSession()
+      return false
+    }
+  }, [clearSession])
+
   useEffect(() => {
     setApiUnauthorizedHandler(() => clearSession())
     return () => {
@@ -239,10 +292,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       refreshSession,
+      verifyOAuthSession,
+      clearLocalSessionForOAuth,
       updateProfile,
     }),
     [
       refreshSession,
+      verifyOAuthSession,
+      clearLocalSessionForOAuth,
       signIn,
       signOut,
       signUp,

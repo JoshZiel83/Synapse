@@ -216,6 +216,20 @@ export const auth = betterAuth({
     Boolean
   ),
 
+  // OAuth-error fallback (WEB), and the residual safety net. Most OAuth early
+  // errors (user cancelled / missing code / state-parse failure) are intercepted
+  // BEFORE this handler by the callback interceptor in ./index.ts
+  // (tryHandleOAuthCallbackError), which reads the stored state and routes the
+  // error to the right platform — a native deep link (synapse://) for an Expo
+  // sign-in, or this web page for a browser one. This errorURL still backs the
+  // cases the interceptor deliberately doesn't claim (no/forged/expired state):
+  // a web page is the safe default. Without it those would hit Better Auth's
+  // default `${baseURL}/error` (404 here). Relative to baseURL (the public web
+  // origin) → <web-origin>/auth/callback, which the web client reads (`?error=`).
+  onAPIError: {
+    errorURL: "/auth/callback",
+  },
+
   database: {
     // Reuse the app's existing pg pool via a Kysely PostgresDialect (exposed by
     // the database layer so the bare pool stays sealed there). type:"postgres"

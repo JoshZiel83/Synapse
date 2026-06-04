@@ -15,7 +15,7 @@ import { APP_NAME } from "@shared"
 
 export default function LoginScreen() {
   const router = useRouter()
-  const { signIn, refreshSession } = useSession()
+  const { signIn, verifyOAuthSession, clearLocalSessionForOAuth } = useSession()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [acceptedPolicy, setAcceptedPolicy] = useState(false)
@@ -58,18 +58,30 @@ export default function LoginScreen() {
       // AUTH_ORIGIN must surface as a config error here, not silently redirect
       // through better-auth's fallback origin.
       assertAuthConfigured()
+      // Clear any leftover local session first, so a stale token from a prior
+      // login can't make verifyOAuthSession() below report success after the
+      // user actually cancelled this flow.
+      await clearLocalSessionForOAuth()
       // Native: opens the system browser and returns via the app scheme deep
       // link. callbackURL MUST start with "/" so @better-auth/expo rewrites it
       // to the app scheme (otherwise BA falls back to the public web URL).
       const { error: oauthError } = await getAuthClient().signIn.oauth2({
         providerId: "feishu",
         callbackURL: "/",
+        errorCallbackURL: "/",
       })
       if (oauthError) {
         setError(getAuthErrorMessage(oauthError, "飞书登录失败，请稍后再试。"))
         return
       }
-      await refreshSession()
+      // A deep-link return that carries no session cookie (cancel / early
+      // error) still resolves the auth session as "success", so confirm a real
+      // session exists before navigating.
+      const ok = await verifyOAuthSession()
+      if (!ok) {
+        setError("飞书登录失败，请稍后再试。")
+        return
+      }
       router.replace("/")
     } catch (nextError) {
       setError(getAuthErrorMessage(nextError, "飞书登录失败，请稍后再试。"))

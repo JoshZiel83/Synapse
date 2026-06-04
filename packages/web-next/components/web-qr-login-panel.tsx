@@ -7,20 +7,13 @@ import { LoaderCircle, RefreshCcw } from "lucide-react"
 import { useRouter } from "next/navigation"
 
 import { api, ApiError } from "@/lib/api"
+import { resolveDestination } from "@/lib/post-login"
 import { Button } from "@/components/ui/button"
 
 function getErrorMessage(error: unknown) {
   if (error instanceof ApiError) return error.message
   if (error instanceof Error) return error.message
   return "Something went wrong."
-}
-
-async function resolveDestination(redirect: string | null) {
-  if (redirect) return redirect
-
-  const result = await api.getWorkspaces()
-  const workspaces = result?.data ?? result ?? []
-  return workspaces.length === 0 ? "/welcome" : "/dashboard"
 }
 
 type DeviceState = "loading" | "pending" | "approved" | "error" | "expired"

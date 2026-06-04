@@ -8,9 +8,9 @@ import { standardSchemaResolver } from "@hookform/resolvers/standard-schema"
 import { z } from "zod"
 import { Loader2, Monitor, QrCode } from "lucide-react"
 
-import { api } from "@/lib/api"
-import { getAuthErrorMessage } from "@/lib/auth-errors"
+import { getAuthErrorMessage, getOAuthErrorMessage } from "@/lib/auth-errors"
 import { normalizeRedirectTarget } from "@/lib/auth"
+import { resolveDestination } from "@/lib/post-login"
 import { useAuthStore } from "@/stores/auth-store"
 import { AuthShell } from "@/components/auth-shell"
 import { FeishuSignInButton } from "@/components/feishu-sign-in-button"
@@ -80,7 +80,12 @@ export function LoginForm() {
   const searchParams = useSearchParams()
   const redirect = normalizeRedirectTarget(searchParams.get("redirect"))
   const { login } = useAuthStore()
-  const [submitError, setSubmitError] = useState("")
+  // Surface an OAuth failure relayed via /auth/callback -> /login?error=<code>
+  // (the full-page fallback path; the popup path reports inline instead).
+  const [submitError, setSubmitError] = useState(() => {
+    const oauthError = searchParams.get("error")
+    return oauthError ? getOAuthErrorMessage(oauthError) : ""
+  })
   const [showingQr, setShowingQr] = useState(false)
 
   const {
@@ -99,14 +104,7 @@ export function LoginForm() {
         temporary: values.temporaryLogin,
       })
 
-      if (redirect) {
-        router.push(redirect)
-        return
-      }
-
-      const result = await api.getWorkspaces()
-      const workspaces = result?.data ?? result ?? []
-      router.push(workspaces.length === 0 ? "/welcome" : "/dashboard")
+      router.push(await resolveDestination(redirect))
     } catch (err) {
       setSubmitError(getAuthErrorMessage(err))
     }

@@ -21,3 +21,14 @@ export function getAuthErrorMessage(error: unknown): string {
   }
   return "Something went wrong. Please try again."
 }
+
+/**
+ * Map an OAuth callback error code (Better Auth's `?error=<code>`, relayed from
+ * /auth/callback) to a friendly message. These are provider/flow failures, not
+ * credential failures, so they get their own mapping. Always returns a message;
+ * callers decide whether to show it based on whether a code was present.
+ */
+export function getOAuthErrorMessage(code: string | null | undefined): string {
+  if (code === "access_denied") return "Sign-in was cancelled."
+  return "Sign-in failed. Please try again."
+}

@@ -100,3 +100,18 @@ export function getSessionBearerToken(): string | null {
   }
   return null
 }
+
+// The expo client persists its cookie-jar and cached session under
+// `<storagePrefix>_cookie` / `<storagePrefix>_session_data` (storagePrefix:
+// "synapse"). Clear both so a stale session from a previous login can't be read
+// as the outcome of a fresh OAuth attempt (see verifyOAuthSession). Best-effort:
+// secure-store deletes can throw on web, where the jar is unused anyway.
+export function clearExpoAuthJar(): void {
+  for (const key of ["synapse_cookie", "synapse_session_data"]) {
+    try {
+      authStorage.setItem(key, "")
+    } catch {
+      // ignore: web/secure-store edge cases; jar is empty there.
+    }
+  }
+}
