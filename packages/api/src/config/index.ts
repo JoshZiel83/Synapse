@@ -3,11 +3,6 @@
 import "../infrastructure/env-bootstrap.js"
 import { resolve } from "node:path"
 import { z } from "zod"
-import {
-  getDefaultModelBaseUrl,
-  getDefaultModelEngineKind,
-  getDefaultModelName,
-} from "@synapse/shared"
 
 import { createLogger } from "../infrastructure/logger/index.js"
 
@@ -100,13 +95,12 @@ const envSchema = z
     SKILL_GITHUB_RAW_PROXY_PREFIXES: z.string().optional(),
     SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS: z.string().optional(),
 
-    AI_PROVIDER: withDefault(z.string(), ""),
-    AI_ENGINE_KIND: z.string().optional(),
-    AI_API_KEY: withDefault(z.string(), ""),
-    AI_BASE_URL: z.string().optional(),
-    AI_MODEL: z.string().optional(),
-    MODEL_NAME: z.string().optional(),
-    AI_MAX_TOKENS: withDefault(positiveInt, "4096"),
+    // Optional override for the declarative model-groups config file location.
+    // Absolute paths are used as-is; relative paths resolve against the repo
+    // root (NOT process.cwd()). Unset => the importer falls back to the repo's
+    // packages/api/config/model-groups.yaml. The default is computed in the
+    // importer (which can reach repo-paths), not here.
+    MODEL_GROUPS_CONFIG_PATH: z.string().optional(),
 
     AUDIO_FALLBACK_PROVIDER: withDefault(z.string().min(1), "sherpa-onnx"),
     SHERPA_ONNX_CONFIG_JSON: withDefault(z.string(), ""),
@@ -238,11 +232,6 @@ function splitList(value: string | undefined): string[] {
     .filter(Boolean)
 }
 
-const configuredAiProvider = env.AI_PROVIDER
-const configuredAiEngineKind =
-  env.AI_ENGINE_KIND ||
-  (configuredAiProvider ? getDefaultModelEngineKind(configuredAiProvider) : "")
-
 export const config = {
   port: env.PORT,
   host: env.HOST,
@@ -316,22 +305,10 @@ export const config = {
       ),
     },
   },
-  ai: {
-    provider: configuredAiProvider,
-    engineKind: configuredAiEngineKind,
-    apiKey: env.AI_API_KEY,
-    baseUrl:
-      env.AI_BASE_URL ||
-      (configuredAiProvider
-        ? getDefaultModelBaseUrl(configuredAiProvider)
-        : ""),
-    model:
-      env.AI_MODEL ||
-      env.MODEL_NAME ||
-      (configuredAiProvider
-        ? getDefaultModelName(configuredAiProvider, configuredAiEngineKind)
-        : ""),
-    maxTokens: env.AI_MAX_TOKENS,
+  modelGroups: {
+    // Optional override for the declarative config file. undefined => importer
+    // uses the repo-default path. May be absolute or repo-root-relative.
+    configPath: env.MODEL_GROUPS_CONFIG_PATH,
   },
   audioFallback: {
     provider: env.AUDIO_FALLBACK_PROVIDER,

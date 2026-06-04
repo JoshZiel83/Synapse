@@ -1,4 +1,3 @@
-import { config } from "../../config/index.js"
 import {
   resolveModelEngineKind,
   validateModelProviderConfig,
@@ -12,10 +11,6 @@ import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
 import type { ModelGroupGrantScope } from "@synapse/shared/types"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import { upsertAccessSubject } from "../access/subject-registry.js"
-import {
-  DEFAULT_MODEL_ATTEMPT_POLICY,
-  DEFAULT_MODEL_ATTEMPT_TIMEOUT_MS,
-} from "./defaults.js"
 import { logProviderStep, logRuntimeEvent } from "../execution/service.js"
 import { sql } from "kysely"
 
@@ -535,6 +530,32 @@ export async function listPlatformModelGroups() {
     .orderBy("name")
     .execute()
   return result.map((row) => mapGroupRow(row as ModelGroupRow))
+}
+
+/**
+ * List ALL platform model groups for the declarative importer — including
+ * DISABLED (soft-deleted) ones. The importer uses this to build its name→group
+ * dedupe table so it never recreates (or revives) a group an operator removed
+ * in the UI.
+ *
+ * Deliberately does NOT reuse mapGroupRow: that mapper renames `is_enabled` to
+ * `is_active`, which would make the importer's enabled-check read undefined.
+ * Returns the raw columns the importer actually needs.
+ */
+export async function listPlatformModelGroupsForImport(): Promise<
+  Array<{ id: string; name: string; is_default: boolean; is_enabled: boolean }>
+> {
+  const rows = await db
+    .selectFrom("model_groups")
+    .select(["id", "name", "is_default", "is_enabled"])
+    .where("owner_type", "=", "platform")
+    .execute()
+  return rows.map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+    is_default: Boolean(row.is_default),
+    is_enabled: Boolean(row.is_enabled),
+  }))
 }
 
 export async function listWorkspaceModelGroups(workspaceId: string) {
@@ -1581,8 +1602,11 @@ export async function logAIRequest(data: {
     return
   }
 
-  let providerType = config.ai.provider
-  let modelName = config.ai.model
+  // No env model fallback: provider/model are sourced from the resolved
+  // revision below. Empty strings are the neutral default when there is no
+  // revision id (the legacy/no-turn path already returned before this point).
+  let providerType = ""
+  let modelName = ""
   if (data.profileRevisionId) {
     const revisionRow = await db
       .selectFrom("model_profile_revisions")
@@ -1613,83 +1637,4 @@ export async function logAIRequest(data: {
     status: data.status as "success" | "error" | "timeout",
     errorMessage: data.errorMessage,
   })
-}
-
-export async function seedPlatformDefaultGroup() {
-  const defaultGroupRow = await db
-    .selectFrom("model_groups")
-    .select("id as group_id")
-    .where("owner_type", "=", "platform")
-    .where("is_default", "=", true)
-    .where("is_enabled", "=", true)
-    .limit(1)
-    .executeTakeFirst()
-
-  let groupId = defaultGroupRow?.group_id || null
-
-  if (!groupId) {
-    const fallbackGroupRow = await db
-      .selectFrom("model_groups")
-      .select("id")
-      .where("owner_type", "=", "platform")
-      .where("is_enabled", "=", true)
-      .orderBy("is_default", "desc")
-      .orderBy("created_at", "asc")
-      .limit(1)
-      .executeTakeFirst()
-
-    groupId = fallbackGroupRow?.id || null
-
-    if (groupId) {
-      await clearExistingDefault("platform")
-      await db
-        .updateTable("model_groups")
-        .set({
-          is_default: true,
-          updated_at: sql`NOW()`,
-        })
-        .where("id", "=", groupId)
-        .execute()
-    }
-  }
-
-  if (!groupId) {
-    const group = await createModelGroup({
-      ownerType: "platform",
-      name: "Platform Default",
-      description: "Auto-created from environment variables",
-      routingStrategy: "priority_failover",
-      attemptPolicy: { ...DEFAULT_MODEL_ATTEMPT_POLICY },
-      isDefault: true,
-    })
-    groupId = group.id
-  }
-
-  if (config.ai.provider && config.ai.apiKey && config.ai.model && groupId) {
-    const existingItem = await db
-      .selectFrom("model_group_profiles")
-      .select("id")
-      .where("group_id", "=", groupId)
-      .where("is_enabled", "=", true)
-      .limit(1)
-      .executeTakeFirst()
-
-    if (!existingItem) {
-      await addModelItem(groupId, {
-        displayName: `${config.ai.model} (env)`,
-        priority: 0,
-        weight: 100,
-        providerType: config.ai.provider,
-        engineKind: config.ai.engineKind,
-        apiKey: config.ai.apiKey,
-        baseUrl: config.ai.baseUrl,
-        modelName: config.ai.model,
-        maxTokens: config.ai.maxTokens,
-        requestTimeoutMs: DEFAULT_MODEL_ATTEMPT_TIMEOUT_MS,
-        maxRetries: 1,
-      })
-    }
-  }
-
-  return groupId
 }

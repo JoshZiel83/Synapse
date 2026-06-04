@@ -7,7 +7,6 @@ import { SUBJECT_KIND, textBlocks } from "@synapse/shared"
 import { upsertAccessSubject } from "../../modules/access/subject-registry.js"
 import { createGeneratedUserAvatarFile } from "../../modules/avatar/service.js"
 import { seedBuiltinMcpPlugins } from "../../modules/mcp-plugins/service.js"
-import { seedPlatformDefaultGroup } from "../../modules/model-groups/service.js"
 import { ensureSeedPlatformAdminForUser } from "../../modules/platform/admin-service.js"
 import { importSeededClawhubMarketplaceSkill } from "../../modules/skills/service.js"
 import { ensureStorageDir } from "../storage/index.js"
@@ -612,8 +611,6 @@ export async function seedDatabase() {
     password: "demo1234",
     emailVerified: true,
   })
-
-  await seedPlatformDefaultGroup()
 
   const { workspaceId, workspaceMemberId } = await seedDemoWorkspace(userId)
   const actorCatalog = await seedOfficialActorCatalog(userId)

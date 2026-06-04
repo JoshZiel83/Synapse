@@ -45,3 +45,8 @@ packages/*/scripts/*.local.js
 # Verdaccio private-registry credentials (commit only the *.example files)
 infra/verdaccio/.env
 infra/verdaccio/htpasswd
+
+# Declarative model-groups config (holds ${ENV} refs only, but keep real file
+# out of git; commit only the .example template).
+packages/api/config/model-groups.yaml
+!packages/api/config/model-groups.yaml.example

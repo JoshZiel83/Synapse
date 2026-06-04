@@ -1,0 +1,39 @@
+# Declarative model-groups config (example template).
+#
+# Copy this file to `model-groups.yaml` in the same directory, then fill in the
+# referenced ${ENV} variables (in your .env / environment). The real
+# model-groups.yaml is gitignored — only this .example is tracked.
+#
+# Apply it with:   npm run db:seed:model-groups
+# It also runs automatically as part of:   npm run db:rebuild
+#
+# Semantics:
+#   - PLATFORM scope only (no per-workspace groups via file import).
+#   - CREATE-ONLY / idempotent: re-running never overwrites groups or items you
+#     have edited in the UI. Groups dedupe by `name`, items by `displayName`.
+#   - Secrets MUST be ${ENV_VAR} references — a literal key here is rejected.
+#   - At most one group may set `isDefault: true`, and it is honored only on a
+#     fresh database (it never steals the default from a UI selection).
+
+version: 1
+groups:
+  - name: Platform Default
+    description: Default platform model group
+    routingStrategy: priority_failover # priority_failover | weighted_random | round_robin
+    isDefault: true
+    items:
+      - displayName: Claude Sonnet
+        providerType: anthropic
+        engineKind: anthropic.messages
+        apiKey: ${ANTHROPIC_API_KEY}
+        baseUrl: https://api.anthropic.com
+        modelName: claude-sonnet-4-20250514
+        maxTokens: 4096
+        # priority: 0          # lower wins under priority_failover
+        # weight: 100          # relative share under weighted_random
+        # capabilityTags: []   # free-form capability labels
+        # extraConfig:         # provider-specific knobs
+        #   multimodal:
+        #     supported: true
+        #     types: [image]
+        #   builtin_tools: [web_search, web_fetch]   # anthropic only

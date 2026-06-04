@@ -109,29 +109,6 @@ PUBLIC_NPM_REGISTRY_URL="${PUBLIC_NPM_REGISTRY_URL:-$PUBLIC_SCHEME://$REGISTRY_D
 # clear a previously-customized value instead of resurrecting it from .env.
 EXPO_PUBLIC_AUTH_ORIGIN_VALUE="${EXPO_PUBLIC_AUTH_ORIGIN-$(read_env_value EXPO_PUBLIC_AUTH_ORIGIN)}"
 API_PROXY_ORIGIN="${SYNAPSE_API_PROXY_ORIGIN:-http://localhost:3001}"
-SELECTED_AI_PROVIDER="${SYNAPSE_AI_PROVIDER:-}"
-SELECTED_AI_ENGINE_KIND="${SYNAPSE_AI_ENGINE_KIND:-}"
-SELECTED_AI_BASE_URL="${SYNAPSE_AI_BASE_URL:-}"
-SELECTED_AI_MODEL="${SYNAPSE_AI_MODEL:-}"
-SELECTED_AI_API_KEY="${SYNAPSE_AI_API_KEY:-}"
-
-case "$SELECTED_AI_PROVIDER" in
-  anthropic)
-    SELECTED_AI_ENGINE_KIND="${SELECTED_AI_ENGINE_KIND:-anthropic.messages}"
-    SELECTED_AI_BASE_URL="${SELECTED_AI_BASE_URL:-https://api.anthropic.com}"
-    SELECTED_AI_MODEL="${SELECTED_AI_MODEL:-claude-sonnet-4-20250514}"
-    ;;
-  openai)
-    SELECTED_AI_ENGINE_KIND="${SELECTED_AI_ENGINE_KIND:-openai.chat_completions}"
-    SELECTED_AI_BASE_URL="${SELECTED_AI_BASE_URL:-https://api.openai.com}"
-    SELECTED_AI_MODEL="${SELECTED_AI_MODEL:-gpt-4.1}"
-    ;;
-  bigmodel)
-    SELECTED_AI_ENGINE_KIND="${SELECTED_AI_ENGINE_KIND:-bigmodel.chat_completions}"
-    SELECTED_AI_BASE_URL="${SELECTED_AI_BASE_URL:-https://open.bigmodel.cn/api}"
-    SELECTED_AI_MODEL="${SELECTED_AI_MODEL:-glm-5.1}"
-    ;;
-esac
 
 generate_password() {
   openssl rand -base64 32 | tr -d '/+=' | head -c 32
@@ -345,13 +322,6 @@ EXPO_PUBLIC_API_URL=$APP_URL/api/v1
 # browser-facing public origin differs from the internal API origin.
 EXPO_PUBLIC_AUTH_ORIGIN=$EXPO_PUBLIC_AUTH_ORIGIN_VALUE
 EXPO_BASE_URL=/mobile
-
-# AI provider
-AI_PROVIDER=$SELECTED_AI_PROVIDER
-AI_ENGINE_KIND=$SELECTED_AI_ENGINE_KIND
-AI_API_KEY=$SELECTED_AI_API_KEY
-AI_BASE_URL=$SELECTED_AI_BASE_URL
-AI_MODEL=$SELECTED_AI_MODEL
 EOF
 
   chmod 600 "$ENV_FILE"
@@ -448,6 +418,16 @@ if [ "$ROOT_ENV_CREATED" = false ] && [ "$WEB_ENV_CREATED" = false ] && [ "$MOBI
 fi
 
 echo "Local secrets and URLs have been initialized."
+echo ""
+echo "Model configuration (required before chat will work):"
+echo "  - Copy packages/api/config/model-groups.yaml.example to"
+echo "    packages/api/config/model-groups.yaml"
+echo "  - Fill in the referenced \${ENV} variables (e.g. ANTHROPIC_API_KEY) in .env"
+echo "  - The file is applied automatically by db:rebuild (step 4 below), or run"
+echo "    'npm run db:seed:model-groups' on its own."
+echo "  (The real model-groups.yaml is NOT auto-created or committed — it is"
+echo "   gitignored. Without it, db:rebuild skips model import and chat fails"
+echo "   loudly until a platform model group is configured.)"
 echo ""
 echo "Next steps:"
 echo "  1. Install Docker and Docker Compose on the host if they are missing"

@@ -6,7 +6,7 @@
 // of the default isolated integration suite.
 //
 // Drives a one-shot Anthropic Messages request against an externally
-// configured base URL to verify the provider transport path (AI_BASE_URL →
+// configured base URL to verify the provider transport path (base URL →
 // /v1/messages with Bearer auth) is wired correctly. This is intentionally
 // SKIPPABLE: if the endpoint or key isn't configured, or the gateway
 // returns 5xx, the test logs the reason and exits 0 rather than fail.
@@ -18,8 +18,10 @@
 //
 // Configure via either pair:
 //   LLM_SMOKE_BASE_URL + LLM_SMOKE_API_KEY  (preferred — test-scoped)
-//   AI_BASE_URL        + AI_API_KEY         (shared with the rest of the
-//                                            integration stack)
+//   AI_BASE_URL        + AI_API_KEY         (LEGACY fallback for THIS test
+//                                            only — the app itself no longer
+//                                            reads any AI_* env to pick a model;
+//                                            models come from model groups)
 // Optional: LLM_SMOKE_MODEL (default: claude-haiku-4-5-20251001).
 //
 // If the deployment requires a proxy or tunnel to reach the endpoint,

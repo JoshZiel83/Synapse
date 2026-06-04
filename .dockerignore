@@ -28,3 +28,8 @@ synapse-env-predeploy.*
 # Local dev scratch that would otherwise bloat the context by tens of GB.
 .claude/
 .worktrees/
+# Declarative model-groups config: keep the real file out of the image (it is
+# bind-mounted :ro at runtime via docker-compose). The .yaml holds only ${ENV}
+# refs, but excluding it is defense-in-depth + avoids baking local state. The
+# .example template still ships.
+packages/api/config/model-groups.yaml

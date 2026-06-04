@@ -149,7 +149,7 @@ Open:
 
 If your local Docker setup requires elevated privileges, run the `docker compose` command with `sudo`.
 
-Before using actor or chat flows with real models, edit `.env` and set an AI provider such as `AI_PROVIDER`, `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL`.
+Before using actor or chat flows with real models, configure at least one platform model group: copy `packages/api/config/model-groups.yaml.example` to `packages/api/config/model-groups.yaml`, fill in the referenced `${ENV}` variables (e.g. `ANTHROPIC_API_KEY`) in `.env`, then apply it with `npm run db:rebuild` (which imports it automatically) or `npm run db:seed:model-groups`.
 
 ### Optional: reset and seed a demo environment
 

@@ -8,13 +8,12 @@ import type {
 import { resolveModelEngineKind } from "@synapse/shared"
 import { redis } from "../../infrastructure/redis/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
-import { config } from "../../config/index.js"
 import {
   actorSubject,
   listAuthorizedResourceIds,
   workspaceMemberSubject,
 } from "../access/service.js"
-import { DEFAULT_MODEL_ATTEMPT_POLICY } from "./defaults.js"
+import { DEFAULT_MAX_TOKENS, DEFAULT_MODEL_ATTEMPT_POLICY } from "./defaults.js"
 
 type GroupRow = {
   id: string
@@ -373,7 +372,7 @@ function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
     apiKey: row.api_key,
     baseUrl: row.base_url,
     modelName: row.model_name,
-    maxTokens: row.max_tokens || config.ai.maxTokens,
+    maxTokens: row.max_tokens || DEFAULT_MAX_TOKENS,
     builtinTools: Array.isArray(extraConfig.builtin_tools)
       ? (extraConfig.builtin_tools as ResolvedModelConfig["builtinTools"])
       : undefined,
@@ -449,20 +448,4 @@ export async function resolveModelConfig(
 ): Promise<ResolvedModelConfig | null> {
   const plan = await resolveModelPlan(actorId, workspaceId, options)
   return plan?.candidates[0] || null
-}
-
-export function getEnvFallbackConfig(): ResolvedModelConfig {
-  return {
-    groupId: "env-fallback",
-    profileId: "env-fallback",
-    profileRevisionId: "env-fallback",
-    providerType: config.ai.provider,
-    engineKind: config.ai.engineKind,
-    apiKey: config.ai.apiKey,
-    baseUrl: config.ai.baseUrl,
-    modelName: config.ai.model,
-    maxTokens: config.ai.maxTokens,
-    requestTimeoutMs: DEFAULT_ATTEMPT_POLICY.timeoutMsPerAttempt,
-    maxRetries: DEFAULT_ATTEMPT_POLICY.maxAttemptsPerBinding - 1,
-  }
 }

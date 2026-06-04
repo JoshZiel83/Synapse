@@ -28,7 +28,6 @@ import {
   describeTransportKind,
   extractText,
   formatMentionText,
-  getDefaultModelEngineKind,
   isToolResultOrigin,
   isTransportKind,
   MCP_TOOL_NAMESPACE_SEPARATOR,
@@ -40,7 +39,6 @@ import {
 import { isPlanCollaborationMode } from "@synapse/shared/utils"
 import type { SessionCollaborationMode } from "@synapse/shared/types"
 import { randomUUID } from "crypto"
-import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import {
   sleep,
@@ -110,24 +108,28 @@ class TurnInterruptedError extends Error {
 // Cache providers by config fingerprint to avoid recreating
 const providerCache = new Map<string, AIProvider>()
 
-function getProvider(resolved?: ResolvedModelConfig | null): AIProvider {
-  const providerConfig: AIProviderConfig = resolved
-    ? {
-        apiKey: resolved.apiKey,
-        baseUrl: resolved.baseUrl,
-        model: resolved.modelName,
-        maxTokens: resolved.maxTokens,
-        engineKind: resolved.engineKind,
-      }
-    : {
-        apiKey: config.ai.apiKey,
-        baseUrl: config.ai.baseUrl,
-        model: config.ai.model,
-        maxTokens: config.ai.maxTokens,
-        engineKind: config.ai.engineKind,
-      }
+function getProvider(resolved: ResolvedModelConfig): AIProvider {
+  // The env model path has been removed: a provider can ONLY be built from a
+  // resolved model candidate (which originates from a configured model group).
+  // The required parameter enforces this at the type level; the runtime guard
+  // below is defense-in-depth against an untyped/`any` caller passing null.
+  if (!resolved) {
+    throw new Error(
+      "Cannot create AI provider: no resolved model configuration. " +
+        "Configure a platform model group (run 'npm run db:seed:model-groups' " +
+        "or use the UI) so a model can be resolved for this actor."
+    )
+  }
 
-  const providerName = resolved?.providerType || config.ai.provider
+  const providerConfig: AIProviderConfig = {
+    apiKey: resolved.apiKey,
+    baseUrl: resolved.baseUrl,
+    model: resolved.modelName,
+    maxTokens: resolved.maxTokens,
+    engineKind: resolved.engineKind,
+  }
+
+  const providerName = resolved.providerType
   const cacheKey = `${providerConfig.engineKind}:${providerConfig.apiKey}:${providerConfig.baseUrl}:${providerConfig.model}`
 
   let provider = providerCache.get(cacheKey)
@@ -136,22 +138,6 @@ function getProvider(resolved?: ResolvedModelConfig | null): AIProvider {
     providerCache.set(cacheKey, provider)
   }
   return provider
-}
-
-function getFallbackResolvedConfig(): ResolvedModelConfig {
-  return {
-    groupId: "env-fallback",
-    profileId: "env-fallback",
-    profileRevisionId: "env-fallback",
-    providerType: config.ai.provider,
-    engineKind: config.ai.engineKind,
-    apiKey: config.ai.apiKey,
-    baseUrl: config.ai.baseUrl,
-    modelName: config.ai.model,
-    maxTokens: config.ai.maxTokens,
-    requestTimeoutMs: DEFAULT_ATTEMPT_POLICY.timeoutMsPerAttempt,
-    maxRetries: DEFAULT_ATTEMPT_POLICY.maxAttemptsPerBinding - 1,
-  }
 }
 
 function classifyModelError(error: unknown): string {
@@ -628,16 +614,17 @@ export async function actorThink(
   let currentSystem = options?.system || ""
   let currentCollaborationMode = options?.collaborationMode || "default"
   let allTools: import("@synapse/shared").ToolDefinition[] = []
-  const effectiveModelPlan =
-    modelPlan && modelPlan.candidates.length > 0
-      ? modelPlan
-      : {
-          groupId: "env-fallback",
-          groupName: "Environment Fallback",
-          routingStrategy: "priority_failover" as const,
-          attemptPolicy: DEFAULT_ATTEMPT_POLICY,
-          candidates: [getFallbackResolvedConfig()],
-        }
+  // No env fallback: a turn can only run against a resolved model plan that came
+  // from a configured model group. If resolution produced nothing, fail loud so
+  // the worker marks the turn failed + session blocked (see session-thinking
+  // catch) instead of silently limping along on absent env config.
+  if (!modelPlan || modelPlan.candidates.length === 0) {
+    throw new Error(
+      `No model group configured for actor ${actor.id} in workspace ${workspaceId ?? "(unknown)"}. ` +
+        "Run 'npm run db:seed:model-groups' or configure a platform model group in the UI."
+    )
+  }
+  const effectiveModelPlan = modelPlan
 
   const allContextWindow: ProviderContextWindow = {
     manifest: contextWindow.manifest,
@@ -665,12 +652,9 @@ export async function actorThink(
     resolved?: ResolvedModelConfig | null,
     attempt?: number
   ) => ({
-    provider: resolved?.providerType || config.ai.provider,
-    engineKind:
-      resolved?.engineKind ||
-      config.ai.engineKind ||
-      (config.ai.provider ? getDefaultModelEngineKind(config.ai.provider) : ""),
-    model: resolved?.modelName || config.ai.model,
+    provider: resolved?.providerType || "",
+    engineKind: resolved?.engineKind || "",
+    model: resolved?.modelName || "",
     round,
     attempt: attempt || 1,
     groupId: effectiveModelPlan.groupId,
@@ -852,7 +836,7 @@ export async function actorThink(
           modelGroupId: effectiveModelPlan.groupId,
           modelProfileId: params.resolved.profileId,
           modelProfileRevisionId: params.resolved.profileRevisionId,
-          modelName: params.resolved.modelName || config.ai.model,
+          modelName: params.resolved.modelName,
           capabilitiesSnapshot: {
             engineKind: params.resolved.engineKind,
             builtinTools: params.resolved.builtinTools || [],
@@ -2049,7 +2033,7 @@ export async function actorThink(
 export async function aiComplete(
   system: string,
   messages: { role: string; content: string }[],
-  resolved?: ResolvedModelConfig | null,
+  resolved: ResolvedModelConfig,
   logContext?: { workspaceId?: string; actorId?: string }
 ): Promise<{ content: string; tokensUsed: { input: number; output: number } }> {
   const provider = getProvider(resolved)
@@ -2067,8 +2051,8 @@ export async function aiComplete(
   let response
 
   const requestLog = {
-    provider: resolved?.providerType || config.ai.provider,
-    model: resolved?.modelName || config.ai.model,
+    provider: resolved.providerType,
+    model: resolved.modelName,
     system,
     contextWindow,
   }
@@ -2081,9 +2065,9 @@ export async function aiComplete(
     await logAIRequest({
       workspaceId: logContext?.workspaceId,
       actorId: logContext?.actorId,
-      groupId: resolved?.groupId,
-      profileId: resolved?.profileId,
-      profileRevisionId: resolved?.profileRevisionId,
+      groupId: resolved.groupId,
+      profileId: resolved.profileId,
+      profileRevisionId: resolved.profileRevisionId,
       requestType: "ai_complete",
       inputTokens: 0,
       outputTokens: 0,
@@ -2103,9 +2087,9 @@ export async function aiComplete(
   await logAIRequest({
     workspaceId: logContext?.workspaceId,
     actorId: logContext?.actorId,
-    groupId: resolved?.groupId,
-    profileId: resolved?.profileId,
-    profileRevisionId: resolved?.profileRevisionId,
+    groupId: resolved.groupId,
+    profileId: resolved.profileId,
+    profileRevisionId: resolved.profileRevisionId,
     requestType: "ai_complete",
     inputTokens: response.tokensUsed.input,
     outputTokens: response.tokensUsed.output,

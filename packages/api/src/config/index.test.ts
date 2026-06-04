@@ -14,13 +14,21 @@ test("numeric env values are coerced to real numbers (not NaN/strings)", () => {
     config.realtime.outboxPollMs,
     config.realtime.outboxRetentionHours,
     config.asr.volcengine.maxConcurrency,
-    config.ai.maxTokens,
     config.memory.embedBatchSize,
     config.memory.recallLimit,
   ]) {
     assert.equal(typeof n, "number")
     assert.ok(Number.isFinite(n), `expected finite number, got ${n}`)
   }
+})
+
+test("modelGroups.configPath is an optional string (env override)", () => {
+  // Unset by default => undefined; if MODEL_GROUPS_CONFIG_PATH is provided it is
+  // surfaced verbatim as a string. The importer computes the real default path.
+  assert.ok(
+    config.modelGroups.configPath === undefined ||
+      typeof config.modelGroups.configPath === "string"
+  )
 })
 
 test("float env values coerce to finite numbers in range", () => {
