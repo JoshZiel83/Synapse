@@ -1,6 +1,6 @@
 # Integration tests for the API package
 
-End-to-end tests that exercise the full MCP / relay / canonical-content
+End-to-end tests that exercise the full MCP / device / canonical-content
 pipeline against an isolated stack — separate postgres, redis, and (when
 needed) a separate API container, all under a **per-worktree** docker
 compose project so multiple worktrees can run their stacks concurrently
@@ -49,7 +49,6 @@ harness/
                                  # for the LLM-endpoint provider/error tests below.
                                  # Per-file dynamic-port container; no impact on
                                  # docker-compose.test.yaml.
-  relay.ts                       # pair + start synapse-relay against the test API
   index.ts                       # re-exports
 mocks/
   mcp-servers/                   # 11 stdio MCP server variants
@@ -240,4 +239,4 @@ never collides with `synapse-*` production containers or other worktrees.
 - `.cache/`, `tmp-profiles/`, and `.stack-env` (the per-worktree
   project/port record written by lib.sh) are gitignored.
 - Mock MCP servers are pure stdio Node scripts — they don't need any
-  runtime bundle; the relay's plain `make cli` build is sufficient.
+  runtime bundle.

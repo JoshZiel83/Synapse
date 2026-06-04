@@ -792,7 +792,7 @@ async function listManageablePluginInstallationIds(
   return rows.map((row) => row.id)
 }
 
-async function listManageableRelayCapabilityIds(
+async function listManageableCapabilityIds(
   db: KyselyDb,
   subject: PermissionSubject,
   limit?: number
@@ -819,7 +819,7 @@ async function listManageableRelayCapabilityIds(
     .where("capability.status", "=", "active")
     .orderBy("capability.updated_at", "desc")
 
-  if (!workspacePermissionFromAccess(access, "manage_relays")) {
+  if (!workspacePermissionFromAccess(access, "manage_devices")) {
     query = query.where("device.owner_workspace_member_id", "=", access.id)
   }
 
@@ -840,7 +840,7 @@ async function listManageableRelayCapabilityIds(
  *      the resource;
  *   3. any permission outside BOTH sets fail-closes — consistent with the
  *      `default: return false` arms in hasActorPermission / hasRemoteAgentPermission
- *      / hasRelayDevicePermission. (The pre-refactor per-resource tails returned
+ *      / hasDevicePermission. (The pre-refactor per-resource tails returned
  *      `canManage` for ANY permission, i.e. fail-OPEN to managers on an unknown
  *      permission string; the explicit `manageablePermissions` whitelist closes
  *      that asymmetry. All real call sites flow through actions.ts, so only a
@@ -983,7 +983,7 @@ async function hasPluginInstallationPermission(
   })
 }
 
-async function hasRelayDevicePermission(
+async function hasDevicePermission(
   db: KyselyDb,
   subject: PermissionSubject,
   deviceId: string,
@@ -1016,7 +1016,7 @@ async function hasRelayDevicePermission(
   }
 
   const canManage =
-    workspacePermissionFromAccess(access, "manage_relays") ||
+    workspacePermissionFromAccess(access, "manage_devices") ||
     row.owner_workspace_member_id === access.id
 
   switch (permission) {
@@ -1030,7 +1030,7 @@ async function hasRelayDevicePermission(
   }
 }
 
-async function hasRelayExposurePermission(
+async function hasExposurePermission(
   db: KyselyDb,
   subject: PermissionSubject,
   exposureId: string,
@@ -1046,7 +1046,7 @@ async function hasRelayExposurePermission(
   if (!row?.device_id) {
     return false
   }
-  return hasRelayDevicePermission(
+  return hasDevicePermission(
     db,
     subject,
     row.device_id,
@@ -1054,7 +1054,7 @@ async function hasRelayExposurePermission(
   )
 }
 
-async function hasRelayCapabilityPermission(
+async function hasCapabilityPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   capabilityId: string,
@@ -1088,7 +1088,7 @@ async function hasRelayCapabilityPermission(
     resourceId: capabilityId,
     workspaceId: row.workspace_id,
     creatorMemberId: row.owner_workspace_member_id,
-    manageAccessKey: "manage_relays",
+    manageAccessKey: "manage_devices",
     grantablePermissions: ["use", "view", "request_runtime_authorization"],
     manageablePermissions: [
       "view",
@@ -1945,21 +1945,21 @@ export async function checkPermission(
         params.runtimeSubjectIds
       )
     case "device":
-      return hasRelayDevicePermission(
+      return hasDevicePermission(
         db,
         params.subject,
         params.resourceId,
         params.permission
       )
     case "device_exposure":
-      return hasRelayExposurePermission(
+      return hasExposurePermission(
         db,
         params.subject,
         params.resourceId,
         params.permission
       )
     case "device_capability":
-      return hasRelayCapabilityPermission(
+      return hasCapabilityPermission(
         db,
         params.subject,
         params.resourceId,
@@ -2097,7 +2097,7 @@ export async function lookupResources(
                 params.runtimeScopeSubjectIds,
                 params.runtimeSubjectIds
               ),
-              await listManageableRelayCapabilityIds(
+              await listManageableCapabilityIds(
                 db,
                 params.subject,
                 params.limit

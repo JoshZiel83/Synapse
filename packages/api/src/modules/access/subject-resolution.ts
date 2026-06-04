@@ -500,7 +500,7 @@ async function assertPrincipalBelongsToWorkspaceOn(
  * Returns the access_subjects.id set used as the right-hand side of a
  * scope_subject_id match — i.e. which subjects represent the runtime
  * group context the principal is currently inside. Used by skill /
- * plugin / relay visibility listings to pass `runtimeScopeSubjectIds`
+ * plugin / device visibility listings to pass `runtimeScopeSubjectIds`
  * to `lookupResources` and `listGrantedResourceIds` so a scoped grant
  * (subject=actor + scope=conversation) is actually visible in tool /
  * skill / plugin enumeration.

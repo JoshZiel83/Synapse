@@ -90,7 +90,7 @@ import {
 // subject-scope-refactor merge: relay-auto-skills was deleted in
 // device-runtime-v3 (PR #20). Replace imports with empty stubs so the existing
 // skill aggregation logic compiles; relay_auto_loaded sourceKind is dead.
-async function listRelayAutoLoadedSkills(
+async function listAutoLoadedSkills(
   _args: unknown
 ): Promise<AvailableSkillSummary[]> {
   return []
@@ -1302,7 +1302,8 @@ async function ensureMarketplacePublisher(
       .insertInto("publishers")
       .values({
         slug: options?.slug || DEFAULT_MARKETPLACE_PUBLISHER_SLUG,
-        display_name: options?.displayName || DEFAULT_MARKETPLACE_PUBLISHER_NAME,
+        display_name:
+          options?.displayName || DEFAULT_MARKETPLACE_PUBLISHER_NAME,
         description: "Official marketplace publisher",
         owner_user_id: options?.ownerUserId || null,
         workspace_id: null,
@@ -1479,7 +1480,9 @@ async function allocateMarketplaceItemSlug(
         .where("item_kind", "=", "skill_package")
         .where("workspace_id", "is", null)
         .where("slug", "=", candidate)
-        .where(sql<boolean>`(${exclude}::uuid IS NULL OR id <> ${exclude}::uuid)`)
+        .where(
+          sql<boolean>`(${exclude}::uuid IS NULL OR id <> ${exclude}::uuid)`
+        )
         .limit(1)
     )
     if (existing.rows.length === 0) {
@@ -2302,14 +2305,10 @@ async function upsertImportedMarketplaceSkill(
       itemId = inserted.rows[0]!.id
     }
 
-    const snapshotId = await insertSkillSnapshot(
-      client,
-      imported,
-      {
-        mirrorSourceId,
-        resolvedRevision: imported.mirrorSource.resolvedRevision || null,
-      }
-    )
+    const snapshotId = await insertSkillSnapshot(client, imported, {
+      mirrorSourceId,
+      resolvedRevision: imported.mirrorSource.resolvedRevision || null,
+    })
 
     const existingVersion = await runBuilder(
       client,
@@ -2577,10 +2576,7 @@ export async function publishMarketplaceSkill(input: {
       itemId = inserted.rows[0]!.id
     }
 
-    const snapshotId = await insertSkillSnapshot(
-      client,
-      preparedSnapshot
-    )
+    const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
 
     const existingVersion = await runBuilder(
       client,
@@ -2718,10 +2714,7 @@ export async function createWorkspaceSkill(input: {
   })
 
   const result = await withDbTransaction(async (client) => {
-    const snapshotId = await insertSkillSnapshot(
-      client,
-      preparedSnapshot
-    )
+    const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
     const installedSlug = await allocateInstalledSkillSlug(
       client,
       input.workspaceId,
@@ -3325,10 +3318,7 @@ export async function updateInstalledSkill(input: {
           files: currentFiles,
         },
       })
-      const snapshotId = await insertSkillSnapshot(
-        client,
-        preparedSnapshot
-      )
+      const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
       nextName = preparedSnapshot.frontmatter.name
 
       await client
@@ -3629,7 +3619,7 @@ export async function listVisibleSkills(input: {
     actorId: input.actorId,
     conversationId: input.conversationId,
   })
-  const relayAutoLoadedSkills = await listRelayAutoLoadedSkills({
+  const autoLoadedSkills = await listAutoLoadedSkills({
     workspaceId: input.workspaceId,
     actorId: input.actorId,
     sessionId: input.sessionId,
@@ -3638,7 +3628,7 @@ export async function listVisibleSkills(input: {
     isImConversation: input.isImConversation,
   })
   if (subjects.length === 0) {
-    return relayAutoLoadedSkills
+    return autoLoadedSkills
   }
 
   const visibleSkillIds = new Set<string>()
@@ -3777,7 +3767,7 @@ export async function listVisibleSkills(input: {
   for (const skill of installedSkills) {
     combined.set(skill.slug.toLowerCase(), skill)
   }
-  for (const skill of relayAutoLoadedSkills) {
+  for (const skill of autoLoadedSkills) {
     if (!combined.has(skill.slug.toLowerCase())) {
       combined.set(skill.slug.toLowerCase(), skill)
     }

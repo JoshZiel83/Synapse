@@ -99,6 +99,52 @@ test("workspace.manage_actors granted by admin or actor_admin key", () => {
   )
 })
 
+test("workspace.manage_devices granted by admin or device_admin key", () => {
+  // Regression guard for the relay→device naming drift: the canonical
+  // workspace permission key is `manage_devices` (not the legacy
+  // `manage_relays`), backed by the `device_admin` access key. evaluator.ts
+  // device/exposure/capability handlers call this key, and an unknown key
+  // would silently deny via the `if (!rule) return false` guard.
+  assert.equal(
+    evaluateWorkspacePermission("manage_devices", {
+      isAdmin: false,
+      accessKeys: ["skill_admin"],
+      trustLevel: "member",
+    }),
+    false
+  )
+  assert.equal(
+    evaluateWorkspacePermission("manage_devices", {
+      isAdmin: false,
+      accessKeys: ["device_admin"],
+      trustLevel: "member",
+    }),
+    true
+  )
+  assert.equal(
+    evaluateWorkspacePermission("manage_devices", {
+      isAdmin: true,
+      accessKeys: [],
+      trustLevel: "member",
+    }),
+    true
+  )
+})
+
+test("workspace.manage_relays is NOT a permission key (legacy name removed)", () => {
+  // The relay→device rename retired `manage_relays`. If it ever reappears as a
+  // rules-table key, the stale literal in evaluator.ts call sites would start
+  // resolving again and mask a regression — so assert it stays unknown.
+  assert.equal(
+    evaluateWorkspacePermission("manage_relays", {
+      isAdmin: true,
+      accessKeys: ["device_admin"],
+      trustLevel: "admin",
+    }),
+    false
+  )
+})
+
 test("workspace.create_conversation excludes guests only", () => {
   assert.equal(
     evaluateWorkspacePermission("create_conversation", {
