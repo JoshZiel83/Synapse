@@ -17,9 +17,10 @@ set -euo pipefail
 #     POSTGRES_PASSWORD, APP_BASE_URL, etc.). Refuses to create a half-baked .env
 #     holding only sandbox secrets — the compose api service would then fail its
 #     POSTGRES_PASSWORD/APP_BASE_URL/... required-var checks.
-#   - Generates a secret only when its line is MISSING or its value is EMPTY.
-#     An existing non-empty value is kept (rotating the signing key would orphan
-#     already-paired devices; the frp token must stay in sync across services).
+#   - Generates a secret only when its line is MISSING or its value is EMPTY /
+#     whitespace-only. An existing non-empty value is kept (rotating the signing
+#     key would orphan already-paired devices; the frp token must stay in sync
+#     across services).
 #   - Preserves .env's `600` permissions and guarantees a trailing newline.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +35,9 @@ die() { echo "[ensure-sandbox-secrets] ERROR: $*" >&2; exit 1; }
 # Current value of KEY in .env (empty string if missing or value-empty).
 env_value() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1; }
 
+# Trim leading/trailing whitespace (so a value like "   " counts as empty).
+trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+
 # Append KEY=VALUE, guaranteeing the file ends in a newline first so we never
 # concatenate onto a no-newline last line.
 append_var() {
@@ -44,15 +48,20 @@ append_var() {
 
 ensure_secret() {
   local key="$1" gen="$2" current
-  current="$(env_value "$key")"
+  current="$(trim "$(env_value "$key")")"
   if [ -n "$current" ]; then
     log "$key already set — keeping existing value."
     return
   fi
-  # Missing line OR present-but-empty: drop any empty line, then append fresh.
+  # Missing line OR present-but-empty/whitespace: drop any such line, then append
+  # fresh. `grep -v` exits 1 when EVERY line matches (e.g. .env is only this key),
+  # which under `set -e` would skip the rewrite and leave the stale empty line —
+  # producing a duplicate key once we append. `|| true` keeps the rewrite running.
   if grep -q "^$key=" "$ENV_FILE"; then
     local tmp; tmp="$(mktemp)"
-    grep -v "^$key=" "$ENV_FILE" >"$tmp" && cat "$tmp" >"$ENV_FILE" && rm -f "$tmp"
+    grep -v "^$key=" "$ENV_FILE" >"$tmp" || true
+    cat "$tmp" >"$ENV_FILE"
+    rm -f "$tmp"
   fi
   local value; value="$($gen)"
   append_var "$key" "$value"

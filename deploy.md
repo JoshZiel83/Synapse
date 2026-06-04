@@ -364,13 +364,21 @@ In both cases provisioning waits for the device to register its tunnel endpoint
 that never becomes dispatchable fails provisioning instead of silently looking
 "online" while every tool call returns `no_tunnel_endpoint`.
 
-Enable the docker backend:
+Enable the docker backend — recommended, use the script (it does baseline checks,
+secret backfill, the three flag flips, the effective-origin guard, all three image
+builds, and brings the stack up, restoring `.env` on any failure):
+
+```bash
+bash scripts/deploy-sandbox-docker.sh
+```
+
+Or do it by hand:
 
 ```bash
 # 0. Ensure the two sandbox secrets exist (signing key + frp token). Narrow —
 #    does NOT touch deploy vars the way ./setup.sh does. Older .env files predate
-#    these and lack the lines entirely; this generates them when missing/empty
-#    and keeps any existing non-empty value.
+#    these and lack the lines entirely; this generates them when missing/empty/
+#    whitespace and keeps any existing non-empty value.
 bash scripts/ensure-sandbox-secrets.sh
 
 # 1. Rebuild the api image WITH the baked fs-helper (see prerequisite above),
@@ -386,7 +394,8 @@ docker compose --profile sandbox-build build sandbox-image
 #    Leave SYNAPSE_SANDBOX_SERVER_ORIGIN UNSET (compose default http://api:3001)
 #    or set it to that internal address — NEVER a loopback or public domain (the
 #    sandbox is on an internal-only network). NB: compose reads the shell env
-#    before .env, so unset any stale value in your deploy shell too.
+#    before .env, so unset any stale value in your deploy shell too. (The script
+#    above strips a stale loopback from .env and rejects any other custom value.)
 
 # 3. Bring up the API + the tunnel edge WITH the docker-backend override, which
 #    is what adds the host docker socket to the API container (see note below).
@@ -462,6 +471,8 @@ shared with the docker backend (which needs an internal address instead).
 ```bash
 # One-shot helper: baseline-.env check → ensure secrets → set ENABLED/BACKEND=local
 # → build api → up api+tunnel-edge with the local override → bwrap exec smoke test.
+# Backs up .env first and restores it on any failure, so a half-switched
+# local+privileged state is never left behind.
 bash scripts/deploy-sandbox-local.sh
 
 # Or just the smoke test against a throwaway container (builds the image, proves a
