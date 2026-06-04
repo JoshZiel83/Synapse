@@ -99,7 +99,11 @@ COPY --from=ts-builder /build/packages/shared/dist ./packages/shared/dist
 COPY --from=ts-builder /build/packages/shared/node_modules ./packages/shared/node_modules
 COPY --from=ts-builder /build/packages/device-protocol/package.json ./packages/device-protocol/package.json
 COPY --from=ts-builder /build/packages/device-protocol/dist ./packages/device-protocol/dist
-COPY --from=ts-builder /build/packages/device-protocol/node_modules ./packages/device-protocol/node_modules
+# NB: no per-package node_modules COPY for device-protocol — its only runtime dep
+# (zod) hoists to the root node_modules (copied above), so npm leaves it without
+# its own node_modules dir and COPYing it fails ("not found"). shared /
+# device-runtime DO keep a per-package node_modules (tldts, picomatch — not fully
+# hoistable), so those COPYs above stay.
 
 # fs-helper Rust sidecar (history / indexed search / extract).
 COPY --from=fs-helper-builder \
