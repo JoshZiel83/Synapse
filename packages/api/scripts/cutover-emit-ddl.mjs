@@ -259,18 +259,105 @@ $$;`)
     )
   }
   L.push("")
+  L.push(emitLiveViews())
+  L.push("")
   L.push(END)
   return L.join("\n")
+}
+
+// --- 5. live views ---------------------------------------------------------
+// One <t>_live view per soft-delete root (deleted_at IS NULL); per status table
+// (status IN liveValues); plus device child derived views (join devices_live so
+// soft-closed sandbox device children disappear, design §8.6). Junction/
+// workspace parent-liveness is layered in for the membership tables.
+function emitLiveViews() {
+  const V = []
+  V.push(
+    "-- 5. Live views: canonical read surface that hides soft-deleted rows."
+  )
+  V.push(
+    "-- Single-table views over a base table are auto-updatable; WITH CASCADED"
+  )
+  V.push(
+    "-- CHECK OPTION blocks inserting/surfacing a row outside the predicate."
+  )
+
+  // roots: deleted_at IS NULL
+  const roots = Object.entries(mTables)
+    .filter(([, e]) => e.softDelete === "deleted_at")
+    .map(([n]) => n)
+    .sort()
+  for (const t of roots) {
+    V.push(`DROP VIEW IF EXISTS ${t}_live;`)
+    V.push(
+      `CREATE VIEW ${t}_live AS SELECT * FROM ${t} WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;`
+    )
+  }
+
+  // status tables: status IN (liveValues). workspace_members additionally needs
+  // parent-liveness folded in by callers via the helper; the base _live view
+  // here is the status filter.
+  const statusTables = Object.entries(mTables)
+    .filter(([, e]) => e.softDelete === "status")
+    .map(([n, e]) => ({ n, live: e.liveValues || ["active"] }))
+    .sort((a, b) => a.n.localeCompare(b.n))
+  for (const { n, live } of statusTables) {
+    const inList = live.map((v) => `'${v}'`).join(", ")
+    V.push(`DROP VIEW IF EXISTS ${n}_live;`)
+    V.push(
+      `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WHERE status IN (${inList}) WITH CASCADED CHECK OPTION;`
+    )
+  }
+
+  // device child derived views (design §8.6) — hide children of a soft-closed
+  // device. Join back to devices via the documented chain.
+  V.push(
+    "-- device child derived views (§8.6): hide children of soft-closed devices."
+  )
+  V.push(`DROP VIEW IF EXISTS device_services_live;`)
+  V.push(
+    `CREATE VIEW device_services_live AS
+  SELECT s.* FROM device_services s
+  JOIN devices d ON d.id = s.device_id
+  WHERE d.deleted_at IS NULL;`
+  )
+  V.push(`DROP VIEW IF EXISTS device_exposures_live;`)
+  V.push(
+    `CREATE VIEW device_exposures_live AS
+  SELECT x.* FROM device_exposures x
+  JOIN devices d ON d.id = x.device_id
+  WHERE d.deleted_at IS NULL;`
+  )
+  V.push(`DROP VIEW IF EXISTS device_capabilities_live;`)
+  V.push(
+    `CREATE VIEW device_capabilities_live AS
+  SELECT c.* FROM device_capabilities c
+  JOIN device_exposures x ON x.id = c.exposure_id
+  JOIN devices d ON d.id = x.device_id
+  WHERE d.deleted_at IS NULL;`
+  )
+  V.push(`DROP VIEW IF EXISTS device_tools_live;`)
+  V.push(
+    `CREATE VIEW device_tools_live AS
+  SELECT t.* FROM device_tools t
+  JOIN device_exposures x ON x.id = t.exposure_id
+  JOIN devices d ON d.id = x.device_id
+  WHERE d.deleted_at IS NULL;`
+  )
+
+  return V.join("\n")
 }
 
 const region = emit()
 let out
 if (schema.includes(BEGIN) && schema.includes(END)) {
+  // Use a replacement FUNCTION so `$$` (dollar-quoted fn bodies) in `region` is
+  // not interpreted as a String.replace special pattern.
   out = schema.replace(
     new RegExp(
       `${BEGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
     ),
-    region
+    () => region
   )
 } else {
   out = schema.trimEnd() + "\n\n" + region + "\n"

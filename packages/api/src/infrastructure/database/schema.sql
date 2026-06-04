@@ -5756,4 +5756,93 @@ CREATE TRIGGER sd_fk_live_automation_event_sources_webhook_endpoint_id BEFORE IN
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_integration_binding_id ON automation_event_sources;
 CREATE TRIGGER sd_fk_live_automation_event_sources_integration_binding_id BEFORE INSERT OR UPDATE OF integration_binding_id ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_integration_bindings', 'integration_binding_id', 'id');
 
+-- 5. Live views: canonical read surface that hides soft-deleted rows.
+-- Single-table views over a base table are auto-updatable; WITH CASCADED
+-- CHECK OPTION blocks inserting/surfacing a row outside the predicate.
+DROP VIEW IF EXISTS account_live;
+CREATE VIEW account_live AS SELECT * FROM account WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS actors_live;
+CREATE VIEW actors_live AS SELECT * FROM actors WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS automation_event_sources_live;
+CREATE VIEW automation_event_sources_live AS SELECT * FROM automation_event_sources WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS automation_integration_bindings_live;
+CREATE VIEW automation_integration_bindings_live AS SELECT * FROM automation_integration_bindings WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS automation_rules_live;
+CREATE VIEW automation_rules_live AS SELECT * FROM automation_rules WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS automation_webhook_endpoints_live;
+CREATE VIEW automation_webhook_endpoints_live AS SELECT * FROM automation_webhook_endpoints WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS catalog_items_live;
+CREATE VIEW catalog_items_live AS SELECT * FROM catalog_items WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS conversations_live;
+CREATE VIEW conversations_live AS SELECT * FROM conversations WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS devices_live;
+CREATE VIEW devices_live AS SELECT * FROM devices WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS file_assets_live;
+CREATE VIEW file_assets_live AS SELECT * FROM file_assets WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS file_spaces_live;
+CREATE VIEW file_spaces_live AS SELECT * FROM file_spaces WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS installed_skills_live;
+CREATE VIEW installed_skills_live AS SELECT * FROM installed_skills WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS memory_items_live;
+CREATE VIEW memory_items_live AS SELECT * FROM memory_items WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS memory_spaces_live;
+CREATE VIEW memory_spaces_live AS SELECT * FROM memory_spaces WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS model_groups_live;
+CREATE VIEW model_groups_live AS SELECT * FROM model_groups WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS model_profiles_live;
+CREATE VIEW model_profiles_live AS SELECT * FROM model_profiles WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS plugin_connections_live;
+CREATE VIEW plugin_connections_live AS SELECT * FROM plugin_connections WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS plugin_installations_live;
+CREATE VIEW plugin_installations_live AS SELECT * FROM plugin_installations WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS publishers_live;
+CREATE VIEW publishers_live AS SELECT * FROM publishers WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS remote_agent_machines_live;
+CREATE VIEW remote_agent_machines_live AS SELECT * FROM remote_agent_machines WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS remote_agents_live;
+CREATE VIEW remote_agents_live AS SELECT * FROM remote_agents WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS transport_accounts_live;
+CREATE VIEW transport_accounts_live AS SELECT * FROM transport_accounts WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS users_live;
+CREATE VIEW users_live AS SELECT * FROM users WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS workspaces_live;
+CREATE VIEW workspaces_live AS SELECT * FROM workspaces WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS file_access_grants_live;
+CREATE VIEW file_access_grants_live AS SELECT * FROM file_access_grants WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS memory_access_grants_live;
+CREATE VIEW memory_access_grants_live AS SELECT * FROM memory_access_grants WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS model_group_grants_live;
+CREATE VIEW model_group_grants_live AS SELECT * FROM model_group_grants WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS platform_access_bindings_live;
+CREATE VIEW platform_access_bindings_live AS SELECT * FROM platform_access_bindings WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS resource_access_bindings_live;
+CREATE VIEW resource_access_bindings_live AS SELECT * FROM resource_access_bindings WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS workspace_access_bindings_live;
+CREATE VIEW workspace_access_bindings_live AS SELECT * FROM workspace_access_bindings WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+DROP VIEW IF EXISTS workspace_members_live;
+CREATE VIEW workspace_members_live AS SELECT * FROM workspace_members WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+-- device child derived views (§8.6): hide children of soft-closed devices.
+DROP VIEW IF EXISTS device_services_live;
+CREATE VIEW device_services_live AS
+  SELECT s.* FROM device_services s
+  JOIN devices d ON d.id = s.device_id
+  WHERE d.deleted_at IS NULL;
+DROP VIEW IF EXISTS device_exposures_live;
+CREATE VIEW device_exposures_live AS
+  SELECT x.* FROM device_exposures x
+  JOIN devices d ON d.id = x.device_id
+  WHERE d.deleted_at IS NULL;
+DROP VIEW IF EXISTS device_capabilities_live;
+CREATE VIEW device_capabilities_live AS
+  SELECT c.* FROM device_capabilities c
+  JOIN device_exposures x ON x.id = c.exposure_id
+  JOIN devices d ON d.id = x.device_id
+  WHERE d.deleted_at IS NULL;
+DROP VIEW IF EXISTS device_tools_live;
+CREATE VIEW device_tools_live AS
+  SELECT t.* FROM device_tools t
+  JOIN device_exposures x ON x.id = t.exposure_id
+  JOIN devices d ON d.id = x.device_id
+  WHERE d.deleted_at IS NULL;
+
 -- <<< SOFT-DELETE CUTOVER <<<

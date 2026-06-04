@@ -399,6 +399,23 @@ export interface Account {
   user_id: string;
 }
 
+export interface AccountLive {
+  access_token: string | null;
+  access_token_expires_at: Timestamp | null;
+  account_id: string | null;
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  id: string | null;
+  id_token: string | null;
+  password: string | null;
+  provider_id: string | null;
+  refresh_token: string | null;
+  refresh_token_expires_at: Timestamp | null;
+  scope: string | null;
+  updated_at: Timestamp | null;
+  user_id: string | null;
+}
+
 export interface ActorModelGroupAssignments {
   actor_id: string;
   created_at: Generated<Timestamp | null>;
@@ -425,6 +442,27 @@ export interface Actors {
   title: string;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
+}
+
+export interface ActorsLive {
+  avatar_emoji: string | null;
+  avatar_file_id: string | null;
+  can_represent_user: boolean | null;
+  config: Json | null;
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  current_version: number | null;
+  deleted_at: Timestamp | null;
+  id: string | null;
+  is_active: boolean | null;
+  is_public_shared: boolean | null;
+  name: string | null;
+  parent_id: string | null;
+  role: ActorsRole | null;
+  specialties: string[] | null;
+  title: string | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
 }
 
 export interface ActorSourceRefs {
@@ -544,6 +582,31 @@ export interface AutomationEventSources {
   workspace_id: string;
 }
 
+export interface AutomationEventSourcesLive {
+  created_at: Timestamp | null;
+  created_by_actor_id: string | null;
+  created_by_kind: AutomationEventSourcesCreatedByKind | null;
+  created_by_session_id: string | null;
+  created_by_workspace_member_id: string | null;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  example_payload: Json | null;
+  id: string | null;
+  integration_binding_id: string | null;
+  last_triggered_at: Timestamp | null;
+  metadata: Json | null;
+  name: string | null;
+  payload_schema: Json | null;
+  provider_kind: AutomationEventSourcesProviderKind | null;
+  provider_ref: string | null;
+  recommended_usage: string | null;
+  source_key: string | null;
+  status: AutomationEventSourcesStatus | null;
+  updated_at: Timestamp | null;
+  webhook_endpoint_id: string | null;
+  workspace_id: string | null;
+}
+
 export interface AutomationExecutions {
   attempt_count: Generated<number>;
   completed_at: Timestamp | null;
@@ -588,6 +651,23 @@ export interface AutomationIntegrationBindings {
   updated_at: Generated<Timestamp | null>;
   webhook_endpoint_id: string | null;
   workspace_id: string;
+}
+
+export interface AutomationIntegrationBindingsLive {
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  external_subscription_id: string | null;
+  id: string | null;
+  ingress_kind: AutomationIntegrationBindingsIngressKind | null;
+  installation_id: string | null;
+  metadata: Json | null;
+  provider: AutomationIntegrationBindingsProvider | null;
+  target_id: string | null;
+  target_kind: AutomationIntegrationBindingsTargetKind | null;
+  target_label: string | null;
+  updated_at: Timestamp | null;
+  webhook_endpoint_id: string | null;
+  workspace_id: string | null;
 }
 
 export interface AutomationOccurrences {
@@ -636,6 +716,25 @@ export interface AutomationRules {
   workspace_id: string;
 }
 
+export interface AutomationRulesLive {
+  category: AutomationRulesCategory | null;
+  conversation_id: string | null;
+  created_at: Timestamp | null;
+  created_by_participant_id: string | null;
+  created_by_session_id: string | null;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  id: string | null;
+  last_error_at: Timestamp | null;
+  last_error_message: string | null;
+  last_triggered_at: Timestamp | null;
+  metadata: Json | null;
+  name: string | null;
+  status: AutomationRulesStatus | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface AutomationTriggers {
   created_at: Generated<Timestamp | null>;
   event_source_id: string | null;
@@ -670,6 +769,22 @@ export interface AutomationWebhookEndpoints {
   status: Generated<AutomationWebhookEndpointsStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
+}
+
+export interface AutomationWebhookEndpointsLive {
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  deleted_at: Timestamp | null;
+  id: string | null;
+  last_received_at: Timestamp | null;
+  metadata: Json | null;
+  name: string | null;
+  path_token: string | null;
+  secret_ciphertext: string | null;
+  secret_hint: string | null;
+  status: AutomationWebhookEndpointsStatus | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
 }
 
 export interface CatalogCategories {
@@ -711,6 +826,29 @@ export interface CatalogItems {
   tags: Generated<string[] | null>;
   updated_at: Generated<Timestamp | null>;
   visibility: Generated<CatalogItemsVisibility>;
+  workspace_id: string | null;
+}
+
+export interface CatalogItemsLive {
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  display_name: string | null;
+  download_count: number | null;
+  icon_file_id: string | null;
+  id: string | null;
+  is_active: boolean | null;
+  item_kind: CatalogItemsItemKind | null;
+  latest_version_id: string | null;
+  long_description: string | null;
+  metadata: Json | null;
+  mirror_source_id: string | null;
+  publisher_id: string | null;
+  slug: string | null;
+  source_kind: CatalogItemsSourceKind | null;
+  summary: string | null;
+  tags: string[] | null;
+  updated_at: Timestamp | null;
+  visibility: CatalogItemsVisibility | null;
   workspace_id: string | null;
 }
 
@@ -966,6 +1104,18 @@ export interface Conversations {
   workspace_id: string;
 }
 
+export interface ConversationsLive {
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  deleted_at: Timestamp | null;
+  id: string | null;
+  kind: ConversationsKind | null;
+  metadata: Json | null;
+  title: string | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface ConversationTransportBindings {
   conversation_id: string;
   created_at: Generated<Timestamp>;
@@ -988,6 +1138,16 @@ export interface DeviceCapabilities {
   status: Generated<DeviceCapabilitiesStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
+}
+
+export interface DeviceCapabilitiesLive {
+  conversation_type_mask_override: number | null;
+  created_at: Timestamp | null;
+  exposure_id: string | null;
+  id: string | null;
+  status: DeviceCapabilitiesStatus | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
 }
 
 export interface DeviceCatalogRevisions {
@@ -1052,6 +1212,25 @@ export interface DeviceExposures {
   sync_source_id: string | null;
   transport: DeviceExposuresTransport;
   updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceExposuresLive {
+  builtin_kind: DeviceExposuresBuiltinKind | null;
+  created_at: Timestamp | null;
+  description: string | null;
+  device_id: string | null;
+  display_name: string | null;
+  id: string | null;
+  last_error: string | null;
+  last_healthy_at: Timestamp | null;
+  last_seen_at: Timestamp | null;
+  metadata: Json | null;
+  runtime_status: DeviceExposuresRuntimeStatus | null;
+  service_id: string | null;
+  stable_key: string | null;
+  sync_source_id: string | null;
+  transport: DeviceExposuresTransport | null;
+  updated_at: Timestamp | null;
 }
 
 export interface DeviceOperationAttempts {
@@ -1212,6 +1391,49 @@ export interface DeviceServices {
   version: string | null;
 }
 
+export interface DeviceServicesLive {
+  created_at: Timestamp | null;
+  current_session_id: string | null;
+  device_id: string | null;
+  id: string | null;
+  last_seen_at: Timestamp | null;
+  metadata: Json | null;
+  remote_agent_machine_id: string | null;
+  service_kind: DeviceServicesServiceKind | null;
+  status: DeviceServicesStatus | null;
+  tunnel_path_token: string | null;
+  updated_at: Timestamp | null;
+  version: string | null;
+}
+
+export interface DevicesLive {
+  arch: string | null;
+  automation_lifecycle_event_at: Timestamp | null;
+  automation_lifecycle_grace_until: Timestamp | null;
+  automation_lifecycle_state: DevicesAutomationLifecycleState | null;
+  conversation_type_mask_override: number | null;
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  device_type: DevicesDeviceType | null;
+  host_kind: DevicesHostKind | null;
+  host_provider: string | null;
+  id: string | null;
+  last_catalog_changed_at: Timestamp | null;
+  last_connected_at: Timestamp | null;
+  last_seen_at: Timestamp | null;
+  lifecycle_kind: DevicesLifecycleKind | null;
+  owner_workspace_member_id: string | null;
+  platform: string | null;
+  public_key: string | null;
+  public_key_fingerprint: string | null;
+  source_session_id: string | null;
+  title: string | null;
+  trust_status: DevicesTrustStatus | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface DeviceSyncSources {
   config_path: string | null;
   created_at: Generated<Timestamp | null>;
@@ -1250,6 +1472,20 @@ export interface DeviceTools {
   stable_key: string;
   status: Generated<DeviceToolsStatus>;
   updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceToolsLive {
+  created_at: Timestamp | null;
+  current_name: string | null;
+  exposure_id: string | null;
+  first_seen_at: Timestamp | null;
+  id: string | null;
+  last_seen_at: Timestamp | null;
+  latest_revision_id: string | null;
+  metadata: Json | null;
+  stable_key: string | null;
+  status: DeviceToolsStatus | null;
+  updated_at: Timestamp | null;
 }
 
 export interface DirectConversationBindings {
@@ -1307,6 +1543,24 @@ export interface FileAccessGrants {
   workspace_id: string;
 }
 
+export interface FileAccessGrantsLive {
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  file_asset_id: string | null;
+  file_space_id: string | null;
+  id: string | null;
+  permissions: ArrayType<FilePermission> | null;
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source: string | null;
+  source_interaction_id: string | null;
+  status: FileAccessGrantsStatus | null;
+  subject_id: string | null;
+  superseded_at: Timestamp | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface FileAssets {
   content_kind: FileContentKind;
   content_sha256: string;
@@ -1322,6 +1576,25 @@ export interface FileAssets {
   source_family: FileOriginFamily;
   source_system: string;
   updated_at: Generated<Timestamp>;
+  uploader_user_id: string | null;
+  workspace_id: string | null;
+}
+
+export interface FileAssetsLive {
+  content_kind: FileContentKind | null;
+  content_sha256: string | null;
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  details_json: Json | null;
+  id: string | null;
+  initiator_actor_id: string | null;
+  mime_type: string | null;
+  original_name: string | null;
+  parent_asset_id: string | null;
+  size_bytes: Int8 | null;
+  source_family: FileOriginFamily | null;
+  source_system: string | null;
+  updated_at: Timestamp | null;
   uploader_user_id: string | null;
   workspace_id: string | null;
 }
@@ -1402,6 +1675,18 @@ export interface FileSpaces {
   workspace_id: string;
 }
 
+export interface FileSpacesLive {
+  created_at: Timestamp | null;
+  current_snapshot_id: string | null;
+  deleted_at: Timestamp | null;
+  id: string | null;
+  namespace_key: string | null;
+  owner_subject_id: string | null;
+  scope_subject_id: string | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface InstalledSkills {
   conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
@@ -1417,6 +1702,23 @@ export interface InstalledSkills {
   tags: Generated<string[] | null>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
+}
+
+export interface InstalledSkillsLive {
+  conversation_type_mask_override: number | null;
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  current_snapshot_id: string | null;
+  current_version: number | null;
+  deleted_at: Timestamp | null;
+  icon_file_id: string | null;
+  id: string | null;
+  is_active: boolean | null;
+  name: string | null;
+  slug: string | null;
+  tags: string[] | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
 }
 
 export interface InteractionActionTokens {
@@ -1525,6 +1827,24 @@ export interface MemoryAccessGrants {
   workspace_id: string;
 }
 
+export interface MemoryAccessGrantsLive {
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  id: string | null;
+  memory_item_id: string | null;
+  memory_space_id: string | null;
+  permissions: ArrayType<MemoryPermission> | null;
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source: string | null;
+  source_interaction_id: string | null;
+  status: MemoryAccessGrantsStatus | null;
+  subject_id: string | null;
+  superseded_at: Timestamp | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface MemoryEmbeddingCache {
   content_hash: string;
   created_at: Generated<Timestamp | null>;
@@ -1593,6 +1913,35 @@ export interface MemoryItems {
   workspace_id: string;
 }
 
+export interface MemoryItemsLive {
+  active_index_version: number | null;
+  category: MemoryItemsCategory | null;
+  confidence: number | null;
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  embedding_dim: number | null;
+  embedding_model: string | null;
+  id: string | null;
+  importance: number | null;
+  index_error: string | null;
+  index_status: MemoryItemsIndexStatus | null;
+  indexed_at: Timestamp | null;
+  memory_space_id: string | null;
+  metadata: Json | null;
+  search_text: string | null;
+  source_item_id: string | null;
+  source_kind: string | null;
+  source_tool_call_id: string | null;
+  source_turn_id: string | null;
+  staged_index_version: number | null;
+  state: MemoryItemsState | null;
+  supersedes_item_id: string | null;
+  tags: string[] | null;
+  text_digest: string | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface MemoryRecallRunResults {
   created_at: Generated<Timestamp | null>;
   final_score: Generated<number>;
@@ -1633,6 +1982,17 @@ export interface MemorySpaces {
   workspace_id: string;
 }
 
+export interface MemorySpacesLive {
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  id: string | null;
+  namespace_key: string | null;
+  owner_subject_id: string | null;
+  scope_subject_id: string | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface ModelGroupGrants {
   created_at: Generated<Timestamp | null>;
   granted_by_workspace_member_id: string | null;
@@ -1642,6 +2002,17 @@ export interface ModelGroupGrants {
   revoked_at: Timestamp | null;
   status: Generated<ModelGroupGrantsStatus>;
   subject_id: string;
+}
+
+export interface ModelGroupGrantsLive {
+  created_at: Timestamp | null;
+  granted_by_workspace_member_id: string | null;
+  group_id: string | null;
+  id: string | null;
+  reason: string | null;
+  revoked_at: Timestamp | null;
+  status: ModelGroupGrantsStatus | null;
+  subject_id: string | null;
 }
 
 export interface ModelGroupProfiles {
@@ -1672,6 +2043,23 @@ export interface ModelGroups {
   updated_at: Generated<Timestamp | null>;
 }
 
+export interface ModelGroupsLive {
+  attempt_policy: Json | null;
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  id: string | null;
+  is_default: boolean | null;
+  is_enabled: boolean | null;
+  name: string | null;
+  owner_type: ModelGroupsOwnerType | null;
+  owner_workspace_id: string | null;
+  owner_workspace_member_id: string | null;
+  routing_strategy: ModelGroupsRoutingStrategy | null;
+  updated_at: Timestamp | null;
+}
+
 export interface ModelProfileRevisions {
   api_key: string;
   base_url: string;
@@ -1700,6 +2088,18 @@ export interface ModelProfiles {
   workspace_id: string | null;
 }
 
+export interface ModelProfilesLive {
+  created_at: Timestamp | null;
+  current_revision_id: string | null;
+  deleted_at: Timestamp | null;
+  display_name: string | null;
+  id: string | null;
+  installed_by_workspace_member_id: string | null;
+  is_enabled: boolean | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface PayloadBlobs {
   byte_size: Generated<number>;
   content_type: PayloadBlobsContentType;
@@ -1721,6 +2121,18 @@ export interface PlatformAccessBindings {
   status: Generated<AccessBindingStatus>;
   updated_at: Generated<Timestamp | null>;
   user_id: string;
+}
+
+export interface PlatformAccessBindingsLive {
+  access_key: PlatformAccessBindingsAccessKey | null;
+  assigned_by_user_id: string | null;
+  created_at: Timestamp | null;
+  revoked_at: Timestamp | null;
+  revoked_by_user_id: string | null;
+  source: PlatformAccessBindingsSource | null;
+  status: AccessBindingStatus | null;
+  updated_at: Timestamp | null;
+  user_id: string | null;
 }
 
 export interface PluginAuthSessions {
@@ -1767,6 +2179,26 @@ export interface PluginConnections {
   workspace_id: string;
 }
 
+export interface PluginConnectionsLive {
+  avatar_url: string | null;
+  binding_key: string | null;
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  display_name: string | null;
+  driver: string | null;
+  expires_at: Timestamp | null;
+  external_account_id: string | null;
+  id: string | null;
+  installation_id: string | null;
+  owner_scope: PluginConnectionsOwnerScope | null;
+  owner_workspace_member_id: string | null;
+  public_payload: Json | null;
+  secret_payload: Json | null;
+  status: PluginConnectionsStatus | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface PluginInstallations {
   approved_runtime_permissions: Generated<string[] | null>;
   attachment_subject_id: string;
@@ -1783,6 +2215,24 @@ export interface PluginInstallations {
   status: Generated<PluginInstallationsStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
+}
+
+export interface PluginInstallationsLive {
+  approved_runtime_permissions: string[] | null;
+  attachment_subject_id: string | null;
+  catalog_item_id: string | null;
+  catalog_version_id: string | null;
+  config_data: Json | null;
+  conversation_type_mask_override: number | null;
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  display_name: string | null;
+  id: string | null;
+  installed_by_workspace_member_id: string | null;
+  reuse_scope: PluginInstallationsReuseScope | null;
+  status: PluginInstallationsStatus | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
 }
 
 export interface PluginPackageVersionSpecs {
@@ -1856,6 +2306,21 @@ export interface Publishers {
   owner_user_id: string | null;
   slug: string;
   updated_at: Generated<Timestamp | null>;
+  workspace_id: string | null;
+}
+
+export interface PublishersLive {
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  display_name: string | null;
+  id: string | null;
+  is_builtin: boolean | null;
+  is_verified: boolean | null;
+  logo_file_id: string | null;
+  owner_user_id: string | null;
+  slug: string | null;
+  updated_at: Timestamp | null;
   workspace_id: string | null;
 }
 
@@ -1963,6 +2428,21 @@ export interface RemoteAgentMachineSessions {
   updated_at: Generated<Timestamp | null>;
 }
 
+export interface RemoteAgentMachinesLive {
+  api_key_hash: string | null;
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  id: string | null;
+  last_seen_at: Timestamp | null;
+  lifecycle_state: RemoteAgentMachinesLifecycleState | null;
+  title: string | null;
+  trust_status: RemoteAgentMachinesTrustStatus | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface RemoteAgentMessageDeliveries {
   attempts: Generated<number>;
   conversation_id: string;
@@ -2024,6 +2504,24 @@ export interface RemoteAgents {
   workspace_id: string;
 }
 
+export interface RemoteAgentsLive {
+  avatar_emoji: string | null;
+  avatar_file_id: string | null;
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  id: string | null;
+  is_active: boolean | null;
+  is_public_shared: boolean | null;
+  metadata: Json | null;
+  name: string | null;
+  runtime_kind: RemoteAgentsRuntimeKind | null;
+  title: string | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface ResourceAccessBindings {
   actor_id: string | null;
   automation_event_source_id: string | null;
@@ -2043,6 +2541,27 @@ export interface ResourceAccessBindings {
   status: Generated<ResourceAccessBindingsStatus>;
   subject_id: string;
   workspace_id: string;
+}
+
+export interface ResourceAccessBindingsLive {
+  actor_id: string | null;
+  automation_event_source_id: string | null;
+  conversation_type_mask_override: number | null;
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  device_capability_id: string | null;
+  id: string | null;
+  installed_skill_id: string | null;
+  plugin_installation_id: string | null;
+  reason: string | null;
+  remote_agent_id: string | null;
+  resource_type: ResourceAccessBindingResourceType | null;
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source: ResourceAccessBindingsSource | null;
+  status: ResourceAccessBindingsStatus | null;
+  subject_id: string | null;
+  workspace_id: string | null;
 }
 
 export interface RuntimeAuthorizationGrants {
@@ -2379,6 +2898,26 @@ export interface TransportAccounts {
   workspace_id: string;
 }
 
+export interface TransportAccountsLive {
+  account_key: string | null;
+  config: Json | null;
+  connection_mode: TransportAccountsConnectionMode | null;
+  created_at: Timestamp | null;
+  credentials: Json | null;
+  deleted_at: Timestamp | null;
+  display_name: string | null;
+  id: string | null;
+  inbound_actor_id: string | null;
+  inbound_actor_mode: TransportAccountsInboundActorMode | null;
+  metadata: Json | null;
+  owner_scope: TransportAccountsOwnerScope | null;
+  owner_workspace_member_id: string | null;
+  status: TransportAccountsStatus | null;
+  transport_kind: TransportAccountsTransportKind | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface TransportAddresses {
   address_type: Generated<TransportAddressesAddressType>;
   created_at: Generated<Timestamp>;
@@ -2454,6 +2993,21 @@ export interface Users {
   updated_at: Generated<Timestamp>;
 }
 
+export interface UsersLive {
+  avatar_file_id: string | null;
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  email: string | null;
+  email_verified: boolean | null;
+  feishu_open_id: string | null;
+  feishu_tenant_key: string | null;
+  feishu_union_id: string | null;
+  id: string | null;
+  image: string | null;
+  name: string | null;
+  updated_at: Timestamp | null;
+}
+
 export interface Verification {
   created_at: Generated<Timestamp>;
   expires_at: Timestamp;
@@ -2472,6 +3026,17 @@ export interface WorkspaceAccessBindings {
   status: Generated<AccessBindingStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_member_id: string;
+}
+
+export interface WorkspaceAccessBindingsLive {
+  access_key: WorkspaceAccessBindingsAccessKey | null;
+  assigned_by_workspace_member_id: string | null;
+  created_at: Timestamp | null;
+  revoked_at: Timestamp | null;
+  revoked_by_workspace_member_id: string | null;
+  status: AccessBindingStatus | null;
+  updated_at: Timestamp | null;
+  workspace_member_id: string | null;
 }
 
 export interface WorkspaceCapabilityConversationTypePolicies {
@@ -2551,6 +3116,17 @@ export interface WorkspaceMembers {
   workspace_id: string;
 }
 
+export interface WorkspaceMembersLive {
+  id: string | null;
+  joined_at: Timestamp | null;
+  left_at: Timestamp | null;
+  removed_at: Timestamp | null;
+  status: WorkspaceMembersStatus | null;
+  trust_level: WorkspaceMembersTrustLevel | null;
+  user_id: string | null;
+  workspace_id: string | null;
+}
+
 export interface WorkspaceMemberSyncEvents {
   conversation_id: string | null;
   created_at: Generated<Timestamp>;
@@ -2588,30 +3164,49 @@ export interface Workspaces {
   updated_at: Generated<Timestamp | null>;
 }
 
+export interface WorkspacesLive {
+  created_at: Timestamp | null;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  id: string | null;
+  is_trusted: boolean | null;
+  name: string | null;
+  owner_id: string | null;
+  slug: string | null;
+  updated_at: Timestamp | null;
+}
+
 export interface DB {
   access_subjects: AccessSubjects;
   account: Account;
+  account_live: AccountLive;
   actor_model_group_assignments: ActorModelGroupAssignments;
   actor_source_refs: ActorSourceRefs;
   actor_template_version_specs: ActorTemplateVersionSpecs;
   actor_version_docs: ActorVersionDocs;
   actor_versions: ActorVersions;
   actors: Actors;
+  actors_live: ActorsLive;
   audit_logs: AuditLogs;
   automation_deliveries: AutomationDeliveries;
   automation_delivery_targets: AutomationDeliveryTargets;
   automation_event_sources: AutomationEventSources;
+  automation_event_sources_live: AutomationEventSourcesLive;
   automation_execution_targets: AutomationExecutionTargets;
   automation_executions: AutomationExecutions;
   automation_integration_bindings: AutomationIntegrationBindings;
+  automation_integration_bindings_live: AutomationIntegrationBindingsLive;
   automation_occurrences: AutomationOccurrences;
   automation_policies: AutomationPolicies;
   automation_rules: AutomationRules;
+  automation_rules_live: AutomationRulesLive;
   automation_triggers: AutomationTriggers;
   automation_webhook_endpoints: AutomationWebhookEndpoints;
+  automation_webhook_endpoints_live: AutomationWebhookEndpointsLive;
   catalog_categories: CatalogCategories;
   catalog_item_categories: CatalogItemCategories;
   catalog_items: CatalogItems;
+  catalog_items_live: CatalogItemsLive;
   catalog_version_files: CatalogVersionFiles;
   catalog_versions: CatalogVersions;
   chat_client_instances: ChatClientInstances;
@@ -2636,11 +3231,14 @@ export interface DB {
   conversation_participants: ConversationParticipants;
   conversation_transport_bindings: ConversationTransportBindings;
   conversations: Conversations;
+  conversations_live: ConversationsLive;
   device_capabilities: DeviceCapabilities;
+  device_capabilities_live: DeviceCapabilitiesLive;
   device_catalog_revisions: DeviceCatalogRevisions;
   device_code: DeviceCode;
   device_control_plane_sessions: DeviceControlPlaneSessions;
   device_exposures: DeviceExposures;
+  device_exposures_live: DeviceExposuresLive;
   device_operation_attempts: DeviceOperationAttempts;
   device_operation_results: DeviceOperationResults;
   device_operations: DeviceOperations;
@@ -2649,21 +3247,28 @@ export interface DB {
   device_runtime_sessions: DeviceRuntimeSessions;
   device_service_keys: DeviceServiceKeys;
   device_services: DeviceServices;
+  device_services_live: DeviceServicesLive;
   device_sync_sources: DeviceSyncSources;
   device_tool_revisions: DeviceToolRevisions;
   device_tools: DeviceTools;
+  device_tools_live: DeviceToolsLive;
   devices: Devices;
+  devices_live: DevicesLive;
   direct_conversation_bindings: DirectConversationBindings;
   engine_branch_checkpoints: EngineBranchCheckpoints;
   entity_access_requests: EntityAccessRequests;
   file_access_grants: FileAccessGrants;
+  file_access_grants_live: FileAccessGrantsLive;
   file_assets: FileAssets;
+  file_assets_live: FileAssetsLive;
   file_mounts: FileMounts;
   file_parse_outputs: FileParseOutputs;
   file_parse_runs: FileParseRuns;
   file_snapshots: FileSnapshots;
   file_spaces: FileSpaces;
+  file_spaces_live: FileSpacesLive;
   installed_skills: InstalledSkills;
+  installed_skills_live: InstalledSkillsLive;
   interaction_action_tokens: InteractionActionTokens;
   interaction_plan_approval_requests: InteractionPlanApprovalRequests;
   interaction_requests: InteractionRequests;
@@ -2672,28 +3277,38 @@ export interface DB {
   interaction_transport_projections: InteractionTransportProjections;
   interaction_user_input_requests: InteractionUserInputRequests;
   memory_access_grants: MemoryAccessGrants;
+  memory_access_grants_live: MemoryAccessGrantsLive;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_item_chunks: MemoryItemChunks;
   memory_item_parts: MemoryItemParts;
   memory_items: MemoryItems;
+  memory_items_live: MemoryItemsLive;
   memory_recall_run_results: MemoryRecallRunResults;
   memory_recall_runs: MemoryRecallRuns;
   memory_spaces: MemorySpaces;
+  memory_spaces_live: MemorySpacesLive;
   model_group_grants: ModelGroupGrants;
+  model_group_grants_live: ModelGroupGrantsLive;
   model_group_profiles: ModelGroupProfiles;
   model_groups: ModelGroups;
+  model_groups_live: ModelGroupsLive;
   model_profile_revisions: ModelProfileRevisions;
   model_profiles: ModelProfiles;
+  model_profiles_live: ModelProfilesLive;
   payload_blobs: PayloadBlobs;
   platform_access_bindings: PlatformAccessBindings;
+  platform_access_bindings_live: PlatformAccessBindingsLive;
   plugin_auth_sessions: PluginAuthSessions;
   plugin_connections: PluginConnections;
+  plugin_connections_live: PluginConnectionsLive;
   plugin_installations: PluginInstallations;
+  plugin_installations_live: PluginInstallationsLive;
   plugin_package_version_specs: PluginPackageVersionSpecs;
   plugin_source_refs: PluginSourceRefs;
   plugin_version_runtime_permissions: PluginVersionRuntimePermissions;
   provider_steps: ProviderSteps;
   publishers: Publishers;
+  publishers_live: PublishersLive;
   realtime_event_outbox: RealtimeEventOutbox;
   remote_agent_bindings: RemoteAgentBindings;
   remote_agent_conversation_contexts: RemoteAgentConversationContexts;
@@ -2701,11 +3316,14 @@ export interface DB {
   remote_agent_group_interaction_grants: RemoteAgentGroupInteractionGrants;
   remote_agent_machine_sessions: RemoteAgentMachineSessions;
   remote_agent_machines: RemoteAgentMachines;
+  remote_agent_machines_live: RemoteAgentMachinesLive;
   remote_agent_message_deliveries: RemoteAgentMessageDeliveries;
   remote_agent_runs: RemoteAgentRuns;
   remote_agent_runtime_catalog: RemoteAgentRuntimeCatalog;
   remote_agents: RemoteAgents;
+  remote_agents_live: RemoteAgentsLive;
   resource_access_bindings: ResourceAccessBindings;
+  resource_access_bindings_live: ResourceAccessBindingsLive;
   runtime_authorization_grants: RuntimeAuthorizationGrants;
   runtime_events: RuntimeEvents;
   schema_migrations: SchemaMigrations;
@@ -2728,13 +3346,16 @@ export interface DB {
   tool_result_parts: ToolResultParts;
   tool_results: ToolResults;
   transport_accounts: TransportAccounts;
+  transport_accounts_live: TransportAccountsLive;
   transport_addresses: TransportAddresses;
   transport_endpoints: TransportEndpoints;
   transport_message_links: TransportMessageLinks;
   turns: Turns;
   users: Users;
+  users_live: UsersLive;
   verification: Verification;
   workspace_access_bindings: WorkspaceAccessBindings;
+  workspace_access_bindings_live: WorkspaceAccessBindingsLive;
   workspace_capability_conversation_type_policies: WorkspaceCapabilityConversationTypePolicies;
   workspace_friend_entries: WorkspaceFriendEntries;
   workspace_friend_requests: WorkspaceFriendRequests;
@@ -2743,6 +3364,8 @@ export interface DB {
   workspace_member_preferences: WorkspaceMemberPreferences;
   workspace_member_sync_events: WorkspaceMemberSyncEvents;
   workspace_members: WorkspaceMembers;
+  workspace_members_live: WorkspaceMembersLive;
   workspace_relationship_profiles: WorkspaceRelationshipProfiles;
   workspaces: Workspaces;
+  workspaces_live: WorkspacesLive;
 }

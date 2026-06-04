@@ -124,6 +124,11 @@ export async function loadDeviceCapabilityToolsForSubjects(
       "d.arch as device_arch",
     ])
     .where("dc.workspace_id", "=", params.workspaceId)
+    // Soft-delete (§8.6): a soft-closed sandbox device keeps its child rows for
+    // audit, but its tools must NOT be projected/resolved. Filter on device
+    // liveness here (the projection joins device_* child tables directly rather
+    // than through devices_live).
+    .where("d.deleted_at", "is", null)
     .where("dc.status", "=", "active")
     .where("dt.status", "=", "active")
     .where("dcr.status", "=", "active")

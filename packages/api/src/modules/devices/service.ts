@@ -70,6 +70,7 @@ export async function listDevices(
     .selectFrom("devices")
     .selectAll()
     .where("workspace_id", "=", workspaceId)
+    .where("deleted_at", "is", null)
     .orderBy("created_at", "desc")
     .execute()
   return rows.map((row) =>
@@ -97,6 +98,7 @@ export async function getDevice(
     .selectAll()
     .where("workspace_id", "=", workspaceId)
     .where("id", "=", deviceId)
+    .where("deleted_at", "is", null)
     .executeTakeFirst()
   if (!deviceRow) {
     throw new DeviceModuleError({
