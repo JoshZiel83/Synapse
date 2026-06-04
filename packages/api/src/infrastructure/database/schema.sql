@@ -6,6 +6,13 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 CREATE TYPE platform_access_bindings_access_key AS ENUM ('super_admin', 'workspace_admin', 'model_admin', 'support', 'auditor');
 CREATE TYPE platform_access_bindings_source AS ENUM ('config', 'manual');
 CREATE TYPE workspace_members_trust_level AS ENUM ('admin', 'member', 'guest');
+-- soft-delete: workspace_members is a single durable identity row; leaving /
+-- removal flip status (member id is stable, re-join revives). See
+-- docs/soft-delete-design.md §6.
+CREATE TYPE workspace_members_status AS ENUM ('active', 'left', 'removed');
+-- soft-delete: composite-PK access binding tables flip status instead of being
+-- hard-deleted on revoke; re-grant revives the row (design §6.2 option A).
+CREATE TYPE access_binding_status AS ENUM ('active', 'revoked');
 CREATE TYPE workspace_access_bindings_access_key AS ENUM ('model_admin', 'actor_admin', 'remote_agent_admin', 'skill_admin', 'plugin_admin', 'memory_admin', 'device_admin', 'conversation_admin');
 CREATE TYPE workspace_invites_trust_level AS ENUM ('admin', 'member', 'guest');
 CREATE TYPE conversations_kind AS ENUM ('direct', 'group');
@@ -175,6 +182,10 @@ CREATE TYPE devices_device_type AS ENUM (
 );
 CREATE TYPE devices_trust_status AS ENUM ('pending', 'trusted', 'revoked');
 CREATE TYPE devices_automation_lifecycle_state AS ENUM ('online', 'offline');
+-- soft-delete: distinguishes long-lived registered devices (soft-deletable via
+-- markDeviceDeleted) from per-session sandbox devices (soft-close, records kept;
+-- see docs/soft-delete-design.md §5.3). source_session_id is a pure marker.
+CREATE TYPE devices_lifecycle_kind AS ENUM ('registered', 'sandbox_ephemeral');
 CREATE TYPE device_services_service_kind AS ENUM ('device_runtime', 'remote_agent_daemon');
 CREATE TYPE device_services_status AS ENUM ('starting', 'online', 'degraded', 'offline');
 CREATE TYPE device_control_plane_sessions_status AS ENUM ('connecting', 'active', 'closing', 'closed', 'rejected');
@@ -5090,3 +5101,59 @@ CREATE INDEX idx_file_mounts_live_backend
   ON file_mounts(sandbox_backend, sandbox_resource_id)
   WHERE sandbox_resource_id IS NOT NULL AND status NOT IN ('closed', 'failed');
 CREATE INDEX idx_file_mounts_space ON file_mounts(file_space_id);
+
+-- ============================================================================
+-- SOFT DELETE — P0a additive lifecycle columns (pure-add, no behavior change)
+-- ============================================================================
+-- See docs/soft-delete-design.md §10 (P0a). This block is intentionally pure
+-- additive: every column is nullable, or NOT NULL with a DEFAULT that backfills
+-- existing rows to "live". It introduces NO tombstones, changes NO FK/cascade
+-- behavior, and is the safe prerequisite for the atomic cutover. The manifest
+-- soft-delete-table-classification.yml is the source of truth for which tables
+-- get which columns; derive-fk-policy.mjs enforces consistency.
+
+-- 1) deleted_at on the 24 soft-delete ROOT entities (NULL = live).
+ALTER TABLE account                          ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE actors                           ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE automation_event_sources         ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE automation_integration_bindings  ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE automation_rules                 ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE automation_webhook_endpoints     ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE catalog_items                    ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE conversations                    ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE devices                          ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE file_assets                      ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE file_spaces                      ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE installed_skills                 ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE memory_items                     ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE memory_spaces                    ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE model_groups                     ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE model_profiles                   ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE plugin_connections               ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE plugin_installations             ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE publishers                       ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE remote_agent_machines            ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE remote_agents                    ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE transport_accounts               ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE users                            ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE workspaces                       ADD COLUMN deleted_at TIMESTAMPTZ;
+
+-- 2) workspace_members: single durable identity row (design §6). status flips on
+--    leave/removal; member id is stable; re-join revives. DEFAULT 'active'
+--    backfills existing members.
+ALTER TABLE workspace_members ADD COLUMN status workspace_members_status NOT NULL DEFAULT 'active';
+ALTER TABLE workspace_members ADD COLUMN left_at TIMESTAMPTZ;
+ALTER TABLE workspace_members ADD COLUMN removed_at TIMESTAMPTZ;
+
+-- 3) Composite-PK access binding tables: status flip on revoke (design §6.2 A).
+ALTER TABLE platform_access_bindings  ADD COLUMN status access_binding_status NOT NULL DEFAULT 'active';
+ALTER TABLE platform_access_bindings  ADD COLUMN revoked_at TIMESTAMPTZ;
+ALTER TABLE platform_access_bindings  ADD COLUMN revoked_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE workspace_access_bindings ADD COLUMN status access_binding_status NOT NULL DEFAULT 'active';
+ALTER TABLE workspace_access_bindings ADD COLUMN revoked_at TIMESTAMPTZ;
+ALTER TABLE workspace_access_bindings ADD COLUMN revoked_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL;
+
+-- 4) devices: lifecycle marker so sandbox-ephemeral devices are distinguished
+--    from registered ones (design §5.3). DEFAULT 'registered' backfills.
+ALTER TABLE devices ADD COLUMN lifecycle_kind devices_lifecycle_kind NOT NULL DEFAULT 'registered';
+ALTER TABLE devices ADD COLUMN source_session_id UUID;
