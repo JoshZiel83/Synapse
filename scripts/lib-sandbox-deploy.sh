@@ -32,8 +32,8 @@ assert_shell_secret() {
 }
 
 # ── pre-deploy snapshot + state-aware rollback ────────────────────────────────
-# A failed deploy must restore each touched service to EXACTLY its pre-deploy
-# state — not just "running in the right form". Three axes matter:
+# A failed deploy restores each touched service to its pre-deploy OPERATIONAL
+# state along three axes:
 #   - existence:  absent vs present (rollback of an absent svc = remove it);
 #   - run state:  a present container may be running OR deliberately stopped
 #                 (docker inspect succeeds either way) — rolling a stopped svc
@@ -43,6 +43,12 @@ assert_shell_secret() {
 # We snapshot a compact string per service and replay it on failure with all
 # managed vars UNSET (so compose honors the restored .env, not a shell flag we
 # accepted because it equalled THIS deploy's target).
+#
+# NOT restored: the exact pre-deploy IMAGE ID / container identity. The deploy
+# (re)builds mutable-tag images first, so a rollback `up -d` recreates from the
+# JUST-BUILT image, not the one that was running before. That's acceptable here —
+# the contract is "restore existence + run-state + form", not image pinning. If
+# you need image-level rollback, deploy by immutable digest and snapshot it too.
 
 # api snapshot:  "absent" | "stopped:<form>" | "running:<form>"  (form ∈ base|docker|local)
 # tunnel-edge:   "absent" | "stopped"        | "running"          (overrides don't touch it)

@@ -51,8 +51,8 @@ assert_shell_flag SYNAPSE_SANDBOX_BACKEND docker
 assert_shell_flag SYNAPSE_SANDBOX_TUNNEL frp
 
 # Snapshot how api + tunnel-edge exist BEFORE we touch anything, so a failed
-# deploy can restore each to its exact pre-deploy state (absent / stopped /
-# running, and the api's override form).
+# deploy can restore each to its pre-deploy operational state (existence / run
+# state / api override form — NOT the pre-deploy image id; see lib header).
 PREDEPLOY_API_SNAPSHOT="$(predeploy_api_snapshot)"
 PREDEPLOY_TUNNEL_SNAPSHOT="$(predeploy_tunnel_snapshot)"
 
@@ -79,8 +79,8 @@ cleanup() {
       cp -p "$ENV_BACKUP" "$ENV_FILE"
       log "deploy failed — restored the original .env (sandbox flags reverted)."
     fi
-    # Each rollback restores its exact pre-deploy snapshot; rollback_* unset
-    # managed vars so compose honors the restored .env, not a shell flag we
+    # Each rollback restores its pre-deploy operational snapshot; rollback_*
+    # unset managed vars so compose honors the restored .env, not a shell flag we
     # accepted for THIS deploy.
     if [ "$API_STARTED" -eq 1 ]; then
       rollback_api "$PREDEPLOY_API_SNAPSHOT" \
