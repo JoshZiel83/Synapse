@@ -6,3 +6,15 @@
 .refer
 coverage
 storage
+# Rust build outputs — the fs-helper Rust stage rebuilds from source (--locked),
+# so the host's target/ (can be >1G) must never enter the build context.
+**/target
+# Never ship secrets into the build context. Docker does NOT read .gitignore,
+# so .env files (root + nested worktrees + infra/) must be excluded here.
+# .env.example templates are deliberately NOT matched and still ship.
+.env
+**/.env
+**/.env.local
+# Local dev scratch that would otherwise bloat the context by tens of GB.
+.claude/
+.worktrees/

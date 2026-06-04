@@ -1,0 +1,44 @@
+# Containerized-LOCAL sandbox opt-in override.
+#
+# The `local` SandboxBackend runs each session's device-runtime as a same-host
+# CHILD of the API process. When the API itself runs in THIS container, that
+# child's bwrap jail needs kernel privileges the default container profile
+# denies:
+#   - CAP_SYS_ADMIN  — bwrap mount / namespace setup,
+#   - CAP_NET_ADMIN  — the jail uses `--unshare-net` (the local host-provider
+#                      does NOT pass --cmd-sandbox-share-net), whose loopback
+#                      bring-up fails without it,
+#   - seccomp + apparmor unconfined — AppArmor otherwise blocks the jail's
+#                      mount make-rslave under Docker.
+#
+# These apply to EVERY process in the API container, so they WEAKEN its own
+# isolation. Use the `local` backend only single-tenant / trusted. For
+# multi-tenant or untrusted workloads use the `docker` backend
+# (docker-compose.sandbox-docker.yml), which confines each session in a separate
+# container and keeps the API on the default profile. On a BARE host (API not in
+# Docker) you need NONE of this — the host userns suffices.
+#
+# Layer this file ONLY when SYNAPSE_SANDBOX_BACKEND=local AND the API is
+# containerized (scripts/deploy-sandbox-local.sh does this for you):
+#
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.sandbox-local.yml \
+#     --profile production up -d api tunnel-edge
+
+services:
+  api:
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    environment:
+      # The same-host child dials the API back over loopback (it shares this
+      # container's network namespace), avoiding a public-domain round-trip
+      # (DNS / hairpin-NAT). This is injected HERE, never in .env: the variable
+      # is shared with the docker backend (which needs an internal address like
+      # http://api:3001), so a stray .env value would break a later switch back
+      # to docker.
+      SYNAPSE_SANDBOX_SERVER_ORIGIN: http://127.0.0.1:3001

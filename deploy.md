@@ -334,10 +334,14 @@ Per-session actor sandboxes run each actor turn's filesystem + command tools in
 an isolated runtime. Two backends, selected by `SYNAPSE_SANDBOX_BACKEND`:
 
 - **`local`** (default) — a same-host `device-runtime` child process. Command
-  confinement needs `bwrap` on the API host; absent it, the sandbox is
-  file-only (fail-closed). The runtime exposes its MCP host to the API over a
-  **direct loopback** endpoint (`--tunnel-mode=noop` → `http://127.0.0.1:<port>`);
-  the server accepts that loopback URL only for a live local sandbox (no frpc).
+  confinement needs `bwrap`; the API image bakes `bubblewrap` (+ `ripgrep` for
+  live search), so a **containerized** API has it — but the container still needs
+  extra kernel privileges (see §8b.1). On a **bare-metal** API, install
+  `bubblewrap` on the host and ensure userns/bwrap actually run; absent a working
+  bwrap the sandbox is file-only (fail-closed — no commandline tool). The runtime
+  exposes its MCP host to the API over a **direct loopback** endpoint
+  (`--tunnel-mode=noop` → `http://127.0.0.1:<port>`); the server accepts that
+  loopback URL only for a live local sandbox (no frpc).
 - **`docker`** — the per-session `device-runtime` runs in its own cloud-sandbox
   container (DooD via the host docker socket), reached over the frp tunnel.
   Command confinement (bwrap) and network isolation live in that container.
@@ -345,6 +349,15 @@ an isolated runtime. Two backends, selected by `SYNAPSE_SANDBOX_BACKEND`:
   loopback path, the docker backend **requires** `SYNAPSE_SANDBOX_TUNNEL=frp`
   and `FRP_SHARED_TOKEN`; any other value fails fast at provision rather than
   booting a sandbox whose tools can never be dispatched.
+
+> **Image prerequisite (BOTH backends).** The API process itself runs the Rust
+> `synapse-device-fs-helper` for all supervisor-side content-addressed-storage
+> work (materialize / scan / 3-way merge) — _before_ the backend is even selected
+> — so `infrastructure/Dockerfile.api` builds it in a `rust:1-bookworm` stage and
+> pins `SYNAPSE_DEVICE_FS_HELPER_PATH`. After pulling a build that adds this,
+> **rebuild the api image** (`docker compose --profile production build api`); an
+> un-baked image fails the first provision with
+> `synapse-device-fs-helper binary not found`.
 
 In both cases provisioning waits for the device to register its tunnel endpoint
 (`device.tunnel.up`) before activating the sandbox or granting tools — a sandbox
@@ -354,14 +367,26 @@ that never becomes dispatchable fails provisioning instead of silently looking
 Enable the docker backend:
 
 ```bash
-# 1. Build the cloud-sandbox image (self-contained; compiles TS + Rust inside).
+# 0. Ensure the two sandbox secrets exist (signing key + frp token). Narrow —
+#    does NOT touch deploy vars the way ./setup.sh does. Older .env files predate
+#    these and lack the lines entirely; this generates them when missing/empty
+#    and keeps any existing non-empty value.
+bash scripts/ensure-sandbox-secrets.sh
+
+# 1. Rebuild the api image WITH the baked fs-helper (see prerequisite above),
+#    then build the cloud-sandbox image (self-contained; compiles TS + Rust inside).
+docker compose --profile production build api
 docker compose --profile sandbox-build build sandbox-image
 
-# 2. In .env (setup.sh already generated the signing key + frp token):
+# 2. In .env set the three flags (setup.sh defaults TUNNEL=none, so it MUST be
+#    changed for docker):
 #      SYNAPSE_SANDBOX_ENABLED=true
 #      SYNAPSE_SANDBOX_BACKEND=docker
 #      SYNAPSE_SANDBOX_TUNNEL=frp
-#    (SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY + FRP_SHARED_TOKEN must be set.)
+#    Leave SYNAPSE_SANDBOX_SERVER_ORIGIN UNSET (compose default http://api:3001)
+#    or set it to that internal address — NEVER a loopback or public domain (the
+#    sandbox is on an internal-only network). NB: compose reads the shell env
+#    before .env, so unset any stale value in your deploy shell too.
 
 # 3. Bring up the API + the tunnel edge WITH the docker-backend override, which
 #    is what adds the host docker socket to the API container (see note below).
@@ -411,6 +436,49 @@ Notes:
   `SYNAPSE_DEVICE_TUNNEL_EDGE_URL` host and `SYNAPSE_TUNNEL_VHOST_HOST` disagree
   (a mismatch would make every sandbox dispatch fail to route), so the two must
   be configured together.
+
+### 8b.1 Containerized `local` backend (single-tenant only)
+
+The `local` backend runs the device-runtime as a same-host child of the API. When
+the API itself runs in a container, that child's bwrap jail needs kernel
+privileges the default profile denies. The API image already bakes `bubblewrap`
+and `ripgrep`; what's left is the container's capability profile:
+
+- `cap_add: SYS_ADMIN` (bwrap mount/namespace setup) **and** `NET_ADMIN` (the
+  local jail uses `--unshare-net`, whose loopback bring-up needs it — the local
+  host-provider does not pass `--cmd-sandbox-share-net`),
+- `security_opt: seccomp=unconfined`, `apparmor=unconfined` (AppArmor otherwise
+  blocks the jail's mount make-rslave).
+
+These apply to **every** process in the API container, so they weaken its
+isolation — strictly worse than the `docker` backend (which keeps the API on the
+default profile and confines each session in a separate container). **Use `local`
+only single-tenant / trusted; prefer `docker` for multi-tenant or untrusted
+workloads.** These caps live in the opt-in `docker-compose.sandbox-local.yml`
+override, which also injects `SYNAPSE_SANDBOX_SERVER_ORIGIN=http://127.0.0.1:3001`
+(loopback) — kept in the override, **never in `.env`**, since that variable is
+shared with the docker backend (which needs an internal address instead).
+
+```bash
+# One-shot helper: baseline-.env check → ensure secrets → set ENABLED/BACKEND=local
+# → build api → up api+tunnel-edge with the local override → bwrap exec smoke test.
+bash scripts/deploy-sandbox-local.sh
+
+# Or just the smoke test against a throwaway container (builds the image, proves a
+# --unshare-net bwrap jail actually starts under the cap stack — not merely that
+# the binaries exist):
+bash scripts/sandbox-local-smoke.sh
+```
+
+**Bare-metal API (not containerized):** no container caps are needed — the host's
+userns suffices — but you must install `bubblewrap` on the host and confirm
+userns/bwrap actually run (else commandline fail-closes off). The baked image
+bwrap does not help a bare-metal process.
+
+**Switching back to `docker`:** ensure no leftover loopback
+`SYNAPSE_SANDBOX_SERVER_ORIGIN` remains in `.env` **or your shell** (compose reads
+the shell first) — it must be unset or `http://api:3001`, never a loopback/public
+domain, or the docker sandbox container will dial the wrong address.
 
 ## 9. Troubleshooting
 

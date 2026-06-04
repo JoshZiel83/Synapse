@@ -219,6 +219,41 @@ interface SessionContext {
 }
 
 /**
+ * Origin the LOCAL sandbox device-runtime dials back to (passed as `--server=`
+ * and to startPairing). Honors SYNAPSE_SANDBOX_SERVER_ORIGIN — a containerized
+ * local deploy sets it to http://127.0.0.1:3001 (loopback) so the same-host
+ * child doesn't have to round-trip the public domain (DNS/hairpin-NAT). Falls
+ * back to config.app.baseUrl (the prior unconditional value) when unset.
+ *
+ * NOTE: this is the LOCAL backend's source. The docker backend does NOT read
+ * spec.serverOrigin — it builds its own from the same env in
+ * dockerBackendOptionsFromEnv (opts.serverOrigin) — so this never affects it.
+ */
+export function sandboxLocalServerOrigin(): string {
+  return process.env.SYNAPSE_SANDBOX_SERVER_ORIGIN?.trim() || config.app.baseUrl
+}
+
+/**
+ * The spec.storageVolumeSubpath value for a given backend. It is a DOCKER-ONLY
+ * field (the docker backend mounts the session's subpath of the shared storage
+ * volume into the container; the local backend ignores it). Computing it for
+ * the local backend was a latent bug: toSandboxVolumeSubpath REQUIRES STORAGE_DIR
+ * to live under the volume mount point (default /app/storage) and throws
+ * otherwise — which on a bare-metal API (default STORAGE_DIR=/tmp/synapse-storage)
+ * aborts provision before the backend even starts. So compute it only for docker;
+ * local gets undefined.
+ *
+ * Pure (takes storageDir/mountPoint explicitly rather than reading the module
+ * STORAGE_DIR const) so it is deterministically unit-testable.
+ */
+export function sandboxSpecVolumeSubpath(
+  kind: SandboxBackendKind,
+  input: { storageDir: string; mountPoint: string; sessionId: string }
+): string | undefined {
+  return kind === "docker" ? toSandboxVolumeSubpath(input) : undefined
+}
+
+/**
  * A backend usable for `connect()` only (teardown / cross-process kill), built
  * from the persisted SandboxRef kind. `create()` is never called on these.
  *
@@ -447,14 +482,6 @@ export function toSandboxVolumeSubpath(input: {
   // Always POSIX separators — the path is consumed by the Linux container's
   // docker engine (host separator is POSIX here too, but normalize defensively).
   return rel.split(/[\\/]/).join("/")
-}
-
-function sandboxVolumeSubpathFor(sessionId: string): string {
-  return toSandboxVolumeSubpath({
-    storageDir: STORAGE_DIR,
-    mountPoint: storageVolumeMountPoint(),
-    sessionId,
-  })
 }
 
 function brokerDirFor(sessionId: string): string {
@@ -755,15 +782,20 @@ export async function provisionSandbox(
       sessionId,
       workspaceId: ctx.workspaceId,
       sandboxRoot,
-      // Docker backend: where this session's root lives RELATIVE to the storage
-      // volume mount (computed from STORAGE_DIR, never hardcoded). Ignored by
-      // the local backend.
-      storageVolumeSubpath: sandboxVolumeSubpathFor(sessionId),
+      // Docker-ONLY: where this session's root lives RELATIVE to the storage
+      // volume mount (computed from STORAGE_DIR, never hardcoded). Undefined for
+      // the local backend — computing it there throws when STORAGE_DIR isn't
+      // under the volume mount point (bare-metal default /tmp/synapse-storage).
+      storageVolumeSubpath: sandboxSpecVolumeSubpath(backend.kind, {
+        storageDir: STORAGE_DIR,
+        mountPoint: storageVolumeMountPoint(),
+        sessionId,
+      }),
       fsHelperPath,
-      // The device dials back to the API. config.app.baseUrl for local;
-      // SYNAPSE_SANDBOX_SERVER_ORIGIN (internal address) is applied by the
-      // docker backend in Phase 4.
-      serverOrigin: config.app.baseUrl,
+      // The device dials back to the API. LOCAL backend: SYNAPSE_SANDBOX_SERVER_ORIGIN
+      // (loopback for a containerized local deploy) or config.app.baseUrl. The
+      // docker backend ignores this and builds its own origin from env.
+      serverOrigin: sandboxLocalServerOrigin(),
       // ALWAYS run this per-session device in sandbox mode (--cmd-sandbox), even
       // when bwrap is unavailable. The device-runtime's --cmd-sandbox branch
       // fail-closes: bwrap present → confined commandline; bwrap absent → NO

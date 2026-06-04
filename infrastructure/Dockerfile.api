@@ -108,13 +108,32 @@ RUN set -eux; mkdir -p /app/models/memory; \
 # top-level copy would clash .so symbols with the transformers-bundled one).
 RUN node -e "require('@huggingface/transformers'); require('sharp'); require('tesseract.js'); console.log('native deps OK')"
 
+# ── Rust builder: compile the fs-helper sidecar (supervisor-side CAS) ─────────
+# The API process ITSELF runs synapse-device-fs-helper for ALL sandbox CAS work
+# (materialize / scan / 3-way merge) in provisionSandbox — BEFORE the backend is
+# even selected — so BOTH the `local` and `docker` backends need it baked into
+# the API image (topology A). Self-contained: built from sidecars/ in the build
+# context; .dockerignore excludes **/target so the host's build outputs never
+# enter the context and `--locked` (Cargo.lock present) stays reproducible.
+# Mirrors the cloud-sandbox image's fs-helper stage.
+FROM rust:1-bookworm AS fs-helper-builder
+WORKDIR /build
+COPY sidecars/fs-helper/ sidecars/fs-helper/
+RUN cd sidecars/fs-helper && cargo build --release --locked
+
 FROM node:20-bookworm-slim
 WORKDIR /app
 # Docker CLI (client only) for the DooD sandbox backend — it talks to the
 # host daemon via the mounted /var/run/docker.sock. Static binary; no daemon.
+# bubblewrap + ripgrep are for the LOCAL sandbox backend, whose device-runtime
+# runs as a same-host child INSIDE this container: bwrap is the --cmd-sandbox
+# jail (absent → commandline fail-closes off), ripgrep backs live fs_search
+# (absent → fs_search ENOENT-throws). Both are inert for the docker backend
+# (no co-located child) — only image size. Explicitly installed, so they
+# survive the `apt-get purge curl` / autoremove below.
 ARG DOCKER_CLI_VERSION=27.5.1
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && apt-get install -y --no-install-recommends ca-certificates curl bubblewrap ripgrep \
   && curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
        -o /tmp/docker.tgz \
   && tar -xzf /tmp/docker.tgz -C /tmp \
@@ -128,10 +147,20 @@ RUN apt-get update \
 # binaries), every package's dist/, and the baked /app/models. dist/index.js
 # resolves @synapse/device-protocol + @synapse/device-runtime via these symlinks.
 COPY --from=builder /app/ ./
+# fs-helper Rust sidecar — supervisor-side CAS engine for BOTH sandbox backends.
+# Placed at the path the api resolver climbs to (anchored on materialize.js via
+# import.meta.url: dist/modules/sandbox → 6×.. → /app/sidecars/fs-helper, then
+# target/release/<bin>) AND pinned via the env var (resolveSidecarPath honors it
+# first). Redundant on purpose: env is primary, the on-disk path is the climb
+# backstop — keep the two aligned if either moves.
+COPY --from=fs-helper-builder \
+     /build/sidecars/fs-helper/target/release/synapse-device-fs-helper \
+     /app/sidecars/fs-helper/target/release/synapse-device-fs-helper
 # Baked-in immutable assets live OUTSIDE the api_storage volume mount.
 ENV MEMORY_MODEL_CACHE_DIR=/app/models/memory \
     MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=false \
     TESSERACT_LANG_PATH=/app/models/tessdata \
-    TESSERACT_LANGS=chi_sim+chi_tra+eng+jpn
+    TESSERACT_LANGS=chi_sim+chi_tra+eng+jpn \
+    SYNAPSE_DEVICE_FS_HELPER_PATH=/app/sidecars/fs-helper/target/release/synapse-device-fs-helper
 EXPOSE 3001
 CMD ["node", "packages/api/dist/index.js"]
