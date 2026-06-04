@@ -414,7 +414,7 @@ test(
 
 // ---------- runtime authorization grant trigger ----------
 
-async function newRelayDevice(
+async function newDevice(
   db: Kysely<any>,
   workspaceId: string
 ): Promise<{ deviceId: string; capabilityId: string; exposureId: string }> {
@@ -469,10 +469,7 @@ test(
   async () => {
     await withTestDb(async (db) => {
       const wsId = await newWorkspace(db)
-      const { deviceId, capabilityId, exposureId } = await newRelayDevice(
-        db,
-        wsId
-      )
+      const { deviceId, capabilityId, exposureId } = await newDevice(db, wsId)
 
       await expectReject(
         db
@@ -499,10 +496,7 @@ test(
     await withTestDb(async (db) => {
       const wsId = await newWorkspace(db)
       const actorId = await newActor(db, wsId)
-      const { deviceId, capabilityId, exposureId } = await newRelayDevice(
-        db,
-        wsId
-      )
+      const { deviceId, capabilityId, exposureId } = await newDevice(db, wsId)
       const actorSubj = await subj(db, {
         kind: SUBJECT_KIND.ACTOR,
         actorId,
@@ -538,14 +532,14 @@ test(
     await withTestDb(async (db) => {
       const wsA = await newWorkspace(db)
       const wsB = await newWorkspace(db)
-      const a = await newRelayDevice(db, wsA)
-      const b = await newRelayDevice(db, wsB)
+      const a = await newDevice(db, wsA)
+      const b = await newDevice(db, wsB)
       const wsASubj = await subj(db, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId: wsA,
       })
 
-      // Try to mix wsA device with wsB capability — the helper relay_resource_workspace_id
+      // Try to mix wsA device with wsB capability — the helper device_capability_workspace_id
       // also enforces capability.exposure_id = exposure_id, so this throws either at the
       // membership check or the workspace alignment.
       await expectReject(
@@ -572,10 +566,7 @@ test(
   async () => {
     await withTestDb(async (db) => {
       const wsId = await newWorkspace(db)
-      const { deviceId, capabilityId, exposureId } = await newRelayDevice(
-        db,
-        wsId
-      )
+      const { deviceId, capabilityId, exposureId } = await newDevice(db, wsId)
       const userRow = await db
         .insertInto("users")
         .values({

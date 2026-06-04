@@ -1105,7 +1105,7 @@ async function loadInstallationRows(
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
   // P3 consolidation: delegate the SELECT-with-access_subjects-JOIN to
-  // binding-storage so every plugin/skill/automation/relay path goes through
+  // binding-storage so every plugin/skill/automation/device path goes through
   // the same code.
   const rows = await loadAccessBindingRowsForResources(db, {
     resourceType: "plugin_installation",

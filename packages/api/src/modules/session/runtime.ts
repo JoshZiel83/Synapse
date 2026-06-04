@@ -34,7 +34,7 @@ import { getSession, updateSessionStatus } from "./service.js"
 const log = createLogger("session.runtime")
 
 // Device-runtime v3 (PR #20): the relay-invoke-options helper is gone. Replicate
-// the trimmed-string normalization inline so the relay-tool fallback branch in
+// the trimmed-string normalization inline so the device-tool fallback branch in
 // buildDeviceBuiltinToolBlocks still works for legacy task rows that may still
 // carry a builtinKind metadata field.
 function normalizeDeviceBuiltinAuthorizationKind(

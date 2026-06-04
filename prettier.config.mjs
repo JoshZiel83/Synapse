@@ -23,13 +23,6 @@ const config = {
         tailwindStylesheet: "./packages/web-next/app/globals.css",
       },
     },
-    {
-      files: "relay/cmd/synapse-relay-gui/frontend/**/*.{js,jsx,ts,tsx,css}",
-      options: {
-        tailwindStylesheet:
-          "./relay/cmd/synapse-relay-gui/frontend/src/app.css",
-      },
-    },
   ],
 }
 
