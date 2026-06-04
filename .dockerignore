@@ -20,6 +20,11 @@ storage
 **/.env.*
 !.env.example
 !**/.env.example
+# Defense-in-depth: the deploy scripts back .env up to $TMPDIR (outside the repo),
+# but if TMPDIR points inside the tree the backup would otherwise land here — its
+# name doesn't start with `.env`, so exclude it explicitly too.
+synapse-env-predeploy.*
+**/synapse-env-predeploy.*
 # Local dev scratch that would otherwise bloat the context by tens of GB.
 .claude/
 .worktrees/

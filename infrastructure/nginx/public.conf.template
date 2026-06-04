@@ -6,11 +6,12 @@ map $http_upgrade $connection_upgrade {
 # NOTE: no static `upstream {}` blocks for api/web/mobile-web. An upstream block
 # (or a literal proxy_pass hostname) resolves the container name ONCE at config
 # load, so recreating a backend (it gets a new docker IP) strands nginx on the
-# stale IP → 502 until nginx reloads. Instead each location below uses a
-# `set $var ...; proxy_pass http://$var:port;` form, which forces nginx to
-# re-resolve via docker's embedded DNS (127.0.0.11) per request — so a rebuilt
-# api/web/mobile-web is picked up with no nginx reload. (Same pattern the
-# registry vhost already uses for verdaccio.)
+# stale IP → permanent 502 until nginx reloads. Instead each location below uses a
+# `set $var ...; proxy_pass http://$var:port;` form, which makes nginx re-resolve
+# via docker's embedded DNS (127.0.0.11) on a timer (the resolver `valid=` TTL
+# below) — NO reload needed. A backend recreate may still 502 briefly, at most
+# until that TTL expires, instead of forever. (Same pattern the registry vhost
+# already uses for verdaccio.)
 
 server {
     listen 80;

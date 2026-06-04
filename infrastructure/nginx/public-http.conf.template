@@ -3,11 +3,12 @@ map $http_upgrade $connection_upgrade {
     '' close;
 }
 
-# No static `upstream {}` blocks: each location resolves its backend per request
-# via docker's embedded DNS (set $var + resolver below), so a rebuilt api/web/
-# mobile-web container (new IP) is picked up without an nginx reload. A static
-# upstream/literal hostname would pin the IP at config-load and 502 after a
-# backend recreate.
+# No static `upstream {}` blocks: each location resolves its backend via docker's
+# embedded DNS (set $var + resolver below) on the resolver `valid=` TTL, so a
+# rebuilt api/web/mobile-web container (new IP) is picked up without an nginx
+# reload (a brief 502 is possible until the TTL expires, never a permanent one).
+# A static upstream/literal hostname would pin the IP at config-load and 502 until
+# reload after a backend recreate.
 
 server {
     listen 80;

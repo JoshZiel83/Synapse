@@ -58,15 +58,38 @@ assert_shell_flag SYNAPSE_SANDBOX_BACKEND local
 # A shell loopback origin is fine for local (the override sets it anyway); only a
 # non-loopback custom value would be surprising. Leave it unconstrained here.
 
-# Back up .env OUTSIDE the repo (mktemp default $TMPDIR) so the secret-bearing
-# copy is never in the docker build context, and restore on failure.
-ENV_BACKUP="$(mktemp "${TMPDIR:-/tmp}/synapse-env-predeploy.XXXXXX")"
+# Back up .env to a path GUARANTEED outside the repo, so the secret-bearing copy
+# can never enter a docker build context. We don't trust $TMPDIR (a caller could
+# point it inside the tree): prefer /tmp, and hard-fail if the resolved backup
+# path is under the repo. (.dockerignore also excludes synapse-env-predeploy.* as
+# a second layer.)
+BACKUP_DIR="/tmp"
+[ -d "$BACKUP_DIR" ] && [ -w "$BACKUP_DIR" ] || BACKUP_DIR="${TMPDIR:-/tmp}"
+ENV_BACKUP="$(mktemp "${BACKUP_DIR%/}/synapse-env-predeploy.XXXXXX")"
+case "$(realpath "$ENV_BACKUP")" in
+  "$REPO_ROOT"/*) die "refusing to back up .env inside the repo ($ENV_BACKUP); set TMPDIR to a path outside $REPO_ROOT." ;;
+esac
 cp -p "$ENV_FILE" "$ENV_BACKUP"
+
+# Track whether we (re)started the API this run, so a FINAL bring-up failure can
+# roll the running container back to the restored .env instead of leaving it
+# half-switched (local + privileged). Set to 1 right before the API `up`.
+API_STARTED=0
 SUCCESS=0
 cleanup() {
-  if [ "$SUCCESS" -ne 1 ] && [ -f "$ENV_BACKUP" ]; then
-    cp -p "$ENV_BACKUP" "$ENV_FILE"
-    log "deploy failed — restored the original .env (sandbox flags reverted)."
+  if [ "$SUCCESS" -ne 1 ]; then
+    if [ -f "$ENV_BACKUP" ]; then
+      cp -p "$ENV_BACKUP" "$ENV_FILE"
+      log "deploy failed — restored the original .env (sandbox flags reverted)."
+    fi
+    if [ "$API_STARTED" -eq 1 ]; then
+      # The API may be running with the local override (SYS_ADMIN/NET_ADMIN). Bring
+      # it back up from the BASE compose only (no override) so it matches the
+      # restored .env — i.e. drop the privileged caps. Best-effort.
+      log "rolling the running API back to the pre-deploy config (base compose, no override)..."
+      docker compose --profile production up -d api >/dev/null 2>&1 \
+        || log "WARNING: could not auto-roll-back the API container — check 'docker compose ps' and re-run with the restored .env."
+    fi
   fi
   rm -f "$ENV_BACKUP"
 }
@@ -74,6 +97,24 @@ trap cleanup EXIT
 
 # 3. Ensure sandbox secrets (signing key + frp token).
 bash "$SCRIPT_DIR/ensure-sandbox-secrets.sh"
+
+# 3b. Reject empty/conflicting shell secrets. FRP_SHARED_TOKEN and
+#     SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY are also ${...:-} in compose (shell wins
+#     over .env), so a stray `FRP_SHARED_TOKEN=` in the shell would blank the
+#     secret even though .env has it. Demand any set shell value be non-empty AND
+#     match what we just ensured in .env.
+assert_shell_matches_env() {
+  local name="$1" shellval envval
+  # Distinguish "unset" from "set-but-empty": only guard when the var is present.
+  if [ -n "${!name+x}" ]; then
+    shellval="$(trim "${!name}")"
+    envval="$(trim "$(sed -n "s/^$name=//p" "$ENV_FILE" | tail -n 1)")"
+    [ -n "$shellval" ] || die "shell env $name is set but EMPTY; compose would use the empty value over .env. Unset it before deploying."
+    [ "$shellval" = "$envval" ] || die "shell env $name differs from .env; compose would use the shell value. Unset it (or align it) before deploying."
+  fi
+}
+assert_shell_matches_env FRP_SHARED_TOKEN
+assert_shell_matches_env SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY
 
 # 4. Switch ONLY the mode flags (idempotent in-place upsert). Deliberately NOT
 #    SYNAPSE_SANDBOX_SERVER_ORIGIN — that loopback lives in the override only.
@@ -97,11 +138,16 @@ log "building api image (baked fs-helper + bubblewrap + ripgrep)..."
 log "running bwrap exec smoke test (throwaway container, before bring-up)..."
 bash "$SCRIPT_DIR/sandbox-local-smoke.sh"
 
-# 6. Bring up the real stack. Build tunnel-edge too (a stale local image won't be
-#    rebuilt by `up` otherwise).
-log "starting api + tunnel-edge with the local override..."
+# 6. Bring up the real stack. tunnel-edge FIRST (benign, no special caps), so a
+#    failure there never started the privileged API. Build tunnel-edge too (a
+#    stale local image won't be rebuilt by `up` otherwise). The API goes last and
+#    is flagged so the cleanup trap can roll it back on a bring-up failure.
+log "starting tunnel-edge..."
 "${COMPOSE[@]}" build tunnel-edge
-"${COMPOSE[@]}" up -d api tunnel-edge
+"${COMPOSE[@]}" up -d tunnel-edge
+log "starting api with the local override (SYS_ADMIN/NET_ADMIN)..."
+API_STARTED=1
+"${COMPOSE[@]}" up -d api
 
 SUCCESS=1
 log "done. Verify a real turn: send a message, then watch:"

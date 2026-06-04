@@ -57,16 +57,36 @@ assert_shell_flag SYNAPSE_SANDBOX_ENABLED true
 assert_shell_flag SYNAPSE_SANDBOX_BACKEND docker
 assert_shell_flag SYNAPSE_SANDBOX_TUNNEL frp
 
-# Back up .env OUTSIDE the repo (mktemp default $TMPDIR) so the secret-bearing
-# copy never enters a docker build context; restore on failure unless marked OK.
-ENV_BACKUP="$(mktemp "${TMPDIR:-/tmp}/synapse-env-predeploy.XXXXXX")"
+# Back up .env to a path GUARANTEED outside the repo (don't trust $TMPDIR — a
+# caller could point it inside the tree, leaking the secret-bearing copy into a
+# build context). Prefer /tmp; hard-fail if the resolved path is under the repo.
+# (.dockerignore also excludes synapse-env-predeploy.* as a second layer.)
+BACKUP_DIR="/tmp"
+[ -d "$BACKUP_DIR" ] && [ -w "$BACKUP_DIR" ] || BACKUP_DIR="${TMPDIR:-/tmp}"
+ENV_BACKUP="$(mktemp "${BACKUP_DIR%/}/synapse-env-predeploy.XXXXXX")"
+case "$(realpath "$ENV_BACKUP")" in
+  "$REPO_ROOT"/*) die "refusing to back up .env inside the repo ($ENV_BACKUP); set TMPDIR to a path outside $REPO_ROOT." ;;
+esac
 cp -p "$ENV_FILE" "$ENV_BACKUP"
+
+# Track API (re)start so a FINAL bring-up failure rolls the running container back
+# to the restored .env instead of leaving it half-switched (docker socket mounted).
+API_STARTED=0
 SUCCESS=0
 cleanup() {
-  if [ "$SUCCESS" -ne 1 ] && [ -f "$ENV_BACKUP" ]; then
-    cp -p "$ENV_BACKUP" "$ENV_FILE"
-    log "deploy failed — restored the original .env (sandbox flags reverted)."
-    log "the running stack was NOT modified by the rollback; re-check 'docker compose ps'."
+  if [ "$SUCCESS" -ne 1 ]; then
+    if [ -f "$ENV_BACKUP" ]; then
+      cp -p "$ENV_BACKUP" "$ENV_FILE"
+      log "deploy failed — restored the original .env (sandbox flags reverted)."
+    fi
+    if [ "$API_STARTED" -eq 1 ]; then
+      # API may be running with the docker-socket override. Bring it back up from
+      # the BASE compose only (no override) so it matches the restored .env and
+      # drops the host docker.sock mount. Best-effort.
+      log "rolling the running API back to the pre-deploy config (base compose, no override)..."
+      docker compose --profile production up -d api >/dev/null 2>&1 \
+        || log "WARNING: could not auto-roll-back the API container — check 'docker compose ps' and re-run with the restored .env."
+    fi
   fi
   rm -f "$ENV_BACKUP"
 }
@@ -74,6 +94,22 @@ trap cleanup EXIT
 
 # 2. Ensure sandbox secrets.
 bash "$SCRIPT_DIR/ensure-sandbox-secrets.sh"
+
+# 2b. Reject empty/conflicting shell secrets. FRP_SHARED_TOKEN and
+#     SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY are ${...:-} in compose (shell wins over
+#     .env), so a stray `FRP_SHARED_TOKEN=` in the shell would blank the secret
+#     even though .env has it — and the docker backend fail-fasts without a token.
+assert_shell_matches_env() {
+  local name="$1" shellval envval
+  if [ -n "${!name+x}" ]; then
+    shellval="$(trim "${!name}")"
+    envval="$(trim "$(sed -n "s/^$name=//p" "$ENV_FILE" | tail -n 1)")"
+    [ -n "$shellval" ] || die "shell env $name is set but EMPTY; compose would use the empty value over .env. Unset it before deploying."
+    [ "$shellval" = "$envval" ] || die "shell env $name differs from .env; compose would use the shell value. Unset it (or align it) before deploying."
+  fi
+}
+assert_shell_matches_env FRP_SHARED_TOKEN
+assert_shell_matches_env SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY
 
 # 3. Switch the three mode flags (idempotent in-place upsert).
 upsert() {
@@ -110,7 +146,8 @@ if [ -n "$shell_origin" ] && [ "$shell_origin" != "$INTERNAL_ORIGIN" ]; then
 fi
 log "effective SYNAPSE_SANDBOX_SERVER_ORIGIN OK (unset → compose default ${INTERNAL_ORIGIN}, or explicitly ${INTERNAL_ORIGIN})."
 
-# 5. Build images, then bring up with the docker-socket override.
+# 5. Build images, then bring up. tunnel-edge FIRST (no docker-socket), then the
+#    API last with the override, flagged so a bring-up failure rolls it back.
 log "building api image (baked fs-helper)..."
 docker compose --profile production build api
 log "building cloud-sandbox image (synapse-device-runtime:latest)..."
@@ -118,9 +155,13 @@ docker compose --profile sandbox-build build sandbox-image
 log "building tunnel-edge (frps) image..."
 docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml \
   --profile production build tunnel-edge
-log "starting api + tunnel-edge with the docker-backend override..."
+log "starting tunnel-edge..."
 docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml \
-  --profile production up -d api tunnel-edge
+  --profile production up -d tunnel-edge
+log "starting api with the docker-socket override..."
+API_STARTED=1
+docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml \
+  --profile production up -d api
 
 SUCCESS=1
 log "done. Verify the docker backend is dispatchable:"
