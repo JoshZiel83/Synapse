@@ -66,6 +66,26 @@ async function ensureSupportedFormat(
   }
 }
 
+/**
+ * Newer OpenAI model families (gpt-5*, o1/o3/o4 reasoning models) REJECT the
+ * legacy `max_tokens` parameter and require `max_completion_tokens` instead;
+ * older families (gpt-4*, gpt-3.5*) still accept `max_tokens`. Pick the right
+ * key by model id so a single Chat Completions adapter serves both. The match
+ * is intentionally broad/prefix-based and case-insensitive so gateway-aliased
+ * ids (e.g. "gpt-5.5", "gpt-5.5-2026-04-24") are covered.
+ */
+export function openAiMaxTokensField(
+  model: string
+): "max_tokens" | "max_completion_tokens" {
+  // Match gpt-5* and the o-series reasoning models (o1/o3/o4) anywhere a model
+  // family token can start: at the string start or after a separator. Covers
+  // gateway-aliased ids like "gpt-5.5" and "gpt-5.5-2026-04-24".
+  if (/(^|[/_-])(gpt-5|o1|o3|o4)/i.test(model)) {
+    return "max_completion_tokens"
+  }
+  return "max_tokens"
+}
+
 export class OpenAIChatCompletionsProvider implements AIProvider {
   readonly name = "openai"
   readonly kind = "openai.chat_completions" as const
@@ -119,7 +139,7 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
 
     const body: Record<string, unknown> = {
       model: this.config.model,
-      max_tokens: this.config.maxTokens,
+      [openAiMaxTokensField(this.config.model)]: this.config.maxTokens,
       messages: openaiMessages,
     }
 
