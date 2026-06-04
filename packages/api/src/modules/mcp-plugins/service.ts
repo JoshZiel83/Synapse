@@ -1611,15 +1611,18 @@ export async function createOrganization(data: {
       is_verified: data.isVerified === true,
     })
     .onConflict((oc) =>
-      oc.column("slug").doUpdateSet({
-        display_name: data.displayName,
-        description: data.description || "",
-        logo_file_id: data.logoFileId || null,
-        owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
-        is_builtin: data.isBuiltin === true,
-        is_verified: data.isVerified === true,
-        updated_at: sql`NOW()`,
-      })
+      oc
+        .column("slug")
+        .where("deleted_at", "is", null)
+        .doUpdateSet({
+          display_name: data.displayName,
+          description: data.description || "",
+          logo_file_id: data.logoFileId || null,
+          owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
+          is_builtin: data.isBuiltin === true,
+          is_verified: data.isVerified === true,
+          updated_at: sql`NOW()`,
+        })
     )
     .returningAll()
     .executeTakeFirstOrThrow()

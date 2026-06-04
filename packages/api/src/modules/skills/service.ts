@@ -1310,13 +1310,16 @@ async function ensureMarketplacePublisher(
         is_verified: true,
       })
       .onConflict((oc) =>
-        oc.column("slug").doUpdateSet({
-          display_name: sql`excluded.display_name`,
-          description: sql`excluded.description`,
-          owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
-          is_verified: true,
-          updated_at: sql`NOW()`,
-        })
+        oc
+          .column("slug")
+          .where("deleted_at", "is", null)
+          .doUpdateSet({
+            display_name: sql`excluded.display_name`,
+            description: sql`excluded.description`,
+            owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
+            is_verified: true,
+            updated_at: sql`NOW()`,
+          })
       )
       .returning("id")
   )

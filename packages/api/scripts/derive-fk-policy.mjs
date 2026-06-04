@@ -196,6 +196,21 @@ function main() {
           `FK ${fk.key}: setNull.needsSnapshot=true requires snapshotColumn`
         )
     }
+
+    // rule 8 (cutover): the schema's ACTUAL ON DELETE must match the manifest's
+    // targetAction. NO ACTION and RESTRICT are both non-cascading and treated as
+    // interchangeable (the 3 deferred composite FKs are NO ACTION by design).
+    const schemaAction = fk.onDelete
+    const target = reg.targetAction
+    const bothNonCascade = (a) => a === "RESTRICT" || a === "NO ACTION"
+    const matches =
+      schemaAction === target ||
+      (bothNonCascade(schemaAction) && bothNonCascade(target))
+    if (!matches) {
+      errors.push(
+        `FK ${fk.key}: schema ON DELETE ${schemaAction} != manifest targetAction ${target} (${fk.childTable}(${fk.childColumns.join(",")}) line ${fk.lineno})`
+      )
+    }
   }
   for (const key of Object.keys(mForeignKeys)) {
     if (!fkByKey.has(key))

@@ -25,7 +25,7 @@ export async function ensurePublisher(
       ${input.isBuiltin === true},
       ${input.isVerified !== false}
     )
-    ON CONFLICT (slug) DO UPDATE SET
+    ON CONFLICT (slug) WHERE deleted_at IS NULL DO UPDATE SET
       display_name = EXCLUDED.display_name,
       description = EXCLUDED.description,
       owner_user_id = COALESCE(publishers.owner_user_id, EXCLUDED.owner_user_id),
