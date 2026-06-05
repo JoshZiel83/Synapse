@@ -1030,6 +1030,9 @@ async function loadInstallationRows(
 ) {
   const conditions: RawBuilder<unknown>[] = [
     sql`installation.workspace_id = ${workspaceId}`,
+    // Soft-delete (review F9): never surface an uninstalled installation in
+    // list/detail/update/grant paths — every caller routes through here.
+    sql`installation.deleted_at IS NULL`,
   ]
 
   if (filters?.pluginId) {
@@ -2030,6 +2033,54 @@ export async function installPluginUnified(data: {
   return installed
 }
 
+/**
+ * Soft-delete teardown for a plugin installation, executor-scoped so it can run
+ * inside any transaction (the real service wraps it in withDbTransaction; tests
+ * call it on a rolled-back trx). Revokes the installation's access bindings,
+ * soft-deletes its child plugin_connections (review F5), then soft-deletes the
+ * installation itself. Idempotent (deleted_at IS NULL guards). Single source of
+ * truth for uninstall semantics — do NOT re-implement these SQL flips elsewhere.
+ */
+export async function tearDownPluginInstallationOn(
+  client: Executor,
+  installId: string
+): Promise<void> {
+  await hardDeleteBindingsForResourceOn(client, {
+    resourceType: "plugin_installation",
+    resourceId: installId,
+  })
+
+  // Soft delete the installation's connections too (review F5): plugin_connections
+  // is its own soft-delete root, so uninstalling the parent must close the child
+  // OAuth/token connections — otherwise they stay live and their secrets remain
+  // resolvable. Flip both deleted_at and status so status-aware reads also drop
+  // them. Done before the parent flip (a child deleted_at flip is always allowed
+  // by the FK-liveness trigger).
+  await runBuilder(
+    client,
+    db
+      .updateTable("plugin_connections")
+      .set({
+        deleted_at: sql`NOW()`,
+        status: "revoked",
+        updated_at: sql`NOW()`,
+      })
+      .where("installation_id", "=", installId)
+      .where("deleted_at", "is", null)
+  )
+
+  // Soft delete (design §7.4): flip deleted_at instead of hard delete (which
+  // sd_reject_delete forbids). Bindings are revoked above.
+  await runBuilder(
+    client,
+    db
+      .updateTable("plugin_installations")
+      .set({ deleted_at: sql`NOW()` })
+      .where("id", "=", installId)
+      .where("deleted_at", "is", null)
+  )
+}
+
 export async function uninstallPluginUnified(installId: string) {
   const installation = await db
     .selectFrom("plugin_installations")
@@ -2044,42 +2095,9 @@ export async function uninstallPluginUnified(installId: string) {
   if (!installation) {
     throw new McpPluginError(404, "Installation not found")
   }
-  await withDbTransaction(async (client) => {
-    await hardDeleteBindingsForResourceOn(client, {
-      resourceType: "plugin_installation",
-      resourceId: installId,
-    })
-
-    // Soft delete the installation's connections too (review F5): plugin_connections
-    // is its own soft-delete root, so uninstalling the parent must close the child
-    // OAuth/token connections — otherwise they stay live and their secrets remain
-    // resolvable. Flip both deleted_at and status so status-aware reads also drop
-    // them. Done before the parent flip (a child deleted_at flip is always allowed
-    // by the FK-liveness trigger).
-    await runBuilder(
-      client,
-      db
-        .updateTable("plugin_connections")
-        .set({
-          deleted_at: sql`NOW()`,
-          status: "revoked",
-          updated_at: sql`NOW()`,
-        })
-        .where("installation_id", "=", installId)
-        .where("deleted_at", "is", null)
-    )
-
-    // Soft delete (design §7.4): flip deleted_at instead of hard delete (which
-    // sd_reject_delete forbids). Bindings are revoked above.
-    await runBuilder(
-      client,
-      db
-        .updateTable("plugin_installations")
-        .set({ deleted_at: sql`NOW()` })
-        .where("id", "=", installId)
-        .where("deleted_at", "is", null)
-    )
-  })
+  await withDbTransaction((client) =>
+    tearDownPluginInstallationOn(client, installId)
+  )
 
   await incrementMcpVersion(installation.workspace_id)
 

@@ -442,16 +442,19 @@ export const auth = betterAuth({
     // Soft delete (design §8.2): `account` is a soft-delete root, NOT a BA
     // direct-delete table. Better Auth's internal deleteAccount/deleteAccounts
     // (unlinkAccount, deleteUser) physically remove account rows. Block them at
-    // the hook: account removal must go through the app's markUserDeleted
-    // orchestration (anonymize + soft-delete in one transaction), never a naked
-    // physical delete. Returning false aborts the delete (fail-closed). The DB
-    // reject-delete trigger on `account` is the backstop.
+    // the hook: account removal must go through the app's orchestration —
+    // markUserDeleted (full closure) or markAccountUnlinked (single account, with
+    // a last-login-method lockout guard), both anonymize + soft-delete in one
+    // transaction. The functional unlink path is DELETE /api/v1/auth/me/accounts;
+    // this hook is the fail-closed backstop for BA's own unlink-account/deleteUser
+    // endpoints. The DB reject-delete trigger on `account` is the final backstop.
     account: {
       delete: {
         before: async () => {
           // Always refuse BA-driven account deletion. This is fail-closed only —
           // it does NOT perform the soft-delete (deleteManyWithHooks short-
-          // circuits on the first false), which markUserDeleted handles.
+          // circuits on the first false); markUserDeleted / markAccountUnlinked
+          // handle the real soft-delete.
           return false
         },
       },

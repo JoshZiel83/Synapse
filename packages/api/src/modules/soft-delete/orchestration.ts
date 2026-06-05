@@ -163,14 +163,14 @@ export async function markUserDeleted(
   userId: string
 ): Promise<void> {
   // 0. tombstone (a first-class step — users_live / auth / partial unique all
-  //    depend on it). Idempotent.
-  const tombstoned = await sql`
+  //    depend on it). Idempotent: only stamps deleted_at on the first call, but
+  //    we do NOT early-return here — the closure steps below must REPLAY on every
+  //    invocation so an interrupted/partial tombstone (ops repair, retry, a
+  //    non-standard tombstone path) is always driven to a fully-closed state.
+  //    Every step is itself WHERE-guarded idempotent (active/non-null filters).
+  await sql`
     UPDATE users SET deleted_at = NOW() WHERE id = ${userId} AND deleted_at IS NULL
   `.execute(db)
-  if (Number(tombstoned.numAffectedRows ?? 0) === 0) {
-    // already deleted — idempotent no-op
-    return
-  }
 
   // 1. owned workspaces: transfer to a surviving admin member, else soft-delete.
   const owned = await sql<{ id: string }>`
@@ -287,4 +287,55 @@ export async function markUserDeleted(
   `.execute(db)
 
   // 7. access_subjects rows are NOT deleted (immutable identity registry, §5).
+}
+
+/** Raised when unlinking would leave the user with no live login method. */
+export class LastAccountError extends Error {
+  constructor() {
+    super("Cannot unlink the only remaining login method")
+    this.name = "LastAccountError"
+  }
+}
+
+/**
+ * Soft-delete (unlink) a SINGLE auth account for a user — the functional
+ * soft-delete replacement for Better Auth's physical unlinkAccount (review F13).
+ * Mirrors step 5 of markUserDeleted for one row: flip deleted_at, anonymize
+ * account_id (releases the (provider_id, account_id) identity so it can be
+ * re-bound later — the partial-unique only constrains live rows), and clear
+ * tokens/credential. The BA `account.delete.before` hook stays as the
+ * fail-closed backstop for BA's own endpoint; this is the sanctioned path.
+ *
+ * Lockout guard: refuses (LastAccountError) if this is the user's last live
+ * account, so a user can't strand themselves with no way to authenticate.
+ * Returns false if the account doesn't exist / isn't the user's / already
+ * unlinked (idempotent no-op).
+ */
+export async function markAccountUnlinked(
+  db: Executor,
+  userId: string,
+  providerId: string,
+  accountId: string
+): Promise<boolean> {
+  const live = await sql<{ id: string; is_target: boolean }>`
+    SELECT id,
+           (provider_id = ${providerId} AND account_id = ${accountId}) AS is_target
+    FROM account
+    WHERE user_id = ${userId} AND deleted_at IS NULL
+  `.execute(db)
+  const target = live.rows.find((r) => r.is_target)
+  if (!target) return false // not found / already unlinked
+  if (live.rows.length <= 1) {
+    // would leave the user with no live login method
+    throw new LastAccountError()
+  }
+  await sql`
+    UPDATE account
+    SET deleted_at = NOW(),
+        account_id = 'deleted:' || id::text,
+        access_token = NULL, refresh_token = NULL, id_token = NULL, password = NULL,
+        updated_at = NOW()
+    WHERE id = ${target.id} AND deleted_at IS NULL
+  `.execute(db)
+  return true
 }

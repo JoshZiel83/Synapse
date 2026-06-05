@@ -1,44 +1,180 @@
 {
-  "modules/access/evaluator.ts": 17,
-  "modules/access/policy.ts": 1,
-  "modules/access/subject-registry.ts": 3,
-  "modules/access/subject-resolution.ts": 6,
-  "modules/ai/session-tools.ts": 1,
-  "modules/auth/better-auth.ts": 2,
-  "modules/auth/service.ts": 2,
-  "modules/automation/integrations.ts": 1,
-  "modules/automation/service.ts": 31,
-  "modules/chat/service.ts": 15,
-  "modules/devices/access-bindings.ts": 7,
-  "modules/devices/catalog-sync.ts": 1,
-  "modules/devices/control-plane-auth.ts": 1,
-  "modules/devices/control-plane.ts": 1,
-  "modules/devices/service.ts": 4,
-  "modules/files/content-access.ts": 1,
-  "modules/files/service.ts": 3,
-  "modules/im/service/accounts.ts": 7,
-  "modules/im/service/bindings.ts": 1,
-  "modules/im/service/ingest.ts": 1,
-  "modules/im/service/weixin-binding.ts": 1,
-  "modules/interactions/service.ts": 21,
-  "modules/mcp-plugins/config-resolver.ts": 1,
-  "modules/mcp-plugins/plugin-auth-connections.ts": 7,
-  "modules/mcp-plugins/service.ts": 12,
-  "modules/mcp-plugins/tool-resolver.ts": 1,
-  "modules/memory/controller.ts": 3,
-  "modules/memory/indexing.ts": 2,
-  "modules/memory/service.ts": 13,
-  "modules/model-groups/resolver.ts": 4,
-  "modules/model-groups/service.ts": 10,
-  "modules/organization/service.ts": 8,
-  "modules/relationship/service.ts": 9,
-  "modules/remote-agents/mcp-endpoint.ts": 1,
-  "modules/remote-agents/service.ts": 15,
-  "modules/runtime-authorizations/requests.ts": 1,
-  "modules/sandbox/space.ts": 2,
-  "modules/session/service.ts": 2,
-  "modules/skills/service.ts": 10,
-  "modules/workspace/invite-service.ts": 1,
-  "modules/workspace/service.ts": 6,
-  "workers/session-thinking.ts": 1
+  "modules/access/evaluator.ts": {
+    "actors": 3,
+    "conversations": 1,
+    "devices": 1,
+    "installed_skills": 2,
+    "memory_items": 1,
+    "memory_spaces": 1,
+    "model_groups": 3,
+    "plugin_installations": 2,
+    "remote_agents": 3
+  },
+  "modules/access/policy.ts": {
+    "conversations": 1
+  },
+  "modules/access/subject-registry.ts": {
+    "actors": 1,
+    "conversations": 1,
+    "remote_agents": 1
+  },
+  "modules/access/subject-resolution.ts": {
+    "actors": 3,
+    "remote_agents": 3
+  },
+  "modules/ai/session-tools.ts": {
+    "actors": 1
+  },
+  "modules/auth/better-auth.ts": {
+    "users": 2
+  },
+  "modules/auth/service.ts": {
+    "users": 2
+  },
+  "modules/automation/integrations.ts": {
+    "plugin_installations": 1
+  },
+  "modules/automation/service.ts": {
+    "automation_event_sources": 13,
+    "automation_integration_bindings": 6,
+    "automation_rules": 6,
+    "automation_webhook_endpoints": 5,
+    "workspaces": 1
+  },
+  "modules/chat/service.ts": {
+    "actors": 3,
+    "conversations": 4,
+    "remote_agents": 3,
+    "users": 5
+  },
+  "modules/devices/access-bindings.ts": {
+    "actors": 2,
+    "conversations": 3,
+    "remote_agents": 2
+  },
+  "modules/devices/catalog-sync.ts": {
+    "devices": 1
+  },
+  "modules/devices/control-plane-auth.ts": {
+    "devices": 1
+  },
+  "modules/devices/control-plane.ts": {
+    "devices": 1
+  },
+  "modules/devices/service.ts": {
+    "devices": 3,
+    "remote_agent_machines": 1
+  },
+  "modules/files/content-access.ts": {
+    "file_assets": 1
+  },
+  "modules/files/service.ts": {
+    "file_assets": 2,
+    "workspaces": 1
+  },
+  "modules/im/service/accounts.ts": {
+    "actors": 1,
+    "transport_accounts": 6
+  },
+  "modules/im/service/bindings.ts": {
+    "conversations": 1
+  },
+  "modules/im/service/ingest.ts": {
+    "workspaces": 1
+  },
+  "modules/im/service/weixin-binding.ts": {
+    "transport_accounts": 1
+  },
+  "modules/interactions/service.ts": {
+    "actors": 6,
+    "conversations": 1,
+    "devices": 2,
+    "remote_agents": 6,
+    "users": 6
+  },
+  "modules/mcp-plugins/config-resolver.ts": {
+    "plugin_installations": 1
+  },
+  "modules/mcp-plugins/plugin-auth-connections.ts": {
+    "catalog_items": 1,
+    "plugin_connections": 2,
+    "plugin_installations": 4
+  },
+  "modules/mcp-plugins/service.ts": {
+    "catalog_items": 2,
+    "file_assets": 1,
+    "plugin_connections": 2,
+    "plugin_installations": 3,
+    "publishers": 4
+  },
+  "modules/mcp-plugins/tool-resolver.ts": {
+    "plugin_installations": 1
+  },
+  "modules/memory/controller.ts": {
+    "memory_items": 2,
+    "memory_spaces": 1
+  },
+  "modules/memory/indexing.ts": {
+    "memory_items": 2
+  },
+  "modules/memory/service.ts": {
+    "actors": 1,
+    "conversations": 2,
+    "memory_items": 5,
+    "memory_spaces": 3,
+    "remote_agents": 1,
+    "users": 1
+  },
+  "modules/model-groups/resolver.ts": {
+    "model_groups": 4
+  },
+  "modules/model-groups/service.ts": {
+    "actors": 1,
+    "model_groups": 8,
+    "workspaces": 1
+  },
+  "modules/organization/service.ts": {
+    "actors": 4,
+    "catalog_items": 2,
+    "publishers": 2
+  },
+  "modules/relationship/service.ts": {
+    "actors": 3,
+    "remote_agents": 3,
+    "workspaces": 3
+  },
+  "modules/remote-agents/mcp-endpoint.ts": {
+    "conversations": 1
+  },
+  "modules/remote-agents/service.ts": {
+    "conversations": 2,
+    "remote_agent_machines": 6,
+    "remote_agents": 6,
+    "users": 1
+  },
+  "modules/runtime-authorizations/requests.ts": {
+    "conversations": 1
+  },
+  "modules/sandbox/space.ts": {
+    "file_spaces": 2
+  },
+  "modules/session/service.ts": {
+    "actors": 2
+  },
+  "modules/skills/service.ts": {
+    "catalog_items": 3,
+    "installed_skills": 6,
+    "publishers": 1
+  },
+  "modules/workspace/invite-service.ts": {
+    "workspaces": 1
+  },
+  "modules/workspace/service.ts": {
+    "actors": 2,
+    "catalog_items": 1,
+    "workspaces": 3
+  },
+  "workers/session-thinking.ts": {
+    "actors": 1
+  }
 }

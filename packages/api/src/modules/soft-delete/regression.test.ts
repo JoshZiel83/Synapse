@@ -575,6 +575,7 @@ test(
 
 // ---- entry-point wiring (review round-3): deleteWorkspace service + closure ----
 import { deleteWorkspace } from "../workspace/service.js"
+import { tearDownPluginInstallationOn } from "../mcp-plugins/service.js"
 
 test(
   "deleteWorkspace service soft-deletes the tenant via markWorkspaceDeleted",
@@ -879,18 +880,9 @@ test(
         })
         .execute()
 
-      // soft-delete the installation + its connections (mirrors uninstall)
-      await db
-        .updateTable("plugin_connections")
-        .set({ deleted_at: new Date(), status: "revoked" })
-        .where("installation_id", "=", inst.id)
-        .where("deleted_at", "is", null)
-        .execute()
-      await db
-        .updateTable("plugin_installations")
-        .set({ deleted_at: new Date() })
-        .where("id", "=", inst.id)
-        .execute()
+      // Exercise the REAL uninstall teardown (review F14) — same code the
+      // service runs, executor-scoped so it works inside the rolled-back trx.
+      await tearDownPluginInstallationOn(db as never, inst.id as string)
 
       const live = await db
         .selectFrom("plugin_connections_live")
@@ -898,6 +890,199 @@ test(
         .where("installation_id", "=", inst.id)
         .execute()
       assert.equal(live.length, 0, "connections hidden after uninstall")
+      const instLive = await db
+        .selectFrom("plugin_installations_live")
+        .select("id")
+        .where("id", "=", inst.id)
+        .execute()
+      assert.equal(instLive.length, 0, "installation hidden after uninstall")
+    })
+  }
+)
+
+// ---- review round-5: dual-axis root views, replayable closure, account unlink
+
+import { markAccountUnlinked, LastAccountError } from "./orchestration.js"
+
+test(
+  "F10: plugin_connections_live hides an expired (non-tombstoned) connection",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const pub = await db
+        .insertInto("publishers")
+        .values({ slug: uniq("pub"), display_name: "p" })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const item = await db
+        .insertInto("catalog_items")
+        .values({
+          publisher_id: pub.id,
+          item_kind: "plugin_package",
+          slug: uniq("it"),
+          display_name: "i",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const ver = await db
+        .insertInto("catalog_versions")
+        .values({
+          catalog_item_id: item.id,
+          version: "1.0.0",
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const wsSubject = await db
+        .insertInto("access_subjects")
+        .values({ kind: "workspace", workspace_id: ws })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const inst = await db
+        .insertInto("plugin_installations")
+        .values({
+          workspace_id: ws,
+          catalog_item_id: item.id,
+          catalog_version_id: ver.id,
+          display_name: "i",
+          attachment_subject_id: wsSubject.id,
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const conn = await db
+        .insertInto("plugin_connections")
+        .values({
+          installation_id: inst.id,
+          workspace_id: ws,
+          owner_scope: "installation",
+          binding_key: "default",
+          driver: "oauth2",
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      // expire it WITHOUT tombstoning — deleted_at stays NULL, only status flips.
+      await db
+        .updateTable("plugin_connections")
+        .set({ status: "expired" })
+        .where("id", "=", conn.id)
+        .execute()
+      const base = await db
+        .selectFrom("plugin_connections")
+        .select("id")
+        .where("id", "=", conn.id)
+        .execute()
+      const live = await db
+        .selectFrom("plugin_connections_live")
+        .select("id")
+        .where("id", "=", conn.id)
+        .execute()
+      assert.equal(base.length, 1, "row still present (not tombstoned)")
+      assert.equal(
+        live.length,
+        0,
+        "_live honors liveValues — expired connection excluded"
+      )
+    })
+  }
+)
+
+test(
+  "F11: markUserDeleted is replayable — closure runs even when re-invoked",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      await insertMember(db, ws, u, "admin")
+      // simulate a partial/interrupted tombstone: user already soft-deleted, but
+      // membership was NOT closed (e.g. an aborted prior run / ops repair).
+      await db
+        .updateTable("users")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", u)
+        .execute()
+      const before = await db
+        .selectFrom("workspace_members")
+        .select("status")
+        .where("user_id", "=", u)
+        .executeTakeFirstOrThrow()
+      assert.equal(
+        before.status,
+        "active",
+        "membership still active pre-replay"
+      )
+      // replay must drive the closure even though deleted_at is already set
+      await markUserDeleted(db, u)
+      const after = await db
+        .selectFrom("workspace_members")
+        .select("status")
+        .where("user_id", "=", u)
+        .executeTakeFirstOrThrow()
+      assert.equal(after.status, "removed", "replay closed the membership")
+    })
+  }
+)
+
+test(
+  "F13: markAccountUnlinked soft-deletes one account but guards the last one",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      await db
+        .insertInto("account")
+        .values({
+          account_id: "cred-" + u,
+          provider_id: "credential",
+          user_id: u,
+          password: "x",
+        })
+        .execute()
+      // last remaining account → refuse
+      await assert.rejects(
+        () => markAccountUnlinked(db as never, u, "credential", "cred-" + u),
+        (e) => e instanceof LastAccountError
+      )
+      // add a second (OAuth) account → now the OAuth one can be unlinked
+      await db
+        .insertInto("account")
+        .values({
+          account_id: "oauth-" + u,
+          provider_id: "feishu",
+          user_id: u,
+        })
+        .execute()
+      const ok = await markAccountUnlinked(
+        db as never,
+        u,
+        "feishu",
+        "oauth-" + u
+      )
+      assert.equal(ok, true, "second account unlinked")
+      const oauth = await db
+        .selectFrom("account")
+        .selectAll()
+        .where("user_id", "=", u)
+        .where("provider_id", "=", "feishu")
+        .executeTakeFirstOrThrow()
+      assert.ok(oauth.deleted_at, "oauth account soft-deleted")
+      assert.match(
+        oauth.account_id as string,
+        /^deleted:/,
+        "account_id released"
+      )
+      // credential remains live + is now the last account again → re-guarded
+      await assert.rejects(
+        () => markAccountUnlinked(db as never, u, "credential", "cred-" + u),
+        (e) => e instanceof LastAccountError
+      )
+      // unknown account → idempotent false (no throw)
+      const none = await markAccountUnlinked(db as never, u, "nope", "nope")
+      assert.equal(none, false, "unknown account is a no-op")
     })
   }
 )

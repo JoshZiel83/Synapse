@@ -90,11 +90,12 @@ const READ_BASELINE_PATH = resolve(
 )
 const UPDATE_READ_BASELINE = process.argv.includes("--update-read-baseline")
 const ROOT_RE = [...ROOT_TABLES].join("|")
+// Capture the table name (group 1) so the ratchet can record per-table counts.
 const SELECT_FROM_RE = new RegExp(
-  `selectFrom\\(\\s*["'](?:${ROOT_RE})(?:\\s+as\\s+[a-z_]+)?["']`,
+  `selectFrom\\(\\s*["'](${ROOT_RE})(?:\\s+as\\s+[a-z_]+)?["']`,
   "g"
 )
-const RAW_FROM_RE = new RegExp(`\\b(?:FROM|JOIN)\\s+(?:${ROOT_RE})\\b`, "g")
+const RAW_FROM_RE = new RegExp(`\\b(?:FROM|JOIN)\\s+(${ROOT_RE})\\b`, "g")
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -111,21 +112,29 @@ function* walk(dir) {
 
 const violations = []
 const warnings = []
-const readCounts = {} // rel -> count of naked root reads (Rule 2 ratchet)
+const readCounts = {} // rel -> { <root>: count } of naked root reads (Rule 2 ratchet)
 
 for (const file of walk(SRC)) {
   const rel = relative(SRC, file)
   const text = readFileSync(file, "utf8")
   const lines = text.split("\n")
-  // Rule 2 (ratchet): count naked root reads per file, ignoring comment lines.
+  // Rule 2 (ratchet): count naked root reads per file BY TABLE, ignoring comment
+  // lines. Tracking per-table (not just a total) catches a refactor that swaps
+  // one root read for another without changing the count.
   if (!READ_INFRA_ALLOWLIST.has(rel)) {
-    let n = 0
+    const byTable = {}
     for (const line of lines) {
       const noComment = line.replace(/\/\/.*$/, "")
-      n += (noComment.match(SELECT_FROM_RE) || []).length
-      n += (noComment.match(RAW_FROM_RE) || []).length
+      for (const m of noComment.matchAll(SELECT_FROM_RE))
+        byTable[m[1]] = (byTable[m[1]] || 0) + 1
+      for (const m of noComment.matchAll(RAW_FROM_RE))
+        byTable[m[1]] = (byTable[m[1]] || 0) + 1
     }
-    if (n > 0) readCounts[rel] = n
+    if (Object.keys(byTable).length) {
+      readCounts[rel] = Object.fromEntries(
+        Object.entries(byTable).sort(([a], [b]) => a.localeCompare(b))
+      )
+    }
   }
   lines.forEach((line, i) => {
     const noComment = line.replace(/\/\/.*$/, "")
@@ -152,17 +161,20 @@ for (const file of walk(SRC)) {
   })
 }
 
-// Rule 2 ratchet: compare per-file naked-read counts against the checked-in
-// baseline. A count that GROWS is a new naked read -> hard fail. A count that
-// SHRANK (or a file that dropped to zero) means progress -> nudge to refresh.
+// Rule 2 ratchet: compare per-file/per-table naked-read counts against the
+// checked-in baseline. Any table whose count GROWS — or a brand-new table read in
+// a file — is a new naked read -> hard fail. A count that SHRANK (or a table that
+// dropped to zero) means progress -> nudge to refresh. Per-table granularity also
+// catches a refactor that swaps one root for another at the same total.
+const fileTotal = (m) => Object.values(m).reduce((s, n) => s + n, 0)
 if (UPDATE_READ_BASELINE) {
   const ordered = Object.fromEntries(
     Object.entries(readCounts).sort(([a], [b]) => a.localeCompare(b))
   )
   writeFileSync(READ_BASELINE_PATH, JSON.stringify(ordered, null, 2) + "\n")
-  const total = Object.values(ordered).reduce((s, n) => s + n, 0)
+  const total = Object.values(ordered).reduce((s, m) => s + fileTotal(m), 0)
   console.log(
-    `✓ wrote read baseline: ${Object.keys(ordered).length} files, ${total} naked root reads.`
+    `✓ wrote read baseline: ${Object.keys(ordered).length} files, ${total} naked root reads (by table).`
   )
   process.exit(0)
 }
@@ -175,22 +187,29 @@ try {
   )
 }
 const shrunk = []
-for (const [rel, n] of Object.entries(readCounts)) {
-  const base = readBaseline[rel] ?? 0
-  if (n > base) {
-    violations.push(
-      `${rel}: ${n} naked root read(s), baseline ${base} — new naked selectFrom/FROM <root>; route through a _live view / live-reads helper (or refresh the baseline if intentional)`
-    )
-  } else if (n < base) {
-    shrunk.push(`${rel}: ${base} -> ${n}`)
+for (const [rel, tables] of Object.entries(readCounts)) {
+  const base = readBaseline[rel] || {}
+  for (const [t, n] of Object.entries(tables)) {
+    const b = base[t] ?? 0
+    if (n > b) {
+      violations.push(
+        `${rel}: naked read of "${t}" x${n} (baseline ${b}) — route through ${t}_live / a live-reads helper, or refresh the baseline if intentional`
+      )
+    } else if (n < b) {
+      shrunk.push(`${rel}:${t} ${b} -> ${n}`)
+    }
+  }
+  for (const t of Object.keys(base)) {
+    if (!(t in tables)) shrunk.push(`${rel}:${t} ${base[t]} -> 0`)
   }
 }
 for (const rel of Object.keys(readBaseline)) {
-  if (!(rel in readCounts)) shrunk.push(`${rel}: ${readBaseline[rel]} -> 0`)
+  if (!(rel in readCounts))
+    shrunk.push(`${rel}: ${fileTotal(readBaseline[rel])} -> 0`)
 }
 if (shrunk.length) {
   warnings.push(
-    `read baseline shrank in ${shrunk.length} file(s) — refresh with --update-read-baseline:`
+    `read baseline shrank in ${shrunk.length} place(s) — refresh with --update-read-baseline:`
   )
   for (const s of shrunk.slice(0, 20)) warnings.push("  " + s)
 }
@@ -208,10 +227,15 @@ if (warnings.length) {
 const ORCH = resolve(SRC, "modules/soft-delete/orchestration.ts")
 const orchText = readFileSync(ORCH, "utf8")
 for (const t of PRINCIPAL_REVOKE_TABLES) {
-  const re = new RegExp(`UPDATE\\s+${t}\\b`)
+  // Require an actual status-FLIP close, not just any mention: the table must
+  // appear in an `UPDATE <t> ... SET ... status = '<terminal>'` statement. This
+  // is stricter than a bare `UPDATE <t>` match — a read or an unrelated update
+  // would no longer satisfy the rule. (Manifest principalColumns actions are
+  // revoke|close|update; all three close the principal via a status flip.)
+  const re = new RegExp(`UPDATE\\s+${t}\\b[\\s\\S]{0,200}?\\bstatus\\s*=`, "i")
   if (!re.test(orchText)) {
     violations.push(
-      `orchestration.ts: principal table "${t}" (manifest principalColumns revoke/close) is not closed by markUserDeleted (no UPDATE ${t})`
+      `orchestration.ts: principal table "${t}" (manifest principalColumns revoke/close) is not closed by markUserDeleted (no \`UPDATE ${t} ... SET status = ...\` status-flip found)`
     )
   }
 }
@@ -225,9 +249,13 @@ if (violations.length) {
   process.exit(1)
 }
 
+const readTotal = Object.values(readCounts).reduce(
+  (s, m) => s + fileTotal(m),
+  0
+)
 console.log(
   `✓ guard-soft-delete: no naked deletes on ${MANAGED_DELETE.size} managed tables; ` +
-    `${PRINCIPAL_REVOKE_TABLES.size} principal tables closed by markUserDeleted; ` +
+    `${PRINCIPAL_REVOKE_TABLES.size} principal tables status-flip-closed by markUserDeleted; ` +
     `read ratchet held across ${Object.keys(readCounts).length} files ` +
-    `(${Object.values(readCounts).reduce((s, n) => s + n, 0)} naked root reads, non-increasing).`
+    `(${readTotal} naked root reads by table, non-increasing).`
 )
