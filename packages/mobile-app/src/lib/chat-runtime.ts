@@ -277,6 +277,16 @@ export class ChatRuntime {
             if (this.state.activeWorkspaceId !== workspaceId) {
               return
             }
+            // Skip frames the live path already applied (memberSeq <= live
+            // cursor): re-applying a stale membership.updated{active}/upsert
+            // could clear/resurrect a newer kick. Cursor still advances below.
+            const liveBase = Math.max(
+              this.liveCursorByWorkspace.get(workspaceId) ?? 0,
+              this.state.snapshot?.inboxCursor ?? 0
+            )
+            if (event.memberSeq <= liveBase) {
+              continue
+            }
             this.applyChatEvent(event)
           }
 
@@ -1056,7 +1066,8 @@ export class ChatRuntime {
           if (payload.selfState === "active") {
             nextSnapshot = clearConversationTombstone(
               nextSnapshot,
-              payload.conversationId
+              payload.conversationId,
+              event.memberSeq
             )
           } else {
             nextSnapshot = pruneConversationFromSnapshot(

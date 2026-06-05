@@ -500,12 +500,26 @@ function pruneConversationFromSnapshot(
   }
 }
 
-/** Clear a conversation's tombstone (legitimate re-add / bootstrap liveness). */
+/**
+ * Clear a conversation's tombstone (legitimate re-add / bootstrap liveness).
+ *
+ * Seq-guarded: a clear only supersedes a removal it is NEWER than. Pass the
+ * clearing event's memberSeq; if it is <= the recorded removedSeq the clear is
+ * STALE (an older {active} arriving after a newer kick) and is ignored, so it
+ * cannot re-expose a conversation a newer removal tombstoned. Pass `undefined`
+ * (bootstrap liveness) to clear unconditionally — bootstrap is the authoritative
+ * current set.
+ */
 function clearConversationTombstone(
   snapshot: ChatWorkspaceSnapshot,
-  conversationId: string
+  conversationId: string,
+  memberSeq?: number
 ): ChatWorkspaceSnapshot {
-  if (!snapshot.tombstones[conversationId]) {
+  const tombstone = snapshot.tombstones[conversationId]
+  if (!tombstone) {
+    return snapshot
+  }
+  if (typeof memberSeq === "number" && memberSeq <= tombstone.removedSeq) {
     return snapshot
   }
   const nextTombstones = { ...snapshot.tombstones }
@@ -541,28 +555,47 @@ function upsertConversationWithTombstoneGuard(
 
 /**
  * Reconcile the result of an async queue operation (flushPendingReads /
- * flushOutbox) back onto the LATEST live snapshot.
+ * flushOutbox) back onto the LATEST live snapshot, using a base-aware THREE-WAY
+ * merge so concurrent additions are not lost.
  *
- * The flush started from a possibly-older base and may have produced a
- * `processed` snapshot whose conversation list / tombstones predate live frames
- * that landed during the network round-trip (e.g. a kick prune). We therefore
- * keep the LATEST snapshot's authoritative list state (conversations,
- * tombstones, inboxCursor) and adopt ONLY the queue fields the flush owns
- * (pendingReads, outbox) — minus any entry for a conversation the latest
- * snapshot has tombstoned (so a flush can't reinsert a removed conversation's
- * outbox/read). This is the web mirror of the latest-snapshot checks mobile's
- * flush already performs.
+ * - `base`: the snapshot the flush STARTED from.
+ * - `latest`: the current live snapshot (may have new outbox/reads/tombstones
+ *   added while the flush's network round-trip was in flight).
+ * - `processed`: the flush result (entries it confirmed/dropped, relative to
+ *   base).
+ *
+ * The queue fields (outbox, pendingReads, tombstones, inboxCursor) are merged
+ * via the shared mergeStoredQueueTransition(current=latest, previous=base,
+ * next=processed) — the SAME base-aware diff the persist layer uses: an entry
+ * the flush dropped (in base, absent in processed) is removed; an entry latest
+ * added after base is preserved; tombstone clears are sequenced. The latest
+ * snapshot's list state (conversations) is authoritative and kept as-is. Any
+ * queue entry for a conversation latest has tombstoned is then dropped so a
+ * flush cannot reinsert a removed conversation's outbox/read.
  */
 function rebaseQueueFieldsOntoLatest(
+  base: ChatWorkspaceSnapshot,
   latest: ChatWorkspaceSnapshot,
   processed: ChatWorkspaceSnapshot
 ): ChatWorkspaceSnapshot {
-  const tombstoned = latest.tombstones
+  const baseQueue = toStoredChatQueueState(base)
+  const latestQueue = toStoredChatQueueState(latest)
+  const processedQueue = toStoredChatQueueState(processed)
+  if (!baseQueue || !latestQueue || !processedQueue) {
+    return latest
+  }
+  const mergedQueue = mergeStoredQueueTransition(
+    latestQueue,
+    baseQueue,
+    processedQueue
+  )
+
+  const tombstoned = mergedQueue.tombstones
   const pendingReads = Object.fromEntries(
-    Object.entries(processed.pendingReads).filter(([cid]) => !tombstoned[cid])
+    Object.entries(mergedQueue.pendingReads).filter(([cid]) => !tombstoned[cid])
   )
   const outbox = Object.fromEntries(
-    Object.entries(processed.outbox).filter(
+    Object.entries(mergedQueue.outbox).filter(
       ([, entry]) => !tombstoned[entry.conversationId]
     )
   )
@@ -570,9 +603,8 @@ function rebaseQueueFieldsOntoLatest(
     ...latest,
     pendingReads,
     outbox,
-    // inboxCursor stays monotonic: the flush never advances it, but a live
-    // frame might have, so take the max.
-    inboxCursor: Math.max(latest.inboxCursor, processed.inboxCursor),
+    tombstones: mergedQueue.tombstones,
+    inboxCursor: mergedQueue.inboxCursor,
   }
 }
 
@@ -1377,10 +1409,12 @@ function applySyncEventToSnapshot(
         event.payload as ChatSyncEvent<"conversation.membership.updated">["payload"]
       if (payload.selfState === "active") {
         // Re-added: clear the tombstone so the accompanying/next
-        // conversation.upsert can re-introduce the conversation.
+        // conversation.upsert can re-introduce the conversation. Seq-guarded so
+        // a stale {active} can't clear a newer kick tombstone.
         nextSnapshot = clearConversationTombstone(
           nextSnapshot,
-          payload.conversationId
+          payload.conversationId,
+          event.memberSeq
         )
       } else {
         // Removed / left: drop the conversation and tombstone it at this seq.
@@ -2085,21 +2119,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     clearOutboxRetryTimer()
 
+    const base = snapshot
     const result = await flushOutboxInternal(
-      snapshot,
+      base,
       get().selectedConversationId,
       get().loadedMessageItems
     )
 
-    // Rebase onto the LATEST snapshot: a kick (membership.updated) may have
-    // pruned/tombstoned a conversation while the POST was in flight. Writing
-    // result.snapshot directly would reinsert the removed conversation's
-    // outbox/read state.
+    // Rebase onto the LATEST snapshot via a base-aware 3-way merge: a kick
+    // (membership.updated) may have pruned/tombstoned a conversation, or the
+    // user may have queued a NEW outbox message, while the POST was in flight.
+    // Writing result.snapshot directly would reinsert removed state or drop the
+    // new message.
     set((state) => {
       if (!state.snapshot) {
         return state
       }
       const merged = rebaseQueueFieldsOntoLatest(
+        base,
         state.snapshot,
         result.snapshot
       )
@@ -2171,7 +2208,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
           let nextSnapshot = live
           let nextLoadedItems = state.loadedMessageItems
+          // Frames the live path already applied (memberSeq <= live cursor) are
+          // skipped: re-applying is mostly idempotent but a stale
+          // membership.updated{active} or upsert could clear/resurrect a newer
+          // kick. The live cursor is the high-water mark of in-order live frames.
+          const liveBase = getLiveCursor(effectiveWorkspaceId, live.inboxCursor)
           for (const event of response.events) {
+            if (event.memberSeq <= liveBase) {
+              continue
+            }
             nextSnapshot = applySyncEventToSnapshot(
               nextSnapshot,
               event,
@@ -2231,23 +2276,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
       setLiveCursor(effectiveWorkspaceId, cursor)
 
       // Flush reads + outbox against the LATEST snapshot, and write each result
-      // back with a latest-snapshot rebase (drop a result if the conversation
-      // was pruned/tombstoned by a live kick during the network round-trip).
-      const afterReads = await flushPendingReadsInternal(
-        get().snapshot ?? startSnapshot
-      )
-      set((state) =>
-        state.snapshot
-          ? createStateFromSnapshot(
-              state,
-              rebaseQueueFieldsOntoLatest(state.snapshot, afterReads)
-            )
-          : state
-      )
-      void queuePersistSnapshot(get().snapshot, get().snapshot)
+      // back with a base-aware 3-way rebase (drop a result if the conversation
+      // was pruned/tombstoned by a live kick during the network round-trip;
+      // preserve a read/message queued concurrently).
+      const readBase = get().snapshot ?? startSnapshot
+      const afterReads = await flushPendingReadsInternal(readBase)
+      set((state) => {
+        if (!state.snapshot) {
+          return state
+        }
+        const previous = state.snapshot
+        const merged = rebaseQueueFieldsOntoLatest(
+          readBase,
+          previous,
+          afterReads
+        )
+        // Persist with previous→merged diff so ACK'd pendingReads are actually
+        // removed from IndexedDB (a same-snapshot diff would be a no-op and the
+        // entry could be restored + re-flushed on reload).
+        void queuePersistSnapshot(previous, merged)
+        return createStateFromSnapshot(state, merged)
+      })
 
+      const outboxBase = get().snapshot ?? startSnapshot
       const outboxResult = await flushOutboxInternal(
-        get().snapshot ?? startSnapshot,
+        outboxBase,
         get().selectedConversationId,
         get().loadedMessageItems
       )
@@ -2255,11 +2308,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (!state.snapshot) {
           return state
         }
+        const previous = state.snapshot
         const merged = rebaseQueueFieldsOntoLatest(
-          state.snapshot,
+          outboxBase,
+          previous,
           outboxResult.snapshot
         )
-        void queuePersistSnapshot(state.snapshot, merged)
+        void queuePersistSnapshot(previous, merged)
         return createStateFromSnapshot(state, merged, {
           loadedMessageItems:
             get().selectedConversationId === state.selectedConversationId

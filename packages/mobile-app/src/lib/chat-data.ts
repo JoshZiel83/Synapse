@@ -657,9 +657,17 @@ export function pruneConversationFromSnapshot(
 
 export function clearConversationTombstone(
   snapshot: ChatWorkspaceSnapshot,
-  conversationId: string
+  conversationId: string,
+  memberSeq?: number
 ): ChatWorkspaceSnapshot {
-  if (!snapshot.tombstones[conversationId]) {
+  const tombstone = snapshot.tombstones[conversationId]
+  if (!tombstone) {
+    return snapshot
+  }
+  // Seq-guarded: a stale {active} (memberSeq <= removedSeq) must not clear a
+  // newer kick tombstone. undefined memberSeq (bootstrap liveness) clears
+  // unconditionally — bootstrap is the authoritative current set.
+  if (typeof memberSeq === "number" && memberSeq <= tombstone.removedSeq) {
     return snapshot
   }
   const tombstones = { ...snapshot.tombstones }
