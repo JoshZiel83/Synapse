@@ -104,7 +104,7 @@
     "catalog_items": 2,
     "file_assets": 1,
     "plugin_connections": 2,
-    "plugin_installations": 3,
+    "plugin_installations": 2,
     "publishers": 4
   },
   "modules/mcp-plugins/tool-resolver.ts": {

@@ -55,6 +55,7 @@ import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
 import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
 import { attachAuthConnectionsToConfig } from "./plugin-auth-connections.js"
 import { incrementMcpVersion } from "./runtime-version.js"
+import { PLUGIN_CONNECTION_LIVE_STATUSES } from "./live-status.js"
 import { builtinCapabilityCategories } from "./builtin-plugins/categories.js"
 import { builtinSeeds } from "./builtin-plugins/index.js"
 import {
@@ -1030,9 +1031,6 @@ async function loadInstallationRows(
 ) {
   const conditions: RawBuilder<unknown>[] = [
     sql`installation.workspace_id = ${workspaceId}`,
-    // Soft-delete (review F9): never surface an uninstalled installation in
-    // list/detail/update/grant paths — every caller routes through here.
-    sql`installation.deleted_at IS NULL`,
   ]
 
   if (filters?.pluginId) {
@@ -1068,7 +1066,10 @@ async function loadInstallationRows(
         source_ref.source_catalog_item_id,
         source_ref.source_catalog_version_id,
         source_ref.sync_mode AS source_sync_mode
-      FROM plugin_installations installation
+      -- Soft-delete (review F9/F16): read the live surface — excludes both
+      -- tombstoned (deleted_at) AND non-live status (archived) installations,
+      -- the same definition as plugin_installations manifest liveValues.
+      FROM plugin_installations_live installation
       INNER JOIN access_subjects attachment_subj
         ON attachment_subj.id = installation.attachment_subject_id
       LEFT JOIN plugin_source_refs source_ref
@@ -1890,6 +1891,7 @@ export async function installPluginUnified(data: {
         .select("public_payload")
         .where("id", "=", rawConnection.connectionId)
         .where("deleted_at", "is", null)
+        .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
         .limit(1)
     )
     if (connectionResult.rows.length === 0) {
@@ -2255,6 +2257,7 @@ export async function updateInstallation(
         .select("public_payload")
         .where("id", "=", rawConnection.connectionId)
         .where("deleted_at", "is", null)
+        .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
         .limit(1)
     )
     if (connectionResult.rows.length === 0) {

@@ -47,18 +47,41 @@ const ROOT_TABLES = new Set(
     .map(([n]) => n)
 )
 
-// Tables that carry a principal (manifest principalColumns) with a revoke/close
-// action — markUserDeleted MUST close each of these so a deleted user leaves no
-// active authorization row. Rule 3 (below) checks orchestration.ts handles them.
-const PRINCIPAL_REVOKE_TABLES = new Set(
-  Object.entries(mTables)
-    .filter(([, e]) =>
-      (e.principalColumns || []).some(
-        (pc) => pc.action === "revoke" || pc.action === "close"
-      )
-    )
-    .map(([n]) => n)
+// Principal tables = any table whose manifest declares principalColumns (a
+// column carrying a deleted user's principal: user/member/subject). Every such
+// table is classified into exactly one bucket (review F17) so a newly-registered
+// principal table can NEVER be silently dropped from the user-deletion contract:
+//
+//   CLOSEABLE  — has a status lifecycle to flip (softDelete:status) OR a
+//                principalColumn action of revoke|close. markUserDeleted MUST
+//                close it with a status flip (rule 3 below verifies).
+//   ANCHORED   — a plain child (softDelete:none) whose principalColumns are all
+//                `update`: it has no status to flip and its liveness derives from
+//                a soft-deletable parent (conversation/member), so it is NOT
+//                independently closed. Must be on PRINCIPAL_ANCHORED_ALLOWLIST.
+//
+// A principal table that is neither (e.g. a new softDelete:none table with a
+// revoke action, or one missing from the allowlist) FAILS the guard.
+const PRINCIPAL_TABLES = Object.entries(mTables).filter(
+  ([, e]) => Array.isArray(e.principalColumns) && e.principalColumns.length
 )
+const isCloseable = (e) =>
+  e.softDelete === "status" ||
+  (e.principalColumns || []).some(
+    (pc) => pc.action === "revoke" || pc.action === "close"
+  )
+const PRINCIPAL_CLOSEABLE_TABLES = new Set(
+  PRINCIPAL_TABLES.filter(([, e]) => isCloseable(e)).map(([n]) => n)
+)
+// Plain-child principal tables anchored by a soft-deletable parent — no
+// independent closure (documented exemption). Keep this list explicit so adding
+// a table here is a reviewed decision.
+const PRINCIPAL_ANCHORED_ALLOWLIST = new Set([
+  "direct_conversation_bindings", // anchored by the conversation (soft-deleted)
+  "workspace_friend_entries", // anchored by the owner member (removed)
+  "workspace_member_preferences", // 1:1 child of the member (removed)
+  "workspace_relationship_profiles", // anchored by the member/subject
+])
 
 // Files allowed to issue managed DELETE / base-table reads (relative to SRC).
 const WRITE_ALLOWLIST = new Set([
@@ -219,25 +242,44 @@ if (warnings.length) {
   for (const w of warnings.slice(0, 50)) console.warn("  " + w)
 }
 
-// Rule 3 (review F2): every principal-bearing revoke/close table must be closed
-// by the user-deletion orchestration. We assert markUserDeleted's source mentions
-// each table in an UPDATE so a newly-registered principal table can't be silently
-// dropped from the closure. (Coarse textual check — the regression suite verifies
-// the actual behavior.)
+// Rule 3 (review F2/F17): every principal table is classified and accounted for.
+//   - CLOSEABLE  -> markUserDeleted MUST status-flip close it (verified below).
+//   - ANCHORED   -> must be on the explicit allowlist (documented exemption).
+//   - NEITHER    -> hard fail (a new principal table can't slip through).
 const ORCH = resolve(SRC, "modules/soft-delete/orchestration.ts")
 const orchText = readFileSync(ORCH, "utf8")
-for (const t of PRINCIPAL_REVOKE_TABLES) {
-  // Require an actual status-FLIP close, not just any mention: the table must
-  // appear in an `UPDATE <t> ... SET ... status = '<terminal>'` statement. This
-  // is stricter than a bare `UPDATE <t>` match — a read or an unrelated update
-  // would no longer satisfy the rule. (Manifest principalColumns actions are
-  // revoke|close|update; all three close the principal via a status flip.)
-  const re = new RegExp(`UPDATE\\s+${t}\\b[\\s\\S]{0,200}?\\bstatus\\s*=`, "i")
-  if (!re.test(orchText)) {
+for (const [t] of PRINCIPAL_TABLES) {
+  if (PRINCIPAL_CLOSEABLE_TABLES.has(t)) {
+    // Require an actual status-FLIP close, not just any mention: the table must
+    // appear in an `UPDATE <t> ... SET ... status = ...` statement. Stricter than
+    // a bare `UPDATE <t>` match — a read or unrelated update won't satisfy it.
+    const re = new RegExp(
+      `UPDATE\\s+${t}\\b[\\s\\S]{0,200}?\\bstatus\\s*=`,
+      "i"
+    )
+    if (!re.test(orchText)) {
+      violations.push(
+        `orchestration.ts: closeable principal table "${t}" is not closed by markUserDeleted (no \`UPDATE ${t} ... SET status = ...\` status-flip found)`
+      )
+    }
+  } else if (!PRINCIPAL_ANCHORED_ALLOWLIST.has(t)) {
     violations.push(
-      `orchestration.ts: principal table "${t}" (manifest principalColumns revoke/close) is not closed by markUserDeleted (no \`UPDATE ${t} ... SET status = ...\` status-flip found)`
+      `principal table "${t}" is neither CLOSEABLE (status-flip in markUserDeleted) nor on PRINCIPAL_ANCHORED_ALLOWLIST — classify it in guard-soft-delete.mjs (review F17)`
     )
   }
+}
+// Allowlist hygiene: every anchored entry must actually be a (non-closeable)
+// principal table, so the list can't rot.
+const principalNames = new Set(PRINCIPAL_TABLES.map(([n]) => n))
+for (const t of PRINCIPAL_ANCHORED_ALLOWLIST) {
+  if (!principalNames.has(t))
+    violations.push(
+      `PRINCIPAL_ANCHORED_ALLOWLIST entry "${t}" is not a principal table (stale) — remove it`
+    )
+  else if (PRINCIPAL_CLOSEABLE_TABLES.has(t))
+    violations.push(
+      `PRINCIPAL_ANCHORED_ALLOWLIST entry "${t}" is closeable — it must be closed by markUserDeleted, not anchored`
+    )
 }
 
 if (violations.length) {
@@ -255,7 +297,9 @@ const readTotal = Object.values(readCounts).reduce(
 )
 console.log(
   `✓ guard-soft-delete: no naked deletes on ${MANAGED_DELETE.size} managed tables; ` +
-    `${PRINCIPAL_REVOKE_TABLES.size} principal tables status-flip-closed by markUserDeleted; ` +
+    `${PRINCIPAL_TABLES.length} principal tables accounted for ` +
+    `(${PRINCIPAL_CLOSEABLE_TABLES.size} closeable status-flip-closed by markUserDeleted, ` +
+    `${PRINCIPAL_ANCHORED_ALLOWLIST.size} anchored); ` +
     `read ratchet held across ${Object.keys(readCounts).length} files ` +
     `(${readTotal} naked root reads by table, non-increasing).`
 )
