@@ -58,13 +58,17 @@ async function getWorkspaceMemberRowByUserId(
   workspaceId: string,
   userId: string
 ) {
-  return db
-    .selectFrom("workspace_members")
-    .select(["id", "workspace_id", "user_id", "trust_level", "joined_at"])
-    .where("workspace_id", "=", workspaceId)
-    .where("user_id", "=", userId)
-    .limit(1)
-    .executeTakeFirst()
+  return (
+    db
+      .selectFrom("workspace_members")
+      .select(["id", "workspace_id", "user_id", "trust_level", "joined_at"])
+      .where("workspace_id", "=", workspaceId)
+      .where("user_id", "=", userId)
+      // Soft delete (§8.4): resolve only active memberships.
+      .where("status", "=", "active")
+      .limit(1)
+      .executeTakeFirst()
+  )
 }
 
 async function requireWorkspaceMemberRowByUserId(
@@ -492,6 +496,9 @@ export async function listUserWorkspaces(userId: string) {
     .selectAll("w")
     .select(["wm.id as current_workspace_member_id", "wm.trust_level"])
     .where("wm.user_id", "=", userId)
+    // Soft delete (§8.4): only active memberships of live workspaces are listed.
+    .where("wm.status", "=", "active")
+    .where("w.deleted_at", "is", null)
     .orderBy("w.created_at", "desc")
     .execute()
   return rows.map((row) => ({
@@ -506,6 +513,7 @@ export async function getWorkspaceById(workspaceId: string) {
     .selectFrom("workspaces")
     .selectAll()
     .where("id", "=", workspaceId)
+    .where("deleted_at", "is", null)
     .executeTakeFirst()
   return row ? mapWorkspaceRow(row) : null
 }
@@ -632,16 +640,34 @@ export async function checkMembership(workspaceId: string, userId: string) {
   const row = await db
     .selectFrom("workspaces as w")
     .leftJoin("workspace_members as wm", (join) =>
-      join.onRef("wm.workspace_id", "=", "w.id").on("wm.user_id", "=", userId)
+      join
+        .onRef("wm.workspace_id", "=", "w.id")
+        .on("wm.user_id", "=", userId)
+        // Soft delete (§8.4): only an active membership counts.
+        .on("wm.status", "=", "active")
     )
     .select(["w.owner_id", "wm.user_id", "wm.trust_level"])
     .where("w.id", "=", workspaceId)
+    .where("w.deleted_at", "is", null)
     .executeTakeFirst()
   return row ? deriveWorkspaceTrustLevel(row) : null
 }
 
 export async function addMember(input: AddMemberInput) {
   const result = await withDbTransaction(async (trx) => {
+    // Single durable membership row (design §6): re-joining a previously
+    // left/removed member REVIVES the row (status→active) rather than failing.
+    // "already an active member" is detected via the pre-existing status.
+    const existing = await trx
+      .selectFrom("workspace_members")
+      .select(["id", "status"])
+      .where("workspace_id", "=", input.workspaceId)
+      .where("user_id", "=", input.userId)
+      .executeTakeFirst()
+    if (existing?.status === "active") {
+      return null
+    }
+
     const memberRow = await trx
       .insertInto("workspace_members")
       .values({
@@ -649,7 +675,14 @@ export async function addMember(input: AddMemberInput) {
         user_id: input.userId,
         trust_level: input.trustLevel,
       })
-      .onConflict((oc) => oc.columns(["workspace_id", "user_id"]).doNothing())
+      .onConflict((oc) =>
+        oc.columns(["workspace_id", "user_id"]).doUpdateSet({
+          status: "active",
+          trust_level: input.trustLevel,
+          left_at: null,
+          removed_at: null,
+        })
+      )
       .returningAll()
       .executeTakeFirst()
 

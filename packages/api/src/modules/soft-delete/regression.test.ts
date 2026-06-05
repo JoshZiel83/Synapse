@@ -463,3 +463,112 @@ test(
     })
   }
 )
+
+// ---- P0 authorization read-path filtering (review round) -------------------
+import { checkPermission } from "../access/evaluator.js"
+import { resolveWorkspaceAccessSubject } from "../access/service.js"
+
+test(
+  "authz: a soft-deleted actor is not authorizable",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const mid = await insertMember(db, ws, u, "admin")
+      const actorId = await insertActor(db, ws)
+      const subject = { type: "workspace_member" as const, id: mid }
+      const before = await checkPermission(db as never, {
+        resourceType: "actor",
+        resourceId: actorId,
+        permission: "view",
+        subject,
+      })
+      assert.equal(before, true, "live actor is viewable by admin")
+      await db
+        .updateTable("actors")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", actorId)
+        .execute()
+      const after = await checkPermission(db as never, {
+        resourceType: "actor",
+        resourceId: actorId,
+        permission: "view",
+        subject,
+      })
+      assert.equal(after, false, "soft-deleted actor is NOT authorizable")
+    })
+  }
+)
+
+test(
+  "authz: a removed member resolves to the platform user subject, not a workspace_member",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      await insertMember(db, ws, u, "admin")
+      const s1 = await resolveWorkspaceAccessSubject(db as never, ws, u)
+      assert.equal(
+        s1.type,
+        "workspace_member",
+        "active member resolves to workspace_member"
+      )
+      await db
+        .updateTable("workspace_members")
+        .set({ status: "removed", removed_at: new Date() })
+        .where("workspace_id", "=", ws)
+        .where("user_id", "=", u)
+        .execute()
+      const s2 = await resolveWorkspaceAccessSubject(db as never, ws, u)
+      assert.equal(
+        s2.type,
+        "user",
+        "removed member falls back to platform user subject"
+      )
+    })
+  }
+)
+
+test(
+  "authz: a soft-deleted device is not authorizable",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const mid = await insertMember(db, ws, u, "admin")
+      const dev = await db
+        .insertInto("devices")
+        .values({
+          workspace_id: ws,
+          title: "d",
+          public_key: "k",
+          public_key_fingerprint: `fp-${uniq("d")}`,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const subject = { type: "workspace_member" as const, id: mid }
+      const before = await checkPermission(db as never, {
+        resourceType: "device",
+        resourceId: dev.id as string,
+        permission: "view",
+        subject,
+      })
+      assert.equal(before, true, "live device is viewable by admin")
+      await db
+        .updateTable("devices")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", dev.id)
+        .execute()
+      const after = await checkPermission(db as never, {
+        resourceType: "device",
+        resourceId: dev.id as string,
+        permission: "view",
+        subject,
+      })
+      assert.equal(after, false, "soft-deleted device is NOT authorizable")
+    })
+  }
+)
