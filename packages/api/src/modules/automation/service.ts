@@ -1105,6 +1105,7 @@ async function loadAutomationRulesByIds(
        FROM automation_rules
        WHERE workspace_id = $1
          AND id = ANY($2)
+         AND deleted_at IS NULL
        ORDER BY created_at DESC`,
       [workspaceId, ruleIds]
     ),
@@ -1279,6 +1280,7 @@ async function pauseAutomationRulesForEventSource(
        AND at.event_source_id = $1
        AND ar.category = 'event_subscription'
        AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
      RETURNING ar.id, ar.workspace_id`,
     [eventSourceId, reason]
   )
@@ -1718,7 +1720,8 @@ async function pauseAutomationRulesMissingEventSourceAccess(
        ON at.rule_id = ar.id
      WHERE at.event_source_id = $1
        AND ar.category = 'event_subscription'
-       AND ar.status = 'active'`,
+       AND ar.status = 'active'
+       AND ar.deleted_at IS NULL`,
     [eventSourceId]
   )
 
@@ -1785,6 +1788,7 @@ export async function getAutomationEventSource(
      ${automationEventSourceJoinClause("aes", "aib")}
      WHERE aes.workspace_id = $1
        AND aes.id = $2
+       AND aes.deleted_at IS NULL
      LIMIT 1`,
     [workspaceId, eventSourceId]
   )
@@ -1802,7 +1806,7 @@ export async function listAutomationEventSources(
   accessContext?: AutomationEventSourceAccessContext
 ) {
   const values: unknown[] = [workspaceId]
-  let where = "aes.workspace_id = $1"
+  let where = "aes.workspace_id = $1 AND aes.deleted_at IS NULL"
 
   if (filters?.status) {
     values.push(filters.status)
@@ -2001,7 +2005,8 @@ async function ensureAutomationIntegrationBinding(params: {
             integrationTargetId: targetId,
             integrationTargetLabel: targetLabel,
           }),
-          created_by_workspace_member_id: params.creator.workspaceMemberId || null,
+          created_by_workspace_member_id:
+            params.creator.workspaceMemberId || null,
           created_at: sql`NOW()`,
           updated_at: sql`NOW()`,
         })
@@ -2359,10 +2364,15 @@ async function createIntegrationAutomationEventSource(
       await reconcileIntegrationBindingWebhook(binding.id)
     }
   } catch (error) {
+    // Saga compensating rollback: the just-created event source never became
+    // usable. Soft-delete it (hard delete forbidden by sd_reject_delete); an
+    // offline purge reclaims the tombstone later.
     await db
-      .deleteFrom("automation_event_sources")
+      .updateTable("automation_event_sources")
+      .set({ deleted_at: sql`NOW()` })
       .where("workspace_id", "=", workspaceId)
       .where("id", "=", sourceId)
+      .where("deleted_at", "is", null)
       .execute()
       .catch(() => undefined)
     throw error
@@ -2715,9 +2725,11 @@ async function getAutomationEventSourceByWebhookPathToken(
        ON awe.id = aes.webhook_endpoint_id
      WHERE awe.path_token = $1
        AND awe.status = 'active'
+       AND awe.deleted_at IS NULL
        AND aes.provider_kind = 'webhook'
        AND aes.source_key = $2
        AND aes.status IN ('active', 'deprecated')
+       AND aes.deleted_at IS NULL
      LIMIT 1`,
     [pathToken, sourceKey]
   )
@@ -2745,9 +2757,12 @@ async function listIntegrationEventSourcesByWebhookPathToken(
        ON aes.integration_binding_id = aib.id
      WHERE awe.path_token = $1
        AND awe.status = 'active'
+       AND awe.deleted_at IS NULL
        AND aib.ingress_kind = 'webhook'
+       AND aib.deleted_at IS NULL
        AND aes.provider_kind = 'integration'
        AND aes.status IN ('active', 'deprecated')
+       AND aes.deleted_at IS NULL
      ORDER BY aes.created_at ASC`,
     [pathToken]
   )
@@ -2798,6 +2813,7 @@ async function expireAutomationRules(params: {
      FROM automation_policies ap
      WHERE ap.rule_id = ar.id
        AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
        AND ap.active_until IS NOT NULL
        AND ap.active_until < $1
        ${params.workspaceId ? "AND ar.workspace_id = $2" : ""}
@@ -2848,6 +2864,7 @@ async function pauseAutomationRulesForInactiveCreators(params: {
      FROM conversation_participants cp
      WHERE cp.id = ar.created_by_participant_id
        AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
        AND cp.state <> 'active'
        ${params.workspaceId ? "AND ar.workspace_id = $1" : ""}
      RETURNING ar.id, ar.workspace_id`,
@@ -2991,6 +3008,7 @@ async function resolveAutomationRulesForEvent(params: {
      JOIN automation_policies ap ON ap.rule_id = ar.id
      WHERE ar.workspace_id = $1
        AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
        AND at.trigger_kind = 'event'
        AND at.event_source_id = $2
        AND (ap.active_from IS NULL OR ap.active_from <= $3)
@@ -3565,7 +3583,7 @@ export async function listAutomationRules(
   await syncAutomationRuleLiveness({ workspaceId })
 
   const values: unknown[] = [workspaceId]
-  let where = "workspace_id = $1"
+  let where = "workspace_id = $1 AND deleted_at IS NULL"
 
   if (filters?.status) {
     values.push(filters.status)
@@ -3793,10 +3811,14 @@ export async function deleteAutomationRule(
       details: JSON.stringify({ deleted: true }),
     })
     .execute()
+  // Soft delete (design §7.4): flip deleted_at (hard delete forbidden by
+  // sd_reject_delete).
   await db
-    .deleteFrom("automation_rules")
+    .updateTable("automation_rules")
+    .set({ deleted_at: sql`NOW()` })
     .where("id", "=", ruleId)
     .where("workspace_id", "=", workspaceId)
+    .where("deleted_at", "is", null)
     .execute()
 }
 
@@ -3837,6 +3859,7 @@ export async function listAutomationWebhookEndpoints(workspaceId: string) {
     `SELECT *
      FROM automation_webhook_endpoints
      WHERE workspace_id = $1
+       AND deleted_at IS NULL
      ORDER BY created_at DESC`,
     [workspaceId]
   )
@@ -3910,6 +3933,7 @@ export async function ingestAutomationProviderEvent(params: {
       )
       .where("source_key", "=", params.sourceKey)
       .where("status", "in", ["active", "deprecated"])
+      .where("deleted_at", "is", null)
       .limit(1)
   )
   const eventSource = result.rows[0]
@@ -4190,6 +4214,7 @@ export async function scheduleDueAutomationExecutions(
        JOIN automation_policies ap ON ap.rule_id = ar.id
        WHERE at.trigger_kind = 'schedule'
          AND ar.status = 'active'
+         AND ar.deleted_at IS NULL
          AND at.next_fire_at IS NOT NULL
          AND at.next_fire_at <= NOW()
          AND (ap.active_from IS NULL OR ap.active_from <= at.next_fire_at)

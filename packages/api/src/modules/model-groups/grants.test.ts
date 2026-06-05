@@ -225,7 +225,7 @@ test(
 )
 
 test(
-  "model_group_grants.subject_id FK cascades when the access_subjects row is deleted",
+  "workspace_members cannot be hard-deleted (soft-delete reject trigger); member status flips instead, grant + subject rows are preserved",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -245,19 +245,49 @@ test(
           status: "active",
         })
         .execute()
-      // Deleting the workspace_member cascades into access_subjects (subject's
-      // workspace_member_id has ON DELETE CASCADE), which in turn cascades
-      // into model_group_grants (deferred FK has ON DELETE CASCADE).
+
+      // Soft-delete world (design §0/§7): hard-deleting a workspace_member is
+      // forbidden by the sd_reject_delete trigger — there is no DB cascade.
+      // Wrap in a manual SAVEPOINT so the rejected statement's abort doesn't
+      // poison the outer test transaction (Kysely has no nested .transaction()).
+      await sql`SAVEPOINT sd_reject_probe`.execute(db)
+      await assert.rejects(
+        () =>
+          db
+            .deleteFrom("workspace_members")
+            .where("id", "=", memberId)
+            .execute(),
+        /hard delete of workspace_members is forbidden/
+      )
+      await sql`ROLLBACK TO SAVEPOINT sd_reject_probe`.execute(db)
+
+      // The lifecycle is a status flip (member id stays stable, §6). The
+      // access_subjects row is an immutable identity registry (§5) — it stays,
+      // and the grant row stays too (no cascade). Availability is derived from
+      // the underlying member's status, not from row deletion.
       await db
-        .deleteFrom("workspace_members")
+        .updateTable("workspace_members")
+        .set({ status: "removed", removed_at: new Date() })
         .where("id", "=", memberId)
         .execute()
-      const after = await db
-        .selectFrom("model_group_grants")
+
+      const subjectAfter = await db
+        .selectFrom("access_subjects")
         .select("id")
+        .where("id", "=", subjectId)
+        .execute()
+      assert.equal(
+        subjectAfter.length,
+        1,
+        "access_subjects row is preserved (immutable registry)"
+      )
+
+      const grantAfter = await db
+        .selectFrom("model_group_grants")
+        .select(["id", "status"])
         .where("group_id", "=", groupId)
         .execute()
-      assert.equal(after.length, 0)
+      assert.equal(grantAfter.length, 1, "grant row is preserved (no cascade)")
     })
   }
 )

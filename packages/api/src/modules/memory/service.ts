@@ -914,9 +914,11 @@ export async function resolveOrCreateMemorySpace(
   // We pick the right index by branching on scopeSubjectId. DO UPDATE
   // (no-op) is required for RETURNING on the conflicting row (DO NOTHING
   // would skip the RETURNING).
+  // The two indexes are soft-delete-aware (… AND deleted_at IS NULL), so the
+  // ON CONFLICT predicate must match exactly (design §8.3).
   const conflictClause = scopeSubjectId
-    ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL`
-    : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL`
+    ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL AND deleted_at IS NULL`
+    : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL AND deleted_at IS NULL`
   const result = await executor.executeQuery<MemorySpaceRow>(
     CompiledQuery.raw(
       `INSERT INTO memory_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
@@ -1832,8 +1834,11 @@ export async function updateMemory(
         .where("workspace_id", "=", workspaceId)
     )
 
-    await trx.executeQuery(
-      db.deleteFrom("memory_item_parts").where("memory_item_id", "=", memoryId)
+    // Content set-replace: memory_item_parts is aggregate-internal detail; the
+    // physical delete goes through the SECURITY DEFINER fn (sd_reject_delete
+    // forbids a naked DELETE on this persistent child table). Design §7.5/§11.
+    await sql`SELECT sd_replace_memory_item_parts(${memoryId}::uuid)`.execute(
+      trx
     )
     await insertMemoryParts(trx, memoryId, normalizedContent.parts)
     await maybeMarkSuperseded(trx, input.supersedesMemoryId)
@@ -1853,12 +1858,17 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
     throw new MemoryError("Memory not found", 404)
   }
   await withDbTransaction(async (trx) => {
+    // Soft delete (design §7.4): flip deleted_at. memory_item_parts/chunks stay
+    // as aggregate-internal detail until offline purge; hard delete is forbidden
+    // by sd_reject_delete.
     const deleted = await trx
-      .deleteFrom("memory_items")
+      .updateTable("memory_items")
+      .set({ deleted_at: new Date() })
       .where("workspace_id", "=", workspaceId)
       .where("id", "=", memoryId)
+      .where("deleted_at", "is", null)
       .executeTakeFirst()
-    if (!deleted.numDeletedRows) {
+    if (!deleted.numUpdatedRows) {
       throw new MemoryError("Memory not found", 404)
     }
   })

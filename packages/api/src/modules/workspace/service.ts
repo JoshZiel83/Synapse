@@ -20,6 +20,7 @@ import {
 } from "@synapse/shared"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
 import { setAccessPolicy } from "../access/default-access-policy.js"
+import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
 import type {
   WorkspaceAccessBindingsAccessKey,
   WorkspaceMembersTrustLevel,
@@ -58,13 +59,17 @@ async function getWorkspaceMemberRowByUserId(
   workspaceId: string,
   userId: string
 ) {
-  return db
-    .selectFrom("workspace_members")
-    .select(["id", "workspace_id", "user_id", "trust_level", "joined_at"])
-    .where("workspace_id", "=", workspaceId)
-    .where("user_id", "=", userId)
-    .limit(1)
-    .executeTakeFirst()
+  return (
+    db
+      .selectFrom("workspace_members")
+      .select(["id", "workspace_id", "user_id", "trust_level", "joined_at"])
+      .where("workspace_id", "=", workspaceId)
+      .where("user_id", "=", userId)
+      // Soft delete (§8.4): resolve only active memberships.
+      .where("status", "=", "active")
+      .limit(1)
+      .executeTakeFirst()
+  )
 }
 
 async function requireWorkspaceMemberRowByUserId(
@@ -492,6 +497,9 @@ export async function listUserWorkspaces(userId: string) {
     .selectAll("w")
     .select(["wm.id as current_workspace_member_id", "wm.trust_level"])
     .where("wm.user_id", "=", userId)
+    // Soft delete (§8.4): only active memberships of live workspaces are listed.
+    .where("wm.status", "=", "active")
+    .where("w.deleted_at", "is", null)
     .orderBy("w.created_at", "desc")
     .execute()
   return rows.map((row) => ({
@@ -506,6 +514,7 @@ export async function getWorkspaceById(workspaceId: string) {
     .selectFrom("workspaces")
     .selectAll()
     .where("id", "=", workspaceId)
+    .where("deleted_at", "is", null)
     .executeTakeFirst()
   return row ? mapWorkspaceRow(row) : null
 }
@@ -561,10 +570,11 @@ export async function updateWorkspaceChiefActorPreference(
 ): Promise<WorkspaceChiefActorPreference> {
   const member = await requireWorkspaceMemberRowByUserId(workspaceId, userId)
   if (!chiefActorId) {
-    await db
-      .deleteFrom("workspace_member_preferences")
-      .where("workspace_member_id", "=", member.id)
-      .execute()
+    // Clearing a preference physically removes the child row; routed through the
+    // SECURITY DEFINER fn since sd_reject_delete forbids a naked DELETE (§7.5).
+    await sql`SELECT sd_clear_member_preferences(${member.id}::uuid)`.execute(
+      db
+    )
 
     return {
       workspaceId,
@@ -627,20 +637,56 @@ export async function updateWorkspace(
   return row ? mapWorkspaceRow(row) : null
 }
 
+/**
+ * Soft-delete a workspace and its entire tenant footprint (design §5.5). Runs
+ * the markWorkspaceDeleted orchestration in one transaction: soft-deletes every
+ * workspace-scoped root, revokes memberships/bindings/grants, stops runtime.
+ * Returns false if the workspace was already gone / not live.
+ */
+export async function deleteWorkspace(workspaceId: string): Promise<boolean> {
+  const live = await db
+    .selectFrom("workspaces")
+    .select("id")
+    .where("id", "=", workspaceId)
+    .where("deleted_at", "is", null)
+    .executeTakeFirst()
+  if (!live) return false
+  await withDbTransaction((trx) => markWorkspaceDeleted(trx, workspaceId))
+  return true
+}
+
 export async function checkMembership(workspaceId: string, userId: string) {
   const row = await db
     .selectFrom("workspaces as w")
     .leftJoin("workspace_members as wm", (join) =>
-      join.onRef("wm.workspace_id", "=", "w.id").on("wm.user_id", "=", userId)
+      join
+        .onRef("wm.workspace_id", "=", "w.id")
+        .on("wm.user_id", "=", userId)
+        // Soft delete (§8.4): only an active membership counts.
+        .on("wm.status", "=", "active")
     )
     .select(["w.owner_id", "wm.user_id", "wm.trust_level"])
     .where("w.id", "=", workspaceId)
+    .where("w.deleted_at", "is", null)
     .executeTakeFirst()
   return row ? deriveWorkspaceTrustLevel(row) : null
 }
 
 export async function addMember(input: AddMemberInput) {
   const result = await withDbTransaction(async (trx) => {
+    // Single durable membership row (design §6): re-joining a previously
+    // left/removed member REVIVES the row (status→active) rather than failing.
+    // "already an active member" is detected via the pre-existing status.
+    const existing = await trx
+      .selectFrom("workspace_members")
+      .select(["id", "status"])
+      .where("workspace_id", "=", input.workspaceId)
+      .where("user_id", "=", input.userId)
+      .executeTakeFirst()
+    if (existing?.status === "active") {
+      return null
+    }
+
     const memberRow = await trx
       .insertInto("workspace_members")
       .values({
@@ -648,7 +694,14 @@ export async function addMember(input: AddMemberInput) {
         user_id: input.userId,
         trust_level: input.trustLevel,
       })
-      .onConflict((oc) => oc.columns(["workspace_id", "user_id"]).doNothing())
+      .onConflict((oc) =>
+        oc.columns(["workspace_id", "user_id"]).doUpdateSet({
+          status: "active",
+          trust_level: input.trustLevel,
+          left_at: null,
+          removed_at: null,
+        })
+      )
       .returningAll()
       .executeTakeFirst()
 
@@ -683,6 +736,7 @@ export async function listMembers(workspaceId: string) {
         "access_keys"
       ),
     ])
+    .where("status", "=", "active")
     .groupBy(["workspace_member_id"])
     .as("access_map")
 
@@ -774,6 +828,20 @@ export async function grantWorkspaceAccess(input: {
     throw new Error("Workspace member is not part of this workspace")
   }
 
+  // Re-grant must revive a previously-revoked row (design §6.2): the composite
+  // PK is kept, so onConflict updates status back to 'active' rather than
+  // doNothing (which would let a revoked row permanently block re-granting).
+  // "Already granted" is now detected by checking the pre-existing active state.
+  const existing = await db
+    .selectFrom("workspace_access_bindings")
+    .select(["status"])
+    .where("workspace_member_id", "=", input.workspaceMemberId)
+    .where("access_key", "=", input.accessKey)
+    .executeTakeFirst()
+  if (existing?.status === "active") {
+    throw new Error("Access already granted")
+  }
+
   const row = await db
     .insertInto("workspace_access_bindings")
     .values({
@@ -782,7 +850,12 @@ export async function grantWorkspaceAccess(input: {
       assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
     })
     .onConflict((oc) =>
-      oc.columns(["workspace_member_id", "access_key"]).doNothing()
+      oc.columns(["workspace_member_id", "access_key"]).doUpdateSet({
+        status: "active",
+        revoked_at: null,
+        assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
+        updated_at: sql`NOW()`,
+      })
     )
     .returningAll()
     .executeTakeFirst()
@@ -812,10 +885,18 @@ export async function revokeWorkspaceAccess(
     throw new Error("Access grant not found")
   }
 
+  // Soft revoke (design §6.2 option A): flip status instead of hard-deleting the
+  // row (which sd_reject_delete forbids). Re-granting revives the row. The
+  // revoker identity is not threaded to this layer; audit_logs records the actor.
   const row = await db
-    .deleteFrom("workspace_access_bindings")
+    .updateTable("workspace_access_bindings")
+    .set({
+      status: "revoked",
+      revoked_at: sql`NOW()`,
+    })
     .where("workspace_member_id", "=", workspaceMemberId)
     .where("access_key", "=", accessKey)
+    .where("status", "=", "active")
     .returning(["workspace_member_id", "access_key"])
     .executeTakeFirst()
 

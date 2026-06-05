@@ -911,10 +911,9 @@ export async function deleteModelGroup(groupId: string) {
         .where("group_id", "=", groupId)
     )
     .execute()
-  await db
-    .deleteFrom("actor_model_group_assignments")
-    .where("group_id", "=", groupId)
-    .execute()
+  await sql`SELECT sd_replace_group_actor_assignments(${groupId}::uuid)`.execute(
+    db
+  )
 }
 
 export async function addModelItem(
@@ -1391,10 +1390,7 @@ export async function setActorModelGroups(
     actorId
   )
 
-  await db
-    .deleteFrom("actor_model_group_assignments")
-    .where("actor_id", "=", actorId)
-    .execute()
+  await sql`SELECT sd_replace_actor_model_groups(${actorId}::uuid)`.execute(db)
   for (const group of groups) {
     await db
       .insertInto("actor_model_group_assignments")

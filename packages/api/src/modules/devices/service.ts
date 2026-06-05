@@ -70,6 +70,7 @@ export async function listDevices(
     .selectFrom("devices")
     .selectAll()
     .where("workspace_id", "=", workspaceId)
+    .where("deleted_at", "is", null)
     .orderBy("created_at", "desc")
     .execute()
   return rows.map((row) =>
@@ -97,6 +98,7 @@ export async function getDevice(
     .selectAll()
     .where("workspace_id", "=", workspaceId)
     .where("id", "=", deviceId)
+    .where("deleted_at", "is", null)
     .executeTakeFirst()
   if (!deviceRow) {
     throw new DeviceModuleError({
@@ -179,12 +181,20 @@ export async function deleteDevice(
   workspaceId: string,
   deviceId: string
 ): Promise<void> {
+  // Soft delete (design §5.3): devices are never hard-deleted in production —
+  // both user-registered devices and per-session sandbox devices flip deleted_at
+  // and KEEP their device_* child rows (services/capabilities/operations) for
+  // audit. Child rows are hidden from projection via the device-liveness filter
+  // and the *_live views (§8.6). Hard delete is forbidden by sd_reject_delete;
+  // physical removal happens only via offline purge.
   const result = await db
-    .deleteFrom("devices")
+    .updateTable("devices")
+    .set({ deleted_at: new Date() })
     .where("workspace_id", "=", workspaceId)
     .where("id", "=", deviceId)
+    .where("deleted_at", "is", null)
     .executeTakeFirst()
-  if (Number(result.numDeletedRows ?? 0) === 0) {
+  if (Number(result.numUpdatedRows ?? 0) === 0) {
     throw new DeviceModuleError({
       statusCode: 404,
       code: "device_not_found",
@@ -615,24 +625,25 @@ export async function detachDeviceService(
   deviceId: string,
   serviceId: string
 ): Promise<void> {
-  const result = await db
-    .deleteFrom("device_services")
-    .where("id", "=", serviceId)
-    .where("device_id", "=", deviceId)
-    .where(
-      "device_id",
-      "in",
-      db
-        .selectFrom("devices")
-        .select("id")
-        .where("workspace_id", "=", workspaceId)
-    )
+  // Verify the service belongs to a device in this workspace before detaching.
+  const owned = await db
+    .selectFrom("device_services as ds")
+    .innerJoin("devices as d", "d.id", "ds.device_id")
+    .select("ds.id")
+    .where("ds.id", "=", serviceId)
+    .where("ds.device_id", "=", deviceId)
+    .where("d.workspace_id", "=", workspaceId)
     .executeTakeFirst()
-  if (Number(result.numDeletedRows ?? 0) === 0) {
+  if (!owned) {
     throw new DeviceModuleError({
       statusCode: 404,
       code: "device_service_not_found",
       message: `device_service ${serviceId} not found on device ${deviceId}`,
     })
   }
+  // device_services is a persistent child guarded by sd_reject_delete; the
+  // physical detach goes through the SECURITY DEFINER fn (design §7.5/§11).
+  await sql`SELECT sd_detach_device_service(${serviceId}::uuid, ${deviceId}::uuid)`.execute(
+    db
+  )
 }

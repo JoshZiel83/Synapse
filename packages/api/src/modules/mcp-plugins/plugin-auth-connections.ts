@@ -10,6 +10,10 @@ import type {
 import { CompiledQuery, sql } from "kysely"
 import { config } from "../../config/index.js"
 import {
+  PLUGIN_CONNECTION_LIVE_STATUSES,
+  PLUGIN_INSTALLATION_LIVE_STATUSES,
+} from "./live-status.js"
+import {
   decrypt,
   decryptSensitiveFields,
   encrypt,
@@ -404,6 +408,10 @@ async function getSessionRowByState(state: string) {
 
 async function getConnectionRow(connectionId: string, workspaceId?: string) {
   let builder = db
+    // Live predicate (review F5/F16): a connection resolves secrets only when both
+    // it and its parent installation are live (deleted_at IS NULL AND status ∈
+    // liveValues — excludes archived install / expired-revoked connection). Base
+    // tables (not _live views) so NOT NULL column types survive.
     .selectFrom("plugin_connections as connection")
     .innerJoin(
       "plugin_installations as installation",
@@ -413,6 +421,10 @@ async function getConnectionRow(connectionId: string, workspaceId?: string) {
     .selectAll("connection")
     .select(["installation.catalog_item_id", "installation.catalog_version_id"])
     .where("connection.id", "=", connectionId)
+    .where("connection.deleted_at", "is", null)
+    .where("connection.status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
+    .where("installation.deleted_at", "is", null)
+    .where("installation.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
 
   if (workspaceId) {
     builder = builder.where("connection.workspace_id", "=", workspaceId)
@@ -430,6 +442,7 @@ async function getInstallationConfigRow(
   workspaceId: string
 ): Promise<InstallationConfigRow> {
   const row = await db
+    // Live predicate (review F16): exclude tombstoned + non-live-status installs.
     .selectFrom("plugin_installations as installation")
     .innerJoin(
       "plugin_package_version_specs as spec",
@@ -444,6 +457,8 @@ async function getInstallationConfigRow(
     ])
     .where("installation.id", "=", installationId)
     .where("installation.workspace_id", "=", workspaceId)
+    .where("installation.deleted_at", "is", null)
+    .where("installation.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
 
@@ -1918,6 +1933,7 @@ export async function attachAuthConnectionsToConfig(input: {
            AND connection.workspace_id = $2
            AND connection.binding_key = $3
            AND connection.external_account_id IS NOT DISTINCT FROM $4
+           AND connection.deleted_at IS NULL
          ORDER BY connection.updated_at DESC
          LIMIT 1`,
         [input.installationId, input.workspaceId, bindingKey, externalAccountId]

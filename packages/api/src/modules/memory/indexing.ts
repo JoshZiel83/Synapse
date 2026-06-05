@@ -394,11 +394,11 @@ export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
 
   await withDbTransaction(async (trx) => {
     if (currentStagedVersion > 0) {
-      await trx
-        .deleteFrom("memory_item_chunks")
-        .where("memory_item_id", "=", memoryItemId)
-        .where("index_version", "=", currentStagedVersion)
-        .execute()
+      // Index churn: route the physical delete through the SECURITY DEFINER fn
+      // (sd_reject_delete forbids a naked DELETE on this persistent child table).
+      await sql`SELECT sd_replace_memory_item_chunks(${memoryItemId}::uuid, ${currentStagedVersion}::int)`.execute(
+        trx
+      )
     }
 
     for (const spec of specs) {
@@ -528,11 +528,9 @@ export async function reindexMemoryItemEmbeddings(
         activeIndexVersion > 0 &&
         activeIndexVersion !== targetIndexVersion
       ) {
-        await trx
-          .deleteFrom("memory_item_chunks")
-          .where("memory_item_id", "=", memoryItemId)
-          .where("index_version", "=", activeIndexVersion)
-          .execute()
+        await sql`SELECT sd_replace_memory_item_chunks(${memoryItemId}::uuid, ${activeIndexVersion}::int)`.execute(
+          trx
+        )
       }
     })
     return { status: "ready" as const, chunkCount: 0 }
@@ -583,11 +581,9 @@ export async function reindexMemoryItemEmbeddings(
         activeIndexVersion > 0 &&
         activeIndexVersion !== targetIndexVersion
       ) {
-        await trx
-          .deleteFrom("memory_item_chunks")
-          .where("memory_item_id", "=", memoryItemId)
-          .where("index_version", "=", activeIndexVersion)
-          .execute()
+        await sql`SELECT sd_replace_memory_item_chunks(${memoryItemId}::uuid, ${activeIndexVersion}::int)`.execute(
+          trx
+        )
       }
     })
 

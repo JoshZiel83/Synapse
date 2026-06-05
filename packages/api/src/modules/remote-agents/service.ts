@@ -830,11 +830,9 @@ async function sendAgentStartPrefix(
       .selectFrom("remote_agent_conversation_contexts")
       .select(["remote_agent_id", "conversation_id", "runtime_session_id"])
       .where("remote_agent_id", "in", remoteAgentIds)
-      .where(
-        "conversation_id",
-        "in",
-        [...new Set([...pairs.values()].map((pair) => pair.conversationId))]
-      )
+      .where("conversation_id", "in", [
+        ...new Set([...pairs.values()].map((pair) => pair.conversationId)),
+      ])
   )
   const sessionByPair = new Map(
     sessionResult.rows.map((row) => [
@@ -1873,10 +1871,15 @@ export async function deleteRemoteAgent(params: {
   userId: string
 }) {
   await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
+  // Soft delete (design §7.4): flip deleted_at instead of hard-deleting. The
+  // remote agent's access_subjects row stays (immutable registry, §5). Hard
+  // delete is forbidden by the sd_reject_delete trigger.
   await db
-    .deleteFrom("remote_agents")
+    .updateTable("remote_agents")
+    .set({ deleted_at: new Date() })
     .where("workspace_id", "=", params.workspaceId)
     .where("id", "=", params.remoteAgentId)
+    .where("deleted_at", "is", null)
     .execute()
   return { deleted: true }
 }
@@ -2248,10 +2251,10 @@ export async function updateRemoteAgentGroupInteractionGrants(params: {
   }
 
   await withDbTransaction(async (client) => {
-    await client
-      .deleteFrom("remote_agent_group_interaction_grants")
-      .where("remote_agent_id", "=", params.remoteAgentId)
-      .execute()
+    // set-replace of a derived grants table → SECURITY DEFINER fn (§7.5).
+    await sql`SELECT sd_replace_remote_agent_group_grants(${params.remoteAgentId}::uuid)`.execute(
+      client
+    )
     for (const workspaceMemberId of nextIds) {
       await client
         .insertInto("remote_agent_group_interaction_grants")

@@ -1070,7 +1070,7 @@ test(
 )
 
 test(
-  "hardDeleteBindingsForResourceOn removes every binding tied to a resource",
+  "hardDeleteBindingsForResourceOn revokes every binding tied to a resource",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
@@ -1087,6 +1087,7 @@ test(
         .selectFrom("resource_access_bindings")
         .select("id")
         .where("actor_id", "=", actorId)
+        .where("status", "=", "active")
         .execute()
       assert.equal(before.length, 1)
 
@@ -1094,18 +1095,27 @@ test(
         resourceType: "actor",
         resourceId: actorId,
       })
-      const after = await db
+      // Soft-delete world (design §7.4): the binding is REVOKED, not removed.
+      const active = await db
         .selectFrom("resource_access_bindings")
         .select("id")
         .where("actor_id", "=", actorId)
+        .where("status", "=", "active")
         .execute()
-      assert.equal(after.length, 0)
+      assert.equal(active.length, 0, "no active bindings remain")
+      const revoked = await db
+        .selectFrom("resource_access_bindings")
+        .select(["id", "status"])
+        .where("actor_id", "=", actorId)
+        .execute()
+      assert.equal(revoked.length, 1, "the row is preserved")
+      assert.equal(revoked[0]!.status, "revoked")
     })
   }
 )
 
 test(
-  "hardDeleteBindingsForResource (kysely flavour) hard-deletes bindings for the resource",
+  "hardDeleteBindingsForResource (kysely flavour) revokes bindings for the resource",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -1126,12 +1136,19 @@ test(
         resourceType: "actor",
         resourceId: actorId,
       })
-      const remaining = await loadAccessBindingRowsForResources(db, {
+      // No ACTIVE bindings remain; the revoked row is preserved.
+      const active = await loadAccessBindingRowsForResources(db, {
+        resourceType: "actor",
+        resourceIds: [actorId],
+        includeRevoked: false,
+      })
+      assert.equal(active.length, 0)
+      const all = await loadAccessBindingRowsForResources(db, {
         resourceType: "actor",
         resourceIds: [actorId],
         includeRevoked: true,
       })
-      assert.equal(remaining.length, 0)
+      assert.equal(all.length, 1)
     })
   }
 )

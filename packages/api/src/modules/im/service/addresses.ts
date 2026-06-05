@@ -151,11 +151,11 @@ async function removeConversationParticipantTransportAddress(params: {
   conversationParticipantId: string
   transportAddressId: string
 }) {
-  await db
-    .deleteFrom("conversation_participant_addresses")
-    .where("conversation_participant_id", "=", params.conversationParticipantId)
-    .where("transport_address_id", "=", params.transportAddressId)
-    .execute()
+  // conversation_participant_addresses is a persistent child guarded by
+  // sd_reject_delete; the detach goes through the SECURITY DEFINER fn (§7.5/§11).
+  await sql`SELECT sd_detach_participant_address(${params.conversationParticipantId}::uuid, ${params.transportAddressId}::uuid)`.execute(
+    db
+  )
 }
 
 async function archiveConversationParticipantIfOrphaned(

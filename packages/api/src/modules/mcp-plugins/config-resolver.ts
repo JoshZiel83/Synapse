@@ -1,6 +1,7 @@
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { resolveAuthConnectionRefs } from "./plugin-auth-connections.js"
+import { PLUGIN_INSTALLATION_LIVE_STATUSES } from "./live-status.js"
 
 export interface ResolvedPluginConfig {
   pluginId: string
@@ -38,6 +39,10 @@ export async function resolveInstallationConfig(
   installationId: string
 ): Promise<ResolvedPluginConfig> {
   const row = await db
+    // Live predicate (review F16): exclude tombstoned AND non-live status
+    // (archived) installs — same definition as plugin_installations_live /
+    // manifest liveValues. Read the base table (not the _live view) so the NOT
+    // NULL column types are preserved (views type every column nullable).
     .selectFrom("plugin_installations as installation")
     .innerJoin(
       "plugin_package_version_specs as spec",
@@ -51,6 +56,8 @@ export async function resolveInstallationConfig(
       "spec.config_schema",
     ])
     .where("installation.id", "=", installationId)
+    .where("installation.deleted_at", "is", null)
+    .where("installation.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
 

@@ -36,7 +36,7 @@ async function seedCredentialUser(input: {
   const userRow = await sql<{ id: string }>`
     INSERT INTO users (email, name, email_verified)
     VALUES (${input.email}, ${input.name}, ${input.emailVerified ?? true})
-    ON CONFLICT (email) DO UPDATE SET
+    ON CONFLICT (email) WHERE deleted_at IS NULL DO UPDATE SET
       name = EXCLUDED.name,
       email_verified = EXCLUDED.email_verified,
       updated_at = NOW()
@@ -46,7 +46,7 @@ async function seedCredentialUser(input: {
   await sql`
     INSERT INTO account (account_id, provider_id, user_id, password)
     VALUES (${userId}, 'credential', ${userId}, ${passwordHash})
-    ON CONFLICT (provider_id, account_id) DO UPDATE SET
+    ON CONFLICT (provider_id, account_id) WHERE deleted_at IS NULL DO UPDATE SET
       password = EXCLUDED.password,
       updated_at = NOW()`.execute(db)
 
@@ -100,7 +100,7 @@ async function seedDemoWorkspace(userId: string) {
   const result = await sql<{ id: string }>`
     INSERT INTO workspaces (name, slug, description, owner_id, is_trusted)
     VALUES ('Yihang', 'yihang', 'Refactored workspace seed', ${userId}, TRUE)
-    ON CONFLICT (slug) DO UPDATE SET
+    ON CONFLICT (slug) WHERE deleted_at IS NULL DO UPDATE SET
       name = EXCLUDED.name,
       description = EXCLUDED.description,
       is_trusted = EXCLUDED.is_trusted,

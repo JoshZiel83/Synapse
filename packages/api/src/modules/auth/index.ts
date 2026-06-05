@@ -11,7 +11,12 @@ import { auth } from "./better-auth.js"
 import { resolveOAuthErrorRedirect } from "./oauth-error-routing.js"
 import { getProfile, updateProfile, AuthError } from "./service.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
-import { db } from "../../infrastructure/database/kysely.js"
+import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
+import {
+  markUserDeleted,
+  markAccountUnlinked,
+  LastAccountError,
+} from "../soft-delete/orchestration.js"
 
 const updateMeSchema = z
   .object({
@@ -24,6 +29,13 @@ const updateMeSchema = z
       message: "At least one field is required",
     }
   )
+
+// Body for DELETE /api/v1/auth/me/accounts — identifies the account to unlink by
+// its (providerId, accountId) pair (the same key Better Auth uses).
+const unlinkAccountSchema = z.object({
+  providerId: z.string().min(1).max(100),
+  accountId: z.string().min(1).max(255),
+})
 
 function handleAuthError(error: unknown, reply: FastifyReply) {
   if (error instanceof AuthError) {
@@ -209,6 +221,59 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
           session: (request as any).authSession,
         })
       } catch (error) {
+        return handleAuthError(error, reply)
+      }
+    }
+  )
+
+  // Self-service account closure (design §5.4). Soft-deletes the user via the
+  // markUserDeleted orchestration (tombstone + owned-workspace transfer/erase +
+  // membership/grant revoke + auth-runtime teardown + account/PII anonymization)
+  // in one transaction. NOT routed to Better Auth's deleteUser (which would hard
+  // delete users and CASCADE account/session); BA's deleteUser is disabled and
+  // account.delete.before is fail-closed. After closure the user's sessions are
+  // already revoked inside the transaction, so subsequent requests are rejected.
+  app.delete(
+    "/api/v1/auth/me",
+    { preHandler: [authMiddleware] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const userId = (request as any).user.userId as string
+        await withDbTransaction((trx) => markUserDeleted(trx, userId))
+        return reply.status(204).send()
+      } catch (error) {
+        return handleAuthError(error, reply)
+      }
+    }
+  )
+
+  // Unlink a single OAuth/credential account (design §8.2, review F13). The
+  // sanctioned soft-delete replacement for Better Auth's physical unlinkAccount:
+  // soft-deletes + anonymizes the one account so its provider identity is
+  // released, refusing if it is the user's last live login method (423 Locked).
+  // BA's own unlink-account endpoint stays fail-closed at the hook.
+  app.delete(
+    "/api/v1/auth/me/accounts",
+    { preHandler: [authMiddleware] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const userId = (request as any).user.userId as string
+        const body = unlinkAccountSchema.parse(request.body)
+        const unlinked = await withDbTransaction((trx) =>
+          markAccountUnlinked(trx, userId, body.providerId, body.accountId)
+        )
+        if (!unlinked) {
+          return reply
+            .status(404)
+            .send({ error: "Account not found", code: "ACCOUNT_NOT_FOUND" })
+        }
+        return reply.status(204).send()
+      } catch (error) {
+        if (error instanceof LastAccountError) {
+          return reply
+            .status(423)
+            .send({ error: error.message, code: "LAST_ACCOUNT" })
+        }
         return handleAuthError(error, reply)
       }
     }

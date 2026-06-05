@@ -123,11 +123,13 @@ export async function ensureFileSpace(
     (input.namespaceKey || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
 
   // DO UPDATE (no-op) is required for RETURNING on the conflicting row; DO
-  // NOTHING would skip RETURNING. Pick the matching partial-unique index.
+  // NOTHING would skip RETURNING. Pick the matching partial-unique index. The
+  // file_spaces unique indexes are soft-delete-aware (… AND deleted_at IS NULL),
+  // so the ON CONFLICT predicate must match exactly (design §8.3).
   // conflictClause is a fixed compile-time fragment (no external input) → sql.raw.
   const conflictClause = scopeSubjectId
-    ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL`
-    : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL`
+    ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL AND deleted_at IS NULL`
+    : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL AND deleted_at IS NULL`
   const result = await sql<FileSpaceRow>`
     INSERT INTO file_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
     VALUES (${uuidv4()}, ${input.workspaceId}, ${ownerSubjectId}, ${scopeSubjectId}, ${namespaceKey}, NOW(), NOW())

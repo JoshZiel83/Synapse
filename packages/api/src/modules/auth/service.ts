@@ -168,6 +168,25 @@ function toAuthenticated(
 }
 
 /**
+ * Soft-delete guard (design §8.4): Better Auth's getSession/findUserById do NOT
+ * filter users.deleted_at, so a session minted before account closure (or via a
+ * residual device_code) could still resolve. Reject any session whose user is
+ * soft-deleted, treating it as unauthenticated.
+ */
+async function rejectIfUserDeleted(
+  authed: AuthenticatedRequestSession | null
+): Promise<AuthenticatedRequestSession | null> {
+  if (!authed) return null
+  const live = await db
+    .selectFrom("users")
+    .select("id")
+    .where("id", "=", authed.user.id)
+    .where("deleted_at", "is", null)
+    .executeTakeFirst()
+  return live ? authed : null
+}
+
+/**
  * Resolve a session from a set of (Node) request headers — the cookie-only
  * path. Used by the Fastify middleware (HTTP) and by the WebSocket/ASR layers
  * when the client relies on the signed session cookie carried on the upgrade
@@ -179,7 +198,7 @@ export async function authenticateSessionFromHeaders(
   const result = await auth.api.getSession({
     headers: fromNodeHeaders(headers),
   })
-  return toAuthenticated(result)
+  return rejectIfUserDeleted(toAuthenticated(result))
 }
 
 /**
@@ -195,7 +214,7 @@ export async function authenticateSessionToken(
   const result = await auth.api.getSession({
     headers: headers as unknown as Headers,
   })
-  return toAuthenticated(result)
+  return rejectIfUserDeleted(toAuthenticated(result))
 }
 
 /**

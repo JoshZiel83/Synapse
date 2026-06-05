@@ -55,6 +55,7 @@ import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
 import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
 import { attachAuthConnectionsToConfig } from "./plugin-auth-connections.js"
 import { incrementMcpVersion } from "./runtime-version.js"
+import { PLUGIN_CONNECTION_LIVE_STATUSES } from "./live-status.js"
 import { builtinCapabilityCategories } from "./builtin-plugins/categories.js"
 import { builtinSeeds } from "./builtin-plugins/index.js"
 import {
@@ -1065,7 +1066,10 @@ async function loadInstallationRows(
         source_ref.source_catalog_item_id,
         source_ref.source_catalog_version_id,
         source_ref.sync_mode AS source_sync_mode
-      FROM plugin_installations installation
+      -- Soft-delete (review F9/F16): read the live surface — excludes both
+      -- tombstoned (deleted_at) AND non-live status (archived) installations,
+      -- the same definition as plugin_installations manifest liveValues.
+      FROM plugin_installations_live installation
       INNER JOIN access_subjects attachment_subj
         ON attachment_subj.id = installation.attachment_subject_id
       LEFT JOIN plugin_source_refs source_ref
@@ -1526,10 +1530,11 @@ async function upsertPluginVersion(
     )
     .execute()
 
-  await ex
-    .deleteFrom("plugin_version_runtime_permissions")
-    .where("catalog_version_id", "=", versionId)
-    .execute()
+  // set-replace of a derived config table → SECURITY DEFINER fn (naked DELETE
+  // forbidden by sd_reject_delete; design §7.5).
+  await sql`SELECT sd_replace_plugin_runtime_permissions(${versionId}::uuid)`.execute(
+    ex
+  )
 
   for (const permissionKey of input.authorization?.requiredPermissions || []) {
     await ex
@@ -1560,10 +1565,10 @@ async function assignPluginCategories(
   itemId: string,
   categorySlugs: string[]
 ) {
-  await ex
-    .deleteFrom("catalog_item_categories")
-    .where("catalog_item_id", "=", itemId)
-    .execute()
+  // set-replace of a derived join table → SECURITY DEFINER fn (design §7.5).
+  await sql`SELECT sd_replace_catalog_item_categories(${itemId}::uuid)`.execute(
+    ex
+  )
 
   if (categorySlugs.length === 0) return
 
@@ -1611,15 +1616,18 @@ export async function createOrganization(data: {
       is_verified: data.isVerified === true,
     })
     .onConflict((oc) =>
-      oc.column("slug").doUpdateSet({
-        display_name: data.displayName,
-        description: data.description || "",
-        logo_file_id: data.logoFileId || null,
-        owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
-        is_builtin: data.isBuiltin === true,
-        is_verified: data.isVerified === true,
-        updated_at: sql`NOW()`,
-      })
+      oc
+        .column("slug")
+        .where("deleted_at", "is", null)
+        .doUpdateSet({
+          display_name: data.displayName,
+          description: data.description || "",
+          logo_file_id: data.logoFileId || null,
+          owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
+          is_builtin: data.isBuiltin === true,
+          is_verified: data.isVerified === true,
+          updated_at: sql`NOW()`,
+        })
     )
     .returningAll()
     .executeTakeFirstOrThrow()
@@ -1882,6 +1890,8 @@ export async function installPluginUnified(data: {
         .selectFrom("plugin_connections")
         .select("public_payload")
         .where("id", "=", rawConnection.connectionId)
+        .where("deleted_at", "is", null)
+        .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
         .limit(1)
     )
     if (connectionResult.rows.length === 0) {
@@ -2025,6 +2035,54 @@ export async function installPluginUnified(data: {
   return installed
 }
 
+/**
+ * Soft-delete teardown for a plugin installation, executor-scoped so it can run
+ * inside any transaction (the real service wraps it in withDbTransaction; tests
+ * call it on a rolled-back trx). Revokes the installation's access bindings,
+ * soft-deletes its child plugin_connections (review F5), then soft-deletes the
+ * installation itself. Idempotent (deleted_at IS NULL guards). Single source of
+ * truth for uninstall semantics — do NOT re-implement these SQL flips elsewhere.
+ */
+export async function tearDownPluginInstallationOn(
+  client: Executor,
+  installId: string
+): Promise<void> {
+  await hardDeleteBindingsForResourceOn(client, {
+    resourceType: "plugin_installation",
+    resourceId: installId,
+  })
+
+  // Soft delete the installation's connections too (review F5): plugin_connections
+  // is its own soft-delete root, so uninstalling the parent must close the child
+  // OAuth/token connections — otherwise they stay live and their secrets remain
+  // resolvable. Flip both deleted_at and status so status-aware reads also drop
+  // them. Done before the parent flip (a child deleted_at flip is always allowed
+  // by the FK-liveness trigger).
+  await runBuilder(
+    client,
+    db
+      .updateTable("plugin_connections")
+      .set({
+        deleted_at: sql`NOW()`,
+        status: "revoked",
+        updated_at: sql`NOW()`,
+      })
+      .where("installation_id", "=", installId)
+      .where("deleted_at", "is", null)
+  )
+
+  // Soft delete (design §7.4): flip deleted_at instead of hard delete (which
+  // sd_reject_delete forbids). Bindings are revoked above.
+  await runBuilder(
+    client,
+    db
+      .updateTable("plugin_installations")
+      .set({ deleted_at: sql`NOW()` })
+      .where("id", "=", installId)
+      .where("deleted_at", "is", null)
+  )
+}
+
 export async function uninstallPluginUnified(installId: string) {
   const installation = await db
     .selectFrom("plugin_installations")
@@ -2039,17 +2097,9 @@ export async function uninstallPluginUnified(installId: string) {
   if (!installation) {
     throw new McpPluginError(404, "Installation not found")
   }
-  await withDbTransaction(async (client) => {
-    await hardDeleteBindingsForResourceOn(client, {
-      resourceType: "plugin_installation",
-      resourceId: installId,
-    })
-
-    await runBuilder(
-      client,
-      db.deleteFrom("plugin_installations").where("id", "=", installId)
-    )
-  })
+  await withDbTransaction((client) =>
+    tearDownPluginInstallationOn(client, installId)
+  )
 
   await incrementMcpVersion(installation.workspace_id)
 
@@ -2206,6 +2256,8 @@ export async function updateInstallation(
         .selectFrom("plugin_connections")
         .select("public_payload")
         .where("id", "=", rawConnection.connectionId)
+        .where("deleted_at", "is", null)
+        .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
         .limit(1)
     )
     if (connectionResult.rows.length === 0) {

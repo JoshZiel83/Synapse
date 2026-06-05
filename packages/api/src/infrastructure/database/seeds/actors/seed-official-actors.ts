@@ -109,7 +109,7 @@ export async function seedOfficialActorCatalog(
           ${actorSeed.tags},
           ${JSON.stringify(actorSeed.itemMetadata)}::jsonb
         )
-        ON CONFLICT (publisher_id, item_kind, slug) WHERE workspace_id IS NULL
+        ON CONFLICT (publisher_id, item_kind, slug) WHERE workspace_id IS NULL AND deleted_at IS NULL
         DO UPDATE SET
           display_name = EXCLUDED.display_name,
           summary = EXCLUDED.summary,

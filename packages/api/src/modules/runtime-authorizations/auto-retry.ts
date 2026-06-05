@@ -103,6 +103,8 @@ async function resolveAutoRetryTarget(args: {
     .where("dc.id", "=", args.deviceCapabilityId)
     .where("dt.current_name", "=", args.visibleToolName)
     .where("dt.status", "=", "active")
+    // Soft-delete (§8.6): never auto-retry against a soft-closed device's tool.
+    .where("d.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) return null

@@ -91,6 +91,10 @@ async function loadWorkspaceMemberAccess(
       "w.owner_id",
     ])
     .where("wm.id", "=", workspaceMemberId)
+    // Soft delete (§8.4): a left/removed member or a soft-deleted workspace
+    // grants no access.
+    .where("wm.status", "=", "active")
+    .where("w.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) return null
@@ -99,6 +103,7 @@ async function loadWorkspaceMemberAccess(
     .selectFrom("workspace_access_bindings")
     .select("access_key")
     .where("workspace_member_id", "=", workspaceMemberId)
+    .where("status", "=", "active")
     .execute()
 
   return {
@@ -115,17 +120,21 @@ async function loadActorRow(
   db: KyselyDb,
   actorId: string
 ): Promise<ActorRow | null> {
-  return (await db
-    .selectFrom("actors")
-    .select([
-      "id",
-      "workspace_id",
-      "created_by_workspace_member_id",
-      "is_active",
-    ])
-    .where("id", "=", actorId)
-    .limit(1)
-    .executeTakeFirst()) as ActorRow | null
+  return (
+    (await db
+      .selectFrom("actors")
+      .select([
+        "id",
+        "workspace_id",
+        "created_by_workspace_member_id",
+        "is_active",
+      ])
+      .where("id", "=", actorId)
+      // Soft delete (§8): a soft-deleted actor is never authorizable.
+      .where("deleted_at", "is", null)
+      .limit(1)
+      .executeTakeFirst()) as ActorRow | null
+  )
 }
 
 async function loadRemoteAgentRow(
@@ -141,6 +150,7 @@ async function loadRemoteAgentRow(
       is_public_shared
     FROM remote_agents
     WHERE id = ${remoteAgentId}
+      AND deleted_at IS NULL
     LIMIT 1
   `.execute(db)
   return result.rows[0] ?? null
@@ -167,6 +177,7 @@ async function loadPlatformAccessKeysForUser(db: KyselyDb, userId: string) {
     .selectFrom("platform_access_bindings")
     .select("access_key")
     .where("user_id", "=", userId)
+    .where("status", "=", "active")
     .execute()
   return rows.map((row) => row.access_key)
 }
@@ -753,6 +764,7 @@ async function listManageableInstalledSkillIds(
     .select("id")
     .where("workspace_id", "=", access.workspaceId)
     .where("is_active", "=", true)
+    .where("deleted_at", "is", null)
     .orderBy("updated_at", "desc")
 
   if (!workspacePermissionFromAccess(access, "manage_skills")) {
@@ -782,6 +794,7 @@ async function listManageablePluginInstallationIds(
     .select("id")
     .where("workspace_id", "=", access.workspaceId)
     .where("status", "=", "active")
+    .where("deleted_at", "is", null)
     .orderBy("updated_at", "desc")
 
   if (!workspacePermissionFromAccess(access, "manage_plugins")) {
@@ -929,6 +942,8 @@ async function hasInstalledSkillPermission(
     .selectFrom("installed_skills")
     .select(["workspace_id", "created_by_workspace_member_id", "is_active"])
     .where("id", "=", skillId)
+    // Soft delete (§8): a soft-deleted skill is never authorizable.
+    .where("deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row || !row.is_active) {
@@ -962,6 +977,8 @@ async function hasPluginInstallationPermission(
     .selectFrom("plugin_installations")
     .select(["workspace_id", "installed_by_workspace_member_id", "status"])
     .where("id", "=", installationId)
+    // Soft delete (§8): a soft-deleted installation is never authorizable.
+    .where("deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row || row.status !== "active") {
@@ -993,6 +1010,8 @@ async function hasDevicePermission(
     .selectFrom("devices")
     .select(["workspace_id", "owner_workspace_member_id"])
     .where("id", "=", deviceId)
+    // Soft delete (§8): a soft-deleted/closed device is never authorizable.
+    .where("deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) {

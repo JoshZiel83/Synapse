@@ -35,10 +35,15 @@ export async function resolveWorkspaceAccessSubject(
   userId: string
 ): Promise<AccessSubject> {
   const member = await db
-    .selectFrom("workspace_members")
-    .select("id")
-    .where("workspace_id", "=", workspaceId)
-    .where("user_id", "=", userId)
+    .selectFrom("workspace_members as wm")
+    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
+    .select("wm.id")
+    .where("wm.workspace_id", "=", workspaceId)
+    .where("wm.user_id", "=", userId)
+    // Soft delete (§8.4): only an active member of a live workspace resolves to a
+    // workspace_member subject; otherwise fall back to the platform user subject.
+    .where("wm.status", "=", "active")
+    .where("w.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
 

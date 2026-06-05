@@ -26,6 +26,9 @@ export async function getWorkspaceMemberIdentity(
     ])
     .where("wm.workspace_id", "=", workspaceId)
     .where("wm.user_id", "=", userId)
+    // Soft delete (§8.4): only an active member + live user resolves to an identity.
+    .where("wm.status", "=", "active")
+    .where("u.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
 
