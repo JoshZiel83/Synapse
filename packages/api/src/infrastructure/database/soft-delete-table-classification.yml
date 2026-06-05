@@ -340,10 +340,6 @@ tables:
       - column: participant_two_subject_id
         resolvesSubject: target
         action: update
-  engine_branch_checkpoints:
-    class: append-only
-    softDelete: none
-    workspaceScope: none
   entity_access_requests:
     class: child
     softDelete: none
@@ -693,12 +689,6 @@ tables:
       - ba-kernel
       - revokeAuthRuntimeForUser
   session_context_states:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: none
-    deleteWhitelist:
-      - securityDefinerFn
-  session_engine_branches:
     class: ephemeral
     softDelete: none
     workspaceScope: none
@@ -2503,31 +2493,6 @@ foreignKeys:
     _child: session_context_states(active_private_archive_point_id)
     _parent: context_archive_points(id)
     _was: SET NULL
-  digest:3187068d3056a517:
-    targetAction: RESTRICT
-    _child: session_engine_branches(session_id)
-    _parent: sessions(id)
-    _was: CASCADE
-  digest:083a95a261c98dc1:
-    targetAction: RESTRICT
-    _child: session_engine_branches(conversation_id)
-    _parent: conversations(id)
-    _was: CASCADE
-  digest:de7123d105d5c3df:
-    targetAction: RESTRICT
-    _child: engine_branch_checkpoints(branch_id)
-    _parent: session_engine_branches(id)
-    _was: CASCADE
-  digest:4b0fa46e713697e4:
-    targetAction: RESTRICT
-    _child: engine_branch_checkpoints(session_id)
-    _parent: sessions(id)
-    _was: CASCADE
-  digest:f644c4f246bdfa31:
-    targetAction: RESTRICT
-    _child: engine_branch_checkpoints(conversation_id)
-    _parent: conversations(id)
-    _was: CASCADE
   digest:dd79f9941dbe660e:
     targetAction: RESTRICT
     _child: session_interrupts(target_session_id)

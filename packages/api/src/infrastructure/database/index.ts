@@ -156,26 +156,6 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "transactional realtime event outbox",
   },
   {
-    table: "session_engine_branches",
-    requiredColumns: [
-      "session_id",
-      "engine_kind",
-      "binding_key",
-      "native_state",
-    ],
-    reason: "provider/session branch persistence",
-  },
-  {
-    table: "engine_branch_checkpoints",
-    requiredColumns: [
-      "branch_id",
-      "engine_kind",
-      "binding_key",
-      "native_state",
-    ],
-    reason: "branch checkpoints and recovery",
-  },
-  {
     table: "interaction_user_input_requests",
     requiredColumns: ["interaction_id", "prompt_payload", "resolution_payload"],
     reason: "user input interaction subtype storage",

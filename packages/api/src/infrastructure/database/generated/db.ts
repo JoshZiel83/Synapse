@@ -159,8 +159,6 @@ export type DeviceSyncSourcesSyncMode = "follow" | "snapshot";
 
 export type DeviceToolsStatus = "active" | "hidden" | "removed";
 
-export type EngineBranchCheckpointsCheckpointKind = "compaction" | "snapshot";
-
 export type FileAccessGrantsStatus = "active" | "revoked" | "superseded";
 
 export type FileContentKind = "audio" | "document" | "image" | "video";
@@ -290,8 +288,6 @@ export type RuntimeAuthorizationRequestMode = "background" | "blocking";
 export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
 export type RuntimeEventsSource = "conversation" | "device" | "provider" | "system" | "tool";
-
-export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
 
 export type SessionInterruptsType = "remote_control_terminated";
 
@@ -1496,23 +1492,6 @@ export interface DirectConversationBindings {
   participant_two_subject_id: string;
 }
 
-export interface EngineBranchCheckpoints {
-  applied_item_keys: Generated<string[] | null>;
-  binding_key: string;
-  branch_id: string;
-  checkpoint_kind: Generated<EngineBranchCheckpointsCheckpointKind>;
-  conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  engine_kind: string;
-  id: Generated<string>;
-  metadata: Generated<Json | null>;
-  native_state: Generated<Json | null>;
-  private_sequence: Generated<Int8>;
-  provider_type: string;
-  session_id: string;
-  shared_sequence: Generated<Int8>;
-}
-
 export interface EntityAccessRequests {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
@@ -2653,23 +2632,6 @@ export interface SessionContextStates {
   updated_at: Generated<Timestamp | null>;
 }
 
-export interface SessionEngineBranches {
-  applied_item_keys: Generated<string[] | null>;
-  binding_key: string;
-  conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  engine_kind: string;
-  id: Generated<string>;
-  last_private_sequence: Generated<Int8>;
-  last_shared_sequence: Generated<Int8>;
-  metadata: Generated<Json | null>;
-  native_state: Generated<Json | null>;
-  provider_type: string;
-  session_id: string;
-  status: Generated<SessionEngineBranchesStatus>;
-  updated_at: Generated<Timestamp | null>;
-}
-
 export interface SessionInterrupts {
   content: string;
   created_at: Generated<Timestamp | null>;
@@ -3279,7 +3241,6 @@ export interface DB {
   devices: Devices;
   devices_live: DevicesLive;
   direct_conversation_bindings: DirectConversationBindings;
-  engine_branch_checkpoints: EngineBranchCheckpoints;
   entity_access_requests: EntityAccessRequests;
   file_access_grants: FileAccessGrants;
   file_access_grants_live: FileAccessGrantsLive;
@@ -3354,7 +3315,6 @@ export interface DB {
   schema_migrations: SchemaMigrations;
   session: Session;
   session_context_states: SessionContextStates;
-  session_engine_branches: SessionEngineBranches;
   session_interrupts: SessionInterrupts;
   session_wakeups: SessionWakeups;
   sessions: Sessions;
