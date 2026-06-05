@@ -216,19 +216,6 @@ export const ACCESS_ACTIONS = {
   "model_group.grant": { resourceType: "model_group", permission: "grant" },
   "model_group.delete": { resourceType: "model_group", permission: "delete" },
 
-  "model_profile.use": { resourceType: "model_profile", permission: "use" },
-  "model_profile.view": { resourceType: "model_profile", permission: "view" },
-  "model_profile.edit": { resourceType: "model_profile", permission: "edit" },
-  "model_profile.attach": {
-    resourceType: "model_profile",
-    permission: "attach",
-  },
-  "model_profile.grant": { resourceType: "model_profile", permission: "grant" },
-  "model_profile.delete": {
-    resourceType: "model_profile",
-    permission: "delete",
-  },
-
   "automation_event_source.use": {
     resourceType: "automation_event_source",
     permission: "use",

@@ -19,21 +19,27 @@ version: 1
 groups:
   - name: Platform Default
     description: Default platform model group
-    routingStrategy: priority_failover # priority_failover | weighted_random | round_robin
+    routingStrategy: priority_failover # priority_failover | weighted_random
     isDefault: true
     items:
       - displayName: Claude Sonnet
-        providerType: anthropic
-        engineKind: anthropic.messages
+        # vendor drives both the SDK provider-kind (anthropic|openai|
+        # openai_compatible) and the UI label. Known vendors: anthropic, openai,
+        # deepseek, bigmodel. providerKind is derived from vendor (override only
+        # if you know what you're doing).
+        vendor: anthropic
         apiKey: ${ANTHROPIC_API_KEY}
         baseUrl: https://api.anthropic.com
         modelName: claude-sonnet-4-20250514
-        maxTokens: 4096
+        maxOutputTokens: 4096
         # priority: 0          # lower wins under priority_failover
         # weight: 100          # relative share under weighted_random
         # capabilityTags: []   # free-form capability labels
-        # extraConfig:         # provider-specific knobs
+        # features:            # typed per-binding feature flags
+        #   apiStyle: chat     # openai only: chat | responses
+        #   serverTools: [web_search, web_fetch]   # anthropic only
         #   multimodal:
         #     supported: true
         #     types: [image]
-        #   builtin_tools: [web_search, web_fetch]   # anthropic only
+        #   crossTurnToolHistory: false
+        # providerOptions: {}  # opaque, passed verbatim to the AI SDK provider

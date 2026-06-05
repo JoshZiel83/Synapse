@@ -32,24 +32,25 @@ test("bigModelChatBase normalizes all three baseUrl shapes to /paas/v4", () => {
 function baseResolved(over: Partial<ResolvedModelConfig>): ResolvedModelConfig {
   return {
     groupId: "g",
-    profileId: "p",
-    profileRevisionId: "r",
-    providerType: "anthropic",
-    engineKind: "anthropic.messages",
+    bindingId: "b",
+    bindingVersionId: "v",
+    providerKind: "anthropic",
+    vendor: "anthropic",
     apiKey: "k",
     baseUrl: "http://x",
     modelName: "m",
-    maxTokens: 1024,
+    maxOutputTokens: 1024,
     ...over,
   } as ResolvedModelConfig
 }
 
-test("toLanguageModelSpec derives providerKind/apiStyle from legacy fields", () => {
+test("toLanguageModelSpec passes through providerKind/vendor/apiStyle", () => {
   assert.deepEqual(
     toLanguageModelSpec(
       baseResolved({
-        providerType: "anthropic",
-        engineKind: "anthropic.messages",
+        providerKind: "anthropic",
+        vendor: "anthropic",
+        apiStyle: "chat",
       })
     ),
     {
@@ -64,23 +65,15 @@ test("toLanguageModelSpec derives providerKind/apiStyle from legacy fields", () 
   assert.equal(
     toLanguageModelSpec(
       baseResolved({
-        providerType: "openai",
-        engineKind: "openai.chat_completions",
+        providerKind: "openai",
+        vendor: "openai",
+        apiStyle: "responses",
       })
-    ).apiStyle,
-    "chat"
-  )
-  assert.equal(
-    toLanguageModelSpec(
-      baseResolved({ providerType: "openai", engineKind: "openai.responses" })
     ).apiStyle,
     "responses"
   )
   const compat = toLanguageModelSpec(
-    baseResolved({
-      providerType: "bigmodel",
-      engineKind: "bigmodel.chat_completions",
-    })
+    baseResolved({ providerKind: "openai_compatible", vendor: "bigmodel" })
   )
   assert.equal(compat.providerKind, "openai_compatible")
   assert.equal(compat.vendor, "bigmodel")

@@ -6,12 +6,11 @@ import { modelGroupsFileSchema, modelGroupsResolvedSchema } from "./schemas.js"
 function rawItem(overrides: Record<string, unknown> = {}) {
   return {
     displayName: "Claude Sonnet",
-    providerType: "anthropic",
-    engineKind: "anthropic.messages",
+    vendor: "anthropic",
     apiKey: "${ANTHROPIC_API_KEY}",
     baseUrl: "https://api.anthropic.com",
     modelName: "claude-sonnet-4-20250514",
-    maxTokens: 4096,
+    maxOutputTokens: 4096,
     ...overrides,
   }
 }
@@ -115,10 +114,10 @@ test("rejects an empty groups array (min 1)", () => {
   assert.equal(modelGroupsFileSchema.safeParse(doc).success, false)
 })
 
-test("rejects an unknown provider type", () => {
+test("rejects an unknown vendor", () => {
   const doc = {
     version: 1,
-    groups: [{ name: "G", items: [rawItem({ providerType: "bogus" })] }],
+    groups: [{ name: "G", items: [rawItem({ vendor: "bogus" })] }],
   }
   assert.equal(modelGroupsFileSchema.safeParse(doc).success, false)
 })

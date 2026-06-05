@@ -629,20 +629,20 @@ export async function actorThink(
     resolved?: ResolvedModelConfig | null,
     attempt?: number
   ) => ({
-    provider: resolved?.providerType || "",
-    engineKind: resolved?.engineKind || "",
+    provider: resolved?.vendor || "",
+    providerKind: resolved?.providerKind || "",
     model: resolved?.modelName || "",
     round,
     attempt: attempt || 1,
     groupId: effectiveModelPlan.groupId,
     groupName: effectiveModelPlan.groupName,
-    candidateProfileIds: effectiveModelPlan.candidates.map(
-      (candidate: ResolvedModelConfig) => candidate.profileId
+    candidateBindingIds: effectiveModelPlan.candidates.map(
+      (candidate: ResolvedModelConfig) => candidate.bindingId
     ),
     system: currentSystem,
     contextWindow: allContextWindow,
     tools: allTools,
-    builtinTools: resolved?.builtinTools || null,
+    serverTools: resolved?.serverTools || null,
     multimodal: resolved?.multimodal || null,
   })
 
@@ -810,15 +810,16 @@ export async function actorThink(
         return logProviderStep({
           turnId: options!.turnId!,
           stepIndex,
-          providerType: params.resolved.providerType,
+          providerType: params.resolved.vendor,
           requestType: "actor_think",
           modelGroupId: effectiveModelPlan.groupId,
-          modelProfileId: params.resolved.profileId,
-          modelProfileRevisionId: params.resolved.profileRevisionId,
+          modelBindingId: params.resolved.bindingId,
+          modelBindingVersionId: params.resolved.bindingVersionId,
           modelName: params.resolved.modelName,
           capabilitiesSnapshot: {
-            engineKind: params.resolved.engineKind,
-            builtinTools: params.resolved.builtinTools || [],
+            providerKind: params.resolved.providerKind,
+            apiStyle: params.resolved.apiStyle || null,
+            serverTools: params.resolved.serverTools || [],
             multimodal: params.resolved.multimodal || null,
             toolNames: allTools.map((tool) => tool.name),
             attempt: params.attempt,
@@ -838,8 +839,8 @@ export async function actorThink(
       await logAIRequest({
         ...logCommon,
         round: stepIndex,
-        profileId: params.resolved.profileId,
-        profileRevisionId: params.resolved.profileRevisionId,
+        bindingId: params.resolved.bindingId,
+        bindingVersionId: params.resolved.bindingVersionId,
         inputTokens: params.inputTokens,
         outputTokens: params.outputTokens,
         latencyMs: params.latencyMs,
@@ -854,19 +855,19 @@ export async function actorThink(
     const executeProviderRound = async (round: number) => {
       const routePolicy =
         effectiveModelPlan.attemptPolicy || DEFAULT_ATTEMPT_POLICY
-      const perProfileAttempts = new Map<string, number>()
+      const perBindingAttempts = new Map<string, number>()
       let totalAttempts = 0
       let lastError: Error | null = null
 
       candidateLoop: for (const candidate of effectiveModelPlan.candidates) {
         const candidatePolicy = effectiveAttemptPolicy(routePolicy, candidate)
         while (true) {
-          const priorAttempts = perProfileAttempts.get(candidate.profileId) || 0
+          const priorAttempts = perBindingAttempts.get(candidate.bindingId) || 0
           if (priorAttempts >= candidatePolicy.maxAttemptsPerBinding) break
           if (totalAttempts >= routePolicy.maxAttemptsTotal) break candidateLoop
 
           const attempt = priorAttempts + 1
-          perProfileAttempts.set(candidate.profileId, attempt)
+          perBindingAttempts.set(candidate.bindingId, attempt)
           totalAttempts += 1
 
           const requestBody = buildRequestLog(round, candidate, attempt)
@@ -893,7 +894,7 @@ export async function actorThink(
                 messages: modelMessages,
                 tools: buildAiTools(allTools),
                 toolChoice: allTools.length > 0 ? "auto" : undefined,
-                maxOutputTokens: candidate.maxTokens,
+                maxOutputTokens: candidate.maxOutputTokens,
                 // single step: Synapse runs its own agent loop + tool executor
                 stopWhen: stepCountIs(1),
               }),
@@ -1037,7 +1038,7 @@ export async function actorThink(
         try {
           roundMediaBlocks = await ingestResponseMedia(
             response.mediaBlocks,
-            selectedResolved.providerType || "anthropic",
+            selectedResolved.vendor || "anthropic",
             workspaceId
           )
           allSupplementalBlocks.push(...collectFileRefBlocks(roundMediaBlocks))
@@ -1991,7 +1992,7 @@ export async function aiComplete(
   let response: ReturnType<typeof fromGenerateText>
 
   const requestLog = {
-    provider: resolved.providerType,
+    provider: resolved.vendor,
     model: resolved.modelName,
     system,
     contextWindow,
@@ -2008,7 +2009,7 @@ export async function aiComplete(
       model: languageModelFor(resolved),
       system,
       messages: modelMessages,
-      maxOutputTokens: resolved.maxTokens,
+      maxOutputTokens: resolved.maxOutputTokens,
       stopWhen: stepCountIs(1),
     })
     response = fromGenerateText(result)
@@ -2019,8 +2020,8 @@ export async function aiComplete(
       workspaceId: logContext?.workspaceId,
       actorId: logContext?.actorId,
       groupId: resolved.groupId,
-      profileId: resolved.profileId,
-      profileRevisionId: resolved.profileRevisionId,
+      bindingId: resolved.bindingId,
+      bindingVersionId: resolved.bindingVersionId,
       requestType: "ai_complete",
       inputTokens: 0,
       outputTokens: 0,
@@ -2041,8 +2042,8 @@ export async function aiComplete(
     workspaceId: logContext?.workspaceId,
     actorId: logContext?.actorId,
     groupId: resolved.groupId,
-    profileId: resolved.profileId,
-    profileRevisionId: resolved.profileRevisionId,
+    bindingId: resolved.bindingId,
+    bindingVersionId: resolved.bindingVersionId,
     requestType: "ai_complete",
     inputTokens: response.tokensUsed.input,
     outputTokens: response.tokensUsed.output,

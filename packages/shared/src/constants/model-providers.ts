@@ -1,47 +1,40 @@
-export type ModelProviderAdapterKey =
-  | "anthropic.messages"
-  | "openai.chat_completions"
-  | "openai.responses"
-  | "bigmodel.chat_completions"
+// Vendor catalog: UI dropdowns + per-model max-output-token limits + the
+// provider-kind mapping. After the AI-SDK migration, the engineKind 3-axis
+// fan-out (providerAdapter × branchStateMode × supportsBuiltinTools) is gone —
+// the SDK owns wire dispatch. A vendor maps to ONE providerKind
+// (anthropic|openai|openai_compatible); DeepSeek/BigModel are openai_compatible.
 
-export type ModelBranchStateMode =
-  | "anthropic.messages"
-  | "openai.chat_completions"
-  | "openai.responses"
+export type ProviderKind = "anthropic" | "openai" | "openai_compatible"
 
-export interface ModelProviderKnownModelDefinition {
+export interface ModelVendorKnownModelDefinition {
   modelName: string
   label: string
   maxOutputTokens?: number
 }
 
-export interface ModelProviderEngineDefinition {
-  engineKind: string
+export interface ModelVendorDefinition {
+  /** Stable vendor id (used as the binding's `vendor` + UI key). */
+  vendor: string
   label: string
-  defaultModelName: string
-  providerAdapter: ModelProviderAdapterKey
-  branchStateMode: ModelBranchStateMode
-  maxOutputTokens?: number
-  knownModels?: ModelProviderKnownModelDefinition[]
-}
-
-export interface ModelProviderDefinition {
-  providerType: string
-  label: string
+  /** Which SDK factory serves this vendor. */
+  providerKind: ProviderKind
   defaultBaseUrl: string
-  defaultEngineKind: string
-  supportsBuiltinTools: boolean
-  engines: ModelProviderEngineDefinition[]
+  defaultModelName: string
+  /** Whether Anthropic-style server tools (web_search/web_fetch) are available. */
+  supportsServerTools: boolean
+  /** Fallback per-vendor max output cap when a model isn't in knownModels. */
+  maxOutputTokens?: number
+  knownModels?: ModelVendorKnownModelDefinition[]
 }
 
 export interface ModelProviderConfigValidationIssue {
-  field: "maxTokens"
+  field: "maxOutputTokens"
   code: "max_tokens_exceeded"
   message: string
   maximum?: number
 }
 
-const BIGMODEL_CHAT_MODELS: ModelProviderKnownModelDefinition[] = [
+const BIGMODEL_CHAT_MODELS: ModelVendorKnownModelDefinition[] = [
   { modelName: "glm-5.1", label: "GLM-5.1", maxOutputTokens: 131072 },
   { modelName: "glm-5-turbo", label: "GLM-5-Turbo", maxOutputTokens: 131072 },
   { modelName: "glm-5", label: "GLM-5", maxOutputTokens: 131072 },
@@ -102,230 +95,131 @@ const BIGMODEL_CHAT_MODELS: ModelProviderKnownModelDefinition[] = [
   { modelName: "emohaa", label: "Emohaa", maxOutputTokens: 4096 },
 ]
 
-export const MODEL_PROVIDER_CATALOG: Record<string, ModelProviderDefinition> = {
+export const MODEL_VENDOR_CATALOG: Record<string, ModelVendorDefinition> = {
   anthropic: {
-    providerType: "anthropic",
+    vendor: "anthropic",
     label: "Anthropic",
+    providerKind: "anthropic",
     defaultBaseUrl: "https://api.anthropic.com",
-    defaultEngineKind: "anthropic.messages",
-    supportsBuiltinTools: true,
-    engines: [
-      {
-        engineKind: "anthropic.messages",
-        label: "Messages API",
-        defaultModelName: "claude-sonnet-4-20250514",
-        providerAdapter: "anthropic.messages",
-        branchStateMode: "anthropic.messages",
-      },
-    ],
+    defaultModelName: "claude-sonnet-4-20250514",
+    supportsServerTools: true,
   },
   openai: {
-    providerType: "openai",
+    vendor: "openai",
     label: "OpenAI",
+    providerKind: "openai",
     defaultBaseUrl: "https://api.openai.com",
-    defaultEngineKind: "openai.chat_completions",
-    supportsBuiltinTools: false,
-    engines: [
-      {
-        engineKind: "openai.chat_completions",
-        label: "Chat Completions",
-        defaultModelName: "gpt-4.1",
-        providerAdapter: "openai.chat_completions",
-        branchStateMode: "openai.chat_completions",
-      },
-      {
-        engineKind: "openai.responses",
-        label: "Responses API",
-        defaultModelName: "gpt-5",
-        providerAdapter: "openai.responses",
-        branchStateMode: "openai.responses",
-      },
-    ],
+    defaultModelName: "gpt-4.1",
+    supportsServerTools: false,
+  },
+  deepseek: {
+    vendor: "deepseek",
+    label: "DeepSeek",
+    providerKind: "openai_compatible",
+    defaultBaseUrl: "https://api.deepseek.com",
+    defaultModelName: "deepseek-chat",
+    supportsServerTools: false,
   },
   bigmodel: {
-    providerType: "bigmodel",
+    vendor: "bigmodel",
     label: "BigModel",
-    defaultBaseUrl: "https://open.bigmodel.cn/api",
-    defaultEngineKind: "bigmodel.chat_completions",
-    supportsBuiltinTools: false,
-    engines: [
-      {
-        engineKind: "bigmodel.chat_completions",
-        label: "Chat Completions",
-        defaultModelName: "glm-5.1",
-        providerAdapter: "bigmodel.chat_completions",
-        branchStateMode: "openai.chat_completions",
-        maxOutputTokens: 131072,
-        knownModels: BIGMODEL_CHAT_MODELS,
-      },
-    ],
+    providerKind: "openai_compatible",
+    defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    defaultModelName: "glm-5.1",
+    supportsServerTools: false,
+    maxOutputTokens: 131072,
+    knownModels: BIGMODEL_CHAT_MODELS,
   },
 }
 
-export function listModelProviderDefinitions(): ModelProviderDefinition[] {
-  return Object.values(MODEL_PROVIDER_CATALOG)
+export const PROVIDER_KINDS = [
+  "anthropic",
+  "openai",
+  "openai_compatible",
+] as const
+
+export function isProviderKind(value: string): value is ProviderKind {
+  return (PROVIDER_KINDS as readonly string[]).includes(value)
 }
 
-export function getModelProviderDefinition(
-  providerType?: string | null
-): ModelProviderDefinition | undefined {
-  if (!providerType) return undefined
-  return MODEL_PROVIDER_CATALOG[providerType]
+export function listModelVendorDefinitions(): ModelVendorDefinition[] {
+  return Object.values(MODEL_VENDOR_CATALOG)
 }
 
-export function getModelProviderEngineDefinition(
-  engineKind?: string | null
-): ModelProviderEngineDefinition | undefined {
-  if (!engineKind) return undefined
-  for (const provider of Object.values(MODEL_PROVIDER_CATALOG)) {
-    const engine = provider.engines.find(
-      (candidate) => candidate.engineKind === engineKind
-    )
-    if (engine) return engine
-  }
-  return undefined
+export function getModelVendorDefinition(
+  vendor?: string | null
+): ModelVendorDefinition | undefined {
+  if (!vendor) return undefined
+  return MODEL_VENDOR_CATALOG[vendor]
 }
 
-export function getModelProviderEngineDefinitions(
-  providerType?: string | null
-): ModelProviderEngineDefinition[] {
-  return getModelProviderDefinition(providerType)?.engines || []
+export function isKnownModelVendor(value: string): boolean {
+  return !!getModelVendorDefinition(value)
 }
 
-export function isKnownModelProviderType(value: string): boolean {
-  return !!getModelProviderDefinition(value)
+export function getDefaultModelBaseUrl(vendor: string): string {
+  return getModelVendorDefinition(vendor)?.defaultBaseUrl || ""
 }
 
-export function isKnownModelEngineKind(value: string): boolean {
-  return !!getModelProviderEngineDefinition(value)
+export function getDefaultModelName(vendor: string): string {
+  return getModelVendorDefinition(vendor)?.defaultModelName || ""
 }
 
-export function getDefaultModelEngineKind(providerType: string): string {
-  return (
-    getModelProviderDefinition(providerType)?.defaultEngineKind ||
-    "anthropic.messages"
-  )
+export function getProviderKindForVendor(vendor: string): ProviderKind {
+  return getModelVendorDefinition(vendor)?.providerKind || "openai_compatible"
 }
 
-export function getDefaultModelBaseUrl(providerType: string): string {
-  return getModelProviderDefinition(providerType)?.defaultBaseUrl || ""
-}
-
-export function getDefaultModelName(
-  providerType: string,
-  engineKind?: string
-): string {
-  const provider = getModelProviderDefinition(providerType)
-  if (!provider) return ""
-  const resolvedEngineKind = engineKind || provider.defaultEngineKind
-  const engine = provider.engines.find(
-    (candidate) => candidate.engineKind === resolvedEngineKind
-  )
-  return engine?.defaultModelName || provider.engines[0]?.defaultModelName || ""
-}
-
-export function resolveModelEngineKind(
-  providerType: string,
-  extraConfig?: Record<string, unknown> | null
-): string {
-  const raw =
-    typeof extraConfig?.engine_kind === "string"
-      ? extraConfig.engine_kind
-      : typeof extraConfig?.api_style === "string"
-        ? extraConfig.api_style
-        : undefined
-
-  if (raw === "responses" && providerType === "openai") {
-    return "openai.responses"
-  }
-
-  if (typeof raw === "string" && raw.length > 0) {
-    return raw
-  }
-
-  return getDefaultModelEngineKind(providerType)
-}
-
-export function getModelProviderAdapter(
-  engineKind: string
-): ModelProviderAdapterKey {
-  return (
-    getModelProviderEngineDefinition(engineKind)?.providerAdapter ||
-    "anthropic.messages"
-  )
-}
-
-export function getModelBranchStateMode(
-  engineKind: string
-): ModelBranchStateMode {
-  return (
-    getModelProviderEngineDefinition(engineKind)?.branchStateMode ||
-    "anthropic.messages"
-  )
-}
-
-export function providerSupportsBuiltinTools(providerType: string): boolean {
-  return getModelProviderDefinition(providerType)?.supportsBuiltinTools === true
+export function vendorSupportsServerTools(vendor: string): boolean {
+  return getModelVendorDefinition(vendor)?.supportsServerTools === true
 }
 
 export function getKnownModelDefinitions(
-  providerType?: string | null,
-  engineKind?: string | null
-): ModelProviderKnownModelDefinition[] {
-  const resolvedEngineKind =
-    engineKind ||
-    getModelProviderDefinition(providerType || "")?.defaultEngineKind
-  return getModelProviderEngineDefinition(resolvedEngineKind)?.knownModels || []
+  vendor?: string | null
+): ModelVendorKnownModelDefinition[] {
+  return getModelVendorDefinition(vendor || "")?.knownModels || []
 }
 
 export function getKnownModelDefinition(
-  providerType: string,
-  engineKind: string | undefined,
+  vendor: string,
   modelName: string
-): ModelProviderKnownModelDefinition | undefined {
+): ModelVendorKnownModelDefinition | undefined {
   const normalized = modelName.trim()
   if (!normalized) return undefined
-  return getKnownModelDefinitions(providerType, engineKind).find(
+  return getKnownModelDefinitions(vendor).find(
     (candidate) => candidate.modelName === normalized
   )
 }
 
 export function getModelMaxTokensLimit(
-  providerType: string,
-  engineKind: string | undefined,
+  vendor: string,
   modelName?: string
 ): number | undefined {
   const byModel = modelName
-    ? getKnownModelDefinition(providerType, engineKind, modelName)
-        ?.maxOutputTokens
+    ? getKnownModelDefinition(vendor, modelName)?.maxOutputTokens
     : undefined
   if (typeof byModel === "number") return byModel
-  const resolvedEngineKind =
-    engineKind || getModelProviderDefinition(providerType)?.defaultEngineKind
-  return getModelProviderEngineDefinition(resolvedEngineKind)?.maxOutputTokens
+  return getModelVendorDefinition(vendor)?.maxOutputTokens
 }
 
 export function validateModelProviderConfig(input: {
-  providerType: string
-  engineKind?: string
+  vendor: string
   modelName: string
-  maxTokens?: number
+  maxOutputTokens?: number
 }): ModelProviderConfigValidationIssue[] {
   const issues: ModelProviderConfigValidationIssue[] = []
   const modelName = input.modelName.trim()
 
-  if (typeof input.maxTokens === "number" && Number.isFinite(input.maxTokens)) {
-    const maximum = getModelMaxTokensLimit(
-      input.providerType,
-      input.engineKind,
-      modelName
-    )
-    if (typeof maximum === "number" && input.maxTokens > maximum) {
+  if (
+    typeof input.maxOutputTokens === "number" &&
+    Number.isFinite(input.maxOutputTokens)
+  ) {
+    const maximum = getModelMaxTokensLimit(input.vendor, modelName)
+    if (typeof maximum === "number" && input.maxOutputTokens > maximum) {
       issues.push({
-        field: "maxTokens",
+        field: "maxOutputTokens",
         code: "max_tokens_exceeded",
         maximum,
-        message: `${input.providerType} model "${modelName}" supports at most ${maximum} max tokens.`,
+        message: `${input.vendor} model "${modelName}" supports at most ${maximum} max output tokens.`,
       })
     }
   }

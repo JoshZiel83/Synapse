@@ -2,8 +2,9 @@ import { isAbsolute } from "node:path"
 import { existsSync, readFileSync } from "node:fs"
 import yaml from "js-yaml"
 import {
-  getModelProviderDefinition,
-  resolveModelEngineKind,
+  getModelVendorDefinition,
+  getProviderKindForVendor,
+  isKnownModelVendor,
   validateModelProviderConfig,
 } from "@synapse/shared"
 import { resolveRepoPath } from "../../../config/repo-paths.js"
@@ -329,14 +330,16 @@ export async function applyModelGroups(doc: ModelGroupsFile): Promise<{
           displayName: item.displayName,
           priority: item.priority,
           weight: item.weight,
-          providerType: item.providerType,
-          engineKind: item.engineKind,
+          providerKind:
+            item.providerKind || getProviderKindForVendor(item.vendor),
+          vendor: item.vendor,
           apiKey: item.apiKey,
           baseUrl: item.baseUrl,
           modelName: item.modelName,
-          maxTokens: item.maxTokens,
+          maxOutputTokens: item.maxOutputTokens,
           capabilityTags: item.capabilityTags,
-          extraConfig: item.extraConfig,
+          features: item.features,
+          providerOptions: item.providerOptions,
           requestTimeoutMs: item.requestTimeoutMs,
           maxRetries: item.maxRetries,
         })
@@ -403,45 +406,42 @@ function assertNoDuplicateNames(names: string[], context: string): void {
 }
 
 /**
- * Validate provider/engine compatibility and maxTokens ceilings using the SAME
- * rules the service layer applies at write time:
- *   effectiveEngineKind = item.engineKind || resolveModelEngineKind(provider, extraConfig)
- * Aggregates ALL issues across the document into one loud error.
+ * Validate vendor + provider-kind compatibility and maxOutputTokens ceilings
+ * using the SAME rules the service layer applies at write time. Aggregates ALL
+ * issues across the document into one loud error.
  */
 function assertSemanticallyValid(doc: ModelGroupsFile, path: string): void {
   const issues: string[] = []
 
   for (const group of doc.groups) {
     for (const item of group.items) {
-      const provider = getModelProviderDefinition(item.providerType)
-      if (!provider) {
-        // providerTypeSchema already refines this, but guard defensively.
+      const vendorDef = getModelVendorDefinition(item.vendor)
+      if (!vendorDef || !isKnownModelVendor(item.vendor)) {
+        // vendorSchema already refines this, but guard defensively.
         issues.push(
-          `group "${group.name}" / item "${item.displayName}": unknown provider "${item.providerType}".`
+          `group "${group.name}" / item "${item.displayName}": unknown model vendor "${item.vendor}".`
         )
         continue
       }
 
-      const effectiveEngineKind =
-        item.engineKind ||
-        resolveModelEngineKind(item.providerType, item.extraConfig)
-
-      const engineKnown = provider.engines.some(
-        (engine) => engine.engineKind === effectiveEngineKind
-      )
-      if (!engineKnown) {
+      // If an explicit providerKind is given, it must match the vendor's kind
+      // (the vendor catalog is the source of truth for which SDK factory serves
+      // a vendor; a mismatch is a config error).
+      if (
+        item.providerKind &&
+        item.providerKind !== getProviderKindForVendor(item.vendor)
+      ) {
         issues.push(
-          `group "${group.name}" / item "${item.displayName}": engine "${effectiveEngineKind}" ` +
-            `is not valid for provider "${item.providerType}".`
+          `group "${group.name}" / item "${item.displayName}": providerKind "${item.providerKind}" ` +
+            `does not match vendor "${item.vendor}" (expected "${getProviderKindForVendor(item.vendor)}").`
         )
         continue
       }
 
       const configIssues = validateModelProviderConfig({
-        providerType: item.providerType,
-        engineKind: effectiveEngineKind,
+        vendor: item.vendor,
         modelName: item.modelName,
-        maxTokens: item.maxTokens,
+        maxOutputTokens: item.maxOutputTokens,
       })
       for (const issue of configIssues) {
         issues.push(

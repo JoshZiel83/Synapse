@@ -27,7 +27,6 @@ type AccessResourceType =
   | "memory_space"
   | "memory_item"
   | "model_group"
-  | "model_profile"
 
 type PermissionSubject = {
   type: "user" | "workspace_member" | "actor" | "remote_agent" | "workspace"
@@ -1400,44 +1399,6 @@ async function hasModelGroupPermission(
   return false
 }
 
-async function hasModelProfilePermission(
-  db: KyselyDb,
-  subject: PermissionSubject,
-  profileId: string,
-  permission: string
-): Promise<boolean> {
-  const groups = await db
-    .selectFrom("model_group_profiles")
-    .select("group_id")
-    .where("profile_id", "=", profileId)
-    .execute()
-  if (groups.length === 0) {
-    return false
-  }
-
-  const mappedPermission =
-    permission === "use" || permission === "view"
-      ? permission
-      : permission === "attach"
-        ? "edit"
-        : permission
-
-  for (const group of groups) {
-    if (
-      await hasModelGroupPermission(
-        db,
-        subject,
-        group.group_id,
-        mappedPermission
-      )
-    ) {
-      return true
-    }
-  }
-
-  return false
-}
-
 type MemorySpaceLoadedRow = {
   id: string
   workspace_id: string
@@ -1988,13 +1949,6 @@ export async function checkPermission(
       )
     case "model_group":
       return hasModelGroupPermission(
-        db,
-        params.subject,
-        params.resourceId,
-        params.permission
-      )
-    case "model_profile":
-      return hasModelProfilePermission(
         db,
         params.subject,
         params.resourceId,

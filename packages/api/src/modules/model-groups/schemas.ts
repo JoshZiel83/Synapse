@@ -1,9 +1,10 @@
 import { z } from "zod"
 import {
+  CANONICAL_FILE_CATEGORIES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
-  isKnownModelEngineKind,
-  isKnownModelProviderType,
+  PROVIDER_KINDS,
+  isKnownModelVendor,
 } from "@synapse/shared"
 
 // ===========================================================================
@@ -17,15 +18,27 @@ import {
 // ===========================================================================
 
 export const routingStrategyEnum = z.enum(MODEL_GROUP_ROUTING_STRATEGIES)
-export const providerTypeSchema = z
+export const providerKindSchema = z.enum(PROVIDER_KINDS)
+export const vendorSchema = z
   .string()
   .min(1)
-  .refine(isKnownModelProviderType, "Unknown provider type")
-export const engineKindSchema = z
-  .string()
-  .min(1)
-  .refine(isKnownModelEngineKind, "Unknown engine kind")
+  .refine(isKnownModelVendor, "Unknown model vendor")
 export const grantScopeEnum = z.enum(MODEL_GROUP_GRANT_SCOPES)
+
+// Typed per-binding feature flags (replaces the old untyped extra_config bag).
+// apiStyle = OpenAI chat-vs-responses selector; serverTools = anthropic server
+// tools; multimodal = capability gate; crossTurnToolHistory = context option.
+export const featuresSchema = z.object({
+  apiStyle: z.enum(["chat", "responses"]).optional(),
+  serverTools: z.array(z.enum(["web_search", "web_fetch"])).optional(),
+  multimodal: z
+    .object({
+      supported: z.boolean(),
+      types: z.array(z.enum(CANONICAL_FILE_CATEGORIES)),
+    })
+    .optional(),
+  crossTurnToolHistory: z.boolean().optional(),
+})
 
 export const attemptPolicySchema = z.looseObject({
   maxAttemptsTotal: z.number().int().positive().optional(),
@@ -57,14 +70,15 @@ export const addItemSchema = z.object({
   displayName: z.string().min(1).max(255),
   priority: z.number().int().optional(),
   weight: z.number().int().min(0).max(1000).optional(),
-  providerType: providerTypeSchema,
-  engineKind: engineKindSchema.optional(),
+  providerKind: providerKindSchema.optional(),
+  vendor: vendorSchema,
   apiKey: z.string().min(1),
   baseUrl: z.string().min(1),
   modelName: z.string().min(1),
-  maxTokens: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
   capabilityTags: z.array(z.string()).optional(),
-  extraConfig: z.record(z.string(), z.unknown()).optional(),
+  features: featuresSchema.optional(),
+  providerOptions: z.record(z.string(), z.unknown()).optional(),
   requestTimeoutMs: z.number().int().positive().optional(),
   maxRetries: z.number().int().min(0).optional(),
 })
@@ -74,14 +88,15 @@ export const updateItemSchema = z.object({
   priority: z.number().int().optional(),
   weight: z.number().int().min(0).max(1000).optional(),
   isEnabled: z.boolean().optional(),
-  providerType: providerTypeSchema.optional(),
-  engineKind: engineKindSchema.optional(),
+  providerKind: providerKindSchema.optional(),
+  vendor: vendorSchema.optional(),
   apiKey: z.string().min(1).optional(),
   baseUrl: z.string().min(1).optional(),
   modelName: z.string().min(1).optional(),
-  maxTokens: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
   capabilityTags: z.array(z.string()).optional(),
-  extraConfig: z.record(z.string(), z.unknown()).optional(),
+  features: featuresSchema.optional(),
+  providerOptions: z.record(z.string(), z.unknown()).optional(),
   requestTimeoutMs: z.number().int().positive().optional(),
   maxRetries: z.number().int().min(0).optional(),
 })

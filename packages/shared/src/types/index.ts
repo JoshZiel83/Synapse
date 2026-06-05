@@ -104,6 +104,7 @@ import {
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
+import type { ProviderKind } from "../constants/model-providers.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
@@ -1566,17 +1567,19 @@ export interface MultimodalConfig {
 
 export interface ResolvedModelConfig {
   groupId: UUID
-  profileId: UUID
-  profileRevisionId: UUID
-  providerType: ProviderType
-  engineKind: ModelEngineKind
+  bindingId: UUID
+  bindingVersionId: UUID
+  providerKind: ProviderKind
+  vendor: string
+  apiStyle?: "chat" | "responses"
   apiKey: string
   baseUrl: string
   modelName: string
-  maxTokens: number
-  builtinTools?: AnthropicBuiltinTool[]
+  maxOutputTokens: number
+  serverTools?: AnthropicBuiltinTool[]
   multimodal?: MultimodalConfig
   crossTurnToolHistory?: boolean
+  providerOptions?: Record<string, unknown>
   priority?: number
   weight?: number
   requestTimeoutMs?: number

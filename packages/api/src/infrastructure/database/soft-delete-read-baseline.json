@@ -125,9 +125,6 @@
     "remote_agents": 1,
     "users": 1
   },
-  "modules/model-groups/resolver.ts": {
-    "model_groups": 4
-  },
   "modules/model-groups/service.ts": {
     "actors": 1,
     "model_groups": 8,
