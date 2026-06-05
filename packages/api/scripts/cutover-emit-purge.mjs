@@ -85,9 +85,95 @@ const NEVER_PURGE = new Set([
   "audit_logs",
 ])
 
-// Tables that carry a workspace_id (purge-by-workspace surface for tier B).
-const WS_TABLES = ORDER.filter((t) => hasCol(t, "workspace_id"))
-// Tables with deleted_at (tier A retention surface).
+// child -> its non-self FKs (for scope-predicate chaining).
+const fksByChild = new Map([...allT].map((t) => [t, []]))
+for (const fk of foreignKeys) {
+  if (
+    fk.childTable !== fk.referencedTable &&
+    allT.has(fk.childTable) &&
+    allT.has(fk.referencedTable)
+  )
+    fksByChild.get(fk.childTable).push(fk)
+}
+
+// Is a table reachable to a workspace_id-bearing table via non-self FKs?
+function reachesWorkspace(t, seen = new Set()) {
+  if (hasCol(t, "workspace_id")) return true
+  if (seen.has(t)) return false
+  seen.add(t)
+  return fksByChild
+    .get(t)
+    .some((fk) => reachesWorkspace(fk.referencedTable, seen))
+}
+
+// Build a SQL predicate that ties a row of `table` (alias t0) to
+// workspace_id = p_workspace_id, via the FK chain. Workspace-scoped tables use
+// their own column; others EXISTS up to a chosen ws-reaching parent. Multi-path
+// (OR) is kept for CORRECTNESS — a row reachable via ANY FK path to the
+// workspace must be purged — but bounded by a depth cap + by only chaining
+// through parents at a strictly-shorter ws-distance, which prunes redundant deep
+// branches and keeps the generated SQL small (most chains are 1–2 hops).
+function scopePredicate(table, alias, depth = 0, seen = new Set()) {
+  if (hasCol(table, "workspace_id")) {
+    if (table === "workspaces") return `${alias}.id = p_workspace_id`
+    return `${alias}.workspace_id = p_workspace_id`
+  }
+  if (depth > 6) return "FALSE" // safety cap (no real chain is this deep)
+  seen = new Set(seen)
+  seen.add(table)
+  const myDist = wsDist(table)
+  // chain only through parents that are (a) acyclic, (b) ws-reaching, and (c)
+  // strictly closer to the workspace than `table` — this keeps every branch a
+  // shortest-path step, eliminating the exponential blowup of OR-ing every edge
+  // while still covering every distinct ws-reaching path.
+  const candidates = fksByChild
+    .get(table)
+    .filter(
+      (fk) =>
+        fk.childColumns.length === 1 &&
+        fk.referencedColumns.length === 1 &&
+        reachesWorkspace(fk.referencedTable) &&
+        !seen.has(fk.referencedTable) &&
+        wsDist(fk.referencedTable) < myDist
+    )
+  if (!candidates.length) return "FALSE"
+  const parts = []
+  for (const fk of candidates) {
+    const childCol = fk.childColumns[0]
+    const parentCol = fk.referencedColumns[0]
+    const palias = `t${depth + 1}_${parts.length}`
+    const inner = scopePredicate(fk.referencedTable, palias, depth + 1, seen)
+    if (inner === "FALSE") continue
+    parts.push(
+      `EXISTS (SELECT 1 FROM ${fk.referencedTable} ${palias} WHERE ${palias}.${parentCol} = ${alias}.${childCol} AND ${inner})`
+    )
+  }
+  return parts.length ? `(${parts.join(" OR ")})` : "FALSE"
+}
+// ws-distance: FK hops from a table to the nearest workspace_id-bearing table.
+const _wsDistCache = new Map()
+function wsDist(t, seen = new Set()) {
+  if (hasCol(t, "workspace_id")) return 0
+  if (seen.has(t)) return Infinity
+  if (_wsDistCache.has(t)) return _wsDistCache.get(t)
+  seen.add(t)
+  let best = Infinity
+  for (const fk of fksByChild.get(t)) {
+    if (fk.childColumns.length !== 1) continue
+    const d = wsDist(fk.referencedTable, new Set(seen))
+    if (d + 1 < best) best = d + 1
+  }
+  if (seen.size === 1) _wsDistCache.set(t, best)
+  return best
+}
+
+// Tables in tenant scope (workspace-reachable). For tier-B tenant hard-erase the
+// design (§5.2-B) erases the tenant's history too, INCLUDING its access_subjects
+// rows; only transport_addresses stays (cross-tenant external identity registry).
+const TENANT_TABLES = ORDER.filter(
+  (t) => reachesWorkspace(t) && t !== "transport_addresses"
+)
+// Tables with deleted_at (tier A retention surface = direct soft-delete roots).
 const SD_TABLES = ORDER.filter(
   (t) => hasCol(t, "deleted_at") && !NEVER_PURGE.has(t)
 )
@@ -111,11 +197,11 @@ function emit() {
   L.push(
     "-- Tier B: tenant hard-erase. NULLs nullable edges, then deletes every"
   )
-  L.push(
-    "-- workspace-scoped row leaf→root. Irreversible; writes a ledger row."
-  )
-  const wsNullable = nullableEdges.filter((fk) =>
-    hasCol(fk.childTable, "workspace_id")
+  L.push("-- workspace-reachable row leaf→root (incl child tables without a")
+  L.push("-- workspace_id, scoped via their FK chain). Irreversible; ledgered.")
+  // nullable edges whose child is tenant-scoped — null them first to break cycles
+  const tenantNullable = nullableEdges.filter((fk) =>
+    TENANT_TABLES.includes(fk.childTable)
   )
   L.push(`CREATE OR REPLACE FUNCTION sd_purge_workspace(p_workspace_id uuid)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
@@ -130,19 +216,19 @@ BEGIN
   VALUES (NULL, 'tenant.hard_erase', 'workspace', p_workspace_id,
           jsonb_build_object('workspace_id', p_workspace_id, 'purged_at', NOW()));
 
-  -- 1. break cycles: null nullable cross-table FKs for this workspace's rows
-${wsNullable
+  -- 1. break cycles: null nullable cross-table FKs for in-scope rows
+${tenantNullable
   .map(
     (fk) =>
-      `  UPDATE ${fk.childTable} SET ${fk.childColumns[0]} = NULL WHERE workspace_id = p_workspace_id AND ${fk.childColumns[0]} IS NOT NULL;`
+      `  UPDATE ${fk.childTable} t0 SET ${fk.childColumns[0]} = NULL WHERE ${fk.childColumns[0]} IS NOT NULL AND ${scopePredicate(fk.childTable, "t0")};`
   )
   .join("\n")}
 
-  -- 2. delete workspace-scoped rows leaf→root
-${WS_TABLES.filter((t) => t !== "workspaces")
+  -- 2. delete every workspace-reachable row leaf→root
+${TENANT_TABLES.filter((t) => t !== "workspaces")
   .map(
     (t) =>
-      `  DELETE FROM ${t} WHERE workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;`
+      `  DELETE FROM ${t} t0 WHERE ${scopePredicate(t, "t0")}; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;`
   )
   .join("\n")}
 
@@ -160,20 +246,40 @@ $$;`)
   L.push("REVOKE EXECUTE ON FUNCTION sd_purge_workspace(uuid) FROM PUBLIC;")
   L.push("")
 
-  // tier A: retention purge of soft-deleted rows older than cutoff.
+  // tier A: retention purge of soft-deleted rows older than cutoff. For each
+  // soft-delete root, delete its child rows (leaf→root) whose owning root row is
+  // an expired tombstone, then the root rows themselves.
   L.push(
-    "-- Tier A: retention purge. Physically removes rows soft-deleted before"
+    "-- Tier A: retention purge. For each expired soft-deleted root, deletes its"
   )
   L.push(
-    "-- p_before, leaf→root, skipping the never-purge registries. Bounded by"
+    "-- child rows (leaf→root) then the root row. Skips never-purge registries."
   )
-  L.push("-- deleted_at; safe to run repeatedly (idempotent).")
+  // For child cleanup we delete, in leaf→root order, any tenant child row whose
+  // chain leads to an EXPIRED soft-deleted root. Build a predicate per table:
+  // EXISTS chain to ANY soft-delete root row with deleted_at < p_before.
+  const childPurgeTables = ORDER.filter(
+    (t) =>
+      !hasCol(t, "deleted_at") &&
+      reachesWorkspace(t) &&
+      !["access_subjects", "transport_addresses"].includes(t)
+  )
   L.push(`CREATE OR REPLACE FUNCTION sd_purge_expired_soft_deleted(p_before timestamptz)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE
   v_total bigint := 0;
   v_n bigint;
 BEGIN
+  -- 1. child rows whose owning soft-delete root is an expired tombstone (leaf→root)
+${childPurgeTables
+  .map((t) => {
+    const pred = expiredRootPredicate(t, "t0")
+    if (pred === "FALSE") return `  -- ${t}: no expired-root chain`
+    return `  DELETE FROM ${t} t0 WHERE ${pred}; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;`
+  })
+  .join("\n")}
+
+  -- 2. the expired soft-delete root rows themselves (leaf→root)
 ${SD_TABLES.map(
   (t) =>
     `  DELETE FROM ${t} WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;`
@@ -192,17 +298,95 @@ $$;`)
   )
   L.push("")
 
-  // owner needs DELETE + UPDATE + SELECT on every workspace/soft-delete table.
+  // owner needs DELETE + UPDATE + SELECT on every tenant/soft-delete table.
   const ownerTables = [
-    ...new Set([...WS_TABLES, ...SD_TABLES, "workspaces"]),
+    ...new Set([...TENANT_TABLES, ...SD_TABLES, "workspaces"]),
   ].sort()
   L.push(
     `GRANT SELECT, UPDATE, DELETE ON ${ownerTables.join(", ")} TO synapse_purge_fn_owner;`
+  )
+  // The scope-predicate EXISTS chains traverse the immutable registries
+  // (access_subjects / transport_addresses) read-only — grant SELECT so the
+  // purge functions can evaluate them (we never delete these here).
+  L.push(
+    "GRANT SELECT ON access_subjects, transport_addresses TO synapse_purge_fn_owner;"
   )
   L.push("GRANT INSERT ON audit_logs TO synapse_purge_fn_owner;")
   L.push("")
   L.push(END)
   return L.join("\n")
+}
+
+// Predicate: row of `table` chains to ITS owning soft-delete root row with
+// deleted_at < p_before, via the SHORTEST single FK path to a deleted_at-bearing
+// ancestor. Used for tier-A child cleanup. We deliberately pick ONE path (not
+// OR-over-all-paths) to keep the generated SQL bounded — a child whose primary
+// ownership FK leads to an expired root is purged; rows reachable only via a
+// secondary/optional path are caught when their own owning root expires (their
+// FK to that root is itself in the chain) or by the next retention pass after a
+// higher-level root is purged.
+function expiredRootPredicate(table, alias, depth = 0, seen = new Set()) {
+  if (depth > 6) return "FALSE" // hard depth cap (safety)
+  if (hasCol(table, "deleted_at")) {
+    return `${alias}.deleted_at IS NOT NULL AND ${alias}.deleted_at < p_before`
+  }
+  seen = new Set(seen)
+  seen.add(table)
+  const candidates = fksByChild
+    .get(table)
+    .filter(
+      (fk) =>
+        !seen.has(fk.referencedTable) &&
+        fk.childColumns.length === 1 &&
+        fk.referencedColumns.length === 1 &&
+        chainHasDeletedAt(fk.referencedTable, new Set(seen))
+    )
+  if (!candidates.length) return "FALSE"
+  // Choose the single shortest path: prefer a parent that itself HAS deleted_at
+  // (one hop), else the parent with the shallowest distance to a deleted_at
+  // ancestor. This bounds the generated predicate to a single chain.
+  candidates.sort(
+    (a, b) =>
+      distToDeletedAt(a.referencedTable) - distToDeletedAt(b.referencedTable)
+  )
+  const fk = candidates[0]
+  const palias = `r${depth + 1}`
+  const inner = expiredRootPredicate(
+    fk.referencedTable,
+    palias,
+    depth + 1,
+    seen
+  )
+  if (inner === "FALSE") return "FALSE"
+  return `EXISTS (SELECT 1 FROM ${fk.referencedTable} ${palias} WHERE ${palias}.${fk.referencedColumns[0]} = ${alias}.${fk.childColumns[0]} AND (${inner}))`
+}
+// distance (in FK hops) from a table to its nearest deleted_at-bearing ancestor.
+const _distCache = new Map()
+function distToDeletedAt(t, seen = new Set()) {
+  if (hasCol(t, "deleted_at")) return 0
+  if (seen.has(t)) return Infinity
+  if (_distCache.has(t)) return _distCache.get(t)
+  seen.add(t)
+  let best = Infinity
+  for (const fk of fksByChild.get(t)) {
+    if (fk.childColumns.length !== 1) continue
+    const d = distToDeletedAt(fk.referencedTable, new Set(seen))
+    if (d + 1 < best) best = d + 1
+  }
+  if (seen.size === 1) _distCache.set(t, best)
+  return best
+}
+function chainHasDeletedAt(t, seen = new Set()) {
+  if (hasCol(t, "deleted_at")) return true
+  if (seen.has(t)) return false
+  seen.add(t)
+  return fksByChild
+    .get(t)
+    .some(
+      (fk) =>
+        fk.childColumns.length === 1 &&
+        chainHasDeletedAt(fk.referencedTable, seen)
+    )
 }
 
 const region = emit()
@@ -219,5 +403,5 @@ if (schema.includes(BEGIN) && schema.includes(END)) {
 }
 writeFileSync(SCHEMA_PATH, out)
 console.log(
-  `✓ purge DDL emitted: sd_purge_workspace (${WS_TABLES.length} ws tables, ${nullableEdges.filter((fk) => hasCol(fk.childTable, "workspace_id")).length} cycle-breaks), sd_purge_expired_soft_deleted (${SD_TABLES.length} soft-delete tables).`
+  `✓ purge DDL emitted: sd_purge_workspace (${TENANT_TABLES.length} tenant tables), sd_purge_expired_soft_deleted (${SD_TABLES.length} soft-delete tables).`
 )

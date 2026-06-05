@@ -15,7 +15,7 @@
     "guard:soft-delete": "node scripts/guard-soft-delete.mjs",
     "gen:fk-policy": "node scripts/derive-fk-policy.mjs",
     "pretest": "bash ../../scripts/pretest-fs-helper.sh release && npm run guard:db && npm run guard:fk-policy && npm run guard:soft-delete && npm run typecheck",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "tsx --test --test-concurrency=4 \"src/**/*.test.ts\"",
     "test:integration": "bash tests/integration/scripts/run-integration.sh",
     "test:integration:keep-stack": "KEEP_CONTAINERS=1 bash tests/integration/scripts/run-integration.sh",
     "test:integration:llm-smoke": "tsx --test tests/integration/manual/llm-smoke.test.ts",

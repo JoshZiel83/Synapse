@@ -238,21 +238,38 @@ DECLARE
   v_parent_table CONSTANT text := TG_ARGV[0];
   v_child_col    CONSTANT text := TG_ARGV[1];
   v_parent_col   CONSTANT text := TG_ARGV[2];
+  v_child_has_deleted_at CONSTANT boolean := TG_ARGV[3] = 'true';
   v_fk_value     uuid;
   v_old_value    uuid;
   v_alive        boolean;
+  v_recheck      boolean := FALSE;
+  v_old_deleted  timestamptz;
+  v_new_deleted  timestamptz;
 BEGIN
   EXECUTE format('SELECT ($1).%I', v_child_col) INTO v_fk_value USING NEW;
   IF v_fk_value IS NULL THEN
     RETURN NEW;
   END IF;
-  -- On UPDATE, only re-check when the FK column actually changed (avoids
-  -- blocking the delete orchestration's own status flips on the child).
-  IF TG_OP = 'UPDATE' THEN
+  IF TG_OP = 'INSERT' THEN
+    v_recheck := TRUE;
+  ELSE
+    -- UPDATE: re-check when the FK column changed OR on a REVIVE
+    -- (deleted_at non-null -> NULL), so a restored child can't point at a
+    -- soft-deleted parent. A plain failing transition (active -> deleted) and
+    -- non-FK updates are NOT re-checked (the orchestration relies on that).
     EXECUTE format('SELECT ($1).%I', v_child_col) INTO v_old_value USING OLD;
-    IF v_old_value IS NOT DISTINCT FROM v_fk_value THEN
-      RETURN NEW;
+    IF v_old_value IS DISTINCT FROM v_fk_value THEN
+      v_recheck := TRUE;
+    ELSIF v_child_has_deleted_at THEN
+      EXECUTE 'SELECT ($1).deleted_at' INTO v_old_deleted USING OLD;
+      EXECUTE 'SELECT ($1).deleted_at' INTO v_new_deleted USING NEW;
+      IF v_old_deleted IS NOT NULL AND v_new_deleted IS NULL THEN
+        v_recheck := TRUE; -- revive
+      END IF;
     END IF;
+  END IF;
+  IF NOT v_recheck THEN
+    RETURN NEW;
   END IF;
   EXECUTE format(
     'SELECT deleted_at IS NULL FROM %I WHERE %I = $1',
@@ -271,10 +288,14 @@ $$;`)
     const col = fk.childColumns[0]
     const parent = fk.referencedTable
     const pcol = fk.referencedColumns[0]
+    const childHasDeletedAt = hasCol(child, "deleted_at")
+    // Fire on the FK column always; additionally on deleted_at when the child is
+    // itself soft-deletable, so a REVIVE re-validates the parent's liveness.
+    const updateCols = childHasDeletedAt ? `${col}, deleted_at` : col
     const trg = `sd_fk_live_${child}_${col}`
     L.push(`DROP TRIGGER IF EXISTS ${trg} ON ${child};`)
     L.push(
-      `CREATE TRIGGER ${trg} BEFORE INSERT OR UPDATE OF ${col} ON ${child} FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('${parent}', '${col}', '${pcol}');`
+      `CREATE TRIGGER ${trg} BEFORE INSERT OR UPDATE OF ${updateCols} ON ${child} FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('${parent}', '${col}', '${pcol}', '${childHasDeletedAt}');`
     )
   }
   L.push("")
@@ -386,9 +407,25 @@ $$;`)
     F.push(
       `REVOKE EXECUTE ON FUNCTION ${fn.name}(${argTypes(fn.args)}) FROM PUBLIC;`
     )
-    // EXECUTE granted to the app role at deploy time (the app's DB role name is
-    // env-specific); in dev the owning superuser already has EXECUTE.
   }
+
+  // GRANT EXECUTE on every cleanup fn to the app role. Ownership was reassigned
+  // to synapse_purge_fn_owner above, so after REVOKE FROM PUBLIC the connecting
+  // (app) role would otherwise lose access. The app role name is env-specific;
+  // grant to the role that applied the schema (current_user at bootstrap) so the
+  // app can call these at runtime. Done in a DO block to interpolate the role.
+  const execGrants = FNS.map(
+    (fn) =>
+      `    EXECUTE format('GRANT EXECUTE ON FUNCTION ${fn.name}(${argTypes(fn.args)}) TO %I', v_app_role);`
+  ).join("\n")
+  F.push(`DO $sd_exec_grants$
+DECLARE v_app_role text := current_user;
+BEGIN
+  IF v_app_role <> 'synapse_purge_fn_owner' THEN
+${execGrants}
+  END IF;
+END
+$sd_exec_grants$;`)
 
   // The owner role needs SELECT (to evaluate DELETE ... WHERE) + DELETE on each
   // table its functions touch. Grant both. (SELECT alone is harmless; these are

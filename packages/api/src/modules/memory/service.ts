@@ -914,9 +914,11 @@ export async function resolveOrCreateMemorySpace(
   // We pick the right index by branching on scopeSubjectId. DO UPDATE
   // (no-op) is required for RETURNING on the conflicting row (DO NOTHING
   // would skip the RETURNING).
+  // The two indexes are soft-delete-aware (… AND deleted_at IS NULL), so the
+  // ON CONFLICT predicate must match exactly (design §8.3).
   const conflictClause = scopeSubjectId
-    ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL`
-    : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL`
+    ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL AND deleted_at IS NULL`
+    : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL AND deleted_at IS NULL`
   const result = await executor.executeQuery<MemorySpaceRow>(
     CompiledQuery.raw(
       `INSERT INTO memory_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
