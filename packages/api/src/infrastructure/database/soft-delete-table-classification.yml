@@ -354,6 +354,18 @@ tables:
     workspaceScope: workspace_id
     liveValues:
       - active
+    liveParents:
+      - column: workspace_id
+        parent: workspaces
+      - column: file_space_id
+        parent: file_spaces
+    principalColumns:
+      - column: subject_id
+        resolvesSubject: target
+        action: revoke
+      - column: scope_subject_id
+        resolvesSubject: scope
+        action: revoke
   file_assets:
     class: root
     softDelete: deleted_at
@@ -438,6 +450,18 @@ tables:
     workspaceScope: workspace_id
     liveValues:
       - active
+    liveParents:
+      - column: workspace_id
+        parent: workspaces
+      - column: memory_space_id
+        parent: memory_spaces
+    principalColumns:
+      - column: subject_id
+        resolvesSubject: target
+        action: revoke
+      - column: scope_subject_id
+        resolvesSubject: scope
+        action: revoke
   memory_embedding_cache:
     class: ephemeral
     softDelete: none
@@ -477,6 +501,13 @@ tables:
     workspaceScope: none
     liveValues:
       - active
+    liveParents:
+      - column: group_id
+        parent: model_groups
+    principalColumns:
+      - column: subject_id
+        resolvesSubject: target
+        action: revoke
   model_group_profiles:
     class: ephemeral
     softDelete: none
@@ -509,6 +540,9 @@ tables:
     workspaceScope: none
     liveValues:
       - active
+    liveParents:
+      - column: user_id
+        parent: users
     principalColumns:
       - column: user_id
         resolvesSubject: user
@@ -621,12 +655,31 @@ tables:
     workspaceScope: workspace_id
     liveValues:
       - active
+    liveParents:
+      - column: workspace_id
+        parent: workspaces
+    principalColumns:
+      - column: subject_id
+        resolvesSubject: target
+        action: revoke
+      - column: scope_subject_id
+        resolvesSubject: scope
+        action: revoke
   runtime_authorization_grants:
-    class: ephemeral
-    softDelete: none
+    # Reclassified ephemeral -> status junction (review F4): the service uses it
+    # as a revocable authorization-state table (active/consumed/revoked/
+    # superseded), so it must be delete-protected like the other grant tables.
+    # Its only sanctioned hard delete is the offline purge fn (owner-role bypass).
+    class: junction
+    softDelete: status
     workspaceScope: workspace_id
-    deleteWhitelist:
-      - securityDefinerFn
+    liveValues:
+      - active
+    liveParents:
+      - column: workspace_id
+        parent: workspaces
+      - column: device_id
+        parent: devices
   runtime_events:
     class: append-only
     softDelete: none
@@ -766,6 +819,9 @@ tables:
     workspaceScope: none
     liveValues:
       - active
+    liveParents:
+      - column: workspace_member_id
+        parent: workspace_members
     principalColumns:
       - column: workspace_member_id
         resolvesSubject: member
@@ -815,6 +871,11 @@ tables:
     workspaceScope: workspace_id
     liveValues:
       - active
+    liveParents:
+      - column: workspace_id
+        parent: workspaces
+      - column: user_id
+        parent: users
     principalColumns:
       - column: user_id
         resolvesSubject: user

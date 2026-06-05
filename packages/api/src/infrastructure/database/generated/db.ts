@@ -2588,6 +2588,30 @@ export interface RuntimeAuthorizationGrants {
   workspace_id: string;
 }
 
+export interface RuntimeAuthorizationGrantsLive {
+  consumed_at: Timestamp | null;
+  created_at: Timestamp | null;
+  created_by_workspace_member_id: string | null;
+  device_capability_id: string | null;
+  device_exposure_id: string | null;
+  device_id: string | null;
+  id: string | null;
+  policy: Json | null;
+  retention: RuntimeAuthorizationGrantsRetention | null;
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source_interaction_id: string | null;
+  source_request_args: Json | null;
+  source_retry_nonce: string | null;
+  source_runtime_session_id: string | null;
+  source_task_id: string | null;
+  status: RuntimeAuthorizationGrantsStatus | null;
+  subject_id: string | null;
+  superseded_at: Timestamp | null;
+  updated_at: Timestamp | null;
+  workspace_id: string | null;
+}
+
 export interface RuntimeEvents {
   actor_id: string | null;
   conversation_id: string | null;
@@ -3325,6 +3349,7 @@ export interface DB {
   resource_access_bindings: ResourceAccessBindings;
   resource_access_bindings_live: ResourceAccessBindingsLive;
   runtime_authorization_grants: RuntimeAuthorizationGrants;
+  runtime_authorization_grants_live: RuntimeAuthorizationGrantsLive;
   runtime_events: RuntimeEvents;
   schema_migrations: SchemaMigrations;
   session: Session;

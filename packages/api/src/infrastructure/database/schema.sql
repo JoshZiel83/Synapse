@@ -5383,6 +5383,8 @@ DROP TRIGGER IF EXISTS sd_reject_delete ON remote_agents;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON remote_agents FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON resource_access_bindings;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
+DROP TRIGGER IF EXISTS sd_reject_delete ON runtime_authorization_grants;
+CREATE TRIGGER sd_reject_delete BEFORE DELETE ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON runtime_events;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON runtime_events FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON skill_mirror_sources;
@@ -5744,6 +5746,8 @@ DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_actor_id ON resource_
 CREATE TRIGGER sd_fk_live_resource_access_bindings_actor_id BEFORE INSERT OR UPDATE OF actor_id ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('actors', 'actor_id', 'id', 'false');
 DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_remote_agent_id ON resource_access_bindings;
 CREATE TRIGGER sd_fk_live_resource_access_bindings_remote_agent_id BEFORE INSERT OR UPDATE OF remote_agent_id ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('remote_agents', 'remote_agent_id', 'id', 'false');
+DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_workspace_id ON runtime_authorization_grants;
+CREATE TRIGGER sd_fk_live_runtime_authorization_grants_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false');
 DROP TRIGGER IF EXISTS sd_fk_live_devices_workspace_id ON devices;
 CREATE TRIGGER sd_fk_live_devices_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON devices FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true');
 DROP TRIGGER IF EXISTS sd_fk_live_device_services_device_id ON device_services;
@@ -5786,6 +5790,70 @@ DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_webhook_endpoint_id O
 CREATE TRIGGER sd_fk_live_automation_event_sources_webhook_endpoint_id BEFORE INSERT OR UPDATE OF webhook_endpoint_id, deleted_at ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_webhook_endpoints', 'webhook_endpoint_id', 'id', 'true');
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_integration_binding_id ON automation_event_sources;
 CREATE TRIGGER sd_fk_live_automation_event_sources_integration_binding_id BEFORE INSERT OR UPDATE OF integration_binding_id, deleted_at ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_integration_bindings', 'integration_binding_id', 'id', 'true');
+DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_device_id ON runtime_authorization_grants;
+CREATE TRIGGER sd_fk_live_runtime_authorization_grants_device_id BEFORE INSERT OR UPDATE OF device_id ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('devices', 'device_id', 'id', 'false');
+
+-- 4b. Status-junction parent-liveness: block reviving/inserting a live
+-- status row under a non-live parent (design §7.3 revive case, review F3).
+CREATE OR REPLACE FUNCTION sd_assert_status_parent_live()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  v_live_values CONSTANT text[] := string_to_array(TG_ARGV[0], ',');
+  v_new_status text;
+  v_old_status text;
+  v_i int := 1;
+  v_parent text;
+  v_col text;
+  v_fk uuid;
+  v_alive boolean;
+BEGIN
+  EXECUTE 'SELECT ($1).status::text' INTO v_new_status USING NEW;
+  -- not transitioning into a live state -> always allowed.
+  IF NOT (v_new_status = ANY(v_live_values)) THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    EXECUTE 'SELECT ($1).status::text' INTO v_old_status USING OLD;
+    -- already live and staying live: FK columns on these junctions are
+    -- immutable, so no parent re-check is needed.
+    IF v_old_status = ANY(v_live_values) THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+  -- INSERT of a live row, or a dead->live revive: every parent must be live.
+  WHILE v_i < TG_NARGS LOOP
+    v_parent := TG_ARGV[v_i];
+    v_col := TG_ARGV[v_i + 1];
+    EXECUTE format('SELECT ($1).%I', v_col) INTO v_fk USING NEW;
+    IF v_fk IS NOT NULL THEN
+      EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I_live WHERE id = $1)', v_parent)
+        INTO v_alive USING v_fk;
+      IF NOT v_alive THEN
+        RAISE EXCEPTION '%.% cannot be set live: parent %(id=%) is not live', TG_TABLE_NAME, v_col, v_parent, v_fk
+          USING ERRCODE = 'foreign_key_violation';
+      END IF;
+    END IF;
+    v_i := v_i + 2;
+  END LOOP;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS sd_status_parent_live_file_access_grants ON file_access_grants;
+CREATE TRIGGER sd_status_parent_live_file_access_grants BEFORE INSERT OR UPDATE OF status ON file_access_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live('active', 'workspaces', 'workspace_id', 'file_spaces', 'file_space_id');
+DROP TRIGGER IF EXISTS sd_status_parent_live_memory_access_grants ON memory_access_grants;
+CREATE TRIGGER sd_status_parent_live_memory_access_grants BEFORE INSERT OR UPDATE OF status ON memory_access_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live('active', 'workspaces', 'workspace_id', 'memory_spaces', 'memory_space_id');
+DROP TRIGGER IF EXISTS sd_status_parent_live_model_group_grants ON model_group_grants;
+CREATE TRIGGER sd_status_parent_live_model_group_grants BEFORE INSERT OR UPDATE OF status ON model_group_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live('active', 'model_groups', 'group_id');
+DROP TRIGGER IF EXISTS sd_status_parent_live_platform_access_bindings ON platform_access_bindings;
+CREATE TRIGGER sd_status_parent_live_platform_access_bindings BEFORE INSERT OR UPDATE OF status ON platform_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live('active', 'users', 'user_id');
+DROP TRIGGER IF EXISTS sd_status_parent_live_resource_access_bindings ON resource_access_bindings;
+CREATE TRIGGER sd_status_parent_live_resource_access_bindings BEFORE INSERT OR UPDATE OF status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live('active', 'workspaces', 'workspace_id');
+DROP TRIGGER IF EXISTS sd_status_parent_live_runtime_authorization_grants ON runtime_authorization_grants;
+CREATE TRIGGER sd_status_parent_live_runtime_authorization_grants BEFORE INSERT OR UPDATE OF status ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live('active', 'workspaces', 'workspace_id', 'devices', 'device_id');
+DROP TRIGGER IF EXISTS sd_status_parent_live_workspace_access_bindings ON workspace_access_bindings;
+CREATE TRIGGER sd_status_parent_live_workspace_access_bindings BEFORE INSERT OR UPDATE OF status ON workspace_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live('active', 'workspace_members', 'workspace_member_id');
+DROP TRIGGER IF EXISTS sd_status_parent_live_workspace_members ON workspace_members;
+CREATE TRIGGER sd_status_parent_live_workspace_members BEFORE INSERT OR UPDATE OF status ON workspace_members FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live('active', 'workspaces', 'workspace_id', 'users', 'user_id');
 
 -- 4.5 SECURITY DEFINER controlled-delete functions (design §7.5/§11).
 -- app role gets EXECUTE; functions run as synapse_purge_fn_owner so the
@@ -5968,19 +6036,49 @@ CREATE VIEW users_live AS SELECT * FROM users WHERE deleted_at IS NULL WITH CASC
 DROP VIEW IF EXISTS workspaces_live;
 CREATE VIEW workspaces_live AS SELECT * FROM workspaces WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS file_access_grants_live;
-CREATE VIEW file_access_grants_live AS SELECT * FROM file_access_grants WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+CREATE VIEW file_access_grants_live AS
+  SELECT base.* FROM file_access_grants base
+  JOIN workspaces_live lp0 ON lp0.id = base.workspace_id
+  JOIN file_spaces_live lp1 ON lp1.id = base.file_space_id
+  WHERE base.status IN ('active');
 DROP VIEW IF EXISTS memory_access_grants_live;
-CREATE VIEW memory_access_grants_live AS SELECT * FROM memory_access_grants WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+CREATE VIEW memory_access_grants_live AS
+  SELECT base.* FROM memory_access_grants base
+  JOIN workspaces_live lp0 ON lp0.id = base.workspace_id
+  JOIN memory_spaces_live lp1 ON lp1.id = base.memory_space_id
+  WHERE base.status IN ('active');
 DROP VIEW IF EXISTS model_group_grants_live;
-CREATE VIEW model_group_grants_live AS SELECT * FROM model_group_grants WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+CREATE VIEW model_group_grants_live AS
+  SELECT base.* FROM model_group_grants base
+  JOIN model_groups_live lp0 ON lp0.id = base.group_id
+  WHERE base.status IN ('active');
 DROP VIEW IF EXISTS platform_access_bindings_live;
-CREATE VIEW platform_access_bindings_live AS SELECT * FROM platform_access_bindings WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+CREATE VIEW platform_access_bindings_live AS
+  SELECT base.* FROM platform_access_bindings base
+  JOIN users_live lp0 ON lp0.id = base.user_id
+  WHERE base.status IN ('active');
 DROP VIEW IF EXISTS resource_access_bindings_live;
-CREATE VIEW resource_access_bindings_live AS SELECT * FROM resource_access_bindings WHERE status IN ('active') WITH CASCADED CHECK OPTION;
-DROP VIEW IF EXISTS workspace_access_bindings_live;
-CREATE VIEW workspace_access_bindings_live AS SELECT * FROM workspace_access_bindings WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+CREATE VIEW resource_access_bindings_live AS
+  SELECT base.* FROM resource_access_bindings base
+  JOIN workspaces_live lp0 ON lp0.id = base.workspace_id
+  WHERE base.status IN ('active');
+DROP VIEW IF EXISTS runtime_authorization_grants_live;
+CREATE VIEW runtime_authorization_grants_live AS
+  SELECT base.* FROM runtime_authorization_grants base
+  JOIN workspaces_live lp0 ON lp0.id = base.workspace_id
+  JOIN devices_live lp1 ON lp1.id = base.device_id
+  WHERE base.status IN ('active');
 DROP VIEW IF EXISTS workspace_members_live;
-CREATE VIEW workspace_members_live AS SELECT * FROM workspace_members WHERE status IN ('active') WITH CASCADED CHECK OPTION;
+CREATE VIEW workspace_members_live AS
+  SELECT base.* FROM workspace_members base
+  JOIN workspaces_live lp0 ON lp0.id = base.workspace_id
+  JOIN users_live lp1 ON lp1.id = base.user_id
+  WHERE base.status IN ('active');
+DROP VIEW IF EXISTS workspace_access_bindings_live;
+CREATE VIEW workspace_access_bindings_live AS
+  SELECT base.* FROM workspace_access_bindings base
+  JOIN workspace_members_live lp0 ON lp0.id = base.workspace_member_id
+  WHERE base.status IN ('active');
 -- device child derived views (§8.6): hide children of soft-closed devices.
 DROP VIEW IF EXISTS device_services_live;
 CREATE VIEW device_services_live AS
@@ -6022,9 +6120,12 @@ DECLARE
   v_total bigint := 0;
   v_n bigint;
 BEGIN
-  -- ledger first (audit_logs is never purged). workspace_id is NULL because the
-  -- workspace is (already) soft-deleted and the FK-liveness trigger forbids a new
-  -- audit_logs row pointing at a soft-deleted workspace; the id is in resource_id.
+  -- Global deletion-ledger row (workspace_id NULL so it is NOT a tenant row and
+  -- survives the audit_logs delete in step 2). This tier ERASES the tenant's own
+  -- audit_logs + access_subjects (design §5.2-B); only the global ledger and the
+  -- cross-tenant transport_addresses registry remain. workspace_id is NULL also
+  -- because the workspace is (already) soft-deleted and the FK-liveness trigger
+  -- forbids a new audit_logs row pointing at it; the id is in resource_id.
   INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
   VALUES (NULL, 'tenant.hard_erase', 'workspace', p_workspace_id,
           jsonb_build_object('workspace_id', p_workspace_id, 'purged_at', NOW()));
@@ -6340,7 +6441,9 @@ ALTER FUNCTION sd_purge_workspace(uuid) OWNER TO synapse_purge_fn_owner;
 REVOKE EXECUTE ON FUNCTION sd_purge_workspace(uuid) FROM PUBLIC;
 
 -- Tier A: retention purge. For each expired soft-deleted root, deletes its
--- child rows (leaf→root) then the root row. Skips never-purge registries.
+-- child rows (leaf→root) then the root row. Skips never-purge registries +
+-- audit (access_subjects/transport_addresses/audit_logs) and roots pinned by
+-- them via RESTRICT (those are erased only by a tier-B tenant erase).
 CREATE OR REPLACE FUNCTION sd_purge_expired_soft_deleted(p_before timestamptz)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE
@@ -6352,7 +6455,6 @@ BEGIN
   DELETE FROM actor_source_refs t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.actor_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM actor_template_version_specs t0 WHERE EXISTS (SELECT 1 FROM file_assets r1 WHERE r1.id = t0.avatar_file_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM actor_version_docs t0 WHERE EXISTS (SELECT 1 FROM actor_versions r1 WHERE r1.id = t0.actor_version_id AND (EXISTS (SELECT 1 FROM actors r2 WHERE r2.id = r1.actor_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM audit_logs t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_deliveries t0 WHERE EXISTS (SELECT 1 FROM automation_rules r1 WHERE r1.id = t0.rule_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_delivery_targets t0 WHERE EXISTS (SELECT 1 FROM automation_rules r1 WHERE r1.id = t0.rule_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_execution_targets t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6486,16 +6588,10 @@ BEGIN
   DELETE FROM memory_spaces WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_webhook_endpoints WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM plugin_installations WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actors WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM catalog_items WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM conversations WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agents WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM devices WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM publishers WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machines WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM transport_accounts WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM workspaces WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM users WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
   VALUES (NULL, 'soft_delete.retention_purge', 'system', NULL,
           jsonb_build_object('before', p_before, 'rows_deleted', v_total, 'finished_at', NOW()));

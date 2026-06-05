@@ -134,6 +134,32 @@ function main() {
         errors.push(
           `${name}: softDelete=status requires liveValues or livePredicate`
         )
+      // rule 4b (review F1/F3): a status junction must declare liveParents — the
+      // parent rows whose own liveness gates this junction's liveness. The
+      // generated `_live` view folds these in (JOIN parent _live) and the
+      // FK-liveness trigger rechecks them on a dead->live status revive.
+      if (!Array.isArray(entry.liveParents) || !entry.liveParents.length)
+        errors.push(
+          `${name}: softDelete=status requires liveParents (parent-liveness chain)`
+        )
+    }
+
+    // liveParents: each names a real FK column on this table and a parent that
+    // is itself a soft-delete table (deleted_at root or status junction).
+    for (const lp of entry.liveParents || []) {
+      if (!cols.has(lp.column))
+        errors.push(
+          `${name}: liveParents.column '${lp.column}' not a real column`
+        )
+      const pe = mTables[lp.parent]
+      if (!pe)
+        errors.push(
+          `${name}.${lp.column}: liveParents.parent '${lp.parent}' not in manifest`
+        )
+      else if (pe.softDelete !== "deleted_at" && pe.softDelete !== "status")
+        errors.push(
+          `${name}.${lp.column}: liveParents.parent '${lp.parent}' is not a soft-delete table (softDelete=${pe.softDelete})`
+        )
     }
 
     // principalColumns reference real columns (rule 6)

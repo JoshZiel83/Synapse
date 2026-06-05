@@ -299,12 +299,99 @@ $$;`)
     )
   }
   L.push("")
+  L.push(emitStatusParentLiveTriggers())
+  L.push("")
   L.push(emitSecurityDefinerFns())
   L.push("")
   L.push(emitLiveViews())
   L.push("")
   L.push(END)
   return L.join("\n")
+}
+
+// --- 4b. status-junction parent-liveness triggers (review F1/F3) ------------
+// A status junction is "live" only while its declared liveParents are all live.
+// The FK-liveness triggers above only re-check on FK-column change or a
+// deleted_at revive; a STATUS revive (dead status -> live status, FK cols
+// unchanged) slips past them, letting addMember/grantWorkspaceAccess re-activate
+// a binding/member under a soft-deleted workspace/user/space. This trigger fires
+// on INSERT / UPDATE OF status and, whenever a row BECOMES live (insert-live or
+// dead->live), asserts every liveParent row is live via the parent's own _live
+// view (transitive: e.g. workspace_members_live already folds in workspace+user
+// liveness). Setting a row dead is always allowed (the orchestration relies on
+// that).
+function emitStatusParentLiveTriggers() {
+  const S = []
+  S.push(
+    "-- 4b. Status-junction parent-liveness: block reviving/inserting a live"
+  )
+  S.push(
+    "-- status row under a non-live parent (design §7.3 revive case, review F3)."
+  )
+  S.push(`CREATE OR REPLACE FUNCTION sd_assert_status_parent_live()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  v_live_values CONSTANT text[] := string_to_array(TG_ARGV[0], ',');
+  v_new_status text;
+  v_old_status text;
+  v_i int := 1;
+  v_parent text;
+  v_col text;
+  v_fk uuid;
+  v_alive boolean;
+BEGIN
+  EXECUTE 'SELECT ($1).status::text' INTO v_new_status USING NEW;
+  -- not transitioning into a live state -> always allowed.
+  IF NOT (v_new_status = ANY(v_live_values)) THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    EXECUTE 'SELECT ($1).status::text' INTO v_old_status USING OLD;
+    -- already live and staying live: FK columns on these junctions are
+    -- immutable, so no parent re-check is needed.
+    IF v_old_status = ANY(v_live_values) THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+  -- INSERT of a live row, or a dead->live revive: every parent must be live.
+  WHILE v_i < TG_NARGS LOOP
+    v_parent := TG_ARGV[v_i];
+    v_col := TG_ARGV[v_i + 1];
+    EXECUTE format('SELECT ($1).%I', v_col) INTO v_fk USING NEW;
+    IF v_fk IS NOT NULL THEN
+      EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I_live WHERE id = $1)', v_parent)
+        INTO v_alive USING v_fk;
+      IF NOT v_alive THEN
+        RAISE EXCEPTION '%.% cannot be set live: parent %(id=%) is not live', TG_TABLE_NAME, v_col, v_parent, v_fk
+          USING ERRCODE = 'foreign_key_violation';
+      END IF;
+    END IF;
+    v_i := v_i + 2;
+  END LOOP;
+  RETURN NEW;
+END;
+$$;`)
+  const statusParents = Object.entries(mTables)
+    .filter(
+      ([, e]) =>
+        e.softDelete === "status" &&
+        Array.isArray(e.liveParents) &&
+        e.liveParents.length
+    )
+    .sort((a, b) => a[0].localeCompare(b[0]))
+  for (const [name, e] of statusParents) {
+    const live = (e.liveValues || ["active"]).join(",")
+    const args = [
+      `'${live}'`,
+      ...e.liveParents.flatMap((lp) => [`'${lp.parent}'`, `'${lp.column}'`]),
+    ].join(", ")
+    const trg = `sd_status_parent_live_${name}`
+    S.push(`DROP TRIGGER IF EXISTS ${trg} ON ${name};`)
+    S.push(
+      `CREATE TRIGGER ${trg} BEFORE INSERT OR UPDATE OF status ON ${name} FOR EACH ROW EXECUTE FUNCTION sd_assert_status_parent_live(${args});`
+    )
+  }
+  return S.join("\n")
 }
 
 // --- 4.5 SECURITY DEFINER cleanup functions --------------------------------
@@ -488,19 +575,56 @@ function emitLiveViews() {
     )
   }
 
-  // status tables: status IN (liveValues). workspace_members additionally needs
-  // parent-liveness folded in by callers via the helper; the base _live view
-  // here is the status filter.
+  // status tables: status IN (liveValues), AND every declared liveParent row is
+  // itself live — folded in by JOINing the parent's own _live view (review F1).
+  // This makes liveness transitive: e.g. workspace_access_bindings_live JOINs
+  // workspace_members_live, which itself JOINs workspaces_live + users_live, so a
+  // binding under a removed member or a soft-deleted workspace disappears. A view
+  // with a JOIN is not auto-updatable, so these are read-only (no CHECK OPTION);
+  // all writes target the base tables. Single-table fallback (no liveParents)
+  // keeps the auto-updatable CHECK-OPTION form.
   const statusTables = Object.entries(mTables)
     .filter(([, e]) => e.softDelete === "status")
-    .map(([n, e]) => ({ n, live: e.liveValues || ["active"] }))
-    .sort((a, b) => a.n.localeCompare(b.n))
-  for (const { n, live } of statusTables) {
+    .map(([n, e]) => ({
+      n,
+      live: e.liveValues || ["active"],
+      parents: e.liveParents || [],
+    }))
+  // Dependency order: a status view that JOINs another status _live view must be
+  // emitted after it. (Root _live views are all emitted above already.)
+  const statusByName = new Map(statusTables.map((s) => [s.n, s]))
+  const emittedStatus = new Set()
+  const orderedStatus = []
+  const visitStatus = (s, stack = new Set()) => {
+    if (emittedStatus.has(s.n) || stack.has(s.n)) return
+    stack.add(s.n)
+    for (const lp of s.parents) {
+      const dep = statusByName.get(lp.parent)
+      if (dep) visitStatus(dep, stack)
+    }
+    emittedStatus.add(s.n)
+    orderedStatus.push(s)
+  }
+  for (const s of [...statusTables].sort((a, b) => a.n.localeCompare(b.n)))
+    visitStatus(s)
+  for (const { n, live, parents } of orderedStatus) {
     const inList = live.map((v) => `'${v}'`).join(", ")
     V.push(`DROP VIEW IF EXISTS ${n}_live;`)
-    V.push(
-      `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WHERE status IN (${inList}) WITH CASCADED CHECK OPTION;`
-    )
+    if (parents.length) {
+      const joins = parents
+        .map(
+          (lp, i) =>
+            `  JOIN ${lp.parent}_live lp${i} ON lp${i}.id = base.${lp.column}`
+        )
+        .join("\n")
+      V.push(
+        `CREATE VIEW ${n}_live AS\n  SELECT base.* FROM ${n} base\n${joins}\n  WHERE base.status IN (${inList});`
+      )
+    } else {
+      V.push(
+        `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WHERE status IN (${inList}) WITH CASCADED CHECK OPTION;`
+      )
+    }
   }
 
   // device child derived views (design §8.6) — hide children of a soft-closed
