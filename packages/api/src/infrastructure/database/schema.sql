@@ -5859,10 +5859,22 @@ DROP TRIGGER IF EXISTS sd_fk_live_device_services_device_id ON device_services;
 CREATE TRIGGER sd_fk_live_device_services_device_id BEFORE INSERT OR UPDATE OF device_id, status ON device_services FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('devices', 'device_id', 'id', 'false', 'starting,online,degraded');
 DROP TRIGGER IF EXISTS sd_fk_live_device_services_remote_agent_machine_id ON device_services;
 CREATE TRIGGER sd_fk_live_device_services_remote_agent_machine_id BEFORE INSERT OR UPDATE OF remote_agent_machine_id, status ON device_services FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('remote_agent_machines', 'remote_agent_machine_id', 'id', 'false', 'starting,online,degraded');
+DROP TRIGGER IF EXISTS sd_fk_live_device_service_keys_service_id ON device_service_keys;
+CREATE TRIGGER sd_fk_live_device_service_keys_service_id BEFORE INSERT OR UPDATE OF service_id ON device_service_keys FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_services', 'service_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_device_exposures_device_id ON device_exposures;
 CREATE TRIGGER sd_fk_live_device_exposures_device_id BEFORE INSERT OR UPDATE OF device_id ON device_exposures FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('devices', 'device_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_device_exposures_service_id ON device_exposures;
+CREATE TRIGGER sd_fk_live_device_exposures_service_id BEFORE INSERT OR UPDATE OF service_id ON device_exposures FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_services', 'service_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_device_capabilities_workspace_id ON device_capabilities;
 CREATE TRIGGER sd_fk_live_device_capabilities_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, status ON device_capabilities FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', 'active,deprecated');
+DROP TRIGGER IF EXISTS sd_fk_live_device_capabilities_exposure_id ON device_capabilities;
+CREATE TRIGGER sd_fk_live_device_capabilities_exposure_id BEFORE INSERT OR UPDATE OF exposure_id, status ON device_capabilities FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'exposure_id', 'id', 'false', 'active,deprecated');
+DROP TRIGGER IF EXISTS sd_fk_live_device_catalog_revisions_exposure_id ON device_catalog_revisions;
+CREATE TRIGGER sd_fk_live_device_catalog_revisions_exposure_id BEFORE INSERT OR UPDATE OF exposure_id ON device_catalog_revisions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'exposure_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_device_tools_exposure_id ON device_tools;
+CREATE TRIGGER sd_fk_live_device_tools_exposure_id BEFORE INSERT OR UPDATE OF exposure_id ON device_tools FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'exposure_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_device_tool_revisions_tool_id ON device_tool_revisions;
+CREATE TRIGGER sd_fk_live_device_tool_revisions_tool_id BEFORE INSERT OR UPDATE OF tool_id ON device_tool_revisions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_tools', 'tool_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_device_operations_workspace_id ON device_operations;
 CREATE TRIGGER sd_fk_live_device_operations_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON device_operations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_device_operations_conversation_id ON device_operations;
@@ -5871,6 +5883,14 @@ DROP TRIGGER IF EXISTS sd_fk_live_device_operations_initiated_by_workspace_membe
 CREATE TRIGGER sd_fk_live_device_operations_initiated_by_workspace_member_id BEFORE INSERT OR UPDATE OF initiated_by_workspace_member_id ON device_operations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspace_members', 'initiated_by_workspace_member_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_device_operations_device_id ON device_operations;
 CREATE TRIGGER sd_fk_live_device_operations_device_id BEFORE INSERT OR UPDATE OF device_id ON device_operations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('devices', 'device_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_device_operations_device_exposure_id ON device_operations;
+CREATE TRIGGER sd_fk_live_device_operations_device_exposure_id BEFORE INSERT OR UPDATE OF device_exposure_id ON device_operations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'device_exposure_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_device_operations_device_capability_id ON device_operations;
+CREATE TRIGGER sd_fk_live_device_operations_device_capability_id BEFORE INSERT OR UPDATE OF device_capability_id ON device_operations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_capabilities', 'device_capability_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_device_operations_tool_id ON device_operations;
+CREATE TRIGGER sd_fk_live_device_operations_tool_id BEFORE INSERT OR UPDATE OF tool_id ON device_operations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_tools', 'tool_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_device_operation_attempts_device_service_id ON device_operation_attempts;
+CREATE TRIGGER sd_fk_live_device_operation_attempts_device_service_id BEFORE INSERT OR UPDATE OF device_service_id ON device_operation_attempts FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_services', 'device_service_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_memory_access_grants_workspace_id ON memory_access_grants;
 CREATE TRIGGER sd_fk_live_memory_access_grants_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, status ON memory_access_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', 'active');
 DROP TRIGGER IF EXISTS sd_fk_live_memory_access_grants_memory_space_id ON memory_access_grants;
@@ -5903,8 +5923,14 @@ DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_webhook_endpoint_id O
 CREATE TRIGGER sd_fk_live_automation_event_sources_webhook_endpoint_id BEFORE INSERT OR UPDATE OF webhook_endpoint_id, deleted_at, status ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_webhook_endpoints', 'webhook_endpoint_id', 'id', 'true', 'active,deprecated,disabled');
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_integration_binding_id ON automation_event_sources;
 CREATE TRIGGER sd_fk_live_automation_event_sources_integration_binding_id BEFORE INSERT OR UPDATE OF integration_binding_id, deleted_at, status ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_integration_bindings', 'integration_binding_id', 'id', 'true', 'active,deprecated,disabled');
+DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_device_capability_id ON resource_access_bindings;
+CREATE TRIGGER sd_fk_live_resource_access_bindings_device_capability_id BEFORE INSERT OR UPDATE OF device_capability_id, status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_capabilities', 'device_capability_id', 'id', 'false', 'active');
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_device_id ON runtime_authorization_grants;
 CREATE TRIGGER sd_fk_live_runtime_authorization_grants_device_id BEFORE INSERT OR UPDATE OF device_id, status ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('devices', 'device_id', 'id', 'false', 'active');
+DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_device_capability_id ON runtime_authorization_grants;
+CREATE TRIGGER sd_fk_live_runtime_authorization_grants_device_capability_id BEFORE INSERT OR UPDATE OF device_capability_id, status ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_capabilities', 'device_capability_id', 'id', 'false', 'active');
+DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_device_exposure_id ON runtime_authorization_grants;
+CREATE TRIGGER sd_fk_live_runtime_authorization_grants_device_exposure_id BEFORE INSERT OR UPDATE OF device_exposure_id, status ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'device_exposure_id', 'id', 'false', 'active');
 
 -- 4b. Status-junction parent-liveness: block reviving/inserting a live
 -- status row under a non-live parent (design §7.3 revive case, review F3).
@@ -6100,16 +6126,11 @@ GRANT SELECT, DELETE ON memory_item_parts, conversation_participant_addresses, d
 -- 5. Live views: canonical read surface that hides soft-deleted rows.
 -- Single-table views over a base table are auto-updatable; WITH CASCADED
 -- CHECK OPTION blocks inserting/surfacing a row outside the predicate.
-DROP VIEW IF EXISTS device_tools_live;
-DROP VIEW IF EXISTS device_capabilities_live;
-DROP VIEW IF EXISTS device_exposures_live;
-DROP VIEW IF EXISTS device_services_live;
 DROP VIEW IF EXISTS workspace_access_bindings_live;
 DROP VIEW IF EXISTS transport_accounts_live;
 DROP VIEW IF EXISTS runtime_authorization_grants_live;
 DROP VIEW IF EXISTS resource_access_bindings_live;
 DROP VIEW IF EXISTS remote_agents_live;
-DROP VIEW IF EXISTS remote_agent_machines_live;
 DROP VIEW IF EXISTS plugin_connections_live;
 DROP VIEW IF EXISTS platform_access_bindings_live;
 DROP VIEW IF EXISTS model_profiles_live;
@@ -6123,6 +6144,11 @@ DROP VIEW IF EXISTS installed_skills_live;
 DROP VIEW IF EXISTS file_access_grants_live;
 DROP VIEW IF EXISTS file_assets_live;
 DROP VIEW IF EXISTS file_spaces_live;
+DROP VIEW IF EXISTS device_tools_live;
+DROP VIEW IF EXISTS device_capabilities_live;
+DROP VIEW IF EXISTS device_exposures_live;
+DROP VIEW IF EXISTS device_services_live;
+DROP VIEW IF EXISTS remote_agent_machines_live;
 DROP VIEW IF EXISTS devices_live;
 DROP VIEW IF EXISTS automation_rules_live;
 DROP VIEW IF EXISTS conversations_live;
@@ -6149,6 +6175,11 @@ CREATE VIEW automation_event_sources_live AS SELECT base.* FROM automation_event
 CREATE VIEW conversations_live AS SELECT base.* FROM conversations base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW automation_rules_live AS SELECT base.* FROM automation_rules base WHERE deleted_at IS NULL AND status IN ('active', 'paused', 'error') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.conversation_id IS NULL OR EXISTS (SELECT 1 FROM conversations_live lp1 WHERE lp1.id = base.conversation_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW devices_live AS SELECT base.* FROM devices base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW remote_agent_machines_live AS SELECT base.* FROM remote_agent_machines base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW device_services_live AS SELECT base.* FROM device_services base WHERE status IN ('starting', 'online', 'degraded') AND (base.device_id IS NULL OR EXISTS (SELECT 1 FROM devices_live lp0 WHERE lp0.id = base.device_id)) AND (base.remote_agent_machine_id IS NULL OR EXISTS (SELECT 1 FROM remote_agent_machines_live lp1 WHERE lp1.id = base.remote_agent_machine_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW device_exposures_live AS SELECT base.* FROM device_exposures base WHERE (base.device_id IS NULL OR EXISTS (SELECT 1 FROM devices_live lp0 WHERE lp0.id = base.device_id)) AND (base.service_id IS NULL OR EXISTS (SELECT 1 FROM device_services_live lp1 WHERE lp1.id = base.service_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW device_capabilities_live AS SELECT base.* FROM device_capabilities base WHERE status IN ('active', 'deprecated') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.exposure_id IS NULL OR EXISTS (SELECT 1 FROM device_exposures_live lp1 WHERE lp1.id = base.exposure_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW device_tools_live AS SELECT base.* FROM device_tools base WHERE (base.exposure_id IS NULL OR EXISTS (SELECT 1 FROM device_exposures_live lp0 WHERE lp0.id = base.exposure_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW file_spaces_live AS SELECT base.* FROM file_spaces base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW file_assets_live AS SELECT base.* FROM file_assets base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW file_access_grants_live AS SELECT base.* FROM file_access_grants base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.file_space_id IS NULL OR EXISTS (SELECT 1 FROM file_spaces_live lp1 WHERE lp1.id = base.file_space_id)) AND (base.file_asset_id IS NULL OR EXISTS (SELECT 1 FROM file_assets_live lp2 WHERE lp2.id = base.file_asset_id)) WITH CASCADED CHECK OPTION;
@@ -6162,25 +6193,11 @@ CREATE VIEW model_group_grants_live AS SELECT base.* FROM model_group_grants bas
 CREATE VIEW model_profiles_live AS SELECT base.* FROM model_profiles base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW platform_access_bindings_live AS SELECT base.* FROM platform_access_bindings base WHERE status IN ('active') AND (base.user_id IS NULL OR EXISTS (SELECT 1 FROM users_live lp0 WHERE lp0.id = base.user_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW plugin_connections_live AS SELECT base.* FROM plugin_connections base WHERE deleted_at IS NULL AND status IN ('active') AND (base.installation_id IS NULL OR EXISTS (SELECT 1 FROM plugin_installations_live lp0 WHERE lp0.id = base.installation_id)) AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp1 WHERE lp1.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW remote_agent_machines_live AS SELECT base.* FROM remote_agent_machines base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW remote_agents_live AS SELECT base.* FROM remote_agents base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW resource_access_bindings_live AS SELECT base.* FROM resource_access_bindings base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.installed_skill_id IS NULL OR EXISTS (SELECT 1 FROM installed_skills_live lp1 WHERE lp1.id = base.installed_skill_id)) AND (base.plugin_installation_id IS NULL OR EXISTS (SELECT 1 FROM plugin_installations_live lp2 WHERE lp2.id = base.plugin_installation_id)) AND (base.automation_event_source_id IS NULL OR EXISTS (SELECT 1 FROM automation_event_sources_live lp3 WHERE lp3.id = base.automation_event_source_id)) AND (base.actor_id IS NULL OR EXISTS (SELECT 1 FROM actors_live lp4 WHERE lp4.id = base.actor_id)) AND (base.remote_agent_id IS NULL OR EXISTS (SELECT 1 FROM remote_agents_live lp5 WHERE lp5.id = base.remote_agent_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW runtime_authorization_grants_live AS SELECT base.* FROM runtime_authorization_grants base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.device_id IS NULL OR EXISTS (SELECT 1 FROM devices_live lp1 WHERE lp1.id = base.device_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW resource_access_bindings_live AS SELECT base.* FROM resource_access_bindings base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.installed_skill_id IS NULL OR EXISTS (SELECT 1 FROM installed_skills_live lp1 WHERE lp1.id = base.installed_skill_id)) AND (base.plugin_installation_id IS NULL OR EXISTS (SELECT 1 FROM plugin_installations_live lp2 WHERE lp2.id = base.plugin_installation_id)) AND (base.automation_event_source_id IS NULL OR EXISTS (SELECT 1 FROM automation_event_sources_live lp3 WHERE lp3.id = base.automation_event_source_id)) AND (base.actor_id IS NULL OR EXISTS (SELECT 1 FROM actors_live lp4 WHERE lp4.id = base.actor_id)) AND (base.remote_agent_id IS NULL OR EXISTS (SELECT 1 FROM remote_agents_live lp5 WHERE lp5.id = base.remote_agent_id)) AND (base.device_capability_id IS NULL OR EXISTS (SELECT 1 FROM device_capabilities_live lp6 WHERE lp6.id = base.device_capability_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW runtime_authorization_grants_live AS SELECT base.* FROM runtime_authorization_grants base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.device_id IS NULL OR EXISTS (SELECT 1 FROM devices_live lp1 WHERE lp1.id = base.device_id)) AND (base.device_capability_id IS NULL OR EXISTS (SELECT 1 FROM device_capabilities_live lp2 WHERE lp2.id = base.device_capability_id)) AND (base.device_exposure_id IS NULL OR EXISTS (SELECT 1 FROM device_exposures_live lp3 WHERE lp3.id = base.device_exposure_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW transport_accounts_live AS SELECT base.* FROM transport_accounts base WHERE deleted_at IS NULL AND status IN ('active', 'disabled', 'error') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.owner_workspace_member_id IS NULL OR EXISTS (SELECT 1 FROM workspace_members_live lp1 WHERE lp1.id = base.owner_workspace_member_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW workspace_access_bindings_live AS SELECT base.* FROM workspace_access_bindings base WHERE status IN ('active') AND (base.workspace_member_id IS NULL OR EXISTS (SELECT 1 FROM workspace_members_live lp0 WHERE lp0.id = base.workspace_member_id)) WITH CASCADED CHECK OPTION;
--- device child derived views (§8.6): hide children of soft-closed devices.
-CREATE VIEW device_services_live AS
-  SELECT s.* FROM device_services s
-  JOIN devices_live d ON d.id = s.device_id;
-CREATE VIEW device_exposures_live AS
-  SELECT x.* FROM device_exposures x
-  JOIN devices_live d ON d.id = x.device_id;
-CREATE VIEW device_capabilities_live AS
-  SELECT c.* FROM device_capabilities c
-  JOIN device_exposures_live x ON x.id = c.exposure_id;
-CREATE VIEW device_tools_live AS
-  SELECT t.* FROM device_tools t
-  JOIN device_exposures_live x ON x.id = t.exposure_id;
 
 -- <<< SOFT-DELETE CUTOVER <<<
 

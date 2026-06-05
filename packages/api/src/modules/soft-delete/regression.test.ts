@@ -1138,6 +1138,62 @@ async function insertInstallation(
   }
 }
 
+async function insertDevice(db: AnyDb, ws: string): Promise<string> {
+  const row = await db
+    .insertInto("devices")
+    .values({
+      workspace_id: ws,
+      title: "soft-delete-device",
+      public_key: uniq("device-pk"),
+      public_key_fingerprint: uniq("device-fp"),
+      trust_status: "trusted",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function insertDeviceCapability(
+  db: AnyDb,
+  ws: string
+): Promise<{ capabilityId: string; exposureId: string; serviceId: string }> {
+  const deviceId = await insertDevice(db, ws)
+  const service = await db
+    .insertInto("device_services")
+    .values({
+      device_id: deviceId,
+      service_kind: "device_runtime",
+      status: "online",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const exposure = await db
+    .insertInto("device_exposures")
+    .values({
+      device_id: deviceId,
+      service_id: service.id as string,
+      stable_key: uniq("device-exposure"),
+      display_name: "soft-delete exposure",
+      transport: "stdio",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const capability = await db
+    .insertInto("device_capabilities")
+    .values({
+      workspace_id: ws,
+      exposure_id: exposure.id as string,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return {
+    capabilityId: capability.id as string,
+    exposureId: exposure.id as string,
+    serviceId: service.id as string,
+  }
+}
+
 test(
   "F15: FK-liveness trigger blocks a child under an ARCHIVED (non-live) parent",
   { timeout: 5 * 60_000 },
@@ -1403,6 +1459,115 @@ test(
         live.length,
         0,
         "resource binding hidden when plugin installation is archived"
+      )
+    })
+  }
+)
+
+test(
+  "F19: device derived live views honor liveValues and grant parent liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const offlineDeviceId = await insertDevice(db, ws)
+      const offlineService = await db
+        .insertInto("device_services")
+        .values({
+          device_id: offlineDeviceId,
+          service_kind: "device_runtime",
+          status: "offline",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      const offlineServiceLive = await db
+        .selectFrom("device_services_live")
+        .select("id")
+        .where("id", "=", offlineService.id)
+        .execute()
+      assert.equal(
+        offlineServiceLive.length,
+        0,
+        "offline device service excluded from _live"
+      )
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("device_exposures")
+            .values({
+              device_id: offlineDeviceId,
+              service_id: offlineService.id as string,
+              stable_key: uniq("offline-exposure"),
+              display_name: "offline exposure",
+              transport: "stdio",
+            } as any)
+            .execute(),
+        /references non-live device_services/
+      )
+
+      const { capabilityId } = await insertDeviceCapability(db, ws)
+      const subject = await db
+        .insertInto("access_subjects")
+        .values({ kind: "workspace", workspace_id: ws })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const binding = await db
+        .insertInto("resource_access_bindings")
+        .values({
+          workspace_id: ws,
+          resource_type: "device_capability",
+          device_capability_id: capabilityId,
+          subject_id: subject.id,
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("device_capabilities")
+        .set({ status: "archived" })
+        .where("id", "=", capabilityId)
+        .execute()
+
+      const archivedCapabilityLive = await db
+        .selectFrom("device_capabilities_live")
+        .select("id")
+        .where("id", "=", capabilityId)
+        .execute()
+      assert.equal(
+        archivedCapabilityLive.length,
+        0,
+        "archived device capability excluded from _live"
+      )
+
+      const bindingLive = await db
+        .selectFrom("resource_access_bindings_live")
+        .select("id")
+        .where("id", "=", binding.id)
+        .execute()
+      assert.equal(
+        bindingLive.length,
+        0,
+        "binding hidden when device capability is archived"
+      )
+
+      await db
+        .updateTable("resource_access_bindings")
+        .set({ status: "revoked" })
+        .where("id", "=", binding.id)
+        .execute()
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("resource_access_bindings")
+            .set({ status: "active" })
+            .where("id", "=", binding.id)
+            .execute(),
+        /references non-live device_capabilities/
       )
     })
   }

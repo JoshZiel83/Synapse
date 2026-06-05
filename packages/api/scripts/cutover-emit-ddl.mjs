@@ -129,8 +129,16 @@ persistentTables.sort()
 const fkPolicyFor = (fk) => manifest.foreignKeys?.[fk.key]
 const tableIsEphemeral = (entry) =>
   entry.class === "ephemeral" || entry.derived === true
-const tableHasLiveView = (entry) =>
-  entry.softDelete === "deleted_at" || entry.softDelete === "status"
+const DERIVED_LIVE_VIEW_TABLES = new Set([
+  "device_services",
+  "device_exposures",
+  "device_capabilities",
+  "device_tools",
+])
+const tableHasLiveView = (name, entry) =>
+  entry.softDelete === "deleted_at" ||
+  entry.softDelete === "status" ||
+  DERIVED_LIVE_VIEW_TABLES.has(name)
 const liveValuesForTable = (name, entry) => {
   if (!hasCol(name, "status")) return []
   if (Array.isArray(entry.liveValues) && entry.liveValues.length) {
@@ -147,7 +155,7 @@ const integrityFks = foreignKeys.filter((fk) => {
   const parent = mTables[fk.referencedTable]
   const child = mTables[fk.childTable]
   if (!parent || !child) return false
-  if (!tableHasLiveView(parent)) return false
+  if (!tableHasLiveView(fk.referencedTable, parent)) return false
   // Only single-column FKs (composite FK liveness handled via the parent's own
   // reject/live view); keep the trigger set targeted and unambiguous.
   if (fk.childColumns.length !== 1) return false
@@ -619,7 +627,9 @@ function restrictLiveParentsFor(tableName) {
     )
     .filter((fk) => fk.childTable !== fk.referencedTable)
     .filter((fk) => fkPolicyFor(fk)?.targetAction === "RESTRICT")
-    .filter((fk) => tableHasLiveView(mTables[fk.referencedTable] || {}))
+    .filter((fk) =>
+      tableHasLiveView(fk.referencedTable, mTables[fk.referencedTable] || {})
+    )
     .map((fk) => ({
       column: fk.childColumns[0],
       parent: fk.referencedTable,
@@ -708,19 +718,26 @@ function emitLiveViews() {
       parents: liveParentsFor(n, e, true),
     }))
 
-  const orderedLiveTables = sortLiveTables([...roots, ...statusTables])
-  const derivedViews = [
-    "device_services_live",
-    "device_exposures_live",
-    "device_capabilities_live",
-    "device_tools_live",
-  ]
+  const derivedTables = [...DERIVED_LIVE_VIEW_TABLES]
+    .filter((n) => tables.has(n))
+    .map((n) => {
+      const e = mTables[n]
+      return {
+        kind: "derived",
+        n,
+        live: liveValuesForTable(n, e),
+        parents: liveParentsFor(n, e, true),
+      }
+    })
+
+  const orderedLiveTables = sortLiveTables([
+    ...roots,
+    ...statusTables,
+    ...derivedTables,
+  ])
 
   // Drop dependents first so re-applying the schema works once root/status views
   // reference each other.
-  for (const name of [...derivedViews].reverse()) {
-    V.push(`DROP VIEW IF EXISTS ${name};`)
-  }
   for (const { n } of [...orderedLiveTables].reverse()) {
     V.push(`DROP VIEW IF EXISTS ${n}_live;`)
   }
@@ -743,39 +760,15 @@ function emitLiveViews() {
     }
 
     const inList = live.map((v) => `'${v}'`).join(", ")
-    const predicates = [`status IN (${inList})`, ...parentPreds].join(" AND ")
+    const ownPreds =
+      kind === "status" || live.length ? [`status IN (${inList})`] : []
+    const predicates = [...ownPreds, ...parentPreds].join(" AND ")
     V.push(
-      parents.length
+      predicates
         ? `CREATE VIEW ${n}_live AS SELECT base.* FROM ${n} base WHERE ${predicates} WITH CASCADED CHECK OPTION;`
-        : `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WHERE status IN (${inList}) WITH CASCADED CHECK OPTION;`
+        : `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WITH CASCADED CHECK OPTION;`
     )
   }
-
-  // device child derived views (design §8.6) — hide children of a soft-closed
-  // device and any non-live device parent chain.
-  V.push(
-    "-- device child derived views (§8.6): hide children of soft-closed devices."
-  )
-  V.push(
-    `CREATE VIEW device_services_live AS
-  SELECT s.* FROM device_services s
-  JOIN devices_live d ON d.id = s.device_id;`
-  )
-  V.push(
-    `CREATE VIEW device_exposures_live AS
-  SELECT x.* FROM device_exposures x
-  JOIN devices_live d ON d.id = x.device_id;`
-  )
-  V.push(
-    `CREATE VIEW device_capabilities_live AS
-  SELECT c.* FROM device_capabilities c
-  JOIN device_exposures_live x ON x.id = c.exposure_id;`
-  )
-  V.push(
-    `CREATE VIEW device_tools_live AS
-  SELECT t.* FROM device_tools t
-  JOIN device_exposures_live x ON x.id = t.exposure_id;`
-  )
 
   return V.join("\n")
 }
