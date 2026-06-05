@@ -7,11 +7,10 @@ import {
   MODEL_GROUP_GRANT_STATUS,
   MODEL_GROUP_OWNER_TYPE,
   getDefaultModelBaseUrl,
-  getDefaultModelEngineKind,
   getDefaultModelName,
-  getModelProviderEngineDefinitions,
-  listModelProviderDefinitions,
-  providerSupportsBuiltinTools,
+  getProviderKindForVendor,
+  listModelVendorDefinitions,
+  vendorSupportsServerTools,
   type ModelGroupGrantScope,
   type ModelGroupGrantStatus,
   type ModelGroupOwnerType,
@@ -108,20 +107,21 @@ type ModelGroupGrant = {
 type ModelItem = {
   id: string
   group_id: string
-  profile_id: string
-  current_revision_id: string | null
+  binding_id: string
+  current_version_id: string | null
   display_name: string
   priority: number
   weight: number
   is_enabled: boolean
   version: number
-  provider_type: string
-  engine_kind?: string
+  provider_kind: string
+  vendor: string
   base_url: string
   model_name: string
-  max_tokens: number
+  max_output_tokens: number
   capability_tags: string[]
-  extra_config?: Record<string, unknown>
+  features?: Record<string, unknown>
+  provider_options?: Record<string, unknown>
 }
 
 type GroupDetail = ModelGroupSummary & {
@@ -152,20 +152,22 @@ type WorkbenchUser = {
 
 type ConfigDraft = {
   displayName: string
-  providerType: string
-  engineKind: string
+  vendor: string
   apiKey: string
   baseUrl: string
   modelName: string
-  maxTokens: string
+  maxOutputTokens: string
   priority: string
   weight: string
   isEnabled: boolean
-  builtinTools: string[]
+  apiStyle: "chat" | "responses"
+  serverTools: string[]
   multimodalTypes: string[]
+  crossTurnToolHistory: boolean
+  providerOptionsText: string
 }
 
-const ANTHROPIC_BUILTIN_TOOLS = [
+const SERVER_TOOLS = [
   { key: "web_search", label: "Web Search" },
   { key: "web_fetch", label: "Web Fetch" },
 ]
@@ -177,36 +179,41 @@ const MULTIMODAL_TYPES = [
   { key: "document", label: "Documents" },
 ]
 
-const PROVIDER_OPTIONS = listModelProviderDefinitions()
+const VENDOR_OPTIONS = listModelVendorDefinitions()
+const DEFAULT_VENDOR = VENDOR_OPTIONS[0]?.vendor || "anthropic"
+const API_STYLE_OPTIONS = [
+  { value: "chat", label: "Chat Completions" },
+  { value: "responses", label: "Responses API" },
+] as const
 
 function createDraft(item?: ModelItem | null): ConfigDraft {
-  const extraConfig = (item?.extra_config || {}) as Record<string, any>
-  const multimodal = extraConfig.multimodal || {}
-  const providerType = item?.provider_type || "anthropic"
-  const engineKind =
-    item?.engine_kind ||
-    extraConfig.engine_kind ||
-    getDefaultModelEngineKind(providerType)
+  const features = (item?.features || {}) as Record<string, any>
+  const multimodal = features.multimodal || {}
+  const vendor = item?.vendor || DEFAULT_VENDOR
 
   return {
     displayName: item?.display_name || "",
-    providerType,
-    engineKind,
+    vendor,
     apiKey: "",
-    baseUrl: item?.base_url || getDefaultModelBaseUrl(providerType),
-    modelName:
-      item?.model_name || getDefaultModelName(providerType, engineKind),
-    maxTokens: String(item?.max_tokens || 4096),
+    baseUrl: item?.base_url || getDefaultModelBaseUrl(vendor),
+    modelName: item?.model_name || getDefaultModelName(vendor),
+    maxOutputTokens: String(item?.max_output_tokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
     isEnabled: item ? Boolean(item.is_enabled) : true,
-    builtinTools: Array.isArray(extraConfig.builtin_tools)
-      ? extraConfig.builtin_tools
+    apiStyle: features.apiStyle === "responses" ? "responses" : "chat",
+    serverTools: Array.isArray(features.serverTools)
+      ? features.serverTools
       : [],
     multimodalTypes:
       multimodal.supported && Array.isArray(multimodal.types)
         ? multimodal.types
         : [],
+    crossTurnToolHistory: Boolean(features.crossTurnToolHistory),
+    providerOptionsText:
+      item?.provider_options && Object.keys(item.provider_options).length > 0
+        ? JSON.stringify(item.provider_options, null, 2)
+        : "",
   }
 }
 
@@ -619,23 +626,36 @@ function ConfigEditor({
   saving: boolean
   isNew: boolean
 }) {
-  const knownModels = getKnownModelOptions(draft.providerType, draft.engineKind)
+  const providerKind = getProviderKindForVendor(draft.vendor)
+  const knownModels = getKnownModelOptions(draft.vendor)
   const maxTokensLimit = getEffectiveMaxTokensLimit(
-    draft.providerType,
-    draft.engineKind,
+    draft.vendor,
     draft.modelName
   )
   const modelConfigError = getModelConfigValidationMessage({
-    providerType: draft.providerType,
-    engineKind: draft.engineKind,
+    vendor: draft.vendor,
     modelName: draft.modelName,
-    maxTokens: draft.maxTokens,
+    maxOutputTokens: draft.maxOutputTokens,
   })
-  const modelDatalistId =
-    `workbench-model-options-${draft.providerType}-${draft.engineKind}`.replace(
-      /[^a-zA-Z0-9_-]/g,
-      "-"
-    )
+  const providerOptionsError = (() => {
+    if (!draft.providerOptionsText.trim()) return ""
+    try {
+      const parsed = JSON.parse(draft.providerOptionsText)
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed)
+      )
+        return "Provider options must be a JSON object."
+      return ""
+    } catch {
+      return "Provider options must be valid JSON."
+    }
+  })()
+  const modelDatalistId = `workbench-model-options-${draft.vendor}`.replace(
+    /[^a-zA-Z0-9_-]/g,
+    "-"
+  )
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -654,60 +674,33 @@ function ConfigEditor({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Provider</Label>
+              <Label>Vendor</Label>
               <select
-                value={draft.providerType}
+                value={draft.vendor}
                 onChange={(event) => {
-                  const nextProviderType = event.target.value
-                  const nextEngineKind =
-                    getDefaultModelEngineKind(nextProviderType)
+                  const nextVendor = event.target.value
                   onChange({
                     ...draft,
-                    providerType: nextProviderType,
-                    engineKind: nextEngineKind,
-                    baseUrl: getDefaultModelBaseUrl(nextProviderType),
-                    modelName: getDefaultModelName(
-                      nextProviderType,
-                      nextEngineKind
-                    ),
-                    builtinTools: providerSupportsBuiltinTools(nextProviderType)
-                      ? draft.builtinTools
+                    vendor: nextVendor,
+                    baseUrl: getDefaultModelBaseUrl(nextVendor),
+                    modelName: getDefaultModelName(nextVendor),
+                    serverTools: vendorSupportsServerTools(nextVendor)
+                      ? draft.serverTools
                       : [],
                   })
                 }}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
-                {PROVIDER_OPTIONS.map((option) => (
-                  <option key={option.providerType} value={option.providerType}>
+                {VENDOR_OPTIONS.map((option) => (
+                  <option key={option.vendor} value={option.vendor}>
                     {option.label}
                   </option>
                 ))}
               </select>
             </div>
             <div className="space-y-2">
-              <Label>Protocol</Label>
-              <select
-                value={draft.engineKind}
-                onChange={(event) =>
-                  onChange({
-                    ...draft,
-                    engineKind: event.target.value,
-                    modelName: getDefaultModelName(
-                      draft.providerType,
-                      event.target.value
-                    ),
-                  })
-                }
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
-              >
-                {getModelProviderEngineDefinitions(draft.providerType).map(
-                  (option) => (
-                    <option key={option.engineKind} value={option.engineKind}>
-                      {option.label}
-                    </option>
-                  )
-                )}
-              </select>
+              <Label>Provider Kind</Label>
+              <Input value={providerKind} readOnly disabled />
             </div>
           </div>
 
@@ -767,7 +760,7 @@ function ConfigEditor({
                 onChange({ ...draft, baseUrl: event.target.value })
               }
               placeholder={
-                getDefaultModelBaseUrl(draft.providerType) ||
+                getDefaultModelBaseUrl(draft.vendor) ||
                 "https://api.example.com"
               }
             />
@@ -775,12 +768,12 @@ function ConfigEditor({
 
           <div className="grid grid-cols-4 gap-4">
             <div className="space-y-2">
-              <Label>Max Tokens</Label>
+              <Label>Max Output Tokens</Label>
               <Input
                 type="number"
-                value={draft.maxTokens}
+                value={draft.maxOutputTokens}
                 onChange={(event) =>
-                  onChange({ ...draft, maxTokens: event.target.value })
+                  onChange({ ...draft, maxOutputTokens: event.target.value })
                 }
                 max={maxTokensLimit}
               />
@@ -831,14 +824,41 @@ function ConfigEditor({
       </Card>
 
       <div className="flex flex-col gap-4">
-        {providerSupportsBuiltinTools(draft.providerType) ? (
+        {providerKind === "openai" ? (
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Built-in Tools</CardTitle>
+              <CardTitle className="text-base">API Style</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <select
+                value={draft.apiStyle}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    apiStyle:
+                      event.target.value === "responses" ? "responses" : "chat",
+                  })
+                }
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
+              >
+                {API_STYLE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {vendorSupportsServerTools(draft.vendor) ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Server Tools</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              {ANTHROPIC_BUILTIN_TOOLS.map((tool) => {
-                const checked = draft.builtinTools.includes(tool.key)
+              {SERVER_TOOLS.map((tool) => {
+                const checked = draft.serverTools.includes(tool.key)
                 return (
                   <label
                     key={tool.key}
@@ -850,11 +870,11 @@ function ConfigEditor({
                       onChange={() =>
                         onChange({
                           ...draft,
-                          builtinTools: checked
-                            ? draft.builtinTools.filter(
+                          serverTools: checked
+                            ? draft.serverTools.filter(
                                 (value) => value !== tool.key
                               )
-                            : [...draft.builtinTools, tool.key],
+                            : [...draft.serverTools, tool.key],
                         })
                       }
                       className="accent-primary"
@@ -905,8 +925,64 @@ function ConfigEditor({
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Behavior</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <label className="flex items-start gap-3 rounded-2xl border border-border p-3">
+              <input
+                type="checkbox"
+                checked={draft.crossTurnToolHistory}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    crossTurnToolHistory: event.target.checked,
+                  })
+                }
+                className="mt-1 accent-primary"
+              />
+              <div>
+                <div className="font-medium text-foreground">
+                  Cross-turn tool history
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Replay prior tool calls/results across turns.
+                </div>
+              </div>
+            </label>
+            <div className="space-y-2">
+              <Label>Advanced Provider Options (JSON)</Label>
+              <textarea
+                value={draft.providerOptionsText}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    providerOptionsText: event.target.value,
+                  })
+                }
+                rows={4}
+                spellCheck={false}
+                placeholder='{ "reasoning_effort": "high" }'
+                className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none"
+              />
+              {providerOptionsError ? (
+                <p className="text-xs text-red-500">{providerOptionsError}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Opaque, vendor-specific options passed through to the
+                  provider.
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
         <div className="flex items-center gap-2">
-          <Button onClick={onSave} disabled={saving || !!modelConfigError}>
+          <Button
+            onClick={onSave}
+            disabled={saving || !!modelConfigError || !!providerOptionsError}
+          >
             <Save data-icon="inline-start" />
             {saving ? "Saving..." : "Save"}
           </Button>
@@ -1177,41 +1253,66 @@ export default function ModelSettingsWorkbench() {
     )
       return
     const modelConfigError = getModelConfigValidationMessage({
-      providerType: draft.providerType,
-      engineKind: draft.engineKind,
+      vendor: draft.vendor,
       modelName: draft.modelName,
-      maxTokens: draft.maxTokens,
+      maxOutputTokens: draft.maxOutputTokens,
     })
     if (modelConfigError) {
       toast.error(modelConfigError)
       return
     }
+    let providerOptions: Record<string, unknown> | undefined
+    if (draft.providerOptionsText.trim()) {
+      try {
+        const parsed = JSON.parse(draft.providerOptionsText)
+        if (
+          parsed === null ||
+          typeof parsed !== "object" ||
+          Array.isArray(parsed)
+        ) {
+          toast.error("Provider options must be a JSON object.")
+          return
+        }
+        providerOptions = parsed as Record<string, unknown>
+      } catch {
+        toast.error("Provider options must be valid JSON.")
+        return
+      }
+    }
 
     setSavingConfig(true)
     try {
-      const extraConfig: Record<string, unknown> = {}
+      const providerKind = getProviderKindForVendor(draft.vendor)
+      const features: Record<string, unknown> = {}
+      if (providerKind === "openai") {
+        features.apiStyle = draft.apiStyle
+      }
       if (
-        providerSupportsBuiltinTools(draft.providerType) &&
-        draft.builtinTools.length > 0
+        vendorSupportsServerTools(draft.vendor) &&
+        draft.serverTools.length > 0
       ) {
-        extraConfig.builtin_tools = draft.builtinTools
+        features.serverTools = draft.serverTools
       }
       if (draft.multimodalTypes.length > 0) {
-        extraConfig.multimodal = {
+        features.multimodal = {
           supported: true,
           types: draft.multimodalTypes,
         }
+      }
+      if (draft.crossTurnToolHistory) {
+        features.crossTurnToolHistory = true
       }
 
       const payload: Record<string, unknown> = {
         displayName: draft.displayName.trim(),
         priority: parseInt(draft.priority, 10),
         weight: parseInt(draft.weight, 10),
-        providerType: draft.providerType,
-        engineKind: draft.engineKind,
-        maxTokens: parseInt(draft.maxTokens, 10),
-        extraConfig,
+        vendor: draft.vendor,
+        providerKind,
+        maxOutputTokens: parseInt(draft.maxOutputTokens, 10),
+        features,
       }
+      if (providerOptions) payload.providerOptions = providerOptions
 
       if (draft.baseUrl.trim()) payload.baseUrl = draft.baseUrl.trim()
       if (draft.modelName.trim()) payload.modelName = draft.modelName.trim()
@@ -1654,14 +1755,14 @@ export default function ModelSettingsWorkbench() {
                                     <Badge variant="secondary">
                                       v{item.version || 1}
                                     </Badge>
-                                    {item.provider_type ? (
+                                    {item.vendor ? (
                                       <Badge variant="outline">
-                                        {item.provider_type}
+                                        {item.vendor}
                                       </Badge>
                                     ) : null}
-                                    {item.engine_kind ? (
+                                    {item.provider_kind ? (
                                       <Badge variant="outline">
-                                        {item.engine_kind}
+                                        {item.provider_kind}
                                       </Badge>
                                     ) : null}
                                     {!item.is_enabled ? (

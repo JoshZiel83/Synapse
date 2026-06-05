@@ -1556,7 +1556,6 @@ export interface AIRequestLog {
 }
 
 export type AnthropicBuiltinTool = "web_search" | "web_fetch"
-export type ModelEngineKind = string
 
 export type MultimodalType = (typeof CANONICAL_FILE_CATEGORIES)[number]
 

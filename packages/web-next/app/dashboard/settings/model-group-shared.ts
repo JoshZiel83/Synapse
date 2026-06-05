@@ -35,11 +35,6 @@ export const MODEL_GROUP_ROUTING_OPTIONS: Array<{
     label: "Weighted Random",
     desc: "Randomly select by weight distribution",
   },
-  {
-    value: MODEL_GROUP_ROUTING_STRATEGY.ROUND_ROBIN,
-    label: "Round Robin",
-    desc: "Cycle through models evenly",
-  },
 ]
 
 export function getModelGroupStrategyLabel(
@@ -48,8 +43,6 @@ export function getModelGroupStrategyLabel(
   switch (value) {
     case MODEL_GROUP_ROUTING_STRATEGY.WEIGHTED_RANDOM:
       return "Weighted Random"
-    case MODEL_GROUP_ROUTING_STRATEGY.ROUND_ROBIN:
-      return "Round Robin"
     case MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER:
       return "Priority Failover"
     default:

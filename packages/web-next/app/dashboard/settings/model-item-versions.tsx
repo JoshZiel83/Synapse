@@ -11,15 +11,13 @@ import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared"
 
 interface ConfigVersion {
   id: string
-  item_id: string
+  binding_id: string
   version: number
-  provider_type: string
-  engine_kind?: string
+  provider_kind: string
+  vendor: string
   base_url: string
   model_name: string
-  max_tokens: number
-  input_token_cost_micros: number
-  output_token_cost_micros: number
+  max_output_tokens: number
   capability_tags: string[]
   created_at: string
 }
@@ -104,11 +102,11 @@ export default function ModelItemVersions({
                       v{v.version} {idx === 0 && "(current)"}
                     </Badge>
                     <Badge className="border-violet-500/20 bg-violet-500/10 text-xs text-violet-400">
-                      {v.provider_type}
+                      {v.vendor}
                     </Badge>
-                    {v.engine_kind ? (
+                    {v.provider_kind ? (
                       <Badge className="border-slate-500/20 bg-slate-500/10 text-xs text-slate-300">
-                        {v.engine_kind}
+                        {v.provider_kind}
                       </Badge>
                     ) : null}
                   </div>
@@ -134,9 +132,11 @@ export default function ModelItemVersions({
                   </div>
                   <div>
                     <span className="block text-xs text-muted-foreground">
-                      Max Tokens
+                      Max Output Tokens
                     </span>
-                    <span className="text-foreground">{v.max_tokens}</span>
+                    <span className="text-foreground">
+                      {v.max_output_tokens}
+                    </span>
                   </div>
                   <div>
                     <span className="block text-xs text-muted-foreground">
