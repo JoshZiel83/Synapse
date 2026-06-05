@@ -1508,7 +1508,62 @@ test(
         /references non-live device_services/
       )
 
-      const { capabilityId } = await insertDeviceCapability(db, ws)
+      const { capabilityId, exposureId } = await insertDeviceCapability(db, ws)
+      const hiddenTool = await db
+        .insertInto("device_tools")
+        .values({
+          exposure_id: exposureId,
+          stable_key: uniq("hidden-tool"),
+          current_name: "hidden_tool",
+          status: "hidden",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const removedTool = await db
+        .insertInto("device_tools")
+        .values({
+          exposure_id: exposureId,
+          stable_key: uniq("removed-tool"),
+          current_name: "removed_tool",
+          status: "removed",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const hiddenRemovedToolsLive = await db
+        .selectFrom("device_tools_live")
+        .select("id")
+        .where("id", "in", [hiddenTool.id, removedTool.id])
+        .execute()
+      assert.equal(
+        hiddenRemovedToolsLive.length,
+        0,
+        "hidden/removed device tools excluded from _live"
+      )
+
+      const catalogRevision = await db
+        .insertInto("device_catalog_revisions")
+        .values({
+          exposure_id: exposureId,
+          revision_seq: 1,
+          schema_hash: uniq("schema-hash"),
+          status: "active",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("device_tool_revisions")
+            .values({
+              tool_id: removedTool.id as string,
+              catalog_revision_id: catalogRevision.id as string,
+              tool_name: "removed_tool",
+            } as any)
+            .execute(),
+        /references non-live device_tools/
+      )
+
       const subject = await db
         .insertInto("access_subjects")
         .values({ kind: "workspace", workspace_id: ws })
