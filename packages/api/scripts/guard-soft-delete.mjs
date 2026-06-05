@@ -38,6 +38,7 @@ const tableIsEphemeral = (entry) =>
 const tableHasDeclaredLiveSemantics = (entry) =>
   (Array.isArray(entry.liveValues) && entry.liveValues.length) ||
   Boolean(entry.livePredicate)
+const VALID_LIVE_INTEGRITY = new Set(["enforce", "historical", "none"])
 
 // Managed (delete-protected) tables: persistent classes, not ephemeral/derived/baOwned.
 const MANAGED_DELETE = new Set(
@@ -368,6 +369,39 @@ for (const t of ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES) {
   if (hasBusinessStateColumn && !tableHasDeclaredLiveSemantics(entry)) {
     violations.push(
       `${t}: parent-folding _live table has status/state column but no liveValues/livePredicate in soft-delete manifest`
+    )
+  }
+}
+
+// Rule 5 (FK live-integrity classification): every persistent FK pointing at a
+// canonical live parent must say whether it is a lifecycle edge (`enforce`), a
+// historical/provenance reference (`historical`), or intentionally ignored by
+// live integrity (`none`). This prevents newly generated `_live` parents from
+// accidentally turning author/creator/history columns into lifecycle parents.
+for (const fk of schema.foreignKeys) {
+  const parentEntry = mTables[fk.referencedTable]
+  const childEntry = mTables[fk.childTable]
+  if (!parentEntry || !childEntry) continue
+  if (tableIsEphemeral(childEntry)) continue
+  if (!tableHasLiveView(fk.referencedTable, parentEntry)) continue
+
+  const reg = manifest.foreignKeys?.[fk.key]
+  const liveIntegrity = reg?.liveIntegrity
+  if (!liveIntegrity) {
+    violations.push(
+      `FK ${fk.key} (${fk.childTable}.${fk.childColumns.join(",")} -> ${fk.referencedTable}) references a live parent but has no liveIntegrity classification`
+    )
+    continue
+  }
+  if (!VALID_LIVE_INTEGRITY.has(liveIntegrity)) {
+    violations.push(`FK ${fk.key}: invalid liveIntegrity '${liveIntegrity}'`)
+  }
+  if (
+    liveIntegrity === "enforce" &&
+    (fk.childColumns.length !== 1 || fk.referencedColumns.length !== 1)
+  ) {
+    violations.push(
+      `FK ${fk.key}: liveIntegrity=enforce currently supports single-column FKs only`
     )
   }
 }

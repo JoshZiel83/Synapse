@@ -898,6 +898,7 @@ tables:
 foreignKeys:
   digest:e8948e1046f77257:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: account(user_id)
     _parent: users(id)
     _was: CASCADE
@@ -913,16 +914,19 @@ foreignKeys:
     _was: CASCADE
   digest:98ec713652d94f52:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspaces(owner_id)
     _parent: users(id)
     _was: CASCADE
   digest:74e0db9275648c5a:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: platform_access_bindings(user_id)
     _parent: users(id)
     _was: CASCADE
   digest:4e2e8f0769a79d1d:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -932,21 +936,25 @@ foreignKeys:
     _was: SET NULL
   digest:4ee84e3ce33cff7d:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_members(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:564174ef6f6826bd:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_members(user_id)
     _parent: users(id)
     _was: CASCADE
   digest:f7b0145784d6c1d5:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_access_bindings(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:77511418f798211e:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -956,21 +964,25 @@ foreignKeys:
     _was: SET NULL
   digest:0662d58675c86b8d:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_invites(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:51371a55afaa6df8:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: workspace_invites(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:ea72b4f3dcaeae10:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: conversations(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:03062d021ed288d6:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -980,11 +992,13 @@ foreignKeys:
     _was: SET NULL
   digest:24a75e9ae9931cae:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: audit_logs(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:1a6778e2016a2463:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -994,6 +1008,7 @@ foreignKeys:
     _was: SET NULL
   digest:4d2bcc747acadf6b:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: file_assets(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
@@ -1004,6 +1019,7 @@ foreignKeys:
     _was: RESTRICT
   digest:e84a2af3f6d44685:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1013,6 +1029,7 @@ foreignKeys:
     _was: SET NULL
   digest:82f810b5cc2445b2:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1062,6 +1079,7 @@ foreignKeys:
     _was: CASCADE
   digest:df5cc738ac7f8554:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1070,6 +1088,7 @@ foreignKeys:
     _was: SET NULL
   digest:18cc796ae60043e3:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1079,11 +1098,13 @@ foreignKeys:
     _was: SET NULL
   digest:58c63e093795c1e1:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: publishers(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:2dbe699149bef13e:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1092,16 +1113,19 @@ foreignKeys:
     _was: SET NULL
   digest:512f41743546bcf8:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: catalog_items(publisher_id)
     _parent: publishers(id)
     _was: CASCADE
   digest:729793326e20f489:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: catalog_items(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:88154a761f4ddf1e:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1128,11 +1152,13 @@ foreignKeys:
     _was: CASCADE
   digest:5a7a34c1ba8396eb:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: catalog_versions(catalog_item_id)
     _parent: catalog_items(id)
     _was: CASCADE
   digest:47005fc83263e4f6:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1152,6 +1178,7 @@ foreignKeys:
     _was: CASCADE
   digest:a698b167692963c5:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1180,11 +1207,13 @@ foreignKeys:
     _was: CASCADE
   digest:4ab06a666e1db90f:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: actors(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:863421d63df3444e:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1193,6 +1222,7 @@ foreignKeys:
     _was: SET NULL
   digest:92173ab39606d470:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1201,6 +1231,7 @@ foreignKeys:
     _was: SET NULL
   digest:0bfb8ce80f28c8d8:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1210,11 +1241,13 @@ foreignKeys:
     _was: SET NULL
   digest:898693e9c84eb985:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agents(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:bd26c512c4e5a2fa:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1223,6 +1256,7 @@ foreignKeys:
     _was: SET NULL
   digest:cfab6c17dd9db0f8:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1232,11 +1266,13 @@ foreignKeys:
     _was: SET NULL
   digest:cc041dcd33bdd143:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agent_machines(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:32432bc83f309b7f:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1251,16 +1287,19 @@ foreignKeys:
     _was: CASCADE
   digest:a7bd588d8c8970ce:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agent_runtime_catalog(machine_id)
     _parent: remote_agent_machines(id)
     _was: CASCADE
   digest:082b14c7aa320ca4:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agent_bindings(remote_agent_id)
     _parent: remote_agents(id)
     _was: CASCADE
   digest:e9d64e1451bd893f:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agent_bindings(machine_id)
     _parent: remote_agent_machines(id)
     _was: CASCADE
@@ -1308,11 +1347,13 @@ foreignKeys:
     _was: SET NULL
   digest:0fae820b0d5d3fd9:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_relationship_profiles(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:0b3195feb9d7fe77:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1322,6 +1363,7 @@ foreignKeys:
     _was: SET NULL
   digest:ac4f18df5d1b7e6a:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: workspace_friend_requests(requester_workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
@@ -1335,6 +1377,7 @@ foreignKeys:
     _was: SET NULL
   digest:7778b6f71416a327:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1344,11 +1387,13 @@ foreignKeys:
     _was: SET NULL
   digest:8745df8a756aa962:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_friend_entries(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:e7ae4d6cf57a26a8:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_friend_entries(owner_workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
@@ -1362,16 +1407,19 @@ foreignKeys:
     _was: SET NULL
   digest:4ed600e2ab05adb8:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: entity_access_requests(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:0191a0a716aac967:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: entity_access_requests(requester_workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:fb4a758cc6b9a6c7:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1381,16 +1429,19 @@ foreignKeys:
     _was: SET NULL
   digest:68b1214ed7e5e3df:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: direct_conversation_bindings(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
   digest:5b13b6dd146c387c:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_member_preferences(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:6e67de559358b3d6:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1399,6 +1450,7 @@ foreignKeys:
     _was: SET NULL
   digest:3803a5aeaf5bfc98:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: actor_versions(actor_id)
     _parent: actors(id)
     _was: CASCADE
@@ -1412,6 +1464,7 @@ foreignKeys:
     _was: SET NULL
   digest:5f3e8a692318ca57:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1420,6 +1473,7 @@ foreignKeys:
     _was: SET NULL
   digest:42bd7a4568291b4b:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1429,6 +1483,7 @@ foreignKeys:
     _was: SET NULL
   digest:7d4ea6538ab0ab67:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1437,6 +1492,7 @@ foreignKeys:
     _was: SET NULL
   digest:1b19cfcb2bf42b35:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1446,6 +1502,7 @@ foreignKeys:
     _was: SET NULL
   digest:88af0f1839b5b325:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1459,11 +1516,13 @@ foreignKeys:
     _was: CASCADE
   digest:184504c91cb7aa52:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: actor_source_refs(actor_id)
     _parent: actors(id)
     _was: CASCADE
   digest:1f349f40877c9e00:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1480,16 +1539,19 @@ foreignKeys:
     _was: SET NULL
   digest:8396a284b560a954:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: model_groups(owner_workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:b76fd404c1bd4d47:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: model_groups(owner_workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:d66b3255cb29ad6d:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1499,11 +1561,13 @@ foreignKeys:
     _was: SET NULL
   digest:5b383687e7477db3:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: model_profiles(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:ab0f26b16e7d7017:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1513,16 +1577,19 @@ foreignKeys:
     _was: SET NULL
   digest:ae5d983f10219374:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: model_profile_revisions(profile_id)
     _parent: model_profiles(id)
     _was: CASCADE
   digest:0dc6f0dfdb5a35b4:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: model_group_grants(group_id)
     _parent: model_groups(id)
     _was: CASCADE
   digest:a6095b142e55d57d:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1567,11 +1634,13 @@ foreignKeys:
     _was: CASCADE
   digest:9ea280124928abfd:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: conversation_actor_contexts(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
   digest:1f576baae995f4e2:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: conversation_actor_contexts(actor_id)
     _parent: actors(id)
     _was: CASCADE
@@ -1585,41 +1654,49 @@ foreignKeys:
     _was: SET NULL
   digest:382157128151b5c4:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: access_subjects(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:159451ada151e933:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: access_subjects(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:62e35bc7ac2040bd:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: access_subjects(actor_id)
     _parent: actors(id)
     _was: CASCADE
   digest:9aae144e4c2429c2:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: access_subjects(remote_agent_id)
     _parent: remote_agents(id)
     _was: CASCADE
   digest:8b7aee378f78f834:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: access_subjects(user_id)
     _parent: users(id)
     _was: CASCADE
   digest:ba04f71aa8ce1d0f:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: transport_accounts(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:d80acf4d6967f0e9:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: transport_accounts(owner_workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:1a9e3c8eae837aea:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1629,16 +1706,19 @@ foreignKeys:
     _was: SET NULL
   digest:d8fda2b5b2970dc9:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: transport_endpoints(transport_account_id)
     _parent: transport_accounts(id)
     _was: CASCADE
   digest:58160141b0df023f:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: conversation_transport_bindings(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:2770cdb04fc6010b:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -1648,11 +1728,13 @@ foreignKeys:
     _was: SET NULL
   digest:5655893855d4c4f4:
     targetAction: RESTRICT
+    liveIntegrity: none
     _child: conversation_transport_bindings(conversation_id,workspace_id)
     _parent: conversations(id,workspace_id)
     _was: CASCADE
   digest:1d8ceb2eadf5c3fc:
     targetAction: RESTRICT
+    liveIntegrity: none
     _child: conversation_transport_bindings(transport_account_id,workspace_id)
     _parent: transport_accounts(id,workspace_id)
     _was: NO ACTION
@@ -1663,11 +1745,13 @@ foreignKeys:
     _was: NO ACTION
   digest:4e7e6c268b708b06:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: transport_addresses(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:87469eee78ac5b59:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1676,11 +1760,13 @@ foreignKeys:
     _was: SET NULL
   digest:86a1f330fd23163b:
     targetAction: RESTRICT
+    liveIntegrity: none
     _child: transport_addresses(transport_account_id,workspace_id)
     _parent: transport_accounts(id,workspace_id)
     _was: CASCADE
   digest:8066a2f323e51cf7:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: conversation_items(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -1715,6 +1801,7 @@ foreignKeys:
     _was: CASCADE
   digest:4d2b3cd83e072435:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: conversation_participants(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -1733,11 +1820,13 @@ foreignKeys:
     _was: CASCADE
   digest:6b862759729ffc0d:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: conversation_item_mentions(mentioned_participant_id)
     _parent: conversation_participants(id)
     _was: CASCADE
   digest:7303186d05b13770:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: conversation_participant_addresses(conversation_participant_id)
     _parent: conversation_participants(id)
     _was: CASCADE
@@ -1753,6 +1842,7 @@ foreignKeys:
     _was: CASCADE
   digest:f1d3784b31861fe9:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: conversation_item_targets(target_participant_id)
     _parent: conversation_participants(id)
     _was: CASCADE
@@ -1763,16 +1853,19 @@ foreignKeys:
     _was: CASCADE
   digest:c83066a74e0964d4:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: conversation_item_context_targets(target_participant_id)
     _parent: conversation_participants(id)
     _was: CASCADE
   digest:30badfebded9148c:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: conversation_participant_states(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
   digest:c468dfa76d940c58:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: conversation_participant_states(participant_id)
     _parent: conversation_participants(id)
     _was: CASCADE
@@ -1786,16 +1879,19 @@ foreignKeys:
     _was: SET NULL
   digest:d901dce771c72e09:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: chat_client_instances(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:6ec5e35c67e82400:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: chat_client_instances(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:ee21d2f85d1f59d6:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: conversation_device_states(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -1806,11 +1902,13 @@ foreignKeys:
     _was: CASCADE
   digest:cb07f22f4d680491:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_member_conversation_views(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:9141154d794111b2:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_member_conversation_views(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -1824,11 +1922,13 @@ foreignKeys:
     _was: SET NULL
   digest:e66e6dc50924fb0a:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agent_conversation_views(remote_agent_id)
     _parent: remote_agents(id)
     _was: CASCADE
   digest:4bd531a278265207:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agent_conversation_views(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -1850,11 +1950,13 @@ foreignKeys:
     _was: SET NULL
   digest:47096b58e2a48e90:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agent_message_deliveries(remote_agent_id)
     _parent: remote_agents(id)
     _was: CASCADE
   digest:0a8bf690016e3c6d:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: remote_agent_message_deliveries(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -1865,16 +1967,19 @@ foreignKeys:
     _was: CASCADE
   digest:af4e802671d3ed50:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_member_sync_events(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:a16eba1dbc16b078:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_member_sync_events(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:a2de3d70a1cbc193:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: workspace_member_sync_events(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -1888,26 +1993,31 @@ foreignKeys:
     _was: SET NULL
   digest:63c0ae00827102d4:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: chat_conversation_create_requests(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
   digest:73aa86e05fda50d0:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: chat_conversation_create_requests(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:7c86cf1fe3a773b2:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: chat_conversation_create_requests(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
   digest:7f0b4c35beb6732e:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: transport_message_links(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:41122da4cc4a8916:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: transport_message_links(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -1918,6 +2028,7 @@ foreignKeys:
     _was: CASCADE
   digest:60913d14269ee3fc:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: transport_message_links(transport_account_id)
     _parent: transport_accounts(id)
     _was: CASCADE
@@ -1933,11 +2044,13 @@ foreignKeys:
     _was: CASCADE
   digest:c7b5c38b6d6f80e7:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: turns(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
   digest:db7b662b49d85a28:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: turns(actor_id)
     _parent: actors(id)
     _was: CASCADE
@@ -1956,6 +2069,7 @@ foreignKeys:
     _was: CASCADE
   digest:7bb76cdda7c1caef:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -1964,6 +2078,7 @@ foreignKeys:
     _was: SET NULL
   digest:620ab4c374ea6f2d:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2009,6 +2124,7 @@ foreignKeys:
     _was: SET NULL
   digest:14a4e5f3a42bf810:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: tool_calls(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -2131,16 +2247,19 @@ foreignKeys:
     _was: SET NULL
   digest:0b683f7bbcfc9722:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_rules(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:f3bcd495652ba058:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_rules(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
   digest:7058ff55d73745f7:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: automation_rules(created_by_participant_id)
     _parent: conversation_participants(id)
     _was: RESTRICT
@@ -2155,16 +2274,19 @@ foreignKeys:
     _was: SET NULL
   digest:13e5a37814372e3c:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_policies(rule_id)
     _parent: automation_rules(id)
     _was: CASCADE
   digest:0e18a0c8365b49f9:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_event_sources(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:2a8a98a44be808b0:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2174,6 +2296,7 @@ foreignKeys:
     _was: SET NULL
   digest:81f0d53b26a56a79:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2217,11 +2340,13 @@ foreignKeys:
     _was: CASCADE
   digest:80a8a1d3dad75fb3:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_webhook_endpoints(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:167c7a1ee2996575:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2231,11 +2356,13 @@ foreignKeys:
     _was: SET NULL
   digest:7b1195c0c15744dd:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_occurrences(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:afebd2fe03edca4d:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2312,6 +2439,7 @@ foreignKeys:
     _was: SET NULL
   digest:1d41cd7bb50bd73d:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_spaces(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
@@ -2327,16 +2455,19 @@ foreignKeys:
     _was: CASCADE
   digest:7b4ffd9d26d4fcc2:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_items(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:2c5f6f403ec13f5f:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_items(memory_space_id)
     _parent: memory_spaces(id)
     _was: CASCADE
   digest:d7f191891235c85b:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2345,6 +2476,7 @@ foreignKeys:
     _was: SET NULL
   digest:e6bb6835c0372677:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_item_parts(memory_item_id)
     _parent: memory_items(id)
     _was: CASCADE
@@ -2360,11 +2492,13 @@ foreignKeys:
     _was: CASCADE
   digest:e214c7a98cd99f7d:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_recall_runs(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:02f86844e84f7a16:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2373,6 +2507,7 @@ foreignKeys:
     _was: SET NULL
   digest:e3d47c4e86d0190b:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2381,6 +2516,7 @@ foreignKeys:
     _was: SET NULL
   digest:124774567bbe37e8:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2394,6 +2530,7 @@ foreignKeys:
     _was: CASCADE
   digest:357daab331641db8:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_recall_run_results(memory_item_id)
     _parent: memory_items(id)
     _was: CASCADE
@@ -2407,6 +2544,7 @@ foreignKeys:
     _was: SET NULL
   digest:cb33ec70a7b7be88:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: context_archive_points(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -2528,6 +2666,7 @@ foreignKeys:
     _was: CASCADE
   digest:f644c4f246bdfa31:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: engine_branch_checkpoints(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
@@ -2546,6 +2685,7 @@ foreignKeys:
     _was: SET NULL
   digest:a476830f26ef0fc9:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2554,6 +2694,7 @@ foreignKeys:
     _was: SET NULL
   digest:2c0b2f9055019730:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2602,6 +2743,7 @@ foreignKeys:
     _was: SET NULL
   digest:24ceb4ea555f573e:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2610,6 +2752,7 @@ foreignKeys:
     _was: SET NULL
   digest:f14c406d011be629:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2618,11 +2761,13 @@ foreignKeys:
     _was: SET NULL
   digest:b4ea6b1937bc4230:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: installed_skills(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:223fa49a9dbc9d2c:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2636,6 +2781,7 @@ foreignKeys:
     _was: RESTRICT
   digest:94f0a829171febe5:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2645,6 +2791,7 @@ foreignKeys:
     _was: SET NULL
   digest:61118cd859f7a02e:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: skill_versions(skill_id)
     _parent: installed_skills(id)
     _was: CASCADE
@@ -2655,6 +2802,7 @@ foreignKeys:
     _was: RESTRICT
   digest:cc2255e7823d78ec:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2664,11 +2812,13 @@ foreignKeys:
     _was: SET NULL
   digest:f4cea3f0151faf2f:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: skill_source_refs(skill_id)
     _parent: installed_skills(id)
     _was: CASCADE
   digest:330386888d414203:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2685,11 +2835,13 @@ foreignKeys:
     _was: SET NULL
   digest:ae633f659cf23b31:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: plugin_installations(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:7ac73d1b58d0552a:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: plugin_installations(catalog_item_id)
     _parent: catalog_items(id)
     _was: RESTRICT
@@ -2700,6 +2852,7 @@ foreignKeys:
     _was: RESTRICT
   digest:d1bd786c0b5d0eac:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2709,16 +2862,19 @@ foreignKeys:
     _was: SET NULL
   digest:3c667c1007110505:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_integration_bindings(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:efc0c0e7f95b5318:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_integration_bindings(installation_id)
     _parent: plugin_installations(id)
     _was: CASCADE
   digest:c26bc057b80aad3c:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_integration_bindings(webhook_endpoint_id)
     _parent: automation_webhook_endpoints(id)
     _was: RESTRICT
@@ -2752,16 +2908,19 @@ foreignKeys:
     _was: CASCADE
   digest:9bd6132244a7fb2d:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: plugin_connections(installation_id)
     _parent: plugin_installations(id)
     _was: CASCADE
   digest:499b81c42d1b8713:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: plugin_connections(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:f56717e170b038c7:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2770,11 +2929,13 @@ foreignKeys:
     _was: SET NULL
   digest:6b3620f81be0d83b:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: plugin_source_refs(installation_id)
     _parent: plugin_installations(id)
     _was: CASCADE
   digest:410d14eb7fa33d4b:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -2791,31 +2952,37 @@ foreignKeys:
     _was: SET NULL
   digest:29da1546d4b5b30d:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: resource_access_bindings(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:03af95417c80a6e6:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: resource_access_bindings(installed_skill_id)
     _parent: installed_skills(id)
     _was: CASCADE
   digest:925cc3312d1cbb08:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: resource_access_bindings(plugin_installation_id)
     _parent: plugin_installations(id)
     _was: CASCADE
   digest:78a722a54ff2ccb8:
     targetAction: RESTRICT
+    liveIntegrity: historical
     _child: resource_access_bindings(automation_event_source_id)
     _parent: automation_event_sources(id)
     _was: CASCADE
   digest:0653b6df1a07bd65:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: resource_access_bindings(actor_id)
     _parent: actors(id)
     _was: CASCADE
   digest:eb70bee400c2c1aa:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: resource_access_bindings(remote_agent_id)
     _parent: remote_agents(id)
     _was: CASCADE
@@ -2831,6 +2998,7 @@ foreignKeys:
     _was: CASCADE
   digest:7ae7b7e8ed9629a0:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2931,6 +3099,7 @@ foreignKeys:
     _was: CASCADE
   digest:7122bda38b2e9340:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2940,11 +3109,13 @@ foreignKeys:
     _was: SET NULL
   digest:ceb9df2e88119237:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: runtime_authorization_grants(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:814287e8e659a369:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -2970,11 +3141,13 @@ foreignKeys:
     _was: SET NULL
   digest:0d0b1dc1ef7278c2:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: devices(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:4e1b38cb3cb1fc1f:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -3005,16 +3178,19 @@ foreignKeys:
     _was: SET NULL
   digest:219cbc6806fa6300:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_services(device_id)
     _parent: devices(id)
     _was: CASCADE
   digest:09df4e4e6a2ba89e:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_services(remote_agent_machine_id)
     _parent: remote_agent_machines(id)
     _was: CASCADE
   digest:7c6c56871ef7db81:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_service_keys(service_id)
     _parent: device_services(id)
     _was: CASCADE
@@ -3035,11 +3211,13 @@ foreignKeys:
     _was: CASCADE
   digest:03b1a144c43cf372:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_exposures(device_id)
     _parent: devices(id)
     _was: CASCADE
   digest:437d60990f9981e2:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_exposures(service_id)
     _parent: device_services(id)
     _was: CASCADE
@@ -3053,26 +3231,31 @@ foreignKeys:
     _was: SET NULL
   digest:1954df6497f404e1:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_capabilities(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:cb560237bd041326:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_capabilities(exposure_id)
     _parent: device_exposures(id)
     _was: CASCADE
   digest:baf2c140d655eeda:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_catalog_revisions(exposure_id)
     _parent: device_exposures(id)
     _was: CASCADE
   digest:43ba841660e0ff81:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_tools(exposure_id)
     _parent: device_exposures(id)
     _was: CASCADE
   digest:31bcc236048f94fa:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_tool_revisions(tool_id)
     _parent: device_tools(id)
     _was: CASCADE
@@ -3122,11 +3305,13 @@ foreignKeys:
     _was: CASCADE
   digest:ecbd09c11d253a5e:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_operations(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:46cae3349ad773e0:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -3148,6 +3333,7 @@ foreignKeys:
     _was: RESTRICT
   digest:9f8e4f3abb7abfb9:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -3166,16 +3352,19 @@ foreignKeys:
     _was: SET NULL
   digest:da12cf2aa297a5a3:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_operations(device_id)
     _parent: devices(id)
     _was: CASCADE
   digest:1391ecf5e460d772:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_operations(device_exposure_id)
     _parent: device_exposures(id)
     _was: CASCADE
   digest:b93337eb2ff8b5e3:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_operations(device_capability_id)
     _parent: device_capabilities(id)
     _was: CASCADE
@@ -3186,6 +3375,7 @@ foreignKeys:
     _was: CASCADE
   digest:772cef5af5517737:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_operations(tool_id)
     _parent: device_tools(id)
     _was: CASCADE
@@ -3209,6 +3399,7 @@ foreignKeys:
     _was: CASCADE
   digest:d22d8a1609442f69:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: device_operation_attempts(device_service_id)
     _parent: device_services(id)
     _was: CASCADE
@@ -3232,16 +3423,19 @@ foreignKeys:
     _was: CASCADE
   digest:5189370f57383a25:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_access_grants(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:cd46feb870562702:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_access_grants(memory_space_id)
     _parent: memory_spaces(id)
     _was: CASCADE
   digest:1af03e77b5f3e6e9:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: memory_access_grants(memory_item_id)
     _parent: memory_items(id)
     _was: CASCADE
@@ -3257,6 +3451,7 @@ foreignKeys:
     _was: CASCADE
   digest:d4d87e1df2e46892:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -3274,6 +3469,7 @@ foreignKeys:
     _was: SET NULL
   digest:ebc0c71736e724a9:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: file_spaces(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
@@ -3289,11 +3485,13 @@ foreignKeys:
     _was: CASCADE
   digest:2e2b21d490f06e91:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: file_snapshots(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:9d38677c17316381:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: file_snapshots(file_space_id)
     _parent: file_spaces(id)
     _was: CASCADE
@@ -3321,16 +3519,19 @@ foreignKeys:
     _was: SET NULL
   digest:277c2d1870777a54:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: file_access_grants(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
   digest:1ceb46610f404d2e:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: file_access_grants(file_space_id)
     _parent: file_spaces(id)
     _was: CASCADE
   digest:598ece0be30e750f:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: file_access_grants(file_asset_id)
     _parent: file_assets(id)
     _was: CASCADE
@@ -3346,6 +3547,7 @@ foreignKeys:
     _was: CASCADE
   digest:228179373a1d784a:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: false
       needsSnapshot: true
@@ -3426,6 +3628,7 @@ foreignKeys:
     _was: SET NULL
   digest:1e2a3f06cc60ff65:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -3434,6 +3637,7 @@ foreignKeys:
     _was: SET NULL
   digest:b8946bc749f4c34e:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -3442,6 +3646,7 @@ foreignKeys:
     _was: SET NULL
   constraint:users_avatar_file_id_fkey:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -3511,6 +3716,7 @@ foreignKeys:
     _was: NO ACTION
   constraint:fk_access_subjects_conversation:
     targetAction: RESTRICT
+    liveIntegrity: none
     _child: access_subjects(conversation_id,workspace_id)
     _parent: conversations(id,workspace_id)
     _was: CASCADE
@@ -3521,6 +3727,7 @@ foreignKeys:
     _was: CASCADE
   constraint:fk_conversation_items_author_participant:
     targetAction: SET NULL
+    liveIntegrity: historical
     setNull:
       canLose: true
       needsSnapshot: false
@@ -3537,6 +3744,7 @@ foreignKeys:
     _was: SET NULL
   constraint:fk_automation_event_sources_webhook_endpoint:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_event_sources(webhook_endpoint_id)
     _parent: automation_webhook_endpoints(id)
     _was: RESTRICT
@@ -3547,6 +3755,7 @@ foreignKeys:
     _was: CASCADE
   constraint:fk_automation_event_sources_integration_binding:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: automation_event_sources(integration_binding_id)
     _parent: automation_integration_bindings(id)
     _was: CASCADE
@@ -3620,21 +3829,25 @@ foreignKeys:
     _was: SET NULL
   constraint:fk_resource_access_bindings_device_capability:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: resource_access_bindings(device_capability_id)
     _parent: device_capabilities(id)
     _was: CASCADE
   constraint:fk_runtime_authorization_grants_device:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: runtime_authorization_grants(device_id)
     _parent: devices(id)
     _was: CASCADE
   constraint:fk_runtime_authorization_grants_device_capability:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: runtime_authorization_grants(device_capability_id)
     _parent: device_capabilities(id)
     _was: CASCADE
   constraint:fk_runtime_authorization_grants_device_exposure:
     targetAction: RESTRICT
+    liveIntegrity: enforce
     _child: runtime_authorization_grants(device_exposure_id)
     _parent: device_exposures(id)
     _was: CASCADE

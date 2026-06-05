@@ -1674,6 +1674,18 @@ test(
         1,
         "active participant appears in canonical _live view"
       )
+      const rule = await db
+        .insertInto("automation_rules")
+        .values({
+          workspace_id: ws,
+          conversation_id: conversationId,
+          category: "event_subscription",
+          name: "participant provenance rule",
+          created_by_participant_id: participant.id as string,
+          status: "active",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
 
       await db
         .updateTable("conversation_participants")
@@ -1692,17 +1704,26 @@ test(
         "left participant excluded from canonical _live view"
       )
 
-      await rejects(
-        db,
-        () =>
-          db
-            .insertInto("conversation_participant_states")
-            .values({
-              conversation_id: conversationId,
-              participant_id: participant.id as string,
-            })
-            .execute(),
-        /references non-live conversation_participants/
+      await db
+        .updateTable("automation_rules")
+        .set({ status: "archived" })
+        .where("id", "=", rule.id)
+        .execute()
+      await db
+        .updateTable("automation_rules")
+        .set({ status: "active" })
+        .where("id", "=", rule.id)
+        .execute()
+
+      const ruleLive = await db
+        .selectFrom("automation_rules_live")
+        .select("id")
+        .where("id", "=", rule.id)
+        .execute()
+      assert.equal(
+        ruleLive.length,
+        1,
+        "creator participant is provenance and must not hide an active rule"
       )
 
       await db

@@ -127,6 +127,7 @@ for (const [name, e] of Object.entries(mTables)) {
 persistentTables.sort()
 
 const fkPolicyFor = (fk) => manifest.foreignKeys?.[fk.key]
+const fkLiveIntegrityFor = (fk) => fkPolicyFor(fk)?.liveIntegrity
 const tableIsEphemeral = (entry) =>
   entry.class === "ephemeral" || entry.derived === true
 const tableHasDeclaredLiveSemantics = (entry) =>
@@ -172,6 +173,7 @@ const integrityFks = foreignKeys.filter((fk) => {
   const child = mTables[fk.childTable]
   if (!parent || !child) return false
   if (!tableHasLiveView(fk.referencedTable, parent)) return false
+  if (fkLiveIntegrityFor(fk) !== "enforce") return false
   // Only single-column FKs (composite FK liveness handled via the parent's own
   // reject/live view); keep the trigger set targeted and unambiguous.
   if (fk.childColumns.length !== 1) return false
@@ -659,7 +661,7 @@ function restrictLiveParentsFor(tableName) {
       (fk) => fk.childColumns.length === 1 && fk.referencedColumns.length === 1
     )
     .filter((fk) => fk.childTable !== fk.referencedTable)
-    .filter((fk) => fkPolicyFor(fk)?.targetAction === "RESTRICT")
+    .filter((fk) => fkLiveIntegrityFor(fk) === "enforce")
     .filter((fk) =>
       tableHasLiveView(fk.referencedTable, mTables[fk.referencedTable] || {})
     )
