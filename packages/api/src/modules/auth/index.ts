@@ -11,7 +11,8 @@ import { auth } from "./better-auth.js"
 import { resolveOAuthErrorRedirect } from "./oauth-error-routing.js"
 import { getProfile, updateProfile, AuthError } from "./service.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
-import { db } from "../../infrastructure/database/kysely.js"
+import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
+import { markUserDeleted } from "../soft-delete/orchestration.js"
 
 const updateMeSchema = z
   .object({
@@ -208,6 +209,27 @@ const authModule: FastifyPluginAsync = async (app: FastifyInstance) => {
           }),
           session: (request as any).authSession,
         })
+      } catch (error) {
+        return handleAuthError(error, reply)
+      }
+    }
+  )
+
+  // Self-service account closure (design §5.4). Soft-deletes the user via the
+  // markUserDeleted orchestration (tombstone + owned-workspace transfer/erase +
+  // membership/grant revoke + auth-runtime teardown + account/PII anonymization)
+  // in one transaction. NOT routed to Better Auth's deleteUser (which would hard
+  // delete users and CASCADE account/session); BA's deleteUser is disabled and
+  // account.delete.before is fail-closed. After closure the user's sessions are
+  // already revoked inside the transaction, so subsequent requests are rejected.
+  app.delete(
+    "/api/v1/auth/me",
+    { preHandler: [authMiddleware] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const userId = (request as any).user.userId as string
+        await withDbTransaction((trx) => markUserDeleted(trx, userId))
+        return reply.status(204).send()
       } catch (error) {
         return handleAuthError(error, reply)
       }

@@ -23,6 +23,7 @@ import {
   listUserWorkspaces,
   getWorkspaceById,
   updateWorkspace,
+  deleteWorkspace,
   addMember,
   listMembers,
   getWorkspaceChiefActorPreference,
@@ -202,6 +203,26 @@ export async function handleUpdateWorkspace(
   }
 
   return reply.send(workspace)
+}
+
+export async function handleDeleteWorkspace(
+  request: FastifyRequest<{ Params: WorkspaceParams }>,
+  reply: FastifyReply
+) {
+  const allowed = await requireWorkspacePermission(
+    request,
+    reply,
+    "workspace.manage",
+    "Not allowed to delete this workspace"
+  )
+  if (!allowed) return
+
+  // Soft delete (design §5.5): tenant-level orchestration via markWorkspaceDeleted.
+  const deleted = await deleteWorkspace(request.params.workspaceId)
+  if (!deleted) {
+    return reply.status(404).send({ error: "Workspace not found" })
+  }
+  return reply.status(204).send()
 }
 
 export async function handleAddMember(
@@ -628,6 +649,11 @@ export async function registerWorkspaceRoutes(fastify: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId",
     workspaceAuthHook,
     handleUpdateWorkspace
+  )
+  fastify.delete<{ Params: WorkspaceParams }>(
+    "/api/v1/workspaces/:workspaceId",
+    workspaceAuthHook,
+    handleDeleteWorkspace
   )
 
   // Workspace member routes

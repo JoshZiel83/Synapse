@@ -20,6 +20,7 @@ import {
 } from "@synapse/shared"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
 import { setAccessPolicy } from "../access/default-access-policy.js"
+import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
 import type {
   WorkspaceAccessBindingsAccessKey,
   WorkspaceMembersTrustLevel,
@@ -634,6 +635,24 @@ export async function updateWorkspace(
     .returningAll()
     .executeTakeFirst()
   return row ? mapWorkspaceRow(row) : null
+}
+
+/**
+ * Soft-delete a workspace and its entire tenant footprint (design §5.5). Runs
+ * the markWorkspaceDeleted orchestration in one transaction: soft-deletes every
+ * workspace-scoped root, revokes memberships/bindings/grants, stops runtime.
+ * Returns false if the workspace was already gone / not live.
+ */
+export async function deleteWorkspace(workspaceId: string): Promise<boolean> {
+  const live = await db
+    .selectFrom("workspaces")
+    .select("id")
+    .where("id", "=", workspaceId)
+    .where("deleted_at", "is", null)
+    .executeTakeFirst()
+  if (!live) return false
+  await withDbTransaction((trx) => markWorkspaceDeleted(trx, workspaceId))
+  return true
 }
 
 export async function checkMembership(workspaceId: string, userId: string) {
