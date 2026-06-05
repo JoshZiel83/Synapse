@@ -151,6 +151,12 @@ export async function markWorkspaceDeleted(
  * Account closure for a user (design §5.4). Tombstones the user, handles owned
  * workspaces (transfer to a surviving admin, else soft-delete), revokes
  * memberships + grants, revokes auth runtime, then anonymizes PII.
+ *
+ * The subject-scoped revoke (step 3b) closes EVERY active authorization row keyed
+ * on the user's principal — manifest `principalColumns` is the registry of which
+ * tables/columns carry a principal (CI-checked by guard-soft-delete so a new such
+ * table can't be forgotten). "The user's subjects" = the user's own platform
+ * subject ∪ the access_subjects of all the user's workspace_members.
  */
 export async function markUserDeleted(
   db: Executor,
@@ -199,10 +205,60 @@ export async function markUserDeleted(
     WHERE user_id = ${userId} AND status = 'active'
   `.execute(db)
 
-  // 3. platform access bindings → revoked
+  // 3a. platform access bindings → revoked (principal = user_id)
   await sql`
     UPDATE platform_access_bindings SET status = 'revoked', revoked_at = NOW()
     WHERE user_id = ${userId} AND status = 'active'
+  `.execute(db)
+
+  // 3b. subject-scoped authorization closure (manifest principalColumns). Revoke
+  //     every active grant/binding whose subject (or scope subject) is the user's
+  //     own subject OR one of the user's workspace_member subjects. The subject
+  //     set is computed once; access_subjects rows are immutable (never deleted),
+  //     so this is purely a status flip on the grant rows.
+  const subjectSet = sql`(
+    SELECT id FROM access_subjects WHERE user_id = ${userId}
+    UNION
+    SELECT s.id FROM access_subjects s
+    JOIN workspace_members wm ON wm.id = s.workspace_member_id
+    WHERE wm.user_id = ${userId}
+  )`
+  // grants keyed by subject_id and/or scope_subject_id
+  await sql`
+    UPDATE resource_access_bindings SET status = 'revoked', revoked_at = NOW()
+    WHERE status = 'active'
+      AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
+  `.execute(db)
+  await sql`
+    UPDATE memory_access_grants SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+    WHERE status = 'active'
+      AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
+  `.execute(db)
+  await sql`
+    UPDATE file_access_grants SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+    WHERE status = 'active'
+      AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
+  `.execute(db)
+  await sql`
+    UPDATE model_group_grants SET status = 'revoked', revoked_at = NOW()
+    WHERE status = 'active' AND subject_id IN ${subjectSet}
+  `.execute(db)
+  // workspace_access_bindings keyed by the user's workspace_member ids.
+  await sql`
+    UPDATE workspace_access_bindings SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+    WHERE status = 'active'
+      AND workspace_member_id IN (
+        SELECT id FROM workspace_members WHERE user_id = ${userId}
+      )
+  `.execute(db)
+  // chat_client_instances: close the user's member-bound client sessions (the
+  // table has no revoked_at; record via updated_at).
+  await sql`
+    UPDATE chat_client_instances SET status = 'revoked', updated_at = NOW()
+    WHERE status = 'active'
+      AND workspace_member_id IN (
+        SELECT id FROM workspace_members WHERE user_id = ${userId}
+      )
   `.execute(db)
 
   // 4. auth runtime (session + device_code) in this transaction

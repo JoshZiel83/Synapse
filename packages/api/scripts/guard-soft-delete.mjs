@@ -15,7 +15,7 @@
 //
 // Usage: node scripts/guard-soft-delete.mjs    (exit 1 on violation)
 
-import { readFileSync, readdirSync, statSync } from "node:fs"
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import { dirname, resolve, relative, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import yaml from "js-yaml"
@@ -47,17 +47,54 @@ const ROOT_TABLES = new Set(
     .map(([n]) => n)
 )
 
+// Tables that carry a principal (manifest principalColumns) with a revoke/close
+// action — markUserDeleted MUST close each of these so a deleted user leaves no
+// active authorization row. Rule 3 (below) checks orchestration.ts handles them.
+const PRINCIPAL_REVOKE_TABLES = new Set(
+  Object.entries(mTables)
+    .filter(([, e]) =>
+      (e.principalColumns || []).some(
+        (pc) => pc.action === "revoke" || pc.action === "close"
+      )
+    )
+    .map(([n]) => n)
+)
+
 // Files allowed to issue managed DELETE / base-table reads (relative to SRC).
 const WRITE_ALLOWLIST = new Set([
   // none: managed deletes must always go through soft-delete / sd_* fns.
 ])
-// Read-allowlist: orchestration, the live-reads module, schema/seed/migration,
-// admin/audit paths, and anything that already filters explicitly. We keep this
-// pragmatic — the read rule is advisory-strength (warn) rather than hard-fail to
-// avoid churn across the large existing read surface, EXCEPT it hard-fails for
-// brand-new naked root reads in business modules once adopted. For now we only
-// HARD-fail rule 1 (writes); rule 2 emits warnings.
-const READ_ENFORCE = false
+// Read-rule infra exemption: files that legitimately read base tables (the
+// soft-delete module itself, schema/seed/bootstrap, the platform-admin/audit
+// path, content-addressed GC). These are NOT counted toward the read baseline.
+const READ_INFRA_ALLOWLIST = new Set([
+  "modules/soft-delete/live-reads.ts",
+  "modules/soft-delete/orchestration.ts",
+  "infrastructure/database/seed.ts",
+  "infrastructure/database/seeds/actors/seed-official-actors.ts",
+  "modules/platform/admin-service.ts",
+  "modules/sandbox/gc.ts",
+])
+// Read rule (review F8): the existing business read-surface is large (~100 naked
+// root reads interleaved with legitimate base-table uses in the same files), so a
+// blanket flip-to-fail or a file-granularity allowlist would either break CI or
+// silently whitelist real leaks. Instead we RATCHET: a checked-in baseline records
+// the current per-file count of naked `selectFrom("<root>")` / raw `FROM/JOIN
+// <root>` reads; the guard HARD-FAILS if any file's count GROWS (a brand-new naked
+// read), and nudges to refresh the baseline when a count shrinks. New reads must
+// go through the `_live` views / live-reads helpers. Regenerate the baseline with
+// `node scripts/guard-soft-delete.mjs --update-read-baseline` (a reviewable diff).
+const READ_BASELINE_PATH = resolve(
+  here,
+  "../src/infrastructure/database/soft-delete-read-baseline.json"
+)
+const UPDATE_READ_BASELINE = process.argv.includes("--update-read-baseline")
+const ROOT_RE = [...ROOT_TABLES].join("|")
+const SELECT_FROM_RE = new RegExp(
+  `selectFrom\\(\\s*["'](?:${ROOT_RE})(?:\\s+as\\s+[a-z_]+)?["']`,
+  "g"
+)
+const RAW_FROM_RE = new RegExp(`\\b(?:FROM|JOIN)\\s+(?:${ROOT_RE})\\b`, "g")
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -74,11 +111,22 @@ function* walk(dir) {
 
 const violations = []
 const warnings = []
+const readCounts = {} // rel -> count of naked root reads (Rule 2 ratchet)
 
 for (const file of walk(SRC)) {
   const rel = relative(SRC, file)
   const text = readFileSync(file, "utf8")
   const lines = text.split("\n")
+  // Rule 2 (ratchet): count naked root reads per file, ignoring comment lines.
+  if (!READ_INFRA_ALLOWLIST.has(rel)) {
+    let n = 0
+    for (const line of lines) {
+      const noComment = line.replace(/\/\/.*$/, "")
+      n += (noComment.match(SELECT_FROM_RE) || []).length
+      n += (noComment.match(RAW_FROM_RE) || []).length
+    }
+    if (n > 0) readCounts[rel] = n
+  }
   lines.forEach((line, i) => {
     const noComment = line.replace(/\/\/.*$/, "")
     // Rule 1a: Kysely deleteFrom("managed")
@@ -101,18 +149,50 @@ for (const file of walk(SRC)) {
         )
       }
     }
-    // Rule 2: naked selectFrom("root") (advisory)
-    if (READ_ENFORCE) {
-      for (const m of noComment.matchAll(/selectFrom\(\s*["']([a-z_]+)["']/g)) {
-        const t = m[1]
-        if (ROOT_TABLES.has(t)) {
-          warnings.push(
-            `${rel}:${i + 1}  selectFrom("${t}") — consider the _live view / live-reads helper`
-          )
-        }
-      }
-    }
   })
+}
+
+// Rule 2 ratchet: compare per-file naked-read counts against the checked-in
+// baseline. A count that GROWS is a new naked read -> hard fail. A count that
+// SHRANK (or a file that dropped to zero) means progress -> nudge to refresh.
+if (UPDATE_READ_BASELINE) {
+  const ordered = Object.fromEntries(
+    Object.entries(readCounts).sort(([a], [b]) => a.localeCompare(b))
+  )
+  writeFileSync(READ_BASELINE_PATH, JSON.stringify(ordered, null, 2) + "\n")
+  const total = Object.values(ordered).reduce((s, n) => s + n, 0)
+  console.log(
+    `✓ wrote read baseline: ${Object.keys(ordered).length} files, ${total} naked root reads.`
+  )
+  process.exit(0)
+}
+let readBaseline = {}
+try {
+  readBaseline = JSON.parse(readFileSync(READ_BASELINE_PATH, "utf8"))
+} catch {
+  warnings.push(
+    "read baseline missing — run `node scripts/guard-soft-delete.mjs --update-read-baseline`"
+  )
+}
+const shrunk = []
+for (const [rel, n] of Object.entries(readCounts)) {
+  const base = readBaseline[rel] ?? 0
+  if (n > base) {
+    violations.push(
+      `${rel}: ${n} naked root read(s), baseline ${base} — new naked selectFrom/FROM <root>; route through a _live view / live-reads helper (or refresh the baseline if intentional)`
+    )
+  } else if (n < base) {
+    shrunk.push(`${rel}: ${base} -> ${n}`)
+  }
+}
+for (const rel of Object.keys(readBaseline)) {
+  if (!(rel in readCounts)) shrunk.push(`${rel}: ${readBaseline[rel]} -> 0`)
+}
+if (shrunk.length) {
+  warnings.push(
+    `read baseline shrank in ${shrunk.length} file(s) — refresh with --update-read-baseline:`
+  )
+  for (const s of shrunk.slice(0, 20)) warnings.push("  " + s)
 }
 
 if (warnings.length) {
@@ -120,10 +200,24 @@ if (warnings.length) {
   for (const w of warnings.slice(0, 50)) console.warn("  " + w)
 }
 
+// Rule 3 (review F2): every principal-bearing revoke/close table must be closed
+// by the user-deletion orchestration. We assert markUserDeleted's source mentions
+// each table in an UPDATE so a newly-registered principal table can't be silently
+// dropped from the closure. (Coarse textual check — the regression suite verifies
+// the actual behavior.)
+const ORCH = resolve(SRC, "modules/soft-delete/orchestration.ts")
+const orchText = readFileSync(ORCH, "utf8")
+for (const t of PRINCIPAL_REVOKE_TABLES) {
+  const re = new RegExp(`UPDATE\\s+${t}\\b`)
+  if (!re.test(orchText)) {
+    violations.push(
+      `orchestration.ts: principal table "${t}" (manifest principalColumns revoke/close) is not closed by markUserDeleted (no UPDATE ${t})`
+    )
+  }
+}
+
 if (violations.length) {
-  console.error(
-    `\n✗ guard-soft-delete: ${violations.length} write violation(s):\n`
-  )
+  console.error(`\n✗ guard-soft-delete: ${violations.length} violation(s):\n`)
   for (const v of violations) console.error("  - " + v)
   console.error(
     "\nManaged tables must be soft-deleted (deleted_at / status flip) or deleted via a SECURITY DEFINER sd_* function. See docs/soft-delete-design.md §7.5.\n"
@@ -132,5 +226,8 @@ if (violations.length) {
 }
 
 console.log(
-  `✓ guard-soft-delete: no naked deletes on ${MANAGED_DELETE.size} managed tables.`
+  `✓ guard-soft-delete: no naked deletes on ${MANAGED_DELETE.size} managed tables; ` +
+    `${PRINCIPAL_REVOKE_TABLES.size} principal tables closed by markUserDeleted; ` +
+    `read ratchet held across ${Object.keys(readCounts).length} files ` +
+    `(${Object.values(readCounts).reduce((s, n) => s + n, 0)} naked root reads, non-increasing).`
 )
