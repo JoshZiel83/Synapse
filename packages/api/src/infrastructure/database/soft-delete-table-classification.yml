@@ -325,6 +325,8 @@ tables:
     class: child
     softDelete: none
     workspaceScope: none
+    liveValues:
+      - active
   devices:
     class: root
     softDelete: deleted_at

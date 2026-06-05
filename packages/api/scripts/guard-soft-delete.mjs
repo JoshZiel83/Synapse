@@ -19,14 +19,17 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import { dirname, resolve, relative, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import yaml from "js-yaml"
+import { parseSchema } from "./schema-introspect.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SRC = resolve(here, "../src")
+const SCHEMA = resolve(here, "../src/infrastructure/database/schema.sql")
 const MANIFEST = resolve(
   here,
   "../src/infrastructure/database/soft-delete-table-classification.yml"
 )
 
+const schema = parseSchema(readFileSync(SCHEMA, "utf8"))
 const manifest = yaml.load(readFileSync(MANIFEST, "utf8"))
 const mTables = manifest.tables
 
@@ -46,6 +49,18 @@ const ROOT_TABLES = new Set(
     .filter(([, e]) => e.softDelete === "deleted_at")
     .map(([n]) => n)
 )
+
+// Keep in lockstep with cutover-emit-ddl.mjs: these softDelete:none child
+// tables deliberately expose canonical `_live` views derived from parent
+// liveness. If one has its own status column, the manifest must declare the
+// status live semantics explicitly so the generated view cannot leak hidden
+// runtime/business states.
+const DERIVED_LIVE_VIEW_TABLES = new Set([
+  "device_services",
+  "device_exposures",
+  "device_capabilities",
+  "device_tools",
+])
 
 // Principal tables = any table whose manifest declares principalColumns (a
 // column carrying a deleted user's principal: user/member/subject). Every such
@@ -280,6 +295,31 @@ for (const t of PRINCIPAL_ANCHORED_ALLOWLIST) {
     violations.push(
       `PRINCIPAL_ANCHORED_ALLOWLIST entry "${t}" is closeable — it must be closed by markUserDeleted, not anchored`
     )
+}
+
+// Rule 4 (derived live view status semantics): a derived `_live` table that has
+// a business/runtime status column must declare its live state explicitly in the
+// manifest. Otherwise the generated live view would only fold parent liveness
+// and could treat hidden/removed runtime rows as live parents.
+for (const t of DERIVED_LIVE_VIEW_TABLES) {
+  const tbl = schema.tables.get(t)
+  const entry = mTables[t]
+  if (!tbl || !entry) {
+    violations.push(
+      `DERIVED_LIVE_VIEW_TABLES entry "${t}" is missing from schema or manifest`
+    )
+    continue
+  }
+  const hasStatus = tbl.columns.some((c) => c.name === "status")
+  if (
+    hasStatus &&
+    !(Array.isArray(entry.liveValues) && entry.liveValues.length) &&
+    !entry.livePredicate
+  ) {
+    violations.push(
+      `${t}: derived _live table has status column but no liveValues/livePredicate in soft-delete manifest`
+    )
+  }
 }
 
 if (violations.length) {
