@@ -5462,6 +5462,10 @@ DECLARE
     WHEN TG_NARGS >= 5 AND TG_ARGV[4] <> '' THEN string_to_array(TG_ARGV[4], ',')
     ELSE ARRAY[]::text[]
   END;
+  v_child_live_col CONSTANT text := CASE
+    WHEN TG_NARGS >= 6 AND TG_ARGV[5] <> '' THEN TG_ARGV[5]
+    ELSE 'status'
+  END;
   v_fk_value     uuid;
   v_old_value    uuid;
   v_alive        boolean;
@@ -5492,21 +5496,21 @@ BEGIN
         v_recheck := TRUE; -- revive
       END IF;
     ELSIF array_length(v_child_live_values, 1) IS NOT NULL THEN
-      EXECUTE 'SELECT ($1).status::text' INTO v_old_status USING OLD;
-      EXECUTE 'SELECT ($1).status::text' INTO v_new_status USING NEW;
+      EXECUTE format('SELECT ($1).%I::text', v_child_live_col) INTO v_old_status USING OLD;
+      EXECUTE format('SELECT ($1).%I::text', v_child_live_col) INTO v_new_status USING NEW;
       IF v_new_status = ANY(v_child_live_values)
          AND NOT (v_old_status = ANY(v_child_live_values)) THEN
-        v_recheck := TRUE; -- status revive (dead -> live)
+        v_recheck := TRUE; -- live-state revive (dead -> live)
       END IF;
     END IF;
     IF NOT v_recheck
        AND v_child_has_deleted_at
        AND array_length(v_child_live_values, 1) IS NOT NULL THEN
-      EXECUTE 'SELECT ($1).status::text' INTO v_old_status USING OLD;
-      EXECUTE 'SELECT ($1).status::text' INTO v_new_status USING NEW;
+      EXECUTE format('SELECT ($1).%I::text', v_child_live_col) INTO v_old_status USING OLD;
+      EXECUTE format('SELECT ($1).%I::text', v_child_live_col) INTO v_new_status USING NEW;
       IF v_new_status = ANY(v_child_live_values)
          AND NOT (v_old_status = ANY(v_child_live_values)) THEN
-        v_recheck := TRUE; -- dual-axis root status revive
+        v_recheck := TRUE; -- dual-axis root live-state revive
       END IF;
     END IF;
   END IF;
@@ -5514,7 +5518,7 @@ BEGIN
     RETURN NEW;
   END IF;
   -- Liveness = a row with this key exists in the parent's _live view (folds in
-  -- deleted_at IS NULL AND status IN liveValues for dual-axis roots).
+  -- deleted_at IS NULL and liveValues/livePredicate where declared).
   EXECUTE format(
     'SELECT EXISTS (SELECT 1 FROM %I_live WHERE %I = $1)',
     v_parent_table, v_parent_col
@@ -5694,9 +5698,19 @@ CREATE TRIGGER sd_fk_live_transport_addresses_workspace_member_id BEFORE INSERT 
 DROP TRIGGER IF EXISTS sd_fk_live_conversation_items_conversation_id ON conversation_items;
 CREATE TRIGGER sd_fk_live_conversation_items_conversation_id BEFORE INSERT OR UPDATE OF conversation_id ON conversation_items FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_conversation_participants_conversation_id ON conversation_participants;
-CREATE TRIGGER sd_fk_live_conversation_participants_conversation_id BEFORE INSERT OR UPDATE OF conversation_id ON conversation_participants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'false', '');
+CREATE TRIGGER sd_fk_live_conversation_participants_conversation_id BEFORE INSERT OR UPDATE OF conversation_id, state ON conversation_participants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'false', 'active', 'state');
+DROP TRIGGER IF EXISTS sd_fk_live_conversation_item_mentions_mentioned_participant_id ON conversation_item_mentions;
+CREATE TRIGGER sd_fk_live_conversation_item_mentions_mentioned_participant_id BEFORE INSERT OR UPDATE OF mentioned_participant_id ON conversation_item_mentions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversation_participants', 'mentioned_participant_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_conversation_participant_addresses_conversation_participant_id ON conversation_participant_addresses;
+CREATE TRIGGER sd_fk_live_conversation_participant_addresses_conversation_participant_id BEFORE INSERT OR UPDATE OF conversation_participant_id ON conversation_participant_addresses FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversation_participants', 'conversation_participant_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_conversation_item_targets_target_participant_id ON conversation_item_targets;
+CREATE TRIGGER sd_fk_live_conversation_item_targets_target_participant_id BEFORE INSERT OR UPDATE OF target_participant_id ON conversation_item_targets FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversation_participants', 'target_participant_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_conversation_item_context_targets_target_participant_id ON conversation_item_context_targets;
+CREATE TRIGGER sd_fk_live_conversation_item_context_targets_target_participant_id BEFORE INSERT OR UPDATE OF target_participant_id ON conversation_item_context_targets FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversation_participants', 'target_participant_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_conversation_participant_states_conversation_id ON conversation_participant_states;
 CREATE TRIGGER sd_fk_live_conversation_participant_states_conversation_id BEFORE INSERT OR UPDATE OF conversation_id ON conversation_participant_states FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'false', '');
+DROP TRIGGER IF EXISTS sd_fk_live_conversation_participant_states_participant_id ON conversation_participant_states;
+CREATE TRIGGER sd_fk_live_conversation_participant_states_participant_id BEFORE INSERT OR UPDATE OF participant_id ON conversation_participant_states FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversation_participants', 'participant_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_chat_client_instances_workspace_id ON chat_client_instances;
 CREATE TRIGGER sd_fk_live_chat_client_instances_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON chat_client_instances FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_chat_client_instances_workspace_member_id ON chat_client_instances;
@@ -5747,6 +5761,8 @@ DROP TRIGGER IF EXISTS sd_fk_live_automation_rules_workspace_id ON automation_ru
 CREATE TRIGGER sd_fk_live_automation_rules_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at, status ON automation_rules FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', 'active,paused,error');
 DROP TRIGGER IF EXISTS sd_fk_live_automation_rules_conversation_id ON automation_rules;
 CREATE TRIGGER sd_fk_live_automation_rules_conversation_id BEFORE INSERT OR UPDATE OF conversation_id, deleted_at, status ON automation_rules FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'true', 'active,paused,error');
+DROP TRIGGER IF EXISTS sd_fk_live_automation_rules_created_by_participant_id ON automation_rules;
+CREATE TRIGGER sd_fk_live_automation_rules_created_by_participant_id BEFORE INSERT OR UPDATE OF created_by_participant_id, deleted_at, status ON automation_rules FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversation_participants', 'created_by_participant_id', 'id', 'true', 'active,paused,error');
 DROP TRIGGER IF EXISTS sd_fk_live_automation_policies_rule_id ON automation_policies;
 CREATE TRIGGER sd_fk_live_automation_policies_rule_id BEFORE INSERT OR UPDATE OF rule_id ON automation_policies FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_rules', 'rule_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_workspace_id ON automation_event_sources;
@@ -5919,6 +5935,8 @@ DROP TRIGGER IF EXISTS sd_fk_live_workspace_access_bindings_revoked_by_workspace
 CREATE TRIGGER sd_fk_live_workspace_access_bindings_revoked_by_workspace_member_id BEFORE INSERT OR UPDATE OF revoked_by_workspace_member_id, status ON workspace_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspace_members', 'revoked_by_workspace_member_id', 'id', 'false', 'active');
 DROP TRIGGER IF EXISTS sd_fk_live_users_avatar_file_id ON users;
 CREATE TRIGGER sd_fk_live_users_avatar_file_id BEFORE INSERT OR UPDATE OF avatar_file_id, deleted_at ON users FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('file_assets', 'avatar_file_id', 'id', 'true', '');
+DROP TRIGGER IF EXISTS sd_fk_live_conversation_items_author_participant_id ON conversation_items;
+CREATE TRIGGER sd_fk_live_conversation_items_author_participant_id BEFORE INSERT OR UPDATE OF author_participant_id ON conversation_items FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversation_participants', 'author_participant_id', 'id', 'false', '');
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_webhook_endpoint_id ON automation_event_sources;
 CREATE TRIGGER sd_fk_live_automation_event_sources_webhook_endpoint_id BEFORE INSERT OR UPDATE OF webhook_endpoint_id, deleted_at, status ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_webhook_endpoints', 'webhook_endpoint_id', 'id', 'true', 'active,deprecated,disabled');
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_integration_binding_id ON automation_event_sources;
@@ -6151,6 +6169,7 @@ DROP VIEW IF EXISTS device_services_live;
 DROP VIEW IF EXISTS remote_agent_machines_live;
 DROP VIEW IF EXISTS devices_live;
 DROP VIEW IF EXISTS automation_rules_live;
+DROP VIEW IF EXISTS conversation_participants_live;
 DROP VIEW IF EXISTS conversations_live;
 DROP VIEW IF EXISTS automation_event_sources_live;
 DROP VIEW IF EXISTS automation_integration_bindings_live;
@@ -6173,7 +6192,8 @@ CREATE VIEW plugin_installations_live AS SELECT base.* FROM plugin_installations
 CREATE VIEW automation_integration_bindings_live AS SELECT base.* FROM automation_integration_bindings base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.installation_id IS NULL OR EXISTS (SELECT 1 FROM plugin_installations_live lp1 WHERE lp1.id = base.installation_id)) AND (base.webhook_endpoint_id IS NULL OR EXISTS (SELECT 1 FROM automation_webhook_endpoints_live lp2 WHERE lp2.id = base.webhook_endpoint_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW automation_event_sources_live AS SELECT base.* FROM automation_event_sources base WHERE deleted_at IS NULL AND status IN ('active', 'deprecated', 'disabled') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.webhook_endpoint_id IS NULL OR EXISTS (SELECT 1 FROM automation_webhook_endpoints_live lp1 WHERE lp1.id = base.webhook_endpoint_id)) AND (base.integration_binding_id IS NULL OR EXISTS (SELECT 1 FROM automation_integration_bindings_live lp2 WHERE lp2.id = base.integration_binding_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW conversations_live AS SELECT base.* FROM conversations base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW automation_rules_live AS SELECT base.* FROM automation_rules base WHERE deleted_at IS NULL AND status IN ('active', 'paused', 'error') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.conversation_id IS NULL OR EXISTS (SELECT 1 FROM conversations_live lp1 WHERE lp1.id = base.conversation_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW conversation_participants_live AS SELECT base.* FROM conversation_participants base WHERE state IN ('active') AND (base.conversation_id IS NULL OR EXISTS (SELECT 1 FROM conversations_live lp0 WHERE lp0.id = base.conversation_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW automation_rules_live AS SELECT base.* FROM automation_rules base WHERE deleted_at IS NULL AND status IN ('active', 'paused', 'error') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.conversation_id IS NULL OR EXISTS (SELECT 1 FROM conversations_live lp1 WHERE lp1.id = base.conversation_id)) AND (base.created_by_participant_id IS NULL OR EXISTS (SELECT 1 FROM conversation_participants_live lp2 WHERE lp2.id = base.created_by_participant_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW devices_live AS SELECT base.* FROM devices base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW remote_agent_machines_live AS SELECT base.* FROM remote_agent_machines base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW device_services_live AS SELECT base.* FROM device_services base WHERE status IN ('starting', 'online', 'degraded') AND (base.device_id IS NULL OR EXISTS (SELECT 1 FROM devices_live lp0 WHERE lp0.id = base.device_id)) AND (base.remote_agent_machine_id IS NULL OR EXISTS (SELECT 1 FROM remote_agent_machines_live lp1 WHERE lp1.id = base.remote_agent_machine_id)) WITH CASCADED CHECK OPTION;

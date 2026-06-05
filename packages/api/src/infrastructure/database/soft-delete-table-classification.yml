@@ -221,6 +221,7 @@ tables:
     class: child
     softDelete: none
     workspaceScope: none
+    liveColumn: state
     liveValues:
       - active
   conversation_transport_bindings:

@@ -65,6 +65,14 @@ async function insertActor(db: AnyDb, ws: string): Promise<string> {
     .executeTakeFirstOrThrow()
   return row.id as string
 }
+async function insertConversation(db: AnyDb, ws: string): Promise<string> {
+  const row = await db
+    .insertInto("conversations")
+    .values({ workspace_id: ws, kind: "group", title: "soft-delete conv" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
 async function rejects(db: AnyDb, fn: () => Promise<unknown>, re: RegExp) {
   await sql`SAVEPOINT sd_probe`.execute(db)
   await assert.rejects(fn, re)
@@ -1623,6 +1631,94 @@ test(
             .where("id", "=", binding.id)
             .execute(),
         /references non-live device_capabilities/
+      )
+    })
+  }
+)
+
+test(
+  "F20: manifest-live child tables get canonical live views and parent-liveness guards",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const actorId = await insertActor(db, ws)
+      const conversationId = await insertConversation(db, ws)
+      const actorSubject = await db
+        .insertInto("access_subjects")
+        .values({
+          kind: "actor",
+          workspace_id: ws,
+          actor_id: actorId,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const participant = await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conversationId,
+          subject_id: actorSubject.id,
+          state: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      let participantLive = await db
+        .selectFrom("conversation_participants_live")
+        .select("id")
+        .where("id", "=", participant.id)
+        .execute()
+      assert.equal(
+        participantLive.length,
+        1,
+        "active participant appears in canonical _live view"
+      )
+
+      await db
+        .updateTable("conversation_participants")
+        .set({ state: "left" })
+        .where("id", "=", participant.id)
+        .execute()
+
+      participantLive = await db
+        .selectFrom("conversation_participants_live")
+        .select("id")
+        .where("id", "=", participant.id)
+        .execute()
+      assert.equal(
+        participantLive.length,
+        0,
+        "left participant excluded from canonical _live view"
+      )
+
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("conversation_participant_states")
+            .values({
+              conversation_id: conversationId,
+              participant_id: participant.id as string,
+            })
+            .execute(),
+        /references non-live conversation_participants/
+      )
+
+      await db
+        .updateTable("conversations")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", conversationId)
+        .execute()
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("conversation_participants")
+            .set({ state: "active" })
+            .where("id", "=", participant.id)
+            .execute(),
+        /references non-live conversations/
       )
     })
   }

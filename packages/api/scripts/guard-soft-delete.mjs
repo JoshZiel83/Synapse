@@ -29,9 +29,15 @@ const MANIFEST = resolve(
   "../src/infrastructure/database/soft-delete-table-classification.yml"
 )
 
-const schema = parseSchema(readFileSync(SCHEMA, "utf8"))
+const schemaSql = readFileSync(SCHEMA, "utf8")
+const schema = parseSchema(schemaSql)
 const manifest = yaml.load(readFileSync(MANIFEST, "utf8"))
 const mTables = manifest.tables
+const tableIsEphemeral = (entry) =>
+  entry.class === "ephemeral" || entry.derived === true
+const tableHasDeclaredLiveSemantics = (entry) =>
+  (Array.isArray(entry.liveValues) && entry.liveValues.length) ||
+  Boolean(entry.livePredicate)
 
 // Managed (delete-protected) tables: persistent classes, not ephemeral/derived/baOwned.
 const MANAGED_DELETE = new Set(
@@ -50,17 +56,35 @@ const ROOT_TABLES = new Set(
     .map(([n]) => n)
 )
 
-// Keep in lockstep with cutover-emit-ddl.mjs: these softDelete:none child
-// tables deliberately expose canonical `_live` views derived from parent
-// liveness. If one has its own status column, the manifest must declare the
-// status live semantics explicitly so the generated view cannot leak hidden
-// runtime/business states.
-const DERIVED_LIVE_VIEW_TABLES = new Set([
-  "device_services",
-  "device_exposures",
-  "device_capabilities",
-  "device_tools",
-])
+// Keep in lockstep with cutover-emit-ddl.mjs: these softDelete:none child tables
+// expose canonical `_live` views even without their own liveValues because their
+// liveness is inherited entirely from parent `_live` views.
+const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set(["device_exposures"])
+const tableHasManifestLiveView = (name, entry) =>
+  !tableIsEphemeral(entry) &&
+  (tableHasDeclaredLiveSemantics(entry) ||
+    ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES.has(name))
+const tableHasLiveView = (name, entry) =>
+  entry.softDelete === "deleted_at" ||
+  entry.softDelete === "status" ||
+  tableHasManifestLiveView(name, entry)
+const hasColumn = (name, column) =>
+  schema.tables.get(name)?.columns.some((c) => c.name === column)
+const liveColumnForTable = (name, entry, errors) => {
+  if (!Array.isArray(entry.liveValues) || !entry.liveValues.length) return null
+  if (entry.liveColumn) {
+    if (!hasColumn(name, entry.liveColumn)) {
+      errors.push(`${name}: liveColumn '${entry.liveColumn}' is absent`)
+    }
+    return entry.liveColumn
+  }
+  if (hasColumn(name, "status")) return "status"
+  if (hasColumn(name, "state")) return "state"
+  errors.push(
+    `${name}: liveValues declared but no liveColumn/status/state column exists`
+  )
+  return null
+}
 
 // Principal tables = any table whose manifest declares principalColumns (a
 // column carrying a deleted user's principal: user/member/subject). Every such
@@ -297,27 +321,53 @@ for (const t of PRINCIPAL_ANCHORED_ALLOWLIST) {
     )
 }
 
-// Rule 4 (derived live view status semantics): a derived `_live` table that has
-// a business/runtime status column must declare its live state explicitly in the
-// manifest. Otherwise the generated live view would only fold parent liveness
-// and could treat hidden/removed runtime rows as live parents.
-for (const t of DERIVED_LIVE_VIEW_TABLES) {
+// Rule 4 (canonical live surfaces): every persistent table with manifest live
+// semantics must have a generated `_live` view, and every `_live` table with a
+// business/runtime status column must declare its own live semantics unless it
+// is explicitly parent-folding only. This keeps active/left/removed-style
+// semantics manifest-driven instead of relying on ad hoc business filters.
+for (const [t, entry] of Object.entries(mTables)) {
   const tbl = schema.tables.get(t)
-  const entry = mTables[t]
-  if (!tbl || !entry) {
+  if (!tbl) continue
+  if (!tableHasLiveView(t, entry)) continue
+
+  const hasGeneratedView = new RegExp(`CREATE VIEW ${t}_live\\b`).test(
+    schemaSql
+  )
+  if (!hasGeneratedView) {
+    violations.push(`${t}: expected generated canonical ${t}_live view`)
+  }
+
+  liveColumnForTable(t, entry, violations)
+  const hasBusinessStateColumn =
+    tbl.columns.some((c) => c.name === "status") ||
+    tbl.columns.some((c) => c.name === "state")
+  if (
+    tableHasManifestLiveView(t, entry) &&
+    hasBusinessStateColumn &&
+    !tableHasDeclaredLiveSemantics(entry) &&
+    !ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES.has(t)
+  ) {
     violations.push(
-      `DERIVED_LIVE_VIEW_TABLES entry "${t}" is missing from schema or manifest`
+      `${t}: generated _live table has status/state column but no liveValues/livePredicate in soft-delete manifest`
+    )
+  }
+}
+for (const t of ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES) {
+  if (!schema.tables.has(t) || !mTables[t]) {
+    violations.push(
+      `ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES entry "${t}" is missing from schema or manifest`
     )
     continue
   }
-  const hasStatus = tbl.columns.some((c) => c.name === "status")
-  if (
-    hasStatus &&
-    !(Array.isArray(entry.liveValues) && entry.liveValues.length) &&
-    !entry.livePredicate
-  ) {
+  const tbl = schema.tables.get(t)
+  const entry = mTables[t]
+  const hasBusinessStateColumn =
+    tbl.columns.some((c) => c.name === "status") ||
+    tbl.columns.some((c) => c.name === "state")
+  if (hasBusinessStateColumn && !tableHasDeclaredLiveSemantics(entry)) {
     violations.push(
-      `${t}: derived _live table has status column but no liveValues/livePredicate in soft-delete manifest`
+      `${t}: parent-folding _live table has status/state column but no liveValues/livePredicate in soft-delete manifest`
     )
   }
 }
