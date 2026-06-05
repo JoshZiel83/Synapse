@@ -17,7 +17,6 @@ import type {
   ProviderContextWindow,
   AvailableSkillSummary,
   ModelAttemptPolicy,
-  EngineBranchState,
 } from "@synapse/shared"
 import type {
   CanonicalContextItem,
@@ -44,11 +43,14 @@ import {
   sleep,
   withTimeout as withTimeoutBase,
 } from "../../infrastructure/async/index.js"
-import {
-  createAIProvider,
-  type AIProvider,
-  type AIProviderConfig,
-} from "./providers/index.js"
+import { generateText, stepCountIs } from "ai"
+import { getLanguageModel } from "./providers/get-language-model.js"
+import { toLanguageModelSpec } from "./providers/to-language-model-spec.js"
+import { toModelMessages } from "./providers/to-model-messages.js"
+import { reconcileToolPairing } from "./providers/reconcile-tool-pairing.js"
+import { buildAiTools } from "./providers/build-tools.js"
+import { fromGenerateText } from "./providers/from-generate-text.js"
+import { compileContextWindowToConversationMessages } from "./context-compiler.js"
 import { toolCallsToActions } from "./tools.js"
 import { buildActorPrompt } from "./prompt-builder.js"
 import { logAIRequest } from "../model-groups/service.js"
@@ -71,13 +73,6 @@ import {
 } from "./inline-ref-resolver.js"
 import { buildAdHocContextItems } from "./context-builder.js"
 import { buildAdHocProviderContextWindow } from "../context/service.js"
-import {
-  createEngineBindingKey,
-  getEngineBranchState,
-  initializeEngineBranchState,
-  saveEngineBranchState,
-  shouldRebuildBranchState,
-} from "./engine-branches.js"
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from "../model-groups/defaults.js"
 import { listConversationParticipants as getLiveConversationParticipants } from "../chat/service.js"
 import {
@@ -105,39 +100,21 @@ class TurnInterruptedError extends Error {
   }
 }
 
-// Cache providers by config fingerprint to avoid recreating
-const providerCache = new Map<string, AIProvider>()
-
-function getProvider(resolved: ResolvedModelConfig): AIProvider {
-  // The env model path has been removed: a provider can ONLY be built from a
-  // resolved model candidate (which originates from a configured model group).
-  // The required parameter enforces this at the type level; the runtime guard
-  // below is defense-in-depth against an untyped/`any` caller passing null.
+// Build an AI-SDK LanguageModel for a resolved candidate. Provider objects are
+// memoized inside getLanguageModel by a stable hash of the binding's
+// instance-distinguishing fields (not modelName).
+function languageModelFor(resolved: ResolvedModelConfig) {
+  // The env model path has been removed: a model can ONLY be built from a
+  // resolved candidate (which originates from a configured model group). The
+  // runtime guard is defense-in-depth against an untyped/`any` caller.
   if (!resolved) {
     throw new Error(
-      "Cannot create AI provider: no resolved model configuration. " +
+      "Cannot create AI model: no resolved model configuration. " +
         "Configure a platform model group (run 'npm run db:seed:model-groups' " +
         "or use the UI) so a model can be resolved for this actor."
     )
   }
-
-  const providerConfig: AIProviderConfig = {
-    apiKey: resolved.apiKey,
-    baseUrl: resolved.baseUrl,
-    model: resolved.modelName,
-    maxTokens: resolved.maxTokens,
-    engineKind: resolved.engineKind,
-  }
-
-  const providerName = resolved.providerType
-  const cacheKey = `${providerConfig.engineKind}:${providerConfig.apiKey}:${providerConfig.baseUrl}:${providerConfig.model}`
-
-  let provider = providerCache.get(cacheKey)
-  if (!provider) {
-    provider = createAIProvider(providerName, providerConfig)
-    providerCache.set(cacheKey, provider)
-  }
-  return provider
+  return getLanguageModel(toLanguageModelSpec(resolved))
 }
 
 function classifyModelError(error: unknown): string {
@@ -763,14 +740,16 @@ export async function actorThink(
   const allServerToolCalls: ServerToolCall[] = [] // track cloud-side tool calls
   let allCitationSources: Record<string, { url: string; title: string }> = {} // cite index → source
   const onStatus = options?.onStatus
-  const branchStateCache = new Map<string, EngineBranchState>()
 
   // Accumulate ToolRound[] for DB storage only (not passed to provider)
   const toolRounds: ToolRound[] = []
   // Accumulate media attachments from MCP/model responses
   const allSupplementalBlocks: CanonicalContentBlock[] = []
   let finalDraftText = ""
-  let finalDraftProvider: AIProvider | null = null
+  // True once at least one provider round produced a draft (a "final draft"
+  // response that downstream prefers over finalTextContent). Replaces the old
+  // finalDraftProvider object — we only need the boolean.
+  let usedDraftProvider = false
   let sendToCalledThisTurn = false
   let sleepWithoutSendToReminderCount = 0
 
@@ -890,76 +869,38 @@ export async function actorThink(
           perProfileAttempts.set(candidate.profileId, attempt)
           totalAttempts += 1
 
-          const provider = getProvider(candidate)
           const requestBody = buildRequestLog(round, candidate, attempt)
           const attemptStart = Date.now()
 
           try {
-            const branchKey = options?.sessionId
-              ? `${options.sessionId}:${createEngineBindingKey(candidate)}`
-              : ""
-            let branchState = options?.sessionId
-              ? branchStateCache.get(branchKey) ||
-                (await getEngineBranchState(options.sessionId, candidate)) ||
-                initializeEngineBranchState({
-                  sessionId: options.sessionId,
-                  conversationId: options.conversationId,
-                  resolved: candidate,
-                })
-              : undefined
+            // Compile the provider-neutral canonical window once per candidate
+            // (multimodal/feature degradation is candidate-specific), reconcile
+            // tool-call/result pairing (the SDK rejects orphan tool calls), then
+            // let the AI SDK fan the neutral ModelMessage[] out to this
+            // candidate's wire format. No branch-state: every turn rebuilds from
+            // canonical (validated cross-provider in the migration spikes).
+            const conversationMessages =
+              await compileContextWindowToConversationMessages(allContextWindow)
+            const reconciled = reconcileToolPairing(conversationMessages)
+            const modelMessages = await toModelMessages(reconciled, {
+              multimodal: candidate.multimodal,
+            })
 
-            if (branchState && branchKey) {
-              branchStateCache.set(branchKey, branchState)
-            }
-
-            if (
-              branchState &&
-              branchKey &&
-              shouldRebuildBranchState(
-                allContextWindow,
-                branchState,
-                currentSystem
-              )
-            ) {
-              const rebuiltBranchState = await provider.rebuildBranchState({
+            const result = await withTimeout(
+              generateText({
+                model: languageModelFor(candidate),
                 system: currentSystem,
-                contextWindow: allContextWindow,
-                branchState,
-                tools: allTools,
-                builtinTools: candidate.builtinTools,
-                multimodal: candidate.multimodal,
-              })
-
-              const persistedRebuiltBranch = await saveEngineBranchState(
-                rebuiltBranchState,
-                {
-                  checkpointKind: "compaction",
-                }
-              )
-              branchState = persistedRebuiltBranch || rebuiltBranchState
-              branchStateCache.set(branchKey, branchState)
-            }
-
-            const response = await withTimeout(
-              provider.chat({
-                system: currentSystem,
-                contextWindow: allContextWindow,
-                branchState,
-                tools: allTools,
-                builtinTools: candidate.builtinTools,
-                multimodal: candidate.multimodal,
+                messages: modelMessages,
+                tools: buildAiTools(allTools),
+                toolChoice: allTools.length > 0 ? "auto" : undefined,
+                maxOutputTokens: candidate.maxTokens,
+                // single step: Synapse runs its own agent loop + tool executor
+                stopWhen: stepCountIs(1),
               }),
               candidatePolicy.timeoutMsPerAttempt
             )
 
-            if (response.branchState) {
-              const persistedBranchState = await saveEngineBranchState(
-                response.branchState
-              )
-              if (persistedBranchState && branchKey) {
-                branchStateCache.set(branchKey, persistedBranchState)
-              }
-            }
+            const response = fromGenerateText(result)
 
             const assistantMsg = response.context[0]
             const textContent =
@@ -988,6 +929,7 @@ export async function actorThink(
                 })),
                 textContent,
                 rawAssistantMessage: response.rawAssistantMessage,
+                rawRequestBody: response.rawRequestBody,
               },
               stopReason: response.stopReason,
               inputTokens: response.tokensUsed.input,
@@ -1000,7 +942,7 @@ export async function actorThink(
               return null
             })
 
-            return { response, provider, resolved: candidate, providerStep }
+            return { response, resolved: candidate, providerStep }
           } catch (err: any) {
             const error = err instanceof Error ? err : new Error(String(err))
             lastError = error
@@ -1063,7 +1005,6 @@ export async function actorThink(
 
       const {
         response,
-        provider,
         resolved: selectedResolved,
         providerStep,
       } = await executeProviderRound(currentRound)
@@ -1130,7 +1071,7 @@ export async function actorThink(
       let finalTextContent = textContent
       if (finalTextContent.trim().length > 0 || roundMediaBlocks.length > 0) {
         finalDraftText = finalTextContent
-        finalDraftProvider = provider
+        usedDraftProvider = true
       }
 
       // Dispatch: three-bucket separation
@@ -1714,7 +1655,7 @@ export async function actorThink(
 
           const toolHistory: AssistantToolHistory | undefined =
             toolRounds.length > 0 ? { rounds: toolRounds } : undefined
-          const responseText = finalDraftProvider
+          const responseText = usedDraftProvider
             ? finalDraftText
             : finalTextContent
           const contentBlocks = await buildMergedResponseContentBlocks(
@@ -1790,7 +1731,7 @@ export async function actorThink(
           const actions: ActorAction[] = []
           const toolHistory: AssistantToolHistory | undefined =
             toolRounds.length > 0 ? { rounds: toolRounds } : undefined
-          const responseText = finalDraftProvider
+          const responseText = usedDraftProvider
             ? finalDraftText
             : finalTextContent
           const contentBlocks = await buildMergedResponseContentBlocks(
@@ -1981,7 +1922,7 @@ export async function actorThink(
       `[actorThink] actor=${actor.id} exceeded max tool rounds (${MAX_TOOL_ROUNDS})`
     )
 
-    if (finalDraftProvider || allSupplementalBlocks.length > 0) {
+    if (usedDraftProvider || allSupplementalBlocks.length > 0) {
       const contentBlocks = await buildMergedResponseContentBlocks(
         finalDraftText,
         allSupplementalBlocks,
@@ -2036,7 +1977,6 @@ export async function aiComplete(
   resolved: ResolvedModelConfig,
   logContext?: { workspaceId?: string; actorId?: string }
 ): Promise<{ content: string; tokensUsed: { input: number; output: number } }> {
-  const provider = getProvider(resolved)
   const contextItems = buildAdHocContextItems(
     messages.map((message) => ({
       role: message.role as "user" | "assistant",
@@ -2048,7 +1988,7 @@ export async function aiComplete(
   const startTime = Date.now()
   let status = "success"
   let errorMessage: string | undefined
-  let response
+  let response: ReturnType<typeof fromGenerateText>
 
   const requestLog = {
     provider: resolved.providerType,
@@ -2058,7 +1998,20 @@ export async function aiComplete(
   }
 
   try {
-    response = await provider.chat({ system, contextWindow })
+    const conversationMessages =
+      await compileContextWindowToConversationMessages(contextWindow)
+    const modelMessages = await toModelMessages(
+      reconcileToolPairing(conversationMessages),
+      { multimodal: resolved.multimodal }
+    )
+    const result = await generateText({
+      model: languageModelFor(resolved),
+      system,
+      messages: modelMessages,
+      maxOutputTokens: resolved.maxTokens,
+      stopWhen: stepCountIs(1),
+    })
+    response = fromGenerateText(result)
   } catch (err: any) {
     status = "error"
     errorMessage = err.message
