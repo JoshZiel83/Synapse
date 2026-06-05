@@ -246,6 +246,27 @@ let bootstrapWorkspaceId: string | null = null
 let syncPromise: Promise<void> | null = null
 let outboxRetryTimer: ReturnType<typeof setTimeout> | null = null
 
+// In-memory (NOT persisted) per-workspace high-water mark of durable sync
+// frames applied live. Initialized to the persisted inboxCursor on load and
+// refreshed after every sync/bootstrap. Used only for live ordering/gap
+// detection; the persisted inboxCursor remains the authoritative resume cursor.
+const liveCursorByWorkspace = new Map<string, number>()
+// Set when a live frame arrives with a gap (memberSeq > base+1) while a sync is
+// already in flight — the in-flight sync resumes from a cursor below the gap, so
+// it must run one more time after finishing to backfill. See syncFromServer.
+let needsResync = false
+
+function getLiveCursor(workspaceId: string, persistedCursor: number): number {
+  return Math.max(liveCursorByWorkspace.get(workspaceId) ?? 0, persistedCursor)
+}
+
+function setLiveCursor(workspaceId: string, value: number): void {
+  liveCursorByWorkspace.set(
+    workspaceId,
+    Math.max(liveCursorByWorkspace.get(workspaceId) ?? 0, value)
+  )
+}
+
 function createEmptyWorkspaceSnapshot(
   workspaceId: string
 ): ChatWorkspaceSnapshot {
@@ -265,6 +286,7 @@ function toStoredChatQueueState(
     | "lastBootstrappedAt"
     | "pendingReads"
     | "outbox"
+    | "tombstones"
   > | null
 ): StoredChatQueueState | null {
   if (!snapshot) {
@@ -272,7 +294,7 @@ function toStoredChatQueueState(
   }
 
   return {
-    version: 3,
+    version: 4,
     workspaceId: snapshot.workspaceId,
     workspaceMemberId: snapshot.workspaceMemberId,
     clientInstanceId: snapshot.clientInstanceId,
@@ -280,6 +302,7 @@ function toStoredChatQueueState(
     lastBootstrappedAt: snapshot.lastBootstrappedAt,
     pendingReads: snapshot.pendingReads,
     outbox: snapshot.outbox,
+    tombstones: snapshot.tombstones,
   }
 }
 
@@ -307,6 +330,7 @@ function mergeStoredQueueIntoSnapshot(
     ),
     pendingReads: queueState.pendingReads,
     outbox: queueState.outbox,
+    tombstones: queueState.tombstones,
     conversations: baseSnapshot.conversations,
   }
 }
@@ -430,6 +454,89 @@ function upsertRawConversation(
   )
   next.push(incoming)
   return sortRawConversations(next)
+}
+
+/**
+ * Remove a conversation from a snapshot and record a tombstone at `removedSeq`.
+ * Pure data helper shared by the membership.updated reducer and the bootstrap
+ * authoritative prune. Also purges the conversation's pendingReads + outbox so
+ * the flusher won't keep POSTing to a conversation the member was removed from
+ * (those would 403/404 forever). selected/visible/loadedMessageItems are NOT in
+ * the snapshot — createStateFromSnapshot clears them automatically once the
+ * conversation leaves snapshot.conversations.
+ *
+ * `removedSeq` is the member_seq boundary: a later but lower-seq stale upsert
+ * (memberSeq <= removedSeq) is refused by upsertConversationWithTombstoneGuard,
+ * so the conversation cannot resurrect until a fresh re-add clears the tombstone.
+ */
+function pruneConversationFromSnapshot(
+  snapshot: ChatWorkspaceSnapshot,
+  conversationId: string,
+  removedSeq: number
+): ChatWorkspaceSnapshot {
+  const nextPendingReads = { ...snapshot.pendingReads }
+  delete nextPendingReads[conversationId]
+  const nextOutbox = Object.fromEntries(
+    Object.entries(snapshot.outbox).filter(
+      ([, entry]) => entry.conversationId !== conversationId
+    )
+  )
+  const existing = snapshot.tombstones[conversationId]
+  const nextTombstones = {
+    ...snapshot.tombstones,
+    [conversationId]: {
+      conversationId,
+      removedSeq: Math.max(removedSeq, existing?.removedSeq ?? 0),
+    },
+  }
+  return {
+    ...snapshot,
+    conversations: snapshot.conversations.filter(
+      (conversation) => conversation.conversationId !== conversationId
+    ),
+    pendingReads: nextPendingReads,
+    outbox: nextOutbox,
+    tombstones: nextTombstones,
+  }
+}
+
+/** Clear a conversation's tombstone (legitimate re-add / bootstrap liveness). */
+function clearConversationTombstone(
+  snapshot: ChatWorkspaceSnapshot,
+  conversationId: string
+): ChatWorkspaceSnapshot {
+  if (!snapshot.tombstones[conversationId]) {
+    return snapshot
+  }
+  const nextTombstones = { ...snapshot.tombstones }
+  delete nextTombstones[conversationId]
+  return { ...snapshot, tombstones: nextTombstones }
+}
+
+/**
+ * Upsert a conversation, but REFUSE if a live frame is stale relative to a
+ * tombstone (event.memberSeq <= tombstone.removedSeq). This is what stops an
+ * old, higher-than-the-removal-but-still-in-flight conversation.upsert from
+ * resurrecting a removed conversation. Frames with no seq context (memberSeq
+ * undefined) are allowed through (bootstrap path passes its own liveness).
+ */
+function upsertConversationWithTombstoneGuard(
+  snapshot: ChatWorkspaceSnapshot,
+  incoming: ChatConversationView,
+  memberSeq?: number
+): ChatWorkspaceSnapshot {
+  const tombstone = snapshot.tombstones[incoming.conversationId]
+  if (
+    tombstone &&
+    typeof memberSeq === "number" &&
+    memberSeq <= tombstone.removedSeq
+  ) {
+    return snapshot
+  }
+  return {
+    ...snapshot,
+    conversations: upsertRawConversation(snapshot.conversations, incoming),
+  }
 }
 
 function mergeRawItems(
@@ -1209,21 +1316,42 @@ function applySyncEventToSnapshot(
   event: ChatSyncEvent,
   visibleConversationId?: string | null
 ) {
-  let nextSnapshot: ChatWorkspaceSnapshot = {
-    ...snapshot,
-    inboxCursor: Math.max(snapshot.inboxCursor, event.syncSeq),
-  }
+  // NOTE: the persisted inboxCursor is NOT advanced here. It is the authoritative
+  // resume cursor and is advanced ONLY by the contiguous sync drain and by
+  // bootstrap (see syncFromServer / bootstrapWorkspaceSnapshot). Live frames
+  // advance the in-memory liveCursor separately, in handleSyncEvent, after the
+  // ordering check — so a best-effort/out-of-order live frame can never push the
+  // durable resume point past an event that was never applied.
+  let nextSnapshot: ChatWorkspaceSnapshot = snapshot
 
   switch (event.eventType) {
     case "conversation.upsert": {
       const payload =
         event.payload as ChatSyncEvent<"conversation.upsert">["payload"]
-      nextSnapshot = {
-        ...nextSnapshot,
-        conversations: upsertRawConversation(
-          nextSnapshot.conversations,
-          payload.conversation
-        ),
+      nextSnapshot = upsertConversationWithTombstoneGuard(
+        nextSnapshot,
+        payload.conversation,
+        event.memberSeq
+      )
+      break
+    }
+    case "conversation.membership.updated": {
+      const payload =
+        event.payload as ChatSyncEvent<"conversation.membership.updated">["payload"]
+      if (payload.selfState === "active") {
+        // Re-added: clear the tombstone so the accompanying/next
+        // conversation.upsert can re-introduce the conversation.
+        nextSnapshot = clearConversationTombstone(
+          nextSnapshot,
+          payload.conversationId
+        )
+      } else {
+        // Removed / left: drop the conversation and tombstone it at this seq.
+        nextSnapshot = pruneConversationFromSnapshot(
+          nextSnapshot,
+          payload.conversationId,
+          event.memberSeq
+        )
       }
       break
     }
@@ -1240,6 +1368,17 @@ function applySyncEventToSnapshot(
       }
 
       if (!currentConversation) {
+        break
+      }
+
+      // Idempotency guard: replay (every reconnect re-drains confirmed..head)
+      // must not double-count unread or regress lastItem. If this item's
+      // sequence is not newer than what the conversation already reflects, skip
+      // the unread bump and the lastItem/updatedAt overwrite.
+      const isNewerItem =
+        !currentConversation.lastItem ||
+        payload.item.sequence > currentConversation.lastItem.sequence
+      if (!isNewerItem) {
         break
       }
 
@@ -1340,16 +1479,47 @@ async function bootstrapWorkspaceSnapshot(
     clientInstanceId = response.clientInstanceId
   }
 
+  // Authoritative prune: the bootstrap conversation set is the member's current
+  // live set. Any locally-known conversation NOT in it (e.g. removed while this
+  // device was offline, so it never saw membership.updated) is pruned and
+  // tombstoned at the bootstrap cursor — guarding against a stale lower-seq
+  // upsert resurrecting it. Conversely, conversations the server returns as live
+  // get their tombstone cleared (legitimate re-add).
+  const liveIds = new Set(
+    bootstrap.conversations.map((conversation) => conversation.conversationId)
+  )
+  let prunedBase: ChatWorkspaceSnapshot = baseSnapshot
+  for (const conversation of baseSnapshot.conversations) {
+    if (!liveIds.has(conversation.conversationId)) {
+      prunedBase = pruneConversationFromSnapshot(
+        prunedBase,
+        conversation.conversationId,
+        bootstrap.nextInboxCursor
+      )
+    }
+  }
+  for (const conversationId of liveIds) {
+    prunedBase = clearConversationTombstone(prunedBase, conversationId)
+  }
+
+  // Bootstrap advances the authoritative resume cursor; refresh the live cursor
+  // to match so the next live frame isn't misjudged as a gap.
+  const nextInboxCursor = Math.max(
+    prunedBase.inboxCursor,
+    bootstrap.nextInboxCursor
+  )
+  setLiveCursor(workspaceId, nextInboxCursor)
+
   return {
-    ...baseSnapshot,
+    ...prunedBase,
     workspaceId,
     workspaceMemberId: bootstrap.workspaceMemberId,
     clientInstanceId,
-    inboxCursor: Math.max(baseSnapshot.inboxCursor, bootstrap.nextInboxCursor),
+    inboxCursor: nextInboxCursor,
     lastBootstrappedAt: new Date().toISOString(),
     conversations: bootstrap.conversations.reduce(
       upsertRawConversation,
-      baseSnapshot.conversations
+      prunedBase.conversations
     ),
   }
 }
@@ -1912,6 +2082,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return syncPromise
     }
 
+    needsResync = false
     set({ syncing: true })
     syncPromise = (async () => {
       let workingSnapshot = get().snapshot
@@ -1923,6 +2094,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       let workingLoadedItems = get().loadedMessageItems
+      const runtimeUpdates: Record<string, RemoteAgentRuntimeState> = {}
+      // The persisted resume cursor is the authoritative start. The reducer no
+      // longer advances it, so advance it explicitly per page from
+      // response.nextCursor (contiguous, gap-free member_seq).
       let cursor = workingSnapshot.inboxCursor
       let hasMore = true
 
@@ -1965,12 +2140,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
               workingLoadedItems,
               payload
             )
+            continue
+          }
+
+          if (event.eventType === "remote_agent.runtime_updated") {
+            // Top-level runtime state lives outside the snapshot — collect it
+            // here so the HTTP resync path keeps remote-agent runtime in sync
+            // (previously only the live handler did this, so an HTTP-only
+            // catch-up dropped it).
+            const payload =
+              event.payload as ChatSyncEvent<"remote_agent.runtime_updated">["payload"]
+            runtimeUpdates[payload.remoteAgentId] = payload.snapshot
           }
         }
 
         cursor = response.nextCursor
         hasMore = response.hasMore
       }
+
+      // Advance the persisted resume cursor to the drained position.
+      workingSnapshot = { ...workingSnapshot, inboxCursor: cursor }
+      // Refresh the in-memory live cursor so the next live frame isn't
+      // misjudged as a gap (persisted cursor moved; liveCursor must follow).
+      setLiveCursor(effectiveWorkspaceId, cursor)
 
       workingSnapshot = await flushPendingReadsInternal(workingSnapshot)
 
@@ -1982,12 +2174,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
       workingSnapshot = outboxResult.snapshot
       workingLoadedItems = outboxResult.loadedMessageItems
 
-      set((state) => ({
-        ...createStateFromSnapshot(state, workingSnapshot, {
-          loadedMessageItems: workingLoadedItems,
-        }),
-      }))
-      void queuePersistSnapshot(currentSnapshot, workingSnapshot)
+      // Rebase write-back: while we were draining, live frames may have mutated
+      // get().snapshot (e.g. a kick prune). Merge our drained queue state
+      // (cursor/outbox/pendingReads/tombstones) onto the LATEST snapshot rather
+      // than blindly overwriting it with the stale working copy. The conversation
+      // list from the drain is authoritative for what we synced, but tombstones
+      // recorded live must be preserved.
+      const finalWorkingSnapshot = workingSnapshot
+      const finalLoadedItems = workingLoadedItems
+      set((state) => {
+        const latest = state.snapshot
+        // If the workspace changed under us, drop our result.
+        if (!latest || latest.workspaceId !== effectiveWorkspaceId) {
+          return state
+        }
+        // Re-apply any tombstones that appeared live during the drain so a
+        // concurrently-kicked conversation stays pruned.
+        let merged = finalWorkingSnapshot
+        for (const [cid, tomb] of Object.entries(latest.tombstones)) {
+          if (!merged.tombstones[cid]) {
+            merged = pruneConversationFromSnapshot(merged, cid, tomb.removedSeq)
+          }
+        }
+        return {
+          ...createStateFromSnapshot(state, merged, {
+            loadedMessageItems: finalLoadedItems,
+          }),
+          remoteAgentRuntimeMap: {
+            ...state.remoteAgentRuntimeMap,
+            ...runtimeUpdates,
+          },
+        }
+      })
+      void queuePersistSnapshot(currentSnapshot, get().snapshot)
 
       if (outboxResult.retryAttemptCount !== null) {
         scheduleOutboxRetry(outboxResult.retryAttemptCount)
@@ -1999,6 +2218,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       .finally(() => {
         syncPromise = null
         set({ syncing: false })
+        // A live gap arrived mid-sync; the drain resumed below it, so run once
+        // more to backfill the gap + the frame that triggered it.
+        if (needsResync) {
+          needsResync = false
+          void get().syncFromServer(effectiveWorkspaceId)
+        }
       })
 
     return syncPromise
@@ -2119,6 +2344,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleSyncEvent: (event) => {
+    const stateBefore = get()
+    const snapshotBefore = stateBefore.snapshot
+    if (!snapshotBefore || snapshotBefore.workspaceId !== event.workspaceId) {
+      return
+    }
+
+    // Live ordering discipline (durable chat.sync.event frames only). base is
+    // the unified high-water mark across the persisted resume cursor and the
+    // in-memory live cursor.
+    const workspaceId = event.workspaceId
+    const base = getLiveCursor(workspaceId, snapshotBefore.inboxCursor)
+
+    if (event.memberSeq <= base) {
+      // Stale: already applied (or superseded by a sync/bootstrap). Drop it —
+      // applying would risk resurrecting a tombstoned conversation or
+      // double-effecting a non-idempotent reducer.
+      return
+    }
+
+    if (event.memberSeq > base + 1) {
+      // Gap: a lower-seq frame was never applied (best-effort delivery /
+      // out-of-order). Do NOT apply this frame (blind apply could clobber/
+      // resurrect). Trigger a contiguous resync from the persisted cursor,
+      // which will backfill the gap AND this frame in order. If a sync is
+      // already running, mark needsResync so it runs once more after.
+      if (syncPromise) {
+        needsResync = true
+      } else {
+        void get().syncFromServer(workspaceId)
+      }
+      return
+    }
+
+    // In order (memberSeq === base + 1): apply and advance the live cursor.
+    setLiveCursor(workspaceId, event.memberSeq)
+
     set((state) => {
       if (!state.snapshot || state.snapshot.workspaceId !== event.workspaceId) {
         return state

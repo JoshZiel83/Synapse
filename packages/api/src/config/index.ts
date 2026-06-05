@@ -73,6 +73,7 @@ const envSchema = z
     REALTIME_OUTBOX_POLL_MS: withDefault(positiveInt, "500"),
     REALTIME_OUTBOX_RETENTION_HOURS: withDefault(nonNegativeInt, "24"),
     REALTIME_OUTBOX_GC_INTERVAL_MS: withDefault(positiveInt, "60000"),
+    REALTIME_OUTBOX_PROCESSING_TIMEOUT_MS: withDefault(positiveInt, "30000"),
 
     ASR_PROVIDER: withDefault(z.string().min(1), "volcengine"),
     VOLCENGINE_ASR_APP_ID: withDefault(z.string(), ""),
@@ -280,6 +281,12 @@ export const config = {
     // fine — GC just trims stale rows; missing a window doesn't lose
     // events.
     outboxGcIntervalMs: env.REALTIME_OUTBOX_GC_INTERVAL_MS,
+    // How long a row may sit in 'processing' before the dispatcher loop
+    // treats it as abandoned (crashed mid-dispatch) and resets it to
+    // 'failed' for re-claim. Must exceed worst-case publish latency.
+    // Runs on the same cadence as GC. See
+    // recoverStuckProcessingRealtimeOutboxEntries.
+    outboxProcessingTimeoutMs: env.REALTIME_OUTBOX_PROCESSING_TIMEOUT_MS,
   },
   asr: {
     provider: env.ASR_PROVIDER,

@@ -307,11 +307,12 @@
   var CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-chat-periodic-sync";
   function createEmptyStoredChatQueueState(workspaceId) {
     return {
-      version: 3,
+      version: 4,
       workspaceId,
       inboxCursor: 0,
       pendingReads: {},
-      outbox: {}
+      outbox: {},
+      tombstones: {}
     };
   }
   function isUuidLike(value) {
@@ -324,20 +325,28 @@
       return createEmptyStoredChatQueueState(workspaceId);
     }
     const snapshot = value;
-    if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
+    if (snapshot.workspaceId !== workspaceId) {
+      return createEmptyStoredChatQueueState(workspaceId);
+    }
+    const version = snapshot.version ?? 0;
+    const isV3 = version === 3;
+    const isV4 = version === 4;
+    if (!isV3 && !isV4) {
       return createEmptyStoredChatQueueState(workspaceId);
     }
     const pendingReads = snapshot.pendingReads && typeof snapshot.pendingReads === "object" ? Object.fromEntries(Object.entries(snapshot.pendingReads).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string"))) : {};
     const outbox = snapshot.outbox && typeof snapshot.outbox === "object" ? Object.fromEntries(Object.entries(snapshot.outbox).filter(([, entry]) => Boolean(entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string"))) : {};
+    const tombstones = isV4 && snapshot.tombstones && typeof snapshot.tombstones === "object" ? Object.fromEntries(Object.entries(snapshot.tombstones).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.removedSeq === "number"))) : {};
     return {
-      version: 3,
+      version: 4,
       workspaceId,
       workspaceMemberId: typeof snapshot.workspaceMemberId === "string" ? snapshot.workspaceMemberId : void 0,
       clientInstanceId: isUuidLike(snapshot.clientInstanceId) ? snapshot.clientInstanceId : void 0,
-      inboxCursor: typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
+      inboxCursor: isV4 && typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
       lastBootstrappedAt: typeof snapshot.lastBootstrappedAt === "string" ? snapshot.lastBootstrappedAt : void 0,
       pendingReads,
-      outbox
+      outbox,
+      tombstones
     };
   }
   function sameStoredChatQueueState(left, right) {
@@ -384,6 +393,19 @@
         nextPendingReads[conversationId] = entry;
       }
     }
+    const previousTombstones = previousState?.tombstones ?? {};
+    const nextTombstones = { ...nextWorkspaceState.tombstones ?? {} };
+    for (const conversationId of Object.keys(previousTombstones)) {
+      if (!(conversationId in nextState.tombstones)) {
+        delete nextTombstones[conversationId];
+      }
+    }
+    for (const [conversationId, entry] of Object.entries(nextState.tombstones)) {
+      const current = nextTombstones[conversationId];
+      if (!current || entry.removedSeq >= current.removedSeq) {
+        nextTombstones[conversationId] = entry;
+      }
+    }
     return {
       ...nextWorkspaceState,
       workspaceId: nextState.workspaceId,
@@ -392,7 +414,8 @@
       inboxCursor: Math.max(nextWorkspaceState.inboxCursor, nextState.inboxCursor),
       lastBootstrappedAt: latestIsoTimestamp(nextWorkspaceState.lastBootstrappedAt, nextState.lastBootstrappedAt),
       pendingReads: nextPendingReads,
-      outbox: nextOutbox
+      outbox: nextOutbox,
+      tombstones: nextTombstones
     };
   }
   async function flushOutboxQueue(state, deps) {

@@ -4378,12 +4378,35 @@ export interface ChatSyncEventPayloadMap {
     remoteAgentId: UUID
     snapshot: RemoteAgentRuntimeState
   }
+  /**
+   * A workspace member's participation in a conversation changed. Sent to the
+   * affected member (incl. the member who was removed/left, so all their
+   * devices drop the conversation) and is the authoritative "you were
+   * removed / re-added" signal. `selfState` is the recipient's own state in
+   * that conversation after the change.
+   */
+  "conversation.membership.updated": {
+    conversationId: UUID
+    selfState: "active" | "removed" | "left"
+    reason?: "kicked" | "left" | "added"
+    participants: ChatParticipantSummary[]
+  }
 }
 
 export type ChatSyncEventType = keyof ChatSyncEventPayloadMap
 
 export type ChatSyncEvent<T extends ChatSyncEventType = ChatSyncEventType> = {
+  /**
+   * Global INSERT-time identity (PK). NOT a reliable client cursor — not
+   * commit-ordered, not per-member contiguous. Retained for debugging/joins.
+   */
   syncSeq: number
+  /**
+   * Per-member, commit-ordered, gap-free cursor. THIS is the client sync
+   * cursor: getChatSync pages by `member_seq > cursor`, and clients apply
+   * live frames strictly in `member_seq` order (==base+1 apply / >base+1 gap).
+   */
+  memberSeq: number
   workspaceId: UUID
   workspaceMemberId: UUID
   conversationId?: UUID

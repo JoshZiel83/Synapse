@@ -2009,6 +2009,14 @@ CREATE INDEX idx_remote_agent_message_deliveries_due
 
 CREATE TABLE workspace_member_sync_events (
   sync_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  -- Per-member, COMMIT-ordered, gap-free sequence. Unlike sync_seq (a global
+  -- INSERT-time IDENTITY that is neither commit-ordered nor per-member
+  -- contiguous), member_seq is assigned under an advisory lock inside the
+  -- producing transaction (see appendWorkspaceMemberSyncEventInTransaction):
+  -- the lock serializes that member's writes so commit order == member_seq
+  -- order with no holes. This is the authoritative client sync cursor; getChatSync
+  -- pages by `member_seq > cursor`.
+  member_seq BIGINT NOT NULL,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
   workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE RESTRICT,
   conversation_id UUID REFERENCES conversations(id) ON DELETE RESTRICT,
@@ -2016,11 +2024,15 @@ CREATE TABLE workspace_member_sync_events (
   event_type VARCHAR(80) NOT NULL,
   payload JSONB NOT NULL DEFAULT '{}',
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (workspace_member_id, member_seq)
 );
 
 CREATE INDEX idx_workspace_member_sync_events_cursor
   ON workspace_member_sync_events(workspace_member_id, sync_seq);
+-- Authoritative cursor index: getChatSync pages by (workspace_member_id, member_seq).
+CREATE INDEX idx_workspace_member_sync_events_member_seq
+  ON workspace_member_sync_events(workspace_member_id, member_seq);
 CREATE INDEX idx_workspace_member_sync_events_conversation
   ON workspace_member_sync_events(workspace_member_id, conversation_id, sync_seq DESC);
 
