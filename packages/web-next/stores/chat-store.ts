@@ -539,6 +539,43 @@ function upsertConversationWithTombstoneGuard(
   }
 }
 
+/**
+ * Reconcile the result of an async queue operation (flushPendingReads /
+ * flushOutbox) back onto the LATEST live snapshot.
+ *
+ * The flush started from a possibly-older base and may have produced a
+ * `processed` snapshot whose conversation list / tombstones predate live frames
+ * that landed during the network round-trip (e.g. a kick prune). We therefore
+ * keep the LATEST snapshot's authoritative list state (conversations,
+ * tombstones, inboxCursor) and adopt ONLY the queue fields the flush owns
+ * (pendingReads, outbox) — minus any entry for a conversation the latest
+ * snapshot has tombstoned (so a flush can't reinsert a removed conversation's
+ * outbox/read). This is the web mirror of the latest-snapshot checks mobile's
+ * flush already performs.
+ */
+function rebaseQueueFieldsOntoLatest(
+  latest: ChatWorkspaceSnapshot,
+  processed: ChatWorkspaceSnapshot
+): ChatWorkspaceSnapshot {
+  const tombstoned = latest.tombstones
+  const pendingReads = Object.fromEntries(
+    Object.entries(processed.pendingReads).filter(([cid]) => !tombstoned[cid])
+  )
+  const outbox = Object.fromEntries(
+    Object.entries(processed.outbox).filter(
+      ([, entry]) => !tombstoned[entry.conversationId]
+    )
+  )
+  return {
+    ...latest,
+    pendingReads,
+    outbox,
+    // inboxCursor stays monotonic: the flush never advances it, but a live
+    // frame might have, so take the max.
+    inboxCursor: Math.max(latest.inboxCursor, processed.inboxCursor),
+  }
+}
+
 function mergeRawItems(
   existing: ChatConversationItem[],
   incoming: ChatConversationItem[]
@@ -2054,15 +2091,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       get().loadedMessageItems
     )
 
-    set((state) => ({
-      ...createStateFromSnapshot(state, result.snapshot, {
+    // Rebase onto the LATEST snapshot: a kick (membership.updated) may have
+    // pruned/tombstoned a conversation while the POST was in flight. Writing
+    // result.snapshot directly would reinsert the removed conversation's
+    // outbox/read state.
+    set((state) => {
+      if (!state.snapshot) {
+        return state
+      }
+      const merged = rebaseQueueFieldsOntoLatest(
+        state.snapshot,
+        result.snapshot
+      )
+      void queuePersistSnapshot(state.snapshot, merged)
+      return createStateFromSnapshot(state, merged, {
         loadedMessageItems:
           get().selectedConversationId === state.selectedConversationId
             ? result.loadedMessageItems
             : state.loadedMessageItems,
-      }),
-    }))
-    void queuePersistSnapshot(snapshot, result.snapshot)
+      })
+    })
 
     if (result.retryAttemptCount !== null) {
       scheduleOutboxRetry(result.retryAttemptCount)
@@ -2085,20 +2133,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     needsResync = false
     set({ syncing: true })
     syncPromise = (async () => {
-      let workingSnapshot = get().snapshot
+      const startSnapshot = get().snapshot
       if (
-        !workingSnapshot ||
-        workingSnapshot.workspaceId !== effectiveWorkspaceId
+        !startSnapshot ||
+        startSnapshot.workspaceId !== effectiveWorkspaceId
       ) {
         return
       }
 
-      let workingLoadedItems = get().loadedMessageItems
+      // Apply drained events DIRECTLY onto the live store, page by page (mobile
+      // pattern). We never build an isolated working snapshot and overwrite at
+      // the end — that would clobber any live frame applied during the drain.
+      // Each page's set() reads the LATEST state.snapshot, so live messages /
+      // reads / kicks that landed concurrently are preserved. The reducer is
+      // idempotent (item dedupe by id, read watermark Math.max, upsert
+      // tombstone-guarded, unread sequence-guarded), so re-applying a frame the
+      // live path already applied is a no-op.
       const runtimeUpdates: Record<string, RemoteAgentRuntimeState> = {}
-      // The persisted resume cursor is the authoritative start. The reducer no
-      // longer advances it, so advance it explicitly per page from
-      // response.nextCursor (contiguous, gap-free member_seq).
-      let cursor = workingSnapshot.inboxCursor
+      let cursor = startSnapshot.inboxCursor
       let hasMore = true
 
       while (hasMore) {
@@ -2111,102 +2163,110 @@ export const useChatStore = create<ChatState>((set, get) => ({
           limit: 200,
         })
 
-        for (const event of response.events) {
-          workingSnapshot = applySyncEventToSnapshot(
-            workingSnapshot,
-            event,
-            get().visibleConversationId
-          )
-
-          if (event.eventType === "conversation.item.created") {
-            const payload =
-              event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
-            if (payload.conversationId !== get().selectedConversationId) {
-              continue
-            }
-            workingLoadedItems = mergeRawItems(workingLoadedItems, [
-              payload.item,
-            ])
-            continue
+        const pageCursor = response.nextCursor
+        set((state) => {
+          const live = state.snapshot
+          if (!live || live.workspaceId !== effectiveWorkspaceId) {
+            return state
           }
-
-          if (event.eventType === "interaction.updated") {
-            const payload =
-              event.payload as ChatSyncEvent<"interaction.updated">["payload"]
-            if (payload.conversationId !== get().selectedConversationId) {
-              continue
-            }
-            workingLoadedItems = patchInteractionInRawItems(
-              workingLoadedItems,
-              payload
+          let nextSnapshot = live
+          let nextLoadedItems = state.loadedMessageItems
+          for (const event of response.events) {
+            nextSnapshot = applySyncEventToSnapshot(
+              nextSnapshot,
+              event,
+              state.visibleConversationId
             )
-            continue
+            if (
+              event.eventType === "conversation.item.created" &&
+              (
+                event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+              ).conversationId === state.selectedConversationId
+            ) {
+              nextLoadedItems = mergeRawItems(nextLoadedItems, [
+                (
+                  event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+                ).item,
+              ])
+            } else if (
+              event.eventType === "interaction.updated" &&
+              (event.payload as ChatSyncEvent<"interaction.updated">["payload"])
+                .conversationId === state.selectedConversationId
+            ) {
+              nextLoadedItems = patchInteractionInRawItems(
+                nextLoadedItems,
+                event.payload as ChatSyncEvent<"interaction.updated">["payload"]
+              )
+            } else if (event.eventType === "remote_agent.runtime_updated") {
+              const payload =
+                event.payload as ChatSyncEvent<"remote_agent.runtime_updated">["payload"]
+              runtimeUpdates[payload.remoteAgentId] = payload.snapshot
+            }
           }
-
-          if (event.eventType === "remote_agent.runtime_updated") {
-            // Top-level runtime state lives outside the snapshot — collect it
-            // here so the HTTP resync path keeps remote-agent runtime in sync
-            // (previously only the live handler did this, so an HTTP-only
-            // catch-up dropped it).
-            const payload =
-              event.payload as ChatSyncEvent<"remote_agent.runtime_updated">["payload"]
-            runtimeUpdates[payload.remoteAgentId] = payload.snapshot
+          // Advance the authoritative resume cursor to the drained position
+          // (monotonic — never moves backward vs a concurrent live/bootstrap
+          // advance).
+          nextSnapshot = {
+            ...nextSnapshot,
+            inboxCursor: Math.max(nextSnapshot.inboxCursor, pageCursor),
           }
-        }
+          void queuePersistSnapshot(live, nextSnapshot)
+          return {
+            ...createStateFromSnapshot(state, nextSnapshot, {
+              loadedMessageItems: nextLoadedItems,
+            }),
+            remoteAgentRuntimeMap: {
+              ...state.remoteAgentRuntimeMap,
+              ...runtimeUpdates,
+            },
+          }
+        })
 
-        cursor = response.nextCursor
+        cursor = pageCursor
         hasMore = response.hasMore
       }
 
-      // Advance the persisted resume cursor to the drained position.
-      workingSnapshot = { ...workingSnapshot, inboxCursor: cursor }
       // Refresh the in-memory live cursor so the next live frame isn't
       // misjudged as a gap (persisted cursor moved; liveCursor must follow).
       setLiveCursor(effectiveWorkspaceId, cursor)
 
-      workingSnapshot = await flushPendingReadsInternal(workingSnapshot)
+      // Flush reads + outbox against the LATEST snapshot, and write each result
+      // back with a latest-snapshot rebase (drop a result if the conversation
+      // was pruned/tombstoned by a live kick during the network round-trip).
+      const afterReads = await flushPendingReadsInternal(
+        get().snapshot ?? startSnapshot
+      )
+      set((state) =>
+        state.snapshot
+          ? createStateFromSnapshot(
+              state,
+              rebaseQueueFieldsOntoLatest(state.snapshot, afterReads)
+            )
+          : state
+      )
+      void queuePersistSnapshot(get().snapshot, get().snapshot)
 
       const outboxResult = await flushOutboxInternal(
-        workingSnapshot,
+        get().snapshot ?? startSnapshot,
         get().selectedConversationId,
-        workingLoadedItems
+        get().loadedMessageItems
       )
-      workingSnapshot = outboxResult.snapshot
-      workingLoadedItems = outboxResult.loadedMessageItems
-
-      // Rebase write-back: while we were draining, live frames may have mutated
-      // get().snapshot (e.g. a kick prune). Merge our drained queue state
-      // (cursor/outbox/pendingReads/tombstones) onto the LATEST snapshot rather
-      // than blindly overwriting it with the stale working copy. The conversation
-      // list from the drain is authoritative for what we synced, but tombstones
-      // recorded live must be preserved.
-      const finalWorkingSnapshot = workingSnapshot
-      const finalLoadedItems = workingLoadedItems
       set((state) => {
-        const latest = state.snapshot
-        // If the workspace changed under us, drop our result.
-        if (!latest || latest.workspaceId !== effectiveWorkspaceId) {
+        if (!state.snapshot) {
           return state
         }
-        // Re-apply any tombstones that appeared live during the drain so a
-        // concurrently-kicked conversation stays pruned.
-        let merged = finalWorkingSnapshot
-        for (const [cid, tomb] of Object.entries(latest.tombstones)) {
-          if (!merged.tombstones[cid]) {
-            merged = pruneConversationFromSnapshot(merged, cid, tomb.removedSeq)
-          }
-        }
-        return {
-          ...createStateFromSnapshot(state, merged, {
-            loadedMessageItems: finalLoadedItems,
-          }),
-          remoteAgentRuntimeMap: {
-            ...state.remoteAgentRuntimeMap,
-            ...runtimeUpdates,
-          },
-        }
+        const merged = rebaseQueueFieldsOntoLatest(
+          state.snapshot,
+          outboxResult.snapshot
+        )
+        void queuePersistSnapshot(state.snapshot, merged)
+        return createStateFromSnapshot(state, merged, {
+          loadedMessageItems:
+            get().selectedConversationId === state.selectedConversationId
+              ? outboxResult.loadedMessageItems
+              : state.loadedMessageItems,
+        })
       })
-      void queuePersistSnapshot(currentSnapshot, get().snapshot)
 
       if (outboxResult.retryAttemptCount !== null) {
         scheduleOutboxRetry(outboxResult.retryAttemptCount)

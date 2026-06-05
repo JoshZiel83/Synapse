@@ -257,14 +257,23 @@ export function mergeStoredQueueTransition(
     }
   }
 
-  // tombstones are a base-aware diff set, exactly like outbox/pendingReads:
-  // "removal" (a key present in next) is written; "clear" (a key dropped in
-  // next vs previous) is honored as a real deletion — so a legitimate re-add
-  // that cleared the tombstone isn't resurrected from concurrent/old state.
+  // tombstones are a base-aware diff set, like outbox/pendingReads, but the
+  // CLEAR must be sequenced. A clear (key in previous, absent in next) is a real
+  // deletion ONLY when it supersedes what current holds — i.e. current is absent
+  // or current.removedSeq <= previous.removedSeq. Otherwise current already has
+  // a NEWER removal (e.g. another tab tombstoned at a higher seq after this
+  // transition's base was captured) and a stale clear must NOT delete it.
   const previousTombstones = previousState?.tombstones ?? {}
   const nextTombstones = { ...(nextWorkspaceState.tombstones ?? {}) }
   for (const conversationId of Object.keys(previousTombstones)) {
     if (!(conversationId in nextState.tombstones)) {
+      const current = nextTombstones[conversationId]
+      const previous = previousTombstones[conversationId]
+      if (current && previous && current.removedSeq > previous.removedSeq) {
+        // current has a newer removal than the one this transition cleared —
+        // keep it.
+        continue
+      }
       delete nextTombstones[conversationId]
     }
   }

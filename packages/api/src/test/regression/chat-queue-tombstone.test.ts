@@ -132,3 +132,22 @@ test("merge honors tombstone CLEAR as a real change (re-add not resurrected)", (
     "cleared tombstone is not merged back from current"
   )
 })
+
+test("a stale CLEAR does not delete a newer removal in current", () => {
+  // current already holds a NEWER removal (seq 12, e.g. from another tab) than
+  // the one this transition cleared (it cleared the seq-8 tombstone). The stale
+  // clear must NOT delete the newer removal.
+  const previous = v4({
+    tombstones: { c1: { conversationId: "c1", removedSeq: 8 } },
+  })
+  const current = v4({
+    tombstones: { c1: { conversationId: "c1", removedSeq: 12 } },
+  })
+  const next = v4({ tombstones: {} })
+  const merged = mergeStoredQueueTransition(current, previous, next)
+  assert.deepEqual(
+    merged.tombstones,
+    { c1: { conversationId: "c1", removedSeq: 12 } },
+    "newer removal in current survives a stale clear"
+  )
+})
