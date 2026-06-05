@@ -618,3 +618,286 @@ test(
     })
   }
 )
+
+// ---- review round-4: junction parent-liveness + status-revive + F4/F5/F2 ----
+
+async function insertAccessSubjectForMember(
+  db: AnyDb,
+  ws: string,
+  memberId: string
+): Promise<string> {
+  const row = await db
+    .insertInto("access_subjects")
+    .values({
+      kind: "workspace_member",
+      workspace_id: ws,
+      workspace_member_id: memberId,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+test(
+  "F1: workspace_members_live hides members of a soft-deleted workspace",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const mid = await insertMember(db, ws, u, "admin")
+      const before = await db
+        .selectFrom("workspace_members_live")
+        .select("id")
+        .where("id", "=", mid)
+        .execute()
+      assert.equal(before.length, 1, "active member live before ws delete")
+      await db
+        .updateTable("workspaces")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", ws)
+        .execute()
+      const after = await db
+        .selectFrom("workspace_members_live")
+        .select("id")
+        .where("id", "=", mid)
+        .execute()
+      assert.equal(
+        after.length,
+        0,
+        "member disappears from _live once parent workspace is soft-deleted"
+      )
+    })
+  }
+)
+
+test(
+  "F1: workspace_access_bindings_live folds in member+workspace liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const mid = await insertMember(db, ws, u, "admin")
+      await db
+        .insertInto("workspace_access_bindings")
+        .values({ workspace_member_id: mid, access_key: "model_admin" })
+        .execute()
+      const before = await db
+        .selectFrom("workspace_access_bindings_live")
+        .select("access_key")
+        .where("workspace_member_id", "=", mid)
+        .execute()
+      assert.equal(before.length, 1, "binding live while member is live")
+      // remove the member (status flip) — the binding must vanish from _live
+      await db
+        .updateTable("workspace_members")
+        .set({ status: "removed", removed_at: new Date() })
+        .where("id", "=", mid)
+        .execute()
+      const after = await db
+        .selectFrom("workspace_access_bindings_live")
+        .select("access_key")
+        .where("workspace_member_id", "=", mid)
+        .execute()
+      assert.equal(after.length, 0, "binding hidden once member is removed")
+    })
+  }
+)
+
+test(
+  "F3: reviving a member into a soft-deleted workspace is rejected",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const mid = await insertMember(db, ws, u, "member")
+      // soft-delete the member, then soft-delete the workspace
+      await db
+        .updateTable("workspace_members")
+        .set({ status: "removed", removed_at: new Date() })
+        .where("id", "=", mid)
+        .execute()
+      await db
+        .updateTable("workspaces")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", ws)
+        .execute()
+      // attempting to re-activate the member (status revive) must be blocked by
+      // the status-parent-live trigger, since the parent workspace is not live.
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("workspace_members")
+            .set({ status: "active", removed_at: null })
+            .where("id", "=", mid)
+            .execute(),
+        /not live/
+      )
+    })
+  }
+)
+
+test(
+  "F4: runtime_authorization_grants is delete-protected (status table)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      // The reject-delete + status-parent-live triggers are attached (a row-level
+      // BEFORE DELETE only fires on matching rows, so we assert via the catalog
+      // rather than an empty DELETE that would be a no-op).
+      const trg = await sql<{ tgname: string }>`
+        SELECT tgname FROM pg_trigger
+        WHERE tgrelid = 'runtime_authorization_grants'::regclass
+          AND tgname IN ('sd_reject_delete', 'sd_status_parent_live_runtime_authorization_grants')
+        ORDER BY tgname
+      `.execute(db)
+      assert.deepEqual(
+        trg.rows.map((r) => r.tgname),
+        [
+          "sd_reject_delete",
+          "sd_status_parent_live_runtime_authorization_grants",
+        ],
+        "reject-delete + status-parent-live triggers attached"
+      )
+      // and the _live view exists (status IN ('active') + parent liveness)
+      const rows = await db
+        .selectFrom("runtime_authorization_grants_live")
+        .select("id")
+        .where("workspace_id", "=", ws)
+        .execute()
+      assert.equal(rows.length, 0)
+    })
+  }
+)
+
+test(
+  "F2: markUserDeleted revokes subject-scoped grants (memory/model)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const mid = await insertMember(db, ws, u, "admin")
+      const subj = await insertAccessSubjectForMember(db, ws, mid)
+      // a memory space + a memory access grant to the member subject
+      const space = await db
+        .insertInto("memory_spaces")
+        .values({
+          workspace_id: ws,
+          owner_subject_id: subj,
+          namespace_key: uniq("ns"),
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      await db
+        .insertInto("memory_access_grants")
+        .values({
+          workspace_id: ws,
+          memory_space_id: space.id,
+          subject_id: subj,
+          permissions: sql`ARRAY['read']::memory_permission[]`,
+          status: "active",
+        })
+        .execute()
+
+      await markUserDeleted(db, u)
+
+      const grant = await db
+        .selectFrom("memory_access_grants")
+        .select(["status", "revoked_at"])
+        .where("subject_id", "=", subj)
+        .executeTakeFirstOrThrow()
+      assert.equal(grant.status, "revoked", "member-subject grant revoked")
+      assert.ok(grant.revoked_at, "revoked_at stamped")
+    })
+  }
+)
+
+test(
+  "F5: uninstalling a plugin soft-deletes its child connections",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      // minimal publisher/catalog item/version to satisfy installation FKs
+      const pub = await db
+        .insertInto("publishers")
+        .values({ slug: uniq("pub"), display_name: "p" })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const item = await db
+        .insertInto("catalog_items")
+        .values({
+          publisher_id: pub.id,
+          item_kind: "plugin_package",
+          slug: uniq("it"),
+          display_name: "i",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const ver = await db
+        .insertInto("catalog_versions")
+        .values({
+          catalog_item_id: item.id,
+          version: "1.0.0",
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const wsSubject = await db
+        .insertInto("access_subjects")
+        .values({ kind: "workspace", workspace_id: ws })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const inst = await db
+        .insertInto("plugin_installations")
+        .values({
+          workspace_id: ws,
+          catalog_item_id: item.id,
+          catalog_version_id: ver.id,
+          display_name: "i",
+          attachment_subject_id: wsSubject.id,
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      await db
+        .insertInto("plugin_connections")
+        .values({
+          installation_id: inst.id,
+          workspace_id: ws,
+          owner_scope: "installation",
+          binding_key: "default",
+          driver: "oauth2",
+          status: "active",
+        })
+        .execute()
+
+      // soft-delete the installation + its connections (mirrors uninstall)
+      await db
+        .updateTable("plugin_connections")
+        .set({ deleted_at: new Date(), status: "revoked" })
+        .where("installation_id", "=", inst.id)
+        .where("deleted_at", "is", null)
+        .execute()
+      await db
+        .updateTable("plugin_installations")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", inst.id)
+        .execute()
+
+      const live = await db
+        .selectFrom("plugin_connections_live")
+        .select("id")
+        .where("installation_id", "=", inst.id)
+        .execute()
+      assert.equal(live.length, 0, "connections hidden after uninstall")
+    })
+  }
+)

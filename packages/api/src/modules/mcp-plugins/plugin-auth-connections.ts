@@ -413,6 +413,10 @@ async function getConnectionRow(connectionId: string, workspaceId?: string) {
     .selectAll("connection")
     .select(["installation.catalog_item_id", "installation.catalog_version_id"])
     .where("connection.id", "=", connectionId)
+    // Fail closed against soft-deleted connections and connections whose parent
+    // installation was uninstalled (review F5) — neither should resolve secrets.
+    .where("connection.deleted_at", "is", null)
+    .where("installation.deleted_at", "is", null)
 
   if (workspaceId) {
     builder = builder.where("connection.workspace_id", "=", workspaceId)
@@ -1918,6 +1922,7 @@ export async function attachAuthConnectionsToConfig(input: {
            AND connection.workspace_id = $2
            AND connection.binding_key = $3
            AND connection.external_account_id IS NOT DISTINCT FROM $4
+           AND connection.deleted_at IS NULL
          ORDER BY connection.updated_at DESC
          LIMIT 1`,
         [input.installationId, input.workspaceId, bindingKey, externalAccountId]

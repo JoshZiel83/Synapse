@@ -15,9 +15,14 @@
 //     synapse_purge_fn_owner (reject-delete guard permits), fixed search_path,
 //     writes an audit_logs deletion-ledger row first.
 //   - sd_purge_expired_soft_deleted(p_before timestamptz): tier-A retention
-//     purge — physically removes rows soft-deleted before the cutoff, leaf→root,
-//     EXCLUDING the never-purge set (access_subjects / transport_addresses /
-//     audit_logs).
+//     purge — physically removes rows soft-deleted before the cutoff, leaf→root.
+//     NEVER touches the immutable registries / audit (access_subjects /
+//     transport_addresses / audit_logs), NOR roots pinned by those registries via
+//     a RESTRICT FK (workspaces / users / actors / remote_agents / conversations /
+//     transport_accounts) — full erasure of a pinned root is a tier-B tenant
+//     hard-erase (which also deletes the registry + audit rows). Retention thus
+//     reclaims the bulk payload (memory/file/model/plugin/automation roots and
+//     all tenant child rows) while preserving auditability of the principals.
 
 import { readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
@@ -169,13 +174,33 @@ function wsDist(t, seen = new Set()) {
 
 // Tables in tenant scope (workspace-reachable). For tier-B tenant hard-erase the
 // design (§5.2-B) erases the tenant's history too, INCLUDING its access_subjects
-// rows; only transport_addresses stays (cross-tenant external identity registry).
+// and audit_logs rows; only transport_addresses stays (cross-tenant external
+// identity registry). The global deletion-ledger rows (workspace_id NULL) written
+// by the function are NOT tenant rows, so they survive the audit_logs delete.
 const TENANT_TABLES = ORDER.filter(
   (t) => reachesWorkspace(t) && t !== "transport_addresses"
 )
-// Tables with deleted_at (tier A retention surface = direct soft-delete roots).
+
+// Roots PINNED by a never-purge registry: a deleted_at root that a NEVER_PURGE
+// table references via a non-nullable (RESTRICT/NO ACTION) FK. Tier-A retention
+// keeps the registries (access_subjects/transport_addresses/audit_logs), so it
+// CANNOT physically delete these roots — the RESTRICT child would block it.
+// Full erasure of a pinned root (workspaces/users/actors/remote_agents/
+// conversations/transport_accounts) is tier-B's job (which deletes the registry
+// rows too). Their tombstones therefore survive retention until a tenant erase.
+const pinnedByNeverPurge = new Set()
+for (const fk of foreignKeys) {
+  if (!NEVER_PURGE.has(fk.childTable)) continue
+  if (fk.onDelete === "SET NULL") continue // nullable edge can't block a delete
+  if (hasCol(fk.referencedTable, "deleted_at"))
+    pinnedByNeverPurge.add(fk.referencedTable)
+}
+
+// Tables with deleted_at (tier A retention surface = direct soft-delete roots),
+// excluding the never-purge set and the registry-pinned roots (above).
 const SD_TABLES = ORDER.filter(
-  (t) => hasCol(t, "deleted_at") && !NEVER_PURGE.has(t)
+  (t) =>
+    hasCol(t, "deleted_at") && !NEVER_PURGE.has(t) && !pinnedByNeverPurge.has(t)
 )
 
 function emit() {
@@ -209,9 +234,12 @@ DECLARE
   v_total bigint := 0;
   v_n bigint;
 BEGIN
-  -- ledger first (audit_logs is never purged). workspace_id is NULL because the
-  -- workspace is (already) soft-deleted and the FK-liveness trigger forbids a new
-  -- audit_logs row pointing at a soft-deleted workspace; the id is in resource_id.
+  -- Global deletion-ledger row (workspace_id NULL so it is NOT a tenant row and
+  -- survives the audit_logs delete in step 2). This tier ERASES the tenant's own
+  -- audit_logs + access_subjects (design §5.2-B); only the global ledger and the
+  -- cross-tenant transport_addresses registry remain. workspace_id is NULL also
+  -- because the workspace is (already) soft-deleted and the FK-liveness trigger
+  -- forbids a new audit_logs row pointing at it; the id is in resource_id.
   INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
   VALUES (NULL, 'tenant.hard_erase', 'workspace', p_workspace_id,
           jsonb_build_object('workspace_id', p_workspace_id, 'purged_at', NOW()));
@@ -253,16 +281,23 @@ $$;`)
     "-- Tier A: retention purge. For each expired soft-deleted root, deletes its"
   )
   L.push(
-    "-- child rows (leaf→root) then the root row. Skips never-purge registries."
+    "-- child rows (leaf→root) then the root row. Skips never-purge registries +"
+  )
+  L.push(
+    "-- audit (access_subjects/transport_addresses/audit_logs) and roots pinned by"
+  )
+  L.push(
+    "-- them via RESTRICT (those are erased only by a tier-B tenant erase)."
   )
   // For child cleanup we delete, in leaf→root order, any tenant child row whose
   // chain leads to an EXPIRED soft-deleted root. Build a predicate per table:
-  // EXISTS chain to ANY soft-delete root row with deleted_at < p_before.
+  // EXISTS chain to ANY soft-delete root row with deleted_at < p_before. Skips the
+  // full never-purge set (access_subjects / transport_addresses / audit_logs) —
+  // retention NEVER deletes audit history or the immutable identity registries
+  // (those are erased only by a tier-B tenant hard-erase).
   const childPurgeTables = ORDER.filter(
     (t) =>
-      !hasCol(t, "deleted_at") &&
-      reachesWorkspace(t) &&
-      !["access_subjects", "transport_addresses"].includes(t)
+      !hasCol(t, "deleted_at") && reachesWorkspace(t) && !NEVER_PURGE.has(t)
   )
   L.push(`CREATE OR REPLACE FUNCTION sd_purge_expired_soft_deleted(p_before timestamptz)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$

@@ -1886,6 +1886,7 @@ export async function installPluginUnified(data: {
         .selectFrom("plugin_connections")
         .select("public_payload")
         .where("id", "=", rawConnection.connectionId)
+        .where("deleted_at", "is", null)
         .limit(1)
     )
     if (connectionResult.rows.length === 0) {
@@ -2048,6 +2049,25 @@ export async function uninstallPluginUnified(installId: string) {
       resourceType: "plugin_installation",
       resourceId: installId,
     })
+
+    // Soft delete the installation's connections too (review F5): plugin_connections
+    // is its own soft-delete root, so uninstalling the parent must close the child
+    // OAuth/token connections — otherwise they stay live and their secrets remain
+    // resolvable. Flip both deleted_at and status so status-aware reads also drop
+    // them. Done before the parent flip (a child deleted_at flip is always allowed
+    // by the FK-liveness trigger).
+    await runBuilder(
+      client,
+      db
+        .updateTable("plugin_connections")
+        .set({
+          deleted_at: sql`NOW()`,
+          status: "revoked",
+          updated_at: sql`NOW()`,
+        })
+        .where("installation_id", "=", installId)
+        .where("deleted_at", "is", null)
+    )
 
     // Soft delete (design §7.4): flip deleted_at instead of hard delete (which
     // sd_reject_delete forbids). Bindings are revoked above.
@@ -2216,6 +2236,7 @@ export async function updateInstallation(
         .selectFrom("plugin_connections")
         .select("public_payload")
         .where("id", "=", rawConnection.connectionId)
+        .where("deleted_at", "is", null)
         .limit(1)
     )
     if (connectionResult.rows.length === 0) {

@@ -1105,6 +1105,7 @@ async function loadAutomationRulesByIds(
        FROM automation_rules
        WHERE workspace_id = $1
          AND id = ANY($2)
+         AND deleted_at IS NULL
        ORDER BY created_at DESC`,
       [workspaceId, ruleIds]
     ),
@@ -1785,6 +1786,7 @@ export async function getAutomationEventSource(
      ${automationEventSourceJoinClause("aes", "aib")}
      WHERE aes.workspace_id = $1
        AND aes.id = $2
+       AND aes.deleted_at IS NULL
      LIMIT 1`,
     [workspaceId, eventSourceId]
   )
@@ -1802,7 +1804,7 @@ export async function listAutomationEventSources(
   accessContext?: AutomationEventSourceAccessContext
 ) {
   const values: unknown[] = [workspaceId]
-  let where = "aes.workspace_id = $1"
+  let where = "aes.workspace_id = $1 AND aes.deleted_at IS NULL"
 
   if (filters?.status) {
     values.push(filters.status)
@@ -2721,9 +2723,11 @@ async function getAutomationEventSourceByWebhookPathToken(
        ON awe.id = aes.webhook_endpoint_id
      WHERE awe.path_token = $1
        AND awe.status = 'active'
+       AND awe.deleted_at IS NULL
        AND aes.provider_kind = 'webhook'
        AND aes.source_key = $2
        AND aes.status IN ('active', 'deprecated')
+       AND aes.deleted_at IS NULL
      LIMIT 1`,
     [pathToken, sourceKey]
   )
@@ -2751,9 +2755,12 @@ async function listIntegrationEventSourcesByWebhookPathToken(
        ON aes.integration_binding_id = aib.id
      WHERE awe.path_token = $1
        AND awe.status = 'active'
+       AND awe.deleted_at IS NULL
        AND aib.ingress_kind = 'webhook'
+       AND aib.deleted_at IS NULL
        AND aes.provider_kind = 'integration'
        AND aes.status IN ('active', 'deprecated')
+       AND aes.deleted_at IS NULL
      ORDER BY aes.created_at ASC`,
     [pathToken]
   )
@@ -2997,6 +3004,7 @@ async function resolveAutomationRulesForEvent(params: {
      JOIN automation_policies ap ON ap.rule_id = ar.id
      WHERE ar.workspace_id = $1
        AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
        AND at.trigger_kind = 'event'
        AND at.event_source_id = $2
        AND (ap.active_from IS NULL OR ap.active_from <= $3)
@@ -3571,7 +3579,7 @@ export async function listAutomationRules(
   await syncAutomationRuleLiveness({ workspaceId })
 
   const values: unknown[] = [workspaceId]
-  let where = "workspace_id = $1"
+  let where = "workspace_id = $1 AND deleted_at IS NULL"
 
   if (filters?.status) {
     values.push(filters.status)
@@ -3847,6 +3855,7 @@ export async function listAutomationWebhookEndpoints(workspaceId: string) {
     `SELECT *
      FROM automation_webhook_endpoints
      WHERE workspace_id = $1
+       AND deleted_at IS NULL
      ORDER BY created_at DESC`,
     [workspaceId]
   )
@@ -3920,6 +3929,7 @@ export async function ingestAutomationProviderEvent(params: {
       )
       .where("source_key", "=", params.sourceKey)
       .where("status", "in", ["active", "deprecated"])
+      .where("deleted_at", "is", null)
       .limit(1)
   )
   const eventSource = result.rows[0]
@@ -4200,6 +4210,7 @@ export async function scheduleDueAutomationExecutions(
        JOIN automation_policies ap ON ap.rule_id = ar.id
        WHERE at.trigger_kind = 'schedule'
          AND ar.status = 'active'
+         AND ar.deleted_at IS NULL
          AND at.next_fire_at IS NOT NULL
          AND at.next_fire_at <= NOW()
          AND (ap.active_from IS NULL OR ap.active_from <= at.next_fire_at)
