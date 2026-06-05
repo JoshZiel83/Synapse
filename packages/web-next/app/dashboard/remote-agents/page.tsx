@@ -816,6 +816,58 @@ export default function RemoteAgentsPage() {
                     </div>
                   </FieldContent>
                 </Field>
+                {pairingResult.oneClickCommands ? (
+                  <Field>
+                    <FieldLabel htmlFor="pairing-oneclick-unix">
+                      One-click install (no Node required)
+                    </FieldLabel>
+                    <FieldContent>
+                      <p className="text-xs text-muted-foreground">
+                        Bootstraps Node + installs the daemon, then starts it.
+                        Linux / macOS:
+                      </p>
+                      <Textarea
+                        id="pairing-oneclick-unix"
+                        readOnly
+                        value={pairingResult.oneClickCommands.unix}
+                        className="min-h-28 rounded-2xl font-mono text-xs"
+                      />
+                      <Button
+                        variant="outline"
+                        className="w-full rounded-full"
+                        onClick={() =>
+                          void copyText(
+                            pairingResult.oneClickCommands!.unix,
+                            "One-click (Unix)"
+                          )
+                        }
+                      >
+                        <Copy className="mr-2 size-4" />
+                        Copy Linux / macOS command
+                      </Button>
+                      <p className="text-xs text-muted-foreground">Windows:</p>
+                      <Textarea
+                        id="pairing-oneclick-windows"
+                        readOnly
+                        value={pairingResult.oneClickCommands.windows}
+                        className="min-h-28 rounded-2xl font-mono text-xs"
+                      />
+                      <Button
+                        variant="outline"
+                        className="w-full rounded-full"
+                        onClick={() =>
+                          void copyText(
+                            pairingResult.oneClickCommands!.windows,
+                            "One-click (Windows)"
+                          )
+                        }
+                      >
+                        <Copy className="mr-2 size-4" />
+                        Copy Windows command
+                      </Button>
+                    </FieldContent>
+                  </Field>
+                ) : null}
               </FieldGroup>
             </div>
           ) : null}

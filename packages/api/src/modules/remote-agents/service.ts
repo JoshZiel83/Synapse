@@ -10,6 +10,7 @@ import {
   type RemoteAgentLifecycleState,
   type RemoteAgentMachineDetailView,
   type RemoteAgentMachinePairingSessionView,
+  type OneClickInstallCommands,
   type RemoteAgentMachineTrustStatus,
   type RemoteAgentMachineView,
   type RemoteAgentRuntimeCapabilityView,
@@ -22,6 +23,10 @@ import {
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { buildDaemonCommand as buildDaemonCommandImpl } from "./daemon-command.js"
+import {
+  buildDaemonInstallCommands,
+  getRenderedInstallerArtifacts,
+} from "../installer/install-command.js"
 import { CompiledQuery, sql } from "kysely"
 import {
   db,
@@ -132,6 +137,22 @@ function buildDaemonCommand(apiKey: string) {
     serverUrl: config.app.baseUrl,
     apiKey,
     npmRegistryUrl: config.remoteAgent.npmRegistryUrl,
+  })
+}
+
+// One-click bootstrap commands for a host with no Node yet. null when no
+// private registry is configured (bootstrap can't fetch @synapse/* without it).
+function buildDaemonOneClick(apiKey: string): OneClickInstallCommands | null {
+  const artifacts = getRenderedInstallerArtifacts({
+    serverUrl: config.app.baseUrl,
+    privateRegistry: config.remoteAgent.npmRegistryUrl,
+  })
+  if (!artifacts) return null
+  return buildDaemonInstallCommands({
+    serverUrl: config.app.baseUrl,
+    apiKey,
+    shaSh: artifacts.shaSh,
+    shaPs1: artifacts.shaPs1,
   })
 }
 
@@ -1926,6 +1947,7 @@ export async function createRemoteAgentMachinePairingSession(params: {
     },
     apiKey,
     daemonCommand: buildDaemonCommand(apiKey),
+    oneClickCommands: buildDaemonOneClick(apiKey),
   }
 }
 

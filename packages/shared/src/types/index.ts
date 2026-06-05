@@ -1386,10 +1386,22 @@ export interface RemoteAgentMachineDetailView {
   }>
 }
 
+export interface OneClickInstallCommands {
+  unix: string
+  windows: string
+}
+
 export interface RemoteAgentMachinePairingSessionView {
   machine: Omit<RemoteAgentMachineView, "bindingCount">
   apiKey: string
   daemonCommand: string
+  /**
+   * One-click bootstrap installer commands (download-to-file + verify + run)
+   * for hosts with no Node yet. null when PUBLIC_NPM_REGISTRY_URL is unset
+   * (one-click bootstrap requires the private registry). Kept alongside the
+   * legacy `daemonCommand` for back-compat.
+   */
+  oneClickCommands: OneClickInstallCommands | null
 }
 
 export interface SessionMessage {

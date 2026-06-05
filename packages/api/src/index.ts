@@ -48,6 +48,7 @@ import modelGroupsModule from "./modules/model-groups/index.js"
 import platformModule from "./modules/platform/index.js"
 import auditModule from "./modules/audit/index.js"
 import imModule from "./modules/im/index.js"
+import installerModule from "./modules/installer/index.js"
 import {
   startTransportRuntimeManager,
   stopTransportRuntimeManager,
@@ -243,6 +244,7 @@ async function main() {
   await app.register(platformModule)
   await app.register(auditModule)
   await app.register(imModule)
+  await app.register(installerModule)
 
   try {
     await initBuiltinRegistry()

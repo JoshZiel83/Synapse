@@ -39,7 +39,65 @@ import {
 import type {
   ManifestPlatformEntry,
   ToolchainManifest,
+  TrustedSourceKey,
 } from "../terminal/manifest.js"
+
+// China Node-dist mirror key -> { base, trustedSource }. The base path differs
+// per host, so we replace the WHOLE https://nodejs.org/dist/ prefix (not just
+// the hostname) and switch trustedSource to the matching allow-list key, both
+// BEFORE assertTrustedDownload. Only these 5 keys are accepted; anything else
+// (incl. "nodejs"/custom URLs/empty) leaves the entry untouched (official).
+const NODE_MIRRORS: Record<
+  string,
+  { base: string; trustedSource: TrustedSourceKey }
+> = {
+  ustc: {
+    base: "https://mirrors.ustc.edu.cn/node/",
+    trustedSource: "nodejs.org-ustc",
+  },
+  huawei: {
+    base: "https://mirrors.huaweicloud.com/nodejs/",
+    trustedSource: "nodejs.org-huawei",
+  },
+  tencent: {
+    base: "https://mirrors.cloud.tencent.com/nodejs-release/",
+    trustedSource: "nodejs.org-tencent",
+  },
+  aliyun: {
+    base: "https://mirrors.aliyun.com/nodejs-release/",
+    trustedSource: "nodejs.org-aliyun",
+  },
+  npmmirror: {
+    base: "https://cdn.npmmirror.com/binaries/node/",
+    trustedSource: "nodejs.org-npmmirror",
+  },
+}
+
+const NODE_OFFICIAL_PREFIX = "https://nodejs.org/dist/"
+
+// Returns a copy of the entry with its download URL prefix-rewritten to the
+// chosen China mirror (and trustedSource switched). No-op unless the key is a
+// known mirror AND the URL is a canonical nodejs.org/dist URL. The sha256 is
+// the official value and is left untouched — it still gates the bytes.
+function rewriteToNodeMirror(
+  entry: ManifestPlatformEntry,
+  mirrorKey: string | undefined
+): ManifestPlatformEntry {
+  if (!mirrorKey) return entry
+  const mirror = NODE_MIRRORS[mirrorKey]
+  if (!mirror) return entry // unknown key / "nodejs" / custom: official source
+  if (!entry.download.url.startsWith(NODE_OFFICIAL_PREFIX)) return entry
+  const rewrittenUrl =
+    mirror.base + entry.download.url.slice(NODE_OFFICIAL_PREFIX.length)
+  return {
+    ...entry,
+    download: {
+      ...entry.download,
+      url: rewrittenUrl,
+      trustedSource: mirror.trustedSource,
+    },
+  }
+}
 import type { TerminalPlatform } from "../terminal/types.js"
 
 export const COMPLETION_MARKER = ".synapse-toolchain-ok"
@@ -101,6 +159,8 @@ export interface InstallBundlesOptions {
    * who must NEVER hit the network during deployment.
    */
   requirePrestaged?: boolean
+  /** China Node-dist mirror key, forwarded to downloadAndExtractEntry. */
+  toolchainMirror?: string
 }
 
 export interface InstallBundlesReport {
@@ -225,6 +285,16 @@ export interface DownloadAndExtractEntryOptions {
    * who must NEVER reach the network during deployment.
    */
   requirePrestaged?: boolean
+  /**
+   * China Node-dist mirror key. When set (and the entry URL is a canonical
+   * https://nodejs.org/dist/ URL), the URL's full prefix is rewritten to the
+   * mirror's base and trustedSource is set to the matching mirror key BEFORE
+   * the supply-chain check — so only allow-listed mirror hosts are reachable
+   * and the official per-entry sha256 still gates the downloaded bytes.
+   * Defaults to process.env.SYNAPSE_DEVICE_TOOLCHAIN_MIRROR; pass explicitly
+   * (incl. "") in tests. Only applies to a canonical nodejs.org/dist URL.
+   */
+  toolchainMirror?: string
 }
 
 /**
@@ -452,17 +522,26 @@ export async function downloadAndExtractEntry(
       `manifest entry has no usable download.url — operator must publish the asset and update bundles/manifest.json`
     )
   }
+  // China-mirror prefix rewrite (default from env), BEFORE the supply-chain
+  // guard so the rewritten host must itself be allow-listed. No-op unless a
+  // known mirror key is set and the URL is canonical nodejs.org/dist.
+  const mirrorKey =
+    opts.toolchainMirror ?? process.env["SYNAPSE_DEVICE_TOOLCHAIN_MIRROR"]
+  const entry = rewriteToNodeMirror(opts.entry, mirrorKey)
+  if (entry.download.url !== opts.entry.download.url) {
+    log(`mirror: ${opts.entry.download.url} -> ${entry.download.url}`)
+  }
   // Supply-chain guard: hostname must be on the trustedSource allow-list.
   // Rejecting here means a tampered manifest can't redirect downloads to
   // an attacker's mirror. Applies even to the pre-staged path: the
   // manifest still has to declare an allow-listed URL even though we
   // won't fetch it, so operators can't whitelist `fixture://attacker` to
   // sneak an unverified archive in.
-  assertTrustedDownload(opts.entry)
+  assertTrustedDownload(entry)
   let buf: Buffer | null = null
   if (opts.prestageDirs && opts.prestageDirs.length > 0) {
     buf = readPrestagedArchive({
-      entry: opts.entry,
+      entry,
       prestageDirs: opts.prestageDirs,
       log,
     })
@@ -478,8 +557,8 @@ export async function downloadAndExtractEntry(
         `--require-prestaged set but no sha256-matching archive found in [${searched}]`
       )
     }
-    log(`GET ${opts.entry.download.url}`)
-    const res = await fetchImpl(opts.entry.download.url)
+    log(`GET ${entry.download.url}`)
+    const res = await fetchImpl(entry.download.url)
     if (!res.ok) {
       throw new Error(`download failed: HTTP ${res.status} ${res.statusText}`)
     }
