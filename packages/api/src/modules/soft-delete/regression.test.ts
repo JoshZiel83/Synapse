@@ -117,7 +117,7 @@ test(
               title: "t",
             })
             .execute(),
-        /references soft-deleted workspaces/
+        /references non-live workspaces/
       )
     })
   }
@@ -1083,6 +1083,147 @@ test(
       // unknown account → idempotent false (no throw)
       const none = await markAccountUnlinked(db as never, u, "nope", "nope")
       assert.equal(none, false, "unknown account is a no-op")
+    })
+  }
+)
+
+// ---- review round-6: parent liveValues at the DB trigger + app reads ---------
+
+/** Insert a minimal live plugin installation; returns its id + workspace. */
+async function insertInstallation(
+  db: AnyDb,
+  ws: string
+): Promise<{ instId: string; itemId: string; verId: string }> {
+  const pub = await db
+    .insertInto("publishers")
+    .values({ slug: uniq("pub"), display_name: "p" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const item = await db
+    .insertInto("catalog_items")
+    .values({
+      publisher_id: pub.id,
+      item_kind: "plugin_package",
+      slug: uniq("it"),
+      display_name: "i",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const ver = await db
+    .insertInto("catalog_versions")
+    .values({ catalog_item_id: item.id, version: "1.0.0", status: "active" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const wsSubject = await db
+    .insertInto("access_subjects")
+    .values({ kind: "workspace", workspace_id: ws })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const inst = await db
+    .insertInto("plugin_installations")
+    .values({
+      workspace_id: ws,
+      catalog_item_id: item.id,
+      catalog_version_id: ver.id,
+      display_name: "i",
+      attachment_subject_id: wsSubject.id,
+      status: "active",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return {
+    instId: inst.id as string,
+    itemId: item.id as string,
+    verId: ver.id as string,
+  }
+}
+
+test(
+  "F15: FK-liveness trigger blocks a child under an ARCHIVED (non-live) parent",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const { instId } = await insertInstallation(db, ws)
+      // a connection under the live installation is fine
+      await db
+        .insertInto("plugin_connections")
+        .values({
+          installation_id: instId,
+          workspace_id: ws,
+          owner_scope: "installation",
+          binding_key: "default",
+          driver: "oauth2",
+          status: "active",
+        })
+        .execute()
+      // archive the installation WITHOUT tombstoning (status -> non-live)
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "archived" })
+        .where("id", "=", instId)
+        .execute()
+      // a NEW connection under the archived (non-live) parent must be rejected by
+      // the FK-liveness trigger — even though deleted_at IS NULL.
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("plugin_connections")
+            .values({
+              installation_id: instId,
+              workspace_id: ws,
+              owner_scope: "installation",
+              binding_key: "second",
+              driver: "oauth2",
+              status: "active",
+            })
+            .execute(),
+        /references non-live plugin_installations/
+      )
+    })
+  }
+)
+
+test(
+  "F16: an archived installation is excluded from plugin_installations_live",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const { instId } = await insertInstallation(db, ws)
+      // disabled is still LIVE (in liveValues) — must remain visible
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "disabled" })
+        .where("id", "=", instId)
+        .execute()
+      let live = await db
+        .selectFrom("plugin_installations_live")
+        .select("id")
+        .where("id", "=", instId)
+        .execute()
+      assert.equal(live.length, 1, "disabled install is still live")
+      // archived is NOT in liveValues — must drop from the live surface
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "archived" })
+        .where("id", "=", instId)
+        .execute()
+      live = await db
+        .selectFrom("plugin_installations_live")
+        .select("id")
+        .where("id", "=", instId)
+        .execute()
+      assert.equal(live.length, 0, "archived install excluded from _live")
+      const base = await db
+        .selectFrom("plugin_installations")
+        .select("id")
+        .where("id", "=", instId)
+        .execute()
+      assert.equal(base.length, 1, "row still present (not tombstoned)")
     })
   }
 )

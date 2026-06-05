@@ -5445,8 +5445,12 @@ DROP TRIGGER IF EXISTS sd_reject_delete ON workspaces;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON workspaces FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 
 -- 4. Soft-delete-aware referential integrity: forbid NEW/revived refs to
--- a soft-deleted parent. Fires only on INSERT / FK-col change / revive
+-- a non-live parent. Fires only on INSERT / FK-col change / revive
 -- (design §7.3); failing-active transitions are allowed.
+-- 'Parent live' is defined by the parent's own _live view (review F15), so a
+-- dual-axis root (deleted_at + status liveValues, e.g. plugin_installations)
+-- counts as dead once archived/expired, not only once tombstoned — the same
+-- definition the read surface and sd_assert_status_parent_live use.
 CREATE OR REPLACE FUNCTION sd_assert_parent_live()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
@@ -5486,12 +5490,14 @@ BEGIN
   IF NOT v_recheck THEN
     RETURN NEW;
   END IF;
+  -- Liveness = a row with this key exists in the parent's _live view (folds in
+  -- deleted_at IS NULL AND status IN liveValues for dual-axis roots).
   EXECUTE format(
-    'SELECT deleted_at IS NULL FROM %I WHERE %I = $1',
+    'SELECT EXISTS (SELECT 1 FROM %I_live WHERE %I = $1)',
     v_parent_table, v_parent_col
   ) INTO v_alive USING v_fk_value;
   IF v_alive IS DISTINCT FROM TRUE THEN
-    RAISE EXCEPTION '%.% references soft-deleted %(%) = %', TG_TABLE_NAME, v_child_col, v_parent_table, v_parent_col, v_fk_value
+    RAISE EXCEPTION '%.% references non-live %(%) = %', TG_TABLE_NAME, v_child_col, v_parent_table, v_parent_col, v_fk_value
       USING ERRCODE = 'foreign_key_violation';
   END IF;
   RETURN NEW;
