@@ -735,7 +735,7 @@ test(
             .set({ status: "active", removed_at: null })
             .where("id", "=", mid)
             .execute(),
-        /not live/
+        /(?:not live|non-live)/
       )
     })
   }
@@ -1224,6 +1224,186 @@ test(
         .where("id", "=", instId)
         .execute()
       assert.equal(base.length, 1, "row still present (not tombstoned)")
+    })
+  }
+)
+
+test(
+  "F18: plugin_connections_live folds in parent installation liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const { instId } = await insertInstallation(db, ws)
+      const conn = await db
+        .insertInto("plugin_connections")
+        .values({
+          installation_id: instId,
+          workspace_id: ws,
+          owner_scope: "installation",
+          binding_key: "default",
+          driver: "oauth2",
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "archived" })
+        .where("id", "=", instId)
+        .execute()
+
+      const live = await db
+        .selectFrom("plugin_connections_live")
+        .select("id")
+        .where("id", "=", conn.id)
+        .execute()
+      assert.equal(
+        live.length,
+        0,
+        "connection hidden when parent install is archived"
+      )
+    })
+  }
+)
+
+test(
+  "F18: status revive of a dual-axis root under a non-live parent is rejected",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const { instId } = await insertInstallation(db, ws)
+      const conn = await db
+        .insertInto("plugin_connections")
+        .values({
+          installation_id: instId,
+          workspace_id: ws,
+          owner_scope: "installation",
+          binding_key: "default",
+          driver: "oauth2",
+          status: "expired",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "archived" })
+        .where("id", "=", instId)
+        .execute()
+
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("plugin_connections")
+            .set({ status: "active" })
+            .where("id", "=", conn.id)
+            .execute(),
+        /references non-live plugin_installations/
+      )
+    })
+  }
+)
+
+test(
+  "F18: deleted_at roots fold in status-parent liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const member = await insertMember(db, ws, u)
+      const group = await db
+        .insertInto("model_groups")
+        .values({
+          owner_type: "workspace_member",
+          owner_workspace_member_id: member,
+          name: "member-owned",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("workspace_members")
+        .set({ status: "removed" })
+        .where("id", "=", member)
+        .execute()
+
+      const live = await db
+        .selectFrom("model_groups_live")
+        .select("id")
+        .where("id", "=", group.id)
+        .execute()
+      assert.equal(
+        live.length,
+        0,
+        "member-owned model group hidden when owner member is removed"
+      )
+
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("model_groups")
+            .values({
+              owner_type: "workspace_member",
+              owner_workspace_member_id: member,
+              name: "late-member-owned",
+            })
+            .execute(),
+        /references non-live workspace_members/
+      )
+    })
+  }
+)
+
+test(
+  "F18: status live views fold in resource-parent liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const { instId } = await insertInstallation(db, ws)
+      const subject = await db
+        .selectFrom("access_subjects")
+        .select("id")
+        .where("kind", "=", "workspace")
+        .where("workspace_id", "=", ws)
+        .executeTakeFirstOrThrow()
+      const binding = await db
+        .insertInto("resource_access_bindings")
+        .values({
+          workspace_id: ws,
+          resource_type: "plugin_installation",
+          plugin_installation_id: instId,
+          subject_id: subject.id,
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "archived" })
+        .where("id", "=", instId)
+        .execute()
+
+      const live = await db
+        .selectFrom("resource_access_bindings_live")
+        .select("id")
+        .where("id", "=", binding.id)
+        .execute()
+      assert.equal(
+        live.length,
+        0,
+        "resource binding hidden when plugin installation is archived"
+      )
     })
   }
 )
