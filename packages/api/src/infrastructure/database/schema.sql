@@ -5992,13 +5992,13 @@ CREATE VIEW account_live AS SELECT * FROM account WHERE deleted_at IS NULL WITH 
 DROP VIEW IF EXISTS actors_live;
 CREATE VIEW actors_live AS SELECT * FROM actors WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS automation_event_sources_live;
-CREATE VIEW automation_event_sources_live AS SELECT * FROM automation_event_sources WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+CREATE VIEW automation_event_sources_live AS SELECT * FROM automation_event_sources WHERE deleted_at IS NULL AND status IN ('active', 'deprecated', 'disabled') WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS automation_integration_bindings_live;
 CREATE VIEW automation_integration_bindings_live AS SELECT * FROM automation_integration_bindings WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS automation_rules_live;
-CREATE VIEW automation_rules_live AS SELECT * FROM automation_rules WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+CREATE VIEW automation_rules_live AS SELECT * FROM automation_rules WHERE deleted_at IS NULL AND status IN ('active', 'paused', 'error') WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS automation_webhook_endpoints_live;
-CREATE VIEW automation_webhook_endpoints_live AS SELECT * FROM automation_webhook_endpoints WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+CREATE VIEW automation_webhook_endpoints_live AS SELECT * FROM automation_webhook_endpoints WHERE deleted_at IS NULL AND status IN ('active', 'disabled') WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS catalog_items_live;
 CREATE VIEW catalog_items_live AS SELECT * FROM catalog_items WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS conversations_live;
@@ -6020,9 +6020,9 @@ CREATE VIEW model_groups_live AS SELECT * FROM model_groups WHERE deleted_at IS 
 DROP VIEW IF EXISTS model_profiles_live;
 CREATE VIEW model_profiles_live AS SELECT * FROM model_profiles WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS plugin_connections_live;
-CREATE VIEW plugin_connections_live AS SELECT * FROM plugin_connections WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+CREATE VIEW plugin_connections_live AS SELECT * FROM plugin_connections WHERE deleted_at IS NULL AND status IN ('active') WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS plugin_installations_live;
-CREATE VIEW plugin_installations_live AS SELECT * FROM plugin_installations WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+CREATE VIEW plugin_installations_live AS SELECT * FROM plugin_installations WHERE deleted_at IS NULL AND status IN ('active', 'disabled', 'error') WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS publishers_live;
 CREATE VIEW publishers_live AS SELECT * FROM publishers WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS remote_agent_machines_live;
@@ -6030,7 +6030,7 @@ CREATE VIEW remote_agent_machines_live AS SELECT * FROM remote_agent_machines WH
 DROP VIEW IF EXISTS remote_agents_live;
 CREATE VIEW remote_agents_live AS SELECT * FROM remote_agents WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS transport_accounts_live;
-CREATE VIEW transport_accounts_live AS SELECT * FROM transport_accounts WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
+CREATE VIEW transport_accounts_live AS SELECT * FROM transport_accounts WHERE deleted_at IS NULL AND status IN ('active', 'disabled', 'error') WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS users_live;
 CREATE VIEW users_live AS SELECT * FROM users WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 DROP VIEW IF EXISTS workspaces_live;

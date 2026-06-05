@@ -51,6 +51,7 @@ export async function resolveInstallationConfig(
       "spec.config_schema",
     ])
     .where("installation.id", "=", installationId)
+    .where("installation.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
 

@@ -480,6 +480,7 @@ async function loadVisiblePlugins(params: ResolveParams) {
     ])
     .where("installation.id", "in", Array.from(visibleInstallationIds))
     .where("installation.status", "=", "active")
+    .where("installation.deleted_at", "is", null)
     .orderBy("installation.updated_at", "desc")
     .execute()
 

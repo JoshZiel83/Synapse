@@ -448,6 +448,7 @@ async function getInstallationConfigRow(
     ])
     .where("installation.id", "=", installationId)
     .where("installation.workspace_id", "=", workspaceId)
+    .where("installation.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
 

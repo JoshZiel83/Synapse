@@ -1280,6 +1280,7 @@ async function pauseAutomationRulesForEventSource(
        AND at.event_source_id = $1
        AND ar.category = 'event_subscription'
        AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
      RETURNING ar.id, ar.workspace_id`,
     [eventSourceId, reason]
   )
@@ -1719,7 +1720,8 @@ async function pauseAutomationRulesMissingEventSourceAccess(
        ON at.rule_id = ar.id
      WHERE at.event_source_id = $1
        AND ar.category = 'event_subscription'
-       AND ar.status = 'active'`,
+       AND ar.status = 'active'
+       AND ar.deleted_at IS NULL`,
     [eventSourceId]
   )
 
@@ -2811,6 +2813,7 @@ async function expireAutomationRules(params: {
      FROM automation_policies ap
      WHERE ap.rule_id = ar.id
        AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
        AND ap.active_until IS NOT NULL
        AND ap.active_until < $1
        ${params.workspaceId ? "AND ar.workspace_id = $2" : ""}
@@ -2861,6 +2864,7 @@ async function pauseAutomationRulesForInactiveCreators(params: {
      FROM conversation_participants cp
      WHERE cp.id = ar.created_by_participant_id
        AND ar.status = 'active'
+       AND ar.deleted_at IS NULL
        AND cp.state <> 'active'
        ${params.workspaceId ? "AND ar.workspace_id = $1" : ""}
      RETURNING ar.id, ar.workspace_id`,

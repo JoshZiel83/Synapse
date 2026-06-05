@@ -794,6 +794,7 @@ async function listManageablePluginInstallationIds(
     .select("id")
     .where("workspace_id", "=", access.workspaceId)
     .where("status", "=", "active")
+    .where("deleted_at", "is", null)
     .orderBy("updated_at", "desc")
 
   if (!workspacePermissionFromAccess(access, "manage_plugins")) {

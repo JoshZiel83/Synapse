@@ -563,15 +563,26 @@ function emitLiveViews() {
     "-- CHECK OPTION blocks inserting/surfacing a row outside the predicate."
   )
 
-  // roots: deleted_at IS NULL
+  // roots: deleted_at IS NULL — AND status IN (liveValues) when the root ALSO
+  // carries a status column with declared liveValues (review F10). Several roots
+  // are dual-axis (deleted_at tombstone + a status lifecycle: plugin_connections
+  // active-only, plugin_installations, automation_*, transport_accounts); their
+  // canonical live surface must hide expired/revoked/archived/disabled rows even
+  // when they were never tombstoned. A pure single-table view stays auto-updatable
+  // with CASCADED CHECK OPTION.
   const roots = Object.entries(mTables)
     .filter(([, e]) => e.softDelete === "deleted_at")
-    .map(([n]) => n)
-    .sort()
-  for (const t of roots) {
-    V.push(`DROP VIEW IF EXISTS ${t}_live;`)
+    .map(([n, e]) => ({ n, live: e.liveValues }))
+    .sort((a, b) => a.n.localeCompare(b.n))
+  for (const { n, live } of roots) {
+    let pred = "deleted_at IS NULL"
+    if (Array.isArray(live) && live.length && hasCol(n, "status")) {
+      const inList = live.map((v) => `'${v}'`).join(", ")
+      pred = `deleted_at IS NULL AND status IN (${inList})`
+    }
+    V.push(`DROP VIEW IF EXISTS ${n}_live;`)
     V.push(
-      `CREATE VIEW ${t}_live AS SELECT * FROM ${t} WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;`
+      `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WHERE ${pred} WITH CASCADED CHECK OPTION;`
     )
   }
 
