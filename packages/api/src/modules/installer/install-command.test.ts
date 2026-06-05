@@ -146,3 +146,67 @@ test("rendered script never points @synapse:registry at npmjs", () => {
   // the @synapse scope must resolve to the private registry, not public npmjs
   assert.ok(!/@synapse:registry=\S*registry\.npmjs\.org/.test(a.scriptSh))
 })
+
+// --- real-execution tests (review #1: the verify segment must actually run) -
+import { execFileSync } from "node:child_process"
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { createHash } from "node:crypto"
+
+// Extract the `printf ... | { sha256sum ... }` verify segment from a unix
+// command and run it for real against a temp file, asserting it accepts a
+// matching sha and rejects a mismatching one (guards the literal-$f bug).
+function runVerifySegment(shaSh: string, fileContent: string): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "synapse-vseg-"))
+  const f = join(dir, "payload")
+  writeFileSync(f, fileContent)
+  try {
+    const script = `f=${JSON.stringify(f)}; printf '%s  %s\\n' ${JSON.stringify(shaSh)} "$f" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c - 2>/dev/null; }`
+    execFileSync("bash", ["-c", script], { stdio: "ignore" })
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+test("unix verify segment: accepts matching sha, rejects mismatch (real exec)", () => {
+  const content = "hello-synapse-installer"
+  const goodSha = createHash("sha256").update(content).digest("hex")
+  assert.equal(
+    runVerifySegment(goodSha, content),
+    true,
+    "matching sha must verify OK"
+  )
+  assert.equal(
+    runVerifySegment("0".repeat(64), content),
+    false,
+    "mismatching sha must fail"
+  )
+})
+
+test("renderScript: hostile config value with $() / quotes is inert in the rendered sh", () => {
+  const a = getRenderedInstallerArtifacts({
+    serverUrl: "https://s.example/",
+    privateRegistry: "https://r/$(touch /tmp/SYNAPSE_PWNED_TEST)/'x",
+  })!
+  const line = a.scriptSh
+    .split("\n")
+    .find((l) => l.startsWith("SYNAPSE_RENDERED_PRIVATE_REGISTRY="))!
+  // Source ONLY that assignment line and confirm no command substitution ran.
+  const dir = mkdtempSync(join(tmpdir(), "synapse-inject-"))
+  try {
+    const probe = `rm -f /tmp/SYNAPSE_PWNED_TEST; ${line}; test -e /tmp/SYNAPSE_PWNED_TEST && echo PWNED || echo SAFE`
+    const out = execFileSync("bash", ["-c", probe], { encoding: "utf8" }).trim()
+    assert.equal(
+      out,
+      "SAFE",
+      "command substitution in a config value must NOT execute"
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync("/tmp/SYNAPSE_PWNED_TEST", { force: true })
+  }
+})

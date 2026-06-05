@@ -130,6 +130,62 @@ assert_contains "no-modify-path skips ~/.npmrc" "skipping ~/.npmrc"
 PRIV="" run_installer --target device --server https://x --code C1 --region intl
 assert_contains "empty private registry dies" "no private @synapse registry configured"
 
+# ---- PATH persistence content (review #3: npm-global bin on PATH) ---------
+# Existing-Node fast path: only the npm-global bin needs persisting.
+FAKE_NODE_VER=24.16.0 run_installer --target device --server https://x --code C1 --region intl
+assert_contains "PATH line includes npm-global/bin" 'npm-global/bin:$PATH'
+
+# Bootstrapped-Node path: the bootstrapped node/<ver>/bin must ALSO be on PATH
+# so the synapse-* shim's `#!/usr/bin/env node` resolves in a new shell. Needs a
+# REAL bootstrap (dry-run can't fake the downloaded tarball), so build a fixture
+# tarball + a curl stub that serves it, patch the embedded sha to match.
+test_bootstrapped_node_path() {
+  local home="$WORK/bsnode.$RANDOM" syn="$WORK/bsnode-syn.$RANDOM"
+  local bin="$WORK/bsbin.$RANDOM" stageroot="$WORK/stage.$RANDOM"
+  mkdir -p "$home" "$bin"
+  local t s
+  for t in bash sh tar gzip sha256sum shasum awk sed grep mktemp cat uname dirname mkdir rm cp chmod ls printf env test; do
+    s="$(command -v "$t" 2>/dev/null)"; [ -n "$s" ] && ln -sf "$s" "$bin/$t"
+  done
+  # fixture tarball with bin/node + bin/npm inside (strip-components 1 layout;
+  # the real Node tarball ships npm alongside node).
+  mkdir -p "$stageroot/node-v24.16.0-linux-x64/bin"
+  printf '#!/bin/sh\n[ "$1" = "-p" ] && echo 24.16.0\n' > "$stageroot/node-v24.16.0-linux-x64/bin/node"
+  printf '#!/bin/sh\nexit 0\n' > "$stageroot/node-v24.16.0-linux-x64/bin/npm"
+  chmod +x "$stageroot/node-v24.16.0-linux-x64/bin/node" "$stageroot/node-v24.16.0-linux-x64/bin/npm"
+  ( cd "$stageroot" && tar -czf "$WORK/fake-node.tgz" node-v24.16.0-linux-x64 )
+  local sha; sha="$(sha256sum "$WORK/fake-node.tgz" | awk '{print $1}')"
+  cat > "$bin/curl" <<CURL
+#!/usr/bin/env bash
+out=""; while [ "\$#" -gt 0 ]; do case "\$1" in -o) out="\$2"; shift 2;; *) url="\$1"; shift;; esac; done
+case "\$url" in *SHASUMS256.txt) exit 0;; *.tar.gz) cp "$WORK/fake-node.tgz" "\$out";; esac
+CURL
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/npm"
+  chmod +x "$bin/curl" "$bin/npm"
+  # patch the installer copy so embedded linux-x64 sha matches the fixture
+  local patched="$WORK/install.patched.$RANDOM.sh"
+  sed "s|2faf6a387e9b62b888e21c54f01249fb27537ffecf1842f29f4c919d0a59a0ff|$sha|" "$INSTALL_SH" > "$patched"
+  # NO node on PATH -> forces bootstrap
+  OUT="$(env -i HOME="$home" PATH="$bin" \
+    SYNAPSE_PRIVATE_NPM_REGISTRY="https://npmr.example.com/" SYNAPSE_HOME="$syn" \
+    bash "$patched" --target device --server https://x --code C1 --region intl 2>&1)"
+}
+test_bootstrapped_node_path
+assert_contains "bootstrap: PATH includes bootstrapped node bin" "node/24.16.0/bin:"
+assert_contains "bootstrap: sha256 verified" "sha256 verified"
+
+# ---- review #5: no rc file exists -> ~/.profile is created (real, not dry) -
+NO_RC_HOME="$WORK/norc.$RANDOM"
+mkdir -p "$NO_RC_HOME"
+env PATH="$FAKE_BIN:/usr/bin:/bin" HOME="$NO_RC_HOME" FAKE_NODE_VER=24.16.0 \
+  SYNAPSE_PRIVATE_NPM_REGISTRY="https://npmr.example.com/" SYNAPSE_HOME="$WORK/norc-syn.$RANDOM" \
+  bash "$INSTALL_SH" --target device --server https://x --code C1 --region intl >/dev/null 2>&1
+if [ -f "$NO_RC_HOME/.profile" ] && grep -q "npm-global/bin" "$NO_RC_HOME/.profile"; then
+  echo "ok   - no rc file: ~/.profile created with PATH line"; pass=$((pass + 1))
+else
+  echo "FAIL - no rc file: ~/.profile NOT created with PATH line"; fail=$((fail + 1))
+fi
+
 echo ""
 echo "install.test.sh: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

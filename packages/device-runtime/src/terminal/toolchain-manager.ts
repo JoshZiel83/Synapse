@@ -107,6 +107,12 @@ export interface CreateToolchainManagerOptions {
   readonly prestageDirs?: readonly string[]
   /** Logger called on download / extract events. */
   readonly logger?: (message: string) => void
+  /**
+   * China Node-dist mirror key (ustc|huawei|tencent|aliyun|npmmirror).
+   * Forwarded to downloadAndExtractEntry, which also reads
+   * SYNAPSE_DEVICE_TOOLCHAIN_MIRROR from the env when this is unset.
+   */
+  readonly toolchainMirror?: string
 }
 
 export type ArchiveLocator = (params: {
@@ -235,6 +241,7 @@ export function createToolchainManager(
           fetchImpl: options.fetchImpl,
           log: (m) => log(`[${normName}] ${m}`),
           prestageDirs: options.prestageDirs,
+          toolchainMirror: options.toolchainMirror,
         })
       } catch (err) {
         if (err instanceof Error && /sha256 mismatch/.test(err.message)) {

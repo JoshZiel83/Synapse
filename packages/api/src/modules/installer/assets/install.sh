@@ -36,11 +36,15 @@ track_tmp() { SYNAPSE_TMP_PATHS="$SYNAPSE_TMP_PATHS $1"; }
 trap 'for _p in $SYNAPSE_TMP_PATHS; do rm -rf "$_p" 2>/dev/null || true; done' EXIT
 
 # --- server-rendered placeholders (substituted by the API route) ----------
-SYNAPSE_RENDERED_SERVER_URL="@@SYNAPSE_SERVER_URL@@"
-SYNAPSE_RENDERED_PRIVATE_REGISTRY="@@SYNAPSE_NPM_REGISTRY@@"
+# The API route replaces each @@...@@ token with a FULLY shell-quoted literal
+# (e.g. 'https://host/'), so do NOT add surrounding quotes here. When the
+# script is run raw (not via the route) the tokens stay literal and are
+# treated as unset below.
+SYNAPSE_RENDERED_SERVER_URL=@@SYNAPSE_SERVER_URL@@
+SYNAPSE_RENDERED_PRIVATE_REGISTRY=@@SYNAPSE_NPM_REGISTRY@@
 # sha256 of the rendered install.ps1, injected so the Git-Bash → PowerShell
 # re-exec path can verify the downloaded ps1 before running it.
-SYNAPSE_RENDERED_PS1_SHA256="@@SYNAPSE_PS1_SHA256@@"
+SYNAPSE_RENDERED_PS1_SHA256=@@SYNAPSE_PS1_SHA256@@
 
 # >>> SYNAPSE_NODE_MANIFEST (generated — do not edit by hand) >>>
 INSTALLER_NODE_VERSION="24.16.0"
@@ -80,6 +84,7 @@ __main() {
   NODE_PREFIX_BASE="$SYNAPSE_HOME/node"
   NPM_GLOBAL_PREFIX="$SYNAPSE_HOME/npm-global"
   MANAGED_NPMRC="$SYNAPSE_HOME/npmrc"
+  BOOTSTRAPPED_NODE_BIN=""  # set by bootstrap_node when we install our own Node
   RC_MARKER_BEGIN="# >>> synapse installer >>>"
   RC_MARKER_END="# <<< synapse installer <<<"
 
@@ -436,6 +441,10 @@ bootstrap_node() {
   local prefix="$NODE_PREFIX_BASE/$INSTALLER_NODE_VERSION"
   NODE_BIN="$prefix/bin/node"
   NPM_BIN="$prefix/bin/npm"
+  # Record the bootstrapped Node bin dir so install_synapse_pkg persists it on
+  # PATH too — a new shell's `synapse-device` shim (#!/usr/bin/env node) must
+  # find this Node, not just the npm-global bin.
+  BOOTSTRAPPED_NODE_BIN="$prefix/bin"
 
   # Idempotent: a healthy prior bootstrap is reused.
   if [ -x "$NODE_BIN" ] && [ "$("$NODE_BIN" -p 'process.versions.node' 2>/dev/null || echo)" = "$INSTALLER_NODE_VERSION" ]; then
@@ -568,7 +577,9 @@ write_npmrc_file() {
   run mkdir -p "$(dirname "$path")"
   {
     echo "@synapse:registry=$PRIVATE_REGISTRY"
-    [ -n "$THIRD_PARTY_REGISTRY" ] && echo "registry=$THIRD_PARTY_REGISTRY"
+    if [ -n "$THIRD_PARTY_REGISTRY" ]; then
+      echo "registry=$THIRD_PARTY_REGISTRY"
+    fi
   } > "$path"
 }
 
@@ -599,11 +610,16 @@ install_synapse_pkg() {
     --userconfig "$MANAGED_NPMRC" $reg_args "$pkg" \
     || die "npm install $pkg failed"
 
+  # Persist the npm-global bin (where the synapse-* shims land) and, when we
+  # bootstrapped our own Node, that Node's bin too — the shim's
+  # `#!/usr/bin/env node` must resolve in a fresh shell.
+  local path_dirs="$NPM_GLOBAL_PREFIX/bin"
+  [ -n "$BOOTSTRAPPED_NODE_BIN" ] && path_dirs="$BOOTSTRAPPED_NODE_BIN:$path_dirs"
   if [ "$NO_MODIFY_PATH" = "true" ]; then
     log "--no-modify-path set: add this to your shell profile manually:"
-    log "  export PATH=\"$NPM_GLOBAL_PREFIX/bin:\$PATH\""
+    log "  export PATH=\"$path_dirs:\$PATH\""
   else
-    persist_env_line "export PATH=\"$NPM_GLOBAL_PREFIX/bin:\$PATH\""
+    persist_env_line "export PATH=\"$path_dirs:\$PATH\""
   fi
 }
 
@@ -645,10 +661,16 @@ run_daemon() {
 
 # ---------------------------------------------------------------------------
 # Append a single guarded line to shell rc files, idempotently.
+# Append a single guarded line to shell rc files, idempotently. If NONE of the
+# usual rc files exist (fresh HOME / minimal image), create ~/.profile so the
+# line actually lands somewhere. Always print the line so the user can apply it
+# to the current shell immediately.
 persist_env_line() {
-  local line="$1" rc
-  for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
+  local line="$1" rc wrote=false
+  local rcs="$HOME/.profile $HOME/.bashrc $HOME/.zshrc"
+  for rc in $rcs; do
     [ -e "$rc" ] || continue
+    wrote=true
     if grep -Fq "$line" "$rc" 2>/dev/null; then continue; fi
     if [ "$DRY_RUN" = "true" ]; then
       echo "DRYRUN: append to $rc: $line"
@@ -660,8 +682,22 @@ persist_env_line() {
       echo "$line"
       echo "$RC_MARKER_END"
     } >> "$rc"
-    log "updated PATH in $rc (open a new shell or 'source $rc')"
+    log "updated $rc (open a new shell or 'source $rc')"
   done
+  if [ "$wrote" = "false" ]; then
+    # No rc file existed — create ~/.profile so the change persists.
+    if [ "$DRY_RUN" = "true" ]; then
+      echo "DRYRUN: create $HOME/.profile with: $line"
+    else
+      {
+        echo "$RC_MARKER_BEGIN"
+        echo "$line"
+        echo "$RC_MARKER_END"
+      } >> "$HOME/.profile"
+      log "created $HOME/.profile (open a new shell or 'source ~/.profile')"
+    fi
+  fi
+  log "to use it now: $line"
 }
 
 __main "$@"

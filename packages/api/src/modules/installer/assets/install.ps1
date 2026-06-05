@@ -40,8 +40,10 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 }
 
 # --- server-rendered placeholders ------------------------------------------
-$RenderedServerUrl = '@@SYNAPSE_SERVER_URL@@'
-$RenderedPrivateRegistry = '@@SYNAPSE_NPM_REGISTRY@@'
+# The API route replaces each @@...@@ token with a fully PowerShell-quoted
+# literal (e.g. 'https://host/'), so do NOT add surrounding quotes here.
+$RenderedServerUrl = @@SYNAPSE_SERVER_URL@@
+$RenderedPrivateRegistry = @@SYNAPSE_NPM_REGISTRY@@
 
 # >>> SYNAPSE_NODE_MANIFEST (generated — do not edit by hand) >>>
 $InstallerNodeVersion = '24.16.0'
@@ -217,6 +219,7 @@ function Get-SynapseHome {
 }
 
 $script:NodeExe = $null
+$script:NodeDir = $null
 $script:NpmCmd = $null
 $script:NpmGlobalPrefix = $null
 
@@ -224,6 +227,7 @@ function Initialize-NodeFromPrefix {
   param([string]$Prefix)
   # Windows Node zip lays node.exe at the prefix ROOT (not bin/).
   $script:NodeExe = Join-Path $Prefix 'node.exe'
+  $script:NodeDir = $Prefix
   $script:NpmCmd = Join-Path $Prefix 'npm.cmd'
   # Put node + the managed npm-global on PATH for THIS process.
   $env:PATH = "$Prefix;$($script:NpmGlobalPrefix);$env:PATH"
@@ -401,7 +405,12 @@ function Main {
 
   Set-Npmrc $privateRegistry $thirdParty $managedNpmrc
   Set-ToolchainMirror $mirrorInfo.P5
-  Set-UserPath (Join-Path $script:NpmGlobalPrefix 'bin')
+  # Persist the npm-global PREFIX ROOT — on Windows the npm global bin shims
+  # (synapse-device.cmd etc.) live at the prefix root, not a bin/ subdir. When
+  # we bootstrapped our own Node, also persist that Node dir so the shims'
+  # node fallback resolves in a fresh terminal.
+  Set-UserPath $script:NpmGlobalPrefix
+  if (-not $useExisting -and $script:NodeDir) { Set-UserPath $script:NodeDir }
 
   $pkg = if ($Target -eq 'device') { '@synapse/device-runtime' } else { '@synapse/remote-agent-daemon' }
   $binName = if ($Target -eq 'device') { 'synapse-device.cmd' } else { 'synapse-remote-agent-daemon.cmd' }

@@ -239,6 +239,7 @@ export async function installBundles(
         // linux-x64 archives. Threading the flag through lets the
         // single-buffer-read path enforce the air-gapped requirement.
         requirePrestaged: opts.requirePrestaged,
+        toolchainMirror: opts.toolchainMirror,
       })
       if (!isHealthyCache(rootDir, entry, opts.platform)) {
         throw new Error(

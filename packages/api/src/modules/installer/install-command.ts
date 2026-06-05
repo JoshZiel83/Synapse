@@ -84,8 +84,11 @@ function psQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
 }
 
-// Substitute server/registry placeholders only. Values are quoted for the
-// target shell context so a hostile/odd URL can't break out of the literal.
+// Substitute server/registry (and extra) placeholders with FULLY shell-quoted
+// values. The script templates place each placeholder as a bare assignment
+// (VAR=@@...@@ / $X = @@...@@), so injecting the complete quoted literal
+// ('...') is what makes a value containing $(), backticks, or quotes inert —
+// stripping the quotes (the prior approach) left command-substitution live.
 function renderScript(
   body: string,
   cfg: InstallerConfig,
@@ -94,22 +97,13 @@ function renderScript(
 ): string {
   let out = body
     .split(PLACEHOLDER_SERVER)
-    .join(stripQuotes(quote(cfg.serverUrl)))
+    .join(quote(cfg.serverUrl))
     .split(PLACEHOLDER_REGISTRY)
-    .join(stripQuotes(quote(cfg.privateRegistry)))
+    .join(quote(cfg.privateRegistry))
   for (const [k, v] of Object.entries(extra ?? {})) {
-    out = out.split(k).join(v)
+    out = out.split(k).join(quote(v))
   }
   return out
-}
-
-// The placeholders sit inside the scripts' own quotes (SH="...", PS1='...'),
-// so we substitute the bare (escaped) value, not a re-quoted one. We still run
-// the value through the quoter to neutralize embedded quotes, then strip the
-// outer wrapping quote the quoter added.
-function stripQuotes(quoted: string): string {
-  // shQuote/psQuote both wrap in single quotes; remove the first and last.
-  return quoted.slice(1, -1)
 }
 
 /**
@@ -171,11 +165,13 @@ function unixCommand(
     .filter(([, v]) => v !== "")
     .map(([k, v]) => `${k} ${shQuote(v)}`)
     .join(" ")
-  // download-to-file -> sha256 verify -> run; tools have fallbacks.
+  // download-to-file -> sha256 verify -> run; tools have fallbacks. Use
+  // printf with "$f" as a REAL variable (not inside a single-quoted literal,
+  // which would pass the bytes `$f` to sha256sum and always fail).
   return [
     `f=$(mktemp)`,
     `{ curl -fsSL ${shQuote(url)} -o "$f" || wget -qO "$f" ${shQuote(url)}; }`,
-    `&& { echo ${shQuote(`${shaSh}  $f`)} | { sha256sum -c - 2>/dev/null || shasum -a 256 -c - 2>/dev/null; }; }`,
+    `&& { printf '%s  %s\\n' ${shQuote(shaSh)} "$f" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c - 2>/dev/null; }; }`,
     `&& bash "$f" ${flags}`,
   ].join(" ")
 }

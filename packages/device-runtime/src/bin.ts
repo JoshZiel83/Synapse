@@ -752,6 +752,12 @@ async function main() {
       // after explicit flags so operators can extend, not replace, the
       // standard lookup order.
       prestageDirs.push(...defaultPrestageDirs(defaultPackageRoot()))
+      // Optional China Node-dist mirror. Explicit flag wins over the env
+      // (SYNAPSE_DEVICE_TOOLCHAIN_MIRROR), which downloadAndExtractEntry also
+      // honors directly; passing it here makes the CLI path explicit.
+      const toolchainMirror =
+        getFlag(args.flags, "toolchain-mirror") ??
+        process.env["SYNAPSE_DEVICE_TOOLCHAIN_MIRROR"]
       const report = await installBundles({
         manifest,
         toolchainDir,
@@ -760,6 +766,7 @@ async function main() {
         skipExisting,
         prestageDirs,
         requirePrestaged,
+        toolchainMirror,
         logger: (m) => console.log(m),
       })
       console.log(JSON.stringify(report, null, 2))
