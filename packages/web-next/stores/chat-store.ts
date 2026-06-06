@@ -19,7 +19,6 @@ import { createUuid } from "@/lib/uuid"
 import type {
   ActorRuntimeState,
   CanonicalContentBlock,
-  ChatConversationCreateInput,
   ChatConversationItem,
   ChatConversationReadWatermarkResponse,
   ChatConversationView,
@@ -42,6 +41,13 @@ import {
   summarizeConversationEvent,
   textBlocks,
 } from "@synapse/shared"
+import {
+  clearConversationTombstone,
+  rebaseQueueFieldsOntoLatest,
+  shouldApplyDrainedSyncEvent,
+  toStoredChatQueueState,
+  upsertConversationWithTombstoneGuard,
+} from "./chat-store-queue"
 
 export interface ConversationParticipant {
   id: string
@@ -276,36 +282,6 @@ function createEmptyWorkspaceSnapshot(
   }
 }
 
-function toStoredChatQueueState(
-  snapshot: Pick<
-    ChatWorkspaceSnapshot,
-    | "workspaceId"
-    | "workspaceMemberId"
-    | "clientInstanceId"
-    | "inboxCursor"
-    | "lastBootstrappedAt"
-    | "pendingReads"
-    | "outbox"
-    | "tombstones"
-  > | null
-): StoredChatQueueState | null {
-  if (!snapshot) {
-    return null
-  }
-
-  return {
-    version: 4,
-    workspaceId: snapshot.workspaceId,
-    workspaceMemberId: snapshot.workspaceMemberId,
-    clientInstanceId: snapshot.clientInstanceId,
-    inboxCursor: snapshot.inboxCursor,
-    lastBootstrappedAt: snapshot.lastBootstrappedAt,
-    pendingReads: snapshot.pendingReads,
-    outbox: snapshot.outbox,
-    tombstones: snapshot.tombstones,
-  }
-}
-
 function mergeStoredQueueIntoSnapshot(
   snapshot: ChatWorkspaceSnapshot | null,
   queueState: StoredChatQueueState
@@ -497,114 +473,6 @@ function pruneConversationFromSnapshot(
     pendingReads: nextPendingReads,
     outbox: nextOutbox,
     tombstones: nextTombstones,
-  }
-}
-
-/**
- * Clear a conversation's tombstone (legitimate re-add / bootstrap liveness).
- *
- * Seq-guarded: a clear only supersedes a removal it is NEWER than. Pass the
- * clearing event's memberSeq; if it is <= the recorded removedSeq the clear is
- * STALE (an older {active} arriving after a newer kick) and is ignored, so it
- * cannot re-expose a conversation a newer removal tombstoned. Pass `undefined`
- * (bootstrap liveness) to clear unconditionally — bootstrap is the authoritative
- * current set.
- */
-function clearConversationTombstone(
-  snapshot: ChatWorkspaceSnapshot,
-  conversationId: string,
-  memberSeq?: number
-): ChatWorkspaceSnapshot {
-  const tombstone = snapshot.tombstones[conversationId]
-  if (!tombstone) {
-    return snapshot
-  }
-  if (typeof memberSeq === "number" && memberSeq <= tombstone.removedSeq) {
-    return snapshot
-  }
-  const nextTombstones = { ...snapshot.tombstones }
-  delete nextTombstones[conversationId]
-  return { ...snapshot, tombstones: nextTombstones }
-}
-
-/**
- * Upsert a conversation, but REFUSE if a live frame is stale relative to a
- * tombstone (event.memberSeq <= tombstone.removedSeq). This is what stops an
- * old, higher-than-the-removal-but-still-in-flight conversation.upsert from
- * resurrecting a removed conversation. Frames with no seq context (memberSeq
- * undefined) are allowed through (bootstrap path passes its own liveness).
- */
-function upsertConversationWithTombstoneGuard(
-  snapshot: ChatWorkspaceSnapshot,
-  incoming: ChatConversationView,
-  memberSeq?: number
-): ChatWorkspaceSnapshot {
-  const tombstone = snapshot.tombstones[incoming.conversationId]
-  if (
-    tombstone &&
-    typeof memberSeq === "number" &&
-    memberSeq <= tombstone.removedSeq
-  ) {
-    return snapshot
-  }
-  return {
-    ...snapshot,
-    conversations: upsertRawConversation(snapshot.conversations, incoming),
-  }
-}
-
-/**
- * Reconcile the result of an async queue operation (flushPendingReads /
- * flushOutbox) back onto the LATEST live snapshot, using a base-aware THREE-WAY
- * merge so concurrent additions are not lost.
- *
- * - `base`: the snapshot the flush STARTED from.
- * - `latest`: the current live snapshot (may have new outbox/reads/tombstones
- *   added while the flush's network round-trip was in flight).
- * - `processed`: the flush result (entries it confirmed/dropped, relative to
- *   base).
- *
- * The queue fields (outbox, pendingReads, tombstones, inboxCursor) are merged
- * via the shared mergeStoredQueueTransition(current=latest, previous=base,
- * next=processed) — the SAME base-aware diff the persist layer uses: an entry
- * the flush dropped (in base, absent in processed) is removed; an entry latest
- * added after base is preserved; tombstone clears are sequenced. The latest
- * snapshot's list state (conversations) is authoritative and kept as-is. Any
- * queue entry for a conversation latest has tombstoned is then dropped so a
- * flush cannot reinsert a removed conversation's outbox/read.
- */
-function rebaseQueueFieldsOntoLatest(
-  base: ChatWorkspaceSnapshot,
-  latest: ChatWorkspaceSnapshot,
-  processed: ChatWorkspaceSnapshot
-): ChatWorkspaceSnapshot {
-  const baseQueue = toStoredChatQueueState(base)
-  const latestQueue = toStoredChatQueueState(latest)
-  const processedQueue = toStoredChatQueueState(processed)
-  if (!baseQueue || !latestQueue || !processedQueue) {
-    return latest
-  }
-  const mergedQueue = mergeStoredQueueTransition(
-    latestQueue,
-    baseQueue,
-    processedQueue
-  )
-
-  const tombstoned = mergedQueue.tombstones
-  const pendingReads = Object.fromEntries(
-    Object.entries(mergedQueue.pendingReads).filter(([cid]) => !tombstoned[cid])
-  )
-  const outbox = Object.fromEntries(
-    Object.entries(mergedQueue.outbox).filter(
-      ([, entry]) => !tombstoned[entry.conversationId]
-    )
-  )
-  return {
-    ...latest,
-    pendingReads,
-    outbox,
-    tombstones: mergedQueue.tombstones,
-    inboxCursor: mergedQueue.inboxCursor,
   }
 }
 
@@ -1400,7 +1268,8 @@ function applySyncEventToSnapshot(
       nextSnapshot = upsertConversationWithTombstoneGuard(
         nextSnapshot,
         payload.conversation,
-        event.memberSeq
+        event.memberSeq,
+        upsertRawConversation
       )
       break
     }
@@ -2214,7 +2083,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           // kick. The live cursor is the high-water mark of in-order live frames.
           const liveBase = getLiveCursor(effectiveWorkspaceId, live.inboxCursor)
           for (const event of response.events) {
-            if (event.memberSeq <= liveBase) {
+            if (!shouldApplyDrainedSyncEvent(event.memberSeq, liveBase)) {
               continue
             }
             nextSnapshot = applySyncEventToSnapshot(

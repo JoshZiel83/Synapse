@@ -13,6 +13,9 @@
     "start": "next start",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
+    "pretest": "npm --workspace=@synapse/shared run build",
+    "test": "vitest run",
+    "pretypecheck": "npm --workspace=@synapse/shared run build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -72,6 +75,7 @@
     "prettier-plugin-tailwindcss": "^0.7.2",
     "shadcn": "^4.0.5",
     "tailwindcss": "^4.1.18",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.8"
   }
 }
