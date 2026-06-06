@@ -116,18 +116,6 @@ export interface McpInstance {
   workspaceId?: string
   configHash: string
   tools: ToolDefinition[]
-  // Device-only metadata exposed at instance level so tool-resolver can
-  // build a correct device origin BEFORE invoking execute (the
-  // per-tool runtime context with deviceId/exposureStableKey isn't
-  // populated until ensureRuntimeSession runs inside execute). Without
-  // this, the failure path or the first tool call gets mis-tagged as
-  // plugin origin — Phase 10 review fix.
-  deviceInstanceMetadata?: {
-    deviceId: string
-    exposureId: string
-    exposureStableKey: string
-    exposureDisplayName?: string
-  }
   execute: (
     toolName: string,
     input: Record<string, unknown>,
