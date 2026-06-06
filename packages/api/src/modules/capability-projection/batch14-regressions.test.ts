@@ -415,7 +415,7 @@ test("Batch 14: capability-projection dispatcher computes sanitizedInput via str
   )
 })
 
-test("Batch 14: capability-projection dispatcher stamps mcp_device origin", async () => {
+test("Batch 14: capability-projection dispatcher stamps device origin", async () => {
   const source = await readFile(
     new URL("./service.ts", import.meta.url),
     "utf8"
@@ -428,6 +428,6 @@ test("Batch 14: capability-projection dispatcher stamps mcp_device origin", asyn
     /return withDeviceToolOrigin\(\s*\{\s*content:\s*tool\?\.content/s.test(
       source
     ),
-    "successful device dispatch no longer returns NormalizedMcpToolResult.origin, so tool history will fall back to mcp_remote"
+    "successful device dispatch no longer returns NormalizedMcpToolResult.origin"
   )
 })

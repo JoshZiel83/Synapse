@@ -196,7 +196,7 @@ test(
 )
 
 test(
-  "buildConversationCapabilitySubjects adds actor (no CAC subject) for active participant",
+  "buildConversationCapabilitySubjects adds actor only for active participant",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -213,8 +213,8 @@ test(
         actorId,
         conversationId,
       })
-      // D2: previously also pushed a `conversation_actor_context` subject;
-      // that kind is gone — the actor + conversation runtime context now
+      // D2: previously also pushed a runtime-pair subject; that kind is gone.
+      // The actor + conversation runtime context now
       // matches `actor + scope=conversation` grants instead.
       assert.deepEqual(subjects, [
         { type: "workspace", id: workspaceId },
@@ -236,7 +236,7 @@ test(
       const conversationId = await insertConversation(db, workspaceId)
       await addActiveActorParticipant(db, conversationId, actorId)
 
-      // D2: the conversationActorContextId param is gone; the function now
+      // D2: the runtime-pair id param is gone; the function now
       // produces the workspace + actor subjects only — they should be unique.
       const subjects = await buildConversationCapabilitySubjects(db, {
         workspaceId,

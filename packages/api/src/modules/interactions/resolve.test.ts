@@ -91,7 +91,7 @@ test("runtime_authorization WITH taskId does NOT skip task completion", () => {
       principalSubjectKind: undefined,
     }),
     false,
-    "actor / actor_in_conversation principals always drive task completion"
+    "actor principals always drive task completion"
   )
 })
 

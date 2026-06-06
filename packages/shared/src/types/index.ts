@@ -907,11 +907,7 @@ export type ActorRuntimeActivityState =
   | "skipped"
   | "cancelled"
 
-export type ActorRuntimeToolKind =
-  | "callable"
-  | "mcp_plugin"
-  | "mcp_device"
-  | "provider_builtin"
+export type ActorRuntimeToolKind = "system" | "plugin" | "device"
 
 export type ActorRuntimeTaskStatus =
   | "working"
@@ -1921,41 +1917,32 @@ export interface CanonicalToolCall {
 // executor, model response media ingest). Downstream consumers
 // (FE display, audit logs, debugging tools) read this to attribute results.
 export type ToolResultOrigin =
+  | { kind: "system"; registryKey: string }
   | {
-      kind: "mcp_remote"
-      serverKey: string
-      serverName?: string
+      kind: "plugin"
+      installationId: string
+      upstreamToolName: string
+      publisherSlug?: string
+      itemSlug?: string
     }
   | {
-      kind: "mcp_device"
-      deviceId: string
-      deviceName?: string
-      exposureId?: string
+      kind: "device"
+      deviceToolId: string
       exposureStableKey: string
-      exposureName?: string
-      runtimeSessionId?: string
+      deviceName?: string
       visibleToolName?: string
-      namespacedToolName?: string
     }
-  | {
-      kind: "callable_plugin"
-      pluginKey: string
-      pluginName?: string
-    }
-  | {
-      kind: "builtin"
-      toolKind: string
-    }
+  | { kind: "provider_native"; providerType: ProviderType; toolName: string }
   | {
       kind: "model_response"
       providerType: ProviderType
     }
 
 export const TOOL_RESULT_ORIGIN_KINDS = [
-  "mcp_remote",
-  "mcp_device",
-  "callable_plugin",
-  "builtin",
+  "system",
+  "plugin",
+  "device",
+  "provider_native",
   "model_response",
 ] as const
 export type ToolResultOriginKind = (typeof TOOL_RESULT_ORIGIN_KINDS)[number]
@@ -1971,7 +1958,7 @@ export interface CanonicalToolResult {
   structuredContent?: Record<string, unknown>
   isError?: boolean
   // Where this result came from. Filled at the ingest boundary.
-  origin?: ToolResultOrigin
+  origin: ToolResultOrigin
   metadata?: Record<string, unknown>
 }
 
@@ -2216,10 +2203,11 @@ export interface NormalizedMcpToolResult {
   content: CanonicalContentBlock[]
   isError?: boolean
   structuredContent?: Record<string, unknown>
-  // Provenance of the result (transport / device / plugin). Filled by the
+  // Provenance of the result (system / plugin / device / provider / model).
+  // Filled by the
   // ingest pipeline so downstream code can attribute the result without
   // tracking it out-of-band.
-  origin?: ToolResultOrigin
+  origin: ToolResultOrigin
   metadata?: Record<string, unknown>
   rawResult?: unknown
 }
@@ -2267,7 +2255,6 @@ export interface RuntimeActorContext {
   conversationId?: string
   conversationKind?: "direct" | "group"
   isImConversation?: boolean
-  conversationActorContextId?: string
   userId?: string
   // Carries the workspace_member acting on behalf of `userId` in this workspace.
   // Needed so that member-scoped resource_access_bindings (written by
@@ -2286,7 +2273,6 @@ export interface CapabilityInvocationContext {
   conversationId?: string
   conversationKind?: "direct" | "group"
   isImConversation?: boolean
-  conversationActorContextId?: string
   turnId?: string
   toolCallId?: string
   providerCallId?: string
@@ -2364,7 +2350,7 @@ export interface AIResponse {
 export type MarketplaceItemKind = "plugin" | "skill" | "actor" | "model"
 // Plugin transport tiers — single source of truth in constants/enums.ts.
 // McpServerTransport: what the runtime instance-manager can start.
-// PluginSpecTransport: the DB catalog spec column (adds "device").
+// PluginSpecTransport: the DB catalog spec column.
 // PluginTransport: full application union (adds "filesystem").
 // DeviceExposureTransport: the device-exposure transport set (has "custom").
 export type McpServerTransport = (typeof MCP_SERVER_TRANSPORTS)[number]
@@ -2386,12 +2372,10 @@ export type MarketplaceSourceType =
   | "official"
   | "workspace_upload"
   | "user_upload"
-  | "device_derived"
 export type MarketplaceLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
-  | "device_derivation"
 export type MarketplaceSyncMode =
   | "notify"
   | "manual_merge"
@@ -2406,7 +2390,6 @@ export type MarketplaceRequirementTargetKind = "package" | "tag"
 export type PluginInstallationMode =
   | "manual"
   | "seeded"
-  | "device_derived"
   | "package_required"
   | "package_recommended"
 export type MarketplaceVersionStatus =
@@ -2473,13 +2456,9 @@ export interface AttachmentTarget {
   workspaceMemberId?: string
 }
 
-// subject-scope-refactor D3: AccessTarget / CapabilityAccessTarget collapsed to
-// the unified ScopedSubjectTarget = {subject: SubjectRef; scope?: SubjectRef}.
-// AccessTargetType / CapabilityAccessTargetType remain as legacy display label
-// types for UI selectors only (see ACCESS_TARGET_TYPES /
-// CAPABILITY_ACCESS_TARGET_TYPES in constants/enums.ts). Payload type aliases
-// re-export the wide model; device-side wire windows continue to use the narrow
-// DeviceCapabilityAccessTarget from @synapse/device-protocol.
+// AccessTarget / CapabilityAccessTarget are canonical scoped-subject payloads:
+// {subject: SubjectRef; scope?: SubjectRef}. Conversation scoping is represented
+// by `scope`, not by flat target strings.
 export type AccessTarget = ScopedSubjectTarget
 export type CapabilityAccessTarget = ScopedSubjectTarget
 
@@ -5004,17 +4983,20 @@ export function isToolResultOrigin(value: unknown): value is ToolResultOrigin {
   if (!value || typeof value !== "object") return false
   const v = value as Record<string, unknown>
   switch (v.kind) {
-    case "mcp_remote":
-      return typeof v.serverKey === "string"
-    case "mcp_device":
+    case "system":
+      return typeof v.registryKey === "string"
+    case "plugin":
       return (
-        typeof v.deviceId === "string" &&
+        typeof v.installationId === "string" &&
+        typeof v.upstreamToolName === "string"
+      )
+    case "device":
+      return (
+        typeof v.deviceToolId === "string" &&
         typeof v.exposureStableKey === "string"
       )
-    case "callable_plugin":
-      return typeof v.pluginKey === "string"
-    case "builtin":
-      return typeof v.toolKind === "string"
+    case "provider_native":
+      return typeof v.providerType === "string" && typeof v.toolName === "string"
     case "model_response":
       return typeof v.providerType === "string"
     default:
@@ -5034,7 +5016,7 @@ export function canonicalToolResult(input: {
   content: CanonicalContentBlock[]
   structuredContent?: Record<string, unknown>
   isError?: boolean
-  origin?: ToolResultOrigin
+  origin: ToolResultOrigin
   metadata?: Record<string, unknown>
 }): CanonicalToolResult {
   const result: CanonicalToolResult = {
@@ -5047,7 +5029,7 @@ export function canonicalToolResult(input: {
   if (input.structuredContent !== undefined)
     result.structuredContent = input.structuredContent
   if (input.isError !== undefined) result.isError = input.isError
-  if (input.origin !== undefined) result.origin = input.origin
+  result.origin = input.origin
   if (input.metadata !== undefined) result.metadata = input.metadata
   return result
 }

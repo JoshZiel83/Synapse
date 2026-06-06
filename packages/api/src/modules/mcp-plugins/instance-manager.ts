@@ -36,13 +36,7 @@ const MCP_INSTANCE_TTL_ACTOR = 2 * 60 * 60 * 1000
 const MCP_INSTANCE_TTL_CONVERSATION = 1 * 60 * 60 * 1000
 const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000
 
-type InstanceTransport =
-  | "builtin"
-  | "stdio"
-  | "http"
-  | "sse"
-  | "device"
-  | string
+type InstanceTransport = "builtin" | "stdio" | "http" | "sse" | string
 
 export type McpInstanceParams = {
   pluginId: string
@@ -123,11 +117,11 @@ export interface McpInstance {
   configHash: string
   tools: ToolDefinition[]
   // Device-only metadata exposed at instance level so tool-resolver can
-  // build a correct mcp_device origin BEFORE invoking execute (the
+  // build a correct device origin BEFORE invoking execute (the
   // per-tool runtime context with deviceId/exposureStableKey isn't
   // populated until ensureRuntimeSession runs inside execute). Without
   // this, the failure path or the first tool call gets mis-tagged as
-  // mcp_remote — Phase 10 review fix.
+  // plugin origin — Phase 10 review fix.
   deviceInstanceMetadata?: {
     deviceId: string
     exposureId: string

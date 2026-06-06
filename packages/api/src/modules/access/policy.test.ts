@@ -236,8 +236,8 @@ test(
   { timeout: 5 * 60_000 },
   async () => {
     // Round-8 P2 regression: validator used to only know about actor +
-    // scope=conversation. The runtime visibility path matches
-    // remote_agent_in_conversation (tool-resolver) so creation must
+    // scope=conversation. The runtime visibility path also checks
+    // remote_agent + scope=conversation, so creation must
     // validate it too — otherwise a remote_agent + scope=conv grant
     // could be written for a remote agent that isn't in the
     // conversation.

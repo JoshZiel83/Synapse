@@ -34,7 +34,6 @@ export const attachmentTypeLabels: Record<string, string> = {
   workspace: "Workspace",
   conversation: "Conversation",
   actor: "Actor",
-  actor_in_conversation: "Actor in Conversation",
   workspace_member: "Workspace Member",
 }
 
@@ -42,8 +41,6 @@ export const attachmentTypeColors: Record<string, string> = {
   workspace: "border-blue-500/30 text-blue-500 dark:text-blue-300",
   conversation: "border-orange-500/30 text-orange-500 dark:text-orange-300",
   actor: "border-green-500/30 text-green-500 dark:text-green-300",
-  actor_in_conversation:
-    "border-amber-500/30 text-amber-500 dark:text-amber-300",
   workspace_member:
     "border-fuchsia-500/30 text-fuchsia-500 dark:text-fuchsia-300",
 }
@@ -51,7 +48,6 @@ export const attachmentTypeColors: Record<string, string> = {
 export const transportLabels: Record<string, string> = {
   http: "Remote MCP",
   builtin: "Built-in",
-  device: "Device",
   stdio: "Local",
 }
 
@@ -67,7 +63,6 @@ const ownershipSummaryByAttachmentType: Record<string, string> = {
   workspace: "Owned by this workspace",
   conversation: "Owned by one conversation",
   actor: "Owned by one actor",
-  actor_in_conversation: "Owned by one actor in one conversation",
   workspace_member: "Owned by one workspace user",
 }
 
@@ -91,9 +86,6 @@ export function getPluginInstallationTitle(
   }
   if (attachmentType === "actor") {
     return "Actor configuration"
-  }
-  if (attachmentType === "actor_in_conversation") {
-    return "Actor + conversation configuration"
   }
   if (attachmentType === "workspace_member") {
     return "Workspace user configuration"

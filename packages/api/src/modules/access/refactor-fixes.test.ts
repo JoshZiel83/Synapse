@@ -21,7 +21,7 @@ import { insertMemoryAccessGrant } from "../memory/access-grant-storage.js"
  * Regression suite for the PR1-7 follow-up fixes (P0 grant REST holes,
  * grants not wired into reads, scope leak in
  * loadAccessBindingRowsForResourcesAndContext, remote_agent evaluator
- * branch, principal workspace validation, device CAC allowlist).
+ * branch, principal workspace validation, device allowlist).
  */
 
 const NS = "fixes"
@@ -344,11 +344,10 @@ test(
   }
 )
 
-// -------- P2 fix #6: runtime-authorization grant trigger CAC strict allowlist --------
+// -------- P2 fix #6: runtime-authorization grant trigger strict allowlist --------
 //
-// D2: the `conversation_actor_context` subject_kind has been removed from the
-// type system AND from the SQL ENUM, so the previous test ("CAC subjects are
-// rejected by the runtime-authorization grant trigger") can no longer construct
+// D2: the runtime-pair subject kind has been removed from the type system AND
+// from the SQL ENUM, so the previous rejection test can no longer construct
 // the offending subject. The trigger (tg_runtime_authorization_grant_validate)
 // now uses the canonical `is_workspace_bound_subject_kind`
 // allowlist (workspace_member / actor / remote_agent / workspace / conversation)

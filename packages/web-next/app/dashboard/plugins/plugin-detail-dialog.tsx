@@ -48,14 +48,12 @@ const transportLabels: Record<string, string> = {
   http: "Remote MCP (HTTP)",
   builtin: "Built-in",
   stdio: "Local (stdio)",
-  device: "Device Tunnel",
 }
 
 const attachmentTypeLabels: Record<string, string> = {
   workspace: "Workspace",
   conversation: "Conversation",
   actor: "Actor",
-  actor_in_conversation: "Actor in Conversation",
   workspace_member: "Workspace Member",
 }
 

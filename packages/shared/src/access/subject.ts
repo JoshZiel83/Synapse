@@ -400,41 +400,7 @@ export type ScopedSubjectTarget = {
 
 export type ScopedCapabilityAccessTarget = ScopedSubjectTarget
 
-/**
- * D3: derive the legacy display/SQL label from a `ScopedSubjectTarget`. The
- * label is the historical string used by the per-resource SQL views
- * (`bind_scope`, `access_bind_scope`) and by FE badge/description maps; we
- * keep it for back-compat indexing/display only, never for storage decisions.
- *
- * Mapping:
- *   - actor + scope=conversation         → "actor_in_conversation"
- *   - remote_agent + scope=conversation  → "remote_agent_in_conversation"
- *   - workspace / workspace_member / actor / conversation / remote_agent →
- *     mirrors the subject.kind value
- *   - anything else (user, external, platform, scope-only) falls back to
- *     the raw subject.kind for diagnostic use; UI maps should default-case.
- *
- * Round 9 review extension: previously only the actor-side composite was
- * emitted; remote_agent + scope=conversation defaulted to "remote_agent",
- * which (when the RuntimeBindingScope union didn't include "remote_agent"
- * at all — round 9 fixed that too) made some service-layer dedup paths
- * compare the new grant's label against a label set that didn't contain
- * the right value, miss the existing row, and crash on the DB unique
- * constraint when inserting the duplicate.
- */
 export function subjectScopeLabel(target: ScopedSubjectTarget): string {
-  if (
-    target.subject.kind === SUBJECT_KIND.ACTOR &&
-    target.scope?.kind === SUBJECT_KIND.CONVERSATION
-  ) {
-    return "actor_in_conversation"
-  }
-  if (
-    target.subject.kind === SUBJECT_KIND.REMOTE_AGENT &&
-    target.scope?.kind === SUBJECT_KIND.CONVERSATION
-  ) {
-    return "remote_agent_in_conversation"
-  }
   return target.subject.kind
 }
 

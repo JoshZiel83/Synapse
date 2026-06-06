@@ -8,7 +8,6 @@ import { sql } from "kysely"
 import { SUBJECT_KIND } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
-import { ensureConversationActorContext } from "../session/service.js"
 
 export interface DeviceCapabilityToolRow {
   device_id: string
@@ -154,9 +153,7 @@ export interface AccessTargetInput {
     | "workspace"
     | "actor"
     | "conversation"
-    | "actor_in_conversation"
     | "remote_agent"
-    | "remote_agent_in_conversation"
   workspaceId?: string
   actorId?: string
   conversationId?: string
@@ -165,13 +162,8 @@ export interface AccessTargetInput {
 
 /**
  * Resolve an AccessTarget DTO into an access_subjects row id pair:
- * `(subjectId, scopeSubjectId?)`. Scope is populated for the two
- * `*_in_conversation` flat-shape variants — `actor_in_conversation`
- * and `remote_agent_in_conversation` — which are the internal
- * representations of the wire-layer `(subject=actor|remote_agent,
- * scope=conversation)` combinations whitelisted by
- * `ScopedSubjectTargetWireSchema.superRefine`. All other variants
- * return `scopeSubjectId === undefined`.
+ * `(subjectId, scopeSubjectId?)`. Scope is populated when actor or
+ * remote_agent targets carry a conversationId.
  *
  * Tests may inject a Kysely handle (e.g. the ephemeral DB returned by
  * `withTestDb`) so the underlying `upsertAccessSubject` writes against
@@ -197,7 +189,12 @@ export async function resolveScopedSubjectTarget(
         kind: SUBJECT_KIND.ACTOR,
         actorId: input.actorId,
       })
-      return { subjectId }
+      if (!input.conversationId) return { subjectId }
+      const scopeSubjectId = await upsertAccessSubject(dbHandle, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: input.conversationId,
+      })
+      return { subjectId, scopeSubjectId }
     }
     case "conversation": {
       if (!input.conversationId) throw new Error("conversationId required")
@@ -207,22 +204,6 @@ export async function resolveScopedSubjectTarget(
       })
       return { subjectId }
     }
-    case "actor_in_conversation": {
-      // D3: collapse into actor subject + conversation scope. No CAC subject.
-      if (!input.actorId || !input.conversationId)
-        throw new Error(
-          "actorId and conversationId required for actor_in_conversation target"
-        )
-      const subjectId = await upsertAccessSubject(dbHandle, {
-        kind: SUBJECT_KIND.ACTOR,
-        actorId: input.actorId,
-      })
-      const scopeSubjectId = await upsertAccessSubject(dbHandle, {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: input.conversationId,
-      })
-      return { subjectId, scopeSubjectId }
-    }
     case "remote_agent": {
       if (!input.remoteAgentId)
         throw new Error("remoteAgentId required for remote_agent target")
@@ -230,23 +211,7 @@ export async function resolveScopedSubjectTarget(
         kind: SUBJECT_KIND.REMOTE_AGENT,
         remoteAgentId: input.remoteAgentId,
       })
-      return { subjectId }
-    }
-    case "remote_agent_in_conversation": {
-      // Mirror of `actor_in_conversation`: remote_agent subject narrowed
-      // to a conversation scope. The wire layer admits this combination
-      // (ScopedSubjectTargetWireSchema's superRefine whitelist) and the
-      // trigger `tg_runtime_authorization_grant_validate` accepts
-      // `(remote_agent, conversation)` for grants; bindings flow through
-      // the same `tg_rab_validate` trigger.
-      if (!input.remoteAgentId || !input.conversationId)
-        throw new Error(
-          "remoteAgentId and conversationId required for remote_agent_in_conversation target"
-        )
-      const subjectId = await upsertAccessSubject(dbHandle, {
-        kind: SUBJECT_KIND.REMOTE_AGENT,
-        remoteAgentId: input.remoteAgentId,
-      })
+      if (!input.conversationId) return { subjectId }
       const scopeSubjectId = await upsertAccessSubject(dbHandle, {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: input.conversationId,

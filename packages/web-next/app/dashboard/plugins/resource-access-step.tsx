@@ -7,15 +7,13 @@ import type {
 } from "@synapse/shared/types"
 type AccessTargetInput = CapabilityAccessTarget
 
-// D3 / PR6 TODO: PluginGrantScope mirrors the historical 5-value label union;
-// the UI still emits this shape from its selectors. PR6 will switch to a
-// SubjectPicker + ScopePicker that emit ScopedSubjectTarget directly.
-type PluginGrantScopeLegacy =
+type PluginGrantScope =
   | "workspace"
   | "workspace_member"
   | "conversation"
   | "actor"
-  | "actor_in_conversation"
+  | "actor_conversation"
+  | "remote_agent"
 import {
   MODEL_GROUP_GRANT_SCOPE,
   CONVERSATION_PARTICIPANT_TYPE,
@@ -74,13 +72,11 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
 import type { ConversationCatalogEntry } from "@synapse/shared"
 
-type PluginGrantScope = PluginGrantScopeLegacy
-
 const allowedGrantScopes: PluginGrantScope[] = [
   "workspace",
   "conversation",
   "actor",
-  "actor_in_conversation",
+  "actor_conversation",
 ]
 
 function buildGrantScopeOptions(resourceLabel: string): Array<{
@@ -105,7 +101,7 @@ function buildGrantScopeOptions(resourceLabel: string): Array<{
       description: `Only one actor can use this ${resourceLabel} anywhere it appears.`,
     },
     {
-      value: "actor_in_conversation",
+      value: "actor_conversation",
       label: "Actor in Conversation",
       description: `Only one actor can use this ${resourceLabel} inside one conversation.`,
     },
@@ -369,7 +365,7 @@ function getScopeLabel(scope: PluginGrantScope) {
       return "Conversation"
     case "actor":
       return "Actor"
-    case "actor_in_conversation":
+    case "actor_conversation":
       return "Actor in Conversation"
     default:
       return scope
@@ -377,19 +373,17 @@ function getScopeLabel(scope: PluginGrantScope) {
 }
 
 /**
- * D3: derive the legacy 5-value label from a ScopedSubjectTarget for display.
- * Subjects of other kinds (remote_agent, etc.) fall back to "workspace" until
- * PR6 widens the UI to render them.
+ * Derive the local UI selection from a canonical ScopedSubjectTarget.
  */
-function legacyTargetTypeOf(
+function targetScopeOf(
   target: ResourceAccessGrant["target"]
-): PluginGrantScopeLegacy {
+): PluginGrantScope {
   if (!target) return "workspace"
   if (
     target.subject.kind === "actor" &&
     target.scope?.kind === "conversation"
   ) {
-    return "actor_in_conversation"
+    return "actor_conversation"
   }
   switch (target.subject.kind) {
     case "workspace":
@@ -406,8 +400,8 @@ function legacyTargetTypeOf(
 }
 
 /**
- * D3: pull the actorId / conversationId / workspaceMemberId from a
- * ScopedSubjectTarget for the legacy reader paths below.
+ * Pull the actorId / conversationId / workspaceMemberId from a
+ * ScopedSubjectTarget for the reader paths below.
  */
 function targetActorId(target: ResourceAccessGrant["target"]): string | null {
   if (!target) return null
@@ -435,7 +429,7 @@ function formatGrantTarget(
 ) {
   const target = grant.target
   if (!target) return "Entire workspace"
-  const label = legacyTargetTypeOf(target)
+  const label = targetScopeOf(target)
   const actorId = targetActorId(target)
   const conversationId = targetConversationId(target)
   switch (label) {
@@ -453,7 +447,7 @@ function formatGrantTarget(
         (actorId ? actorsById.get(actorId) : null) ||
         (actorId ? `Actor ${String(actorId).slice(0, 8)}` : "Selected actor")
       )
-    case "actor_in_conversation": {
+    case "actor_conversation": {
       const actorName =
         (actorId ? actorsById.get(actorId) : null) ||
         (actorId ? `Actor ${String(actorId).slice(0, 8)}` : "Selected actor")
@@ -947,7 +941,7 @@ export default function ResourceAccessStep({
   }, [selectedConversation, selectedConversationAllowed])
   const actorOptions = useMemo(
     () =>
-      grantScope === "actor_in_conversation"
+      grantScope === "actor_conversation"
         ? actorInConversationOptions
         : allActorOptions,
     [actorInConversationOptions, allActorOptions, grantScope]
@@ -988,7 +982,7 @@ export default function ResourceAccessStep({
         ? "The actor you selected on the left"
         : "Choose an actor on the left"
     }
-    if (grantScope === "actor_in_conversation") {
+    if (grantScope === "actor_conversation") {
       return actorId && conversationId
         ? "The actor + conversation pair you selected on the left"
         : "Choose one actor and one conversation on the left"
@@ -1052,7 +1046,7 @@ export default function ResourceAccessStep({
           secondaryActorActive: false,
           footer: `Good when one actor owns this ${resourceLabelLower} across every conversation it joins.`,
         }
-      case "actor_in_conversation":
+      case "actor_conversation":
         return {
           title: `${PREVIEW_PRIMARY_ACTOR} in ${PREVIEW_CONVERSATION}`,
           subtitle: "Only this actor in this conversation can use it",
@@ -1107,7 +1101,7 @@ export default function ResourceAccessStep({
     if (grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR) {
       return Boolean(actorId && !loadingActors)
     }
-    if (grantScope === "actor_in_conversation") {
+    if (grantScope === "actor_conversation") {
       return Boolean(
         actorId &&
         conversationId &&
@@ -1260,14 +1254,14 @@ export default function ResourceAccessStep({
     }
     if (
       grantScope === "conversation" ||
-      grantScope === "actor_in_conversation"
+      grantScope === "actor_conversation"
     ) {
       void ensureConversationsLoaded().catch(() => {})
     }
   }, [dialogOpen, ensureActorsLoaded, ensureConversationsLoaded, grantScope])
 
   useEffect(() => {
-    if (grantScope !== "actor_in_conversation") {
+    if (grantScope !== "actor_conversation") {
       return
     }
     if (!actorId) {
@@ -1379,7 +1373,7 @@ export default function ResourceAccessStep({
         )
       }
     }
-    if (grantScope === "actor_in_conversation") {
+    if (grantScope === "actor_conversation") {
       if (!conversationId) {
         return "Select a conversation before choosing an actor."
       }
@@ -1431,7 +1425,7 @@ export default function ResourceAccessStep({
             }
           case "actor":
             return { subject: { kind: "actor", actorId: actorId ?? "" } }
-          case "actor_in_conversation":
+          case "actor_conversation":
             return {
               subject: { kind: "actor", actorId: actorId ?? "" },
               scope: {
@@ -1563,7 +1557,7 @@ export default function ResourceAccessStep({
 
   const openGrantConversationTypeDialog = (grant: ResourceAccessGrant) => {
     if (
-      !supportsGrantConversationTypeOverride(legacyTargetTypeOf(grant.target))
+      !supportsGrantConversationTypeOverride(targetScopeOf(grant.target))
     ) {
       return
     }
@@ -1713,7 +1707,7 @@ export default function ResourceAccessStep({
       )
     }
 
-    if (grantScope === "actor_in_conversation") {
+    if (grantScope === "actor_conversation") {
       return (
         <FieldGroup>
           <Field>
@@ -2015,7 +2009,7 @@ export default function ResourceAccessStep({
                 grants.map((grant) => (
                   <TableRow key={grant.id}>
                     <TableCell className="px-6 font-medium">
-                      {getScopeLabel(legacyTargetTypeOf(grant.target))}
+                      {getScopeLabel(targetScopeOf(grant.target))}
                     </TableCell>
                     <TableCell className="max-w-0">
                       <div className="truncate">
@@ -2028,7 +2022,7 @@ export default function ResourceAccessStep({
                     </TableCell>
                     <TableCell className="max-w-0">
                       {supportsGrantConversationTypeOverride(
-                        legacyTargetTypeOf(grant.target)
+                        targetScopeOf(grant.target)
                       ) ? (
                         <div className="space-y-1">
                           <div className="truncate">
@@ -2073,7 +2067,7 @@ export default function ResourceAccessStep({
                       <div className="flex justify-end gap-2">
                         {canManageGrantConversationTypes &&
                         supportsGrantConversationTypeOverride(
-                          legacyTargetTypeOf(grant.target)
+                          targetScopeOf(grant.target)
                         ) ? (
                           <Button
                             variant="ghost"
@@ -2265,7 +2259,7 @@ export default function ResourceAccessStep({
               ) : (
                 <div className="rounded-3xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
                   {grantScope === "conversation" ||
-                  grantScope === "actor_in_conversation" ? (
+                  grantScope === "actor_conversation" ? (
                     <>
                       Grant conversation types are fixed by the selected
                       conversation. This grant follows the instance policy and
@@ -2356,7 +2350,7 @@ export default function ResourceAccessStep({
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {editingGrant
-                  ? getScopeLabel(legacyTargetTypeOf(editingGrant.target))
+                  ? getScopeLabel(targetScopeOf(editingGrant.target))
                   : "Grant"}
               </div>
             </div>

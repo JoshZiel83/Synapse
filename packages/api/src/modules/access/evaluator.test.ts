@@ -846,11 +846,10 @@ test(
   }
 )
 
-// subject-scope-refactor merge: conversation_actor_context resource_type
-// was dropped (replaced by (subject, scope?) two-tuple). The two former
-// tests for `checkPermission(conversation_actor_context.memory_read)` and
-// `checkPermission(conversation_actor_context.*)` are intentionally
-// deleted — the resource type and permissions no longer exist.
+// subject-scope-refactor merge: the runtime-pair resource type was dropped
+// (replaced by (subject, scope?) two-tuple). The former permission tests are
+// intentionally deleted because the resource type and permissions no longer
+// exist.
 
 test(
   "checkPermission(memory_item.read) for a workspace_shared memory uses the workspace permission check",

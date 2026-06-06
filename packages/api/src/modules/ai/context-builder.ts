@@ -102,7 +102,9 @@ export async function loadExecutionToolResultsForSession(
     const contentBlocks = itemPartsToCanonicalContentBlocks(
       partsByResult.get(resultRow.id) || []
     )
-    const origin = isToolResultOrigin(meta.origin) ? meta.origin : undefined
+    const origin: ToolResultOrigin = isToolResultOrigin(meta.origin)
+      ? meta.origin
+      : { kind: "system", registryKey: call.tool_name }
     const structuredContent =
       meta.structuredContent && typeof meta.structuredContent === "object"
         ? (meta.structuredContent as Record<string, unknown>)
@@ -125,7 +127,7 @@ export async function loadExecutionToolResultsForSession(
         ? { isError: resultRow.is_error }
         : {}),
       ...(structuredContent !== undefined ? { structuredContent } : {}),
-      ...(origin ? { origin } : {}),
+      origin,
       ...(innerMetadata ? { metadata: innerMetadata } : {}),
     }
 
@@ -647,11 +649,9 @@ function extractInnerMetadata(
 }
 
 // Convert a session_message row with role="tool_result" into a structured
-// CanonicalToolResultBatchContextItem. Phase 4+ writers persist
+// CanonicalToolResultBatchContextItem. Writers persist
 // toolCallId/toolName/origin/structuredContent/isError under msg.metadata so
-// the batch can be reconstructed without extra DB lookups. For legacy rows
-// (no metadata structure), synthetic identifiers derived from msg.id keep
-// the batch well-formed; origin defaults to a placeholder mcp_remote kind.
+// the batch can be reconstructed without extra DB lookups.
 function buildToolResultBatchFromSessionMessage(
   msg: SessionMessageRow,
   meta: Record<string, unknown>,
@@ -659,10 +659,7 @@ function buildToolResultBatchFromSessionMessage(
     scope: "shared" | "private"
     surface: "visible" | "internal"
     // Override the synthetic toolName/origin used when the writer didn't
-    // preserve structured identifiers in metadata. tool_result rows use
-    // "unknown_tool" + an mcp_remote placeholder; child_result rows use
-    // "child_actor" + a builtin origin so the discriminator reflects
-    // semantics (a child actor finishing is not an MCP server response).
+    // preserve structured identifiers in metadata.
     defaultToolName?: string
     defaultOrigin?: ToolResultOrigin
     // Authoritative tool result data pre-loaded from
@@ -723,7 +720,7 @@ function buildToolResultBatchFromSessionMessage(
   const origin = isToolResultOrigin(meta.origin)
     ? meta.origin
     : options.defaultOrigin ||
-      ({ kind: "mcp_remote", serverKey: "unknown_legacy" } as const)
+      ({ kind: "system", registryKey: toolName } as const)
   // The writer (ai/index.ts) flattens the original tool metadata into
   // tool_results.metadata next to the reserved keys above (no
   // `innerMetadata` wrapper). Recover by stripping the reserved keys.
@@ -873,7 +870,7 @@ export function buildSessionContextItems(
             scope: "private",
             surface: "internal",
             defaultToolName: "child_actor",
-            defaultOrigin: { kind: "builtin", toolKind: "child_actor" },
+            defaultOrigin: { kind: "system", registryKey: "child_actor" },
             executionToolResults: options.executionToolResults,
           })
         )
@@ -959,7 +956,7 @@ export function buildConversationContextItems(params: {
             scope: "private",
             surface: "internal",
             defaultToolName: "child_actor",
-            defaultOrigin: { kind: "builtin", toolKind: "child_actor" },
+            defaultOrigin: { kind: "system", registryKey: "child_actor" },
             executionToolResults: params.executionToolResults,
           }
         )

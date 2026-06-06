@@ -15,7 +15,7 @@ import {
 import type { RuntimePrincipalContext } from "../access/subject-resolution.js"
 import { SUBJECT_KIND } from "@synapse/shared"
 
-// subject-scope-refactor: 'actor_in_conversation' removed from the operation
+// subject-scope-refactor: scoped actor target removed from the operation
 // principal_kind enum. The scoped-actor semantics is expressed as
 // (principal.kind='actor', activeConversationSubjectId set) in
 // RuntimePrincipalContext; deriveOperationPrincipalAudit collapses it back to
@@ -68,7 +68,7 @@ export interface BeginOperationResult {
  *   - principal.kind === 'workspace_member'→ 'workspace_member'
  *   - other (workspace, user, external, system) → throw InvalidPrincipalKindForDeviceOperation
  *
- * Note the scoped-actor case ('actor_in_conversation' before the refactor)
+ * Note the scoped-actor case before the refactor
  * collapses to 'actor' — the conversation context is recorded separately via
  * `device_operations.conversation_id` + `authorization_payload`.
  */

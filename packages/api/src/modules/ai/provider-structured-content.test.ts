@@ -24,7 +24,11 @@ function toolResultMessage(
     toolName: "lookup",
     content: opts.withText ? textBlocks("primary tool output") : [],
     isError: false,
-    origin: { kind: "mcp_remote", serverKey: "github" },
+    origin: {
+      kind: "plugin",
+      installationId: "plugin-installation-1",
+      upstreamToolName: "lookup",
+    },
   }
   if (structuredContent) tr.structuredContent = structuredContent
   return { role: "tool_result", results: [tr] }

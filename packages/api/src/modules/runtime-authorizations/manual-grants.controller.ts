@@ -7,7 +7,7 @@
 // page_id / all_pages) become usable on first run (those tools produce
 // `grantOptions:[]` interactions, which can't be one-click approved).
 //
-// Non-workspace scopes (actor/conversation/actor_in_conversation/
+// Non-workspace scopes (actor/conversation/scoped actor/
 // remote_agent/once) are intentionally rejected: those scopes require a
 // subject id that the API has no clean UX to collect from operators in
 // MVP. The chat approval path remains for those.

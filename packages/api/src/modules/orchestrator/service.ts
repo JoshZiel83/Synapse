@@ -191,13 +191,11 @@ async function handleCreateMemory(
         ? metadata.scope
         : "participant_private"
   const normalizedPreset =
-    requestedPreset === "actor_in_conversation"
-      ? "participant_private"
-      : requestedPreset === "conversation"
-        ? "conversation_shared"
-        : requestedPreset === "actor_global"
-          ? "actor_private"
-          : requestedPreset
+    requestedPreset === "conversation"
+      ? "conversation_shared"
+      : requestedPreset === "actor_global"
+        ? "actor_private"
+        : requestedPreset
   const effectivePreset: MemoryPreset = !ACTOR_MEMORY_PRESETS.has(
     normalizedPreset as MemoryPreset
   )

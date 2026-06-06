@@ -12,37 +12,32 @@ import {
 
 test("TOOL_RESULT_ORIGIN_KINDS enumerates all five kinds", () => {
   assert.deepEqual([...TOOL_RESULT_ORIGIN_KINDS].sort(), [
-    "builtin",
-    "callable_plugin",
-    "mcp_device",
-    "mcp_remote",
+    "device",
     "model_response",
+    "plugin",
+    "provider_native",
+    "system",
   ])
 })
 
 test("isToolResultOrigin accepts each valid kind shape", () => {
   const cases: ToolResultOrigin[] = [
-    { kind: "mcp_remote", serverKey: "github" },
-    { kind: "mcp_remote", serverKey: "amap", serverName: "Amap MCP" },
+    { kind: "system", registryKey: "create_memory" },
     {
-      kind: "mcp_device",
-      deviceId: "dev-1",
-      exposureStableKey: "synapse.builtin.filesystem.v1",
+      kind: "plugin",
+      installationId: "plugin-1",
+      upstreamToolName: "search",
+      publisherSlug: "acme",
+      itemSlug: "github",
     },
     {
-      kind: "mcp_device",
-      deviceId: "dev-1",
+      kind: "device",
+      deviceToolId: "tool-1",
       deviceName: "MacBook",
-      exposureId: "exp-uuid",
       exposureStableKey: "synapse.builtin.filesystem.v1",
-      exposureName: "Filesystem",
-      runtimeSessionId: "rs-uuid",
       visibleToolName: "View",
-      namespacedToolName: "filesystem__View",
     },
-    { kind: "callable_plugin", pluginKey: "github" },
-    { kind: "callable_plugin", pluginKey: "amap", pluginName: "Amap" },
-    { kind: "builtin", toolKind: "memory" },
+    { kind: "provider_native", providerType: "openai", toolName: "web_search" },
     { kind: "model_response", providerType: "anthropic" },
   ]
   for (const c of cases) {
@@ -63,22 +58,20 @@ test("isToolResultOrigin rejects malformed input", () => {
   // unknown kind
   assert.equal(isToolResultOrigin({ kind: "magic", serverKey: "x" }), false)
   // missing required field per kind
-  assert.equal(isToolResultOrigin({ kind: "mcp_remote" }), false)
-  assert.equal(isToolResultOrigin({ kind: "mcp_device", deviceId: "x" }), false)
-  assert.equal(
-    isToolResultOrigin({ kind: "mcp_device", exposureStableKey: "x" }),
-    false
-  )
-  assert.equal(isToolResultOrigin({ kind: "callable_plugin" }), false)
-  assert.equal(isToolResultOrigin({ kind: "builtin" }), false)
+  assert.equal(isToolResultOrigin({ kind: "system" }), false)
+  assert.equal(isToolResultOrigin({ kind: "plugin", installationId: "x" }), false)
+  assert.equal(isToolResultOrigin({ kind: "device", deviceToolId: "x" }), false)
+  assert.equal(isToolResultOrigin({ kind: "provider_native" }), false)
   assert.equal(isToolResultOrigin({ kind: "model_response" }), false)
 })
 
 test("canonicalToolResult builds the minimal shape", () => {
+  const origin: ToolResultOrigin = { kind: "system", registryKey: "echo" }
   const r = canonicalToolResult({
     toolCallId: "call-1",
     toolName: "echo",
     content: textBlocks("hello"),
+    origin,
   })
   assert.equal(r.toolCallId, "call-1")
   assert.equal(r.toolName, "echo")
@@ -89,7 +82,7 @@ test("canonicalToolResult builds the minimal shape", () => {
     Object.prototype.hasOwnProperty.call(r, "structuredContent"),
     false
   )
-  assert.equal(Object.prototype.hasOwnProperty.call(r, "origin"), false)
+  assert.deepEqual(r.origin, origin)
   assert.equal(Object.prototype.hasOwnProperty.call(r, "isError"), false)
   assert.equal(Object.prototype.hasOwnProperty.call(r, "metadata"), false)
   assert.equal(Object.prototype.hasOwnProperty.call(r, "providerCallId"), false)
@@ -97,8 +90,8 @@ test("canonicalToolResult builds the minimal shape", () => {
 
 test("canonicalToolResult carries all optional fields when set", () => {
   const origin: ToolResultOrigin = {
-    kind: "mcp_device",
-    deviceId: "dev-1",
+    kind: "device",
+    deviceToolId: "tool-1",
     exposureStableKey: "synapse.builtin.filesystem.v1",
   }
   const r: CanonicalToolResult = canonicalToolResult({
@@ -116,17 +109,4 @@ test("canonicalToolResult carries all optional fields when set", () => {
   assert.equal(r.isError, true)
   assert.deepEqual(r.origin, origin)
   assert.deepEqual(r.metadata, { traceId: "abc" })
-})
-
-test("CanonicalToolResult legacy shape (no structuredContent/origin) is still valid", () => {
-  const legacy: CanonicalToolResult = {
-    toolCallId: "call-1",
-    toolName: "echo",
-    content: textBlocks("ok"),
-  }
-  // structural test: should compile and the typeguard for origin should
-  // not falsely match an absent value.
-  assert.equal(legacy.structuredContent, undefined)
-  assert.equal(legacy.origin, undefined)
-  assert.equal(isToolResultOrigin(legacy.origin), false)
 })

@@ -151,7 +151,7 @@ async function loadConversationTargetRecord(
  * layer's view. The earlier helper special-cased actors; the policy
  * validator missed remote_agent + scope=conversation grants, which the
  * runtime path already matches (see loadVisibleAccessBindings
- * remote_agent_in_conversation branch). Same SQL shape, parametrized
+ * scoped remote_agent branch). Same SQL shape, parametrized
  * over participant_type + subject_id.
  *
  * Round 9 review extension: also accepts `workspace_member` — the
@@ -192,7 +192,7 @@ export async function validateConversationScopedAccessTarget(params: {
   // Post-D4 round 8 review (P2): handle ALL scope=conversation shapes
   // (subject=conversation, actor + scope=conversation, AND
   // remote_agent + scope=conversation). The runtime visibility layer
-  // already matches remote_agent_in_conversation grants (see
+  // already matches scoped remote_agent grants (see
   // loadVisibleAccessBindings in tool-resolver.ts) so the creation path
   // must validate them too, otherwise a remote_agent + scope=conv grant
   // could be written without checking conversation type policy or

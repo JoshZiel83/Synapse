@@ -2,14 +2,11 @@ import type { FastifyInstance } from "fastify"
 import { getTransportAccountById } from "./service.js"
 import { tryGetConnector } from "./connectors/registry.js"
 import { ingestInboundEnvelope } from "./service/ingest.js"
-import { handleFeishuWebhookRequest } from "./runtime.js"
 
 export default async function imPublicController(app: FastifyInstance) {
   /**
    * Generic IM webhook entry point — dispatches to the registered
-   * TransportConnector for the given transport_kind. Replaces the
-   * Feishu-specific path /api/v1/im/public/feishu/accounts/:accountId/webhook,
-   * which remains live below as a legacy alias.
+   * TransportConnector for the given transport_kind.
    */
   app.post<{
     Params: { transportKind: string; accountId: string }
@@ -51,29 +48,6 @@ export default async function imPublicController(app: FastifyInstance) {
         emitInbound: async (envelope) => {
           await ingestInboundEnvelope({ account, envelope })
         },
-      })
-      return reply.status(result.statusCode).send(result.body)
-    }
-  )
-
-  /**
-   * Legacy Feishu-specific webhook URL kept for already-deployed Feishu app
-   * event-subscription configurations. New deployments should point at the
-   * generic /api/v1/im/webhooks/feishu/:accountId path above.
-   */
-  app.post<{
-    Params: { accountId: string }
-    Body: unknown
-  }>(
-    "/api/v1/im/public/feishu/accounts/:accountId/webhook",
-    async (request, reply) => {
-      const result = await handleFeishuWebhookRequest({
-        accountId: request.params.accountId,
-        headers: request.headers as Record<string, unknown>,
-        body: request.body,
-        // Same rawBody plumbing as the generic route — required for
-        // any connector signature path that needs the original bytes.
-        rawBody: (request as unknown as { rawBody?: string }).rawBody,
       })
       return reply.status(result.statusCode).send(result.body)
     }

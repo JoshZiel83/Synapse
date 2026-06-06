@@ -14,9 +14,10 @@ import { textBlock, textBlocks, type ToolResultOrigin } from "@synapse/shared"
 import type { BuiltinPluginExecuteResult } from "./builtin/index.js"
 
 const CALLABLE_PLUGIN_ORIGIN: ToolResultOrigin = {
-  kind: "callable_plugin",
-  pluginKey: "test-plugin",
-  pluginName: "Test Plugin",
+  kind: "plugin",
+  installationId: "plugin-installation-1",
+  upstreamToolName: "test_tool",
+  itemSlug: "test-plugin",
 }
 
 async function simulateHandlerInvocation(
@@ -86,14 +87,18 @@ test("handler returning isError=true envelope preserves the flag", async () => {
 
 test("origin discriminator carries through for all 4 'tool_output' kinds", async () => {
   const origins: ToolResultOrigin[] = [
-    { kind: "mcp_remote", serverKey: "github" },
     {
-      kind: "mcp_device",
-      deviceId: "dev-1",
+      kind: "plugin",
+      installationId: "plugin-installation-1",
+      upstreamToolName: "search",
+    },
+    {
+      kind: "device",
+      deviceToolId: "device-tool-1",
       exposureStableKey: "synapse.builtin.filesystem.v1",
     },
-    { kind: "callable_plugin", pluginKey: "amap/openapi" },
-    { kind: "builtin", toolKind: "create_memory" },
+    { kind: "system", registryKey: "create_memory" },
+    { kind: "provider_native", providerType: "openai", toolName: "web_search" },
   ]
   for (const origin of origins) {
     const result = await normalizeMcpToolResult("hello", "ws", { origin })

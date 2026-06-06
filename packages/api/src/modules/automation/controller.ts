@@ -118,7 +118,6 @@ const accessTargetSchema = z
       "workspace_member",
       "conversation",
       "actor",
-      "actor_in_conversation",
     ]),
     conversationId: z.uuid().optional(),
     actorId: z.uuid().optional(),
@@ -126,8 +125,7 @@ const accessTargetSchema = z
   })
   .superRefine((value, ctx) => {
     if (
-      (value.type === "conversation" ||
-        value.type === "actor_in_conversation") &&
+      (value.type === "conversation") &&
       !value.conversationId
     ) {
       ctx.addIssue({
@@ -137,8 +135,7 @@ const accessTargetSchema = z
       })
     }
     if (
-      (value.type === "actor" || value.type === "actor_in_conversation") &&
-      !value.actorId
+      value.type === "actor" && !value.actorId
     ) {
       ctx.addIssue({
         code: "custom",
@@ -172,14 +169,14 @@ function inputToCapabilityAccessTarget(
     case "workspace_member":
       return { subject: workspaceMemberRef(input.workspaceMemberId!) }
     case "actor":
-      return { subject: actorRef(input.actorId!) }
-    case "conversation":
-      return { subject: conversationRef(input.conversationId!) }
-    case "actor_in_conversation":
       return {
         subject: actorRef(input.actorId!),
-        scope: conversationRef(input.conversationId!),
+        ...(input.conversationId
+          ? { scope: conversationRef(input.conversationId) }
+          : {}),
       }
+    case "conversation":
+      return { subject: conversationRef(input.conversationId!) }
   }
 }
 const accessGrantUpdateSchema = z.object({

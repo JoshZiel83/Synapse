@@ -139,19 +139,14 @@ type RawInteractionRow = {
   source_request_args: unknown
   source_runtime_session_id: string | null
   source_retry_nonce: string | null
-  // subject-scope-refactor: principal_remote_agent_id +
-  // principal_conversation_actor_context_id dropped from
+  // subject-scope-refactor: principal_remote_agent_id dropped from
   // interaction_runtime_authorization_requests. Replaced by
   // principal_subject_id (NOT NULL) + principal_scope_subject_id (nullable),
   // both FK to access_subjects with ON DELETE RESTRICT (durable audit).
   principal_subject_id: string
   principal_scope_subject_id: string | null
-  // Retained on the type for transitional caller compatibility — the SELECT
-  // projections below alias these via access_subjects JOIN so existing
-  // consumers (e.g. dashboard rendering, runtime auth request matching) can
-  // continue to address familiar field names during the merge-prep window.
+  // Retained on the type for transitional caller compatibility.
   principal_remote_agent_id: string | null
-  principal_conversation_actor_context_id: string | null
   principal_subject_kind: string | null
   resolution_payload: unknown
   resolved_at: string | Date | null
@@ -295,7 +290,7 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   workspaceId: string
   conversationId: string
   /**
-   * Optional. Actor / actor_in_conversation principals create a
+   * Optional. Actor principals create a
    * tool_call_task so the approval can drive a chat wakeup; remote_agent
    * principals leave it undefined — the bridged agent retries its own
    * tool call on the next round-trip.
@@ -333,10 +328,6 @@ export interface CreateRuntimeAuthorizationInteractionParams {
    * The approval flow now uses principalSubjectId + presetToOwnerScope.
    */
   principalRemoteAgentId?: string
-  /**
-   * @deprecated kept for transitional callers; not written to the DB.
-   */
-  principalConversationActorContextId?: string
 }
 
 /**
@@ -1237,7 +1228,6 @@ async function getInteractionRowById(
             auth.principal_scope_subject_id AS principal_scope_subject_id,
             principal_subj.kind AS principal_subject_kind,
             principal_subj.remote_agent_id AS principal_remote_agent_id,
-            NULL::uuid AS principal_conversation_actor_context_id,
             COALESCE(
               user_input.resolution_payload,
               plan.resolution_payload,
@@ -1413,7 +1403,6 @@ async function getInteractionRowByIdForUpdate(
             auth.principal_scope_subject_id AS principal_scope_subject_id,
             principal_subj.kind AS principal_subject_kind,
             principal_subj.remote_agent_id AS principal_remote_agent_id,
-            NULL::uuid AS principal_conversation_actor_context_id,
             COALESCE(
               user_input.resolution_payload,
               plan.resolution_payload,
@@ -2151,9 +2140,6 @@ async function insertRuntimeAuthorizationInteractionDetails(
     /** @deprecated retained for transitional caller compatibility; not
      * written to the DB. */
     principalRemoteAgentId?: string
-    /** @deprecated retained for transitional caller compatibility; not
-     * written to the DB. */
-    principalConversationActorContextId?: string
   }
 ) {
   await runBuilder(
@@ -2850,8 +2836,6 @@ export async function createRuntimeAuthorizationInteractionRequest(
       principalSubjectId: params.principalSubjectId,
       principalScopeSubjectId: params.principalScopeSubjectId,
       principalRemoteAgentId: params.principalRemoteAgentId,
-      principalConversationActorContextId:
-        params.principalConversationActorContextId,
       requestedAction: params.requestedAction,
       grantOptions: params.grantOptions,
       availablePresets: params.availablePresets,

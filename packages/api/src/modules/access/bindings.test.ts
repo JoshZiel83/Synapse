@@ -213,7 +213,7 @@ test("relationForAccessGrantTarget maps every subject + scope combo", () => {
       subject: actorRef("a-1"),
       scope: conversationRef("c-1"),
     }),
-    "use_actor_in_conversation"
+    "use_actor"
   )
 })
 

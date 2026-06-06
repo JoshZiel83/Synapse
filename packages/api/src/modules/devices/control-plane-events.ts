@@ -18,7 +18,6 @@ const RuntimeSessionOpenedSchema = z.object({
   runtime_session_id: z.uuid(),
   conversation_id: z.uuid().nullable().optional(),
   actor_id: z.uuid().nullable().optional(),
-  conversation_actor_context_id: z.uuid().nullable().optional(),
 })
 
 export async function persistRuntimeSessionOpened(
@@ -43,8 +42,6 @@ export async function persistRuntimeSessionOpened(
           device_id: deviceId,
           conversation_id: parsed.data.conversation_id ?? null,
           actor_id: parsed.data.actor_id ?? null,
-          conversation_actor_context_id:
-            parsed.data.conversation_actor_context_id ?? null,
           status: "open",
           opened_at: sql`NOW()`,
         })

@@ -4,8 +4,6 @@
 export {
   TOOL_SOURCE_KINDS,
   type ToolSourceKind,
-  type ExecutableModelToolKind,
-  execKindForSource,
 } from "./kinds.js"
 
 export {

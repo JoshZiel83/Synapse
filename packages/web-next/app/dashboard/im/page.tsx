@@ -250,15 +250,7 @@ function formatDateTime(value?: string) {
 function buildWebhookUrl(account: TransportAccountSummary) {
   if (typeof window === "undefined") return ""
   try {
-    // Feishu keeps its legacy alias so existing Feishu app
-    // event-subscription configs don't have to be re-pointed. All
-    // other transports (QQ, future WebSocket-replacement webhooks)
-    // go through the generic `/api/v1/im/webhooks/:kind/:id` route
-    // wired up in public-controller.ts.
-    const path =
-      account.transportKind === "feishu"
-        ? `${API_BASE}/im/public/feishu/accounts/${account.id}/webhook`
-        : `${API_BASE}/im/webhooks/${account.transportKind}/${account.id}`
+    const path = `${API_BASE}/im/webhooks/${account.transportKind}/${account.id}`
     return new URL(path, window.location.origin).toString()
   } catch {
     return ""

@@ -10,26 +10,23 @@ import { normalizeMcpToolResult } from "./result-normalizer.js"
 import type { ToolResultOrigin } from "@synapse/shared"
 
 const MCP_DEVICE_ORIGIN: ToolResultOrigin = {
-  kind: "mcp_device",
-  deviceId: "dev-1",
+  kind: "device",
+  deviceToolId: "device-tool-1",
   deviceName: "MacBook Pro",
   exposureStableKey: "synapse.builtin.filesystem.v1",
-  exposureName: "Filesystem",
-  runtimeSessionId: "rs-1",
   visibleToolName: "View",
-  namespacedToolName: "filesystem__View",
 }
 
 const MCP_REMOTE_ORIGIN: ToolResultOrigin = {
-  kind: "mcp_remote",
-  serverKey: "github",
-  serverName: "GitHub MCP",
+  kind: "plugin",
+  installationId: "plugin-installation-1",
+  upstreamToolName: "search",
+  publisherSlug: "github",
 }
 
 const CALLABLE_PLUGIN_ORIGIN: ToolResultOrigin = {
-  kind: "callable_plugin",
-  pluginKey: "amap/openapi",
-  pluginName: "AMap",
+  kind: "system",
+  registryKey: "create_memory",
 }
 
 test("string result propagates origin to NormalizedMcpToolResult", async () => {
@@ -65,18 +62,12 @@ test("array result propagates origin", async () => {
   assert.deepEqual(result.origin, CALLABLE_PLUGIN_ORIGIN)
 })
 
-test("missing origin → no origin field on result (backward-compat)", async () => {
-  const result = await normalizeMcpToolResult("hello", "ws-1")
-  assert.equal(result.origin, undefined)
-})
-
-test("legacy binaryMetadata option does not produce an origin", async () => {
+test("binaryMetadata preserves explicit origin", async () => {
   const result = await normalizeMcpToolResult("hello", "ws-1", {
+    origin: MCP_REMOTE_ORIGIN,
     binaryMetadata: { traceId: "trc-1" },
   })
-  assert.equal(result.origin, undefined)
-  // Behavior: binaryMetadata is preserved internally for the storage layer
-  // (when binaries get saved), but it doesn't synthesize an origin.
+  assert.deepEqual(result.origin, MCP_REMOTE_ORIGIN)
 })
 
 test("structuredContent-only object input flows through with origin", async () => {
@@ -94,10 +85,14 @@ test("structuredContent-only object input flows through with origin", async () =
 
 test("origin kind enumeration covers all 5 documented ToolResultOrigin kinds", async () => {
   const origins: ToolResultOrigin[] = [
-    { kind: "mcp_remote", serverKey: "s" },
-    { kind: "mcp_device", deviceId: "d", exposureStableKey: "e" },
-    { kind: "callable_plugin", pluginKey: "p" },
-    { kind: "builtin", toolKind: "create_memory" },
+    { kind: "system", registryKey: "create_memory" },
+    {
+      kind: "plugin",
+      installationId: "plugin-installation-1",
+      upstreamToolName: "search",
+    },
+    { kind: "device", deviceToolId: "device-tool-1", exposureStableKey: "e" },
+    { kind: "provider_native", providerType: "openai", toolName: "web_search" },
     { kind: "model_response", providerType: "anthropic" },
   ]
   for (const origin of origins) {

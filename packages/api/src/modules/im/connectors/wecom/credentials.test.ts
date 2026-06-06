@@ -14,14 +14,6 @@ test("accepts canonical botId/secret", () => {
   assert.equal(r.credentials?.secret, "s")
 })
 
-test("accepts legacy aliases (bot_id/botID/Secret)", () => {
-  const a = extractWecomCredentials({ bot_id: "x", Secret: "y" })
-  assert.equal(a.credentials?.botId, "x")
-  assert.equal(a.credentials?.secret, "y")
-  const b = extractWecomCredentials({ botID: "z", secret: "w" })
-  assert.equal(b.credentials?.botId, "z")
-})
-
 test("reports missing required fields", () => {
   const r = extractWecomCredentials({})
   assert.ok(r.errors.includes("botId is required"))
@@ -33,15 +25,9 @@ test("whitespace-only treated as missing", () => {
   assert.equal(r.errors.length, 2)
 })
 
-test("extractWecomConfig picks up baseWsUrl + aliases", () => {
+test("extractWecomConfig picks up canonical baseWsUrl", () => {
   assert.deepEqual(extractWecomConfig({ baseWsUrl: "wss://x" }), {
     baseWsUrl: "wss://x",
-  })
-  assert.deepEqual(extractWecomConfig({ base_ws_url: "wss://y" }), {
-    baseWsUrl: "wss://y",
-  })
-  assert.deepEqual(extractWecomConfig({ wsUrl: "wss://z" }), {
-    baseWsUrl: "wss://z",
   })
   assert.deepEqual(extractWecomConfig({}), {})
   assert.deepEqual(extractWecomConfig(null), {})
@@ -173,27 +159,7 @@ test("validateWecomConfig rejects baseWsUrl exceeding length cap", () => {
   assert.match(r.errors[0], /exceeds|too long/i)
 })
 
-test("validateWecomConfig accepts aliased baseWsUrl key (e.g. wsUrl)", () => {
-  // extractWecomConfig honors `baseWsUrl/base_ws_url/wsUrl` aliases;
-  // the validator must run after that normalization so we check the
-  // refined value, not the original key.
-  const r = validateWecomConfig({ wsUrl: "wss://example.com" })
-  assert.equal(r.ok, true)
-  assert.equal(r.normalized?.baseWsUrl, "wss://example.com")
-  // And the rejection works through the alias too.
-  const bad = validateWecomConfig({ wsUrl: "http://evil" })
-  assert.equal(bad.ok, false)
-})
-
-test("validateWecomConfig rejects malformed URL via alias", () => {
-  // Same malformed-URL guard applies regardless of which alias key the
-  // caller used — the bypass path the reviewer flagged goes through the
-  // generic /im/accounts route, which can carry any of the alias keys.
-  const r = validateWecomConfig({ wsUrl: "wss://bad host" })
-  assert.equal(r.ok, false)
-})
-
-// ─── Type-mismatch on alias keys (silent-drop regression guard) ───
+// ─── Type-mismatch on baseWsUrl (silent-drop regression guard) ───
 //
 // Without these checks, `firstNonEmpty` silently dropped non-string
 // values, so `validateWecomConfig({baseWsUrl: 123})` returned
@@ -239,17 +205,13 @@ test("validateWecomConfig rejects whitespace-only baseWsUrl", () => {
   assert.equal(r.ok, false)
 })
 
-test("validateWecomConfig type-mismatch check applies to ALL alias keys", () => {
-  // Generic route could carry the alias key instead of the canonical
-  // one; the type guard must fire either way.
-  for (const alias of ["baseWsUrl", "base_ws_url", "wsUrl"]) {
-    const r = validateWecomConfig({ [alias]: 42 } as Record<string, unknown>)
-    assert.equal(r.ok, false, `${alias}: 42 should be rejected`)
-    assert.match(r.errors[0], new RegExp(alias))
-  }
+test("validateWecomConfig type-mismatch check applies to baseWsUrl", () => {
+  const r = validateWecomConfig({ baseWsUrl: 42 } as Record<string, unknown>)
+  assert.equal(r.ok, false)
+  assert.match(r.errors[0], /baseWsUrl/)
 })
 
-test("validateWecomConfig treats null/undefined alias keys as absent (clearing semantics)", () => {
+test("validateWecomConfig treats null/undefined baseWsUrl as absent (clearing semantics)", () => {
   // The wecom update controller maps `baseWsUrl: null` to a clearing
   // intent; the validator must NOT trip on null/undefined values.
   // Otherwise PUT bodies with `{baseWsUrl: null}` would 400 instead of

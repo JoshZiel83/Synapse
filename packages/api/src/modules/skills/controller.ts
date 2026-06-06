@@ -38,17 +38,11 @@ import {
   upgradeInstalledSkill,
 } from "./service.js"
 
-// D3: controller accepts the legacy {type, actorId?, conversationId?,
-// workspaceMemberId?} input shape for back-compat with existing FE code; we
-// fold it into a ScopedSubjectTarget here at the boundary so the service
-// layer only sees the canonical shape. PR6 widens the FE to emit
-// ScopedSubjectTarget directly and this schema collapses.
 const accessTargetTypeSchema = z.enum([
   "workspace",
   "workspace_member",
   "conversation",
   "actor",
-  "actor_in_conversation",
 ]) satisfies z.ZodType<SkillAccessTargetType>
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const accessTargetSchema = z.object({
@@ -77,7 +71,12 @@ function inputToCapabilityAccessTarget(
       if (!input.actorId) {
         throw new SkillError(400, "actorId is required for actor access target")
       }
-      return { subject: actorRef(input.actorId) }
+      return {
+        subject: actorRef(input.actorId),
+        ...(input.conversationId
+          ? { scope: conversationRef(input.conversationId) }
+          : {}),
+      }
     case "conversation":
       if (!input.conversationId) {
         throw new SkillError(
@@ -86,17 +85,6 @@ function inputToCapabilityAccessTarget(
         )
       }
       return { subject: conversationRef(input.conversationId) }
-    case "actor_in_conversation":
-      if (!input.actorId || !input.conversationId) {
-        throw new SkillError(
-          400,
-          "actorId and conversationId are required for actor_in_conversation access target"
-        )
-      }
-      return {
-        subject: actorRef(input.actorId),
-        scope: conversationRef(input.conversationId),
-      }
   }
 }
 

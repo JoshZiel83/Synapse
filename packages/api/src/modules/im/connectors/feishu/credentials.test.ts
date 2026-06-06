@@ -12,15 +12,6 @@ test("accepts canonical appId/appSecret", () => {
   assert.equal(r.credentials?.appSecret, "s")
 })
 
-test("accepts legacy aliases (appID/cliAppId/app_secret)", () => {
-  const r = extractFeishuCredentials({
-    appID: "cli_y",
-    cliAppSecret: "secret",
-  })
-  assert.equal(r.credentials?.appId, "cli_y")
-  assert.equal(r.credentials?.appSecret, "secret")
-})
-
 test("reports missing required fields", () => {
   const r = extractFeishuCredentials({})
   assert.ok(r.errors.includes("appId is required"))

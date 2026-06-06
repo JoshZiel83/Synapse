@@ -3,17 +3,12 @@
 import { useEffect, useMemo, useState } from "react"
 import type { AttachmentTargetType, ReuseScope } from "@synapse/shared"
 
-// D3 / PR6 TODO: this string label is the historical 5-value access-target enum
-// the UI still emits from its selectors. The wire shape it produces should
-// fold into a ScopedSubjectTarget at the API boundary (see
-// `inputToCapabilityAccessTarget` in each controller). Once PR6's
-// SubjectPicker+ScopePicker land this whole label-union can be deleted.
 export type AccessTargetType =
   | "workspace"
   | "workspace_member"
   | "conversation"
   | "actor"
-  | "actor_in_conversation"
+  | "actor_conversation"
 import {
   Activity,
   Bot,
@@ -182,7 +177,7 @@ const accessTypeOptionDefs: ScopeOptionDef<AccessTargetType>[] = [
     ring: "ring-emerald-500/20",
   },
   {
-    value: "actor_in_conversation",
+    value: "actor_conversation",
     label: "Actor in Conversation Access",
     shortLabel: "Actor in Conversation",
     hint: "Only one actor can use this installation in one conversation",
@@ -963,7 +958,7 @@ export function AccessGrantScopeStep({
       case "workspace":
         return true
       case "conversation":
-      case "actor_in_conversation":
+      case "actor_conversation":
         return index === 0
       case "actor":
         return true
@@ -984,7 +979,7 @@ export function AccessGrantScopeStep({
         return index === 0
       case "actor":
         return actorName === selectedActorName
-      case "actor_in_conversation":
+      case "actor_conversation":
         return index === 0 && actorName === selectedActorName
       default:
         return false
@@ -1008,7 +1003,7 @@ export function AccessGrantScopeStep({
           ))}
       </div>
 
-      {(value === "actor" || value === "actor_in_conversation") && (
+      {(value === "actor" || value === "actor_conversation") && (
         <div className="space-y-2">
           <Label className="text-xs tracking-[0.16em] text-muted-foreground uppercase">
             Authorized actor
@@ -1035,7 +1030,7 @@ export function AccessGrantScopeStep({
         </div>
       )}
 
-      {(value === "conversation" || value === "actor_in_conversation") && (
+      {(value === "conversation" || value === "actor_conversation") && (
         <div className="space-y-2">
           <Label className="text-xs tracking-[0.16em] text-muted-foreground uppercase">
             Authorized conversation

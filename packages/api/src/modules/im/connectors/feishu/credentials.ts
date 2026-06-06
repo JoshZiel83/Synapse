@@ -1,8 +1,5 @@
 /**
- * Feishu credentials extraction with alias support.
- *
- * Various callers (lark-cli, manual UI, old import scripts) have written
- * differently-cased forms of the same fields. Normalize to canonical names.
+ * Feishu credentials extraction for the current account schema.
  */
 
 export interface FeishuCredentials {
@@ -21,18 +18,10 @@ export function extractFeishuCredentials(
 ): { credentials?: FeishuCredentials; errors: string[] } {
   const errors: string[] = []
   const raw = credentials || {}
-  const appId =
-    nonEmpty(raw.appId) ||
-    nonEmpty(raw.appID) ||
-    nonEmpty(raw.app_id) ||
-    nonEmpty(raw.cliAppId)
-  const appSecret =
-    nonEmpty(raw.appSecret) ||
-    nonEmpty(raw.app_secret) ||
-    nonEmpty(raw.cliAppSecret)
-  const verificationToken =
-    nonEmpty(raw.verificationToken) || nonEmpty(raw.verification_token)
-  const encryptKey = nonEmpty(raw.encryptKey) || nonEmpty(raw.encrypt_key)
+  const appId = nonEmpty(raw.appId)
+  const appSecret = nonEmpty(raw.appSecret)
+  const verificationToken = nonEmpty(raw.verificationToken)
+  const encryptKey = nonEmpty(raw.encryptKey)
 
   if (!appId) errors.push("appId is required")
   if (!appSecret) errors.push("appSecret is required")

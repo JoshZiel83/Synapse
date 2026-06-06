@@ -37,7 +37,6 @@ import {
 } from "../mcp-plugins/tool-resolver.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
-import { ensureConversationActorContext } from "../session/service.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import {
@@ -107,14 +106,13 @@ import {
  * - `workspace_member` — dashboard introspection; never used for
  *   executable dispatch.
  *
- * subject-scope-refactor: the legacy `actor_in_conversation` discriminator
+ * subject-scope-refactor: the scoped actor discriminator
  * is dropped. Its semantics ("this actor, narrowed to this conversation")
  * are now expressed as `actor` principal + `RuntimePrincipalContext.
  * activeConversationSubjectId`, with the conversation subject also pushed
  * into `runtimeScopeSubjectIds` so `(subject=actor, scope=conversation)`
  * grants match SQL-side rather than requiring an extra principal-kind
- * branch in every dispatcher. The legacy `conversation_actor_context`
- * subject kind is gone with the discriminator.
+ * branch in every dispatcher.
  */
 export type DevicePrincipal =
   | { kind: "actor"; actorId: string; conversationId?: string }
@@ -269,14 +267,11 @@ function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
 
 function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
   return {
-    kind: "mcp_device",
-    deviceId: row.device_id,
+    kind: "device",
+    deviceToolId: row.device_tool_id,
     deviceName: row.device_name,
-    exposureId: row.device_exposure_id,
     exposureStableKey: row.exposure_stable_key,
-    exposureName: row.visible_tool_name,
     visibleToolName: row.visible_tool_name,
-    namespacedToolName: makeDeviceToolId(row.device_tool_id),
   }
 }
 

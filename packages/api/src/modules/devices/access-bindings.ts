@@ -5,13 +5,9 @@
 // subject-scope-refactor: the wire shape is `ScopedSubjectTarget` from
 // `@synapse/device-protocol` (`{subject: SubjectRefWire, scope?: SubjectRefWire}`).
 // The SDK sends this shape; the route parses with the protocol schema
-// directly so they cannot drift. Service-layer `AccessTargetInput` is the
-// internal flat-shape compat structure that capability-projection still
-// uses — the route maps `ScopedSubjectTarget → AccessTargetInput` at the
-// boundary via `wireTargetToInternalAccessTarget`. We don't carry the
-// legacy `{kind: "actor_in_conversation", actorId, conversationId}` body
-// shape on the wire any more (the user explicitly opted out of legacy-
-// client compatibility).
+// directly so they cannot drift. The route maps
+// `ScopedSubjectTarget → AccessTargetInput` at the boundary via
+// `wireTargetToInternalAccessTarget`.
 
 import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
@@ -43,9 +39,7 @@ export const setActiveBodySchema = z.object({
 })
 
 /**
- * Map the wire `(subject, scope?)` shape onto the service-layer flat
- * `AccessTargetInput` (`{kind, actorId?, conversationId?, ...}`) that
- * capability-projection's helpers still consume internally.
+ * Map the wire `(subject, scope?)` shape onto `AccessTargetInput`.
  *
  * The wire schema's `superRefine` already rejects every combination
  * outside the supported whitelist (unscoped any-of-4, or
@@ -61,21 +55,16 @@ export function wireTargetToInternalAccessTarget(
 ): AccessTargetInput {
   const { subject, scope } = target
   if (scope) {
-    // The wire whitelist (ScopedSubjectTargetWireSchema.superRefine) only
-    // admits (actor, conversation) and (remote_agent, conversation). Both
-    // map to dedicated internal `*_in_conversation` flat-shape variants so
-    // the service layer can carry the scope through without adding a
-    // separate scope field to AccessTargetInput.
     if (subject.kind === "actor" && scope.kind === "conversation") {
       return {
-        kind: "actor_in_conversation",
+        kind: "actor",
         actorId: subject.actorId,
         conversationId: scope.conversationId,
       }
     }
     if (subject.kind === "remote_agent" && scope.kind === "conversation") {
       return {
-        kind: "remote_agent_in_conversation",
+        kind: "remote_agent",
         remoteAgentId: subject.remoteAgentId,
         conversationId: scope.conversationId,
       }
@@ -155,14 +144,14 @@ function listQueryToInternalAccessTarget(
   if (q.scope_kind === "conversation" && q.scope_conversation_id) {
     if (q.subject_kind === "actor" && q.subject_actor_id) {
       return {
-        kind: "actor_in_conversation",
+        kind: "actor",
         actorId: q.subject_actor_id,
         conversationId: q.scope_conversation_id,
       }
     }
     if (q.subject_kind === "remote_agent" && q.subject_remote_agent_id) {
       return {
-        kind: "remote_agent_in_conversation",
+        kind: "remote_agent",
         remoteAgentId: q.subject_remote_agent_id,
         conversationId: q.scope_conversation_id,
       }
@@ -197,7 +186,7 @@ function listQueryToInternalAccessTarget(
  * Validate that an AccessTarget points at a row that lives in the same
  * workspace as the grant. Without this check a caller authorized in
  * workspace W1 could write a binding that targets an actor / conversation
- * / actor_in_conversation in workspace W2.
+ * / scoped actor in workspace W2.
  */
 async function assertTargetInWorkspace(
   workspaceId: string,
@@ -222,6 +211,19 @@ async function assertTargetInWorkspace(
           reason: "actor not found in this workspace",
         }
       }
+      if (target.conversationId) {
+        const conversation = await db
+          .selectFrom("conversations")
+          .select("workspace_id")
+          .where("id", "=", target.conversationId)
+          .executeTakeFirst()
+        if (!conversation || conversation.workspace_id !== workspaceId) {
+          return {
+            ok: false,
+            reason: "conversation not found in this workspace",
+          }
+        }
+      }
       return { ok: true }
     }
     case "conversation": {
@@ -233,33 +235,6 @@ async function assertTargetInWorkspace(
         .where("id", "=", target.conversationId)
         .executeTakeFirst()
       if (!row || row.workspace_id !== workspaceId) {
-        return {
-          ok: false,
-          reason: "conversation not found in this workspace",
-        }
-      }
-      return { ok: true }
-    }
-    case "actor_in_conversation": {
-      if (!target.actorId || !target.conversationId)
-        return {
-          ok: false,
-          reason: "actorId and conversationId required",
-        }
-      const actor = await db
-        .selectFrom("actors")
-        .select("workspace_id")
-        .where("id", "=", target.actorId)
-        .executeTakeFirst()
-      const conversation = await db
-        .selectFrom("conversations")
-        .select("workspace_id")
-        .where("id", "=", target.conversationId)
-        .executeTakeFirst()
-      if (!actor || actor.workspace_id !== workspaceId) {
-        return { ok: false, reason: "actor not found in this workspace" }
-      }
-      if (!conversation || conversation.workspace_id !== workspaceId) {
         return {
           ok: false,
           reason: "conversation not found in this workspace",
@@ -281,34 +256,17 @@ async function assertTargetInWorkspace(
           reason: "remote_agent not found in this workspace",
         }
       }
-      return { ok: true }
-    }
-    case "remote_agent_in_conversation": {
-      if (!target.remoteAgentId || !target.conversationId)
-        return {
-          ok: false,
-          reason: "remoteAgentId and conversationId required",
-        }
-      const agent = await db
-        .selectFrom("remote_agents")
-        .select("workspace_id")
-        .where("id", "=", target.remoteAgentId)
-        .executeTakeFirst()
-      const conversation = await db
-        .selectFrom("conversations")
-        .select("workspace_id")
-        .where("id", "=", target.conversationId)
-        .executeTakeFirst()
-      if (!agent || agent.workspace_id !== workspaceId) {
-        return {
-          ok: false,
-          reason: "remote_agent not found in this workspace",
-        }
-      }
-      if (!conversation || conversation.workspace_id !== workspaceId) {
-        return {
-          ok: false,
-          reason: "conversation not found in this workspace",
+      if (target.conversationId) {
+        const conversation = await db
+          .selectFrom("conversations")
+          .select("workspace_id")
+          .where("id", "=", target.conversationId)
+          .executeTakeFirst()
+        if (!conversation || conversation.workspace_id !== workspaceId) {
+          return {
+            ok: false,
+            reason: "conversation not found in this workspace",
+          }
         }
       }
       return { ok: true }
