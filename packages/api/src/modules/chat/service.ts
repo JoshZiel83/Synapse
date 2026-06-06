@@ -61,6 +61,7 @@ import {
   runBuilder,
   withDbTransaction,
   type Executor,
+  type DatabaseTransaction,
 } from "../../infrastructure/database/kysely.js"
 import { SUBJECT_KIND } from "@synapse/shared"
 import {
@@ -1030,6 +1031,14 @@ async function getConversationBaseRow(
       INNER JOIN conversations c ON c.id = v.conversation_id
       WHERE v.workspace_member_id = $1
         AND v.conversation_id = $2
+        AND c.deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM conversation_participants cp
+          INNER JOIN access_subjects cps ON cps.id = cp.subject_id
+          WHERE cp.conversation_id = v.conversation_id
+            AND cps.workspace_member_id = v.workspace_member_id
+            AND cp.state = 'active'
+        )
       LIMIT 1
     `,
     [workspaceMemberId, conversationId]
@@ -1065,6 +1074,14 @@ async function listConversationBaseRows(
       FROM workspace_member_conversation_views v
       INNER JOIN conversations c ON c.id = v.conversation_id
       WHERE v.workspace_member_id = $1
+        AND c.deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM conversation_participants cp
+          INNER JOIN access_subjects cps ON cps.id = cp.subject_id
+          WHERE cp.conversation_id = v.conversation_id
+            AND cps.workspace_member_id = v.workspace_member_id
+            AND cp.state = 'active'
+        )
       ORDER BY
         v.archived ASC,
         v.pinned_sort_key DESC NULLS LAST,
@@ -1343,10 +1360,11 @@ async function getCurrentSyncCursor(
   workspaceId: string,
   workspaceMemberId: string
 ) {
+  // member_seq is the authoritative client cursor (see getChatSync).
   const result = await runOn<{ cursor: string | number }>(
     queryable,
     `
-      SELECT COALESCE(MAX(sync_seq), 0) AS cursor
+      SELECT COALESCE(MAX(member_seq), 0) AS cursor
       FROM workspace_member_sync_events
       WHERE workspace_id = $1
         AND workspace_member_id = $2
@@ -1506,6 +1524,110 @@ async function upsertConversationView(
     .execute()
 }
 
+/**
+ * Discriminate a Kysely transaction from the top-level `db`. Kysely exposes
+ * `isTransaction` on the instance (true only for a Transaction<DB>); used by the
+ * sync-append wrapper to decide whether to reuse the caller's tx or open one.
+ */
+function isDatabaseTransaction(
+  executor: Executor
+): executor is DatabaseTransaction {
+  return (executor as { isTransaction?: boolean }).isTransaction === true
+}
+
+/**
+ * Append one durable sync event for a single workspace member, assigning the
+ * per-member, commit-ordered, gap-free `member_seq` cursor.
+ *
+ * MUST run inside a transaction (the caller's `trx`): it takes a 64-bit
+ * advisory transaction lock keyed on the member id, reads `MAX(member_seq)+1`,
+ * and inserts the sync row + the realtime outbox row atomically. The advisory
+ * lock serializes all concurrent appends for the same member, so the commit
+ * order equals the `member_seq` order with no holes — which is exactly what the
+ * client cursor (`getChatSync` paging by `member_seq > cursor`) relies on.
+ *
+ * Exported because external producers (interactions, remote-agents) append from
+ * inside their OWN business transaction and must keep the domain write + sync +
+ * outbox atomic; they call this directly with their `trx`. Bare-`db` callers go
+ * through the `appendWorkspaceMemberSyncEvent` wrapper, which opens a tx.
+ */
+export async function appendWorkspaceMemberSyncEventInTransaction<
+  T extends ChatSyncEventType,
+>(
+  trx: DatabaseTransaction,
+  params: {
+    workspaceId: string
+    workspaceMemberId: string
+    conversationId?: string
+    itemId?: string
+    eventType: T
+    payload: ChatSyncEventPayloadMap[T]
+  }
+) {
+  // Serialize concurrent appends for THIS member. hashtextextended yields a
+  // stable 64-bit key (avoids the 32-bit hashtext collision space that would
+  // make unrelated members block each other). The lock auto-releases at
+  // commit/rollback (pg_advisory_xact_lock).
+  await sql`SELECT pg_advisory_xact_lock(hashtextextended(${params.workspaceMemberId}, 0))`.execute(
+    trx
+  )
+
+  const inserted = await runBuilder(
+    trx,
+    trx
+      .insertInto("workspace_member_sync_events")
+      .values({
+        // member_seq = (current max for this member) + 1, computed under the
+        // advisory lock above so it is contiguous and commit-ordered.
+        member_seq: sql<number>`(
+          SELECT COALESCE(MAX(member_seq), 0) + 1
+          FROM workspace_member_sync_events
+          WHERE workspace_member_id = ${params.workspaceMemberId}
+        )`,
+        workspace_id: params.workspaceId,
+        workspace_member_id: params.workspaceMemberId,
+        conversation_id: params.conversationId ?? null,
+        item_id: params.itemId ?? null,
+        event_type: params.eventType,
+        payload: jsonbValue(params.payload),
+        occurred_at: sql`NOW()`,
+        created_at: sql`NOW()`,
+      })
+      .returning(["sync_seq", "member_seq", "occurred_at"])
+  )
+
+  const row = inserted.rows[0]
+  const envelope: ChatSyncEvent<T> = {
+    syncSeq: toNumber(row?.sync_seq),
+    memberSeq: toNumber(row?.member_seq),
+    workspaceId: params.workspaceId,
+    workspaceMemberId: params.workspaceMemberId,
+    conversationId: params.conversationId,
+    itemId: params.itemId,
+    eventType: params.eventType,
+    payload: params.payload,
+    occurredAt: toIso(row?.occurred_at),
+  }
+
+  await enqueueTransactionalEvent(trx, {
+    type: "chat.sync.event",
+    workspaceId: params.workspaceId,
+    recipientWorkspaceMemberId: params.workspaceMemberId,
+    payload: envelope as unknown as Record<string, unknown>,
+    timestamp: envelope.occurredAt,
+  })
+
+  return envelope
+}
+
+/**
+ * Transaction-aware append wrapper. If the caller already holds a transaction
+ * (`queryable` is a Kysely transaction), reuse it so the domain write + sync +
+ * outbox stay atomic. If the caller passes the bare `db` (autocommit), open a
+ * transaction here — the advisory-lock-protected `MAX(member_seq)+1` MUST live
+ * inside a transaction or the lock would release at statement end and the
+ * counter could race.
+ */
 export async function appendWorkspaceMemberSyncEvent<
   T extends ChatSyncEventType,
 >(
@@ -1519,44 +1641,12 @@ export async function appendWorkspaceMemberSyncEvent<
     payload: ChatSyncEventPayloadMap[T]
   }
 ) {
-  const inserted = await runBuilder(
-    queryable,
-    queryable
-      .insertInto("workspace_member_sync_events")
-      .values({
-        workspace_id: params.workspaceId,
-        workspace_member_id: params.workspaceMemberId,
-        conversation_id: params.conversationId ?? null,
-        item_id: params.itemId ?? null,
-        event_type: params.eventType,
-        payload: jsonbValue(params.payload),
-        occurred_at: sql`NOW()`,
-        created_at: sql`NOW()`,
-      })
-      .returning(["sync_seq", "occurred_at"])
-  )
-
-  const row = inserted.rows[0]
-  const envelope: ChatSyncEvent<T> = {
-    syncSeq: toNumber(row?.sync_seq),
-    workspaceId: params.workspaceId,
-    workspaceMemberId: params.workspaceMemberId,
-    conversationId: params.conversationId,
-    itemId: params.itemId,
-    eventType: params.eventType,
-    payload: params.payload,
-    occurredAt: toIso(row?.occurred_at),
+  if (isDatabaseTransaction(queryable)) {
+    return appendWorkspaceMemberSyncEventInTransaction(queryable, params)
   }
-
-  await enqueueTransactionalEvent(queryable, {
-    type: "chat.sync.event",
-    workspaceId: params.workspaceId,
-    recipientWorkspaceMemberId: params.workspaceMemberId,
-    payload: envelope as unknown as Record<string, unknown>,
-    timestamp: envelope.occurredAt,
-  })
-
-  return envelope
+  return withDbTransaction((trx) =>
+    appendWorkspaceMemberSyncEventInTransaction(trx, params)
+  )
 }
 
 async function getConversationSequenceMax(
@@ -1567,9 +1657,7 @@ async function getConversationSequenceMax(
     queryable,
     queryable
       .selectFrom("conversation_items")
-      .select((eb) =>
-        eb.fn.max("sequence").as("max_sequence")
-      )
+      .select((eb) => eb.fn.max("sequence").as("max_sequence"))
       .where("conversation_id", "=", conversationId)
   )
 
@@ -2899,10 +2987,7 @@ export async function ensureConversationParticipant(params: {
         })
         .onConflict((oc) =>
           oc
-            .columns([
-              "conversation_participant_id",
-              "transport_address_id",
-            ])
+            .columns(["conversation_participant_id", "transport_address_id"])
             .doUpdateSet({
               is_primary: sql`EXCLUDED.is_primary`,
               updated_at: sql`NOW()`,
@@ -2939,6 +3024,37 @@ export async function ensureConversationParticipant(params: {
   })
 }
 
+/**
+ * Map each requested workspace_member_id to its CURRENT participant state in the
+ * conversation ('active' | 'left' | 'removed'), or undefined if never a
+ * participant. Used by addConversationParticipants to distinguish a true re-add
+ * (prior 'removed'/'left' → emit membership.updated{active} to clear the client
+ * tombstone) from a no-op (already 'active') or a first-time add.
+ */
+async function loadParticipantStatesByMember(
+  queryable: Executor,
+  conversationId: string,
+  workspaceMemberIds: string[]
+): Promise<Map<string, string>> {
+  if (workspaceMemberIds.length === 0) return new Map()
+  const result = await runOn<{ workspace_member_id: string; state: string }>(
+    queryable,
+    `
+      SELECT cps.workspace_member_id, cp.state
+      FROM conversation_participants cp
+      INNER JOIN access_subjects cps ON cps.id = cp.subject_id
+      WHERE cp.conversation_id = $1
+        AND cps.workspace_member_id = ANY($2::uuid[])
+    `,
+    [conversationId, workspaceMemberIds]
+  )
+  const map = new Map<string, string>()
+  for (const row of result.rows) {
+    map.set(row.workspace_member_id, row.state)
+  }
+  return map
+}
+
 export async function addConversationParticipants(params: {
   workspaceId: string
   conversationId: string
@@ -2968,6 +3084,25 @@ export async function addConversationParticipants(params: {
           "One or more workspace members are invalid"
         )
       }
+
+      // Capture each requested member's PRIOR participation state (before the
+      // ensure reactivates them) so we can distinguish a true re-add (was
+      // removed/left) from a no-op (already active) or a brand-new add. A
+      // re-add must emit conversation.membership.updated{active} so the client
+      // clears its tombstone — a plain conversation.upsert would be rejected by
+      // the tombstone guard until then.
+      const priorStateByMember = await loadParticipantStatesByMember(
+        queryable,
+        params.conversationId,
+        workspaceMemberIds
+      )
+      // Pre-existing active members (before this add) — they need a roster
+      // refresh too, not just the newly-added members.
+      const preExistingRecipients = await listConversationRealtimeRecipients(
+        params.conversationId,
+        queryable
+      )
+
       for (const member of memberRows) {
         await ensureConversationParticipant({
           conversationId: params.conversationId,
@@ -2981,6 +3116,45 @@ export async function addConversationParticipants(params: {
           conversationId: params.conversationId,
           unreadCount: 0,
         })
+      }
+
+      // Refresh the roster for everyone now active (pre-existing ∪ added).
+      const upsertTargets = [
+        ...new Set([
+          ...preExistingRecipients.map((r) => r.workspaceMemberId),
+          ...workspaceMemberIds,
+        ]),
+      ]
+      await syncConversationUpsertForWorkspaceMembers(
+        queryable,
+        params.workspaceId,
+        upsertTargets,
+        params.conversationId
+      )
+
+      // Re-added members (prior state removed/left): clear their tombstone.
+      for (const memberId of workspaceMemberIds) {
+        const prior = priorStateByMember.get(memberId)
+        if (prior === "removed" || prior === "left") {
+          const activeParticipants = await listConversationParticipants(
+            params.conversationId,
+            { queryable }
+          )
+          await appendWorkspaceMemberSyncEvent(queryable, {
+            workspaceId: params.workspaceId,
+            workspaceMemberId: memberId,
+            conversationId: params.conversationId,
+            eventType: "conversation.membership.updated",
+            payload: {
+              conversationId: params.conversationId,
+              selfState: "active",
+              reason: "added",
+              participants: activeParticipants
+                .filter((p) => p.state === "active")
+                .map(participantRowToChatParticipantSummary),
+            },
+          })
+        }
       }
     }
 
@@ -3032,14 +3206,9 @@ export async function addConversationParticipants(params: {
       }
     }
 
-    if (workspaceMemberIds.length > 0) {
-      await syncConversationUpsertForWorkspaceMembers(
-        queryable,
-        params.workspaceId,
-        workspaceMemberIds,
-        params.conversationId
-      )
-    }
+    // Note: the conversation.upsert roster refresh for member adds is emitted
+    // inside the workspaceMemberIds block above (union of pre-existing + added),
+    // so it is intentionally NOT repeated here.
 
     return listConversationParticipants(params.conversationId, { queryable })
   }
@@ -3234,8 +3403,7 @@ export async function createConversationItem(params: {
           ref_path: part.type === "file_ref" ? (part.refPath ?? null) : null,
           ref_sha256:
             part.type === "file_ref" ? (part.refSha256 ?? null) : null,
-          json_value:
-            part.type === "json" ? jsonbValue(part.json ?? {}) : null,
+          json_value: part.type === "json" ? jsonbValue(part.json ?? {}) : null,
           mime_type: part.mimeType ?? null,
           name: part.name ?? null,
           metadata: jsonbValue(part.metadata ?? {}),
@@ -4468,16 +4636,29 @@ export async function getChatBootstrap(params: {
     params.workspaceId,
     params.userId
   )
-  const conversations = await loadConversationViews(
-    rootQueryable(),
-    params.workspaceId,
-    identity.workspaceMemberId
-  )
-  const nextInboxCursor = await getCurrentSyncCursor(
-    rootQueryable(),
-    params.workspaceId,
-    identity.workspaceMemberId
-  )
+  // Read the conversation projection AND the cursor in ONE repeatable-read
+  // snapshot. Otherwise an event committing between the two reads could push
+  // the cursor past a state the projection didn't include (e.g. a removal at
+  // member_seq=N+1 commits after we read conversations but before we read the
+  // cursor) — the client would then tombstone at a boundary that resurrects a
+  // stale higher-seq upsert. A single snapshot makes the projection strictly
+  // consistent with nextInboxCursor.
+  const { conversations, nextInboxCursor } = await db
+    .transaction()
+    .setIsolationLevel("repeatable read")
+    .execute(async (trx) => {
+      const conversations = await loadConversationViews(
+        trx,
+        params.workspaceId,
+        identity.workspaceMemberId
+      )
+      const nextInboxCursor = await getCurrentSyncCursor(
+        trx,
+        params.workspaceId,
+        identity.workspaceMemberId
+      )
+      return { conversations, nextInboxCursor }
+    })
 
   return {
     workspaceMemberId: identity.workspaceMemberId,
@@ -4500,6 +4681,7 @@ export async function getChatSync(params: {
   const limit = Math.min(Math.max(params.limit ?? 200, 1), 500)
   const result = await runOn<{
     sync_seq: string | number
+    member_seq: string | number
     workspace_id: string
     workspace_member_id: string
     conversation_id: string | null
@@ -4512,6 +4694,7 @@ export async function getChatSync(params: {
     `
       SELECT
         sync_seq,
+        member_seq,
         workspace_id,
         workspace_member_id,
         conversation_id,
@@ -4522,8 +4705,8 @@ export async function getChatSync(params: {
       FROM workspace_member_sync_events
       WHERE workspace_id = $1
         AND workspace_member_id = $2
-        AND sync_seq > $3
-      ORDER BY sync_seq ASC
+        AND member_seq > $3
+      ORDER BY member_seq ASC
       LIMIT $4
     `,
     [
@@ -4547,6 +4730,7 @@ export async function getChatSync(params: {
       )
       return {
         syncSeq: toNumber(row.sync_seq),
+        memberSeq: toNumber(row.member_seq),
         workspaceId: row.workspace_id,
         workspaceMemberId: row.workspace_member_id,
         conversationId: row.conversation_id ?? undefined,
@@ -4562,7 +4746,7 @@ export async function getChatSync(params: {
     events,
     nextCursor:
       events.length > 0
-        ? events[events.length - 1]!.syncSeq
+        ? events[events.length - 1]!.memberSeq
         : (params.cursor ?? 0),
     hasMore,
   }
@@ -5639,16 +5823,45 @@ export async function removeChatConversationParticipant(params: {
       params.conversationId,
       client
     )
+    // Remaining active members get a conversation.upsert (roster now reflects
+    // the removal). The removed member is intentionally NOT in this list — a
+    // conversation.upsert would (a) be skipped by syncConversationUpsert because
+    // loadConversationView now excludes them via the active filter, and (b)
+    // wrongly imply the conversation is still theirs. They get an explicit
+    // membership.updated below instead.
     await syncConversationUpsertForWorkspaceMembers(
       client,
       params.workspaceId,
-      [
-        ...recipients.map((r) => r.workspaceMemberId),
-        // Include the removed member so their own view drops the conversation.
-        ...(target.workspace_member_id ? [target.workspace_member_id] : []),
-      ],
+      recipients.map((r) => r.workspaceMemberId),
       params.conversationId
     )
+
+    // Tell the removed member (every one of their devices) they are out. This
+    // is the authoritative "you were removed/left" signal — it does NOT depend
+    // on loadConversationView (which now returns null for them), so it is
+    // emitted directly. Self-leave still notifies the leaver so their OTHER
+    // devices drop the conversation. participants snapshot reflects the
+    // post-removal active roster.
+    if (target.workspace_member_id) {
+      const activeParticipants = await listConversationParticipants(
+        params.conversationId,
+        { queryable: client }
+      )
+      await appendWorkspaceMemberSyncEventInTransaction(client, {
+        workspaceId: params.workspaceId,
+        workspaceMemberId: target.workspace_member_id,
+        conversationId: params.conversationId,
+        eventType: "conversation.membership.updated",
+        payload: {
+          conversationId: params.conversationId,
+          selfState: isSelfRemoval ? "left" : "removed",
+          reason: isSelfRemoval ? "left" : "kicked",
+          participants: activeParticipants
+            .filter((p) => p.state === "active")
+            .map(participantRowToChatParticipantSummary),
+        },
+      })
+    }
 
     return {
       conversationId: params.conversationId,

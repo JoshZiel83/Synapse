@@ -856,3 +856,117 @@ test("sidecar ↔ manifest sha256 parity: every populated sidecar archive matche
     }
   }
 })
+
+// --- China mirror prefix rewrite (P5) --------------------------------------
+function nodeEntry() {
+  // sha256 of the tiny fixture archive so the post-download check passes.
+  const sha = createHash("sha256")
+    .update(readFileSync(FIXTURE_ARCHIVE))
+    .digest("hex")
+  return {
+    sha256: sha,
+    download: {
+      url: "https://nodejs.org/dist/v24.16.0/node-v24.16.0-linux-x64.tar.gz",
+      trustedSource: "nodejs.org-official" as const,
+    },
+    archiveFormat: "tar.gz" as const,
+    stripComponents: 1,
+    executable: "bin/fake-git",
+    binDir: "bin",
+    requiredFiles: [],
+    env: {},
+  }
+}
+
+// Capturing fetch: records the requested URL, returns the fixture bytes.
+function makeCapturingFetch(captured: { url: string }): typeof fetch {
+  return (async (input: unknown) => {
+    captured.url = String(input)
+    return new Response(readFileSync(FIXTURE_ARCHIVE), { status: 200 })
+  }) as unknown as typeof fetch
+}
+
+test("downloadAndExtractEntry: toolchainMirror=ustc rewrites FULL prefix, sha256 still official", async () => {
+  const rootDir = makeTmp("synapse-mirror-ustc-")
+  const captured = { url: "" }
+  try {
+    await downloadAndExtractEntry({
+      entry: nodeEntry(),
+      rootDir,
+      platform: "linux",
+      fetchImpl: makeCapturingFetch(captured),
+      toolchainMirror: "ustc",
+    })
+    // Full prefix replaced (NOT just host): /dist/ -> /node/
+    assert.equal(
+      captured.url,
+      "https://mirrors.ustc.edu.cn/node/v24.16.0/node-v24.16.0-linux-x64.tar.gz"
+    )
+    assert.ok(existsSync(join(rootDir, ".synapse-toolchain-ok")))
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true })
+  }
+})
+
+test("downloadAndExtractEntry: npmmirror uses /binaries/node/ base path", async () => {
+  const rootDir = makeTmp("synapse-mirror-npm-")
+  const captured = { url: "" }
+  try {
+    await downloadAndExtractEntry({
+      entry: nodeEntry(),
+      rootDir,
+      platform: "linux",
+      fetchImpl: makeCapturingFetch(captured),
+      toolchainMirror: "npmmirror",
+    })
+    assert.equal(
+      captured.url,
+      "https://cdn.npmmirror.com/binaries/node/v24.16.0/node-v24.16.0-linux-x64.tar.gz"
+    )
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true })
+  }
+})
+
+test("downloadAndExtractEntry: unknown/empty mirror -> no rewrite (official source)", async () => {
+  for (const mirror of ["", "nodejs", "bogus"]) {
+    const rootDir = makeTmp("synapse-mirror-none-")
+    const captured = { url: "" }
+    try {
+      await downloadAndExtractEntry({
+        entry: nodeEntry(),
+        rootDir,
+        platform: "linux",
+        fetchImpl: makeCapturingFetch(captured),
+        toolchainMirror: mirror,
+      })
+      assert.equal(
+        captured.url,
+        "https://nodejs.org/dist/v24.16.0/node-v24.16.0-linux-x64.tar.gz",
+        `mirror='${mirror}' should NOT rewrite`
+      )
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true })
+    }
+  }
+})
+
+test("downloadAndExtractEntry: mirror bytes still gated by official sha256", async () => {
+  const rootDir = makeTmp("synapse-mirror-sha-")
+  // entry with a WRONG sha256 -> even via mirror, must fail the integrity gate
+  const bad = { ...nodeEntry(), sha256: "0".repeat(64) }
+  try {
+    await assert.rejects(
+      downloadAndExtractEntry({
+        entry: bad,
+        rootDir,
+        platform: "linux",
+        fetchImpl: makeCapturingFetch({ url: "" }),
+        toolchainMirror: "ustc",
+      }),
+      /sha256 mismatch/
+    )
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true })
+  }
+})

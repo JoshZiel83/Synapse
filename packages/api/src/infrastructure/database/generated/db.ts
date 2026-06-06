@@ -1078,6 +1078,19 @@ export interface ConversationParticipants {
   subject_id: string;
 }
 
+export interface ConversationParticipantsLive {
+  actor_join_version_id: string | null;
+  conversation_id: string | null;
+  display_name: string | null;
+  id: string | null;
+  joined_at: Timestamp | null;
+  left_at: Timestamp | null;
+  metadata: Json | null;
+  role_key: string | null;
+  state: ConversationParticipantsState | null;
+  subject_id: string | null;
+}
+
 export interface ConversationParticipantStates {
   conversation_id: string;
   created_at: Generated<Timestamp>;
@@ -3113,6 +3126,7 @@ export interface WorkspaceMemberSyncEvents {
   created_at: Generated<Timestamp>;
   event_type: string;
   item_id: string | null;
+  member_seq: Int8;
   occurred_at: Generated<Timestamp>;
   payload: Generated<Json>;
   sync_seq: Generated<Int8>;
@@ -3210,6 +3224,7 @@ export interface DB {
   conversation_participant_addresses: ConversationParticipantAddresses;
   conversation_participant_states: ConversationParticipantStates;
   conversation_participants: ConversationParticipants;
+  conversation_participants_live: ConversationParticipantsLive;
   conversation_transport_bindings: ConversationTransportBindings;
   conversations: Conversations;
   conversations_live: ConversationsLive;

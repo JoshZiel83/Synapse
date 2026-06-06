@@ -19,16 +19,26 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import { dirname, resolve, relative, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import yaml from "js-yaml"
+import { parseSchema } from "./schema-introspect.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SRC = resolve(here, "../src")
+const SCHEMA = resolve(here, "../src/infrastructure/database/schema.sql")
 const MANIFEST = resolve(
   here,
   "../src/infrastructure/database/soft-delete-table-classification.yml"
 )
 
+const schemaSql = readFileSync(SCHEMA, "utf8")
+const schema = parseSchema(schemaSql)
 const manifest = yaml.load(readFileSync(MANIFEST, "utf8"))
 const mTables = manifest.tables
+const tableIsEphemeral = (entry) =>
+  entry.class === "ephemeral" || entry.derived === true
+const tableHasDeclaredLiveSemantics = (entry) =>
+  (Array.isArray(entry.liveValues) && entry.liveValues.length) ||
+  Boolean(entry.livePredicate)
+const VALID_LIVE_INTEGRITY = new Set(["enforce", "historical", "none"])
 
 // Managed (delete-protected) tables: persistent classes, not ephemeral/derived/baOwned.
 const MANAGED_DELETE = new Set(
@@ -46,6 +56,36 @@ const ROOT_TABLES = new Set(
     .filter(([, e]) => e.softDelete === "deleted_at")
     .map(([n]) => n)
 )
+
+// Keep in lockstep with cutover-emit-ddl.mjs: these softDelete:none child tables
+// expose canonical `_live` views even without their own liveValues because their
+// liveness is inherited entirely from parent `_live` views.
+const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set(["device_exposures"])
+const tableHasManifestLiveView = (name, entry) =>
+  !tableIsEphemeral(entry) &&
+  (tableHasDeclaredLiveSemantics(entry) ||
+    ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES.has(name))
+const tableHasLiveView = (name, entry) =>
+  entry.softDelete === "deleted_at" ||
+  entry.softDelete === "status" ||
+  tableHasManifestLiveView(name, entry)
+const hasColumn = (name, column) =>
+  schema.tables.get(name)?.columns.some((c) => c.name === column)
+const liveColumnForTable = (name, entry, errors) => {
+  if (!Array.isArray(entry.liveValues) || !entry.liveValues.length) return null
+  if (entry.liveColumn) {
+    if (!hasColumn(name, entry.liveColumn)) {
+      errors.push(`${name}: liveColumn '${entry.liveColumn}' is absent`)
+    }
+    return entry.liveColumn
+  }
+  if (hasColumn(name, "status")) return "status"
+  if (hasColumn(name, "state")) return "state"
+  errors.push(
+    `${name}: liveValues declared but no liveColumn/status/state column exists`
+  )
+  return null
+}
 
 // Principal tables = any table whose manifest declares principalColumns (a
 // column carrying a deleted user's principal: user/member/subject). Every such
@@ -280,6 +320,111 @@ for (const t of PRINCIPAL_ANCHORED_ALLOWLIST) {
     violations.push(
       `PRINCIPAL_ANCHORED_ALLOWLIST entry "${t}" is closeable — it must be closed by markUserDeleted, not anchored`
     )
+}
+
+// Rule 4 (canonical live surfaces): every persistent table with manifest live
+// semantics must have a generated `_live` view, and every `_live` table with a
+// business/runtime status column must declare its own live semantics unless it
+// is explicitly parent-folding only. This keeps active/left/removed-style
+// semantics manifest-driven instead of relying on ad hoc business filters.
+for (const [t, entry] of Object.entries(mTables)) {
+  const tbl = schema.tables.get(t)
+  if (!tbl) continue
+  if (!tableHasLiveView(t, entry)) continue
+
+  const hasGeneratedView = new RegExp(`CREATE VIEW ${t}_live\\b`).test(
+    schemaSql
+  )
+  if (!hasGeneratedView) {
+    violations.push(`${t}: expected generated canonical ${t}_live view`)
+  }
+
+  liveColumnForTable(t, entry, violations)
+  const hasBusinessStateColumn =
+    tbl.columns.some((c) => c.name === "status") ||
+    tbl.columns.some((c) => c.name === "state")
+  if (
+    tableHasManifestLiveView(t, entry) &&
+    hasBusinessStateColumn &&
+    !tableHasDeclaredLiveSemantics(entry) &&
+    !ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES.has(t)
+  ) {
+    violations.push(
+      `${t}: generated _live table has status/state column but no liveValues/livePredicate in soft-delete manifest`
+    )
+  }
+}
+for (const t of ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES) {
+  if (!schema.tables.has(t) || !mTables[t]) {
+    violations.push(
+      `ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES entry "${t}" is missing from schema or manifest`
+    )
+    continue
+  }
+  const tbl = schema.tables.get(t)
+  const entry = mTables[t]
+  const hasBusinessStateColumn =
+    tbl.columns.some((c) => c.name === "status") ||
+    tbl.columns.some((c) => c.name === "state")
+  if (hasBusinessStateColumn && !tableHasDeclaredLiveSemantics(entry)) {
+    violations.push(
+      `${t}: parent-folding _live table has status/state column but no liveValues/livePredicate in soft-delete manifest`
+    )
+  }
+}
+
+// Rule 5 (FK live-integrity classification): every persistent FK pointing at a
+// canonical live parent must say whether it is a lifecycle edge (`enforce`), a
+// historical/provenance reference (`historical`), or intentionally ignored by
+// live integrity (`none`). This prevents newly generated `_live` parents from
+// accidentally turning author/creator/history columns into lifecycle parents.
+for (const fk of schema.foreignKeys) {
+  const parentEntry = mTables[fk.referencedTable]
+  const childEntry = mTables[fk.childTable]
+  if (!parentEntry || !childEntry) continue
+  if (tableIsEphemeral(childEntry)) continue
+  if (!tableHasLiveView(fk.referencedTable, parentEntry)) continue
+
+  const reg = manifest.foreignKeys?.[fk.key]
+  const liveIntegrity = reg?.liveIntegrity
+  if (!liveIntegrity) {
+    violations.push(
+      `FK ${fk.key} (${fk.childTable}.${fk.childColumns.join(",")} -> ${fk.referencedTable}) references a live parent but has no liveIntegrity classification`
+    )
+    continue
+  }
+  if (!VALID_LIVE_INTEGRITY.has(liveIntegrity)) {
+    violations.push(`FK ${fk.key}: invalid liveIntegrity '${liveIntegrity}'`)
+  }
+  if (
+    liveIntegrity === "enforce" &&
+    (fk.childColumns.length !== 1 || fk.referencedColumns.length !== 1)
+  ) {
+    violations.push(
+      `FK ${fk.key}: liveIntegrity=enforce currently supports single-column FKs only`
+    )
+  }
+  if (fk.childColumns.length === 1 && fk.referencedColumns.length === 1) {
+    const triggerName = `sd_fk_live_${fk.childTable}_${fk.childColumns[0]}`
+    const dropSql = `DROP TRIGGER IF EXISTS ${triggerName} ON ${fk.childTable};`
+    const createSql = `CREATE TRIGGER ${triggerName} `
+    if (!schemaSql.includes(dropSql)) {
+      violations.push(
+        `FK ${fk.key}: generated schema must drop stale ${triggerName} before recreating enforce-only FK liveness triggers`
+      )
+    }
+    const createsTrigger = schemaSql.includes(createSql)
+    if (liveIntegrity === "enforce" && !createsTrigger) {
+      violations.push(
+        `FK ${fk.key}: liveIntegrity=enforce but generated schema does not create ${triggerName}`
+      )
+    }
+    if (liveIntegrity !== "enforce" && createsTrigger) {
+      violations.push(
+        `FK ${fk.key}: liveIntegrity=${liveIntegrity} but generated schema still creates ${triggerName}`
+      )
+    }
+  }
 }
 
 if (violations.length) {

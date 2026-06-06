@@ -44,6 +44,8 @@
     "test:conformance": "npm run test:conformance -w packages/api",
     "audit:business-enums": "node ./scripts/audit-business-enum-literals.mjs",
     "audit:device-runtime-sidecars": "tsx ./scripts/audit-device-runtime-sidecars.mts",
+    "installer:gen-node-manifest": "node ./scripts/installer/generate-node-manifest.mjs",
+    "verify:installer": "bash ./scripts/installer/install.test.sh",
     "lint:deps": "syncpack lint --dependencies 'zod'",
     "lint:deps:fix": "syncpack fix --dependencies 'zod'",
     "db:bootstrap": "npm run db:bootstrap -w packages/api",

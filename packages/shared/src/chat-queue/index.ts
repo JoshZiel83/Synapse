@@ -39,8 +39,21 @@ export interface PendingOutboxMessage {
   lastErrorMessage?: string
 }
 
+/**
+ * A locally-recorded "this conversation was removed at member_seq=removedSeq"
+ * marker. Persisted so that, after a removal (membership.updated{removed} or a
+ * bootstrap prune), a LATER-arriving but lower-seq stale `conversation.upsert`
+ * cannot resurrect the conversation: the upsert reducer drops any frame whose
+ * memberSeq <= removedSeq. Cleared by membership.updated{active} or by bootstrap
+ * returning the conversation as live (legitimate re-add).
+ */
+export interface ConversationTombstone {
+  conversationId: string
+  removedSeq: number
+}
+
 export interface StoredChatQueueState {
-  version: 3
+  version: 4
   workspaceId: string
   workspaceMemberId?: string
   clientInstanceId?: string
@@ -48,17 +61,20 @@ export interface StoredChatQueueState {
   lastBootstrappedAt?: string
   pendingReads: Record<string, PendingConversationRead>
   outbox: Record<string, PendingOutboxMessage>
+  /** conversationId -> tombstone. See ConversationTombstone. */
+  tombstones: Record<string, ConversationTombstone>
 }
 
 export function createEmptyStoredChatQueueState(
   workspaceId: string
 ): StoredChatQueueState {
   return {
-    version: 3,
+    version: 4,
     workspaceId,
     inboxCursor: 0,
     pendingReads: {},
     outbox: {},
+    tombstones: {},
   }
 }
 
@@ -77,8 +93,18 @@ export function normalizeStoredChatQueueState(
     return createEmptyStoredChatQueueState(workspaceId)
   }
 
-  const snapshot = value as Partial<StoredChatQueueState>
-  if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
+  const snapshot = value as Partial<StoredChatQueueState> & { version?: number }
+  if (snapshot.workspaceId !== workspaceId) {
+    return createEmptyStoredChatQueueState(workspaceId)
+  }
+  // v3 (pre-member_seq) is migratable: the OLD inboxCursor was a global sync_seq
+  // and is meaningless under the new member_seq cursor, so RESET it to 0 (forces
+  // one full bootstrap+sync). Outbox/pendingReads are preserved (no data loss),
+  // tombstones start empty. Any other version is wiped.
+  const version: number = snapshot.version ?? 0
+  const isV3 = version === 3
+  const isV4 = version === 4
+  if (!isV3 && !isV4) {
     return createEmptyStoredChatQueueState(workspaceId)
   }
 
@@ -113,8 +139,26 @@ export function normalizeStoredChatQueueState(
         )
       : {}
 
+  // tombstones only exist from v4 onward; v3 migrates to an empty set.
+  const tombstones =
+    isV4 && snapshot.tombstones && typeof snapshot.tombstones === "object"
+      ? Object.fromEntries(
+          Object.entries(snapshot.tombstones).filter(
+            ([conversationId, entry]) =>
+              Boolean(
+                conversationId &&
+                entry &&
+                typeof entry === "object" &&
+                typeof (entry as ConversationTombstone).conversationId ===
+                  "string" &&
+                typeof (entry as ConversationTombstone).removedSeq === "number"
+              )
+          )
+        )
+      : {}
+
   return {
-    version: 3,
+    version: 4,
     workspaceId,
     workspaceMemberId:
       typeof snapshot.workspaceMemberId === "string"
@@ -124,6 +168,7 @@ export function normalizeStoredChatQueueState(
       ? snapshot.clientInstanceId
       : undefined,
     inboxCursor:
+      isV4 &&
       typeof snapshot.inboxCursor === "number" &&
       Number.isFinite(snapshot.inboxCursor)
         ? snapshot.inboxCursor
@@ -134,6 +179,7 @@ export function normalizeStoredChatQueueState(
         : undefined,
     pendingReads,
     outbox,
+    tombstones,
   }
 }
 
@@ -211,6 +257,34 @@ export function mergeStoredQueueTransition(
     }
   }
 
+  // tombstones are a base-aware diff set, like outbox/pendingReads, but the
+  // CLEAR must be sequenced. A clear (key in previous, absent in next) is a real
+  // deletion ONLY when it supersedes what current holds — i.e. current is absent
+  // or current.removedSeq <= previous.removedSeq. Otherwise current already has
+  // a NEWER removal (e.g. another tab tombstoned at a higher seq after this
+  // transition's base was captured) and a stale clear must NOT delete it.
+  const previousTombstones = previousState?.tombstones ?? {}
+  const nextTombstones = { ...(nextWorkspaceState.tombstones ?? {}) }
+  for (const conversationId of Object.keys(previousTombstones)) {
+    if (!(conversationId in nextState.tombstones)) {
+      const current = nextTombstones[conversationId]
+      const previous = previousTombstones[conversationId]
+      if (current && previous && current.removedSeq > previous.removedSeq) {
+        // current has a newer removal than the one this transition cleared —
+        // keep it.
+        continue
+      }
+      delete nextTombstones[conversationId]
+    }
+  }
+  for (const [conversationId, entry] of Object.entries(nextState.tombstones)) {
+    const current = nextTombstones[conversationId]
+    // Monotonic: keep the highest removedSeq if both sides have one.
+    if (!current || entry.removedSeq >= current.removedSeq) {
+      nextTombstones[conversationId] = entry
+    }
+  }
+
   return {
     ...nextWorkspaceState,
     workspaceId: nextState.workspaceId,
@@ -228,6 +302,7 @@ export function mergeStoredQueueTransition(
     ),
     pendingReads: nextPendingReads,
     outbox: nextOutbox,
+    tombstones: nextTombstones,
   }
 }
 
@@ -254,6 +329,7 @@ export interface ChatQueueStateLike {
   lastBootstrappedAt?: string
   pendingReads: Record<string, unknown>
   outbox: Record<string, unknown>
+  tombstones?: Record<string, unknown>
 }
 
 function sameEntry(left: unknown, right: unknown) {
@@ -282,6 +358,14 @@ export function mergeQueueStateForSave<T extends ChatQueueStateLike>(
       processedQueueState.lastBootstrappedAt,
     pendingReads: { ...latestQueueState.pendingReads },
     outbox: { ...latestQueueState.outbox },
+    // The SW never mutates tombstones (it only flushes outbox/reads), so
+    // preserve whatever the latest UI-thread state holds. Carried through so the
+    // round-trip save doesn't strip the field.
+    tombstones: latestQueueState.tombstones
+      ? { ...latestQueueState.tombstones }
+      : processedQueueState.tombstones
+        ? { ...processedQueueState.tombstones }
+        : undefined,
   } as T
 
   for (const conversationId of Object.keys(baseQueueState.pendingReads)) {

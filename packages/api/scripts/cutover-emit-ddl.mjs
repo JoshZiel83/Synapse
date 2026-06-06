@@ -126,24 +126,69 @@ for (const [name, e] of Object.entries(mTables)) {
 }
 persistentTables.sort()
 
+const fkPolicyFor = (fk) => manifest.foreignKeys?.[fk.key]
+const fkLiveIntegrityFor = (fk) => fkPolicyFor(fk)?.liveIntegrity
+const tableIsEphemeral = (entry) =>
+  entry.class === "ephemeral" || entry.derived === true
+const tableHasDeclaredLiveSemantics = (entry) =>
+  (Array.isArray(entry.liveValues) && entry.liveValues.length) ||
+  Boolean(entry.livePredicate)
+const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set(["device_exposures"])
+const tableHasManifestLiveView = (name, entry) =>
+  !tableIsEphemeral(entry) &&
+  (tableHasDeclaredLiveSemantics(entry) ||
+    ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES.has(name))
+const tableHasLiveView = (name, entry) =>
+  entry.softDelete === "deleted_at" ||
+  entry.softDelete === "status" ||
+  tableHasManifestLiveView(name, entry)
+const liveColumnForTable = (name, entry) => {
+  if (!Array.isArray(entry.liveValues) || !entry.liveValues.length) return null
+  if (entry.liveColumn) {
+    if (!hasCol(name, entry.liveColumn)) {
+      throw new Error(`${name}: liveColumn '${entry.liveColumn}' is absent`)
+    }
+    return entry.liveColumn
+  }
+  if (hasCol(name, "status")) return "status"
+  if (hasCol(name, "state")) return "state"
+  throw new Error(
+    `${name}: liveValues declared but no liveColumn/status/state column exists`
+  )
+}
+const liveValuesForTable = (name, entry) => {
+  if (Array.isArray(entry.liveValues) && entry.liveValues.length) {
+    liveColumnForTable(name, entry)
+    return entry.liveValues
+  }
+  if (entry.softDelete === "status") return ["active"]
+  return []
+}
+
 // --- 4. soft-delete-aware FK integrity triggers (matrix) -------------------
-// FKs whose referenced table is a soft-delete root (has deleted_at) AND child is
-// a persistent (non-ephemeral) table. Skip self-references handled elsewhere.
-const integrityFks = foreignKeys.filter((fk) => {
+// FKs whose referenced table has a canonical _live view AND child is a
+// persistent (non-ephemeral) table. Keep this broader set for stale trigger
+// cleanup: a FK can be demoted from enforce -> historical/none and replaying
+// the cutover must remove the older sd_fk_live_* trigger from already-cut-over
+// databases.
+const liveParentSingleColumnFks = foreignKeys.filter((fk) => {
   const parent = mTables[fk.referencedTable]
   const child = mTables[fk.childTable]
   if (!parent || !child) return false
-  if (parent.softDelete !== "deleted_at") return false
-  if (!hasCol(fk.referencedTable, "deleted_at")) return false
+  if (!tableHasLiveView(fk.referencedTable, parent)) return false
   // Only single-column FKs (composite FK liveness handled via the parent's own
   // reject/live view); keep the trigger set targeted and unambiguous.
-  if (fk.childColumns.length !== 1) return false
+  if (fk.childColumns.length !== 1 || fk.referencedColumns.length !== 1) {
+    return false
+  }
   // child should be persistent to be worth a DB guard (ephemeral children are
   // short-lived; their refs don't outlive a soft-deleted parent meaningfully).
-  const childEphemeral = child.class === "ephemeral" || child.derived === true
-  if (childEphemeral) return false
+  if (tableIsEphemeral(child)) return false
   return true
 })
+const integrityFks = liveParentSingleColumnFks.filter(
+  (fk) => fkLiveIntegrityFor(fk) === "enforce"
+)
 
 // ---------------------------------------------------------------------------
 function emit() {
@@ -247,12 +292,22 @@ DECLARE
   v_child_col    CONSTANT text := TG_ARGV[1];
   v_parent_col   CONSTANT text := TG_ARGV[2];
   v_child_has_deleted_at CONSTANT boolean := TG_ARGV[3] = 'true';
+  v_child_live_values CONSTANT text[] := CASE
+    WHEN TG_NARGS >= 5 AND TG_ARGV[4] <> '' THEN string_to_array(TG_ARGV[4], ',')
+    ELSE ARRAY[]::text[]
+  END;
+  v_child_live_col CONSTANT text := CASE
+    WHEN TG_NARGS >= 6 AND TG_ARGV[5] <> '' THEN TG_ARGV[5]
+    ELSE 'status'
+  END;
   v_fk_value     uuid;
   v_old_value    uuid;
   v_alive        boolean;
   v_recheck      boolean := FALSE;
   v_old_deleted  timestamptz;
   v_new_deleted  timestamptz;
+  v_old_status   text;
+  v_new_status   text;
 BEGIN
   EXECUTE format('SELECT ($1).%I', v_child_col) INTO v_fk_value USING NEW;
   IF v_fk_value IS NULL THEN
@@ -274,13 +329,30 @@ BEGIN
       IF v_old_deleted IS NOT NULL AND v_new_deleted IS NULL THEN
         v_recheck := TRUE; -- revive
       END IF;
+    ELSIF array_length(v_child_live_values, 1) IS NOT NULL THEN
+      EXECUTE format('SELECT ($1).%I::text', v_child_live_col) INTO v_old_status USING OLD;
+      EXECUTE format('SELECT ($1).%I::text', v_child_live_col) INTO v_new_status USING NEW;
+      IF v_new_status = ANY(v_child_live_values)
+         AND NOT (v_old_status = ANY(v_child_live_values)) THEN
+        v_recheck := TRUE; -- live-state revive (dead -> live)
+      END IF;
+    END IF;
+    IF NOT v_recheck
+       AND v_child_has_deleted_at
+       AND array_length(v_child_live_values, 1) IS NOT NULL THEN
+      EXECUTE format('SELECT ($1).%I::text', v_child_live_col) INTO v_old_status USING OLD;
+      EXECUTE format('SELECT ($1).%I::text', v_child_live_col) INTO v_new_status USING NEW;
+      IF v_new_status = ANY(v_child_live_values)
+         AND NOT (v_old_status = ANY(v_child_live_values)) THEN
+        v_recheck := TRUE; -- dual-axis root live-state revive
+      END IF;
     END IF;
   END IF;
   IF NOT v_recheck THEN
     RETURN NEW;
   END IF;
   -- Liveness = a row with this key exists in the parent's _live view (folds in
-  -- deleted_at IS NULL AND status IN liveValues for dual-axis roots).
+  -- deleted_at IS NULL and liveValues/livePredicate where declared).
   EXECUTE format(
     'SELECT EXISTS (SELECT 1 FROM %I_live WHERE %I = $1)',
     v_parent_table, v_parent_col
@@ -293,19 +365,45 @@ BEGIN
 END;
 $$;`)
   L.push("")
+  for (const fk of liveParentSingleColumnFks) {
+    const child = fk.childTable
+    const col = fk.childColumns[0]
+    const trg = `sd_fk_live_${child}_${col}`
+    L.push(`DROP TRIGGER IF EXISTS ${trg} ON ${child};`)
+  }
+  L.push("")
   for (const fk of integrityFks) {
     const child = fk.childTable
     const col = fk.childColumns[0]
     const parent = fk.referencedTable
     const pcol = fk.referencedColumns[0]
+    const childEntry = mTables[child]
     const childHasDeletedAt = hasCol(child, "deleted_at")
+    const childLiveValues = liveValuesForTable(child, childEntry)
+    const childLiveColumn = childLiveValues.length
+      ? liveColumnForTable(child, childEntry)
+      : ""
     // Fire on the FK column always; additionally on deleted_at when the child is
-    // itself soft-deletable, so a REVIVE re-validates the parent's liveness.
-    const updateCols = childHasDeletedAt ? `${col}, deleted_at` : col
+    // itself soft-deletable, and on the manifest live column when the child has
+    // liveValues, so a REVIVE re-validates the parent's liveness.
+    const updateCols = [
+      col,
+      ...(childHasDeletedAt ? ["deleted_at"] : []),
+      ...(childLiveColumn ? [childLiveColumn] : []),
+    ].join(", ")
     const trg = `sd_fk_live_${child}_${col}`
-    L.push(`DROP TRIGGER IF EXISTS ${trg} ON ${child};`)
+    const triggerArgs = [
+      `'${parent}'`,
+      `'${col}'`,
+      `'${pcol}'`,
+      `'${childHasDeletedAt}'`,
+      `'${childLiveValues.join(",")}'`,
+      ...(childLiveColumn && childLiveColumn !== "status"
+        ? [`'${childLiveColumn}'`]
+        : []),
+    ].join(", ")
     L.push(
-      `CREATE TRIGGER ${trg} BEFORE INSERT OR UPDATE OF ${updateCols} ON ${child} FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('${parent}', '${col}', '${pcol}', '${childHasDeletedAt}');`
+      `CREATE TRIGGER ${trg} BEFORE INSERT OR UPDATE OF ${updateCols} ON ${child} FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live(${triggerArgs});`
     )
   }
   L.push("")
@@ -556,11 +654,83 @@ function argTypes(args) {
     .join(", ")
 }
 
+function dedupeLiveParents(parents) {
+  const seen = new Set()
+  const out = []
+  for (const parent of parents) {
+    const parentColumn = parent.parentColumn || "id"
+    const key = `${parent.column}|${parent.parent}|${parentColumn}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ ...parent, parentColumn })
+  }
+  return out
+}
+
+function restrictLiveParentsFor(tableName) {
+  return foreignKeys
+    .filter((fk) => fk.childTable === tableName)
+    .filter(
+      (fk) => fk.childColumns.length === 1 && fk.referencedColumns.length === 1
+    )
+    .filter((fk) => fk.childTable !== fk.referencedTable)
+    .filter((fk) => fkLiveIntegrityFor(fk) === "enforce")
+    .filter((fk) =>
+      tableHasLiveView(fk.referencedTable, mTables[fk.referencedTable] || {})
+    )
+    .map((fk) => ({
+      column: fk.childColumns[0],
+      parent: fk.referencedTable,
+      parentColumn: fk.referencedColumns[0],
+    }))
+}
+
+function liveParentsFor(tableName, entry, includeRestrictParents) {
+  const explicit = Array.isArray(entry.liveParents) ? entry.liveParents : []
+  return dedupeLiveParents([
+    ...explicit,
+    ...(includeRestrictParents ? restrictLiveParentsFor(tableName) : []),
+  ])
+}
+
+function sortLiveTables(liveTables) {
+  const byName = new Map(liveTables.map((t) => [t.n, t]))
+  const visiting = new Set()
+  const visited = new Set()
+  const ordered = []
+  const visit = (table) => {
+    if (visited.has(table.n)) return
+    if (visiting.has(table.n)) {
+      throw new Error(`live view dependency cycle at ${table.n}`)
+    }
+    visiting.add(table.n)
+    for (const parent of table.parents) {
+      const dep = byName.get(parent.parent)
+      if (dep) visit(dep)
+    }
+    visiting.delete(table.n)
+    visited.add(table.n)
+    ordered.push(table)
+  }
+  for (const table of [...liveTables].sort((a, b) => a.n.localeCompare(b.n))) {
+    visit(table)
+  }
+  return ordered
+}
+
+function liveParentPredicates(parents) {
+  return parents.map(
+    (lp, i) =>
+      `(base.${lp.column} IS NULL OR EXISTS (SELECT 1 FROM ${lp.parent}_live lp${i} WHERE lp${i}.${lp.parentColumn || "id"} = base.${lp.column}))`
+  )
+}
+
 // --- 5. live views ---------------------------------------------------------
-// One <t>_live view per soft-delete root (deleted_at IS NULL); per status table
-// (status IN liveValues); plus device child derived views (join devices_live so
-// soft-closed sandbox device children disappear, design §8.6). Junction/
-// workspace parent-liveness is layered in for the membership tables.
+// One <t>_live view per soft-delete root (deleted_at IS NULL), per status table
+// (status IN liveValues), and per persistent manifest-live child table
+// (liveColumn IN liveValues / livePredicate). Additional parent-folding child
+// views cover device rows whose liveness is entirely inherited from parents.
+// Junction/workspace parent-liveness is layered in for the membership tables.
 function emitLiveViews() {
   const V = []
   V.push(
@@ -573,116 +743,92 @@ function emitLiveViews() {
     "-- CHECK OPTION blocks inserting/surfacing a row outside the predicate."
   )
 
-  // roots: deleted_at IS NULL — AND status IN (liveValues) when the root ALSO
-  // carries a status column with declared liveValues (review F10). Several roots
-  // are dual-axis (deleted_at tombstone + a status lifecycle: plugin_connections
-  // active-only, plugin_installations, automation_*, transport_accounts); their
-  // canonical live surface must hide expired/revoked/archived/disabled rows even
-  // when they were never tombstoned. A pure single-table view stays auto-updatable
-  // with CASCADED CHECK OPTION.
+  // Build all root/status live views as one dependency graph. Roots can depend on
+  // parent _live views too (review F18): if a root has a RESTRICT FK to another
+  // soft-delete/status table, its canonical live surface must disappear when the
+  // parent disappears, even if orchestration has not yet tombstoned the child.
+  // Use EXISTS predicates (not JOINs) so nullable FK columns remain valid and the
+  // view keeps a single base table in FROM.
   const roots = Object.entries(mTables)
     .filter(([, e]) => e.softDelete === "deleted_at")
-    .map(([n, e]) => ({ n, live: e.liveValues }))
-    .sort((a, b) => a.n.localeCompare(b.n))
-  for (const { n, live } of roots) {
-    let pred = "deleted_at IS NULL"
-    if (Array.isArray(live) && live.length && hasCol(n, "status")) {
-      const inList = live.map((v) => `'${v}'`).join(", ")
-      pred = `deleted_at IS NULL AND status IN (${inList})`
-    }
-    V.push(`DROP VIEW IF EXISTS ${n}_live;`)
-    V.push(
-      `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WHERE ${pred} WITH CASCADED CHECK OPTION;`
-    )
-  }
+    .map(([n, e]) => ({
+      kind: "root",
+      n,
+      live: liveValuesForTable(n, e),
+      parents: liveParentsFor(n, e, true),
+    }))
 
-  // status tables: status IN (liveValues), AND every declared liveParent row is
-  // itself live — folded in by JOINing the parent's own _live view (review F1).
-  // This makes liveness transitive: e.g. workspace_access_bindings_live JOINs
-  // workspace_members_live, which itself JOINs workspaces_live + users_live, so a
-  // binding under a removed member or a soft-deleted workspace disappears. A view
-  // with a JOIN is not auto-updatable, so these are read-only (no CHECK OPTION);
-  // all writes target the base tables. Single-table fallback (no liveParents)
-  // keeps the auto-updatable CHECK-OPTION form.
   const statusTables = Object.entries(mTables)
     .filter(([, e]) => e.softDelete === "status")
     .map(([n, e]) => ({
+      kind: "status",
       n,
-      live: e.liveValues || ["active"],
-      parents: e.liveParents || [],
+      live: liveValuesForTable(n, e),
+      parents: liveParentsFor(n, e, true),
     }))
-  // Dependency order: a status view that JOINs another status _live view must be
-  // emitted after it. (Root _live views are all emitted above already.)
-  const statusByName = new Map(statusTables.map((s) => [s.n, s]))
-  const emittedStatus = new Set()
-  const orderedStatus = []
-  const visitStatus = (s, stack = new Set()) => {
-    if (emittedStatus.has(s.n) || stack.has(s.n)) return
-    stack.add(s.n)
-    for (const lp of s.parents) {
-      const dep = statusByName.get(lp.parent)
-      if (dep) visitStatus(dep, stack)
-    }
-    emittedStatus.add(s.n)
-    orderedStatus.push(s)
-  }
-  for (const s of [...statusTables].sort((a, b) => a.n.localeCompare(b.n)))
-    visitStatus(s)
-  for (const { n, live, parents } of orderedStatus) {
-    const inList = live.map((v) => `'${v}'`).join(", ")
+
+  const manifestLiveTables = Object.entries(mTables)
+    .filter(([, e]) => e.softDelete === "none")
+    .filter(([n, e]) => tableHasManifestLiveView(n, e))
+    .map(([n, e]) => ({
+      kind: "manifest",
+      n,
+      live: liveValuesForTable(n, e),
+      liveColumn: liveColumnForTable(n, e),
+      livePredicate: e.livePredicate,
+      parents: liveParentsFor(n, e, true),
+    }))
+
+  const orderedLiveTables = sortLiveTables([
+    ...roots,
+    ...statusTables,
+    ...manifestLiveTables,
+  ])
+
+  // Drop dependents first so re-applying the schema works once root/status views
+  // reference each other.
+  for (const { n } of [...orderedLiveTables].reverse()) {
     V.push(`DROP VIEW IF EXISTS ${n}_live;`)
-    if (parents.length) {
-      const joins = parents
-        .map(
-          (lp, i) =>
-            `  JOIN ${lp.parent}_live lp${i} ON lp${i}.id = base.${lp.column}`
-        )
-        .join("\n")
-      V.push(
-        `CREATE VIEW ${n}_live AS\n  SELECT base.* FROM ${n} base\n${joins}\n  WHERE base.status IN (${inList});`
-      )
-    } else {
-      V.push(
-        `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WHERE status IN (${inList}) WITH CASCADED CHECK OPTION;`
-      )
-    }
   }
 
-  // device child derived views (design §8.6) — hide children of a soft-closed
-  // device. Join back to devices via the documented chain.
-  V.push(
-    "-- device child derived views (§8.6): hide children of soft-closed devices."
-  )
-  V.push(`DROP VIEW IF EXISTS device_services_live;`)
-  V.push(
-    `CREATE VIEW device_services_live AS
-  SELECT s.* FROM device_services s
-  JOIN devices d ON d.id = s.device_id
-  WHERE d.deleted_at IS NULL;`
-  )
-  V.push(`DROP VIEW IF EXISTS device_exposures_live;`)
-  V.push(
-    `CREATE VIEW device_exposures_live AS
-  SELECT x.* FROM device_exposures x
-  JOIN devices d ON d.id = x.device_id
-  WHERE d.deleted_at IS NULL;`
-  )
-  V.push(`DROP VIEW IF EXISTS device_capabilities_live;`)
-  V.push(
-    `CREATE VIEW device_capabilities_live AS
-  SELECT c.* FROM device_capabilities c
-  JOIN device_exposures x ON x.id = c.exposure_id
-  JOIN devices d ON d.id = x.device_id
-  WHERE d.deleted_at IS NULL;`
-  )
-  V.push(`DROP VIEW IF EXISTS device_tools_live;`)
-  V.push(
-    `CREATE VIEW device_tools_live AS
-  SELECT t.* FROM device_tools t
-  JOIN device_exposures x ON x.id = t.exposure_id
-  JOIN devices d ON d.id = x.device_id
-  WHERE d.deleted_at IS NULL;`
-  )
+  for (const {
+    kind,
+    n,
+    live,
+    liveColumn,
+    livePredicate,
+    parents,
+  } of orderedLiveTables) {
+    const parentPreds = liveParentPredicates(parents)
+    if (kind === "root") {
+      let pred = "deleted_at IS NULL"
+      if (live.length) {
+        const inList = live.map((v) => `'${v}'`).join(", ")
+        const col = liveColumnForTable(n, mTables[n]) || "status"
+        pred = `deleted_at IS NULL AND ${col} IN (${inList})`
+      }
+      const predicates = [pred, ...parentPreds].join(" AND ")
+      V.push(
+        parents.length
+          ? `CREATE VIEW ${n}_live AS SELECT base.* FROM ${n} base WHERE ${predicates} WITH CASCADED CHECK OPTION;`
+          : `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WHERE ${pred} WITH CASCADED CHECK OPTION;`
+      )
+      continue
+    }
+
+    const inList = live.map((v) => `'${v}'`).join(", ")
+    const ownPreds = livePredicate
+      ? [livePredicate]
+      : kind === "status" || live.length
+        ? [`${liveColumn || "status"} IN (${inList})`]
+        : []
+    const predicates = [...ownPreds, ...parentPreds].join(" AND ")
+    V.push(
+      predicates
+        ? `CREATE VIEW ${n}_live AS SELECT base.* FROM ${n} base WHERE ${predicates} WITH CASCADED CHECK OPTION;`
+        : `CREATE VIEW ${n}_live AS SELECT * FROM ${n} WITH CASCADED CHECK OPTION;`
+    )
+  }
 
   return V.join("\n")
 }

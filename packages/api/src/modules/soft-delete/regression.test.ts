@@ -65,6 +65,14 @@ async function insertActor(db: AnyDb, ws: string): Promise<string> {
     .executeTakeFirstOrThrow()
   return row.id as string
 }
+async function insertConversation(db: AnyDb, ws: string): Promise<string> {
+  const row = await db
+    .insertInto("conversations")
+    .values({ workspace_id: ws, kind: "group", title: "soft-delete conv" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
 async function rejects(db: AnyDb, fn: () => Promise<unknown>, re: RegExp) {
   await sql`SAVEPOINT sd_probe`.execute(db)
   await assert.rejects(fn, re)
@@ -735,7 +743,7 @@ test(
             .set({ status: "active", removed_at: null })
             .where("id", "=", mid)
             .execute(),
-        /not live/
+        /(?:not live|non-live)/
       )
     })
   }
@@ -1138,6 +1146,62 @@ async function insertInstallation(
   }
 }
 
+async function insertDevice(db: AnyDb, ws: string): Promise<string> {
+  const row = await db
+    .insertInto("devices")
+    .values({
+      workspace_id: ws,
+      title: "soft-delete-device",
+      public_key: uniq("device-pk"),
+      public_key_fingerprint: uniq("device-fp"),
+      trust_status: "trusted",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function insertDeviceCapability(
+  db: AnyDb,
+  ws: string
+): Promise<{ capabilityId: string; exposureId: string; serviceId: string }> {
+  const deviceId = await insertDevice(db, ws)
+  const service = await db
+    .insertInto("device_services")
+    .values({
+      device_id: deviceId,
+      service_kind: "device_runtime",
+      status: "online",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const exposure = await db
+    .insertInto("device_exposures")
+    .values({
+      device_id: deviceId,
+      service_id: service.id as string,
+      stable_key: uniq("device-exposure"),
+      display_name: "soft-delete exposure",
+      transport: "stdio",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const capability = await db
+    .insertInto("device_capabilities")
+    .values({
+      workspace_id: ws,
+      exposure_id: exposure.id as string,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return {
+    capabilityId: capability.id as string,
+    exposureId: exposure.id as string,
+    serviceId: service.id as string,
+  }
+}
+
 test(
   "F15: FK-liveness trigger blocks a child under an ARCHIVED (non-live) parent",
   { timeout: 5 * 60_000 },
@@ -1224,6 +1288,542 @@ test(
         .where("id", "=", instId)
         .execute()
       assert.equal(base.length, 1, "row still present (not tombstoned)")
+    })
+  }
+)
+
+test(
+  "F18: plugin_connections_live folds in parent installation liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const { instId } = await insertInstallation(db, ws)
+      const conn = await db
+        .insertInto("plugin_connections")
+        .values({
+          installation_id: instId,
+          workspace_id: ws,
+          owner_scope: "installation",
+          binding_key: "default",
+          driver: "oauth2",
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "archived" })
+        .where("id", "=", instId)
+        .execute()
+
+      const live = await db
+        .selectFrom("plugin_connections_live")
+        .select("id")
+        .where("id", "=", conn.id)
+        .execute()
+      assert.equal(
+        live.length,
+        0,
+        "connection hidden when parent install is archived"
+      )
+    })
+  }
+)
+
+test(
+  "F18: status revive of a dual-axis root under a non-live parent is rejected",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const { instId } = await insertInstallation(db, ws)
+      const conn = await db
+        .insertInto("plugin_connections")
+        .values({
+          installation_id: instId,
+          workspace_id: ws,
+          owner_scope: "installation",
+          binding_key: "default",
+          driver: "oauth2",
+          status: "expired",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "archived" })
+        .where("id", "=", instId)
+        .execute()
+
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("plugin_connections")
+            .set({ status: "active" })
+            .where("id", "=", conn.id)
+            .execute(),
+        /references non-live plugin_installations/
+      )
+    })
+  }
+)
+
+test(
+  "F18: deleted_at roots fold in status-parent liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const member = await insertMember(db, ws, u)
+      const group = await db
+        .insertInto("model_groups")
+        .values({
+          owner_type: "workspace_member",
+          owner_workspace_member_id: member,
+          name: "member-owned",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("workspace_members")
+        .set({ status: "removed" })
+        .where("id", "=", member)
+        .execute()
+
+      const live = await db
+        .selectFrom("model_groups_live")
+        .select("id")
+        .where("id", "=", group.id)
+        .execute()
+      assert.equal(
+        live.length,
+        0,
+        "member-owned model group hidden when owner member is removed"
+      )
+
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("model_groups")
+            .values({
+              owner_type: "workspace_member",
+              owner_workspace_member_id: member,
+              name: "late-member-owned",
+            })
+            .execute(),
+        /references non-live workspace_members/
+      )
+    })
+  }
+)
+
+test(
+  "F18: status live views fold in resource-parent liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const { instId } = await insertInstallation(db, ws)
+      const subject = await db
+        .selectFrom("access_subjects")
+        .select("id")
+        .where("kind", "=", "workspace")
+        .where("workspace_id", "=", ws)
+        .executeTakeFirstOrThrow()
+      const binding = await db
+        .insertInto("resource_access_bindings")
+        .values({
+          workspace_id: ws,
+          resource_type: "plugin_installation",
+          plugin_installation_id: instId,
+          subject_id: subject.id,
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("plugin_installations")
+        .set({ status: "archived" })
+        .where("id", "=", instId)
+        .execute()
+
+      const live = await db
+        .selectFrom("resource_access_bindings_live")
+        .select("id")
+        .where("id", "=", binding.id)
+        .execute()
+      assert.equal(
+        live.length,
+        0,
+        "resource binding hidden when plugin installation is archived"
+      )
+    })
+  }
+)
+
+test(
+  "F18: automation event source grants fold in resource-parent liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const subject = await db
+        .insertInto("access_subjects")
+        .values({ kind: "workspace", workspace_id: ws })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const source = await db
+        .insertInto("automation_event_sources")
+        .values({
+          workspace_id: ws,
+          provider_kind: "internal",
+          source_key: uniq("event-source"),
+          name: "internal event source",
+          created_by_kind: "system",
+          status: "active",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const binding = await db
+        .insertInto("resource_access_bindings")
+        .values({
+          workspace_id: ws,
+          resource_type: "automation_event_source",
+          automation_event_source_id: source.id as string,
+          subject_id: subject.id,
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("automation_event_sources")
+        .set({ status: "archived" })
+        .where("id", "=", source.id)
+        .execute()
+
+      const sourceLive = await db
+        .selectFrom("automation_event_sources_live")
+        .select("id")
+        .where("id", "=", source.id)
+        .execute()
+      assert.equal(
+        sourceLive.length,
+        0,
+        "archived automation event source excluded from _live"
+      )
+
+      const bindingLive = await db
+        .selectFrom("resource_access_bindings_live")
+        .select("id")
+        .where("id", "=", binding.id)
+        .execute()
+      assert.equal(
+        bindingLive.length,
+        0,
+        "binding hidden when automation event source is archived"
+      )
+
+      await db
+        .updateTable("resource_access_bindings")
+        .set({ status: "revoked" })
+        .where("id", "=", binding.id)
+        .execute()
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("resource_access_bindings")
+            .set({ status: "active" })
+            .where("id", "=", binding.id)
+            .execute(),
+        /references non-live automation_event_sources/
+      )
+    })
+  }
+)
+
+test(
+  "F19: device derived live views honor liveValues and grant parent liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const offlineDeviceId = await insertDevice(db, ws)
+      const offlineService = await db
+        .insertInto("device_services")
+        .values({
+          device_id: offlineDeviceId,
+          service_kind: "device_runtime",
+          status: "offline",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      const offlineServiceLive = await db
+        .selectFrom("device_services_live")
+        .select("id")
+        .where("id", "=", offlineService.id)
+        .execute()
+      assert.equal(
+        offlineServiceLive.length,
+        0,
+        "offline device service excluded from _live"
+      )
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("device_exposures")
+            .values({
+              device_id: offlineDeviceId,
+              service_id: offlineService.id as string,
+              stable_key: uniq("offline-exposure"),
+              display_name: "offline exposure",
+              transport: "stdio",
+            } as any)
+            .execute(),
+        /references non-live device_services/
+      )
+
+      const { capabilityId, exposureId } = await insertDeviceCapability(db, ws)
+      const hiddenTool = await db
+        .insertInto("device_tools")
+        .values({
+          exposure_id: exposureId,
+          stable_key: uniq("hidden-tool"),
+          current_name: "hidden_tool",
+          status: "hidden",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const removedTool = await db
+        .insertInto("device_tools")
+        .values({
+          exposure_id: exposureId,
+          stable_key: uniq("removed-tool"),
+          current_name: "removed_tool",
+          status: "removed",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const hiddenRemovedToolsLive = await db
+        .selectFrom("device_tools_live")
+        .select("id")
+        .where("id", "in", [hiddenTool.id, removedTool.id])
+        .execute()
+      assert.equal(
+        hiddenRemovedToolsLive.length,
+        0,
+        "hidden/removed device tools excluded from _live"
+      )
+
+      const catalogRevision = await db
+        .insertInto("device_catalog_revisions")
+        .values({
+          exposure_id: exposureId,
+          revision_seq: 1,
+          schema_hash: uniq("schema-hash"),
+          status: "active",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      await rejects(
+        db,
+        () =>
+          db
+            .insertInto("device_tool_revisions")
+            .values({
+              tool_id: removedTool.id as string,
+              catalog_revision_id: catalogRevision.id as string,
+              tool_name: "removed_tool",
+            } as any)
+            .execute(),
+        /references non-live device_tools/
+      )
+
+      const subject = await db
+        .insertInto("access_subjects")
+        .values({ kind: "workspace", workspace_id: ws })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const binding = await db
+        .insertInto("resource_access_bindings")
+        .values({
+          workspace_id: ws,
+          resource_type: "device_capability",
+          device_capability_id: capabilityId,
+          subject_id: subject.id,
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("device_capabilities")
+        .set({ status: "archived" })
+        .where("id", "=", capabilityId)
+        .execute()
+
+      const archivedCapabilityLive = await db
+        .selectFrom("device_capabilities_live")
+        .select("id")
+        .where("id", "=", capabilityId)
+        .execute()
+      assert.equal(
+        archivedCapabilityLive.length,
+        0,
+        "archived device capability excluded from _live"
+      )
+
+      const bindingLive = await db
+        .selectFrom("resource_access_bindings_live")
+        .select("id")
+        .where("id", "=", binding.id)
+        .execute()
+      assert.equal(
+        bindingLive.length,
+        0,
+        "binding hidden when device capability is archived"
+      )
+
+      await db
+        .updateTable("resource_access_bindings")
+        .set({ status: "revoked" })
+        .where("id", "=", binding.id)
+        .execute()
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("resource_access_bindings")
+            .set({ status: "active" })
+            .where("id", "=", binding.id)
+            .execute(),
+        /references non-live device_capabilities/
+      )
+    })
+  }
+)
+
+test(
+  "F20: manifest-live child tables get canonical live views and parent-liveness guards",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const actorId = await insertActor(db, ws)
+      const conversationId = await insertConversation(db, ws)
+      const actorSubject = await db
+        .insertInto("access_subjects")
+        .values({
+          kind: "actor",
+          workspace_id: ws,
+          actor_id: actorId,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const participant = await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conversationId,
+          subject_id: actorSubject.id,
+          state: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      let participantLive = await db
+        .selectFrom("conversation_participants_live")
+        .select("id")
+        .where("id", "=", participant.id)
+        .execute()
+      assert.equal(
+        participantLive.length,
+        1,
+        "active participant appears in canonical _live view"
+      )
+      const rule = await db
+        .insertInto("automation_rules")
+        .values({
+          workspace_id: ws,
+          conversation_id: conversationId,
+          category: "event_subscription",
+          name: "participant provenance rule",
+          created_by_participant_id: participant.id as string,
+          status: "active",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("conversation_participants")
+        .set({ state: "left" })
+        .where("id", "=", participant.id)
+        .execute()
+
+      participantLive = await db
+        .selectFrom("conversation_participants_live")
+        .select("id")
+        .where("id", "=", participant.id)
+        .execute()
+      assert.equal(
+        participantLive.length,
+        0,
+        "left participant excluded from canonical _live view"
+      )
+
+      await db
+        .updateTable("automation_rules")
+        .set({ status: "archived" })
+        .where("id", "=", rule.id)
+        .execute()
+      await db
+        .updateTable("automation_rules")
+        .set({ status: "active" })
+        .where("id", "=", rule.id)
+        .execute()
+
+      const ruleLive = await db
+        .selectFrom("automation_rules_live")
+        .select("id")
+        .where("id", "=", rule.id)
+        .execute()
+      assert.equal(
+        ruleLive.length,
+        1,
+        "creator participant is provenance and must not hide an active rule"
+      )
+
+      await db
+        .updateTable("conversations")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", conversationId)
+        .execute()
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("conversation_participants")
+            .set({ state: "active" })
+            .where("id", "=", participant.id)
+            .execute(),
+        /references non-live conversations/
+      )
     })
   }
 )
