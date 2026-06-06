@@ -141,7 +141,7 @@ type ActorPackageRow = {
   package_icon_file_id: string | null
   package_summary: string
   package_long_description: string
-  package_source_kind: "builtin" | "official" | "workspace" | "user" | "device"
+  package_source_kind: "builtin" | "official" | "workspace" | "user"
   package_visibility: "public" | "workspace" | "private"
   package_tags: string[] | null
   package_download_count: number
@@ -338,8 +338,6 @@ function mapCatalogSourceKind(
       return "workspace_upload"
     case "user":
       return "user_upload"
-    case "device":
-      return "device_derived"
   }
 }
 

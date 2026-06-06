@@ -50,8 +50,8 @@ test("buildSessionContextItems: tool_result session message becomes tool_result_
         toolCallId: "call-42",
         toolName: "View",
         origin: {
-          kind: "mcp_device",
-          deviceId: "dev-1",
+          kind: "device",
+          deviceToolId: "device-tool-1",
           exposureStableKey: "synapse.builtin.filesystem.v1",
         },
         structuredContent: { path: "/tmp/x", lines: 1 },
@@ -68,14 +68,14 @@ test("buildSessionContextItems: tool_result session message becomes tool_result_
   assert.equal(tr.toolName, "View")
   assert.equal(tr.isError, false)
   assert.deepEqual(tr.structuredContent, { path: "/tmp/x", lines: 1 })
-  assert.equal(tr.origin.kind, "mcp_device")
-  assert.equal(tr.origin.deviceId, "dev-1")
+  assert.equal(tr.origin.kind, "device")
+  assert.equal(tr.origin.deviceToolId, "device-tool-1")
   const text = extractText(tr.content)
   assert.equal(text, "file contents: hello")
   assert.doesNotMatch(text, /\[Tool Result\]/)
 })
 
-test("buildSessionContextItems: legacy tool_result row (no metadata) still becomes tool_result_batch with synthetic ids", () => {
+test("buildSessionContextItems: tool_result row without metadata becomes tool_result_batch with synthetic ids", () => {
   const items = buildSessionContextItems([
     {
       id: "msg-legacy-1",
@@ -89,8 +89,8 @@ test("buildSessionContextItems: legacy tool_result row (no metadata) still becom
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolCallId, "legacy-tool-call:msg-legacy-1")
   assert.equal(tr.toolName, "unknown_tool")
-  assert.equal(tr.origin.kind, "mcp_remote")
-  assert.equal(tr.origin.serverKey, "unknown_legacy")
+  assert.equal(tr.origin.kind, "system")
+  assert.equal(tr.origin.registryKey, "unknown_tool")
 })
 
 test("tool_result rehydration recovers original tool metadata (residual after stripping reserved keys)", () => {
@@ -110,8 +110,9 @@ test("tool_result rehydration recovers original tool metadata (residual after st
         toolCallId: "call-99",
         toolName: "lookup",
         origin: {
-          kind: "callable_plugin",
-          pluginKey: "amap/openapi",
+          kind: "plugin",
+          installationId: "plugin-installation-1",
+          upstreamToolName: "lookup",
         },
         structuredContent: { hits: 3 },
         isError: false,
@@ -126,7 +127,7 @@ test("tool_result rehydration recovers original tool metadata (residual after st
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolCallId, "call-99")
   assert.equal(tr.toolName, "lookup")
-  assert.equal(tr.origin.pluginKey, "amap/openapi")
+  assert.equal(tr.origin.installationId, "plugin-installation-1")
   assert.deepEqual(tr.structuredContent, { hits: 3 })
   // The non-reserved keys flow back into CanonicalToolResult.metadata.
   assert.equal(tr.metadata.attemptId, "att-1")
@@ -148,7 +149,7 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
     toolName: "real_tool",
     content: textBlocks("authoritative payload from tool_results table"),
     isError: false,
-    origin: { kind: "mcp_device", deviceId: "dev-x", exposureStableKey: "k" },
+    origin: { kind: "device", deviceToolId: "device-tool-1", exposureStableKey: "k" },
     structuredContent: { authoritative: true },
   })
 
@@ -162,7 +163,11 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
         metadata: {
           toolCallId: "call-99",
           toolName: "wrong_tool_name_from_metadata",
-          origin: { kind: "callable_plugin", pluginKey: "wrong" },
+          origin: {
+            kind: "plugin",
+            installationId: "wrong",
+            upstreamToolName: "wrong_tool_name_from_metadata",
+          },
         },
       },
     ],
@@ -173,7 +178,7 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
   assert.equal(tr.toolName, "real_tool", "tool_calls table wins over metadata")
   assert.equal(
     tr.origin.kind,
-    "mcp_device",
+    "device",
     "tool_results.metadata origin wins"
   )
   assert.deepEqual(tr.structuredContent, { authoritative: true })
@@ -195,7 +200,11 @@ test("buildSessionContextItems: missing executionToolResults entry falls back to
         metadata: {
           toolCallId: "call-not-in-map",
           toolName: "fallback_tool",
-          origin: { kind: "mcp_remote", serverKey: "github" },
+          origin: {
+            kind: "plugin",
+            installationId: "plugin-installation-1",
+            upstreamToolName: "fallback_tool",
+          },
         },
       },
     ],
@@ -203,7 +212,7 @@ test("buildSessionContextItems: missing executionToolResults entry falls back to
   )
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolName, "fallback_tool")
-  assert.equal(tr.origin.serverKey, "github")
+  assert.equal(tr.origin.installationId, "plugin-installation-1")
 })
 
 test("buildSessionContextItems: child_result becomes tool_result_batch with child_actor origin", () => {
@@ -220,8 +229,8 @@ test("buildSessionContextItems: child_result becomes tool_result_batch with chil
   assert.equal(items[0].kind, "tool_result_batch")
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolName, "child_actor")
-  assert.equal(tr.origin.kind, "builtin")
-  assert.equal(tr.origin.toolKind, "child_actor")
+  assert.equal(tr.origin.kind, "system")
+  assert.equal(tr.origin.registryKey, "child_actor")
   assert.equal(extractText(tr.content), "child agent reply")
 })
 
@@ -322,8 +331,9 @@ test("conversationItemToContextItem: tool_result_batch via crossTurnToolHistory 
                     isError: false,
                     structuredContent: { hit: true, score: 0.9 },
                     origin: {
-                      kind: "mcp_remote",
-                      serverKey: "github",
+                      kind: "plugin",
+                      installationId: "plugin-installation-1",
+                      upstreamToolName: "lookup",
                     },
                   },
                 ],
@@ -342,7 +352,7 @@ test("conversationItemToContextItem: tool_result_batch via crossTurnToolHistory 
   const tr = batch.toolResults[0]
   assert.equal(tr.toolCallId, "c-1")
   assert.deepEqual(tr.structuredContent, { hit: true, score: 0.9 })
-  assert.equal(tr.origin.kind, "mcp_remote")
-  assert.equal(tr.origin.serverKey, "github")
+  assert.equal(tr.origin.kind, "plugin")
+  assert.equal(tr.origin.installationId, "plugin-installation-1")
   assert.equal(extractText(tr.content), "result body, no prefix")
 })

@@ -7,15 +7,14 @@ import type {
 } from "@synapse/shared/types"
 type AccessTargetInput = CapabilityAccessTarget
 
-// D3 / PR6 TODO: PluginGrantScope mirrors the historical 5-value label union;
-// the UI still emits this shape from its selectors. PR6 will switch to a
-// SubjectPicker + ScopePicker that emit ScopedSubjectTarget directly.
-type PluginGrantScopeLegacy =
+type PluginGrantScope =
   | "workspace"
   | "workspace_member"
   | "conversation"
   | "actor"
-  | "actor_in_conversation"
+  | "actor_conversation"
+  | "remote_agent"
+  | "remote_agent_conversation"
 import {
   MODEL_GROUP_GRANT_SCOPE,
   CONVERSATION_PARTICIPANT_TYPE,
@@ -72,15 +71,15 @@ import {
 } from "@/components/ui/table"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
-import type { ConversationCatalogEntry } from "@synapse/shared"
-
-type PluginGrantScope = PluginGrantScopeLegacy
+import type { ConversationCatalogEntry, RemoteAgentView } from "@synapse/shared"
 
 const allowedGrantScopes: PluginGrantScope[] = [
   "workspace",
   "conversation",
   "actor",
-  "actor_in_conversation",
+  "remote_agent",
+  "actor_conversation",
+  "remote_agent_conversation",
 ]
 
 function buildGrantScopeOptions(resourceLabel: string): Array<{
@@ -105,9 +104,19 @@ function buildGrantScopeOptions(resourceLabel: string): Array<{
       description: `Only one actor can use this ${resourceLabel} anywhere it appears.`,
     },
     {
-      value: "actor_in_conversation",
+      value: "remote_agent",
+      label: "Remote Agent",
+      description: `Only one remote agent can use this ${resourceLabel} anywhere it appears.`,
+    },
+    {
+      value: "actor_conversation",
       label: "Actor in Conversation",
       description: `Only one actor can use this ${resourceLabel} inside one conversation.`,
+    },
+    {
+      value: "remote_agent_conversation",
+      label: "Remote Agent in Conversation",
+      description: `Only one remote agent can use this ${resourceLabel} inside one conversation.`,
     },
   ]
 }
@@ -317,6 +326,13 @@ function normalizeActorOption(actor: ActorRecord): ActorOption {
   }
 }
 
+function normalizeRemoteAgentOption(remoteAgent: RemoteAgentView): ActorOption {
+  return {
+    id: remoteAgent.id,
+    name: remoteAgent.name || remoteAgent.title || "Untitled remote agent",
+  }
+}
+
 function normalizeConversationOption(
   group: ConversationCatalogEntry
 ): ConversationOption {
@@ -369,27 +385,35 @@ function getScopeLabel(scope: PluginGrantScope) {
       return "Conversation"
     case "actor":
       return "Actor"
-    case "actor_in_conversation":
+    case "actor_conversation":
       return "Actor in Conversation"
+    case "remote_agent":
+      return "Remote Agent"
+    case "remote_agent_conversation":
+      return "Remote Agent in Conversation"
     default:
       return scope
   }
 }
 
 /**
- * D3: derive the legacy 5-value label from a ScopedSubjectTarget for display.
- * Subjects of other kinds (remote_agent, etc.) fall back to "workspace" until
- * PR6 widens the UI to render them.
+ * Derive the local UI selection from a canonical ScopedSubjectTarget.
  */
-function legacyTargetTypeOf(
+function targetScopeOf(
   target: ResourceAccessGrant["target"]
-): PluginGrantScopeLegacy {
+): PluginGrantScope {
   if (!target) return "workspace"
   if (
     target.subject.kind === "actor" &&
     target.scope?.kind === "conversation"
   ) {
-    return "actor_in_conversation"
+    return "actor_conversation"
+  }
+  if (
+    target.subject.kind === "remote_agent" &&
+    target.scope?.kind === "conversation"
+  ) {
+    return "remote_agent_conversation"
   }
   switch (target.subject.kind) {
     case "workspace":
@@ -400,19 +424,29 @@ function legacyTargetTypeOf(
       return "conversation"
     case "actor":
       return "actor"
+    case "remote_agent":
+      return "remote_agent"
     default:
       return "workspace"
   }
 }
 
 /**
- * D3: pull the actorId / conversationId / workspaceMemberId from a
- * ScopedSubjectTarget for the legacy reader paths below.
+ * Pull the actorId / conversationId / workspaceMemberId from a
+ * ScopedSubjectTarget for the reader paths below.
  */
 function targetActorId(target: ResourceAccessGrant["target"]): string | null {
   if (!target) return null
   return target.subject.kind === "actor"
     ? (target.subject as { actorId: string }).actorId
+    : null
+}
+function targetRemoteAgentId(
+  target: ResourceAccessGrant["target"]
+): string | null {
+  if (!target) return null
+  return target.subject.kind === "remote_agent"
+    ? (target.subject as { remoteAgentId: string }).remoteAgentId
     : null
 }
 function targetConversationId(
@@ -431,12 +465,14 @@ function targetConversationId(
 function formatGrantTarget(
   grant: ResourceAccessGrant,
   actorsById: Map<string, string>,
+  remoteAgentsById: Map<string, string>,
   conversationsById: Map<string, string>
 ) {
   const target = grant.target
   if (!target) return "Entire workspace"
-  const label = legacyTargetTypeOf(target)
+  const label = targetScopeOf(target)
   const actorId = targetActorId(target)
+  const remoteAgentId = targetRemoteAgentId(target)
   const conversationId = targetConversationId(target)
   switch (label) {
     case "workspace":
@@ -453,7 +489,7 @@ function formatGrantTarget(
         (actorId ? actorsById.get(actorId) : null) ||
         (actorId ? `Actor ${String(actorId).slice(0, 8)}` : "Selected actor")
       )
-    case "actor_in_conversation": {
+    case "actor_conversation": {
       const actorName =
         (actorId ? actorsById.get(actorId) : null) ||
         (actorId ? `Actor ${String(actorId).slice(0, 8)}` : "Selected actor")
@@ -463,6 +499,26 @@ function formatGrantTarget(
           ? `Conversation ${String(conversationId).slice(0, 8)}`
           : "Selected conversation")
       return `${actorName} in ${conversationName}`
+    }
+    case "remote_agent":
+      return (
+        (remoteAgentId ? remoteAgentsById.get(remoteAgentId) : null) ||
+        (remoteAgentId
+          ? `Remote Agent ${String(remoteAgentId).slice(0, 8)}`
+          : "Selected remote agent")
+      )
+    case "remote_agent_conversation": {
+      const remoteAgentName =
+        (remoteAgentId ? remoteAgentsById.get(remoteAgentId) : null) ||
+        (remoteAgentId
+          ? `Remote Agent ${String(remoteAgentId).slice(0, 8)}`
+          : "Selected remote agent")
+      const conversationName =
+        (conversationId ? conversationsById.get(conversationId) : null) ||
+        (conversationId
+          ? `Conversation ${String(conversationId).slice(0, 8)}`
+          : "Selected conversation")
+      return `${remoteAgentName} in ${conversationName}`
     }
     default:
       return "Selected target"
@@ -508,7 +564,8 @@ function formatConversationTypeLabel(key: ConversationTypeKey | null) {
 function supportsGrantConversationTypeOverride(scope: PluginGrantScope) {
   return (
     scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE ||
-    scope === MODEL_GROUP_GRANT_SCOPE.ACTOR
+    scope === MODEL_GROUP_GRANT_SCOPE.ACTOR ||
+    scope === "remote_agent"
   )
 }
 
@@ -651,6 +708,7 @@ export default function ResourceAccessStep({
 }) {
   const { workspaceId } = useWorkspace()
   const [actors, setActors] = useState<ActorRecord[]>([])
+  const [remoteAgents, setRemoteAgents] = useState<RemoteAgentView[]>([])
   const [conversations, setConversations] = useState<
     ConversationCatalogEntry[]
   >([])
@@ -658,6 +716,7 @@ export default function ResourceAccessStep({
   const [grants, setGrants] = useState<ResourceAccessGrant[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingActors, setLoadingActors] = useState(false)
+  const [loadingRemoteAgents, setLoadingRemoteAgents] = useState(false)
   const [loadingConversations, setLoadingConversations] = useState(false)
   const [saving, setSaving] = useState(false)
   const [savingPolicy, setSavingPolicy] = useState(false)
@@ -670,9 +729,14 @@ export default function ResourceAccessStep({
   const [grantScope, setGrantScope] = useState<PluginGrantScope>("workspace")
   const [conversationId, setConversationId] = useState("")
   const [actorId, setActorId] = useState("")
+  const [remoteAgentId, setRemoteAgentId] = useState("")
   const [actorsLoaded, setActorsLoaded] = useState(false)
+  const [remoteAgentsLoaded, setRemoteAgentsLoaded] = useState(false)
   const [conversationsLoaded, setConversationsLoaded] = useState(false)
   const [actorsError, setActorsError] = useState<string | null>(null)
+  const [remoteAgentsError, setRemoteAgentsError] = useState<string | null>(
+    null
+  )
   const [conversationsError, setConversationsError] = useState<string | null>(
     null
   )
@@ -710,6 +774,10 @@ export default function ResourceAccessStep({
     () => actors.map(normalizeActorOption),
     [actors]
   )
+  const allRemoteAgentOptions = useMemo(
+    () => remoteAgents.map(normalizeRemoteAgentOption),
+    [remoteAgents]
+  )
   const allConversationOptions = useMemo(
     () => conversations.map(normalizeConversationOption),
     [conversations]
@@ -743,6 +811,29 @@ export default function ResourceAccessStep({
         ),
       ]),
     [allActorOptions, allConversationOptions]
+  )
+  const remoteAgentNamesById = useMemo(
+    () =>
+      new Map([
+        ...allRemoteAgentOptions.map(
+          (remoteAgent) => [remoteAgent.id, remoteAgent.name] as const
+        ),
+        ...allConversationOptions.flatMap((conversation) =>
+          conversation.participants
+            .filter(
+              (participant) =>
+                participant.participantType ===
+                  CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+                participant.remoteAgentId &&
+                participant.name
+            )
+            .map(
+              (participant) =>
+                [participant.remoteAgentId!, participant.name] as const
+            )
+        ),
+      ]),
+    [allRemoteAgentOptions, allConversationOptions]
   )
   const conversationNamesById = useMemo(
     () =>
@@ -945,9 +1036,38 @@ export default function ResourceAccessStep({
         return true
       })
   }, [selectedConversation, selectedConversationAllowed])
+  const remoteAgentInConversationOptions = useMemo<ActorOption[]>(() => {
+    if (!selectedConversation || !selectedConversationAllowed) {
+      return []
+    }
+
+    const seenRemoteAgentIds = new Set<string>()
+    return selectedConversation.participants
+      .filter(
+        (participant) =>
+          participant.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+          participant.remoteAgentId &&
+          participant.state === "active"
+      )
+      .map((participant) =>
+        participant.remoteAgentId
+          ? {
+              id: participant.remoteAgentId,
+              name: participant.name,
+            }
+          : null
+      )
+      .filter((participant): participant is ActorOption => {
+        if (!participant) return false
+        if (seenRemoteAgentIds.has(participant.id)) return false
+        seenRemoteAgentIds.add(participant.id)
+        return true
+      })
+  }, [selectedConversation, selectedConversationAllowed])
   const actorOptions = useMemo(
     () =>
-      grantScope === "actor_in_conversation"
+      grantScope === "actor_conversation"
         ? actorInConversationOptions
         : allActorOptions,
     [actorInConversationOptions, allActorOptions, grantScope]
@@ -988,13 +1108,23 @@ export default function ResourceAccessStep({
         ? "The actor you selected on the left"
         : "Choose an actor on the left"
     }
-    if (grantScope === "actor_in_conversation") {
+    if (grantScope === "remote_agent") {
+      return remoteAgentId
+        ? "The remote agent you selected on the left"
+        : "Choose a remote agent on the left"
+    }
+    if (grantScope === "actor_conversation") {
       return actorId && conversationId
         ? "The actor + conversation pair you selected on the left"
         : "Choose one actor and one conversation on the left"
     }
+    if (grantScope === "remote_agent_conversation") {
+      return remoteAgentId && conversationId
+        ? "The remote agent + conversation pair you selected on the left"
+        : "Choose one remote agent and one conversation on the left"
+    }
     return getScopeLabel(grantScope)
-  }, [actorId, conversationId, grantScope])
+  }, [actorId, conversationId, grantScope, remoteAgentId])
 
   const previewScenario = useMemo<AccessPreviewScenario>(() => {
     switch (grantScope) {
@@ -1052,7 +1182,25 @@ export default function ResourceAccessStep({
           secondaryActorActive: false,
           footer: `Good when one actor owns this ${resourceLabelLower} across every conversation it joins.`,
         }
-      case "actor_in_conversation":
+      case "remote_agent":
+        return {
+          title: "Any thread with Remote Agent",
+          subtitle: "Only this remote agent can use it",
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: "user", active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: "user", active: true },
+            { label: "Remote Agent", kind: "actor", active: true },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: "actor", active: false },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: Let the remote agent use this ${resourceLabelLower} wherever it participates.`,
+          actorName: "Remote Agent",
+          actorMessage: `I can use this ${resourceLabelLower} anywhere I appear, but other remote agents still cannot.`,
+          secondaryActorName: PREVIEW_PRIMARY_ACTOR,
+          secondaryActorMessage: `I am in the same room, but I cannot use this ${resourceLabelLower} because access belongs only to the selected remote agent.`,
+          secondaryActorActive: false,
+          footer: `Good when one remote agent owns this ${resourceLabelLower} across every conversation it joins.`,
+        }
+      case "actor_conversation":
         return {
           title: `${PREVIEW_PRIMARY_ACTOR} in ${PREVIEW_CONVERSATION}`,
           subtitle: "Only this actor in this conversation can use it",
@@ -1070,6 +1218,25 @@ export default function ResourceAccessStep({
           secondaryActorActive: false,
           footer:
             "This is the narrowest option when both the actor and the room matter.",
+        }
+      case "remote_agent_conversation":
+        return {
+          title: `Remote agent in ${PREVIEW_CONVERSATION}`,
+          subtitle: "Only this remote agent in this conversation can use it",
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: "user", active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: "user", active: true },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: "actor", active: false },
+            { label: "Remote Agent", kind: "actor", active: true },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: Let the remote agent use this ${resourceLabelLower} for this room.`,
+          actorName: "Remote Agent",
+          actorMessage: `I can use this ${resourceLabelLower} here, but not in other conversations and not for other remote agents.`,
+          secondaryActorName: PREVIEW_PRIMARY_ACTOR,
+          secondaryActorMessage: `I cannot use this ${resourceLabelLower} because the grant is restricted to one remote agent and one conversation.`,
+          secondaryActorActive: false,
+          footer:
+            "Use this when a remote agent should inherit access only inside one selected room.",
         }
       default:
         return {
@@ -1107,13 +1274,27 @@ export default function ResourceAccessStep({
     if (grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR) {
       return Boolean(actorId && !loadingActors)
     }
-    if (grantScope === "actor_in_conversation") {
+    if (grantScope === "remote_agent") {
+      return Boolean(remoteAgentId && !loadingRemoteAgents)
+    }
+    if (grantScope === "actor_conversation") {
       return Boolean(
         actorId &&
         conversationId &&
         selectedConversationAllowed &&
         !loadingConversations &&
         actorInConversationOptions.some((option) => option.id === actorId)
+      )
+    }
+    if (grantScope === "remote_agent_conversation") {
+      return Boolean(
+        remoteAgentId &&
+        conversationId &&
+        selectedConversationAllowed &&
+        !loadingConversations &&
+        remoteAgentInConversationOptions.some(
+          (option) => option.id === remoteAgentId
+        )
       )
     }
     return true
@@ -1124,6 +1305,9 @@ export default function ResourceAccessStep({
     grantScope,
     loadingActors,
     loadingConversations,
+    loadingRemoteAgents,
+    remoteAgentId,
+    remoteAgentInConversationOptions,
     selectedConversationAllowed,
   ])
 
@@ -1179,6 +1363,38 @@ export default function ResourceAccessStep({
     }
   }, [actors, actorsLoaded, loadingActors, workspaceId])
 
+  const ensureRemoteAgentsLoaded = useCallback(async () => {
+    if (!workspaceId) {
+      return []
+    }
+    if (remoteAgentsLoaded) {
+      return remoteAgents
+    }
+    if (loadingRemoteAgents) {
+      return remoteAgents
+    }
+
+    setLoadingRemoteAgents(true)
+    setRemoteAgentsError(null)
+    try {
+      const response = await api.getRemoteAgents(workspaceId)
+      const nextRemoteAgents = response.remoteAgents || []
+      setRemoteAgents(nextRemoteAgents)
+      setRemoteAgentsLoaded(true)
+      return nextRemoteAgents
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to load remote agents."
+      setRemoteAgentsError(message)
+      setRemoteAgents([])
+      throw error
+    } finally {
+      setLoadingRemoteAgents(false)
+    }
+  }, [loadingRemoteAgents, remoteAgents, remoteAgentsLoaded, workspaceId])
+
   const ensureConversationsLoaded = useCallback(async () => {
     if (!workspaceId) {
       return []
@@ -1219,10 +1435,13 @@ export default function ResourceAccessStep({
 
   useEffect(() => {
     setActors([])
+    setRemoteAgents([])
     setConversations([])
     setActorsLoaded(false)
+    setRemoteAgentsLoaded(false)
     setConversationsLoaded(false)
     setActorsError(null)
+    setRemoteAgentsError(null)
     setConversationsError(null)
   }, [workspaceId])
 
@@ -1258,16 +1477,27 @@ export default function ResourceAccessStep({
       void ensureActorsLoaded().catch(() => {})
       return
     }
+    if (grantScope === "remote_agent") {
+      void ensureRemoteAgentsLoaded().catch(() => {})
+      return
+    }
     if (
       grantScope === "conversation" ||
-      grantScope === "actor_in_conversation"
+      grantScope === "actor_conversation" ||
+      grantScope === "remote_agent_conversation"
     ) {
       void ensureConversationsLoaded().catch(() => {})
     }
-  }, [dialogOpen, ensureActorsLoaded, ensureConversationsLoaded, grantScope])
+  }, [
+    dialogOpen,
+    ensureActorsLoaded,
+    ensureConversationsLoaded,
+    ensureRemoteAgentsLoaded,
+    grantScope,
+  ])
 
   useEffect(() => {
-    if (grantScope !== "actor_in_conversation") {
+    if (grantScope !== "actor_conversation") {
       return
     }
     if (!actorId) {
@@ -1277,6 +1507,22 @@ export default function ResourceAccessStep({
       setActorId("")
     }
   }, [actorId, actorInConversationOptions, grantScope])
+
+  useEffect(() => {
+    if (grantScope !== "remote_agent_conversation") {
+      return
+    }
+    if (!remoteAgentId) {
+      return
+    }
+    if (
+      !remoteAgentInConversationOptions.some(
+        (option) => option.id === remoteAgentId
+      )
+    ) {
+      setRemoteAgentId("")
+    }
+  }, [grantScope, remoteAgentId, remoteAgentInConversationOptions])
 
   useEffect(() => {
     if (!workspaceId || !resolvedResourceId) {
@@ -1307,6 +1553,7 @@ export default function ResourceAccessStep({
   const resetDialogState = () => {
     setConversationId("")
     setActorId("")
+    setRemoteAgentId("")
     setSubmitError(null)
   }
 
@@ -1368,6 +1615,9 @@ export default function ResourceAccessStep({
     if (grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR && !actorId) {
       return "Select an actor before creating resource access."
     }
+    if (grantScope === "remote_agent" && !remoteAgentId) {
+      return "Select a remote agent before creating resource access."
+    }
     if (grantScope === "conversation") {
       if (!conversationId) {
         return "Select a conversation before creating resource access."
@@ -1379,7 +1629,7 @@ export default function ResourceAccessStep({
         )
       }
     }
-    if (grantScope === "actor_in_conversation") {
+    if (grantScope === "actor_conversation") {
       if (!conversationId) {
         return "Select a conversation before choosing an actor."
       }
@@ -1396,6 +1646,29 @@ export default function ResourceAccessStep({
       }
       if (!actorInConversationOptions.some((option) => option.id === actorId)) {
         return "Select an active actor from the chosen conversation."
+      }
+    }
+    if (grantScope === "remote_agent_conversation") {
+      if (!conversationId) {
+        return "Select a conversation before choosing a remote agent."
+      }
+      if (!selectedConversationAllowed) {
+        return (
+          selectedConversationBlockedReason ||
+          "The selected conversation is blocked by the current instance policy."
+        )
+      }
+      if (!remoteAgentId) {
+        return remoteAgentInConversationOptions.length === 0
+          ? "This conversation has no active remote agent participants to grant."
+          : "Select a remote agent from the chosen conversation."
+      }
+      if (
+        !remoteAgentInConversationOptions.some(
+          (option) => option.id === remoteAgentId
+        )
+      ) {
+        return "Select an active remote agent from the chosen conversation."
       }
     }
     return null
@@ -1431,9 +1704,27 @@ export default function ResourceAccessStep({
             }
           case "actor":
             return { subject: { kind: "actor", actorId: actorId ?? "" } }
-          case "actor_in_conversation":
+          case "remote_agent":
+            return {
+              subject: {
+                kind: "remote_agent",
+                remoteAgentId: remoteAgentId ?? "",
+              },
+            }
+          case "actor_conversation":
             return {
               subject: { kind: "actor", actorId: actorId ?? "" },
+              scope: {
+                kind: "conversation",
+                conversationId: conversationId ?? "",
+              },
+            }
+          case "remote_agent_conversation":
+            return {
+              subject: {
+                kind: "remote_agent",
+                remoteAgentId: remoteAgentId ?? "",
+              },
               scope: {
                 kind: "conversation",
                 conversationId: conversationId ?? "",
@@ -1563,7 +1854,7 @@ export default function ResourceAccessStep({
 
   const openGrantConversationTypeDialog = (grant: ResourceAccessGrant) => {
     if (
-      !supportsGrantConversationTypeOverride(legacyTargetTypeOf(grant.target))
+      !supportsGrantConversationTypeOverride(targetScopeOf(grant.target))
     ) {
       return
     }
@@ -1713,7 +2004,40 @@ export default function ResourceAccessStep({
       )
     }
 
-    if (grantScope === "actor_in_conversation") {
+    if (grantScope === "remote_agent") {
+      return (
+        <Field>
+          <FieldLabel>Remote Agent</FieldLabel>
+          <TargetSelect
+            value={remoteAgentId}
+            onChange={setRemoteAgentId}
+            placeholder="Select a remote agent"
+            options={allRemoteAgentOptions.map((remoteAgent) => ({
+              id: remoteAgent.id,
+              label: remoteAgent.name,
+            }))}
+            disabled={loadingRemoteAgents}
+          />
+          {loadingRemoteAgents ? (
+            <FieldDescription>Loading remote agents...</FieldDescription>
+          ) : null}
+          {remoteAgentsError ? (
+            <FieldDescription className="text-destructive">
+              {remoteAgentsError}
+            </FieldDescription>
+          ) : null}
+          {!loadingRemoteAgents &&
+          !remoteAgentsError &&
+          allRemoteAgentOptions.length === 0 ? (
+            <FieldDescription>
+              No active remote agents are available yet.
+            </FieldDescription>
+          ) : null}
+        </Field>
+      )
+    }
+
+    if (grantScope === "actor_conversation") {
       return (
         <FieldGroup>
           <Field>
@@ -1760,6 +2084,60 @@ export default function ResourceAccessStep({
             actorOptions.length === 0 ? (
               <FieldDescription>
                 This conversation has no active actor participants.
+              </FieldDescription>
+            ) : null}
+          </Field>
+        </FieldGroup>
+      )
+    }
+
+    if (grantScope === "remote_agent_conversation") {
+      return (
+        <FieldGroup>
+          <Field>
+            <FieldLabel>Conversation</FieldLabel>
+            <TargetSelect
+              value={conversationId}
+              onChange={setConversationId}
+              placeholder="Select a conversation"
+              options={conversationOptions}
+              disabled={loadingConversations}
+            />
+            {loadingConversations ? (
+              <FieldDescription>Loading conversations...</FieldDescription>
+            ) : null}
+            {conversationsError ? (
+              <FieldDescription className="text-destructive">
+                {conversationsError}
+              </FieldDescription>
+            ) : null}
+            {selectedConversationBlockedReason ? (
+              <FieldDescription className="text-destructive">
+                {selectedConversationBlockedReason}
+              </FieldDescription>
+            ) : null}
+          </Field>
+
+          <Field>
+            <FieldLabel>Remote Agent</FieldLabel>
+            <TargetSelect
+              value={remoteAgentId}
+              onChange={setRemoteAgentId}
+              placeholder="Select a remote agent"
+              options={remoteAgentInConversationOptions.map((remoteAgent) => ({
+                id: remoteAgent.id,
+                label: remoteAgent.name,
+              }))}
+              disabled={!selectedConversationAllowed || loadingConversations}
+            />
+            {!conversationId ? (
+              <FieldDescription>Select a conversation first.</FieldDescription>
+            ) : null}
+            {conversationId &&
+            selectedConversationAllowed &&
+            remoteAgentInConversationOptions.length === 0 ? (
+              <FieldDescription>
+                This conversation has no active remote agent participants.
               </FieldDescription>
             ) : null}
           </Field>
@@ -2012,92 +2390,108 @@ export default function ResourceAccessStep({
                   </TableCell>
                 </TableRow>
               ) : (
-                grants.map((grant) => (
-                  <TableRow key={grant.id}>
-                    <TableCell className="px-6 font-medium">
-                      {getScopeLabel(legacyTargetTypeOf(grant.target))}
-                    </TableCell>
-                    <TableCell className="max-w-0">
-                      <div className="truncate">
-                        {formatGrantTarget(
-                          grant,
-                          actorNamesById,
-                          conversationNamesById
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-0">
-                      {supportsGrantConversationTypeOverride(
-                        legacyTargetTypeOf(grant.target)
-                      ) ? (
-                        <div className="space-y-1">
-                          <div className="truncate">
-                            {formatConversationTypeKeys(
-                              conversationTypeMaskToKeys(
-                                normalizeConversationTypeMask(
-                                  grant.effectiveConversationTypeMask,
-                                  effectiveConversationTypeMask
-                                )
-                              )
-                            )}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {grant.conversationTypeMaskOverride
-                              ? `Override ${grant.conversationTypeMaskOverride}`
-                              : "Follow instance"}
-                          </div>
+                grants.map((grant) => {
+                  const grantScope = targetScopeOf(grant.target)
+                  const grantConversationId = targetConversationId(
+                    grant.target
+                  )
+                  const canEditGrantConversationTypes =
+                    supportsGrantConversationTypeOverride(grantScope)
+                  const effectiveGrantConversationTypes =
+                    formatConversationTypeKeys(
+                      conversationTypeMaskToKeys(
+                        normalizeConversationTypeMask(
+                          grant.effectiveConversationTypeMask,
+                          effectiveConversationTypeMask
+                        )
+                      )
+                    )
+
+                  return (
+                    <TableRow key={grant.id}>
+                      <TableCell className="px-6 font-medium">
+                        {getScopeLabel(grantScope)}
+                      </TableCell>
+                      <TableCell className="max-w-0">
+                        <div className="truncate">
+                          {formatGrantTarget(
+                            grant,
+                            actorNamesById,
+                            remoteAgentNamesById,
+                            conversationNamesById
+                          )}
                         </div>
-                      ) : (
-                        <div className="space-y-1">
-                          <div className="truncate">
-                            {(() => {
-                              const cid = targetConversationId(grant.target)
-                              return cid && conversationsById.get(cid)
+                      </TableCell>
+                      <TableCell className="max-w-0">
+                        {canEditGrantConversationTypes ? (
+                          <div className="space-y-1">
+                            <div className="truncate">
+                              {effectiveGrantConversationTypes}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {grant.conversationTypeMaskOverride
+                                ? `Override ${grant.conversationTypeMaskOverride}`
+                                : "Follow instance"}
+                            </div>
+                          </div>
+                        ) : grantConversationId ? (
+                          <div className="space-y-1">
+                            <div className="truncate">
+                              {conversationsById.get(grantConversationId)
                                 ? formatConversationTypeLabel(
-                                    conversationsById.get(cid)
+                                    conversationsById.get(grantConversationId)
                                       ?.conversationTypeKey || null
                                   )
-                                : "Selected conversation"
-                            })()}
+                                : "Selected conversation"}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Fixed by the selected conversation
+                            </div>
                           </div>
-                          <div className="text-xs text-muted-foreground">
-                            Fixed by the selected conversation
+                        ) : (
+                          <div className="space-y-1">
+                            <div className="truncate">
+                              {effectiveGrantConversationTypes}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {grant.conversationTypeMaskOverride
+                                ? `Override ${grant.conversationTypeMaskOverride}`
+                                : "Follow instance"}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatTimestamp(grant.createdAt || grant.grantedAt)}
-                    </TableCell>
-                    <TableCell className="px-6 text-right">
-                      <div className="flex justify-end gap-2">
-                        {canManageGrantConversationTypes &&
-                        supportsGrantConversationTypeOverride(
-                          legacyTargetTypeOf(grant.target)
-                        ) ? (
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatTimestamp(grant.createdAt || grant.grantedAt)}
+                      </TableCell>
+                      <TableCell className="px-6 text-right">
+                        <div className="flex justify-end gap-2">
+                          {canManageGrantConversationTypes &&
+                          canEditGrantConversationTypes ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                openGrantConversationTypeDialog(grant)
+                              }
+                            >
+                              Types
+                            </Button>
+                          ) : null}
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() =>
-                              openGrantConversationTypeDialog(grant)
-                            }
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => revokeGrant(grant.id)}
                           >
-                            Types
+                            <Trash2 />
+                            <span className="sr-only">Remove access</span>
                           </Button>
-                        ) : null}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-muted-foreground hover:text-destructive"
-                          onClick={() => revokeGrant(grant.id)}
-                        >
-                          <Trash2 />
-                          <span className="sr-only">Remove access</span>
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
               )}
             </TableBody>
           </Table>
@@ -2127,6 +2521,7 @@ export default function ResourceAccessStep({
                   setGrantScope(value as PluginGrantScope)
                   setConversationId("")
                   setActorId("")
+                  setRemoteAgentId("")
                   setSubmitError(null)
                 }}
                 className="w-full"
@@ -2265,7 +2660,8 @@ export default function ResourceAccessStep({
               ) : (
                 <div className="rounded-3xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
                   {grantScope === "conversation" ||
-                  grantScope === "actor_in_conversation" ? (
+                  grantScope === "actor_conversation" ||
+                  grantScope === "remote_agent_conversation" ? (
                     <>
                       Grant conversation types are fixed by the selected
                       conversation. This grant follows the instance policy and
@@ -2350,13 +2746,14 @@ export default function ResourceAccessStep({
                   ? formatGrantTarget(
                       editingGrant,
                       actorNamesById,
+                      remoteAgentNamesById,
                       conversationNamesById
                     )
                   : "Selected grant"}
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {editingGrant
-                  ? getScopeLabel(legacyTargetTypeOf(editingGrant.target))
+                  ? getScopeLabel(targetScopeOf(editingGrant.target))
                   : "Grant"}
               </div>
             </div>

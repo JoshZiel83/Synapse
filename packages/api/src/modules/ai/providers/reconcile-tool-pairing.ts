@@ -19,28 +19,39 @@
  */
 import type {
   CanonicalContentBlock,
+  CanonicalToolCall,
   CanonicalToolResult,
   ConversationMessage,
+  ToolResultOrigin,
 } from "@synapse/shared"
-import { textBlock } from "@synapse/shared"
+import { isToolResultOrigin, textBlock } from "@synapse/shared"
 
 const INTERRUPTED_TEXT =
   "Tool execution was interrupted; no result was produced."
 
 function synthesizedResult(
-  toolCallId: string,
-  toolName: string,
-  providerCallId?: string
+  toolCall: CanonicalToolCall
 ): CanonicalToolResult {
   const content: CanonicalContentBlock[] = [textBlock(INTERRUPTED_TEXT)]
+  const origin = interruptedOriginForToolCall(toolCall)
   return {
-    toolCallId,
-    providerCallId,
-    toolName,
+    toolCallId: toolCall.callId,
+    providerCallId: toolCall.providerCallId,
+    toolName: toolCall.toolName,
     content,
     isError: true,
+    origin,
     metadata: { synthesized: "interrupted" },
   }
+}
+
+function interruptedOriginForToolCall(
+  toolCall: CanonicalToolCall
+): ToolResultOrigin {
+  const origin = toolCall.metadata?.origin
+  return isToolResultOrigin(origin)
+    ? origin
+    : { kind: "system", registryKey: "tool_execution_interrupted" }
 }
 
 /**
@@ -83,9 +94,7 @@ export function reconcileToolPairing(
 
     const synth: ConversationMessage = {
       role: "tool_result",
-      results: missing.map((tc) =>
-        synthesizedResult(tc.callId, tc.toolName, tc.providerCallId)
-      ),
+      results: missing.map((tc) => synthesizedResult(tc)),
     }
     // Insert the synthesized results right after the assistant turn (before any
     // existing tool_result messages so ordering stays call → result).

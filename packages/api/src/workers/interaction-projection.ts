@@ -555,7 +555,6 @@ async function mintOptionsAndTokens(
   const presetLabels: Record<string, string> = {
     once: "仅本次允许",
     actor: "本会话期间允许",
-    actor_in_conversation: "本会话期间允许 (actor)",
     conversation: "本会话期间允许",
     remote_agent: "对此 Agent 始终允许",
     workspace: "工作区内始终允许",

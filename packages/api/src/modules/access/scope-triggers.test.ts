@@ -406,11 +406,9 @@ test(
   }
 )
 
-// D2: the previous "legacy conversation_actor_context subject is allowed
-// (PR1 transitional)" test is gone — the subject kind was removed from
-// both the TS union and the Postgres ENUM, so the trigger no longer needs
-// a transitional CAC allowance. Subject-kind validation now happens at
-// three layers (TS / ENUM / trigger).
+// D2: the previous runtime-pair subject transitional test is gone — the
+// subject kind was removed from both the TS union and the Postgres ENUM.
+// Subject-kind validation now happens at three layers (TS / ENUM / trigger).
 
 // ---------- runtime authorization grant trigger ----------
 
@@ -642,10 +640,9 @@ async function newLegacyMemoryItem(
   return row.id as string
 }
 
-// D2: the previous "tg_memory_grant_validate rejects CAC subjects" test is
-// gone — the subject kind no longer exists in the TS union or the SQL ENUM,
-// so the trigger can never see a CAC subject_id. Validation is now stricter
-// (type-level + DB-ENUM) than the old runtime-only check.
+// D2: the previous runtime-pair subject rejection test is gone — the subject
+// kind no longer exists in the TS union or the SQL ENUM. Validation is now
+// stricter (type-level + DB-ENUM) than the old runtime-only check.
 
 test(
   "tg_memory_grant_validate: item belonging to a different space is rejected",

@@ -140,7 +140,7 @@ test("addDeviceCapabilitiesForTarget is additive; revoke is targeted", async () 
   await withTestDb(async (db) => {
     const s = await seed(db)
     const target = {
-      kind: "actor_in_conversation" as const,
+      kind: "actor" as const,
       actorId: s.actorId,
       conversationId: s.conversationId,
     }

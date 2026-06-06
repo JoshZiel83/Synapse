@@ -40,20 +40,20 @@ export function extractWecomCredentials(
   credentials: Record<string, unknown> | null | undefined
 ): { credentials?: WecomCredentials; errors: string[] } {
   const errors: string[] = []
-  const botId = firstNonEmpty(credentials, ["botId", "bot_id", "botID"])
-  const secret = firstNonEmpty(credentials, ["secret", "Secret"])
+  const botId = firstNonEmpty(credentials, ["botId"])
+  const secret = firstNonEmpty(credentials, ["secret"])
   if (!botId) errors.push("botId is required")
   if (!secret) errors.push("secret is required")
   if (errors.length > 0) return { errors }
   return { credentials: { botId: botId!, secret: secret! }, errors: [] }
 }
 
-const WECOM_BASE_WS_URL_ALIASES = ["baseWsUrl", "base_ws_url", "wsUrl"] as const
+const WECOM_BASE_WS_URL_KEYS = ["baseWsUrl"] as const
 
 export function extractWecomConfig(
   config: Record<string, unknown> | null | undefined
 ): WecomConfig {
-  const baseWsUrl = firstNonEmpty(config, WECOM_BASE_WS_URL_ALIASES)
+  const baseWsUrl = firstNonEmpty(config, WECOM_BASE_WS_URL_KEYS)
   return baseWsUrl ? { baseWsUrl } : {}
 }
 
@@ -127,7 +127,7 @@ function checkBaseWsUrl(value: string): string | null {
 export function validateWecomConfig(
   config: Record<string, unknown> | null | undefined
 ): { ok: boolean; errors: string[]; normalized?: WecomConfig } {
-  // First: catch "alias key is PRESENT but not a usable string" before
+  // First: catch "baseWsUrl is PRESENT but not a usable string" before
   // calling extractWecomConfig (which silently drops non-strings via
   // firstNonEmpty). Without this, POST /im/accounts with body
   // `config: { baseWsUrl: 123 }` would return 201 + lose the value
@@ -136,21 +136,21 @@ export function validateWecomConfig(
   // as "field not provided" (the update controller also maps null to
   // an explicit clear).
   if (config) {
-    for (const alias of WECOM_BASE_WS_URL_ALIASES) {
-      const raw = config[alias]
+    for (const key of WECOM_BASE_WS_URL_KEYS) {
+      const raw = config[key]
       if (raw === undefined || raw === null) continue
       if (typeof raw !== "string") {
         return {
           ok: false,
           errors: [
-            `wecom config.${alias} must be a string (got ${typeof raw})`,
+            `wecom config.${key} must be a string (got ${typeof raw})`,
           ],
         }
       }
       if (raw.trim() === "") {
         return {
           ok: false,
-          errors: [`wecom config.${alias} must be a non-empty string`],
+          errors: [`wecom config.${key} must be a non-empty string`],
         }
       }
     }

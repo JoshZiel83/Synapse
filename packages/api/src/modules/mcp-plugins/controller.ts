@@ -49,7 +49,6 @@ const accessTargetTypeSchema = z.enum([
   "workspace_member",
   "conversation",
   "actor",
-  "actor_in_conversation",
 ])
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
@@ -125,7 +124,12 @@ function inputToCapabilityAccessTarget(
           "actorId is required for actor access target"
         )
       }
-      return { subject: actorRef(input.actorId) }
+      return {
+        subject: actorRef(input.actorId),
+        ...(input.conversationId
+          ? { scope: conversationRef(input.conversationId) }
+          : {}),
+      }
     case "conversation":
       if (!input.conversationId) {
         throw new McpPluginError(
@@ -134,17 +138,6 @@ function inputToCapabilityAccessTarget(
         )
       }
       return { subject: conversationRef(input.conversationId) }
-    case "actor_in_conversation":
-      if (!input.actorId || !input.conversationId) {
-        throw new McpPluginError(
-          400,
-          "actorId and conversationId are required for actor_in_conversation access target"
-        )
-      }
-      return {
-        subject: actorRef(input.actorId),
-        scope: conversationRef(input.conversationId),
-      }
   }
 }
 

@@ -15,7 +15,6 @@ import {
 } from "./runtime/lease.js"
 import { ingestInboundEnvelope } from "./service/ingest.js"
 import {
-  getTransportAccountByKindAndId,
   listActiveTransportAccounts,
 } from "./service.js"
 
@@ -186,55 +185,4 @@ export async function stopTransportRuntimeManager() {
   const handles = Array.from(runtimeHandles.values())
   runtimeHandles.clear()
   await Promise.allSettled(handles.map((handle) => handle.stop()))
-}
-
-export async function handleFeishuWebhookRequest(params: {
-  accountId: string
-  headers: Record<string, unknown>
-  body: unknown
-  /**
-   * Raw, unparsed HTTP body. Connectors that verify a signature over
-   * the original bytes (Feishu's encryption, or any future platform
-   * that signs the raw payload) need this passed through. Optional
-   * because internal callers that synthesise webhook envelopes
-   * (tests, replay) may not have a wire payload.
-   */
-  rawBody?: string
-}) {
-  // Legacy route. Delegates to the new connector.handleWebhook path so the
-  // logic lives in exactly one place. Public-controller.ts also has a
-  // generic /api/v1/im/webhooks/:transportKind/:accountId entry — new
-  // deployments should point Feishu at that one.
-  const account = await getTransportAccountByKindAndId({
-    accountId: params.accountId,
-    transportKind: "feishu",
-  })
-  if (!account || account.status !== "active") {
-    return {
-      statusCode: 404,
-      body: { error: "Transport account not found" },
-    }
-  }
-  if (account.connectionMode !== "webhook") {
-    return {
-      statusCode: 409,
-      body: { error: "Transport account is not configured for webhook mode" },
-    }
-  }
-  const connector = tryGetConnector("feishu")
-  if (!connector || !connector.handleWebhook) {
-    return {
-      statusCode: 503,
-      body: { error: "feishu connector not registered" },
-    }
-  }
-  return connector.handleWebhook({
-    account,
-    headers: params.headers,
-    body: params.body,
-    rawBody: params.rawBody,
-    emitInbound: async (envelope) => {
-      await ingestInboundEnvelope({ account, envelope })
-    },
-  })
 }

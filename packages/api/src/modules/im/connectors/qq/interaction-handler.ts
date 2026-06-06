@@ -63,9 +63,6 @@ export interface QqInteractionCreateData {
   group_openid?: string
   group_member_openid?: string
   user_openid?: string
-  /** Convenience aliases QQ has used historically — fall back if needed. */
-  chat_type?: number
-  scene?: string
 }
 
 export interface QqInteractionHandlerDeps {
@@ -92,7 +89,7 @@ const PRESET_FOR_DECISION: Record<string, string> = {
   // The mint side encodes its intended preset directly in the payload, so
   // this map is only consulted as a fallback when payload.preset is unset.
   // Values must be in RUNTIME_AUTHORIZATION_PRESETS
-  // ("once" | "actor" | "actor_in_conversation" | "conversation" |
+  // ("once" | "actor" | "conversation" |
   //  "remote_agent" | "workspace").
   allow_once: "once",
   allow_conversation: "conversation",

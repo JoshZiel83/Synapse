@@ -646,9 +646,9 @@ async function buildToolActivityDetail(turnId: string) {
     }
 
     const blocks =
-      toolCall.tool_kind === "callable"
+      toolCall.source_kind === "system"
         ? await buildCallableToolBlocks(blockParams)
-        : toolCall.tool_kind === "mcp_device"
+        : toolCall.source_kind === "device"
           ? await buildDeviceBuiltinToolBlocks(blockParams)
           : {
               requestBlocks: buildGenericToolRequestBlocks(
@@ -665,7 +665,7 @@ async function buildToolActivityDetail(turnId: string) {
 
     items.push({
       toolCallId: toolCall.id,
-      toolKind: toolCall.tool_kind,
+      toolKind: toolCall.source_kind,
       toolName: toolCall.tool_name,
       ...(toolSource ? { source: toolSource } : {}),
       state,

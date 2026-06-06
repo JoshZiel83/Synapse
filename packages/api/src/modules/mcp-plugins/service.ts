@@ -157,7 +157,7 @@ type PluginCatalogRow = {
   item_display_name: string
   item_summary: string
   item_long_description: string
-  item_source_kind: "builtin" | "official" | "workspace" | "user" | "device"
+  item_source_kind: "builtin" | "official" | "workspace" | "user"
   item_visibility: "public" | "workspace" | "private"
   item_tags: string[] | null
   item_is_active: boolean
@@ -902,12 +902,9 @@ function normalizeAttachmentTarget(input: {
  * D3: collapse a stored InstallationAccessRow back into the canonical
  * ScopedSubjectTarget shape, for handing off to policy / write helpers.
  *
- * Round 10 review (P2): replaced the legacy label switch with a direct
+ * Replaced the label switch with a direct
  * call to readAccessBindingTarget. The old switch defaulted any
- * unrecognized `access_target_type` (including `remote_agent` /
- * `remote_agent_in_conversation` — round 9 widened RuntimeBindingScope
- * to admit those labels, but this reverse mapper was its own copy of
- * the switch that wasn't updated) to a workspace target. That decoded
+ * unrecognized `access_target_type` to a workspace target. That decoded
  * remote_agent grants as workspace when callers like
  * grantPluginInstallationAccess (update path) and updatePluginInstallation
  * re-validated them — silently bypassing the conversation-scoped policy
@@ -938,20 +935,13 @@ function buildInstallationAccessRow(
 ): InstallationAccessRow {
   const target = readAccessBindingTarget(row as any)
   const label = subjectScopeLabel(target)
-  // Round 9 review (P2): include remote_agent / remote_agent_in_conversation
-  // so those grants don't silently collapse to a "workspace" label.
-  // Downstream dedup compares grants by this string; collapsing
-  // remote_agent into workspace meant a second create of the same
-  // target missed the existing row and hit the DB unique constraint.
   let accessTargetType: RuntimeBindingScope
   switch (label) {
     case "workspace":
     case "workspace_member":
     case "conversation":
     case "actor":
-    case "actor_in_conversation":
     case "remote_agent":
-    case "remote_agent_in_conversation":
       accessTargetType = label
       break
     default:
@@ -1140,6 +1130,24 @@ function buildPluginGrantPlan(input: {
     requiredPermissions,
     reason: input.authorization.reason,
   }
+}
+
+function suggestedAccessTargetType(
+  target: CapabilityAccessTarget
+): RuntimeBindingScope | "actor_conversation" | "remote_agent_conversation" {
+  if (
+    target.subject.kind === "actor" &&
+    target.scope?.kind === "conversation"
+  ) {
+    return "actor_conversation"
+  }
+  if (
+    target.subject.kind === "remote_agent" &&
+    target.scope?.kind === "conversation"
+  ) {
+    return "remote_agent_conversation"
+  }
+  return subjectScopeLabel(target) as RuntimeBindingScope
 }
 
 function defaultAccessTargetForAttachment(
@@ -1372,12 +1380,7 @@ async function ensureCatalogItem(
         display_name: input.displayName,
         summary: input.description || "",
         long_description: input.longDescription || "",
-        source_kind:
-          input.transport === "device"
-            ? "device"
-            : input.isBuiltin
-              ? "builtin"
-              : "official",
+        source_kind: input.isBuiltin ? "builtin" : "official",
         visibility: "public",
         tags: input.tags || [],
         is_active: true,
@@ -1403,12 +1406,7 @@ async function ensureCatalogItem(
         summary: input.description || "",
         long_description: input.longDescription || "",
         icon_file_id: input.iconFileId || null,
-        source_kind:
-          input.transport === "device"
-            ? "device"
-            : input.isBuiltin
-              ? "builtin"
-              : "official",
+        source_kind: input.isBuiltin ? "builtin" : "official",
         visibility: "public",
         tags: input.tags || [],
         is_active: true,
@@ -2413,7 +2411,9 @@ export async function getPluginInstallationAccessState(
     grants,
     summary: {
       requiredPermissions: plugin.authorization?.requiredPermissions || [],
-      suggestedAccessTargetType: subjectScopeLabel(installation.access_target),
+      suggestedAccessTargetType: suggestedAccessTargetType(
+        installation.access_target
+      ),
       sourceDefaultConversationTypeMask:
         installation.source_default_conversation_type_mask ||
         DEFAULT_CONVERSATION_TYPE_MASK,

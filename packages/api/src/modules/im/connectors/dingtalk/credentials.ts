@@ -1,10 +1,5 @@
 /**
  * DingTalk credential extraction + validation.
- *
- * Accepts a small set of aliases for clientId/clientSecret so manual
- * pasted credentials from the DingTalk Open Platform (which uses
- * "AppKey" / "AppSecret" labels) and Device-Flow-issued credentials
- * (which use snake_case) both work without a normalization detour.
  */
 
 export interface DingtalkCredentials {
@@ -21,18 +16,8 @@ export function extractDingtalkCredentials(
 ): { credentials?: DingtalkCredentials; errors: string[] } {
   const errors: string[] = []
   const raw = credentials || {}
-  const clientId =
-    nonEmpty(raw.clientId) ||
-    nonEmpty(raw.client_id) ||
-    nonEmpty(raw.appKey) ||
-    nonEmpty(raw.app_key) ||
-    nonEmpty(raw.AppKey)
-  const clientSecret =
-    nonEmpty(raw.clientSecret) ||
-    nonEmpty(raw.client_secret) ||
-    nonEmpty(raw.appSecret) ||
-    nonEmpty(raw.app_secret) ||
-    nonEmpty(raw.AppSecret)
+  const clientId = nonEmpty(raw.clientId)
+  const clientSecret = nonEmpty(raw.clientSecret)
 
   if (!clientId) errors.push("clientId is required")
   if (!clientSecret) errors.push("clientSecret is required")

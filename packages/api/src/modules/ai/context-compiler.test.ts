@@ -126,8 +126,8 @@ test("tool_result_batch becomes role=tool_result ConversationMessage, preserves 
           isError: false,
           structuredContent: { score: 0.87 },
           origin: {
-            kind: "mcp_device",
-            deviceId: "dev-1",
+            kind: "device",
+            deviceToolId: "device-tool-1",
             exposureStableKey: "synapse.builtin.filesystem.v1",
           },
         },
@@ -140,7 +140,7 @@ test("tool_result_batch becomes role=tool_result ConversationMessage, preserves 
   const results = (messages[0] as any).results
   assert.equal(results.length, 1)
   assert.equal(results[0].toolCallId, "c-1")
-  assert.equal(results[0].origin.kind, "mcp_device")
+  assert.equal(results[0].origin.kind, "device")
   assert.deepEqual(results[0].structuredContent, { score: 0.87 })
   // assert that the body never got prefixed
   assert.equal(extractText(results[0].content), "hit")
@@ -169,7 +169,11 @@ test("tool_result_batch with file_ref content preserves file_ref shape (no extra
           toolCallId: "c-1",
           toolName: "render_image",
           content: [fileRef],
-          origin: { kind: "callable_plugin", pluginKey: "z-ai" },
+          origin: {
+            kind: "plugin",
+            installationId: "plugin-installation-1",
+            upstreamToolName: "render_image",
+          },
         },
       ],
     },
@@ -205,7 +209,7 @@ test("interleaved tool_call_batch → tool_result_batch → message keeps orderi
           toolCallId: "c-1",
           toolName: "t",
           content: textBlocks("ok"),
-          origin: { kind: "builtin", toolKind: "t" },
+          origin: { kind: "system", registryKey: "t" },
         },
       ],
     },

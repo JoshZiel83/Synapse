@@ -15,9 +15,6 @@
  * The fallback is documented per-field below so reviewers don't have
  * to dig into the wiki.
  *
- * Alias support: accept snake_case and a few common typos because the
- * QQ console exports include underscored field names and copy/paste from
- * docs sometimes inserts whitespace.
  */
 
 export interface QqCredentials {
@@ -41,13 +38,9 @@ export function extractQqCredentials(
 ): { credentials?: QqCredentials; errors: string[] } {
   const errors: string[] = []
   const raw = credentials || {}
-  const appId =
-    nonEmpty(raw.appId) || nonEmpty(raw.appID) || nonEmpty(raw.app_id)
-  const clientSecret =
-    nonEmpty(raw.clientSecret) ||
-    nonEmpty(raw.client_secret) ||
-    nonEmpty(raw.secret)
-  const botSecret = nonEmpty(raw.botSecret) || nonEmpty(raw.bot_secret)
+  const appId = nonEmpty(raw.appId)
+  const clientSecret = nonEmpty(raw.clientSecret)
+  const botSecret = nonEmpty(raw.botSecret)
 
   if (!appId) errors.push("appId is required")
   if (!clientSecret) errors.push("clientSecret is required")

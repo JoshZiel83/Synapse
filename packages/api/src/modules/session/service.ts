@@ -135,36 +135,6 @@ async function loadSession(sessionId: UUID): Promise<any | null> {
   return normalizeSessionRow(row ?? null)
 }
 
-export async function getConversationActorContextByPair(
-  conversationId: UUID,
-  actorId: UUID,
-  queryable: Executor = db
-) {
-  return takeFirstOn(
-    queryable,
-    db
-      .selectFrom("conversation_actor_contexts")
-      .selectAll()
-      .where("conversation_id", "=", conversationId)
-      .where("actor_id", "=", actorId)
-      .limit(1)
-  )
-}
-
-export async function getConversationActorContextBySessionId(
-  sessionId: UUID,
-  queryable: Executor = db
-) {
-  return takeFirstOn(
-    queryable,
-    db
-      .selectFrom("conversation_actor_contexts")
-      .selectAll()
-      .where("session_id", "=", sessionId)
-      .limit(1)
-  )
-}
-
 async function getConversationActorSessionRow(
   conversationId: UUID,
   actorId: UUID,
@@ -225,31 +195,12 @@ export async function ensureConversationActorSessionContext(
     queryable
   )
 
-  const existingContext = await getConversationActorContextByPair(
+  let session = await getConversationActorSessionRow(
     params.conversationId,
     params.actorId,
     queryable
   )
-
-  let session = existingContext?.session_id
-    ? await takeFirstOn(
-        queryable,
-        db
-          .selectFrom("sessions")
-          .select("id")
-          .where("id", "=", existingContext.session_id)
-          .limit(1)
-      )
-    : null
   let sessionCreated = false
-
-  if (!session) {
-    session = await getConversationActorSessionRow(
-      params.conversationId,
-      params.actorId,
-      queryable
-    )
-  }
 
   if (!session) {
     if (!params.workspaceId) {
@@ -289,101 +240,9 @@ export async function ensureConversationActorSessionContext(
     )
   }
 
-  if (existingContext?.session_id === session.id) {
-    return {
-      conversationActorContextId: existingContext.id,
-      sessionId: session.id,
-      conversationActorContextCreated: false,
-      sessionCreated,
-    }
-  }
-
-  const ensuredContext = await ensureConversationActorContext(
-    {
-      actorId: params.actorId,
-      conversationId: params.conversationId,
-    },
-    queryable
-  )
-
-  await runBuilder(
-    queryable,
-    db
-      .updateTable("conversation_actor_contexts")
-      .set({
-        session_id: session.id,
-        updated_at: sql`NOW()`,
-      })
-      .where("id", "=", ensuredContext.conversationActorContextId)
-      .returning("id")
-  )
-
   return {
-    conversationActorContextId: ensuredContext.conversationActorContextId,
     sessionId: session.id,
-    conversationActorContextCreated:
-      ensuredContext.conversationActorContextCreated,
     sessionCreated,
-  }
-}
-
-export async function ensureConversationActorContext(
-  params: {
-    actorId: UUID
-    conversationId: UUID
-  },
-  queryable: Executor = db
-) {
-  await requireActiveActorConversationParticipant(
-    params.conversationId,
-    params.actorId,
-    queryable
-  )
-
-  const existingContext = await getConversationActorContextByPair(
-    params.conversationId,
-    params.actorId,
-    queryable
-  )
-  if (existingContext) {
-    return {
-      conversationActorContextId: existingContext.id,
-      sessionId: existingContext.session_id || undefined,
-      conversationActorContextCreated: false,
-    }
-  }
-
-  const insertedContext = await takeFirstOn<{ id: string }>(
-    queryable,
-    db
-      .insertInto("conversation_actor_contexts")
-      .values({
-        id: uuidv4(),
-        conversation_id: params.conversationId,
-        actor_id: params.actorId,
-        session_id: null,
-      })
-      .onConflict((oc) =>
-        oc.columns(["conversation_id", "actor_id"]).doNothing()
-      )
-      .returning("id")
-  )
-
-  const context = await getConversationActorContextByPair(
-    params.conversationId,
-    params.actorId,
-    queryable
-  )
-  if (!context) {
-    throw new Error(
-      `Failed to resolve conversation actor context for actor ${params.actorId} in conversation ${params.conversationId}`
-    )
-  }
-
-  return {
-    conversationActorContextId: context.id,
-    sessionId: context.session_id || undefined,
-    conversationActorContextCreated: Boolean(insertedContext),
   }
 }
 
