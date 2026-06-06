@@ -103,6 +103,33 @@ assert_contains "npm uses managed --prefix" "--prefix"
 assert_contains "npm uses --userconfig (no global pollution)" "--userconfig"
 assert_not_contains "npm not -g to system" "npm install -g @synapse"
 
+# ---- review: malformed registry must NOT split into extra npm argv --------
+# A private-registry value containing a space (e.g. an injected
+# "...  --@synapse:registry=evil") must reach npm as ONE argument, not two,
+# so it cannot override the private-scope pinning. Uses a recording fake npm.
+test_registry_argv_not_split() {
+  local home="$WORK/regargv.$RANDOM" syn="$WORK/regargv-syn.$RANDOM"
+  local bin="$WORK/regargv-bin.$RANDOM" t s
+  mkdir -p "$home" "$bin"
+  for t in bash sh awk sed grep mktemp cat uname dirname mkdir rm cp chmod ls printf env test sha256sum; do
+    s="$(command -v "$t" 2>/dev/null)"; [ -n "$s" ] && ln -sf "$s" "$bin/$t"
+  done
+  printf '#!/usr/bin/env bash\n[ "$1" = "-p" ] && echo 24.16.0\n' > "$bin/node"
+  cat > "$bin/npm" <<'NPM'
+#!/usr/bin/env bash
+c=0; for a in "$@"; do case "$a" in --@synapse:registry=*) c=$((c+1));; esac; done
+echo "SYNAPSE_REGISTRY_ARGS=$c"
+NPM
+  chmod +x "$bin/node" "$bin/npm"
+  OUT="$(env -i HOME="$home" PATH="$bin" \
+    SYNAPSE_PRIVATE_NPM_REGISTRY='https://npmr.example.com/ --@synapse:registry=https://evil/' \
+    SYNAPSE_HOME="$syn" \
+    bash "$INSTALL_SH" --target device --server https://x --code C1 --region intl 2>&1)"
+}
+test_registry_argv_not_split
+assert_contains "malformed registry stays one npm arg (pinning safe)" "SYNAPSE_REGISTRY_ARGS=1"
+assert_not_contains "malformed registry did NOT split into two" "SYNAPSE_REGISTRY_ARGS=2"
+
 # ---- illegal-flag fail-loud vs env warn ----------------------------------
 run_installer --target device --server https://x --mirror bogus --region intl
 assert_contains "explicit --mirror=bogus dies" "ERROR: --mirror: unknown key 'bogus'"

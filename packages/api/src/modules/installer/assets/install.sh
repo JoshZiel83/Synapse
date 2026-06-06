@@ -36,15 +36,15 @@ track_tmp() { SYNAPSE_TMP_PATHS="$SYNAPSE_TMP_PATHS $1"; }
 trap 'for _p in $SYNAPSE_TMP_PATHS; do rm -rf "$_p" 2>/dev/null || true; done' EXIT
 
 # --- server-rendered placeholders (substituted by the API route) ----------
-# The API route replaces each @@...@@ token with a FULLY shell-quoted literal
-# (e.g. 'https://host/'), so do NOT add surrounding quotes here. When the
-# script is run raw (not via the route) the tokens stay literal and are
-# treated as unset below.
-SYNAPSE_RENDERED_SERVER_URL=@@SYNAPSE_SERVER_URL@@
-SYNAPSE_RENDERED_PRIVATE_REGISTRY=@@SYNAPSE_NPM_REGISTRY@@
+# The API route replaces each quoted '@@...@@' token with a fully shell-quoted
+# literal (e.g. 'https://host/'). The quotes here keep this a valid bash
+# assignment when the script is run raw (not via the route); in that case the
+# tokens stay literal and are treated as unset by the "@@"*"@@" guard below.
+SYNAPSE_RENDERED_SERVER_URL='@@SYNAPSE_SERVER_URL@@'
+SYNAPSE_RENDERED_PRIVATE_REGISTRY='@@SYNAPSE_NPM_REGISTRY@@'
 # sha256 of the rendered install.ps1, injected so the Git-Bash → PowerShell
 # re-exec path can verify the downloaded ps1 before running it.
-SYNAPSE_RENDERED_PS1_SHA256=@@SYNAPSE_PS1_SHA256@@
+SYNAPSE_RENDERED_PS1_SHA256='@@SYNAPSE_PS1_SHA256@@'
 
 # >>> SYNAPSE_NODE_MANIFEST (generated — do not edit by hand) >>>
 INSTALLER_NODE_VERSION="24.16.0"
@@ -604,10 +604,15 @@ install_synapse_pkg() {
   esac
   SYNAPSE_BIN="$NPM_GLOBAL_PREFIX/bin/$bin"
 
-  local reg_args="--registry=${THIRD_PARTY_REGISTRY:-https://registry.npmjs.org/} --@synapse:registry=$PRIVATE_REGISTRY"
+  # Pass each registry flag as its OWN quoted argv element — never via an
+  # unquoted intermediate string. A registry value containing a space (e.g. a
+  # malformed "url --@synapse:registry=evil") would otherwise word-split into
+  # extra npm args and could override the private-scope pinning.
+  local third_reg="${THIRD_PARTY_REGISTRY:-https://registry.npmjs.org/}"
   log "installing $pkg into $NPM_GLOBAL_PREFIX"
   run "$NPM_BIN" install --global --prefix "$NPM_GLOBAL_PREFIX" \
-    --userconfig "$MANAGED_NPMRC" $reg_args "$pkg" \
+    --userconfig "$MANAGED_NPMRC" \
+    "--registry=$third_reg" "--@synapse:registry=$PRIVATE_REGISTRY" "$pkg" \
     || die "npm install $pkg failed"
 
   # Persist the npm-global bin (where the synapse-* shims land) and, when we

@@ -84,11 +84,12 @@ function psQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
 }
 
-// Substitute server/registry (and extra) placeholders with FULLY shell-quoted
-// values. The script templates place each placeholder as a bare assignment
-// (VAR=@@...@@ / $X = @@...@@), so injecting the complete quoted literal
-// ('...') is what makes a value containing $(), backticks, or quotes inert —
-// stripping the quotes (the prior approach) left command-substitution live.
+// Substitute the QUOTED placeholder ('@@TOKEN@@') with the FULLY-quoted value
+// ('<escaped>'). Targeting the quoted form (not the bare token) keeps the
+// source scripts valid/parseable PowerShell + bash (so they can be syntax-
+// checked and the raw-placeholder fallback still assigns a string), while the
+// rendered output stays a single inert literal — a value containing $(),
+// backticks, quotes, or spaces cannot execute or word-split.
 function renderScript(
   body: string,
   cfg: InstallerConfig,
@@ -96,12 +97,12 @@ function renderScript(
   extra?: Record<string, string>
 ): string {
   let out = body
-    .split(PLACEHOLDER_SERVER)
+    .split(`'${PLACEHOLDER_SERVER}'`)
     .join(quote(cfg.serverUrl))
-    .split(PLACEHOLDER_REGISTRY)
+    .split(`'${PLACEHOLDER_REGISTRY}'`)
     .join(quote(cfg.privateRegistry))
   for (const [k, v] of Object.entries(extra ?? {})) {
-    out = out.split(k).join(quote(v))
+    out = out.split(`'${k}'`).join(quote(v))
   }
   return out
 }

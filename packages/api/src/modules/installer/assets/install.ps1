@@ -40,10 +40,12 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 }
 
 # --- server-rendered placeholders ------------------------------------------
-# The API route replaces each @@...@@ token with a fully PowerShell-quoted
-# literal (e.g. 'https://host/'), so do NOT add surrounding quotes here.
-$RenderedServerUrl = @@SYNAPSE_SERVER_URL@@
-$RenderedPrivateRegistry = @@SYNAPSE_NPM_REGISTRY@@
+# The API route replaces each quoted '@@...@@' token with a fully
+# PowerShell-quoted literal (e.g. 'https://host/'). The quotes here keep this
+# a valid, parseable PowerShell assignment in the un-rendered source (and let
+# the raw-placeholder fallback in Main treat it as unset).
+$RenderedServerUrl = '@@SYNAPSE_SERVER_URL@@'
+$RenderedPrivateRegistry = '@@SYNAPSE_NPM_REGISTRY@@'
 
 # >>> SYNAPSE_NODE_MANIFEST (generated — do not edit by hand) >>>
 $InstallerNodeVersion = '24.16.0'
@@ -193,8 +195,11 @@ function Save-File {
 function Test-MirrorHasVersion {
   param([string]$Base)
   try {
-    Invoke-WebRequest -Uri "$Base$('v' + $InstallerNodeVersion)/SHASUMS256.txt" -Method Head -TimeoutSec 8 -UseBasicParsing | Out-Null
-    return $true
+    # GET the small SHASUMS256.txt, not HEAD — some of these CDNs answer HEAD
+    # inconsistently with GET (matches the install.sh GET strategy). The body
+    # is tiny so the cost is negligible; we just confirm a 200.
+    $resp = Invoke-WebRequest -Uri "$Base$('v' + $InstallerNodeVersion)/SHASUMS256.txt" -TimeoutSec 8 -UseBasicParsing
+    return ($resp.StatusCode -eq 200)
   } catch { return $false }
 }
 
