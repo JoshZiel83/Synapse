@@ -17,7 +17,14 @@ import type {
   CanonicalContentBlock,
   ToolResultOrigin,
 } from "@synapse/shared/types"
-import { SUBJECT_KIND, textBlock, type SubjectRef } from "@synapse/shared"
+import {
+  SUBJECT_KIND,
+  textBlock,
+  deviceToolId as makeDeviceToolId,
+  type SubjectRef,
+  type ProjectedToolDefinition,
+  type ToolRef,
+} from "@synapse/shared"
 import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
 // subject-scope-refactor: Renamed alias to disambiguate from the API-side
 // SharedRuntimeAuthorizationGrantSpec; envelope payloads use the snake_case
@@ -228,23 +235,39 @@ async function projectLegacyTools(
 }
 
 interface DeviceToolBundle {
-  tools: ToolDefinition[]
+  tools: ProjectedToolDefinition[]
+  /** Keyed by deterministic device toolId (`device:<device_tool_id>`). */
   handlers: Map<string, DeviceCapabilityToolRow>
   subjects: ResolvedPrincipalSubjects
 }
 
-// Tools we project from device_capabilities are namespaced so they cannot
-// collide with MCP-plugin tools that happen to share a bare name.
-const DEVICE_TOOL_PREFIX = "device__"
-
-function namespaceDeviceToolName(row: DeviceCapabilityToolRow): string {
-  return `${DEVICE_TOOL_PREFIX}${row.device_capability_id}__${row.visible_tool_name}`
+/** Build a device ToolRef from a projected capability row. */
+function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
+  return {
+    toolId: makeDeviceToolId(row.device_tool_id),
+    source: {
+      kind: "device",
+      deviceToolId: row.device_tool_id,
+      exposureStableKey: row.exposure_stable_key,
+      deviceName: row.device_name,
+      visibleToolName: row.visible_tool_name,
+    },
+    binding: {
+      transport: "device_tunnel",
+      deviceId: row.device_id,
+      deviceServiceId: row.device_service_id,
+      deviceCapabilityId: row.device_capability_id,
+      deviceExposureId: row.device_exposure_id,
+      deviceToolRevisionId: row.device_tool_revision_id,
+    },
+    identity: {
+      stableKey: `${row.exposure_stable_key}/${row.visible_tool_name}`,
+      revisionId: row.device_tool_revision_id,
+    },
+  }
 }
 
-function deviceToolOrigin(
-  row: DeviceCapabilityToolRow,
-  namespacedToolName: string
-): ToolResultOrigin {
+function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
   return {
     kind: "mcp_device",
     deviceId: row.device_id,
@@ -253,7 +276,7 @@ function deviceToolOrigin(
     exposureStableKey: row.exposure_stable_key,
     exposureName: row.visible_tool_name,
     visibleToolName: row.visible_tool_name,
-    namespacedToolName,
+    namespacedToolName: makeDeviceToolId(row.device_tool_id),
   }
 }
 
@@ -441,25 +464,21 @@ async function projectDeviceTools(
   })
 
   const handlers = new Map<string, DeviceCapabilityToolRow>()
-  const tools: ToolDefinition[] = []
+  const tools: ProjectedToolDefinition[] = []
   for (const row of filteredRows) {
-    const name = namespaceDeviceToolName(row)
-    handlers.set(name, row)
+    const ref = buildDeviceToolRef(row)
+    // Keyed by the deterministic device toolId — the wire name is assigned
+    // later by the surface's NameRegistry (NamePolicy), not here.
+    handlers.set(ref.toolId, row)
     tools.push({
-      name,
+      // `name` carries the visible (leaf) tool name; the surface rewrites it
+      // to the collision-safe wire name. Routing keys on ref.toolId.
+      name: row.visible_tool_name,
       description:
         row.visible_description ||
         `Device tool: ${row.visible_tool_name} on ${row.device_name}`,
       parameters: normalizeInputSchema(row.input_schema),
-      // Origin metadata so reverse-MCP can stamp a "[device:Name]" attribution
-      // on the tool description it forwards to remote agents. Without this
-      // the badge falls back to "[device]" which loses the device name.
-      source: {
-        kind: "device_capability",
-        displayName: row.visible_tool_name,
-        deviceName: row.device_name,
-      },
-      sourceType: "mcp_device",
+      ref,
     })
   }
   return { tools, handlers, subjects }
@@ -486,14 +505,14 @@ function unionWithDevice(
   device: DeviceToolBundle
 ): ProjectedToolList {
   const dispatchDeviceTool = async (
-    toolName: string,
+    toolId: string,
     input: Record<string, unknown>
   ): Promise<NormalizedMcpToolResult> => {
-    const row = device.handlers.get(toolName)
+    const row = device.handlers.get(toolId)
     if (!row) {
-      return mcpErrorBlock(`device tool ${toolName} not found in projection`)
+      return mcpErrorBlock(`device tool ${toolId} not found in projection`)
     }
-    const origin = deviceToolOrigin(row, toolName)
+    const origin = deviceToolOrigin(row)
     // Normalize device platform ONCE per dispatch so both the
     // grant-coverage try block AND the authorization-request try block
     // read the same value. Each try has its own lexical scope, so
@@ -555,7 +574,7 @@ function unionWithDevice(
     try {
       requestedAction = buildRequestedAction({
         capability: row.builtin_kind,
-        toolName,
+        toolName: row.visible_tool_name,
         visibleToolName: row.visible_tool_name,
         args: sanitizedInput,
         devicePlatform,
@@ -701,7 +720,7 @@ function unionWithDevice(
         await requestAuthorizationOrDeny({
           projectInput,
           row,
-          toolName,
+          toolName: row.visible_tool_name,
           input,
           sanitizedInput,
           requestedAction,
@@ -806,14 +825,14 @@ function unionWithDevice(
   }
 
   const executor = async (
-    toolName: string,
+    toolId: string,
     input: Record<string, unknown>,
     executionContext?: McpExecutionContext
   ): Promise<NormalizedMcpToolResult> => {
-    if (device.handlers.has(toolName)) {
-      return dispatchDeviceTool(toolName, input)
+    if (device.handlers.has(toolId)) {
+      return dispatchDeviceTool(toolId, input)
     }
-    return legacy.executor(toolName, input, executionContext)
+    return legacy.executor(toolId, input, executionContext)
   }
 
   const refresh = async () => {

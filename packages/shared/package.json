@@ -63,6 +63,10 @@
     "./access/policies": {
       "types": "./dist/access/policies/index.d.ts",
       "default": "./dist/access/policies/index.js"
+    },
+    "./tool-source": {
+      "types": "./dist/tool-source/index.d.ts",
+      "default": "./dist/tool-source/index.js"
     }
   },
   "scripts": {

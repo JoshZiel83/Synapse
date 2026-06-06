@@ -30,7 +30,17 @@ import {
   formatMentionText,
   isToolResultOrigin,
   isTransportKind,
-  MCP_TOOL_NAMESPACE_SEPARATOR,
+  computeWireNames,
+  execKindForSource,
+  stripForProvider,
+  stripForAuditSnapshot,
+  systemToolId,
+  type NameRegistry,
+  type NamePolicyItem,
+  type ProjectedToolDefinition,
+  type ToolRef,
+  type SourceSnapshot,
+  type ToolSourceKind,
   normalizeCanonicalContentBlocks,
   resolveThreadSemantics,
   textBlock,
@@ -368,17 +378,29 @@ async function loadToolResolveConversationParticipants(params: {
 // but we couldn't get to the real instance.transport to distinguish
 // remote/device/callable. Used in the replan-skip path of appendMcpFailureResult
 // where the tool didn't actually run.
-function deriveOriginFromNamespacedToolName(
-  namespacedToolName: string
-): ToolResultOrigin {
-  const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR)
-  if (parts.length >= 2) {
-    return {
-      kind: "mcp_remote",
-      serverKey: `${parts[0]}/${parts[1]}`,
-    }
+// Map a routed ToolRef to the legacy ToolResultOrigin shape used by
+// CanonicalToolResult until Phase 4 converges the origin type. Used on the
+// replan-skip path where the tool didn't actually run. A missing ref (stale /
+// unknown wire name) falls back to a callable-builtin origin.
+function originFromRef(ref: ToolRef | undefined, fallbackName: string): ToolResultOrigin {
+  if (!ref) return { kind: "builtin", toolKind: fallbackName }
+  switch (ref.source.kind) {
+    case "device":
+      return {
+        kind: "mcp_device",
+        deviceId: ref.binding.transport === "device_tunnel" ? ref.binding.deviceId : "",
+        deviceName: ref.source.deviceName,
+        exposureStableKey: ref.source.exposureStableKey,
+        exposureName: ref.source.deviceName,
+        visibleToolName: ref.identity.stableKey,
+      }
+    case "plugin":
+      return ref.binding.transport === "in_process"
+        ? { kind: "callable_plugin", pluginKey: ref.source.installationId }
+        : { kind: "mcp_remote", serverKey: ref.source.installationId }
+    case "system":
+      return { kind: "builtin", toolKind: ref.source.registryKey }
   }
-  return { kind: "mcp_remote", serverKey: namespacedToolName }
 }
 
 function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
@@ -455,29 +477,79 @@ function buildSleepWithoutSendToReminder(params: {
 
 type ExecutableModelToolKind = "callable" | "mcp_plugin" | "mcp_device"
 
-function buildMcpToolKindByName(
-  tools: ToolDefinition[]
-): Map<string, "mcp_plugin" | "mcp_device"> {
-  return new Map<string, "mcp_plugin" | "mcp_device">(
-    tools.map((tool) => {
-      const kind: "mcp_plugin" | "mcp_device" =
-        tool.sourceType === "mcp_device" ? "mcp_device" : "mcp_plugin"
-      return [tool.name, kind] as const
-    })
-  )
+// A per-turn registry mapping the wire name the model sees to the routed
+// ToolRef. Built by NamePolicy from the projected mcp/device tools; system
+// callable tools occupy the collision space as reserved bare names.
+interface ToolWireRegistry {
+  /** wireName -> ref for mcp/device routed tools. */
+  refByWireName: Map<string, ToolRef>
+  /** wire-named ToolDefinitions to send to the provider (binding stripped). */
+  wireTools: ToolDefinition[]
+  /** wire names of mcp/device tools (the "mcp bucket" membership set). */
+  mcpWireNames: Set<string>
 }
 
-function inferToolKind(
-  toolName: string,
-  mcpToolKindByName: Map<string, "mcp_plugin" | "mcp_device">
-): ExecutableModelToolKind {
-  const mcpKind = mcpToolKindByName.get(toolName)
-  if (mcpKind) return mcpKind
-  // Any non-MCP model tool call is executed through the local callable
-  // dispatcher. Unknown/stale names are still classified as callable so the
-  // dispatcher can return a model-actionable unknown_tool result instead of
-  // failing the whole turn.
-  return "callable"
+function buildToolWireRegistry(
+  projected: ProjectedToolDefinition[],
+  reservedNames: readonly string[]
+): ToolWireRegistry {
+  const items: NamePolicyItem[] = projected.map((tool) => ({
+    ref: tool.ref,
+    leafName: tool.name,
+  }))
+  const registry: NameRegistry = computeWireNames(items, reservedNames)
+  const refByWireName = new Map<string, ToolRef>()
+  const wireTools: ToolDefinition[] = []
+  const mcpWireNames = new Set<string>()
+  const defByToolId = new Map<string, ProjectedToolDefinition>(
+    projected.map((t) => [t.ref.toolId, t])
+  )
+  for (const [toolId, { wireName, ref }] of registry.byToolId) {
+    const def = defByToolId.get(toolId)!
+    refByWireName.set(wireName, ref)
+    mcpWireNames.add(wireName)
+    wireTools.push(stripForProvider({ definition: def, wireName }))
+  }
+  return { refByWireName, wireTools, mcpWireNames }
+}
+
+function execKindFor(ref: ToolRef): "mcp_plugin" | "mcp_device" {
+  // Only plugin/device tools route through the mcpExecutor; both map onto the
+  // MCP execution-kind axis. (system tools never reach this path.)
+  return ref.source.kind === "device" ? "mcp_device" : "mcp_plugin"
+}
+
+// Derive the tool_calls provenance columns for one model tool call. A routed
+// ref (plugin/device) yields its snapshot + soft pointer; everything else is a
+// system tool whose source is the bare wire name.
+function toolCallProvenance(
+  wireName: string,
+  ref: ToolRef | undefined
+): {
+  toolKind: ExecutableModelToolKind
+  sourceKind: ToolSourceKind
+  sourceSnapshot: SourceSnapshot
+  pluginInstallationId: string | null
+  deviceToolId: string | null
+} {
+  if (!ref) {
+    return {
+      toolKind: "callable",
+      sourceKind: "system",
+      sourceSnapshot: { kind: "system", registryKey: wireName },
+      pluginInstallationId: null,
+      deviceToolId: null,
+    }
+  }
+  const snapshot = stripForAuditSnapshot(ref)
+  return {
+    toolKind: execKindFor(ref),
+    sourceKind: ref.source.kind,
+    sourceSnapshot: snapshot,
+    pluginInstallationId:
+      ref.source.kind === "plugin" ? ref.source.installationId : null,
+    deviceToolId: ref.source.kind === "device" ? ref.source.deviceToolId : null,
+  }
 }
 
 function classifyMcpExecutionError(error: unknown) {
@@ -578,15 +650,15 @@ export async function actorThink(
     workspaceMemberId?: string
     availableSkills?: AvailableSkillSummary[]
     onStatus?: (status: string) => Promise<void>
-    mcpTools?: import("@synapse/shared").ToolDefinition[]
+    mcpTools?: ProjectedToolDefinition[]
     mcpExecutor?: (
-      toolName: string,
+      toolId: string,
       input: Record<string, unknown>,
       executionContext?: McpExecutionContext
     ) => Promise<NormalizedMcpToolResult>
     mcpVersion?: number
     mcpRefresh?: () => Promise<{
-      tools: import("@synapse/shared").ToolDefinition[]
+      tools: ProjectedToolDefinition[]
       mcpVersion: number
     }>
     mcpSetTurnId?: (turnId: string, round?: number) => void
@@ -658,13 +730,32 @@ export async function actorThink(
     multimodal: resolved?.multimodal || null,
   })
 
-  // MCP tools (already resolved and authorized by tool-resolver.ts)
+  // MCP/device tools (already resolved and authorized by tool-resolver.ts /
+  // capability-projection). These carry Layer-A ToolRefs; the per-turn
+  // NameRegistry assigns each a collision-safe wire name and lets dispatch map
+  // wireName -> toolId -> ref without parsing the name.
   const initialMcpToolDefs = options?.mcpTools || []
   let mcpToolDefs = isPlanCollaborationMode(currentCollaborationMode)
     ? []
     : initialMcpToolDefs
-  let mcpToolNames = new Set(mcpToolDefs.map((t) => t.name))
-  let mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
+  // Per-turn wire-name registry (rebuilt whenever the tool set changes). Until
+  // refreshLocalCallableTools runs it is empty.
+  let toolWireRegistry: ToolWireRegistry = {
+    refByWireName: new Map(),
+    wireTools: [],
+    mcpWireNames: new Set(),
+  }
+  // Union of every candidate's provider-native server tool names. These keys
+  // are merged into the ToolSet via buildServerTools after buildAiTools, so the
+  // NameRegistry must reserve them (any candidate may be selected at attempt
+  // time). Anthropic-only today; the providerKind gate lives in buildServerTools.
+  const providerNativeReservedNames = Array.from(
+    new Set(
+      effectiveModelPlan.candidates.flatMap(
+        (candidate: ResolvedModelConfig) => candidate.serverTools ?? []
+      )
+    )
+  )
   let currentToolConversationParticipants = options?.conversationParticipants
   const getThreadSemantics = () =>
     resolveThreadSemantics({
@@ -718,16 +809,12 @@ export async function actorThink(
 
     if (isPlanCollaborationMode(currentCollaborationMode)) {
       mcpToolDefs = []
-      mcpToolNames = new Set()
-      mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
     } else if (
       mcpToolDefs.length === 0 &&
       initialMcpToolDefs.length > 0 &&
       !options?.mcpRefresh
     ) {
       mcpToolDefs = initialMcpToolDefs
-      mcpToolNames = new Set(mcpToolDefs.map((t) => t.name))
-      mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
     }
 
     currentToolConversationParticipants =
@@ -737,10 +824,22 @@ export async function actorThink(
         fallback: currentToolConversationParticipants,
       })
     const resolvedCallable = await resolveLocalCallableTools(buildResolveCtx())
+    // Reserved names the NameRegistry must NOT hand to a plugin/device tool:
+    //   - system (callable) tool names — kept bare, collisions qualify.
+    //   - provider-native server tool names (web_search/web_fetch) that any
+    //     candidate may merge into the ToolSet after buildAiTools (see the
+    //     `...buildServerTools(...)` spread). Without reserving these, a plugin
+    //     /device tool NamePolicy happened to name `web_search` would be
+    //     silently shadowed by the server tool, desyncing model<->routing.
+    const reservedNames = [
+      ...resolvedCallable.map((tool) => tool.name),
+      ...providerNativeReservedNames,
+    ]
+    toolWireRegistry = buildToolWireRegistry(mcpToolDefs, reservedNames)
     const filteredCallable = resolvedCallable.filter(
-      (tool) => !mcpToolNames.has(tool.name)
+      (tool) => !toolWireRegistry.mcpWireNames.has(tool.name)
     )
-    allTools = [...filteredCallable, ...mcpToolDefs]
+    allTools = [...filteredCallable, ...toolWireRegistry.wireTools]
     return resolvedCallable
   }
   await refreshLocalCallableTools()
@@ -904,12 +1003,26 @@ export async function actorThink(
 
             // Merge custom (execute-less) tools with provider-defined server
             // tools (Anthropic web_search/web_fetch) for this candidate.
+            const customTools = buildAiTools(allTools)
+            const serverTools = buildServerTools(
+              candidate.providerKind,
+              candidate.serverTools
+            )
+            // Invariant: server tool names are reserved in the NameRegistry, so
+            // they must never collide with a custom (plugin/device/system) tool
+            // name. If this fires, a provider-native name leaked into the wire
+            // surface and the spread below would silently shadow it.
+            for (const serverToolName of Object.keys(serverTools)) {
+              if (serverToolName in customTools) {
+                throw new Error(
+                  `Tool name collision: provider-native server tool "${serverToolName}" ` +
+                    `collides with a custom tool. NamePolicy must reserve it.`
+                )
+              }
+            }
             const aiTools = {
-              ...buildAiTools(allTools),
-              ...buildServerTools(
-                candidate.providerKind,
-                candidate.serverTools
-              ),
+              ...customTools,
+              ...serverTools,
             }
 
             // Real cancellation on timeout: AbortController fed to the SDK so the
@@ -1128,12 +1241,15 @@ export async function actorThink(
         usedDraftProvider = true
       }
 
-      // Dispatch: local callables and projected MCP/device tools.
+      // Dispatch: local callables and projected MCP/device tools. The model
+      // emits WIRE names; mcp/device membership is by NameRegistry, the rest are
+      // callable (system) tools. Unknown/stale names land in the callable bucket
+      // so executeCallableTools returns a model-actionable unknown_tool result.
       const mcpCalls = toolCalls.filter((tc: any) =>
-        mcpToolNames.has(tc.toolName)
+        toolWireRegistry.mcpWireNames.has(tc.toolName)
       )
       const callableCalls = toolCalls.filter(
-        (tc: any) => !mcpToolNames.has(tc.toolName)
+        (tc: any) => !toolWireRegistry.mcpWireNames.has(tc.toolName)
       )
       const allContinuableCalls = [...callableCalls, ...mcpCalls]
       const sendToPlanned = callableCalls.some(
@@ -1183,7 +1299,8 @@ export async function actorThink(
             callIndex++
           ) {
             const tc = allContinuableCalls[callIndex]
-            const toolKind = inferToolKind(tc.toolName, mcpToolKindByName)
+            const dispatchRef = toolWireRegistry.refByWireName.get(tc.toolName)
+            const provenance = toolCallProvenance(tc.toolName, dispatchRef)
             const row = await createToolCall({
               id: tc.callId,
               turnId: options!.turnId!,
@@ -1193,8 +1310,12 @@ export async function actorThink(
               callIndex,
               providerCallId: tc.providerCallId,
               bundleId: roundBundleId,
-              toolKind,
+              toolKind: provenance.toolKind,
               toolName: tc.toolName,
+              sourceKind: provenance.sourceKind,
+              sourceSnapshot: provenance.sourceSnapshot,
+              pluginInstallationId: provenance.pluginInstallationId,
+              deviceToolId: provenance.deviceToolId,
               normalizedInput: tc.input,
             })
             if (!row) {
@@ -1307,8 +1428,10 @@ export async function actorThink(
         if (mcpCalls.length > 0 && options?.mcpExecutor) {
           const mcpExecutorKindFor = (
             toolName: string
-          ): "mcp_plugin" | "mcp_device" =>
-            mcpToolKindByName.get(toolName) ?? "mcp_plugin"
+          ): "mcp_plugin" | "mcp_device" => {
+            const ref = toolWireRegistry.refByWireName.get(toolName)
+            return ref ? execKindFor(ref) : "mcp_plugin"
+          }
           const appendMcpFailureResult = async (params: {
             tc: (typeof mcpCalls)[number]
             callRow: any
@@ -1392,9 +1515,13 @@ export async function actorThink(
                   })
                 : null
             const attemptStart = Date.now()
+            const dispatchRef = toolWireRegistry.refByWireName.get(tc.toolName)
             try {
               const normalizedResult = await options.mcpExecutor(
-                tc.toolName,
+                // Route by the deterministic toolId, not the wire name. (mcpCalls
+                // membership guarantees a ref; fall back to the name only to
+                // surface a clean "no instance" error if the registry drifted.)
+                dispatchRef ? dispatchRef.toolId : tc.toolName,
                 tc.input,
                 {
                   workspaceId: workspaceId || "",
@@ -1543,12 +1670,12 @@ export async function actorThink(
                       skippedDueToReplan: true,
                     },
                     // Skipped MCP calls didn't actually run, so we can't
-                    // inherit a real origin from a thrown error. Derive a
-                    // best-guess mcp_remote origin from the namespaced tool
-                    // name so the audit trail still attributes correctly
-                    // and the roundToolResults fallback doesn't mis-tag as
-                    // {kind:"builtin"}.
-                    origin: deriveOriginFromNamespacedToolName(
+                    // inherit a real origin from a thrown error. Derive the
+                    // origin from the routed ToolRef so the audit trail still
+                    // attributes correctly and the roundToolResults fallback
+                    // doesn't mis-tag as {kind:"builtin"}.
+                    origin: originFromRef(
+                      toolWireRegistry.refByWireName.get(skippedTc.toolName),
                       skippedTc.toolName
                     ),
                     responsePayload: {
@@ -1593,7 +1720,10 @@ export async function actorThink(
             const isCallableEntry = callableResultIds.has(tr.toolCallId)
             const fallbackOrigin: ToolResultOrigin = isCallableEntry
               ? { kind: "builtin", toolKind: tr.toolName }
-              : deriveOriginFromNamespacedToolName(tr.toolName)
+              : originFromRef(
+                  toolWireRegistry.refByWireName.get(tr.toolName),
+                  tr.toolName
+                )
             const origin = isToolResultOrigin(trAny.origin)
               ? trAny.origin
               : fallbackOrigin
@@ -1768,9 +1898,9 @@ export async function actorThink(
             try {
               const refreshed = await options.mcpRefresh()
               mcpToolDefs = refreshed.tools
-              mcpToolNames = new Set(mcpToolDefs.map((t) => t.name))
-              mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
               currentMcpVersion = refreshed.mcpVersion
+              // The wire registry + allTools are rebuilt by the
+              // refreshLocalCallableTools() call below (it re-reads mcpToolDefs).
               log.info(
                 `[actorThink] MCP tools refreshed: ${mcpToolDefs.length} tools, version=${currentMcpVersion}`
               )
@@ -1785,8 +1915,6 @@ export async function actorThink(
           }
         } else if (isPlanCollaborationMode(currentCollaborationMode)) {
           mcpToolDefs = []
-          mcpToolNames = new Set()
-          mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
         }
 
         await refreshLocalCallableTools()

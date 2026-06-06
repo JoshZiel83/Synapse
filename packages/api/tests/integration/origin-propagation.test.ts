@@ -80,6 +80,30 @@ async function buildToolCall(opts: {
   const sessionId = uuidv4()
   const turnId = uuidv4()
   const toolCallId = uuidv4()
+  // Tool provenance & routing: tool_calls now requires source_kind +
+  // source_snapshot (NOT NULL, CHECK-consistent). Map the test execution-kind
+  // to a routed source + minimal snapshot. Legacy "builtin" → callable/system.
+  const execKind = opts.toolKind === "builtin" ? "callable" : opts.toolKind
+  const sourceKind =
+    execKind === "mcp_device"
+      ? "device"
+      : execKind === "mcp_plugin"
+        ? "plugin"
+        : "system"
+  const sourceSnapshot =
+    sourceKind === "device"
+      ? {
+          kind: "device",
+          deviceToolId: uuidv4(),
+          exposureStableKey: "synapse.builtin.filesystem.v1",
+        }
+      : sourceKind === "plugin"
+        ? {
+            kind: "plugin",
+            installationId: uuidv4(),
+            upstreamToolName: opts.toolName,
+          }
+        : { kind: "system", registryKey: opts.toolName }
 
   // We need an actor for the session to satisfy NOT NULL constraints —
   // seed an inline actor row directly.
@@ -112,16 +136,18 @@ async function buildToolCall(opts: {
   await client.query(
     `INSERT INTO tool_calls (
        id, turn_id, conversation_id, session_id,
-       bundle_id, tool_kind, tool_name, normalized_input
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, '{}')`,
+       bundle_id, tool_kind, tool_name, source_kind, source_snapshot, normalized_input
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '{}')`,
     [
       toolCallId,
       turnId,
       conversationId,
       sessionId,
       uuidv4(),
-      opts.toolKind,
+      execKind,
       opts.toolName,
+      sourceKind,
+      JSON.stringify(sourceSnapshot),
     ]
   )
 

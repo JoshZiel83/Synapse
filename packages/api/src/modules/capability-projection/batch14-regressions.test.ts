@@ -421,7 +421,7 @@ test("Batch 14: capability-projection dispatcher stamps mcp_device origin", asyn
     "utf8"
   )
   assert.ok(
-    /const origin\s*=\s*deviceToolOrigin\(row,\s*toolName\)/.test(source),
+    /const origin\s*=\s*deviceToolOrigin\(row\)/.test(source),
     "dispatch closure no longer derives a device ToolResultOrigin from the projected row"
   )
   assert.ok(

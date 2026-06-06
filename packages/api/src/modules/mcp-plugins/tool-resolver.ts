@@ -4,9 +4,12 @@ import {
   MCP_SERVER_TRANSPORTS,
   maskAllowsConversationType,
   resolveNarrowedConversationTypeMask,
+  pluginToolId,
   type McpServerTransport,
   type PluginSpecTransport,
   type ToolDefinition,
+  type ProjectedToolDefinition,
+  type ToolRef,
   type ToolResultOrigin,
 } from "@synapse/shared"
 import type {
@@ -31,21 +34,34 @@ import { getMcpVersion } from "./runtime-version.js"
 import { logToolCall } from "./audit.js"
 import { normalizeMcpToolResult } from "./result-normalizer.js"
 
-const MCP_TOOL_NAMESPACE_SEPARATOR = "__"
-
 const log = createLogger("mcp.tool-resolver")
 
+/**
+ * Routed tool surface returned by the resolver.
+ *
+ * `tools` carries Layer-A identity (each tool has a mandatory `ref`).
+ * `executor` is keyed by the deterministic `toolId` (NOT the wire name) — the
+ * surface (chat / reverse-MCP) maps wireName→toolId via its own NameRegistry
+ * before invoking. This is what removes the `split("__")` name-parsing.
+ */
 export interface ResolvedMcpTools {
-  tools: ToolDefinition[]
+  tools: ProjectedToolDefinition[]
   executor: (
-    toolName: string,
+    toolId: string,
     input: Record<string, unknown>,
     executionContext?: McpExecutionContext
   ) => Promise<NormalizedMcpToolResult>
   mcpVersion: number
-  refresh: () => Promise<{ tools: ToolDefinition[]; mcpVersion: number }>
+  refresh: () => Promise<{ tools: ProjectedToolDefinition[]; mcpVersion: number }>
   setTurnId: (turnId: string, round?: number) => void
   shutdown: () => Promise<void>
+}
+
+/** A plugin tool's per-turn dispatch entry, keyed by its deterministic toolId. */
+interface PluginDispatchEntry {
+  instance: McpInstance
+  upstreamToolName: string
+  ref: ToolRef
 }
 
 interface ResolveParams extends Omit<RuntimeActorContext, "actorId"> {
@@ -109,26 +125,38 @@ type VisibleAccessBindingRow = {
   conversation_id: string | null
 }
 
-function buildMcpInstanceOrigin(
-  instance: {
-    transport?: string
-  },
-  pluginSlug: string | undefined,
-  pluginDisplayName: string | undefined,
-  namespacedToolName: string
-): ToolResultOrigin {
-  if (instance.transport === "builtin") {
-    return {
-      kind: "callable_plugin",
-      pluginKey: pluginSlug || namespacedToolName,
-      pluginName: pluginDisplayName,
-    }
-  }
-  // stdio / http remote MCP servers
+/**
+ * Build a plugin ToolRef from an instance + its upstream (bare) tool name.
+ * The deterministic toolId (`plugin:<installationId>:<upstreamToolName>`) is the
+ * routing key; `binding` carries route-only coordinates (never serialized out).
+ */
+function buildPluginToolRef(
+  instance: McpInstance,
+  upstreamToolName: string
+): ToolRef {
+  const transport: ToolRef["binding"]["transport"] =
+    instance.transport === "builtin" ? "in_process" : (instance.transport as
+      | "stdio"
+      | "http"
+      | "sse")
+  const binding: ToolRef["binding"] =
+    transport === "in_process"
+      ? { transport: "in_process", dispatch: "callable" }
+      : { transport, instanceKey: `${instance.installationId}:${instance.configHash}:${instance.scope}:${instance.scopeId}` }
   return {
-    kind: "mcp_remote",
-    serverKey: pluginSlug || namespacedToolName,
-    serverName: pluginDisplayName,
+    toolId: pluginToolId(instance.installationId, upstreamToolName),
+    source: {
+      kind: "plugin",
+      installationId: instance.installationId,
+      upstreamToolName,
+      // Durable display fields so post-purge audit shows a readable name.
+      publisherSlug: instance.orgSlug,
+      itemSlug: instance.pluginSlug,
+    },
+    binding,
+    identity: {
+      stableKey: `plugin/${instance.orgSlug}/${instance.pluginSlug}/${upstreamToolName}`,
+    },
   }
 }
 
@@ -359,36 +387,6 @@ function manifestToolToDefinition(tool: {
   }
 }
 
-function sanitizeNamespaceSegment(value: string, fallback: string) {
-  const normalized = value
-    .replace(/[^a-zA-Z0-9_-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toLowerCase()
-  return normalized || fallback
-}
-
-function buildPluginNamespace(
-  plugin: Pick<
-    VisiblePluginRow,
-    "installation_id" | "publisher_slug" | "item_slug"
-  >,
-  duplicateBaseNamespaces: Set<string>
-) {
-  const publisher = plugin.publisher_slug || "plugin"
-  const basePluginSlug = plugin.item_slug || "plugin"
-  const baseNamespace = `${publisher}${MCP_TOOL_NAMESPACE_SEPARATOR}${basePluginSlug}`
-  if (!duplicateBaseNamespaces.has(baseNamespace)) {
-    return baseNamespace
-  }
-
-  const installationSuffix = sanitizeNamespaceSegment(
-    plugin.installation_id.slice(0, 8),
-    "install"
-  )
-  return `${publisher}${MCP_TOOL_NAMESPACE_SEPARATOR}${basePluginSlug}_${installationSuffix}`
-}
-
 async function loadConversationTargetedResourceIds(params: {
   resourceType: "plugin_installation"
   conversationId: string
@@ -521,22 +519,11 @@ async function loadVisiblePlugins(params: ResolveParams) {
 
 async function resolveTools(
   params: ResolveParams,
-  instances: Map<string, McpInstance>,
+  dispatch: Map<string, PluginDispatchEntry>,
   turnOwnerKey: string
 ) {
   const visiblePlugins = await loadVisiblePlugins(params)
-  const tools: ToolDefinition[] = []
-  const duplicateBaseNamespaces = new Set<string>()
-  const namespaceCounts = new Map<string, number>()
-
-  for (const plugin of visiblePlugins) {
-    const baseNamespace = `${plugin.publisher_slug || "plugin"}${MCP_TOOL_NAMESPACE_SEPARATOR}${plugin.item_slug || "plugin"}`
-    const nextCount = (namespaceCounts.get(baseNamespace) || 0) + 1
-    namespaceCounts.set(baseNamespace, nextCount)
-    if (nextCount > 1) {
-      duplicateBaseNamespaces.add(baseNamespace)
-    }
-  }
+  const tools: ProjectedToolDefinition[] = []
 
   for (const plugin of visiblePlugins) {
     if (!plugin.reuse_scope) {
@@ -552,8 +539,6 @@ async function resolveTools(
       continue
     }
     const serverTransport = plugin.transport as McpServerTransport
-
-    const namespace = buildPluginNamespace(plugin, duplicateBaseNamespaces)
 
     try {
       const resolved = await resolveInstallationConfig(plugin.installation_id)
@@ -576,18 +561,27 @@ async function resolveTools(
         description?: string
         inputSchema?: Record<string, unknown>
       }>(plugin.tool_manifest)
-      const namespacedTools = (
+      const upstreamTools =
         runtimeInstance.tools.length > 0
           ? runtimeInstance.tools
           : manifest.map((tool) => manifestToolToDefinition(tool))
-      ).map((tool) => ({
-        ...tool,
-        name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
-        description: `[${plugin.publisher_slug || "plugin"}/${plugin.item_slug}] ${tool.description}`,
-      }))
 
-      tools.push(...namespacedTools)
-      instances.set(namespace, runtimeInstance)
+      for (const tool of upstreamTools) {
+        const ref = buildPluginToolRef(runtimeInstance, tool.name)
+        // The plugin attribution that used to be baked into the name now lives
+        // on the ref; keep the bracketed description hint for the model.
+        const projected: ProjectedToolDefinition = {
+          ...tool,
+          description: `[${plugin.publisher_slug || "plugin"}/${plugin.item_slug}] ${tool.description}`,
+          ref,
+        }
+        tools.push(projected)
+        dispatch.set(ref.toolId, {
+          instance: runtimeInstance,
+          upstreamToolName: tool.name,
+          ref,
+        })
+      }
     } catch (error: any) {
       log.error(
         { err: error.message },
@@ -627,8 +621,8 @@ async function resolveMcpToolsCommon(
 ): Promise<ResolvedMcpTools> {
   const mcpVersion = await getMcpVersion(params.workspaceId)
   const turnOwnerKey = `session:${params.sessionId}:turn:${randomUUID()}`
-  const instances = new Map<string, McpInstance>()
-  const allTools = await resolveTools(params, instances, turnOwnerKey)
+  const dispatch = new Map<string, PluginDispatchEntry>()
+  const allTools = await resolveTools(params, dispatch, turnOwnerKey)
 
   let currentTurnId: string | undefined
   let currentRound: number | undefined
@@ -638,42 +632,44 @@ async function resolveMcpToolsCommon(
   }
 
   const executor = async (
-    namespacedToolName: string,
+    toolId: string,
     input: Record<string, unknown>,
     executionContext?: McpExecutionContext
   ): Promise<NormalizedMcpToolResult> => {
-    const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR)
-    if (parts.length < 3) {
-      throw new Error(`Invalid namespaced tool name: ${namespacedToolName}`)
+    const entry = dispatch.get(toolId)
+    if (!entry) {
+      throw new Error(`No MCP instance found for toolId ${toolId}`)
     }
-
-    const orgSlug = parts[0]!
-    const pluginSlug = parts[1]!
-    const toolName = parts.slice(2).join(MCP_TOOL_NAMESPACE_SEPARATOR)
-    const namespace = `${orgSlug}${MCP_TOOL_NAMESPACE_SEPARATOR}${pluginSlug}`
-
-    const instance = instances.get(namespace)
-    if (!instance) {
-      throw new Error(`No MCP instance found for ${namespace}`)
-    }
+    const { instance, upstreamToolName, ref } = entry
 
     const startTime = Date.now()
     let rawOutput: unknown
     let isError = false
     let errorMessage: string | undefined
 
-    // Compute the origin up-front so it's available in the catch path even
-    // if instance.execute throws. With relay gone every instance is either
-    // builtin (callable_plugin) or stdio/http (mcp_remote).
-    const origin = buildMcpInstanceOrigin(
-      instance,
-      `${orgSlug}/${pluginSlug}`,
-      instance.pluginSlug || pluginSlug,
-      namespacedToolName
-    )
+    // Legacy ToolResultOrigin (mcp_remote / callable_plugin) derived from the
+    // ref's binding transport. Phase 4 converges NormalizedMcpToolResult.origin
+    // onto the public projection; until then we emit the legacy shape so the
+    // un-migrated ingest/normalizer types still line up.
+    const origin: ToolResultOrigin =
+      ref.binding.transport === "in_process"
+        ? {
+            kind: "callable_plugin",
+            pluginKey: `${instance.orgSlug}/${instance.pluginSlug}`,
+            pluginName: instance.pluginSlug,
+          }
+        : {
+            kind: "mcp_remote",
+            serverKey: `${instance.orgSlug}/${instance.pluginSlug}`,
+            serverName: instance.pluginSlug,
+          }
 
     try {
-      rawOutput = await instance.execute(toolName, input, executionContext)
+      rawOutput = await instance.execute(
+        upstreamToolName,
+        input,
+        executionContext
+      )
       return await normalizeMcpToolResult(rawOutput, params.workspaceId, {
         origin,
       })
@@ -703,7 +699,7 @@ async function resolveMcpToolsCommon(
         actorId: params.actorId,
         userId: params.userId,
         pluginId: instance.pluginId,
-        toolName: namespacedToolName,
+        toolName: upstreamToolName,
         toolType: "mcp_plugin",
         input,
         output,
@@ -711,7 +707,7 @@ async function resolveMcpToolsCommon(
         errorMessage,
         durationMs,
         transport: instance.transport,
-        instanceKey: namespace,
+        instanceKey: toolId,
       }).catch((logError) => {
         log.error(
           { err: logError },
@@ -723,7 +719,8 @@ async function resolveMcpToolsCommon(
 
   const refresh = async () => {
     const nextVersion = await getMcpVersion(params.workspaceId)
-    const refreshedTools = await resolveTools(params, instances, turnOwnerKey)
+    dispatch.clear()
+    const refreshedTools = await resolveTools(params, dispatch, turnOwnerKey)
     return {
       tools: refreshedTools,
       mcpVersion: nextVersion,
@@ -731,10 +728,15 @@ async function resolveMcpToolsCommon(
   }
 
   const shutdown = async () => {
-    const turnScopedInstances = Array.from(instances.values()).filter(
-      (instance) =>
-        instance.scope === "turn" && instance.scopeId === turnOwnerKey
-    )
+    const seen = new Set<McpInstance>()
+    const turnScopedInstances: McpInstance[] = []
+    for (const { instance } of dispatch.values()) {
+      if (seen.has(instance)) continue
+      seen.add(instance)
+      if (instance.scope === "turn" && instance.scopeId === turnOwnerKey) {
+        turnScopedInstances.push(instance)
+      }
+    }
     await Promise.allSettled(
       turnScopedInstances.map((instance) => instance.shutdown())
     )

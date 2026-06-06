@@ -313,6 +313,8 @@ export type SubjectKind = "actor" | "conversation" | "external" | "platform" | "
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export type ToolCallsSourceKind = "device" | "plugin" | "system";
+
 export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
 
 export type ToolCallsToolKind = "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
@@ -2772,13 +2774,15 @@ export interface ToolCalls {
   completed_at: Timestamp | null;
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
-  device_id: string | null;
+  device_tool_id: string | null;
   id: Generated<string>;
   normalized_input: Generated<Json>;
-  plugin_id: string | null;
+  plugin_installation_id: string | null;
   provider_call_id: string | null;
   provider_step_id: string | null;
   session_id: string | null;
+  source_kind: ToolCallsSourceKind;
+  source_snapshot: Generated<Json>;
   status: Generated<ToolCallsStatus>;
   tool_kind: ToolCallsToolKind;
   tool_name: string;
@@ -2832,14 +2836,11 @@ export interface ToolCallTasks {
 export interface ToolExecutionAttempts {
   attempt_no: number;
   created_at: Generated<Timestamp | null>;
-  device_id: string | null;
   duration_ms: number | null;
   error_message: string | null;
   executor_kind: ToolExecutionAttemptsExecutorKind;
   id: Generated<string>;
-  instance_key: string | null;
   is_error: Generated<boolean | null>;
-  plugin_id: string | null;
   request_payload_blob_id: string | null;
   response_payload_blob_id: string | null;
   status: Generated<ToolExecutionAttemptsStatus>;

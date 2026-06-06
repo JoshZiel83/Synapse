@@ -3600,6 +3600,24 @@ foreignKeys:
     _child: users(avatar_file_id)
     _parent: file_assets(id)
     _was: SET NULL
+  constraint:fk_tool_calls_plugin_installation:
+    targetAction: SET NULL
+    liveIntegrity: historical
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: tool_calls(plugin_installation_id)
+    _parent: plugin_installations(id)
+    _was: SET NULL
+  constraint:fk_tool_calls_device_tool:
+    targetAction: SET NULL
+    liveIntegrity: historical
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: tool_calls(device_tool_id)
+    _parent: device_tools(id)
+    _was: SET NULL
   constraint:fk_catalog_items_latest_version:
     targetAction: SET NULL
     setNull:
