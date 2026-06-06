@@ -385,6 +385,7 @@ type VisibleSkillRow = {
   access_bind_scope: RuntimeBindingScope
   conversation_id: string | null
   actor_id: string | null
+  remote_agent_id: string | null
   workspace_member_id: string | null
   slug: string
   name: string
@@ -1214,6 +1215,15 @@ function visibleRowToAccessTarget(
               : {}),
           }
         : { subject: workspaceRef(row.workspace_id) }
+    case "remote_agent":
+      return row.remote_agent_id
+        ? {
+            subject: remoteAgentRef(row.remote_agent_id),
+            ...(row.conversation_id
+              ? { scope: conversationRef(row.conversation_id) }
+              : {}),
+          }
+        : { subject: workspaceRef(row.workspace_id) }
     case "conversation":
       return row.conversation_id
         ? { subject: conversationRef(row.conversation_id) }
@@ -1751,6 +1761,7 @@ async function loadAccessBindingsBySkillIdsForContext(
     contextWorkspaceId: string
     workspaceMemberId?: string
     actorId?: string
+    remoteAgentId?: string
     conversationId?: string
   }
 ) {
@@ -1764,6 +1775,7 @@ async function loadAccessBindingsBySkillIdsForContext(
     contextWorkspaceId: context.contextWorkspaceId,
     workspaceMemberId: context.workspaceMemberId,
     actorId: context.actorId,
+    remoteAgentId: context.remoteAgentId,
     conversationId: context.conversationId,
   })
 
@@ -3459,12 +3471,14 @@ async function buildVisibilitySubjects(input: {
   workspaceId: string
   workspaceMemberId?: string
   actorId?: string
+  remoteAgentId?: string
   conversationId?: string
 }) {
   return buildConversationCapabilitySubjects(db, {
     workspaceId: input.workspaceId,
     workspaceMemberId: input.workspaceMemberId,
     actorId: input.actorId,
+    remoteAgentId: input.remoteAgentId,
     conversationId: input.conversationId,
   })
 }
@@ -3489,6 +3503,9 @@ function visibleRowToAccessRow(
       break
     case "actor":
       relation = "use_actor"
+      break
+    case "remote_agent":
+      relation = "use_remote_agent"
       break
     default:
       relation = "use_scoped"
@@ -3516,6 +3533,7 @@ function visibleRowToAccessRow(
     bind_scope: row.access_bind_scope,
     actor_id: row.actor_id,
     conversation_id: row.conversation_id,
+    remote_agent_id: row.remote_agent_id,
     workspace_member_id: row.workspace_member_id,
   }
 }
@@ -3524,6 +3542,7 @@ export async function listVisibleSkills(input: {
   workspaceId: string
   workspaceMemberId?: string
   actorId?: string
+  remoteAgentId?: string
   sessionId?: string
   conversationId?: string
   conversationKind?: "direct" | "group"
@@ -3539,6 +3558,7 @@ export async function listVisibleSkills(input: {
     workspaceId: input.workspaceId,
     workspaceMemberId: input.workspaceMemberId,
     actorId: input.actorId,
+    remoteAgentId: input.remoteAgentId,
     conversationId: input.conversationId,
   })
   // P1 fix (post-D4): subject_ids the principal can claim, including the
@@ -3549,6 +3569,7 @@ export async function listVisibleSkills(input: {
     workspaceId: input.workspaceId,
     workspaceMemberId: input.workspaceMemberId,
     actorId: input.actorId,
+    remoteAgentId: input.remoteAgentId,
     conversationId: input.conversationId,
   })
   const autoLoadedSkills = await listAutoLoadedSkills({
@@ -3602,6 +3623,7 @@ export async function listVisibleSkills(input: {
 	                 'workspace'::varchar AS access_bind_scope,
                  NULL::uuid AS conversation_id,
                  NULL::uuid AS actor_id,
+                 NULL::uuid AS remote_agent_id,
                  NULL::uuid AS workspace_member_id,
                  skill.updated_at AS access_created_at
                FROM installed_skills skill
@@ -3625,6 +3647,7 @@ export async function listVisibleSkills(input: {
                 contextWorkspaceId: input.workspaceId,
                 workspaceMemberId: input.workspaceMemberId,
                 actorId: input.actorId,
+                remoteAgentId: input.remoteAgentId,
                 conversationId: input.conversationId,
               }
             ),
@@ -3673,6 +3696,7 @@ export async function listVisibleSkills(input: {
               access_bind_scope: chosenBinding?.bind_scope || "workspace",
               conversation_id: chosenBinding?.conversation_id || null,
               actor_id: chosenBinding?.actor_id || null,
+              remote_agent_id: chosenBinding?.remote_agent_id || null,
               workspace_member_id: chosenBinding?.workspace_member_id || null,
               access_created_at:
                 chosenBinding?.created_at || row.access_created_at,
@@ -3711,6 +3735,7 @@ export async function listVisibleSkills(input: {
 export async function readVisibleSkill(input: {
   workspaceId: string
   actorId?: string
+  remoteAgentId?: string
   sessionId?: string
   conversationId?: string
   conversationKind?: "direct" | "group"
@@ -3721,6 +3746,7 @@ export async function readVisibleSkill(input: {
   const visibleSkills = await listVisibleSkills({
     workspaceId: input.workspaceId,
     actorId: input.actorId,
+    remoteAgentId: input.remoteAgentId,
     sessionId: input.sessionId,
     conversationId: input.conversationId,
     conversationKind: input.conversationKind,

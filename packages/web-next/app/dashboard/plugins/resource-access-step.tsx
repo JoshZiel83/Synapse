@@ -71,12 +71,13 @@ import {
 } from "@/components/ui/table"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
-import type { ConversationCatalogEntry } from "@synapse/shared"
+import type { ConversationCatalogEntry, RemoteAgentView } from "@synapse/shared"
 
 const allowedGrantScopes: PluginGrantScope[] = [
   "workspace",
   "conversation",
   "actor",
+  "remote_agent",
   "actor_conversation",
   "remote_agent_conversation",
 ]
@@ -101,6 +102,11 @@ function buildGrantScopeOptions(resourceLabel: string): Array<{
       value: "actor",
       label: "Actor",
       description: `Only one actor can use this ${resourceLabel} anywhere it appears.`,
+    },
+    {
+      value: "remote_agent",
+      label: "Remote Agent",
+      description: `Only one remote agent can use this ${resourceLabel} anywhere it appears.`,
     },
     {
       value: "actor_conversation",
@@ -320,6 +326,13 @@ function normalizeActorOption(actor: ActorRecord): ActorOption {
   }
 }
 
+function normalizeRemoteAgentOption(remoteAgent: RemoteAgentView): ActorOption {
+  return {
+    id: remoteAgent.id,
+    name: remoteAgent.name || remoteAgent.title || "Untitled remote agent",
+  }
+}
+
 function normalizeConversationOption(
   group: ConversationCatalogEntry
 ): ConversationOption {
@@ -452,6 +465,7 @@ function targetConversationId(
 function formatGrantTarget(
   grant: ResourceAccessGrant,
   actorsById: Map<string, string>,
+  remoteAgentsById: Map<string, string>,
   conversationsById: Map<string, string>
 ) {
   const target = grant.target
@@ -487,13 +501,18 @@ function formatGrantTarget(
       return `${actorName} in ${conversationName}`
     }
     case "remote_agent":
-      return remoteAgentId
-        ? `Remote Agent ${String(remoteAgentId).slice(0, 8)}`
-        : "Selected remote agent"
+      return (
+        (remoteAgentId ? remoteAgentsById.get(remoteAgentId) : null) ||
+        (remoteAgentId
+          ? `Remote Agent ${String(remoteAgentId).slice(0, 8)}`
+          : "Selected remote agent")
+      )
     case "remote_agent_conversation": {
-      const remoteAgentName = remoteAgentId
-        ? `Remote Agent ${String(remoteAgentId).slice(0, 8)}`
-        : "Selected remote agent"
+      const remoteAgentName =
+        (remoteAgentId ? remoteAgentsById.get(remoteAgentId) : null) ||
+        (remoteAgentId
+          ? `Remote Agent ${String(remoteAgentId).slice(0, 8)}`
+          : "Selected remote agent")
       const conversationName =
         (conversationId ? conversationsById.get(conversationId) : null) ||
         (conversationId
@@ -689,6 +708,7 @@ export default function ResourceAccessStep({
 }) {
   const { workspaceId } = useWorkspace()
   const [actors, setActors] = useState<ActorRecord[]>([])
+  const [remoteAgents, setRemoteAgents] = useState<RemoteAgentView[]>([])
   const [conversations, setConversations] = useState<
     ConversationCatalogEntry[]
   >([])
@@ -696,6 +716,7 @@ export default function ResourceAccessStep({
   const [grants, setGrants] = useState<ResourceAccessGrant[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingActors, setLoadingActors] = useState(false)
+  const [loadingRemoteAgents, setLoadingRemoteAgents] = useState(false)
   const [loadingConversations, setLoadingConversations] = useState(false)
   const [saving, setSaving] = useState(false)
   const [savingPolicy, setSavingPolicy] = useState(false)
@@ -710,8 +731,12 @@ export default function ResourceAccessStep({
   const [actorId, setActorId] = useState("")
   const [remoteAgentId, setRemoteAgentId] = useState("")
   const [actorsLoaded, setActorsLoaded] = useState(false)
+  const [remoteAgentsLoaded, setRemoteAgentsLoaded] = useState(false)
   const [conversationsLoaded, setConversationsLoaded] = useState(false)
   const [actorsError, setActorsError] = useState<string | null>(null)
+  const [remoteAgentsError, setRemoteAgentsError] = useState<string | null>(
+    null
+  )
   const [conversationsError, setConversationsError] = useState<string | null>(
     null
   )
@@ -749,6 +774,10 @@ export default function ResourceAccessStep({
     () => actors.map(normalizeActorOption),
     [actors]
   )
+  const allRemoteAgentOptions = useMemo(
+    () => remoteAgents.map(normalizeRemoteAgentOption),
+    [remoteAgents]
+  )
   const allConversationOptions = useMemo(
     () => conversations.map(normalizeConversationOption),
     [conversations]
@@ -782,6 +811,29 @@ export default function ResourceAccessStep({
         ),
       ]),
     [allActorOptions, allConversationOptions]
+  )
+  const remoteAgentNamesById = useMemo(
+    () =>
+      new Map([
+        ...allRemoteAgentOptions.map(
+          (remoteAgent) => [remoteAgent.id, remoteAgent.name] as const
+        ),
+        ...allConversationOptions.flatMap((conversation) =>
+          conversation.participants
+            .filter(
+              (participant) =>
+                participant.participantType ===
+                  CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+                participant.remoteAgentId &&
+                participant.name
+            )
+            .map(
+              (participant) =>
+                [participant.remoteAgentId!, participant.name] as const
+            )
+        ),
+      ]),
+    [allRemoteAgentOptions, allConversationOptions]
   )
   const conversationNamesById = useMemo(
     () =>
@@ -1056,6 +1108,11 @@ export default function ResourceAccessStep({
         ? "The actor you selected on the left"
         : "Choose an actor on the left"
     }
+    if (grantScope === "remote_agent") {
+      return remoteAgentId
+        ? "The remote agent you selected on the left"
+        : "Choose a remote agent on the left"
+    }
     if (grantScope === "actor_conversation") {
       return actorId && conversationId
         ? "The actor + conversation pair you selected on the left"
@@ -1124,6 +1181,24 @@ export default function ResourceAccessStep({
           secondaryActorMessage: `I am in the same room, but I still cannot use this ${resourceLabelLower} because access belongs only to the selected actor.`,
           secondaryActorActive: false,
           footer: `Good when one actor owns this ${resourceLabelLower} across every conversation it joins.`,
+        }
+      case "remote_agent":
+        return {
+          title: "Any thread with Remote Agent",
+          subtitle: "Only this remote agent can use it",
+          identities: [
+            { label: PREVIEW_PRIMARY_USER, kind: "user", active: true },
+            { label: PREVIEW_SECONDARY_USER, kind: "user", active: true },
+            { label: "Remote Agent", kind: "actor", active: true },
+            { label: PREVIEW_PRIMARY_ACTOR, kind: "actor", active: false },
+          ],
+          userMessage: `${PREVIEW_PRIMARY_USER}: Let the remote agent use this ${resourceLabelLower} wherever it participates.`,
+          actorName: "Remote Agent",
+          actorMessage: `I can use this ${resourceLabelLower} anywhere I appear, but other remote agents still cannot.`,
+          secondaryActorName: PREVIEW_PRIMARY_ACTOR,
+          secondaryActorMessage: `I am in the same room, but I cannot use this ${resourceLabelLower} because access belongs only to the selected remote agent.`,
+          secondaryActorActive: false,
+          footer: `Good when one remote agent owns this ${resourceLabelLower} across every conversation it joins.`,
         }
       case "actor_conversation":
         return {
@@ -1200,7 +1275,7 @@ export default function ResourceAccessStep({
       return Boolean(actorId && !loadingActors)
     }
     if (grantScope === "remote_agent") {
-      return Boolean(remoteAgentId)
+      return Boolean(remoteAgentId && !loadingRemoteAgents)
     }
     if (grantScope === "actor_conversation") {
       return Boolean(
@@ -1230,6 +1305,7 @@ export default function ResourceAccessStep({
     grantScope,
     loadingActors,
     loadingConversations,
+    loadingRemoteAgents,
     remoteAgentId,
     remoteAgentInConversationOptions,
     selectedConversationAllowed,
@@ -1287,6 +1363,38 @@ export default function ResourceAccessStep({
     }
   }, [actors, actorsLoaded, loadingActors, workspaceId])
 
+  const ensureRemoteAgentsLoaded = useCallback(async () => {
+    if (!workspaceId) {
+      return []
+    }
+    if (remoteAgentsLoaded) {
+      return remoteAgents
+    }
+    if (loadingRemoteAgents) {
+      return remoteAgents
+    }
+
+    setLoadingRemoteAgents(true)
+    setRemoteAgentsError(null)
+    try {
+      const response = await api.getRemoteAgents(workspaceId)
+      const nextRemoteAgents = response.remoteAgents || []
+      setRemoteAgents(nextRemoteAgents)
+      setRemoteAgentsLoaded(true)
+      return nextRemoteAgents
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to load remote agents."
+      setRemoteAgentsError(message)
+      setRemoteAgents([])
+      throw error
+    } finally {
+      setLoadingRemoteAgents(false)
+    }
+  }, [loadingRemoteAgents, remoteAgents, remoteAgentsLoaded, workspaceId])
+
   const ensureConversationsLoaded = useCallback(async () => {
     if (!workspaceId) {
       return []
@@ -1327,10 +1435,13 @@ export default function ResourceAccessStep({
 
   useEffect(() => {
     setActors([])
+    setRemoteAgents([])
     setConversations([])
     setActorsLoaded(false)
+    setRemoteAgentsLoaded(false)
     setConversationsLoaded(false)
     setActorsError(null)
+    setRemoteAgentsError(null)
     setConversationsError(null)
   }, [workspaceId])
 
@@ -1366,6 +1477,10 @@ export default function ResourceAccessStep({
       void ensureActorsLoaded().catch(() => {})
       return
     }
+    if (grantScope === "remote_agent") {
+      void ensureRemoteAgentsLoaded().catch(() => {})
+      return
+    }
     if (
       grantScope === "conversation" ||
       grantScope === "actor_conversation" ||
@@ -1373,7 +1488,13 @@ export default function ResourceAccessStep({
     ) {
       void ensureConversationsLoaded().catch(() => {})
     }
-  }, [dialogOpen, ensureActorsLoaded, ensureConversationsLoaded, grantScope])
+  }, [
+    dialogOpen,
+    ensureActorsLoaded,
+    ensureConversationsLoaded,
+    ensureRemoteAgentsLoaded,
+    grantScope,
+  ])
 
   useEffect(() => {
     if (grantScope !== "actor_conversation") {
@@ -1883,6 +2004,39 @@ export default function ResourceAccessStep({
       )
     }
 
+    if (grantScope === "remote_agent") {
+      return (
+        <Field>
+          <FieldLabel>Remote Agent</FieldLabel>
+          <TargetSelect
+            value={remoteAgentId}
+            onChange={setRemoteAgentId}
+            placeholder="Select a remote agent"
+            options={allRemoteAgentOptions.map((remoteAgent) => ({
+              id: remoteAgent.id,
+              label: remoteAgent.name,
+            }))}
+            disabled={loadingRemoteAgents}
+          />
+          {loadingRemoteAgents ? (
+            <FieldDescription>Loading remote agents...</FieldDescription>
+          ) : null}
+          {remoteAgentsError ? (
+            <FieldDescription className="text-destructive">
+              {remoteAgentsError}
+            </FieldDescription>
+          ) : null}
+          {!loadingRemoteAgents &&
+          !remoteAgentsError &&
+          allRemoteAgentOptions.length === 0 ? (
+            <FieldDescription>
+              No active remote agents are available yet.
+            </FieldDescription>
+          ) : null}
+        </Field>
+      )
+    }
+
     if (grantScope === "actor_conversation") {
       return (
         <FieldGroup>
@@ -2263,6 +2417,7 @@ export default function ResourceAccessStep({
                           {formatGrantTarget(
                             grant,
                             actorNamesById,
+                            remoteAgentNamesById,
                             conversationNamesById
                           )}
                         </div>
@@ -2591,6 +2746,7 @@ export default function ResourceAccessStep({
                   ? formatGrantTarget(
                       editingGrant,
                       actorNamesById,
+                      remoteAgentNamesById,
                       conversationNamesById
                     )
                   : "Selected grant"}

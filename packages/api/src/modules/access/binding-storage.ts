@@ -510,6 +510,7 @@ export async function loadAccessBindingRowsForResourcesAndContext(
     resourceIds: string[]
     contextWorkspaceId: string
     actorId?: string | null
+    remoteAgentId?: string | null
     conversationId?: string | null
     workspaceMemberId?: string | null
     includeRevoked?: boolean
@@ -543,6 +544,14 @@ export async function loadAccessBindingRowsForResourcesAndContext(
         eb.and([
           eb("subj.kind", "=", "actor"),
           eb("subj.actor_id", "=", input.actorId),
+        ])
+      )
+    }
+    if (input.remoteAgentId) {
+      conditions.push(
+        eb.and([
+          eb("subj.kind", "=", "remote_agent"),
+          eb("subj.remote_agent_id", "=", input.remoteAgentId),
         ])
       )
     }
