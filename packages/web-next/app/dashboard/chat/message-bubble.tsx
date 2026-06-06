@@ -77,6 +77,7 @@ import type {
 import { cn, resolveContentUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
 import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
+import { ToolIcon } from "./tool-icon"
 import { buildReplyPreviewText, getEntityDisplayName } from "./reply-utils"
 import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import {
@@ -2415,23 +2416,17 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
 
   if (calls.length === 0) return null
 
-  const searchCalls = calls.filter((c) => c.type === "web_search")
-  const fetchCalls = calls.filter((c) => c.type === "web_fetch")
-  const totalResults = searchCalls.reduce(
-    (sum, c) => sum + (c.results?.length || 0),
+  // Data-driven: render the server-computed display model (icon + title +
+  // optional detail + clickable result links) — no per-tool-type branching. The
+  // API (from-generate-text) owns the labels; the FE only renders structure.
+  const totalResults = calls.reduce(
+    (sum, c) =>
+      sum + (c.display?.resultLinks?.length || c.results?.length || 0),
     0
   )
-
-  // Compact summary line
-  const parts: string[] = []
-  if (searchCalls.length > 0) {
-    parts.push(
-      `${searchCalls.length} search${searchCalls.length > 1 ? "es" : ""}`
-    )
-  }
-  if (fetchCalls.length > 0) {
-    parts.push(`${fetchCalls.length} fetch${fetchCalls.length > 1 ? "es" : ""}`)
-  }
+  const summary =
+    `${calls.length} 个工具调用` +
+    (totalResults > 0 ? ` · ${totalResults} 个结果` : "")
 
   return (
     <div className="mt-2 border-t border-gray-200 pt-2 dark:border-white/5">
@@ -2444,83 +2439,72 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
         ) : (
           <ChevronRight className="h-3 w-3" />
         )}
-        <span className="font-medium">
-          {parts.join(", ")}
-          {totalResults > 0 &&
-            ` · ${totalResults} result${totalResults > 1 ? "s" : ""}`}
-        </span>
+        <span className="font-medium">{summary}</span>
       </button>
 
       {expanded && (
         <div className="mt-2 space-y-2">
-          {searchCalls.map((call, i) => (
-            <div
-              key={`search-${i}`}
-              className="rounded-lg bg-gray-50 p-2.5 ring-1 ring-gray-200 dark:bg-white/[0.03] dark:ring-white/[0.06]"
-            >
-              <div className="flex items-center gap-1.5 text-[11px] text-primary">
-                <Search className="h-3 w-3" />
-                <span className="font-medium">Web Search</span>
-              </div>
-              {call.query && (
-                <p className="mt-1 rounded bg-white/[0.03] px-2 py-1 font-mono text-[11px] text-foreground/80">
-                  {call.query}
-                </p>
-              )}
-              {call.results && call.results.length > 0 && (
-                <div className="mt-1.5 space-y-1">
-                  {call.results.slice(0, 5).map((r, j) => (
-                    <a
-                      key={j}
-                      href={r.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="group/link flex items-start gap-1.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-primary"
-                    >
-                      <ExternalLink className="mt-0.5 h-2.5 w-2.5 shrink-0 opacity-0 transition-opacity group-hover/link:opacity-100" />
-                      <span className="truncate">
-                        <span className="text-foreground/60 group-hover/link:text-primary">
-                          {r.title || r.url}
-                        </span>
-                        {r.pageAge && (
-                          <span className="ml-1 text-muted-foreground/40">
-                            · {r.pageAge}
-                          </span>
-                        )}
-                      </span>
-                    </a>
-                  ))}
-                  {call.results.length > 5 && (
-                    <span className="ml-4 text-[10px] text-muted-foreground/40">
-                      +{call.results.length - 5} more results
+          {calls.map((call, i) => {
+            const links = call.display?.resultLinks ?? call.results ?? []
+            return (
+              <div
+                key={i}
+                className="rounded-lg bg-gray-50 p-2.5 ring-1 ring-gray-200 dark:bg-white/[0.03] dark:ring-white/[0.06]"
+              >
+                <div className="flex items-center gap-1.5 text-[11px] text-primary">
+                  <ToolIcon name={call.display?.icon} className="h-3 w-3" />
+                  <span className="font-medium">
+                    {call.display?.displayTitle ?? call.toolName ?? call.type}
+                  </span>
+                  {call.display?.displayDetail && (
+                    <span className="text-muted-foreground/60">
+                      · {call.display.displayDetail}
                     </span>
                   )}
                 </div>
-              )}
-            </div>
-          ))}
-
-          {fetchCalls.map((call, i) => (
-            <div
-              key={`fetch-${i}`}
-              className="rounded-lg bg-gray-50 p-2.5 ring-1 ring-gray-200 dark:bg-white/[0.03] dark:ring-white/[0.06]"
-            >
-              <div className="flex items-center gap-1.5 text-[11px] text-emerald-400/80">
-                <Globe className="h-3 w-3" />
-                <span className="font-medium">Web Fetch</span>
+                {links.length > 0 && (
+                  <div className="mt-1.5 space-y-1">
+                    {links.slice(0, 5).map((r, j) => (
+                      <a
+                        key={j}
+                        href={r.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group/link flex items-start gap-1.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-primary"
+                      >
+                        <ExternalLink className="mt-0.5 h-2.5 w-2.5 shrink-0 opacity-0 transition-opacity group-hover/link:opacity-100" />
+                        <span className="truncate">
+                          <span className="text-foreground/60 group-hover/link:text-primary">
+                            {r.title || r.url}
+                          </span>
+                          {r.pageAge && (
+                            <span className="ml-1 text-muted-foreground/40">
+                              · {r.pageAge}
+                            </span>
+                          )}
+                        </span>
+                      </a>
+                    ))}
+                    {links.length > 5 && (
+                      <span className="ml-4 text-[10px] text-muted-foreground/40">
+                        +{links.length - 5} 更多结果
+                      </span>
+                    )}
+                  </div>
+                )}
+                {call.url && links.length === 0 && (
+                  <a
+                    href={call.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1 block truncate text-[10px] text-muted-foreground/60 transition-colors hover:text-primary"
+                  >
+                    {call.url}
+                  </a>
+                )}
               </div>
-              {call.url && (
-                <a
-                  href={call.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 block truncate text-[10px] text-muted-foreground/60 transition-colors hover:text-emerald-400"
-                >
-                  {call.url}
-                </a>
-              )}
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

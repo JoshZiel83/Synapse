@@ -8,6 +8,7 @@ import type {
 import {
   getActorRuntimeCurrentTool,
   getActorRuntimeProcessingTargets,
+  resolvePresentation,
 } from "@synapse/shared"
 import { useEffect, useMemo, useState } from "react"
 import {
@@ -28,6 +29,7 @@ import {
   runtimeToAvatarStatus,
 } from "@/stores/chat-store"
 import ChatAvatar from "./chat-avatar"
+import { ToolIcon } from "./tool-icon"
 
 function formatTargetsLabel(runtime: ActorRuntimeState) {
   const targets = getActorRuntimeProcessingTargets(runtime)
@@ -288,8 +290,20 @@ export default function ActorActivityBubble({
                 <ToolStateIcon state={previewTool.state} />
                 <span>{formatToolStateLabel(previewTool.state)}</span>
               </div>
-              <div className="min-w-0 text-xs text-foreground">
-                <span className="font-medium">{previewTool.displayTitle}</span>
+              <div className="flex min-w-0 items-center gap-1.5 text-xs text-foreground">
+                <ToolIcon
+                  name={previewTool.icon}
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                />
+                <span className="font-medium">
+                  {resolvePresentation(previewTool.titlePresentation) ??
+                    previewTool.displayTitle}
+                </span>
+                {previewTool.source?.displayName ? (
+                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    {previewTool.source.displayName}
+                  </span>
+                ) : null}
                 {previewTool.displayDetail ? (
                   <span className="text-muted-foreground">
                     {" "}
@@ -335,9 +349,21 @@ export default function ActorActivityBubble({
                         <ToolStateIcon state={item.state} />
                         <span>{formatToolStateLabel(item.state)}</span>
                       </div>
-                      <div className="text-sm font-medium text-foreground">
-                        {item.displayTitle}
+                      <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                        <ToolIcon
+                          name={item.icon}
+                          className="size-4 shrink-0 text-muted-foreground"
+                        />
+                        <span>
+                          {resolvePresentation(item.titlePresentation) ??
+                            item.displayTitle}
+                        </span>
                       </div>
+                      {item.source?.displayName ? (
+                        <div className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {item.source.displayName}
+                        </div>
+                      ) : null}
                       {item.displayDetail ? (
                         <div className="text-xs text-muted-foreground">
                           {item.displayDetail}
@@ -355,6 +381,11 @@ export default function ActorActivityBubble({
                         <div className="mb-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                           Result
                         </div>
+                        {resolvePresentation(item.resultSummary) ? (
+                          <div className="mb-1.5 text-xs font-medium text-foreground">
+                            {resolvePresentation(item.resultSummary)}
+                          </div>
+                        ) : null}
                         <ActivityBlocks blocks={item.resultBlocks} />
                       </div>
                     </div>
