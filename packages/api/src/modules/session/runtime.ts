@@ -31,20 +31,15 @@ import {
 import { sql } from "kysely"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
 import { getSession, updateSessionStatus } from "./service.js"
+import { resolveToolPresentation } from "./tool-presentation/resolver.js"
+import {
+  renderToolRequest,
+  renderToolResult,
+  type ToolResultData,
+} from "./tool-presentation/render.js"
+import { redactDeep } from "./tool-presentation/redact.js"
 
 const log = createLogger("session.runtime")
-
-// Device-runtime v3 (PR #20): the relay-invoke-options helper is gone. Replicate
-// the trimmed-string normalization inline so the device-tool fallback branch in
-// buildDeviceBuiltinToolBlocks still works for legacy task rows that may still
-// carry a builtinKind metadata field.
-function normalizeDeviceBuiltinAuthorizationKind(
-  value: unknown
-): string | null {
-  if (typeof value !== "string") return null
-  const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : null
-}
 
 function runtimeHashKey(conversationId: string) {
   return `runtime:conversation:${conversationId}`
@@ -165,24 +160,6 @@ function pickLatestTimestamp(...values: Array<string | undefined>) {
     .sort(
       (left, right) => new Date(right).getTime() - new Date(left).getTime()
     )[0]
-}
-
-function getToolDisplayTitle(
-  toolName: string,
-  requestPayload?: Record<string, unknown>
-) {
-  const visibleToolName =
-    typeof requestPayload?.visibleToolName === "string"
-      ? requestPayload.visibleToolName.trim()
-      : ""
-  if (visibleToolName) {
-    return visibleToolName
-  }
-
-  // DISPLAY ONLY (not routing/provenance): show the leaf of a qualified wire
-  // name (e.g. "github__read" → "read"); bare names pass through unchanged.
-  const segments = toolName.split("__").filter(Boolean)
-  return segments[segments.length - 1] || toolName
 }
 
 // Build the structured UI source from the persisted source_kind + source_snapshot
@@ -312,27 +289,11 @@ async function loadProcessingTargetsForTurn(
   }))
 }
 
-async function loadDeviceExposureSummary(exposureId: string) {
-  const row = await db
-    .selectFrom("device_exposures")
-    .select(["id", "device_id", "metadata"])
-    .where("id", "=", exposureId)
-    .limit(1)
-    .executeTakeFirst()
-
-  if (!row) return null
-
-  return {
-    deviceId: row.device_id,
-    metadata: parseMetadata(row.metadata),
-  }
-}
-
-function buildGenericToolRequestBlocks(toolName: string, input: unknown) {
-  return buildTextBlocksFromLines(`Tool: ${toolName}`, prettyJson(input))
-}
-
-function buildGenericToolResultBlocks(params: {
+// API-side parts→blocks adapter: produce the raw result body blocks the
+// presentation renderer keeps under bodyMode summary_then_raw/passthrough. This
+// is the DB-coupled half (tool_result_parts / output chunks / task payloads)
+// that stays in the API; the shared renderer never touches DB rows.
+function buildResultBodyBlocks(params: {
   resultParts: any[]
   latestResult?: {
     is_error?: boolean | null
@@ -348,7 +309,7 @@ function buildGenericToolResultBlocks(params: {
     stream: string
     text_value: string
   }>
-}) {
+}): CanonicalContentBlock[] {
   if (params.resultParts.length > 0) {
     return itemPartsToCanonicalContentBlocks(params.resultParts)
   }
@@ -387,103 +348,14 @@ function buildGenericToolResultBlocks(params: {
   return []
 }
 
-async function buildDeviceBuiltinToolBlocks(params: {
-  toolName: string
-  input: unknown
-  requestPayload?: Record<string, unknown>
-  resultParts: any[]
-  latestResult?: {
-    is_error?: boolean | null
-    error_message?: string | null
-    metadata?: unknown
-  }
-  task?: {
-    status_message?: string | null
-    final_result_payload?: unknown
-    final_error_payload?: unknown
-  }
-  outputChunks?: Array<{
-    stream: string
-    text_value: string
-  }>
-}) {
-  const exposureId =
-    typeof params.requestPayload?.exposureId === "string"
-      ? params.requestPayload.exposureId
-      : ""
-  const exposureSummary = exposureId
-    ? await loadDeviceExposureSummary(exposureId)
-    : null
-  const builtinKind = normalizeDeviceBuiltinAuthorizationKind(
-    exposureSummary?.metadata?.builtinKind
-  )
-
-  if (!builtinKind) {
-    return {
-      requestBlocks: buildGenericToolRequestBlocks(
-        params.toolName,
-        params.input
-      ),
-      resultBlocks: buildGenericToolResultBlocks({
-        resultParts: params.resultParts,
-        latestResult: params.latestResult,
-        task: params.task,
-        outputChunks: params.outputChunks,
-      }),
-    }
-  }
-
-  const visibleToolName = getToolDisplayTitle(
-    params.toolName,
-    params.requestPayload
-  )
-  const args = parseJsonValue(params.requestPayload?.args ?? params.input)
-  return {
-    requestBlocks: buildTextBlocksFromLines(
-      `${builtinKind}: ${visibleToolName}`,
-      prettyJson(args)
-    ),
-    resultBlocks: buildGenericToolResultBlocks({
-      resultParts: params.resultParts,
-      latestResult: params.latestResult,
-      task: params.task,
-      outputChunks: params.outputChunks,
-    }),
-  }
-}
-
-async function buildCallableToolBlocks(params: {
-  toolName: string
-  input: unknown
-  requestPayload?: Record<string, unknown>
-  resultParts: any[]
-  latestResult?: {
-    is_error?: boolean | null
-    error_message?: string | null
-    metadata?: unknown
-  }
-  task?: {
-    status_message?: string | null
-    final_result_payload?: unknown
-    final_error_payload?: unknown
-  }
-  outputChunks?: Array<{
-    stream: string
-    text_value: string
-  }>
-}) {
-  return {
-    requestBlocks: buildGenericToolRequestBlocks(
-      getToolDisplayTitle(params.toolName, params.requestPayload),
-      params.input
-    ),
-    resultBlocks: buildGenericToolResultBlocks({
-      resultParts: params.resultParts,
-      latestResult: params.latestResult,
-      task: params.task,
-      outputChunks: params.outputChunks,
-    }),
-  }
+// Pull the Phase-2 structured result namespace (tool_results.metadata.toolMeta)
+// for the presentation renderer's ResultRef `meta.*` paths.
+function readToolMeta(metadata: unknown): Record<string, unknown> | undefined {
+  const record = asRecord(parseJsonValue(metadata))
+  const toolMeta = record.toolMeta
+  return toolMeta && typeof toolMeta === "object" && !Array.isArray(toolMeta)
+    ? (toolMeta as Record<string, unknown>)
+    : undefined
 }
 
 async function buildToolActivityDetail(turnId: string) {
@@ -611,20 +483,16 @@ async function buildToolActivityDetail(turnId: string) {
       ? resultPartsByResultId.get(latestResult.id) || []
       : []
     const outputChunks = task ? outputChunksByTaskId.get(task.id) || [] : []
-    const requestPayload = task
-      ? parseMetadata(task.request_payload)
-      : undefined
     const state = mapToolActivityState({
       toolCallStatus: toolCall.status,
       taskStatus: task?.status || undefined,
       latestResultIsError: latestResult?.is_error === true,
     })
-    const displayTitle = getToolDisplayTitle(toolCall.tool_name, requestPayload)
     const toolSource = getToolSource(
       toolCall.source_kind,
       toolCall.source_snapshot
     )
-    const displayDetail = getToolDisplayDetail({
+    const displayDetailStatus = getToolDisplayDetail({
       toolCallStatus: toolCall.status,
       taskStatus: task?.status || undefined,
       statusMessage: task?.status_message || undefined,
@@ -635,44 +503,63 @@ async function buildToolActivityDetail(turnId: string) {
           : undefined),
     })
 
-    const blockParams = {
-      toolName: toolCall.tool_name,
-      input: parseJsonValue(toolCall.normalized_input),
-      requestPayload,
-      resultParts,
-      latestResult,
-      task,
-      outputChunks,
+    // Resolve the CURRENT presentation descriptor by following the source
+    // (snapshot.stableKey), then render request + result. Redaction is a single
+    // deep secretlint pass over the rendered output before it enters the snapshot.
+    const descriptor = await resolveToolPresentation({
+      sourceKind: toolCall.source_kind,
+      sourceSnapshot: toolCall.source_snapshot,
+      pluginInstallationId: toolCall.plugin_installation_id,
+    })
+    const args = asRecord(parseJsonValue(toolCall.normalized_input))
+    const request = renderToolRequest(descriptor, args)
+    const resultData: ToolResultData = {
+      meta: readToolMeta(latestResult?.metadata),
+      task: parseJsonValue(task?.final_result_payload),
+      error:
+        latestResult?.error_message ||
+        (typeof task?.final_error_payload === "object"
+          ? prettyJson(task.final_error_payload)
+          : undefined) ||
+        undefined,
+      bodyBlocks: buildResultBodyBlocks({
+        resultParts,
+        latestResult,
+        task,
+        outputChunks,
+      }),
     }
+    const result = renderToolResult(descriptor, resultData)
 
-    const blocks =
-      toolCall.tool_kind === "callable"
-        ? await buildCallableToolBlocks(blockParams)
-        : toolCall.tool_kind === "mcp_device"
-          ? await buildDeviceBuiltinToolBlocks(blockParams)
-          : {
-              requestBlocks: buildGenericToolRequestBlocks(
-                displayTitle,
-                parseJsonValue(toolCall.normalized_input)
-              ),
-              resultBlocks: buildGenericToolResultBlocks({
-                resultParts,
-                latestResult,
-                task,
-                outputChunks,
-              }),
-            }
+    const rendered = await redactDeep({
+      icon: request.icon,
+      titlePresentation: request.title,
+      detailPresentation: request.detail,
+      requestBlocks: request.requestBlocks,
+      resultSummary: result.resultSummary,
+      resultBlocks: result.resultBlocks,
+    })
 
     items.push({
       toolCallId: toolCall.id,
       toolKind: toolCall.tool_kind,
       toolName: toolCall.tool_name,
       ...(toolSource ? { source: toolSource } : {}),
+      icon: rendered.icon,
       state,
-      displayTitle,
-      displayDetail,
-      requestBlocks: blocks.requestBlocks,
-      resultBlocks: blocks.resultBlocks,
+      // displayTitle/displayDetail remain the fallback strings old clients read.
+      displayTitle: rendered.titlePresentation.fallback,
+      displayDetail:
+        displayDetailStatus ?? rendered.detailPresentation?.fallback,
+      titlePresentation: rendered.titlePresentation,
+      ...(rendered.detailPresentation
+        ? { detailPresentation: rendered.detailPresentation }
+        : {}),
+      ...(rendered.resultSummary
+        ? { resultSummary: rendered.resultSummary }
+        : {}),
+      requestBlocks: rendered.requestBlocks,
+      resultBlocks: rendered.resultBlocks,
       taskStatus: task?.status || undefined,
       startedAt: toIsoString(toolCall.created_at) || nowISO(),
       updatedAt:
@@ -748,39 +635,40 @@ function buildTurnPreviewFromDetail(
     startedAt: detail.startedAt,
     updatedAt: detail.updatedAt,
     processingTargets: detail.processingTargets,
-    activeTool: activeTool
-      ? {
-          toolCallId: activeTool.toolCallId,
-          toolKind: activeTool.toolKind,
-          toolName: activeTool.toolName,
-          ...(activeTool.source ? { source: activeTool.source } : {}),
-          state: activeTool.state,
-          displayTitle: activeTool.displayTitle,
-          displayDetail: activeTool.displayDetail,
-          startedAt: activeTool.startedAt,
-          updatedAt: activeTool.updatedAt,
-          completedAt: activeTool.completedAt,
-        }
-      : undefined,
+    activeTool: activeTool ? toPreviewTool(activeTool) : undefined,
     lastCompletedTool: lastCompletedTool
-      ? {
-          toolCallId: lastCompletedTool.toolCallId,
-          toolKind: lastCompletedTool.toolKind,
-          toolName: lastCompletedTool.toolName,
-          ...(lastCompletedTool.source
-            ? { source: lastCompletedTool.source }
-            : {}),
-          state: lastCompletedTool.state,
-          displayTitle: lastCompletedTool.displayTitle,
-          displayDetail: lastCompletedTool.displayDetail,
-          startedAt: lastCompletedTool.startedAt,
-          updatedAt: lastCompletedTool.updatedAt,
-          completedAt: lastCompletedTool.completedAt,
-        }
+      ? toPreviewTool(lastCompletedTool)
       : undefined,
     totalToolCallCount,
     completedToolCallCount: completedItems.length,
     failedToolCallCount: failedItems.length,
+  }
+}
+
+// Project a full activity item into the light preview tool (no result blocks /
+// raw bodies — preview stays cheap). Carries icon + presentation strings so the
+// collapsed bubble shows the friendly title without fetching the detail.
+function toPreviewTool(
+  item: ActorRuntimeTurnActivityItem
+): ActorRuntimeTurnPreviewTool {
+  return {
+    toolCallId: item.toolCallId,
+    toolKind: item.toolKind,
+    toolName: item.toolName,
+    ...(item.source ? { source: item.source } : {}),
+    ...(item.icon ? { icon: item.icon } : {}),
+    state: item.state,
+    displayTitle: item.displayTitle,
+    displayDetail: item.displayDetail,
+    ...(item.titlePresentation
+      ? { titlePresentation: item.titlePresentation }
+      : {}),
+    ...(item.detailPresentation
+      ? { detailPresentation: item.detailPresentation }
+      : {}),
+    startedAt: item.startedAt,
+    updatedAt: item.updatedAt,
+    completedAt: item.completedAt,
   }
 }
 

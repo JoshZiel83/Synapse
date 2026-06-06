@@ -950,6 +950,12 @@ export interface ActorRuntimeTurnPreviewTool {
   state: ActorRuntimeActivityState
   displayTitle: string
   displayDetail?: string
+  // Presentation layer: semantic icon name + i18n-ready strings. The FE renders
+  // `icon` + resolvePresentation(titlePresentation) (falling back to
+  // displayTitle). Preview stays light: no result blocks/summary here.
+  icon?: string
+  titlePresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  detailPresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
   startedAt: Timestamp
   updatedAt: Timestamp
   completedAt?: Timestamp
@@ -975,6 +981,13 @@ export interface ActorRuntimeTurnActivityItem {
   state: ActorRuntimeActivityState
   displayTitle: string
   displayDetail?: string
+  // Presentation layer (see ActorRuntimeTurnPreviewTool). `resultSummary` is the
+  // friendly one-line result; requestBlocks/resultBlocks are the (redacted)
+  // rendered bodies.
+  icon?: string
+  titlePresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  detailPresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  resultSummary?: import("@synapse/device-protocol/tool-presentation").PresentationString
   requestBlocks: CanonicalContentBlock[]
   resultBlocks: CanonicalContentBlock[]
   taskStatus?: ActorRuntimeTaskStatus
