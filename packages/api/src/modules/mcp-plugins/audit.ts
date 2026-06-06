@@ -18,7 +18,7 @@ export async function logToolCall(data: {
   pluginId?: string | null
   deviceId?: string
   toolName: string
-  toolType?: "callable" | "mcp_plugin" | "mcp_device" | "action"
+  toolType?: "callable" | "mcp_plugin" | "mcp_device"
   input: Record<string, unknown>
   output?: string
   isError?: boolean

@@ -908,9 +908,7 @@ export type ActorRuntimeActivityState =
   | "cancelled"
 
 export type ActorRuntimeToolKind =
-  | "builtin"
   | "callable"
-  | "action"
   | "mcp_plugin"
   | "mcp_device"
   | "provider_builtin"
@@ -1451,7 +1449,7 @@ export interface ThinkingResult {
   actions: ActorAction[]
   reasoning: string
   tokensUsed: { input: number; output: number }
-  toolsUsed?: string[] // names of callable tools invoked during thinking
+  toolsUsed?: string[] // names of executable tools invoked during thinking
   serverToolCalls?: ServerToolCall[] // cloud-side tool calls (web_search, web_fetch)
   citationSources?: Record<string, { url: string; title: string }> // <cite index="X-Y"> → source
   toolHistory?: AssistantToolHistory // cross-turn tool history for replay
@@ -1905,8 +1903,8 @@ export interface CanonicalToolCall {
 }
 
 // Provenance of a CanonicalToolResult — what produced it and where it came from.
-// Set at the ingest boundary (mcp-plugins/result-normalizer, callable executor,
-// model response media ingest, builtin tool dispatch). Downstream consumers
+// Set at the ingest boundary (mcp-plugins/result-normalizer, local callable
+// executor, model response media ingest). Downstream consumers
 // (FE display, audit logs, debugging tools) read this to attribute results.
 export type ToolResultOrigin =
   | {
@@ -2308,7 +2306,6 @@ export interface CapabilitySurface {
 
 export interface ToolPlugin {
   name: string
-  kind: "action" | "callable"
   definition: ToolDefinition
   conversationTypeMask?: ConversationTypeMask
   resolve?: (ctx: ToolResolveContext) =>
@@ -2325,7 +2322,7 @@ export interface ToolPlugin {
   // when they need structuredContent / isError / metadata. The executor
   // (executeCallableTools) handles the union and lifts everything into the
   // canonical ToolResult shape so downstream code never sees plain strings.
-  execute?: (
+  execute: (
     input: Record<string, unknown>
   ) => Promise<CallableToolResult | CanonicalContentBlock[]>
 }

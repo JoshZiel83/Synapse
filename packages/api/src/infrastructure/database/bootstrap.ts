@@ -23,9 +23,9 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 // refactor (this branch). A single combined version slug + description records
 // both so schema_migrations is not mislabeled. Slug kept <=64 chars (VARCHAR(64);
 // bootstrap.test.ts enforces); full narrative lives in the (unbounded) description.
-export const CURRENT_SCHEMA_VERSION =
-  "2026-06-04-chat-member-seq-after-soft-delete"
+export const CURRENT_SCHEMA_VERSION = "2026-06-06-tool-exec-kind-callable"
 export const CURRENT_SCHEMA_DESCRIPTION =
+  "Tool execution kind cleanup: tool_calls.tool_kind + tool_execution_attempts.executor_kind enums now use callable/mcp_plugin/mcp_device/provider_builtin, removing legacy builtin/action execution categories. Requires db:rebuild for existing databases because this repository does not carry in-place migrations during initial design implementation. " +
   "Chat multi-client broadcast correctness: workspace_member_sync_events gains member_seq BIGINT NOT NULL + UNIQUE(workspace_member_id, member_seq) + idx_workspace_member_sync_events_member_seq — a per-member, commit-ordered, gap-free client sync cursor assigned under an advisory lock inside the producing transaction (appendWorkspaceMemberSyncEventInTransaction). Replaces the global INSERT-time sync_seq as the authoritative getChatSync cursor (sync_seq retained as the PK). Merged on top of the soft-delete systematic release. " +
   "(PRIOR) Soft-delete: deleted_at on 24 root tables, _live views, sd_reject_delete (hard-delete guard) + sd_assert_parent_live (FK-liveness) triggers, sd_* SECURITY DEFINER purge fns. " +
   "(PRIOR) Account/auth redesign onto Better Auth (better-auth@1.6.13): users.password_hash dropped (password lives in account), users gains email_verified/image/feishu_*; BA core tables account/session/verification/device_code; dropped legacy auth_sessions + auth_qr_login_requests. " +

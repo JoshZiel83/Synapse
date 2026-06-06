@@ -17,6 +17,7 @@ import type {
   ProviderContextWindow,
   AvailableSkillSummary,
   ModelAttemptPolicy,
+  ToolDefinition,
 } from "@synapse/shared"
 import type {
   CanonicalContextItem,
@@ -48,14 +49,12 @@ import { reconcileToolPairing } from "./providers/reconcile-tool-pairing.js"
 import { buildAiTools, buildServerTools } from "./providers/build-tools.js"
 import { fromGenerateText } from "./providers/from-generate-text.js"
 import { compileContextWindowToConversationMessages } from "./context-compiler.js"
-import { toolCallsToActions } from "./tools.js"
 import { buildActorPrompt } from "./prompt-builder.js"
 import { logAIRequest } from "../model-groups/service.js"
 import {
-  resolveBuiltinTools,
+  resolveLocalCallableTools,
   executeCallableTools,
   isCallableTool,
-  isActionTool,
 } from "./tool-plugins.js"
 import { runWithToolContext } from "./session-tools.js"
 import { type McpExecutionContext } from "../mcp-plugins/instance-manager.js"
@@ -454,11 +453,31 @@ function buildSleepWithoutSendToReminder(params: {
   }
 }
 
-function inferToolKind(toolName: string, mcpToolNames: Set<string>) {
-  if (mcpToolNames.has(toolName)) return "mcp_plugin" as const
-  if (isActionTool(toolName)) return "action" as const
-  if (isCallableTool(toolName)) return "callable" as const
-  return "builtin" as const
+type ExecutableModelToolKind = "callable" | "mcp_plugin" | "mcp_device"
+
+function buildMcpToolKindByName(
+  tools: ToolDefinition[]
+): Map<string, "mcp_plugin" | "mcp_device"> {
+  return new Map<string, "mcp_plugin" | "mcp_device">(
+    tools.map((tool) => {
+      const kind: "mcp_plugin" | "mcp_device" =
+        tool.sourceType === "mcp_device" ? "mcp_device" : "mcp_plugin"
+      return [tool.name, kind] as const
+    })
+  )
+}
+
+function inferToolKind(
+  toolName: string,
+  mcpToolKindByName: Map<string, "mcp_plugin" | "mcp_device">
+): ExecutableModelToolKind {
+  const mcpKind = mcpToolKindByName.get(toolName)
+  if (mcpKind) return mcpKind
+  // Any non-MCP model tool call is executed through the local callable
+  // dispatcher. Unknown/stale names are still classified as callable so the
+  // dispatcher can return a model-actionable unknown_tool result instead of
+  // failing the whole turn.
+  return "callable"
 }
 
 function classifyMcpExecutionError(error: unknown) {
@@ -645,6 +664,7 @@ export async function actorThink(
     ? []
     : initialMcpToolDefs
   let mcpToolNames = new Set(mcpToolDefs.map((t) => t.name))
+  let mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
   let currentToolConversationParticipants = options?.conversationParticipants
   const getThreadSemantics = () =>
     resolveThreadSemantics({
@@ -676,7 +696,7 @@ export async function actorThink(
       conversationParticipants: currentToolConversationParticipants,
       workspaceMemberId: options?.workspaceMemberId,
     })
-  const refreshBuiltinTools = async (): Promise<
+  const refreshLocalCallableTools = async (): Promise<
     import("@synapse/shared").ToolDefinition[]
   > => {
     if (options?.refreshCollaborationContext) {
@@ -699,6 +719,7 @@ export async function actorThink(
     if (isPlanCollaborationMode(currentCollaborationMode)) {
       mcpToolDefs = []
       mcpToolNames = new Set()
+      mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
     } else if (
       mcpToolDefs.length === 0 &&
       initialMcpToolDefs.length > 0 &&
@@ -706,6 +727,7 @@ export async function actorThink(
     ) {
       mcpToolDefs = initialMcpToolDefs
       mcpToolNames = new Set(mcpToolDefs.map((t) => t.name))
+      mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
     }
 
     currentToolConversationParticipants =
@@ -714,14 +736,14 @@ export async function actorThink(
         actorId: actor.id,
         fallback: currentToolConversationParticipants,
       })
-    const resolvedBuiltin = await resolveBuiltinTools(buildResolveCtx())
-    const filteredBuiltin = resolvedBuiltin.filter(
+    const resolvedCallable = await resolveLocalCallableTools(buildResolveCtx())
+    const filteredCallable = resolvedCallable.filter(
       (tool) => !mcpToolNames.has(tool.name)
     )
-    allTools = [...filteredBuiltin, ...mcpToolDefs]
-    return resolvedBuiltin
+    allTools = [...filteredCallable, ...mcpToolDefs]
+    return resolvedCallable
   }
-  let builtinTools = await refreshBuiltinTools()
+  await refreshLocalCallableTools()
   let currentMcpVersion = options?.mcpVersion ?? 0
 
   const turnId = options?.turnId || randomUUID()
@@ -729,7 +751,7 @@ export async function actorThink(
   let totalTokens = { input: 0, output: 0 }
   let providerStepIndex = 0
 
-  const allToolsUsed: string[] = [] // track callable tools invoked
+  const allToolsUsed: string[] = [] // track executable tools invoked
   const allServerToolCalls: ServerToolCall[] = [] // track cloud-side tool calls
   let allCitationSources: Record<string, { url: string; title: string }> = {} // cite index → source
   const onStatus = options?.onStatus
@@ -1106,19 +1128,16 @@ export async function actorThink(
         usedDraftProvider = true
       }
 
-      // Dispatch: three-bucket separation
-      const actionCalls = toolCalls.filter((tc: any) =>
-        isActionTool(tc.toolName)
-      )
-      const callableCalls = toolCalls.filter((tc: any) =>
-        isCallableTool(tc.toolName)
-      )
+      // Dispatch: local callables and projected MCP/device tools.
       const mcpCalls = toolCalls.filter((tc: any) =>
         mcpToolNames.has(tc.toolName)
       )
+      const callableCalls = toolCalls.filter(
+        (tc: any) => !mcpToolNames.has(tc.toolName)
+      )
       const allContinuableCalls = [...callableCalls, ...mcpCalls]
       const sendToPlanned = callableCalls.some(
-        (tc: any) => tc.toolName === "send_to"
+        (tc: any) => tc.toolName === "send_to" && isCallableTool(tc.toolName)
       )
 
       if (allContinuableCalls.length > 0) {
@@ -1133,7 +1152,7 @@ export async function actorThink(
               log.info(
                 `[actorThink] Conversation changed before send_to; rethinking with ${newMsgs.length} new message(s)`
               )
-              builtinTools = await refreshBuiltinTools()
+              await refreshLocalCallableTools()
               continue
             }
           } catch (err: any) {
@@ -1148,7 +1167,7 @@ export async function actorThink(
           sendToCalledThisTurn = true
         }
 
-        // Track tool names and emit status
+        // Track executable tool names and emit status
         const toolNames = allContinuableCalls.map((tc: any) => tc.toolName)
         allToolsUsed.push(...toolNames)
         if (onStatus) {
@@ -1164,6 +1183,7 @@ export async function actorThink(
             callIndex++
           ) {
             const tc = allContinuableCalls[callIndex]
+            const toolKind = inferToolKind(tc.toolName, mcpToolKindByName)
             const row = await createToolCall({
               id: tc.callId,
               turnId: options!.turnId!,
@@ -1173,7 +1193,7 @@ export async function actorThink(
               callIndex,
               providerCallId: tc.providerCallId,
               bundleId: roundBundleId,
-              toolKind: inferToolKind(tc.toolName, mcpToolNames),
+              toolKind,
               toolName: tc.toolName,
               normalizedInput: tc.input,
             })
@@ -1217,8 +1237,8 @@ export async function actorThink(
 
           if (executionEnabled && callRow && attempt) {
             const blocks = res.content
-            // Phase 7b: synthesize a {kind:"builtin"} origin for the
-            // ToolPlugin (registerToolPlugin) path so tool_results.metadata
+            // Keep the existing {kind:"builtin"} result origin for local
+            // callable ToolPlugin results so tool_results.metadata
             // always carries origin alongside structuredContent. Reading
             // this back via context-builder's tool_result_batch path
             // restores the discriminator without any out-of-band lookup.
@@ -1285,6 +1305,10 @@ export async function actorThink(
         }[] = []
         let mcpReplanRequired = false
         if (mcpCalls.length > 0 && options?.mcpExecutor) {
+          const mcpExecutorKindFor = (
+            toolName: string
+          ): "mcp_plugin" | "mcp_device" =>
+            mcpToolKindByName.get(toolName) ?? "mcp_plugin"
           const appendMcpFailureResult = async (params: {
             tc: (typeof mcpCalls)[number]
             callRow: any
@@ -1326,7 +1350,7 @@ export async function actorThink(
                 (await createToolExecutionAttempt({
                   toolCallId: params.callRow.id,
                   attemptNo: 1,
-                  executorKind: "mcp_plugin",
+                  executorKind: mcpExecutorKindFor(params.tc.toolName),
                   transport: "mcp",
                   requestPayload: params.tc.input,
                 }))
@@ -1362,7 +1386,7 @@ export async function actorThink(
                 ? await createToolExecutionAttempt({
                     toolCallId: callRow.id,
                     attemptNo: 1,
-                    executorKind: "mcp_plugin",
+                    executorKind: mcpExecutorKindFor(tc.toolName),
                     transport: "mcp",
                     requestPayload: tc.input,
                   })
@@ -1560,8 +1584,8 @@ export async function actorThink(
             // Both callableResults and mcpResults now carry origin (Phase
             // 7b/7d/8). Distinguish their fallback semantics:
             //   - callable path: synth {kind:"builtin", toolKind: toolName}
-            //     (these are ToolPlugin-style runtime tools like
-            //     create_memory; "builtin" is the right discriminator)
+            //     as a result-origin discriminator. This is intentionally
+            //     separate from the execution kind, which is "callable".
             //   - mcp path: synth a derived mcp_remote origin from the
             //     namespaced tool name (Phase 8 bug: was falling back to
             //     "builtin" for MCP failures, mis-tagging audit + context)
@@ -1648,69 +1672,6 @@ export async function actorThink(
           )
         }
 
-        // If model also produced action calls in the same turn, execute them and finish
-        if (!mcpReplanRequired && actionCalls.length > 0) {
-          const actions = toolCallsToActions(actionCalls)
-          if (executionEnabled) {
-            const actionBundleId = randomUUID()
-            for (
-              let actionIndex = 0;
-              actionIndex < actionCalls.length;
-              actionIndex++
-            ) {
-              const tc = actionCalls[actionIndex]
-              const actionRow = await createToolCall({
-                id: tc.callId,
-                turnId: options!.turnId!,
-                providerStepId: providerStep?.id,
-                conversationId: options!.conversationId!,
-                sessionId: options?.sessionId,
-                callIndex: actionIndex,
-                providerCallId: tc.providerCallId,
-                bundleId: actionBundleId,
-                toolKind: "action",
-                toolName: tc.toolName,
-                normalizedInput: tc.input,
-              })
-              if (!actionRow) {
-                throw new Error(
-                  `Failed to create action tool call for ${tc.toolName}`
-                )
-              }
-              await createToolResult({
-                toolCallId: actionRow.id,
-                parts: [{ type: "json", json: tc.input }],
-              })
-              await updateToolCallStatus(actionRow.id, "completed")
-            }
-          }
-
-          const toolHistory: AssistantToolHistory | undefined =
-            toolRounds.length > 0 ? { rounds: toolRounds } : undefined
-          const responseText = usedDraftProvider
-            ? finalDraftText
-            : finalTextContent
-          const contentBlocks = await buildMergedResponseContentBlocks(
-            responseText,
-            allSupplementalBlocks,
-            getInlineReferenceOptions()
-          )
-          return {
-            actions,
-            reasoning: responseText,
-            tokensUsed: totalTokens,
-            toolsUsed: allToolsUsed,
-            serverToolCalls:
-              allServerToolCalls.length > 0 ? allServerToolCalls : undefined,
-            citationSources:
-              Object.keys(allCitationSources).length > 0
-                ? allCitationSources
-                : undefined,
-            toolHistory,
-            contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
-          }
-        }
-
         // If 'sleep' callable tool was called, the session is now sleeping — stop the loop
         const sleepCalled = callableCalls.some(
           (tc: any) => tc.toolName === "sleep"
@@ -1756,7 +1717,7 @@ export async function actorThink(
               }
             }
 
-            builtinTools = await refreshBuiltinTools()
+            await refreshLocalCallableTools()
             continue
           }
 
@@ -1808,6 +1769,7 @@ export async function actorThink(
               const refreshed = await options.mcpRefresh()
               mcpToolDefs = refreshed.tools
               mcpToolNames = new Set(mcpToolDefs.map((t) => t.name))
+              mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
               currentMcpVersion = refreshed.mcpVersion
               log.info(
                 `[actorThink] MCP tools refreshed: ${mcpToolDefs.length} tools, version=${currentMcpVersion}`
@@ -1824,9 +1786,10 @@ export async function actorThink(
         } else if (isPlanCollaborationMode(currentCollaborationMode)) {
           mcpToolDefs = []
           mcpToolNames = new Set()
+          mcpToolKindByName = buildMcpToolKindByName(mcpToolDefs)
         }
 
-        builtinTools = await refreshBuiltinTools()
+        await refreshLocalCallableTools()
 
         // Inter-round message injection: check for new messages between rounds
         if (options?.checkNewMessages) {
@@ -1849,66 +1812,9 @@ export async function actorThink(
         continue
       }
 
-      // No callable calls — keep looping until the model explicitly sleeps or round limit is reached.
-      let actions: ActorAction[]
-      if (actionCalls.length > 0) {
-        actions = await Promise.all(
-          toolCallsToActions(actionCalls).map(async (action) => {
-            if (action.type !== "respond" || action.contentBlocks) {
-              return action
-            }
-
-            const responseBlocks = await buildResponseContentBlocks(
-              action.content,
-              getInlineReferenceOptions()
-            )
-
-            return {
-              ...action,
-              contentBlocks:
-                responseBlocks.length > 0
-                  ? responseBlocks
-                  : textBlocks(action.content),
-            }
-          })
-        )
-        if (executionEnabled) {
-          const actionBundleId = randomUUID()
-          for (
-            let actionIndex = 0;
-            actionIndex < actionCalls.length;
-            actionIndex++
-          ) {
-            const tc = actionCalls[actionIndex]
-            const actionRow = await createToolCall({
-              id: tc.callId,
-              turnId: options!.turnId!,
-              providerStepId: providerStep?.id,
-              conversationId: options!.conversationId!,
-              sessionId: options?.sessionId,
-              callIndex: actionIndex,
-              providerCallId: tc.providerCallId,
-              bundleId: actionBundleId,
-              toolKind: "action",
-              toolName: tc.toolName,
-              normalizedInput: tc.input,
-            })
-            if (!actionRow) {
-              throw new Error(
-                `Failed to create action tool call for ${tc.toolName}`
-              )
-            }
-            await createToolResult({
-              toolCallId: actionRow.id,
-              parts: [{ type: "json", json: tc.input }],
-            })
-            await updateToolCallStatus(actionRow.id, "completed")
-          }
-        }
-        actions = []
-      } else {
-        actions = []
-      }
+      // No executable tool calls — keep looping until the model explicitly
+      // sleeps or the round limit is reached.
+      const actions: ActorAction[] = []
 
       if (finalTextContent.trim().length > 0 || roundMediaBlocks.length > 0) {
         const draftBlocks = await buildMergedResponseContentBlocks(
@@ -1945,7 +1851,7 @@ export async function actorThink(
         }
       }
 
-      builtinTools = await refreshBuiltinTools()
+      await refreshLocalCallableTools()
       continue
     }
 

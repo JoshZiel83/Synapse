@@ -414,3 +414,20 @@ test("Batch 14: capability-projection dispatcher computes sanitizedInput via str
     "dispatch closure no longer computes `sanitizedInput = stripPlannerNonce(input)` — raw planner-side nonce can leak into device args"
   )
 })
+
+test("Batch 14: capability-projection dispatcher stamps mcp_device origin", async () => {
+  const source = await readFile(
+    new URL("./service.ts", import.meta.url),
+    "utf8"
+  )
+  assert.ok(
+    /const origin\s*=\s*deviceToolOrigin\(row,\s*toolName\)/.test(source),
+    "dispatch closure no longer derives a device ToolResultOrigin from the projected row"
+  )
+  assert.ok(
+    /return withDeviceToolOrigin\(\s*\{\s*content:\s*tool\?\.content/s.test(
+      source
+    ),
+    "successful device dispatch no longer returns NormalizedMcpToolResult.origin, so tool history will fall back to mcp_remote"
+  )
+})

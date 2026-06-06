@@ -315,7 +315,7 @@ export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
 
-export type ToolCallsToolKind = "action" | "builtin" | "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
+export type ToolCallsToolKind = "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
 
 export type ToolCallTaskOutputChunksStream = "stderr" | "stdout" | "system";
 
@@ -327,7 +327,7 @@ export type ToolCallTasksExecutorKind = "device_mcp" | "interaction_user_input" 
 
 export type ToolCallTasksStatus = "cancelled" | "completed" | "failed" | "input_required" | "working";
 
-export type ToolExecutionAttemptsExecutorKind = "action" | "builtin" | "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
+export type ToolExecutionAttemptsExecutorKind = "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
 
 export type ToolExecutionAttemptsStatus = "error" | "success" | "timeout";
 
