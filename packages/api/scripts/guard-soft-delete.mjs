@@ -404,6 +404,27 @@ for (const fk of schema.foreignKeys) {
       `FK ${fk.key}: liveIntegrity=enforce currently supports single-column FKs only`
     )
   }
+  if (fk.childColumns.length === 1 && fk.referencedColumns.length === 1) {
+    const triggerName = `sd_fk_live_${fk.childTable}_${fk.childColumns[0]}`
+    const dropSql = `DROP TRIGGER IF EXISTS ${triggerName} ON ${fk.childTable};`
+    const createSql = `CREATE TRIGGER ${triggerName} `
+    if (!schemaSql.includes(dropSql)) {
+      violations.push(
+        `FK ${fk.key}: generated schema must drop stale ${triggerName} before recreating enforce-only FK liveness triggers`
+      )
+    }
+    const createsTrigger = schemaSql.includes(createSql)
+    if (liveIntegrity === "enforce" && !createsTrigger) {
+      violations.push(
+        `FK ${fk.key}: liveIntegrity=enforce but generated schema does not create ${triggerName}`
+      )
+    }
+    if (liveIntegrity !== "enforce" && createsTrigger) {
+      violations.push(
+        `FK ${fk.key}: liveIntegrity=${liveIntegrity} but generated schema still creates ${triggerName}`
+      )
+    }
+  }
 }
 
 if (violations.length) {

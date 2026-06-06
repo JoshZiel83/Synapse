@@ -167,21 +167,28 @@ const liveValuesForTable = (name, entry) => {
 
 // --- 4. soft-delete-aware FK integrity triggers (matrix) -------------------
 // FKs whose referenced table has a canonical _live view AND child is a
-// persistent (non-ephemeral) table. Skip self-references handled elsewhere.
-const integrityFks = foreignKeys.filter((fk) => {
+// persistent (non-ephemeral) table. Keep this broader set for stale trigger
+// cleanup: a FK can be demoted from enforce -> historical/none and replaying
+// the cutover must remove the older sd_fk_live_* trigger from already-cut-over
+// databases.
+const liveParentSingleColumnFks = foreignKeys.filter((fk) => {
   const parent = mTables[fk.referencedTable]
   const child = mTables[fk.childTable]
   if (!parent || !child) return false
   if (!tableHasLiveView(fk.referencedTable, parent)) return false
-  if (fkLiveIntegrityFor(fk) !== "enforce") return false
   // Only single-column FKs (composite FK liveness handled via the parent's own
   // reject/live view); keep the trigger set targeted and unambiguous.
-  if (fk.childColumns.length !== 1) return false
+  if (fk.childColumns.length !== 1 || fk.referencedColumns.length !== 1) {
+    return false
+  }
   // child should be persistent to be worth a DB guard (ephemeral children are
   // short-lived; their refs don't outlive a soft-deleted parent meaningfully).
   if (tableIsEphemeral(child)) return false
   return true
 })
+const integrityFks = liveParentSingleColumnFks.filter(
+  (fk) => fkLiveIntegrityFor(fk) === "enforce"
+)
 
 // ---------------------------------------------------------------------------
 function emit() {
@@ -358,6 +365,13 @@ BEGIN
 END;
 $$;`)
   L.push("")
+  for (const fk of liveParentSingleColumnFks) {
+    const child = fk.childTable
+    const col = fk.childColumns[0]
+    const trg = `sd_fk_live_${child}_${col}`
+    L.push(`DROP TRIGGER IF EXISTS ${trg} ON ${child};`)
+  }
+  L.push("")
   for (const fk of integrityFks) {
     const child = fk.childTable
     const col = fk.childColumns[0]
@@ -388,7 +402,6 @@ $$;`)
         ? [`'${childLiveColumn}'`]
         : []),
     ].join(", ")
-    L.push(`DROP TRIGGER IF EXISTS ${trg} ON ${child};`)
     L.push(
       `CREATE TRIGGER ${trg} BEFORE INSERT OR UPDATE OF ${updateCols} ON ${child} FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live(${triggerArgs});`
     )

@@ -2970,7 +2970,7 @@ foreignKeys:
     _was: CASCADE
   digest:78a722a54ff2ccb8:
     targetAction: RESTRICT
-    liveIntegrity: historical
+    liveIntegrity: enforce
     _child: resource_access_bindings(automation_event_source_id)
     _parent: automation_event_sources(id)
     _was: CASCADE
