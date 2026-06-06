@@ -179,6 +179,48 @@ test("reconcileToolPairing synthesizes a result for an orphan tool-call", () => 
   }
 })
 
+test("reconcileToolPairing preserves routed origin for an interrupted orphan tool-call", () => {
+  const pluginOrigin = {
+    kind: "plugin" as const,
+    installationId: "install-1",
+    upstreamToolName: "search",
+  }
+  const deviceOrigin = {
+    kind: "device" as const,
+    deviceToolId: "device-tool-1",
+    exposureStableKey: "synapse.builtin.filesystem.v1",
+  }
+  const messages: ConversationMessage[] = [
+    {
+      role: "assistant",
+      content: [],
+      toolCalls: [
+        {
+          callId: "c-plugin",
+          toolName: "search",
+          input: {},
+          metadata: { origin: pluginOrigin },
+        },
+        {
+          callId: "c-device",
+          toolName: "filesystem__View",
+          input: {},
+          metadata: { origin: deviceOrigin },
+        },
+      ],
+    },
+  ]
+
+  const out = reconcileToolPairing(messages)
+  assert.equal(out.length, 2)
+  const last = out[1]
+  assert.equal(last.role, "tool_result")
+  if (last.role === "tool_result") {
+    assert.deepEqual(last.results[0].origin, pluginOrigin)
+    assert.deepEqual(last.results[1].origin, deviceOrigin)
+  }
+})
+
 test("reconcileToolPairing is a no-op when every tool-call has a result", () => {
   const messages: ConversationMessage[] = [
     {

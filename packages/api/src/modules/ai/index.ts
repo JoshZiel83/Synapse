@@ -1638,12 +1638,19 @@ export async function actorThink(
 
         // Build ToolRound for DB storage
         const roundToolCalls: CanonicalToolCall[] = allContinuableCalls.map(
-          (tc: any) => ({
-            callId: tc.callId,
-            providerCallId: tc.providerCallId,
-            toolName: tc.toolName,
-            input: tc.input,
-          })
+          (tc: any) => {
+            const origin = originFromRef(
+              toolWireRegistry.refByWireName.get(tc.toolName),
+              tc.toolName
+            )
+            return {
+              callId: tc.callId,
+              providerCallId: tc.providerCallId,
+              toolName: tc.toolName,
+              input: tc.input,
+              metadata: { origin },
+            }
+          }
         )
         const callableResultIds = new Set(
           callableResults.map((r) => r.toolCallId)

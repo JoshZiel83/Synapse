@@ -34,9 +34,10 @@ function formatConversationTypeKey(value: ConversationTypeKey) {
 
 /**
  * D3: a target carries an optional `conversation_type_mask_override` only when
- * its principal is workspace-wide (workspace) or actor-wide (actor) and not
- * already scoped to a single conversation. Scoped targets (conversation
- * subject, or actor + scope=conversation) inherit the parent mask verbatim.
+ * its principal is workspace-wide (workspace), actor-wide (actor), or
+ * remote-agent-wide (remote_agent) and not already scoped to a single
+ * conversation. Scoped targets (conversation subject, or principal +
+ * scope=conversation) inherit the parent mask verbatim.
  */
 export function targetSupportsConversationTypeOverride(
   target: CapabilityAccessTarget

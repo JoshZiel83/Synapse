@@ -123,7 +123,10 @@ type SkillUseScope =
   | "conversation"
   | "actor"
   | "remote_agent"
-type SkillAccessSuggestion = SkillUseScope | "actor_conversation"
+type SkillAccessSuggestion =
+  | SkillUseScope
+  | "actor_conversation"
+  | "remote_agent_conversation"
 
 /**
  * Build a ScopedSubjectTarget from the public scope label + ids.
@@ -889,6 +892,9 @@ function buildSnapshotAttachmentFiles(
 function resolvePublicUseScope(row: SkillAccessRow): SkillAccessSuggestion {
   if (row.bind_scope === "actor" && row.conversation_id) {
     return "actor_conversation"
+  }
+  if (row.bind_scope === "remote_agent" && row.conversation_id) {
+    return "remote_agent_conversation"
   }
   switch (row.bind_scope) {
     case "workspace":

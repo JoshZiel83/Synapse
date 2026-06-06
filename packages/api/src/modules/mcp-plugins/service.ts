@@ -1134,12 +1134,18 @@ function buildPluginGrantPlan(input: {
 
 function suggestedAccessTargetType(
   target: CapabilityAccessTarget
-): RuntimeBindingScope | "actor_conversation" {
+): RuntimeBindingScope | "actor_conversation" | "remote_agent_conversation" {
   if (
     target.subject.kind === "actor" &&
     target.scope?.kind === "conversation"
   ) {
     return "actor_conversation"
+  }
+  if (
+    target.subject.kind === "remote_agent" &&
+    target.scope?.kind === "conversation"
+  ) {
+    return "remote_agent_conversation"
   }
   return subjectScopeLabel(target) as RuntimeBindingScope
 }
