@@ -7,7 +7,38 @@ import assert from "node:assert/strict"
 import { bigModelChatBase } from "./get-language-model.js"
 import { toLanguageModelSpec } from "./to-language-model-spec.js"
 import { reconcileToolPairing } from "./reconcile-tool-pairing.js"
+import { fromGenerateText } from "./from-generate-text.js"
 import type { ConversationMessage, ResolvedModelConfig } from "@synapse/shared"
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+test("fromGenerateText mints a UUID callId and keeps the SDK id as providerCallId", () => {
+  // Regression for the tool_calls.id PK: the SDK's native id (call_/toolu_) is
+  // NOT a UUID and must never become the canonical callId / DB key.
+  const adapted = fromGenerateText({
+    text: "",
+    toolCalls: [
+      {
+        toolCallId: "toolu_vrtx_abc123",
+        toolName: "get_weather",
+        input: { city: "X" },
+      },
+    ],
+    usage: { inputTokens: 1, outputTokens: 1 },
+    finishReason: "tool-calls",
+    files: [],
+    sources: [],
+    response: {},
+    request: {},
+  } as any)
+  const a = adapted.context[0]
+  const calls = a.role === "assistant" ? (a.toolCalls ?? []) : []
+  assert.equal(calls.length, 1)
+  assert.match(calls[0].callId, UUID_RE)
+  assert.equal(calls[0].providerCallId, "toolu_vrtx_abc123")
+  assert.notEqual(calls[0].callId, "toolu_vrtx_abc123")
+})
 
 test("bigModelChatBase normalizes all three baseUrl shapes to /paas/v4", () => {
   assert.equal(

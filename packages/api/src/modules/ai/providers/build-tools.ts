@@ -7,10 +7,16 @@
  * running them — Synapse's own agent loop + executor handle execution and feed
  * results back as tool ModelMessages on the next call. We never use the SDK's
  * Agent/ToolLoopAgent (single step only).
+ *
+ * Anthropic SERVER tools (web_search/web_fetch) are provider-defined tools and
+ * ARE executed server-side by Anthropic — they are merged in by buildServerTools
+ * when a candidate enables them (features.serverTools), keyed on providerKind.
  */
 import { tool, jsonSchema, type ToolSet } from "ai"
+import { anthropic } from "@ai-sdk/anthropic"
 import type { JSONSchema7 } from "@ai-sdk/provider"
-import type { ToolDefinition } from "@synapse/shared"
+import type { AnthropicBuiltinTool, ToolDefinition } from "@synapse/shared"
+import type { ProviderKind } from "./registry.js"
 
 const EMPTY_OBJECT_SCHEMA: JSONSchema7 = {
   type: "object",
@@ -31,6 +37,34 @@ export function buildAiTools(defs: ToolDefinition[]): ToolSet {
       inputSchema: jsonSchema(schema),
       // execute intentionally omitted — Synapse executes tools out-of-band.
     })
+  }
+  return set
+}
+
+/**
+ * Provider-defined SERVER tools for a candidate. Only Anthropic exposes these
+ * today (web_search / web_fetch run inside Anthropic's API). Returns an empty
+ * object for other provider kinds or when no server tools are enabled, so the
+ * caller can spread it unconditionally.
+ */
+export function buildServerTools(
+  providerKind: ProviderKind,
+  serverTools: AnthropicBuiltinTool[] | undefined
+): ToolSet {
+  if (
+    providerKind !== "anthropic" ||
+    !serverTools ||
+    serverTools.length === 0
+  ) {
+    return {}
+  }
+  const set: ToolSet = {}
+  for (const name of serverTools) {
+    if (name === "web_search") {
+      set.web_search = anthropic.tools.webSearch_20250305()
+    } else if (name === "web_fetch") {
+      set.web_fetch = anthropic.tools.webFetch_20250910()
+    }
   }
   return set
 }

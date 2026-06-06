@@ -3,10 +3,13 @@
  * (the old AIResponse-ish object: assistant ConversationMessage, token usage,
  * stopReason, raw req/resp for audit, server tool calls, citations, media).
  *
- * Tool-call ids: the SDK's toolCallId IS Synapse's canonical callId (we set it
- * that way in toModelMessages). We do NOT thread providerCallId across the
- * boundary anymore — the SDK regenerates native ids per provider on each call.
+ * Tool-call ids: Synapse mints its OWN internal UUID as the canonical `callId`
+ * (it becomes the tool_calls.id PK and the neutral toolCallId we replay to the
+ * SDK next turn — the SDK regenerates each provider's NATIVE id from it). The
+ * SDK's returned id (call_.../toolu_...) is kept as `providerCallId` for audit;
+ * it is NOT a UUID and must never be used as the DB key.
  */
+import { randomUUID } from "node:crypto"
 import type {
   CanonicalContentBlock,
   CanonicalToolCall,
@@ -75,7 +78,8 @@ export function fromGenerateText(
 ): AdaptedResponse {
   const text = result.text || ""
   const toolCalls: CanonicalToolCall[] = (result.toolCalls ?? []).map((tc) => ({
-    callId: tc.toolCallId,
+    callId: randomUUID(),
+    providerCallId: tc.toolCallId,
     toolName: tc.toolName,
     input: (tc.input ?? {}) as Record<string, unknown>,
   }))

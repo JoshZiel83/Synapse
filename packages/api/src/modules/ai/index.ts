@@ -39,16 +39,13 @@ import { isPlanCollaborationMode } from "@synapse/shared/utils"
 import type { SessionCollaborationMode } from "@synapse/shared/types"
 import { randomUUID } from "crypto"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import {
-  sleep,
-  withTimeout as withTimeoutBase,
-} from "../../infrastructure/async/index.js"
+import { sleep } from "../../infrastructure/async/index.js"
 import { generateText, stepCountIs } from "ai"
 import { getLanguageModel } from "./providers/get-language-model.js"
 import { toLanguageModelSpec } from "./providers/to-language-model-spec.js"
 import { toModelMessages } from "./providers/to-model-messages.js"
 import { reconcileToolPairing } from "./providers/reconcile-tool-pairing.js"
-import { buildAiTools } from "./providers/build-tools.js"
+import { buildAiTools, buildServerTools } from "./providers/build-tools.js"
 import { fromGenerateText } from "./providers/from-generate-text.js"
 import { compileContextWindowToConversationMessages } from "./context-compiler.js"
 import { toolCallsToActions } from "./tools.js"
@@ -165,10 +162,6 @@ function classifyModelError(error: unknown): string {
 async function delay(ms: number) {
   if (ms <= 0) return
   await sleep(ms)
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
-  return withTimeoutBase(promise, timeoutMs, "Model attempt")
 }
 
 function effectiveAttemptPolicy(
@@ -887,19 +880,46 @@ export async function actorThink(
               multimodal: candidate.multimodal,
             })
 
-            const result = await withTimeout(
-              generateText({
+            // Merge custom (execute-less) tools with provider-defined server
+            // tools (Anthropic web_search/web_fetch) for this candidate.
+            const aiTools = {
+              ...buildAiTools(allTools),
+              ...buildServerTools(
+                candidate.providerKind,
+                candidate.serverTools
+              ),
+            }
+
+            // Real cancellation on timeout: AbortController fed to the SDK so the
+            // underlying provider request is actually aborted (the legacy
+            // withTimeout only rejected the promise, leaking the request).
+            const abortController = new AbortController()
+            const timeoutHandle = setTimeout(
+              () => abortController.abort(new Error("Model attempt timed out")),
+              candidatePolicy.timeoutMsPerAttempt
+            )
+            let result
+            try {
+              result = await generateText({
                 model: languageModelFor(candidate),
                 system: currentSystem,
                 messages: modelMessages,
-                tools: buildAiTools(allTools),
-                toolChoice: allTools.length > 0 ? "auto" : undefined,
+                tools: aiTools,
+                toolChoice:
+                  Object.keys(aiTools).length > 0 ? "auto" : undefined,
                 maxOutputTokens: candidate.maxOutputTokens,
                 // single step: Synapse runs its own agent loop + tool executor
                 stopWhen: stepCountIs(1),
-              }),
-              candidatePolicy.timeoutMsPerAttempt
-            )
+                abortSignal: abortController.signal,
+                // Per-binding provider-native options (cache control, reasoning,
+                // beta headers, ...) passed through verbatim to the SDK provider.
+                ...(candidate.providerOptions
+                  ? { providerOptions: candidate.providerOptions as any }
+                  : {}),
+              })
+            } finally {
+              clearTimeout(timeoutHandle)
+            }
 
             const response = fromGenerateText(result)
 
@@ -919,8 +939,21 @@ export async function actorThink(
               resolved: candidate,
               latencyMs: Date.now() - attemptStart,
               status: "success",
-              requestBody,
+              // request_payload: what Synapse intended (synapseRequest = the
+              // group/candidate/tool framing) + the SDK's RAW outgoing request
+              // body (sdkRequest, exact bytes sent to the provider).
+              requestBody: {
+                synapseRequest: requestBody,
+                sdkRequest: response.rawRequestBody,
+                bindingVersionId: candidate.bindingVersionId,
+                providerKind: candidate.providerKind,
+                vendor: candidate.vendor,
+                modelName: candidate.modelName,
+              },
+              // response_payload: the SDK's RAW provider response + a parsed
+              // summary for quick reads.
               responseBody: {
+                sdkResponse: response.rawAssistantMessage,
                 stopReason: response.stopReason,
                 toolCalls: toolCalls.map((tc: any) => ({
                   callId: tc.callId,
@@ -929,8 +962,6 @@ export async function actorThink(
                   input: tc.input,
                 })),
                 textContent,
-                rawAssistantMessage: response.rawAssistantMessage,
-                rawRequestBody: response.rawRequestBody,
               },
               stopReason: response.stopReason,
               inputTokens: response.tokensUsed.input,
@@ -2011,6 +2042,9 @@ export async function aiComplete(
       messages: modelMessages,
       maxOutputTokens: resolved.maxOutputTokens,
       stopWhen: stepCountIs(1),
+      ...(resolved.providerOptions
+        ? { providerOptions: resolved.providerOptions as any }
+        : {}),
     })
     response = fromGenerateText(result)
   } catch (err: any) {
