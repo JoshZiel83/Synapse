@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "postbuild": "node scripts/copy-installer-assets.mjs",
     "pretypecheck": "npm run build -w @synapse/device-protocol -w @synapse/shared -w @synapse/device-runtime",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "start": "node dist/index.js",

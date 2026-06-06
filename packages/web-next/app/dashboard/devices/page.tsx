@@ -74,12 +74,27 @@ export default function DevicesIndexPage() {
         <div className="rounded border p-4">
           <h2 className="font-semibold">Pairing ticket</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Run the following on the device:
+            Already have the device runtime installed? Run:
           </p>
           <pre className="mt-2 overflow-x-auto rounded bg-muted p-3 text-sm">
             synapse-device pair --code={pairingTicket.pairing_code} --title=
             &quot;My Device&quot;
           </pre>
+          {pairingTicket.one_click_commands ? (
+            <div className="mt-4 space-y-2">
+              <p className="text-sm text-muted-foreground">
+                Or one-click install (bootstraps Node, no prerequisites) — Linux
+                / macOS:
+              </p>
+              <pre className="overflow-x-auto rounded bg-muted p-3 text-xs">
+                {pairingTicket.one_click_commands.unix}
+              </pre>
+              <p className="text-sm text-muted-foreground">Windows:</p>
+              <pre className="overflow-x-auto rounded bg-muted p-3 text-xs">
+                {pairingTicket.one_click_commands.windows}
+              </pre>
+            </div>
+          ) : null}
           <p className="mt-2 text-xs text-muted-foreground">
             Expires at {pairingTicket.expires_at}
           </p>

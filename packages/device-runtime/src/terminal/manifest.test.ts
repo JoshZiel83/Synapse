@@ -404,3 +404,67 @@ test("manifest ↔ BUNDLE_PROGRAM_PLATFORM_KEYS parity: shared gate and bundles/
     }
   }
 })
+
+// --- China Node-dist mirror trusted sources (P5) ---------------------------
+const CN_MIRROR_CASES: Array<{ key: string; url: string }> = [
+  {
+    key: "nodejs.org-ustc",
+    url: "https://mirrors.ustc.edu.cn/node/v24.16.0/node-v24.16.0-linux-x64.tar.gz",
+  },
+  {
+    key: "nodejs.org-huawei",
+    url: "https://mirrors.huaweicloud.com/nodejs/v24.16.0/node-v24.16.0-linux-x64.tar.gz",
+  },
+  {
+    key: "nodejs.org-tencent",
+    url: "https://mirrors.cloud.tencent.com/nodejs-release/v24.16.0/node-v24.16.0-linux-x64.tar.gz",
+  },
+  {
+    key: "nodejs.org-aliyun",
+    url: "https://mirrors.aliyun.com/nodejs-release/v24.16.0/node-v24.16.0-linux-x64.tar.gz",
+  },
+  {
+    key: "nodejs.org-npmmirror",
+    url: "https://cdn.npmmirror.com/binaries/node/v24.16.0/node-v24.16.0-linux-x64.tar.gz",
+  },
+]
+
+for (const c of CN_MIRROR_CASES) {
+  test(`assertTrustedDownload: ${c.key} accepts its real base path`, () => {
+    assert.ok(
+      (TRUSTED_SOURCES as Record<string, unknown>)[c.key],
+      `${c.key} must be a declared trusted source`
+    )
+    assertTrustedDownload({
+      sha256: "x",
+      download: { url: c.url, trustedSource: c.key as never },
+      archiveFormat: "tar.gz",
+      stripComponents: 1,
+      executable: "bin/node",
+      binDir: "bin",
+      requiredFiles: ["bin/node"],
+      env: {},
+    })
+  })
+}
+
+test("assertTrustedDownload: CN mirror key rejects a non-matching host", () => {
+  assert.throws(
+    () =>
+      assertTrustedDownload({
+        sha256: "x",
+        // ustc key but an aliyun host -> hostname not on ustc's allow-list
+        download: {
+          url: "https://mirrors.aliyun.com/nodejs-release/v24.16.0/node.tar.gz",
+          trustedSource: "nodejs.org-ustc" as never,
+        },
+        archiveFormat: "tar.gz",
+        stripComponents: 1,
+        executable: "bin/node",
+        binDir: "bin",
+        requiredFiles: [],
+        env: {},
+      }),
+    (err) => err instanceof UntrustedDownloadSourceError
+  )
+})

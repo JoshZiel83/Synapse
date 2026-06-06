@@ -75,4 +75,5 @@ export interface DevicePairingTicketView {
     | "expired"
     | "cancelled"
     | "rejected"
+  one_click_commands?: { unix: string; windows: string } | null
 }

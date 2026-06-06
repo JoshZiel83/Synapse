@@ -19,7 +19,31 @@ import {
   type DeviceType,
   type HostKind,
 } from "@synapse/device-protocol"
+import type { OneClickInstallCommands } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
+import { config } from "../../config/index.js"
+import {
+  buildDeviceInstallCommands,
+  getRenderedInstallerArtifacts,
+} from "../installer/install-command.js"
+
+// One-click bootstrap installer commands for a local device pairing (carries
+// the pairing code). null when no private registry is configured.
+function buildDeviceOneClick(
+  pairingCode: string
+): OneClickInstallCommands | null {
+  const artifacts = getRenderedInstallerArtifacts({
+    serverUrl: config.app.baseUrl,
+    privateRegistry: config.remoteAgent.npmRegistryUrl,
+  })
+  if (!artifacts) return null
+  return buildDeviceInstallCommands({
+    serverUrl: config.app.baseUrl,
+    pairingCode,
+    shaSh: artifacts.shaSh,
+    shaPs1: artifacts.shaPs1,
+  })
+}
 
 export class DeviceModuleError extends Error {
   readonly statusCode: number
@@ -232,6 +256,12 @@ export interface StartPairingResult {
   verification_uri: string | null
   verification_uri_complete: string | null
   status: (typeof DEVICE_PAIRING_STATUSES)[number]
+  /**
+   * One-click bootstrap installer commands ({unix, windows}) embedding the
+   * pairing code. Present for local_qr (code) pairings when a private registry
+   * is configured; null otherwise.
+   */
+  one_click_commands: OneClickInstallCommands | null
 }
 
 export interface StartPairingInput {
@@ -321,6 +351,10 @@ export async function startPairing(
     verification_uri: null,
     verification_uri_complete: null,
     status: "pending",
+    // One-click bootstrap only applies to the local_qr code flow (pairingCode
+    // present). cloud_bootstrap / service_join don't use the device installer.
+    one_click_commands:
+      pairingCode !== null ? buildDeviceOneClick(pairingCode) : null,
   }
 }
 

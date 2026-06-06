@@ -252,12 +252,18 @@ export const config = {
   },
   remoteAgent: {
     // The npm registry URL embedded in the daemon install command shown
-    // on the dashboard. This is the EXTERNAL-reachable URL the end
-    // user's machine will hit — it must NOT be an internal/publish-side
-    // address (e.g. http://verdaccio:4873 inside Docker/K8s). Kept
-    // separate from the publish-side NPM_REGISTRY for exactly that
-    // reason. Empty string = omit the --registry flag (user is expected
-    // to have configured @synapse:registry in their own ~/.npmrc).
+    // on the dashboard, AND used to render the one-click installer scripts
+    // (GET /api/v1/install.{sh,ps1}). This is the EXTERNAL-reachable URL the
+    // end user's machine will hit — it must NOT be an internal/publish-side
+    // address (e.g. http://verdaccio:4873 inside Docker/K8s). Kept separate
+    // from the publish-side NPM_REGISTRY for exactly that reason.
+    //
+    // Empty string: the dashboard daemon command degrades to the bare
+    // `synapse-remote-agent-daemon` bin (assuming the user pre-configured
+    // @synapse:registry). BUT the one-click bootstrap installer CANNOT work
+    // with an empty value — it has no Node/npmrc yet — so the install routes
+    // return 503 and the dashboard hides the one-click block when this is
+    // empty (see modules/installer/install-command.ts + controller.ts).
     npmRegistryUrl: env.PUBLIC_NPM_REGISTRY_URL,
   },
   database: {

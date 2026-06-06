@@ -38,6 +38,40 @@ export const TRUSTED_SOURCES = {
     urlPrefixes: ["https://nodejs.org/dist/"],
     description: "Official Node.js release tarballs.",
   },
+  // China Node-dist mirrors. Each lays out vXX.YY.ZZ/<file> + SHASUMS256.txt
+  // byte-identically to nodejs.org/dist, so the per-entry sha256 still gates
+  // the bytes after a host rewrite (see rewriteToNodeMirror in bundles/
+  // install.ts). The urlPrefixes match each mirror's REAL base path — they
+  // differ per host (/node/ vs /nodejs/ vs /nodejs-release/ vs /binaries/
+  // node/), so a host-only swap would not pass this guard. Selected via
+  // SYNAPSE_DEVICE_TOOLCHAIN_MIRROR; node-only (python/git mirrors are out of
+  // scope — they lack the same byte-identical guarantee). TUNA is deliberately
+  // NOT listed: its nodejs-release mirror is frozen and 404s on recent LTS.
+  "nodejs.org-ustc": {
+    hostnames: ["mirrors.ustc.edu.cn"],
+    urlPrefixes: ["https://mirrors.ustc.edu.cn/node/"],
+    description: "USTC Node.js mirror (China).",
+  },
+  "nodejs.org-huawei": {
+    hostnames: ["mirrors.huaweicloud.com"],
+    urlPrefixes: ["https://mirrors.huaweicloud.com/nodejs/"],
+    description: "Huawei Cloud Node.js mirror (China).",
+  },
+  "nodejs.org-tencent": {
+    hostnames: ["mirrors.cloud.tencent.com"],
+    urlPrefixes: ["https://mirrors.cloud.tencent.com/nodejs-release/"],
+    description: "Tencent Cloud Node.js mirror (China).",
+  },
+  "nodejs.org-aliyun": {
+    hostnames: ["mirrors.aliyun.com"],
+    urlPrefixes: ["https://mirrors.aliyun.com/nodejs-release/"],
+    description: "Aliyun Node.js mirror (China).",
+  },
+  "nodejs.org-npmmirror": {
+    hostnames: ["cdn.npmmirror.com"],
+    urlPrefixes: ["https://cdn.npmmirror.com/binaries/node/"],
+    description: "npmmirror (Taobao) Node.js binary mirror (China).",
+  },
   "astral-sh-python-build-standalone": {
     // Manifest URLs MUST be the canonical github.com/astral-sh/python-
     // build-standalone/releases/... form. GitHub's signed-asset
