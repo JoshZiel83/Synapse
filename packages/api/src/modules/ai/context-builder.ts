@@ -110,7 +110,12 @@ export async function loadExecutionToolResultsForSession(
     const innerMetadata = extractInnerMetadata(meta)
 
     const canonical: CanonicalToolResult = {
-      toolCallId: call.provider_call_id || call.id,
+      // Canonical toolCallId is ALWAYS the tool_calls.id (the internal UUID that
+      // the assistant tool-call also carries as callId). providerCallId is
+      // metadata only — never the pairing key, or a cross-turn replay would send
+      // the provider-native id on the result while the assistant tool-call uses
+      // the UUID, breaking reconcileToolPairing's exact match.
+      toolCallId: call.id,
       toolName: call.tool_name,
       content: contentBlocks,
       ...(call.provider_call_id

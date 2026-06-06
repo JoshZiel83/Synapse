@@ -61,28 +61,78 @@ function extractCitations(
   return has ? sources : undefined
 }
 
-/** Extract server-tool calls (web_search/web_fetch) where the SDK surfaces them.
- *  Provider-specific; best-effort from sources for now (additive UI metadata). */
+/** Extract provider-EXECUTED server-tool calls (Anthropic web_search/web_fetch).
+ *  These run inside the provider; the SDK flags them providerExecuted on
+ *  result.toolCalls and carries their output on result.toolResults. They are NOT
+ *  Synapse tools to run — they go to serverToolCalls (history/UI), and are
+ *  filtered out of the Synapse toolCalls in fromGenerateText. */
 function extractServerToolCalls(
   result: GenerateTextResult<ToolSet, never>
 ): ServerToolCall[] | undefined {
-  // The neutral surface does not separate server-tool calls cleanly across
-  // providers; the URL sources above already carry the useful signal. Leave
-  // undefined unless a future provider exposes a stable field. (Additive only.)
-  void result
-  return undefined
+  const serverCalls = (result.toolCalls ?? []).filter(
+    (tc: any) => tc.providerExecuted === true
+  )
+  if (serverCalls.length === 0) return undefined
+
+  const resultsByCallId = new Map<string, any>()
+  for (const tr of (result.toolResults ?? []) as any[]) {
+    if (tr.providerExecuted === true && tr.toolCallId) {
+      resultsByCallId.set(tr.toolCallId, tr)
+    }
+  }
+
+  const out: ServerToolCall[] = []
+  for (const tc of serverCalls as any[]) {
+    const type: ServerToolCall["type"] =
+      tc.toolName === "web_fetch" ? "web_fetch" : "web_search"
+    const call: ServerToolCall = { type }
+    const input = (tc.input ?? {}) as Record<string, unknown>
+    if (type === "web_search" && typeof input.query === "string") {
+      call.query = input.query
+    }
+    if (type === "web_fetch" && typeof input.url === "string") {
+      call.url = input.url
+    }
+    // Pull search results out of the provider-executed tool output when present.
+    const output = resultsByCallId.get(tc.toolCallId)?.output
+    const items = Array.isArray(output)
+      ? output
+      : Array.isArray(output?.value)
+        ? output.value
+        : Array.isArray(output?.content)
+          ? output.content
+          : []
+    const results = items
+      .filter((it: any) => it && (it.url || it.type === "web_search_result"))
+      .map((it: any) => ({
+        url: it.url,
+        title: it.title || "",
+        ...(it.pageAge || it.page_age
+          ? { pageAge: it.pageAge || it.page_age }
+          : {}),
+      }))
+      .filter((r: any) => r.url)
+    if (results.length > 0) call.results = results
+    out.push(call)
+  }
+  return out
 }
 
 export function fromGenerateText(
   result: GenerateTextResult<ToolSet, never>
 ): AdaptedResponse {
   const text = result.text || ""
-  const toolCalls: CanonicalToolCall[] = (result.toolCalls ?? []).map((tc) => ({
-    callId: randomUUID(),
-    providerCallId: tc.toolCallId,
-    toolName: tc.toolName,
-    input: (tc.input ?? {}) as Record<string, unknown>,
-  }))
+  // Only model-requested (Synapse-executed) tool calls become canonical tool
+  // calls. Provider-EXECUTED server tools (web_search/web_fetch) are handled by
+  // the provider and surfaced via serverToolCalls — never run by Synapse's loop.
+  const toolCalls: CanonicalToolCall[] = (result.toolCalls ?? [])
+    .filter((tc: any) => tc.providerExecuted !== true)
+    .map((tc) => ({
+      callId: randomUUID(),
+      providerCallId: tc.toolCallId,
+      toolName: tc.toolName,
+      input: (tc.input ?? {}) as Record<string, unknown>,
+    }))
 
   const contentBlocks: CanonicalContentBlock[] = []
   if (text) contentBlocks.push(textBlock(text))

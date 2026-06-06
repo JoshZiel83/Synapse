@@ -40,6 +40,54 @@ test("fromGenerateText mints a UUID callId and keeps the SDK id as providerCallI
   assert.notEqual(calls[0].callId, "toolu_vrtx_abc123")
 })
 
+test("fromGenerateText splits provider-executed server tools from Synapse tool calls", () => {
+  // web_search is provider-executed (Anthropic runs it) → must NOT become a
+  // Synapse tool call; it surfaces as a serverToolCall with its results. The
+  // model-requested tool stays a normal Synapse call.
+  const adapted = fromGenerateText({
+    text: "Here is the weather.",
+    toolCalls: [
+      {
+        toolCallId: "srv_1",
+        toolName: "web_search",
+        input: { query: "weather" },
+        providerExecuted: true,
+      },
+      {
+        toolCallId: "toolu_real",
+        toolName: "get_weather",
+        input: { city: "X" },
+      },
+    ],
+    toolResults: [
+      {
+        toolCallId: "srv_1",
+        toolName: "web_search",
+        providerExecuted: true,
+        output: [{ url: "https://e.com", title: "E", page_age: "1d" }],
+      },
+    ],
+    usage: { inputTokens: 1, outputTokens: 1 },
+    finishReason: "tool-calls",
+    files: [],
+    sources: [],
+    response: {},
+    request: {},
+  } as any)
+  const a = adapted.context[0]
+  const calls = a.role === "assistant" ? (a.toolCalls ?? []) : []
+  // only the model-requested tool is a Synapse tool call
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].toolName, "get_weather")
+  assert.equal(calls[0].providerCallId, "toolu_real")
+  // the server tool is reported separately, with its result
+  assert.ok(adapted.serverToolCalls)
+  assert.equal(adapted.serverToolCalls!.length, 1)
+  assert.equal(adapted.serverToolCalls![0].type, "web_search")
+  assert.equal(adapted.serverToolCalls![0].query, "weather")
+  assert.equal(adapted.serverToolCalls![0].results?.[0].url, "https://e.com")
+})
+
 test("bigModelChatBase normalizes all three baseUrl shapes to /paas/v4", () => {
   assert.equal(
     bigModelChatBase("https://open.bigmodel.cn/api"),
