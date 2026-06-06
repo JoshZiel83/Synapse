@@ -2316,6 +2316,10 @@ export interface CapabilitySurface {
 export interface ToolPlugin {
   name: string
   definition: ToolDefinition
+  // Optional presentation descriptor co-located with the system tool. The API
+  // display resolver reads it (keyed by the tool's registry name = its system
+  // stableKey) to render a friendly title/result. Type from the base package.
+  presentation?: import("@synapse/device-protocol/tool-presentation").ToolPresentationDescriptor
   conversationTypeMask?: ConversationTypeMask
   resolve?: (ctx: ToolResolveContext) =>
     | {

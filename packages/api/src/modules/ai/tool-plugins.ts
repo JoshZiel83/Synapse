@@ -11,6 +11,7 @@ import {
 } from "@synapse/shared"
 import { getToolErrorMessage, getToolErrorMetadata } from "./tool-errors.js"
 import { isLocalCallableToolAllowedInCollaborationMode } from "./session-plan-mode.js"
+import { SYSTEM_TOOL_PRESENTATION } from "./system-tools.presentation.js"
 
 /**
  * Local Callable Tool Registry
@@ -35,7 +36,20 @@ export function registerToolPlugin(plugin: ToolPlugin): void {
       `Duplicate system tool plugin registration for "${plugin.name}"`
     )
   }
-  registry.set(plugin.name, plugin)
+  // Auto-attach the co-located presentation descriptor (single source of truth
+  // in system-tools.presentation.ts) unless the plugin already declared one.
+  const presentation =
+    plugin.presentation ?? SYSTEM_TOOL_PRESENTATION[plugin.name]
+  registry.set(plugin.name, presentation ? { ...plugin, presentation } : plugin)
+}
+
+/**
+ * Look up a registered system/callable tool plugin by its registry name (which
+ * is also its system stableKey). Used by the presentation display resolver to
+ * fetch the tool's co-located presentation descriptor.
+ */
+export function getToolPlugin(name: string): ToolPlugin | undefined {
+  return registry.get(name)
 }
 
 /**
