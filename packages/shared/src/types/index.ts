@@ -5392,7 +5392,6 @@ export type CatalogSourceKind =
   | "official"
   | "workspace"
   | "user"
-  | "device"
 export type CatalogVisibility = "public" | "workspace" | "private"
 export type CatalogVersionStatus =
   | "draft"
@@ -5403,7 +5402,6 @@ export type CatalogLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
-  | "device_projection"
 export type CatalogSyncMode =
   | "notify"
   | "manual_merge"
