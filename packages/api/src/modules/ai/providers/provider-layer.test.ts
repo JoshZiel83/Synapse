@@ -127,10 +127,12 @@ test("fromGenerateText: web_fetch + unknown provider tool keep their real name",
   assert.equal(fetchCall!.display?.icon, "globe")
   assert.match(fetchCall!.display!.displayTitle, /读取网页/)
   // The unknown provider tool is NOT silently mislabeled web_search: its real
-  // toolName is preserved even though `type` buckets it as web_search.
+  // toolName is preserved even though `type` buckets it as web_search, and its
+  // display label derives from the tool name (not the generic "网络搜索").
   const unknown = calls.find((c) => c.toolName === "code_execution")
   assert.ok(unknown, "unknown provider tool should be preserved")
   assert.equal(unknown!.toolName, "code_execution")
+  assert.equal(unknown!.display?.displayTitle, "code_execution")
 })
 
 test("bigModelChatBase normalizes all three baseUrl shapes to /paas/v4", () => {

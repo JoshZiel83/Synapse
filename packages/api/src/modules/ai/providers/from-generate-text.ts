@@ -139,8 +139,15 @@ function buildServerToolDisplay(
     }
   }
   // web_search (and any other provider-native search-like tool)
-  const label = call.query ? `搜索 ${truncate(call.query, 60)}` : "网络搜索"
   const count = call.results?.length ?? 0
+  // Prefer the query; otherwise derive a label from the real tool name so an
+  // unknown provider tool isn't mislabeled "网络搜索" (only true web_search with
+  // no query falls back to that generic label).
+  const label = call.query
+    ? `搜索 ${truncate(call.query, 60)}`
+    : call.toolName && call.toolName !== "web_search"
+      ? call.toolName
+      : "网络搜索"
   return {
     icon: "search",
     titleKey: "tool.server.web_search.title",

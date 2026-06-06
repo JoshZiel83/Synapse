@@ -41,7 +41,7 @@ const pluginRef: ToolRef = {
     itemSlug: "github",
   },
   binding: { transport: "stdio", instanceKey: "inst-1:h:turn:x" },
-  identity: { stableKey: "acme/github/create_issue" },
+  identity: { stableKey: "plugin/acme/github/create_issue" },
 }
 
 test("toolId constructors are deterministic", () => {
@@ -68,7 +68,7 @@ test("stripForAuditSnapshot carries the full public source + stableKey per kind"
     upstreamToolName: "create_issue",
     publisherSlug: "acme",
     itemSlug: "github",
-    stableKey: "acme/github/create_issue",
+    stableKey: "plugin/acme/github/create_issue",
   })
   // The frozen stableKey must equal the ref's identity (the display resolver's
   // dispatch key) — no drift from re-deriving it out of the source fields.
@@ -107,9 +107,10 @@ test("stripForProvider yields a source-free ToolDefinition with the wire name", 
   assert.equal(out.name, "github__create_issue")
   assert.equal(out.description, def.description)
   assert.deepEqual(out.rawInputSchema, def.rawInputSchema)
-  // No provenance fields exist on the provider-facing shape.
-  assert.equal((out as Record<string, unknown>).ref, undefined)
-  assert.equal((out as Record<string, unknown>).source, undefined)
+  // No provenance fields exist on the provider-facing shape. (ToolDefinition
+  // doesn't index-overlap Record, so go through `unknown` for the cast.)
+  assert.equal((out as unknown as Record<string, unknown>).ref, undefined)
+  assert.equal((out as unknown as Record<string, unknown>).source, undefined)
 })
 
 test("originKindToSourceKind maps routed kinds, rejects non-routed", () => {
