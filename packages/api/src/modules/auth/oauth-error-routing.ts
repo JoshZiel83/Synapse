@@ -48,12 +48,12 @@ function verifyStateCookieBinding(
   return timingSafeEqual(a, b)
 }
 
-// Non-http(s) app schemes we'll deep-link an error to. Production derives them
-// from AUTH_TRUSTED_ORIGINS (e.g. `synapse://`); development additionally allows
-// `exp:` because @better-auth/expo only injects exp:// as a trusted origin in
-// dev (and Expo Go returns exp:// deep links).
+// Non-http(s) app schemes we'll deep-link an error to. `synapse:` is our
+// first-party app scheme; deployments may add more via AUTH_TRUSTED_ORIGINS.
+// Development additionally allows `exp:` because @better-auth/expo only injects
+// exp:// as a trusted origin in dev (and Expo Go returns exp:// deep links).
 function allowedNativeSchemes(): Set<string> {
-  const schemes = new Set<string>()
+  const schemes = new Set<string>(["synapse"])
   for (const origin of config.auth.trustedOrigins) {
     const match = /^([a-z][a-z0-9+.-]*):/i.exec(origin.trim())
     if (!match) continue
