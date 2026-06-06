@@ -5,6 +5,7 @@ import type {
   SkillSurfaceItem,
   ToolSurfaceItem,
 } from "@synapse/shared/types"
+import type { ProjectedToolDefinition, ToolSourceKind } from "@synapse/shared"
 import { type ResolvedMcpTools } from "../mcp-plugins/tool-resolver.js"
 import { projectToolsForPrincipal } from "../capability-projection/service.js"
 import { listVisibleSkills } from "../skills/service.js"
@@ -22,13 +23,25 @@ const EMPTY_MCP_TOOLS: ResolvedMcpTools = {
   shutdown: async () => {},
 }
 
-function mapToolSurfaceItem(toolName: string): ToolSurfaceItem {
+// Maps the structured ToolRef source kind to the dashboard surface label.
+// Routed tools are system/plugin/device; the prior `device__`-prefix sniff is
+// gone — provenance is read from `ref.source.kind`.
+function surfaceSourceFor(kind: ToolSourceKind): ToolSurfaceItem["source"] {
+  switch (kind) {
+    case "device":
+      return "device_capability"
+    case "plugin":
+      return "plugin_installation"
+    case "system":
+      return "builtin"
+  }
+}
+
+function mapToolSurfaceItem(tool: ProjectedToolDefinition): ToolSurfaceItem {
   return {
-    id: toolName,
-    name: toolName,
-    source: toolName.startsWith("device__")
-      ? "device_capability"
-      : "plugin_installation",
+    id: tool.ref.toolId,
+    name: tool.name,
+    source: surfaceSourceFor(tool.ref.source.kind),
   }
 }
 
@@ -102,7 +115,7 @@ export async function resolveActorCapabilitySurface(
   return {
     runtimeContext: resolved,
     surface: {
-      tools: mcpTools.tools.map((tool) => mapToolSurfaceItem(tool.name)),
+      tools: mcpTools.tools.map((tool) => mapToolSurfaceItem(tool)),
       skills: availableSkills.map(mapSkillSurfaceItem),
       version: mcpTools.mcpVersion,
     },

@@ -7,7 +7,14 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
-import { textBlock, type ToolDefinition } from "@synapse/shared"
+import {
+  textBlock,
+  computeWireNames,
+  type ToolDefinition,
+  type ProjectedToolDefinition,
+  type ToolRef,
+  type NamePolicyItem,
+} from "@synapse/shared"
 import { z } from "zod"
 import {
   authenticateMachineForRemoteAgent,
@@ -94,27 +101,16 @@ function zodShapeToJsonSchema(
 
 // PR #14: surface a [device:<name>] / [plugin:<name>] / [skill:<name>]
 // origin badge in the tool description so reverse-MCP callers can attribute
-// results back to the source.
-function describeToolOrigin(def: ToolDefinition): string {
-  const meta = def as unknown as {
-    source?: { kind?: string; displayName?: string; deviceName?: string }
-    sourceType?: string
-  }
-  const source = meta.source
-  const kind = source?.kind ?? meta.sourceType
-  const name = source?.deviceName ?? source?.displayName ?? source?.kind ?? null
-  if (!kind) return ""
-  switch (kind) {
-    case "device_capability":
+// results back to the source. Reads the structured ToolRef (Layer A).
+function describeToolOrigin(ref: ToolRef): string {
+  switch (ref.source.kind) {
     case "device":
-      return name ? `[device:${name}]` : "[device]"
-    case "plugin_installation":
+      return ref.source.deviceName
+        ? `[device:${ref.source.deviceName}]`
+        : "[device]"
     case "plugin":
-      return name ? `[plugin:${name}]` : "[plugin]"
-    case "installed_skill":
-    case "skill":
-      return name ? `[skill:${name}]` : "[skill]"
-    default:
+      return `[plugin:${ref.source.installationId}]`
+    case "system":
       return ""
   }
 }
@@ -300,8 +296,20 @@ async function buildResolvedTools(params: {
   })
 
   const tools: RegisteredTool[] = []
-  for (const def of resolved.tools as ToolDefinition[]) {
-    const originBadge = describeToolOrigin(def)
+  const projected = resolved.tools as ProjectedToolDefinition[]
+  // Build this surface's own wire-name registry (no reserved names: reverse-MCP
+  // exposes only routed plugin/device tools). Dispatch maps wireName→toolId.
+  const items: NamePolicyItem[] = projected.map((def) => ({
+    ref: def.ref,
+    leafName: def.name,
+  }))
+  const registry = computeWireNames(items)
+  const defByToolId = new Map<string, ProjectedToolDefinition>(
+    projected.map((d) => [d.ref.toolId, d])
+  )
+  for (const [toolId, { wireName, ref }] of registry.byToolId) {
+    const def = defByToolId.get(toolId)!
+    const originBadge = describeToolOrigin(ref)
     const decoratedDescription = originBadge
       ? `${originBadge} ${def.description ?? ""}`.trim()
       : (def.description ?? "")
@@ -311,11 +319,11 @@ async function buildResolvedTools(params: {
     const inputSchema: Record<string, unknown> =
       def.rawInputSchema ?? (def.parameters as Record<string, unknown>)
     tools.push({
-      name: def.name,
+      name: wireName,
       description: decoratedDescription,
       inputSchema,
       handler: async (input) => {
-        const output = await resolved.executor(def.name, input ?? {})
+        const output = await resolved.executor(toolId, input ?? {})
         return {
           content: Array.isArray(output.content)
             ? (output.content as unknown as Array<Record<string, unknown>>)

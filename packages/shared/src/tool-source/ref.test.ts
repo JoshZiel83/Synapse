@@ -1,0 +1,90 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import {
+  systemToolId,
+  pluginToolId,
+  deviceToolId,
+  stripForAuditSnapshot,
+  stripForProvider,
+  toPublicOrigin,
+  originKindToSourceKind,
+  type ToolRef,
+} from "./ref.js"
+import type { ToolDefinition } from "../types/index.js"
+
+const deviceRef: ToolRef = {
+  toolId: deviceToolId("dt-1"),
+  source: {
+    kind: "device",
+    deviceToolId: "dt-1",
+    exposureStableKey: "builtin/filesystem",
+    deviceName: "laptop",
+  },
+  binding: {
+    transport: "device_tunnel",
+    deviceId: "d-1",
+    deviceServiceId: "s-1",
+    deviceCapabilityId: "c-1",
+    deviceExposureId: "e-1",
+  },
+  identity: { stableKey: "builtin/filesystem/fs_read" },
+}
+
+const pluginRef: ToolRef = {
+  toolId: pluginToolId("inst-1", "create_issue"),
+  source: { kind: "plugin", installationId: "inst-1", upstreamToolName: "create_issue" },
+  binding: { transport: "stdio", instanceKey: "inst-1:h:turn:x" },
+  identity: { stableKey: "acme/github/create_issue" },
+}
+
+test("toolId constructors are deterministic", () => {
+  assert.equal(systemToolId("send_to"), "system:send_to")
+  assert.equal(pluginToolId("inst-1", "create_issue"), "plugin:inst-1:create_issue")
+  assert.equal(deviceToolId("dt-1"), "device:dt-1")
+})
+
+test("stripForAuditSnapshot carries the full public source per kind", () => {
+  assert.deepEqual(stripForAuditSnapshot(deviceRef), {
+    kind: "device",
+    deviceToolId: "dt-1",
+    exposureStableKey: "builtin/filesystem",
+    deviceName: "laptop",
+  })
+  assert.deepEqual(stripForAuditSnapshot(pluginRef), {
+    kind: "plugin",
+    installationId: "inst-1",
+    upstreamToolName: "create_issue",
+  })
+})
+
+test("toPublicOrigin projects without the binding (route-only) details", () => {
+  const o = toPublicOrigin(pluginRef)
+  assert.equal(o.kind, "plugin")
+  // No instanceKey / binding fields leak into the public origin.
+  assert.equal((o as Record<string, unknown>).instanceKey, undefined)
+  assert.equal(JSON.stringify(o).includes("instanceKey"), false)
+})
+
+test("stripForProvider yields a source-free ToolDefinition with the wire name", () => {
+  const def: ToolDefinition = {
+    name: "create_issue",
+    description: "[acme/github] Create an issue",
+    parameters: { type: "object", properties: {}, required: [] },
+    rawInputSchema: { type: "object", properties: { title: { type: "string" } } },
+  }
+  const out = stripForProvider({ definition: def, wireName: "github__create_issue" })
+  assert.equal(out.name, "github__create_issue")
+  assert.equal(out.description, def.description)
+  assert.deepEqual(out.rawInputSchema, def.rawInputSchema)
+  // No provenance fields exist on the provider-facing shape.
+  assert.equal((out as Record<string, unknown>).ref, undefined)
+  assert.equal((out as Record<string, unknown>).source, undefined)
+})
+
+test("originKindToSourceKind maps routed kinds, rejects non-routed", () => {
+  assert.equal(originKindToSourceKind("plugin"), "plugin")
+  assert.equal(originKindToSourceKind("device"), "device")
+  assert.equal(originKindToSourceKind("system"), "system")
+  assert.equal(originKindToSourceKind("provider_native"), null)
+  assert.equal(originKindToSourceKind("model_response"), null)
+})

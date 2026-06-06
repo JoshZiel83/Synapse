@@ -494,7 +494,7 @@ export function buildActorPrompt(
         extraTools
           .map((tool) => `- \`${tool.name}\`: ${tool.description}`)
           .join("\n") +
-        `\n\nUse these tools when the user's request requires them. Tool names use namespace format (org__plugin__tool).`
+        `\n\nUse these tools when the user's request requires them. Call each tool by exactly the name shown above.`
     )
   }
 

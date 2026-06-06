@@ -2168,16 +2168,11 @@ export interface ToolDefinition {
   // a model (LLM providers, the reverse-MCP endpoint) MUST prefer
   // `rawInputSchema` when present and fall back to `parameters` otherwise.
   rawInputSchema?: Record<string, unknown>
-  // Origin metadata so consumers that surface tools to a model (e.g. the
-  // reverse-MCP endpoint that exposes Synapse tools to a remote agent) can
-  // render a "[device:Name]" / "[plugin:Name]" attribution. Optional because
-  // most ad-hoc ToolDefinitions don't have an upstream source.
-  source?: {
-    kind: "device_capability" | "plugin_installation" | "installed_skill"
-    displayName?: string
-    deviceName?: string
-  }
-  sourceType?: "builtin" | "mcp_plugin" | "mcp_device"
+  // NOTE: tool provenance/source no longer lives on ToolDefinition. The
+  // structured ToolRef (`@synapse/shared/tool-source`) carries source + binding
+  // on the internal `ProjectedToolDefinition`; a plain ToolDefinition that
+  // crosses to the provider/model is intentionally source-free (stripped at the
+  // boundary). See docs/tool-provenance-and-routing.md.
 }
 
 export interface ToolCall {

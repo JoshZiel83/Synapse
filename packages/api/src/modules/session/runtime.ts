@@ -178,6 +178,8 @@ function getToolDisplayTitle(
     return visibleToolName
   }
 
+  // DISPLAY ONLY (not routing/provenance): show the leaf of a qualified wire
+  // name (e.g. "github__read" → "read"); bare names pass through unchanged.
   const segments = toolName.split("__").filter(Boolean)
   return segments[segments.length - 1] || toolName
 }

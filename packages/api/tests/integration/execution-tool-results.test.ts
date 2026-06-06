@@ -98,8 +98,9 @@ async function buildFixture(opts: {
   await client.query(
     `INSERT INTO tool_calls (
        id, turn_id, conversation_id, session_id,
-       provider_call_id, bundle_id, tool_kind, tool_name, normalized_input
-     ) VALUES ($1, $2, $3, $4, $5, $6, 'mcp_plugin', $7, '{}')`,
+       provider_call_id, bundle_id, tool_kind, tool_name,
+       source_kind, source_snapshot, normalized_input
+     ) VALUES ($1, $2, $3, $4, $5, $6, 'mcp_plugin', $7, 'plugin', $8, '{}')`,
     [
       toolCallId,
       turnId,
@@ -108,6 +109,11 @@ async function buildFixture(opts: {
       providerCallId,
       uuidv4(),
       opts.toolName,
+      JSON.stringify({
+        kind: "plugin",
+        installationId: uuidv4(),
+        upstreamToolName: opts.toolName,
+      }),
     ]
   )
 

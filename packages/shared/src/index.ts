@@ -43,6 +43,9 @@ export * from "./automation/index.js"
 export * from "./access/index.js"
 export * from "./chat-catalog/index.js"
 export * from "./chat-queue/index.js"
+// Tool provenance & routing (Layer A/B primitives). Distinct names from the
+// legacy ToolResultOrigin in ./types until Phase 4 converges them.
+export * from "./tool-source/index.js"
 // NOTE: ./schemas is NOT re-exported from the root barrel on purpose.
 // schemas/* pulls in zod, and the chat service workers (web + mobile)
 // transitively reach the root barrel via @synapse/shared / @shared

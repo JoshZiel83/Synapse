@@ -21,6 +21,7 @@ import {
   ACCESS_BINDING_SOURCES,
   ACCESS_BINDING_STATUSES,
   SUBJECT_KINDS,
+  TOOL_SOURCE_KINDS,
 } from "@synapse/shared"
 import {
   AUTOMATION_COMPLETION_STATUSES,
@@ -105,6 +106,7 @@ import type {
   ConversationTransportBindingsInboundActorMode,
   WorkspaceAccessBindingsAccessKey,
   WorkspaceInvitesTrustLevel,
+  ToolCallsSourceKind,
 } from "./generated/db.js"
 
 type IsEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
@@ -389,6 +391,11 @@ type _RuntimeAuthorizationRequestModeMatchesDb = Assert<
     (typeof RUNTIME_AUTHORIZATION_REQUEST_MODES)[number],
     RuntimeAuthorizationRequestMode
   >
+>
+// Tool provenance & routing: routed source family must equal the DB enum
+// (tool_calls.source_kind).
+type _ToolSourceKindMatchesDb = Assert<
+  IsEqual<(typeof TOOL_SOURCE_KINDS)[number], ToolCallsSourceKind>
 >
 
 export {}

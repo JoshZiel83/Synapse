@@ -284,8 +284,12 @@ export async function createToolCall(params: {
   bundleId: string
   toolKind: "callable" | "mcp_plugin" | "mcp_device" | "provider_builtin"
   toolName: string
-  pluginId?: string | null
-  deviceId?: string
+  // Tool provenance & routing: the immutable public source snapshot + its
+  // discriminator, plus optional soft pointers to the live source entity.
+  sourceKind: "system" | "plugin" | "device"
+  sourceSnapshot: Record<string, unknown>
+  pluginInstallationId?: string | null
+  deviceToolId?: string | null
   normalizedInput: Record<string, unknown>
 }) {
   const row = await db
@@ -301,8 +305,11 @@ export async function createToolCall(params: {
       bundle_id: params.bundleId,
       tool_kind: params.toolKind,
       tool_name: params.toolName,
-      plugin_id: params.pluginId || null,
-      device_id: params.deviceId || null,
+      source_kind: params.sourceKind,
+      source_snapshot:
+        params.sourceSnapshot as TableInsert<"tool_calls">["source_snapshot"],
+      plugin_installation_id: params.pluginInstallationId || null,
+      device_tool_id: params.deviceToolId || null,
       normalized_input:
         params.normalizedInput as TableInsert<"tool_calls">["normalized_input"],
       status: "pending",
@@ -341,10 +348,7 @@ export async function createToolExecutionAttempt(params: {
   toolCallId: string
   attemptNo: number
   executorKind: "callable" | "mcp_plugin" | "mcp_device" | "provider_builtin"
-  pluginId?: string | null
-  deviceId?: string
   transport?: string
-  instanceKey?: string
   requestPayload?: unknown
 }) {
   const requestPayloadBlobId =
@@ -359,10 +363,7 @@ export async function createToolExecutionAttempt(params: {
       tool_call_id: params.toolCallId,
       attempt_no: params.attemptNo,
       executor_kind: params.executorKind,
-      plugin_id: params.pluginId || null,
-      device_id: params.deviceId || null,
       transport: params.transport || null,
-      instance_key: params.instanceKey || null,
       request_payload_blob_id: requestPayloadBlobId,
       status: "success",
       is_error: false,
@@ -489,8 +490,10 @@ export async function getToolHistoryForSession(sessionId: string) {
       "tc.bundle_id",
       "tc.tool_kind",
       "tc.tool_name",
-      "tc.plugin_id",
-      "tc.device_id",
+      "tc.source_kind",
+      "tc.source_snapshot",
+      "tc.plugin_installation_id",
+      "tc.device_tool_id",
       "tc.normalized_input",
       "tc.status",
       "tc.created_at",
