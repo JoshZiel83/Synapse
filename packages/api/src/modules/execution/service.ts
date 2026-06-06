@@ -194,8 +194,8 @@ export async function logProviderStep(params: {
   providerType: string
   requestType: "actor_think" | "ai_complete"
   modelGroupId?: string
-  modelProfileId?: string
-  modelProfileRevisionId?: string
+  modelBindingId?: string
+  modelBindingVersionId?: string
   modelName: string
   capabilitiesSnapshot?: Record<string, unknown>
   requestPayload?: unknown
@@ -232,8 +232,8 @@ export async function logProviderStep(params: {
       provider_type: params.providerType,
       request_type: params.requestType,
       model_group_id: asNullableUuid(params.modelGroupId),
-      model_profile_id: asNullableUuid(params.modelProfileId),
-      model_profile_revision_id: asNullableUuid(params.modelProfileRevisionId),
+      model_binding_id: asNullableUuid(params.modelBindingId),
+      model_binding_version_id: asNullableUuid(params.modelBindingVersionId),
       model_name: params.modelName,
       capabilities_snapshot: (params.capabilitiesSnapshot ||
         {}) as TableInsert<"provider_steps">["capabilities_snapshot"],
@@ -253,10 +253,8 @@ export async function logProviderStep(params: {
         provider_type: params.providerType,
         request_type: params.requestType,
         model_group_id: asNullableUuid(params.modelGroupId),
-        model_profile_id: asNullableUuid(params.modelProfileId),
-        model_profile_revision_id: asNullableUuid(
-          params.modelProfileRevisionId
-        ),
+        model_binding_id: asNullableUuid(params.modelBindingId),
+        model_binding_version_id: asNullableUuid(params.modelBindingVersionId),
         model_name: params.modelName,
         capabilities_snapshot: (params.capabilitiesSnapshot ||
           {}) as TableInsert<"provider_steps">["capabilities_snapshot"],

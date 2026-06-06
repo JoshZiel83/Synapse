@@ -1,12 +1,10 @@
 import type {
   ModelAttemptPolicy,
-  ModelEngineKind,
   MultimodalConfig,
+  ProviderKind,
   ResolvedModelConfig,
   ResolvedModelPlan,
 } from "@synapse/shared"
-import { resolveModelEngineKind } from "@synapse/shared"
-import { redis } from "../../infrastructure/redis/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import {
   actorSubject,
@@ -15,13 +13,15 @@ import {
 } from "../access/service.js"
 import { DEFAULT_MAX_TOKENS, DEFAULT_MODEL_ATTEMPT_POLICY } from "./defaults.js"
 
+type RoutingStrategy = "weighted_random" | "priority_failover"
+
 type GroupRow = {
   id: string
   owner_type: "platform" | "workspace" | "workspace_member"
   owner_workspace_id: string | null
   owner_workspace_member_id: string | null
   name: string
-  routing_strategy: "weighted_random" | "round_robin" | "priority_failover"
+  routing_strategy: RoutingStrategy
   attempt_policy: Record<string, unknown> | null
   is_default: boolean
   is_enabled: boolean
@@ -32,22 +32,24 @@ type GroupRow = {
 type GroupItemRow = {
   group_id: string
   group_name: string
-  routing_strategy: "weighted_random" | "round_robin" | "priority_failover"
+  routing_strategy: RoutingStrategy
   attempt_policy: Record<string, unknown> | null
   item_id: string
   priority: number
   weight: number
   item_enabled: boolean
-  profile_id: string
+  binding_id: string
   display_name: string
-  current_revision_id: string | null
-  provider_type: string | null
+  current_version_id: string | null
+  provider_kind: string | null
+  vendor: string | null
   api_key: string | null
   base_url: string | null
   model_name: string | null
-  max_tokens: number | null
+  max_output_tokens: number | null
   capability_tags: string[] | null
-  extra_config: Record<string, unknown> | null
+  features: Record<string, unknown> | null
+  provider_options: Record<string, unknown> | null
   request_timeout_ms: number | null
   max_retries: number | null
 }
@@ -130,38 +132,19 @@ function weightedPick<T extends { weight: number }>(items: T[]) {
   return items[0]
 }
 
-function orderGroupItems(
-  groupId: string,
-  strategy: GroupRow["routing_strategy"],
-  items: GroupItemRow[],
-  roundRobinOffset = 0
-) {
+function orderGroupItems(strategy: RoutingStrategy, items: GroupItemRow[]) {
   const sorted = [...items].sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority
     if (a.weight !== b.weight) return b.weight - a.weight
     return a.display_name.localeCompare(b.display_name)
   })
 
-  if (strategy === "round_robin" && sorted.length > 1) {
-    const offset = roundRobinOffset % sorted.length
-    return [...sorted.slice(offset), ...sorted.slice(0, offset)]
-  }
-
   if (strategy === "weighted_random" && sorted.length > 1) {
     const first = weightedPick(sorted)
     return [first, ...sorted.filter((item) => item.item_id !== first.item_id)]
   }
 
-  void groupId
   return sorted
-}
-
-async function getRoundRobinOffset(groupId: string, length: number) {
-  if (length <= 1) return 0
-  const key = `model_group:rr:${groupId}`
-  const count = await redis.incr(key)
-  await redis.expire(key, 86400)
-  return (count - 1) % length
 }
 
 function ownerRank(group: GroupRow, current: ResolveContext) {
@@ -217,7 +200,7 @@ async function listCandidateGroups(
   ] = await Promise.all([
     authorizedGroupIds.size > 0
       ? db
-          .selectFrom("model_groups")
+          .selectFrom("model_groups_live")
           .selectAll()
           .where("is_enabled", "=", true)
           .where("id", "in", Array.from(authorizedGroupIds))
@@ -230,7 +213,7 @@ async function listCandidateGroups(
       .orderBy("priority", "asc")
       .execute(),
     db
-      .selectFrom("model_groups")
+      .selectFrom("model_groups_live")
       .select("id")
       .where("owner_type", "=", "workspace")
       .where("owner_workspace_id", "=", current.workspaceId)
@@ -238,7 +221,7 @@ async function listCandidateGroups(
       .where("is_enabled", "=", true)
       .executeTakeFirst(),
     db
-      .selectFrom("model_groups")
+      .selectFrom("model_groups_live")
       .select("id")
       .where("owner_type", "=", "platform")
       .where("is_default", "=", true)
@@ -246,7 +229,7 @@ async function listCandidateGroups(
       .executeTakeFirst(),
     current.workspaceMemberId
       ? db
-          .selectFrom("model_groups")
+          .selectFrom("model_groups_live")
           .select("id")
           .where("owner_type", "=", "workspace_member")
           .where("owner_workspace_member_id", "=", current.workspaceMemberId)
@@ -305,45 +288,48 @@ async function listCandidateGroups(
 }
 
 async function listGroupItems(groupId: string) {
+  // Flat read: model_bindings (the item) joined to its current version row.
+  // Reads go through the soft-delete _live view so deleted bindings are excluded.
   const result = await db
-    .selectFrom("model_group_profiles as mgp")
-    .innerJoin("model_groups as mg", "mg.id", "mgp.group_id")
-    .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
-    .leftJoin("model_profile_revisions as r", "r.id", "mp.current_revision_id")
+    .selectFrom("model_bindings_live as mb")
+    .innerJoin("model_groups_live as mg", "mg.id", "mb.group_id")
+    .leftJoin("model_binding_versions as v", "v.id", "mb.current_version_id")
     .select([
       "mg.id as group_id",
       "mg.name as group_name",
       "mg.routing_strategy",
       "mg.attempt_policy",
-      "mgp.id as item_id",
-      "mgp.priority",
-      "mgp.weight",
-      "mgp.is_enabled as item_enabled",
-      "mp.id as profile_id",
-      "mp.display_name",
-      "mp.current_revision_id",
-      "r.provider_type",
-      "r.api_key",
-      "r.base_url",
-      "r.model_name",
-      "r.max_tokens",
-      "r.capability_tags",
-      "r.extra_config",
-      "r.request_timeout_ms",
-      "r.max_retries",
+      "mb.id as item_id",
+      "mb.priority",
+      "mb.weight",
+      "mb.is_enabled as item_enabled",
+      "mb.id as binding_id",
+      "mb.display_name",
+      "mb.current_version_id",
+      "v.provider_kind",
+      "v.vendor",
+      "v.api_key",
+      "v.base_url",
+      "v.model_name",
+      "v.max_output_tokens",
+      "v.capability_tags",
+      "v.features",
+      "v.provider_options",
+      "v.request_timeout_ms",
+      "v.max_retries",
     ])
-    .where("mgp.group_id", "=", groupId)
-    .where("mgp.is_enabled", "=", true)
-    .where("mp.is_enabled", "=", true)
-    .where("mp.current_revision_id", "is not", null)
+    .where("mb.group_id", "=", groupId)
+    .where("mb.is_enabled", "=", true)
+    .where("mb.current_version_id", "is not", null)
     .execute()
-  return result as GroupItemRow[]
+  return result as unknown as GroupItemRow[]
 }
 
 function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
   if (
-    !row.current_revision_id ||
-    !row.provider_type ||
+    !row.current_version_id ||
+    !row.provider_kind ||
+    !row.vendor ||
     !row.api_key ||
     !row.base_url ||
     !row.model_name
@@ -351,8 +337,8 @@ function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
     return null
   }
 
-  const extraConfig = asObject(row.extra_config)
-  const multimodalConfig = asObject(extraConfig.multimodal)
+  const features = asObject(row.features)
+  const multimodalConfig = asObject(features.multimodal)
   const multimodal: MultimodalConfig | undefined =
     multimodalConfig.supported === true
       ? {
@@ -363,22 +349,32 @@ function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
         }
       : undefined
 
+  const apiStyleRaw = features.apiStyle
+  const apiStyle =
+    apiStyleRaw === "responses" || apiStyleRaw === "chat"
+      ? apiStyleRaw
+      : undefined
+
   return {
     groupId: row.group_id,
-    profileId: row.profile_id,
-    profileRevisionId: row.current_revision_id,
-    providerType: row.provider_type,
-    engineKind: resolveModelEngineKind(row.provider_type, extraConfig),
+    bindingId: row.binding_id,
+    bindingVersionId: row.current_version_id,
+    providerKind: row.provider_kind as ProviderKind,
+    vendor: row.vendor,
+    apiStyle,
     apiKey: row.api_key,
     baseUrl: row.base_url,
     modelName: row.model_name,
-    maxTokens: row.max_tokens || DEFAULT_MAX_TOKENS,
-    builtinTools: Array.isArray(extraConfig.builtin_tools)
-      ? (extraConfig.builtin_tools as ResolvedModelConfig["builtinTools"])
+    maxOutputTokens: row.max_output_tokens || DEFAULT_MAX_TOKENS,
+    serverTools: Array.isArray(features.serverTools)
+      ? (features.serverTools as ResolvedModelConfig["serverTools"])
       : undefined,
     multimodal,
     crossTurnToolHistory:
-      extraConfig.cross_turn_tool_history === true ? true : undefined,
+      features.crossTurnToolHistory === true ? true : undefined,
+    providerOptions: row.provider_options
+      ? asObject(row.provider_options)
+      : undefined,
     priority: row.priority,
     weight: row.weight,
     requestTimeoutMs: row.request_timeout_ms ?? undefined,
@@ -408,16 +404,7 @@ export async function resolveModelPlan(
     const items = await listGroupItems(group.id)
     if (items.length === 0) continue
 
-    const offset =
-      group.routing_strategy === "round_robin"
-        ? await getRoundRobinOffset(group.id, items.length)
-        : 0
-    const orderedItems = orderGroupItems(
-      group.id,
-      group.routing_strategy,
-      items,
-      offset
-    )
+    const orderedItems = orderGroupItems(group.routing_strategy, items)
     const candidates = orderedItems
       .map(toResolvedModelConfig)
       .filter(

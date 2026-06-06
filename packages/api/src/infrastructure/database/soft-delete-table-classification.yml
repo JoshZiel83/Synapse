@@ -343,10 +343,6 @@ tables:
       - column: participant_two_subject_id
         resolvesSubject: target
         action: update
-  engine_branch_checkpoints:
-    class: append-only
-    softDelete: none
-    workspaceScope: none
   entity_access_requests:
     class: child
     softDelete: none
@@ -511,13 +507,17 @@ tables:
       - column: subject_id
         resolvesSubject: target
         action: revoke
-  model_group_profiles:
-    class: ephemeral
+  model_bindings:
+    class: root
+    softDelete: deleted_at
+    workspaceScope: owner-derived
+    workspaceScopePredicate: >-
+      group_id IN (SELECT id FROM model_groups WHERE (owner_type = 'workspace' AND owner_workspace_id = $1) OR
+      (owner_type = 'workspace_member' AND owner_workspace_member_id IN (SELECT id FROM workspace_members WHERE workspace_id = $1)))
+  model_binding_versions:
+    class: append-only
     softDelete: none
-    derived: true
     workspaceScope: none
-    deleteWhitelist:
-      - securityDefinerFn
   model_groups:
     class: root
     softDelete: deleted_at
@@ -525,14 +525,6 @@ tables:
     workspaceScopePredicate: >-
       (owner_type = 'workspace' AND owner_workspace_id = $1) OR (owner_type = 'workspace_member' AND
       owner_workspace_member_id IN (SELECT id FROM workspace_members WHERE workspace_id = $1))
-  model_profile_revisions:
-    class: append-only
-    softDelete: none
-    workspaceScope: none
-  model_profiles:
-    class: root
-    softDelete: deleted_at
-    workspaceScope: nullable-global
   payload_blobs:
     class: reference
     softDelete: none
@@ -696,12 +688,6 @@ tables:
       - ba-kernel
       - revokeAuthRuntimeForUser
   session_context_states:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: none
-    deleteWhitelist:
-      - securityDefinerFn
-  session_engine_branches:
     class: ephemeral
     softDelete: none
     workspaceScope: none
@@ -1559,34 +1545,48 @@ foreignKeys:
     _child: model_groups(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
-  digest:5b383687e7477db3:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: model_profiles(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
-  digest:ab0f26b16e7d7017:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: installed_by_workspace_member_id_snapshot
-    _child: model_profiles(installed_by_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: SET NULL
-  digest:ae5d983f10219374:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: model_profile_revisions(profile_id)
-    _parent: model_profiles(id)
-    _was: CASCADE
   digest:0dc6f0dfdb5a35b4:
     targetAction: RESTRICT
     liveIntegrity: enforce
     _child: model_group_grants(group_id)
     _parent: model_groups(id)
     _was: CASCADE
+  digest:95e34bddb408b8da:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: model_bindings(group_id)
+    _parent: model_groups(id)
+    _was: CASCADE
+  digest:ccccd10c9683d770:
+    targetAction: SET NULL
+    liveIntegrity: historical
+    setNull:
+      canLose: false
+      needsSnapshot: true
+      snapshotColumn: installed_by_workspace_member_id_snapshot
+    _child: model_bindings(installed_by_workspace_member_id)
+    _parent: workspace_members(id)
+    _was: SET NULL
+  digest:b4518f8456a8bc54:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: model_binding_versions(binding_id)
+    _parent: model_bindings(id)
+    _was: CASCADE
+  digest:a344918bf1ac16ea:
+    targetAction: SET NULL
+    liveIntegrity: historical
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: provider_steps(model_binding_id)
+    _parent: model_bindings(id)
+    _was: SET NULL
+  digest:db17ae7d96411d13:
+    targetAction: RESTRICT
+    _child: provider_steps(model_binding_version_id)
+    _parent: model_binding_versions(id)
+    _was: RESTRICT
   digest:a6095b142e55d57d:
     targetAction: SET NULL
     liveIntegrity: historical
@@ -1597,16 +1597,6 @@ foreignKeys:
     _child: model_group_grants(granted_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
-  digest:86f1b690bf90c7ad:
-    targetAction: RESTRICT
-    _child: model_group_profiles(group_id)
-    _parent: model_groups(id)
-    _was: CASCADE
-  digest:9e7b9301473038ac:
-    targetAction: RESTRICT
-    _child: model_group_profiles(profile_id)
-    _parent: model_profiles(id)
-    _was: CASCADE
   digest:37ac1963eda81802:
     targetAction: RESTRICT
     _child: actor_model_group_assignments(actor_id)
@@ -2075,23 +2065,6 @@ foreignKeys:
       needsSnapshot: false
     _child: provider_steps(model_group_id)
     _parent: model_groups(id)
-    _was: SET NULL
-  digest:620ab4c374ea6f2d:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: provider_steps(model_profile_id)
-    _parent: model_profiles(id)
-    _was: SET NULL
-  digest:e1c08d06beeb2e44:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: provider_steps(model_profile_revision_id)
-    _parent: model_profile_revisions(id)
     _was: SET NULL
   digest:d027fbe859c64c9b:
     targetAction: SET NULL
@@ -2644,32 +2617,6 @@ foreignKeys:
     _child: session_context_states(active_private_archive_point_id)
     _parent: context_archive_points(id)
     _was: SET NULL
-  digest:3187068d3056a517:
-    targetAction: RESTRICT
-    _child: session_engine_branches(session_id)
-    _parent: sessions(id)
-    _was: CASCADE
-  digest:083a95a261c98dc1:
-    targetAction: RESTRICT
-    _child: session_engine_branches(conversation_id)
-    _parent: conversations(id)
-    _was: CASCADE
-  digest:de7123d105d5c3df:
-    targetAction: RESTRICT
-    _child: engine_branch_checkpoints(branch_id)
-    _parent: session_engine_branches(id)
-    _was: CASCADE
-  digest:4b0fa46e713697e4:
-    targetAction: RESTRICT
-    _child: engine_branch_checkpoints(session_id)
-    _parent: sessions(id)
-    _was: CASCADE
-  digest:f644c4f246bdfa31:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: engine_branch_checkpoints(conversation_id)
-    _parent: conversations(id)
-    _was: CASCADE
   digest:dd79f9941dbe660e:
     targetAction: RESTRICT
     _child: session_interrupts(target_session_id)
@@ -3661,13 +3608,13 @@ foreignKeys:
     _child: catalog_items(latest_version_id)
     _parent: catalog_versions(id)
     _was: SET NULL
-  constraint:fk_model_profiles_current_revision:
+  constraint:fk_model_bindings_current_version:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: model_profiles(current_revision_id)
-    _parent: model_profile_revisions(id)
+    _child: model_bindings(current_version_id)
+    _parent: model_binding_versions(id)
     _was: SET NULL
   constraint:fk_model_group_grants_subject:
     targetAction: RESTRICT

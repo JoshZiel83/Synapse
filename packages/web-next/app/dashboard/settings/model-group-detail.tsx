@@ -35,18 +35,18 @@ import {
 interface ModelItem {
   id: string
   group_id: string
-  profile_id: string
+  binding_id: string
   display_name: string
   priority: number
   weight: number
   is_enabled: boolean
-  current_revision_id: string | null
+  current_version_id: string | null
   version: number
-  provider_type: string
-  engine_kind?: string
+  provider_kind: string
+  vendor: string
   base_url: string
   model_name: string
-  max_tokens: number
+  max_output_tokens: number
   capability_tags: string[]
 }
 
@@ -338,14 +338,14 @@ export default function ModelGroupDetail({
                           <Badge className="border-violet-500/20 bg-violet-500/10 text-xs text-violet-400">
                             v{item.version || 1}
                           </Badge>
-                          {item.provider_type ? (
+                          {item.vendor ? (
                             <Badge className="border-blue-500/20 bg-blue-500/10 text-xs text-blue-400">
-                              {item.provider_type}
+                              {item.vendor}
                             </Badge>
                           ) : null}
-                          {item.engine_kind ? (
+                          {item.provider_kind ? (
                             <Badge className="border-slate-500/20 bg-slate-500/10 text-xs text-slate-300">
-                              {item.engine_kind}
+                              {item.provider_kind}
                             </Badge>
                           ) : null}
                         </div>
@@ -355,8 +355,10 @@ export default function ModelGroupDetail({
                           </span>
                           <span>Priority: {item.priority}</span>
                           <span>Weight: {item.weight}</span>
-                          {item.max_tokens ? (
-                            <span>Max tokens: {item.max_tokens}</span>
+                          {item.max_output_tokens ? (
+                            <span>
+                              Max output tokens: {item.max_output_tokens}
+                            </span>
                           ) : null}
                         </div>
                       </div>

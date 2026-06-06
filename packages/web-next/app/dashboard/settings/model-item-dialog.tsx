@@ -4,11 +4,10 @@ import { useState, useEffect } from "react"
 import {
   MODEL_GROUP_GRANT_SCOPE,
   getDefaultModelBaseUrl,
-  getDefaultModelEngineKind,
   getDefaultModelName,
-  getModelProviderEngineDefinitions,
-  listModelProviderDefinitions,
-  providerSupportsBuiltinTools,
+  getProviderKindForVendor,
+  listModelVendorDefinitions,
+  vendorSupportsServerTools,
 } from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -41,7 +40,7 @@ interface ModelItemDialogProps {
   onSaved: () => void
 }
 
-const ANTHROPIC_BUILTIN_TOOLS = [
+const SERVER_TOOLS = [
   {
     key: "web_search",
     label: "Web Search",
@@ -54,7 +53,7 @@ const ANTHROPIC_BUILTIN_TOOLS = [
     description: "Allow the model to fetch and read full web page content",
     icon: FileText,
   },
-]
+] as const
 
 const MULTIMODAL_TYPES = [
   {
@@ -83,7 +82,14 @@ const MULTIMODAL_TYPES = [
   },
 ]
 
-const PROVIDER_OPTIONS = listModelProviderDefinitions()
+const VENDOR_OPTIONS = listModelVendorDefinitions()
+const DEFAULT_VENDOR = VENDOR_OPTIONS[0]?.vendor || "anthropic"
+const API_STYLE_OPTIONS = [
+  { value: "chat", label: "Chat Completions" },
+  { value: "responses", label: "Responses API" },
+] as const
+
+type ServerTool = "web_search" | "web_fetch"
 
 export default function ModelItemDialog({
   open,
@@ -95,75 +101,99 @@ export default function ModelItemDialog({
 }: ModelItemDialogProps) {
   const { workspaceId } = useWorkspace()
   const [displayName, setDisplayName] = useState("")
-  const [providerType, setProviderType] = useState("anthropic")
-  const [engineKind, setEngineKind] = useState("anthropic.messages")
+  const [vendor, setVendor] = useState(DEFAULT_VENDOR)
   const [apiKey, setApiKey] = useState("")
   const [baseUrl, setBaseUrl] = useState("")
   const [modelName, setModelName] = useState("")
-  const [maxTokens, setMaxTokens] = useState("4096")
+  const [maxOutputTokens, setMaxOutputTokens] = useState("4096")
   const [priority, setPriority] = useState("0")
   const [weight, setWeight] = useState("100")
-  const [builtinTools, setBuiltinTools] = useState<string[]>([])
+  const [apiStyle, setApiStyle] = useState<"chat" | "responses">("chat")
+  const [serverTools, setServerTools] = useState<ServerTool[]>([])
   const [multimodalTypes, setMultimodalTypes] = useState<string[]>([])
+  const [crossTurnToolHistory, setCrossTurnToolHistory] = useState(false)
+  const [providerOptionsText, setProviderOptionsText] = useState("")
   const [saving, setSaving] = useState(false)
-  const knownModels = getKnownModelOptions(providerType, engineKind)
-  const maxTokensLimit = getEffectiveMaxTokensLimit(
-    providerType,
-    engineKind,
-    modelName
-  )
+  const providerKind = getProviderKindForVendor(vendor)
+  const knownModels = getKnownModelOptions(vendor)
+  const maxTokensLimit = getEffectiveMaxTokensLimit(vendor, modelName)
   const modelConfigError = getModelConfigValidationMessage({
-    providerType,
-    engineKind,
+    vendor,
     modelName,
-    maxTokens,
+    maxOutputTokens,
   })
-  const modelDatalistId = `model-options-${providerType}-${engineKind}`.replace(
+  const providerOptionsError = (() => {
+    if (!providerOptionsText.trim()) return ""
+    try {
+      const parsed = JSON.parse(providerOptionsText)
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed)
+      )
+        return "Provider options must be a JSON object."
+      return ""
+    } catch {
+      return "Provider options must be valid JSON."
+    }
+  })()
+  const modelDatalistId = `model-options-${vendor}`.replace(
     /[^a-zA-Z0-9_-]/g,
     "-"
   )
 
   useEffect(() => {
     if (item) {
-      const resolvedProviderType = item.provider_type || "anthropic"
-      const resolvedEngineKind =
-        item.engine_kind ||
-        item.extra_config?.engine_kind ||
-        getDefaultModelEngineKind(resolvedProviderType)
+      const resolvedVendor = item.vendor || DEFAULT_VENDOR
+      const features = item.features || {}
       setDisplayName(item.display_name || "")
-      setProviderType(resolvedProviderType)
-      setEngineKind(resolvedEngineKind)
+      setVendor(resolvedVendor)
       setApiKey("") // Never pre-fill API key for security
       setBaseUrl(item.base_url || "")
       setModelName(item.model_name || "")
-      setMaxTokens(String(item.max_tokens || 4096))
+      setMaxOutputTokens(String(item.max_output_tokens || 4096))
       setPriority(String(item.priority ?? 0))
       setWeight(String(item.weight ?? 100))
-      // Load builtin_tools and multimodal from extra_config
-      const ec = item.extra_config || {}
-      setBuiltinTools(Array.isArray(ec.builtin_tools) ? ec.builtin_tools : [])
-      setMultimodalTypes(
-        ec.multimodal?.supported && Array.isArray(ec.multimodal.types)
-          ? ec.multimodal.types
+      setApiStyle(features.apiStyle === "responses" ? "responses" : "chat")
+      setServerTools(
+        Array.isArray(features.serverTools)
+          ? (features.serverTools.filter(
+              (t: unknown): t is ServerTool =>
+                t === "web_search" || t === "web_fetch"
+            ) as ServerTool[])
           : []
+      )
+      setMultimodalTypes(
+        features.multimodal?.supported &&
+          Array.isArray(features.multimodal.types)
+          ? features.multimodal.types
+          : []
+      )
+      setCrossTurnToolHistory(Boolean(features.crossTurnToolHistory))
+      setProviderOptionsText(
+        item.provider_options && Object.keys(item.provider_options).length > 0
+          ? JSON.stringify(item.provider_options, null, 2)
+          : ""
       )
     } else {
       setDisplayName("")
-      setProviderType("anthropic")
-      setEngineKind("anthropic.messages")
+      setVendor(DEFAULT_VENDOR)
       setApiKey("")
-      setBaseUrl(getDefaultModelBaseUrl("anthropic"))
-      setModelName(getDefaultModelName("anthropic", "anthropic.messages"))
-      setMaxTokens("4096")
+      setBaseUrl(getDefaultModelBaseUrl(DEFAULT_VENDOR))
+      setModelName(getDefaultModelName(DEFAULT_VENDOR))
+      setMaxOutputTokens("4096")
       setPriority("0")
       setWeight("100")
-      setBuiltinTools([])
+      setApiStyle("chat")
+      setServerTools([])
       setMultimodalTypes([])
+      setCrossTurnToolHistory(false)
+      setProviderOptionsText("")
     }
   }, [item, open])
 
-  const toggleBuiltinTool = (tool: string) => {
-    setBuiltinTools((prev) =>
+  const toggleServerTool = (tool: ServerTool) => {
+    setServerTools((prev) =>
       prev.includes(tool) ? prev.filter((t) => t !== tool) : [...prev, tool]
     )
   }
@@ -186,18 +216,29 @@ export default function ModelItemDialog({
         toast.error(modelConfigError)
         return
       }
+      if (providerOptionsError) {
+        toast.error(providerOptionsError)
+        return
+      }
 
-      // Build extraConfig with builtin_tools and multimodal
-      const extraConfig: Record<string, unknown> = {}
-      if (
-        providerSupportsBuiltinTools(providerType) &&
-        builtinTools.length > 0
-      ) {
-        extraConfig.builtin_tools = builtinTools
+      // Build typed features bag.
+      const features: Record<string, unknown> = {}
+      if (providerKind === "openai") {
+        features.apiStyle = apiStyle
+      }
+      if (vendorSupportsServerTools(vendor) && serverTools.length > 0) {
+        features.serverTools = serverTools
       }
       if (multimodalTypes.length > 0) {
-        extraConfig.multimodal = { supported: true, types: multimodalTypes }
+        features.multimodal = { supported: true, types: multimodalTypes }
       }
+      if (crossTurnToolHistory) {
+        features.crossTurnToolHistory = true
+      }
+
+      const providerOptions = providerOptionsText.trim()
+        ? (JSON.parse(providerOptionsText) as Record<string, unknown>)
+        : undefined
 
       if (item) {
         // Update - only send config fields if they changed
@@ -205,15 +246,16 @@ export default function ModelItemDialog({
           displayName: displayName.trim(),
           priority: parseInt(priority),
           weight: parseInt(weight),
-          extraConfig,
+          features,
+          vendor,
+          providerKind,
         }
+        if (providerOptions) updateData.providerOptions = providerOptions
         // Only add config fields if user provided new values
         if (modelName.trim()) updateData.modelName = modelName.trim()
         if (baseUrl.trim()) updateData.baseUrl = baseUrl.trim()
         if (apiKey.trim()) updateData.apiKey = apiKey.trim()
-        if (providerType) updateData.providerType = providerType
-        updateData.engineKind = engineKind
-        updateData.maxTokens = parseInt(maxTokens)
+        updateData.maxOutputTokens = parseInt(maxOutputTokens)
 
         if (scope === MODEL_GROUP_GRANT_SCOPE.PLATFORM) {
           await api.updatePlatformModelItem(groupId, item.id, updateData)
@@ -233,13 +275,14 @@ export default function ModelItemDialog({
           displayName: displayName.trim(),
           priority: parseInt(priority),
           weight: parseInt(weight),
-          providerType,
-          engineKind,
+          vendor,
+          providerKind,
           apiKey: apiKey.trim(),
           baseUrl: baseUrl.trim(),
           modelName: modelName.trim(),
-          maxTokens: parseInt(maxTokens),
-          extraConfig,
+          maxOutputTokens: parseInt(maxOutputTokens),
+          features,
+          ...(providerOptions ? { providerOptions } : {}),
         }
         if (scope === MODEL_GROUP_GRANT_SCOPE.PLATFORM) {
           await api.addPlatformModelItem(groupId, payload)
@@ -261,6 +304,7 @@ export default function ModelItemDialog({
   const isValid =
     displayName.trim() &&
     !modelConfigError &&
+    !providerOptionsError &&
     (item || (apiKey.trim() && baseUrl.trim() && modelName.trim()))
 
   return (
@@ -288,52 +332,32 @@ export default function ModelItemDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Provider</Label>
+              <Label>Vendor</Label>
               <select
-                value={providerType}
+                value={vendor}
                 onChange={(e) => {
-                  const nextProviderType = e.target.value
-                  const nextEngineKind =
-                    getDefaultModelEngineKind(nextProviderType)
-                  setProviderType(nextProviderType)
-                  setEngineKind(nextEngineKind)
-                  setBaseUrl(getDefaultModelBaseUrl(nextProviderType))
-                  setModelName(
-                    getDefaultModelName(nextProviderType, nextEngineKind)
-                  )
-                  if (!providerSupportsBuiltinTools(nextProviderType))
-                    setBuiltinTools([])
+                  const nextVendor = e.target.value
+                  setVendor(nextVendor)
+                  setBaseUrl(getDefaultModelBaseUrl(nextVendor))
+                  setModelName(getDefaultModelName(nextVendor))
+                  if (!vendorSupportsServerTools(nextVendor)) setServerTools([])
                 }}
                 className="h-10 w-full rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-foreground outline-none focus:border-blue-500/40 dark:border-white/10 dark:bg-white/5"
               >
-                {PROVIDER_OPTIONS.map((option) => (
-                  <option key={option.providerType} value={option.providerType}>
+                {VENDOR_OPTIONS.map((option) => (
+                  <option key={option.vendor} value={option.vendor}>
                     {option.label}
                   </option>
                 ))}
               </select>
             </div>
             <div className="space-y-2">
-              <Label>Protocol</Label>
-              <select
-                value={engineKind}
-                onChange={(e) => {
-                  const nextEngineKind = e.target.value
-                  setEngineKind(nextEngineKind)
-                  setModelName(
-                    getDefaultModelName(providerType, nextEngineKind)
-                  )
-                }}
-                className="h-10 w-full rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-foreground outline-none focus:border-blue-500/40 dark:border-white/10 dark:bg-white/5"
-              >
-                {getModelProviderEngineDefinitions(providerType).map(
-                  (option) => (
-                    <option key={option.engineKind} value={option.engineKind}>
-                      {option.label}
-                    </option>
-                  )
-                )}
-              </select>
+              <Label>Provider Kind</Label>
+              <Input
+                value={providerKind}
+                readOnly
+                className="border-gray-200 bg-gray-100 text-muted-foreground dark:border-white/10 dark:bg-white/5"
+              />
             </div>
           </div>
 
@@ -389,8 +413,7 @@ export default function ModelItemDialog({
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder={
-                getDefaultModelBaseUrl(providerType) ||
-                "https://api.example.com"
+                getDefaultModelBaseUrl(vendor) || "https://api.example.com"
               }
               className="border-gray-200 bg-gray-50 focus:border-blue-500/40 dark:border-white/10 dark:bg-white/5"
             />
@@ -398,10 +421,10 @@ export default function ModelItemDialog({
 
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Max Tokens</Label>
+              <Label>Max Output Tokens</Label>
               <Input
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(e.target.value)}
+                value={maxOutputTokens}
+                onChange={(e) => setMaxOutputTokens(e.target.value)}
                 type="number"
                 max={maxTokensLimit}
                 className="border-gray-200 bg-gray-50 focus:border-blue-500/40 dark:border-white/10 dark:bg-white/5"
@@ -437,14 +460,39 @@ export default function ModelItemDialog({
             </div>
           </div>
 
-          {/* Provider Built-in Tools */}
-          {providerSupportsBuiltinTools(providerType) && (
+          {/* API Style (OpenAI providerKind only) */}
+          {providerKind === "openai" && (
+            <div className="space-y-2 pt-1">
+              <Label className="text-sm">API Style</Label>
+              <select
+                value={apiStyle}
+                onChange={(e) =>
+                  setApiStyle(
+                    e.target.value === "responses" ? "responses" : "chat"
+                  )
+                }
+                className="h-10 w-full rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-foreground outline-none focus:border-blue-500/40 dark:border-white/10 dark:bg-white/5"
+              >
+                {API_STYLE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground/60">
+                Wire format used when calling this OpenAI-style endpoint.
+              </p>
+            </div>
+          )}
+
+          {/* Server Tools */}
+          {vendorSupportsServerTools(vendor) && (
             <div className="space-y-3 pt-1">
-              <Label className="text-sm">Built-in Tools</Label>
+              <Label className="text-sm">Server Tools</Label>
               <div className="space-y-2">
-                {ANTHROPIC_BUILTIN_TOOLS.map((tool) => {
+                {SERVER_TOOLS.map((tool) => {
                   const Icon = tool.icon
-                  const checked = builtinTools.includes(tool.key)
+                  const checked = serverTools.includes(tool.key)
                   return (
                     <label
                       key={tool.key}
@@ -457,7 +505,7 @@ export default function ModelItemDialog({
                       <input
                         type="checkbox"
                         checked={checked}
-                        onChange={() => toggleBuiltinTool(tool.key)}
+                        onChange={() => toggleServerTool(tool.key)}
                         className="sr-only"
                       />
                       <div
@@ -514,7 +562,7 @@ export default function ModelItemDialog({
                 })}
               </div>
               <p className="text-xs text-muted-foreground/60">
-                These tools run on the selected provider&apos;s servers when
+                These tools run on the selected vendor&apos;s servers when
                 supported.
               </p>
             </div>
@@ -600,6 +648,46 @@ export default function ModelItemDialog({
               Attachments of unsupported types will be sent as text
               descriptions.
             </p>
+          </div>
+
+          {/* Cross-turn tool history */}
+          <div className="space-y-2 pt-1">
+            <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 bg-background/30 p-3 dark:border-white/10">
+              <input
+                type="checkbox"
+                checked={crossTurnToolHistory}
+                onChange={(e) => setCrossTurnToolHistory(e.target.checked)}
+                className="accent-primary"
+              />
+              <div className="min-w-0 flex-1">
+                <span className="text-sm font-medium text-foreground">
+                  Cross-turn tool history
+                </span>
+                <p className="mt-0.5 text-xs text-muted-foreground/80">
+                  Replay prior tool calls/results across turns for this model.
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {/* Advanced: provider options */}
+          <div className="space-y-2 pt-1">
+            <Label className="text-sm">Advanced Provider Options (JSON)</Label>
+            <textarea
+              value={providerOptionsText}
+              onChange={(e) => setProviderOptionsText(e.target.value)}
+              rows={4}
+              spellCheck={false}
+              placeholder='{ "reasoning_effort": "high" }'
+              className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-blue-500/40 dark:border-white/10 dark:bg-white/5"
+            />
+            {providerOptionsError ? (
+              <p className="text-xs text-red-500">{providerOptionsError}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground/60">
+                Opaque, vendor-specific options passed through to the provider.
+              </p>
+            )}
           </div>
         </div>
 

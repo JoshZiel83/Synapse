@@ -465,12 +465,10 @@ export const INTERACTION_DECISIONS = ["approve", "reject"] as const
 export const PLAN_APPROVAL_DECISIONS = ["approve", "revise"] as const
 export const MODEL_GROUP_ROUTING_STRATEGY = {
   WEIGHTED_RANDOM: "weighted_random",
-  ROUND_ROBIN: "round_robin",
   PRIORITY_FAILOVER: "priority_failover",
 } as const
 export const MODEL_GROUP_ROUTING_STRATEGIES = [
   MODEL_GROUP_ROUTING_STRATEGY.WEIGHTED_RANDOM,
-  MODEL_GROUP_ROUTING_STRATEGY.ROUND_ROBIN,
   MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER,
 ] as const
 export const MODEL_GROUP_OWNER_TYPE = {

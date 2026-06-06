@@ -38,6 +38,9 @@
     "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.81",
+    "@ai-sdk/openai": "^3.0.68",
+    "@ai-sdk/openai-compatible": "^2.0.48",
     "@better-auth/core": "1.6.13",
     "@better-auth/expo": "1.6.13",
     "@dicebear/collection": "^9.4.2",
@@ -54,6 +57,7 @@
     "@synapse/device-runtime": "*",
     "@synapse/shared": "*",
     "@wecom/aibot-node-sdk": "1.0.6",
+    "ai": "^6.0.197",
     "better-auth": "1.6.13",
     "bullmq": "^5.8.0",
     "cron-parser": "^4.9.0",

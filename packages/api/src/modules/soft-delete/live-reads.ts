@@ -39,8 +39,8 @@ export const liveFileAssets = (db: Executor) =>
   db.selectFrom("file_assets_live")
 export const liveModelGroups = (db: Executor) =>
   db.selectFrom("model_groups_live")
-export const liveModelProfiles = (db: Executor) =>
-  db.selectFrom("model_profiles_live")
+export const liveModelBindings = (db: Executor) =>
+  db.selectFrom("model_bindings_live")
 export const liveCatalogItems = (db: Executor) =>
   db.selectFrom("catalog_items_live")
 export const livePublishers = (db: Executor) => db.selectFrom("publishers_live")

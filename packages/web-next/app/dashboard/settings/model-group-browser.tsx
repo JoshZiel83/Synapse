@@ -4,11 +4,10 @@ import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import {
   MODEL_GROUP_OWNER_TYPE,
   getDefaultModelBaseUrl,
-  getDefaultModelEngineKind,
   getDefaultModelName,
-  getModelProviderEngineDefinitions,
-  listModelProviderDefinitions,
-  providerSupportsBuiltinTools,
+  getProviderKindForVendor,
+  listModelVendorDefinitions,
+  vendorSupportsServerTools,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
 } from "@synapse/shared"
@@ -61,20 +60,21 @@ type ModelGroupSummary = {
 type ModelItem = {
   id: string
   group_id: string
-  profile_id: string
+  binding_id: string
   display_name: string
   priority: number
   weight: number
   is_enabled: boolean
-  current_revision_id: string | null
+  current_version_id: string | null
   version: number
-  provider_type: string
-  engine_kind?: string
+  provider_kind: string
+  vendor: string
   base_url: string
   model_name: string
-  max_tokens: number
+  max_output_tokens: number
   capability_tags: string[]
-  extra_config?: Record<string, unknown>
+  features?: Record<string, unknown>
+  provider_options?: Record<string, unknown>
 }
 
 type GroupDetail = ModelGroupSummary & {
@@ -83,20 +83,22 @@ type GroupDetail = ModelGroupSummary & {
 
 type ModelItemFormState = {
   displayName: string
-  providerType: string
-  engineKind: string
+  vendor: string
   apiKey: string
   baseUrl: string
   modelName: string
-  maxTokens: string
+  maxOutputTokens: string
   priority: string
   weight: string
-  builtinTools: string[]
+  apiStyle: "chat" | "responses"
+  serverTools: string[]
   multimodalTypes: string[]
+  crossTurnToolHistory: boolean
+  providerOptionsText: string
   isEnabled: boolean
 }
 
-const ANTHROPIC_BUILTIN_TOOLS = [
+const SERVER_TOOLS = [
   {
     key: "web_search",
     label: "Web Search",
@@ -116,35 +118,40 @@ const MULTIMODAL_TYPES = [
   { key: "document", label: "Documents" },
 ]
 
-const PROVIDER_OPTIONS = listModelProviderDefinitions()
+const VENDOR_OPTIONS = listModelVendorDefinitions()
+const DEFAULT_VENDOR = VENDOR_OPTIONS[0]?.vendor || "anthropic"
+const API_STYLE_OPTIONS = [
+  { value: "chat", label: "Chat Completions" },
+  { value: "responses", label: "Responses API" },
+] as const
 
 function createFormState(item?: ModelItem | null): ModelItemFormState {
-  const extraConfig = (item?.extra_config || {}) as Record<string, any>
-  const multimodal = extraConfig.multimodal || {}
-  const providerType = item?.provider_type || "anthropic"
-  const engineKind =
-    item?.engine_kind ||
-    extraConfig.engine_kind ||
-    getDefaultModelEngineKind(providerType)
+  const features = (item?.features || {}) as Record<string, any>
+  const multimodal = features.multimodal || {}
+  const vendor = item?.vendor || DEFAULT_VENDOR
 
   return {
     displayName: item?.display_name || "",
-    providerType,
-    engineKind,
+    vendor,
     apiKey: "",
-    baseUrl: item?.base_url || getDefaultModelBaseUrl(providerType),
-    modelName:
-      item?.model_name || getDefaultModelName(providerType, engineKind),
-    maxTokens: String(item?.max_tokens || 4096),
+    baseUrl: item?.base_url || getDefaultModelBaseUrl(vendor),
+    modelName: item?.model_name || getDefaultModelName(vendor),
+    maxOutputTokens: String(item?.max_output_tokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
-    builtinTools: Array.isArray(extraConfig.builtin_tools)
-      ? extraConfig.builtin_tools
+    apiStyle: features.apiStyle === "responses" ? "responses" : "chat",
+    serverTools: Array.isArray(features.serverTools)
+      ? features.serverTools
       : [],
     multimodalTypes:
       multimodal.supported && Array.isArray(multimodal.types)
         ? multimodal.types
         : [],
+    crossTurnToolHistory: Boolean(features.crossTurnToolHistory),
+    providerOptionsText:
+      item?.provider_options && Object.keys(item.provider_options).length > 0
+        ? JSON.stringify(item.provider_options, null, 2)
+        : "",
     isEnabled: item ? Boolean(item.is_enabled) : true,
   }
 }
@@ -261,11 +268,11 @@ function ConfigListItem({
               {item.display_name}
             </div>
             <Badge variant="secondary">v{item.version || 1}</Badge>
-            {item.provider_type ? (
-              <Badge variant="outline">{item.provider_type}</Badge>
+            {item.vendor ? (
+              <Badge variant="outline">{item.vendor}</Badge>
             ) : null}
-            {item.engine_kind ? (
-              <Badge variant="outline">{item.engine_kind}</Badge>
+            {item.provider_kind ? (
+              <Badge variant="outline">{item.provider_kind}</Badge>
             ) : null}
             {!item.is_enabled ? (
               <Badge variant="outline">Disabled</Badge>
@@ -277,7 +284,9 @@ function ConfigListItem({
           <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <span>Priority {item.priority}</span>
             <span>Weight {item.weight}</span>
-            {item.max_tokens ? <span>{item.max_tokens} tokens</span> : null}
+            {item.max_output_tokens ? (
+              <span>{item.max_output_tokens} tokens</span>
+            ) : null}
           </div>
         </div>
       </div>
@@ -306,26 +315,36 @@ export default function ModelGroupBrowser({
   const [savingItem, setSavingItem] = useState(false)
   const [groupSearch, setGroupSearch] = useState("")
   const deferredGroupSearch = useDeferredValue(groupSearch)
-  const knownModels = getKnownModelOptions(
-    itemDraft.providerType,
-    itemDraft.engineKind
-  )
+  const providerKind = getProviderKindForVendor(itemDraft.vendor)
+  const knownModels = getKnownModelOptions(itemDraft.vendor)
   const maxTokensLimit = getEffectiveMaxTokensLimit(
-    itemDraft.providerType,
-    itemDraft.engineKind,
+    itemDraft.vendor,
     itemDraft.modelName
   )
   const itemConfigError = getModelConfigValidationMessage({
-    providerType: itemDraft.providerType,
-    engineKind: itemDraft.engineKind,
+    vendor: itemDraft.vendor,
     modelName: itemDraft.modelName,
-    maxTokens: itemDraft.maxTokens,
+    maxOutputTokens: itemDraft.maxOutputTokens,
   })
-  const modelDatalistId =
-    `browser-model-options-${itemDraft.providerType}-${itemDraft.engineKind}`.replace(
-      /[^a-zA-Z0-9_-]/g,
-      "-"
-    )
+  const providerOptionsError = (() => {
+    if (!itemDraft.providerOptionsText.trim()) return ""
+    try {
+      const parsed = JSON.parse(itemDraft.providerOptionsText)
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed)
+      )
+        return "Provider options must be a JSON object."
+      return ""
+    } catch {
+      return "Provider options must be valid JSON."
+    }
+  })()
+  const modelDatalistId = `browser-model-options-${itemDraft.vendor}`.replace(
+    /[^a-zA-Z0-9_-]/g,
+    "-"
+  )
 
   const currentItem = useMemo(
     () =>
@@ -480,34 +499,49 @@ export default function ModelGroupBrowser({
       toast.error(itemConfigError)
       return
     }
+    if (providerOptionsError) {
+      toast.error(providerOptionsError)
+      return
+    }
 
     setSavingItem(true)
     try {
-      const extraConfig: Record<string, unknown> = {}
+      const features: Record<string, unknown> = {}
+      if (providerKind === "openai") {
+        features.apiStyle = itemDraft.apiStyle
+      }
       if (
-        providerSupportsBuiltinTools(itemDraft.providerType) &&
-        itemDraft.builtinTools.length > 0
+        vendorSupportsServerTools(itemDraft.vendor) &&
+        itemDraft.serverTools.length > 0
       ) {
-        extraConfig.builtin_tools = itemDraft.builtinTools
+        features.serverTools = itemDraft.serverTools
       }
       if (itemDraft.multimodalTypes.length > 0) {
-        extraConfig.multimodal = {
+        features.multimodal = {
           supported: true,
           types: itemDraft.multimodalTypes,
         }
       }
+      if (itemDraft.crossTurnToolHistory) {
+        features.crossTurnToolHistory = true
+      }
+
+      const providerOptions = itemDraft.providerOptionsText.trim()
+        ? (JSON.parse(itemDraft.providerOptionsText) as Record<string, unknown>)
+        : undefined
 
       if (currentItem) {
         const payload: Record<string, unknown> = {
           displayName: itemDraft.displayName.trim(),
           priority: parseInt(itemDraft.priority, 10),
           weight: parseInt(itemDraft.weight, 10),
-          extraConfig,
+          features,
           isEnabled: itemDraft.isEnabled,
-          maxTokens: parseInt(itemDraft.maxTokens, 10),
-          providerType: itemDraft.providerType,
-          engineKind: itemDraft.engineKind,
+          maxOutputTokens: parseInt(itemDraft.maxOutputTokens, 10),
+          vendor: itemDraft.vendor,
+          providerKind,
         }
+        if (providerOptions) payload.providerOptions = providerOptions
         if (itemDraft.modelName.trim())
           payload.modelName = itemDraft.modelName.trim()
         if (itemDraft.baseUrl.trim()) payload.baseUrl = itemDraft.baseUrl.trim()
@@ -541,13 +575,14 @@ export default function ModelGroupBrowser({
           displayName: itemDraft.displayName.trim(),
           priority: parseInt(itemDraft.priority, 10),
           weight: parseInt(itemDraft.weight, 10),
-          providerType: itemDraft.providerType,
-          engineKind: itemDraft.engineKind,
+          vendor: itemDraft.vendor,
+          providerKind,
           apiKey: itemDraft.apiKey.trim(),
           baseUrl: itemDraft.baseUrl.trim(),
           modelName: itemDraft.modelName.trim(),
-          maxTokens: parseInt(itemDraft.maxTokens, 10),
-          extraConfig,
+          maxOutputTokens: parseInt(itemDraft.maxOutputTokens, 10),
+          features,
+          ...(providerOptions ? { providerOptions } : {}),
         }
 
         let response
@@ -790,7 +825,12 @@ export default function ModelGroupBrowser({
                   ) : null}
                   <Button
                     onClick={() => void handleSaveItem()}
-                    disabled={savingItem || !selectedGroup || !!itemConfigError}
+                    disabled={
+                      savingItem ||
+                      !selectedGroup ||
+                      !!itemConfigError ||
+                      !!providerOptionsError
+                    }
                   >
                     <Save data-icon="inline-start" />
                     {savingItem ? "Saving..." : "Save"}
@@ -828,69 +868,38 @@ export default function ModelGroupBrowser({
 
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label>Provider</Label>
+                        <Label>Vendor</Label>
                         <select
-                          value={itemDraft.providerType}
+                          value={itemDraft.vendor}
                           onChange={(event) =>
                             setItemDraft((current) => ({
                               ...current,
-                              providerType: event.target.value,
-                              engineKind: getDefaultModelEngineKind(
-                                event.target.value
-                              ),
+                              vendor: event.target.value,
                               baseUrl: getDefaultModelBaseUrl(
                                 event.target.value
                               ),
                               modelName: getDefaultModelName(
-                                event.target.value,
-                                getDefaultModelEngineKind(event.target.value)
+                                event.target.value
                               ),
-                              builtinTools: providerSupportsBuiltinTools(
+                              serverTools: vendorSupportsServerTools(
                                 event.target.value
                               )
-                                ? current.builtinTools
+                                ? current.serverTools
                                 : [],
                             }))
                           }
                           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
                         >
-                          {PROVIDER_OPTIONS.map((option) => (
-                            <option
-                              key={option.providerType}
-                              value={option.providerType}
-                            >
+                          {VENDOR_OPTIONS.map((option) => (
+                            <option key={option.vendor} value={option.vendor}>
                               {option.label}
                             </option>
                           ))}
                         </select>
                       </div>
                       <div className="space-y-2">
-                        <Label>Protocol</Label>
-                        <select
-                          value={itemDraft.engineKind}
-                          onChange={(event) =>
-                            setItemDraft((current) => ({
-                              ...current,
-                              engineKind: event.target.value,
-                              modelName: getDefaultModelName(
-                                current.providerType,
-                                event.target.value
-                              ),
-                            }))
-                          }
-                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
-                        >
-                          {getModelProviderEngineDefinitions(
-                            itemDraft.providerType
-                          ).map((option) => (
-                            <option
-                              key={option.engineKind}
-                              value={option.engineKind}
-                            >
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
+                        <Label>Provider Kind</Label>
+                        <Input value={providerKind} readOnly disabled />
                       </div>
                     </div>
 
@@ -970,7 +979,7 @@ export default function ModelGroupBrowser({
                           }))
                         }
                         placeholder={
-                          getDefaultModelBaseUrl(itemDraft.providerType) ||
+                          getDefaultModelBaseUrl(itemDraft.vendor) ||
                           "https://api.example.com"
                         }
                       />
@@ -978,14 +987,14 @@ export default function ModelGroupBrowser({
 
                     <div className="grid grid-cols-4 gap-4">
                       <div className="space-y-2">
-                        <Label>Max Tokens</Label>
+                        <Label>Max Output Tokens</Label>
                         <Input
                           type="number"
-                          value={itemDraft.maxTokens}
+                          value={itemDraft.maxOutputTokens}
                           onChange={(event) =>
                             setItemDraft((current) => ({
                               ...current,
-                              maxTokens: event.target.value,
+                              maxOutputTokens: event.target.value,
                             }))
                           }
                           max={maxTokensLimit}
@@ -1044,17 +1053,49 @@ export default function ModelGroupBrowser({
                 </Card>
 
                 <div className="flex flex-col gap-6">
-                  {providerSupportsBuiltinTools(itemDraft.providerType) ? (
+                  {providerKind === "openai" ? (
                     <Card>
                       <CardHeader>
-                        <CardTitle>Built-in Tools</CardTitle>
+                        <CardTitle>API Style</CardTitle>
                         <CardDescription>
-                          Provider-side tools exposed to this config.
+                          Wire format used for this OpenAI-style endpoint.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <select
+                          value={itemDraft.apiStyle}
+                          onChange={(event) =>
+                            setItemDraft((current) => ({
+                              ...current,
+                              apiStyle:
+                                event.target.value === "responses"
+                                  ? "responses"
+                                  : "chat",
+                            }))
+                          }
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
+                        >
+                          {API_STYLE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </CardContent>
+                    </Card>
+                  ) : null}
+
+                  {vendorSupportsServerTools(itemDraft.vendor) ? (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Server Tools</CardTitle>
+                        <CardDescription>
+                          Vendor-side tools exposed to this config.
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="flex flex-col gap-3">
-                        {ANTHROPIC_BUILTIN_TOOLS.map((tool) => {
-                          const checked = itemDraft.builtinTools.includes(
+                        {SERVER_TOOLS.map((tool) => {
+                          const checked = itemDraft.serverTools.includes(
                             tool.key
                           )
                           return (
@@ -1068,11 +1109,11 @@ export default function ModelGroupBrowser({
                                 onChange={() =>
                                   setItemDraft((current) => ({
                                     ...current,
-                                    builtinTools: checked
-                                      ? current.builtinTools.filter(
+                                    serverTools: checked
+                                      ? current.serverTools.filter(
                                           (value) => value !== tool.key
                                         )
-                                      : [...current.builtinTools, tool.key],
+                                      : [...current.serverTools, tool.key],
                                   }))
                                 }
                                 className="mt-1 accent-primary"
@@ -1130,6 +1171,64 @@ export default function ModelGroupBrowser({
                           </label>
                         )
                       })}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Behavior</CardTitle>
+                      <CardDescription>
+                        Runtime feature toggles and opaque provider options.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-3">
+                      <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-border p-3">
+                        <input
+                          type="checkbox"
+                          checked={itemDraft.crossTurnToolHistory}
+                          onChange={(event) =>
+                            setItemDraft((current) => ({
+                              ...current,
+                              crossTurnToolHistory: event.target.checked,
+                            }))
+                          }
+                          className="mt-1 accent-primary"
+                        />
+                        <div>
+                          <div className="font-medium text-foreground">
+                            Cross-turn tool history
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            Replay prior tool calls/results across turns.
+                          </div>
+                        </div>
+                      </label>
+                      <div className="space-y-2">
+                        <Label>Advanced Provider Options (JSON)</Label>
+                        <textarea
+                          value={itemDraft.providerOptionsText}
+                          onChange={(event) =>
+                            setItemDraft((current) => ({
+                              ...current,
+                              providerOptionsText: event.target.value,
+                            }))
+                          }
+                          rows={4}
+                          spellCheck={false}
+                          placeholder='{ "reasoning_effort": "high" }'
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none"
+                        />
+                        {providerOptionsError ? (
+                          <p className="text-xs text-red-500">
+                            {providerOptionsError}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            Opaque, vendor-specific options passed through to
+                            the provider.
+                          </p>
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
 

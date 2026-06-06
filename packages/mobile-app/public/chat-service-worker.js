@@ -62,7 +62,7 @@
     }
   });
 
-  // node_modules/idb/build/index.js
+  // ../../node_modules/idb/build/index.js
   var instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
   var idbProxyableTypes;
   var cursorAdvanceMethods;
@@ -864,12 +864,10 @@
   ];
   var MODEL_GROUP_ROUTING_STRATEGY = {
     WEIGHTED_RANDOM: "weighted_random",
-    ROUND_ROBIN: "round_robin",
     PRIORITY_FAILOVER: "priority_failover"
   };
   var MODEL_GROUP_ROUTING_STRATEGIES = [
     MODEL_GROUP_ROUTING_STRATEGY.WEIGHTED_RANDOM,
-    MODEL_GROUP_ROUTING_STRATEGY.ROUND_ROBIN,
     MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER
   ];
   var MODEL_GROUP_OWNER_TYPE = {
@@ -1867,8 +1865,7 @@
     CONVERSATION: "conversation",
     MEMORY_SPACE: "memory_space",
     MEMORY_ITEM: "memory_item",
-    MODEL_GROUP: "model_group",
-    MODEL_PROFILE: "model_profile"
+    MODEL_GROUP: "model_group"
   };
   var ACCESS_RESOURCE_TYPES = [
     ACCESS_RESOURCE_TYPE.PLATFORM,
@@ -1886,8 +1883,7 @@
     ACCESS_RESOURCE_TYPE.CONVERSATION,
     ACCESS_RESOURCE_TYPE.MEMORY_SPACE,
     ACCESS_RESOURCE_TYPE.MEMORY_ITEM,
-    ACCESS_RESOURCE_TYPE.MODEL_GROUP,
-    ACCESS_RESOURCE_TYPE.MODEL_PROFILE
+    ACCESS_RESOURCE_TYPE.MODEL_GROUP
   ];
   var ACCESS_BINDABLE_RESOURCE_TYPE = {
     INSTALLED_SKILL: "installed_skill",

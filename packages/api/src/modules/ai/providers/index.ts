@@ -1,28 +1,24 @@
-import type { AIProvider, AIProviderConfig } from "./types.js"
-import { getModelProviderAdapter } from "@synapse/shared"
-import { AnthropicProvider } from "./anthropic.js"
-import { BigModelChatCompletionsProvider } from "./bigmodel.js"
-import { OpenAIChatCompletionsProvider } from "./openai.js"
-import { OpenAIResponsesProvider } from "./openai-responses.js"
-
-export type { AIProvider, AIProviderConfig }
-
-export function createAIProvider(
-  providerName: string,
-  providerConfig: AIProviderConfig
-): AIProvider {
-  switch (getModelProviderAdapter(providerConfig.engineKind)) {
-    case "anthropic.messages":
-      return new AnthropicProvider(providerConfig)
-    case "openai.chat_completions":
-      return new OpenAIChatCompletionsProvider(providerConfig)
-    case "openai.responses":
-      return new OpenAIResponsesProvider(providerConfig)
-    case "bigmodel.chat_completions":
-      return new BigModelChatCompletionsProvider(providerConfig)
-    default:
-      throw new Error(
-        `Unknown AI engine kind: ${providerConfig.engineKind}. Provider=${providerName}. Supported adapters: anthropic.messages, openai.chat_completions, openai.responses, bigmodel.chat_completions`
-      )
-  }
-}
+/**
+ * Barrel for the AI-SDK provider layer.
+ *
+ * The provider layer is now the Vercel AI SDK. Synapse owns only:
+ *  - getLanguageModel: build a LanguageModel from a resolved binding
+ *  - toModelMessages: compile canonical ConversationMessage[] → neutral ModelMessage[]
+ *  - reconcileToolPairing: guarantee tool-call/result pairing before send
+ *  - buildAiTools: ToolDefinition[] → execute-less ToolSet
+ *  - fromGenerateText: adapt the SDK result back to the loop's expected shape
+ */
+export { getLanguageModel, bigModelChatBase } from "./get-language-model.js"
+export type { LanguageModelSpec } from "./get-language-model.js"
+export { toLanguageModelSpec } from "./to-language-model-spec.js"
+export { toModelMessages } from "./to-model-messages.js"
+export { reconcileToolPairing } from "./reconcile-tool-pairing.js"
+export { buildAiTools } from "./build-tools.js"
+export { fromGenerateText, normalizeUsage } from "./from-generate-text.js"
+export {
+  PROVIDER_KINDS,
+  PROVIDER_KIND_FACTS,
+  isProviderKind,
+  providerKindFacts,
+} from "./registry.js"
+export type { ProviderKind, ApiStyle } from "./registry.js"

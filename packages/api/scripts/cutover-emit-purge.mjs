@@ -84,10 +84,19 @@ function topoOrder() {
 const ORDER = topoOrder() // leaf → root
 
 // Never-purge set (tier A retention): immutable registries + audit.
+//   - provider_steps: append-only per-call audit/billing record.
+//   - model_binding_versions: append-only config snapshots that provider_steps
+//     references (model_binding_version_id, RESTRICT) for accurate per-call
+//     config-version traceability. Retention must not delete a version still
+//     anchored by an audit row, so it is audit-anchoring and never retention-purged.
+//   Both are erased only by a tier-B tenant hard-erase (sd_purge_workspace),
+//   which deletes provider_steps before model_binding_versions in topo order.
 const NEVER_PURGE = new Set([
   "access_subjects",
   "transport_addresses",
   "audit_logs",
+  "provider_steps",
+  "model_binding_versions",
 ])
 
 // child -> its non-self FKs (for scope-predicate chaining).

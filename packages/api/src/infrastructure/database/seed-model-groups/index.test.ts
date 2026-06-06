@@ -33,12 +33,11 @@ groups:
     isDefault: true
     items:
       - displayName: Claude Sonnet
-        providerType: anthropic
-        engineKind: anthropic.messages
+        vendor: anthropic
         apiKey: \${MG_TEST_KEY}
         baseUrl: https://api.anthropic.com
         modelName: claude-sonnet-4-20250514
-        maxTokens: 4096
+        maxOutputTokens: 4096
 `
 
 test.after(() => rmSync(DIR, { recursive: true, force: true }))
@@ -136,9 +135,9 @@ test("an unset ${ENV} reference fails loud and names the variable", async () => 
   )
 })
 
-// ---- semantic validation (provider/engine/maxTokens) ----
+// ---- semantic validation (vendor / providerKind / maxOutputTokens) ----
 
-test("provider/engine mismatch fails loud (semantic preflight)", async () => {
+test("providerKind/vendor mismatch fails loud (semantic preflight)", async () => {
   process.env.MG_TEST_KEY = "sk-test-secret"
   const cfg = `
 version: 1
@@ -146,8 +145,8 @@ groups:
   - name: G
     items:
       - displayName: X
-        providerType: anthropic
-        engineKind: openai.chat_completions
+        vendor: anthropic
+        providerKind: openai
         apiKey: \${MG_TEST_KEY}
         baseUrl: https://api.anthropic.com
         modelName: claude-sonnet-4-20250514
@@ -159,11 +158,11 @@ groups:
     }),
     (e) =>
       e instanceof ModelGroupsConfigError &&
-      /engine .* not valid|Unknown engine/i.test(e.message)
+      /does not match vendor|Unknown model vendor/i.test(e.message)
   )
 })
 
-test("maxTokens over the provider ceiling fails loud (semantic preflight)", async () => {
+test("maxOutputTokens over the vendor ceiling fails loud (semantic preflight)", async () => {
   process.env.MG_TEST_KEY = "sk-test-secret"
   const cfg = `
 version: 1
@@ -171,19 +170,20 @@ groups:
   - name: G
     items:
       - displayName: GLM
-        providerType: bigmodel
-        engineKind: bigmodel.chat_completions
+        vendor: bigmodel
         apiKey: \${MG_TEST_KEY}
-        baseUrl: https://open.bigmodel.cn/api
+        baseUrl: https://open.bigmodel.cn/api/paas/v4
         modelName: glm-4.6
-        maxTokens: 999999999
+        maxOutputTokens: 999999999
 `
   await assert.rejects(
     loadModelGroupsConfig({
       configPath: writeConfig(cfg),
       onMissingFile: "throw",
     }),
-    (e) => e instanceof ModelGroupsConfigError && /max tokens/i.test(e.message)
+    (e) =>
+      e instanceof ModelGroupsConfigError &&
+      /max output tokens/i.test(e.message)
   )
 })
 

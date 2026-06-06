@@ -104,6 +104,7 @@ import {
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
+import type { ProviderKind } from "../constants/model-providers.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
@@ -1567,7 +1568,6 @@ export interface AIRequestLog {
 }
 
 export type AnthropicBuiltinTool = "web_search" | "web_fetch"
-export type ModelEngineKind = string
 
 export type MultimodalType = (typeof CANONICAL_FILE_CATEGORIES)[number]
 
@@ -1578,17 +1578,19 @@ export interface MultimodalConfig {
 
 export interface ResolvedModelConfig {
   groupId: UUID
-  profileId: UUID
-  profileRevisionId: UUID
-  providerType: ProviderType
-  engineKind: ModelEngineKind
+  bindingId: UUID
+  bindingVersionId: UUID
+  providerKind: ProviderKind
+  vendor: string
+  apiStyle?: "chat" | "responses"
   apiKey: string
   baseUrl: string
   modelName: string
-  maxTokens: number
-  builtinTools?: AnthropicBuiltinTool[]
+  maxOutputTokens: number
+  serverTools?: AnthropicBuiltinTool[]
   multimodal?: MultimodalConfig
   crossTurnToolHistory?: boolean
+  providerOptions?: Record<string, unknown>
   priority?: number
   weight?: number
   requestTimeoutMs?: number
@@ -2134,24 +2136,6 @@ export interface ProviderContextWindow {
   orderedTailItems: CanonicalContextItem[]
 }
 
-export interface EngineBranchCursor {
-  sharedSequence?: number
-  privateSequence?: number
-  appliedItemIds?: string[]
-}
-
-export interface EngineBranchState {
-  branchId: string
-  sessionId: string
-  conversationId?: string
-  providerType: ProviderType
-  engineKind: ModelEngineKind
-  bindingKey: string
-  cursor: EngineBranchCursor
-  nativeState?: Record<string, unknown>
-  metadata?: Record<string, unknown>
-}
-
 // ============ Conversation Message ============
 export type ConversationMessage =
   | { role: "user"; content: CanonicalContentBlock[] }
@@ -2365,7 +2349,6 @@ export interface AIResponse {
   mediaBlocks?: unknown[] // Provider raw media content blocks (images, audio from model response)
   serverToolCalls?: ServerToolCall[]
   citationSources?: Record<string, { url: string; title: string }>
-  branchState?: EngineBranchState
 }
 
 // ============================================================

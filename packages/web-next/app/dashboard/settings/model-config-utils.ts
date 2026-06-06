@@ -6,44 +6,39 @@ import {
 import { ApiError } from "@/lib/api"
 
 export function getModelConfigValidationMessage(input: {
-  providerType: string
-  engineKind: string
+  vendor: string
   modelName: string
-  maxTokens: string
+  maxOutputTokens: string
 }): string {
-  const parsedMaxTokens = Number.parseInt(input.maxTokens, 10)
+  const parsedMaxOutputTokens = Number.parseInt(input.maxOutputTokens, 10)
 
   if (
-    input.maxTokens.trim() &&
-    (!Number.isFinite(parsedMaxTokens) || parsedMaxTokens <= 0)
+    input.maxOutputTokens.trim() &&
+    (!Number.isFinite(parsedMaxOutputTokens) || parsedMaxOutputTokens <= 0)
   ) {
-    return "Max tokens must be a positive integer."
+    return "Max output tokens must be a positive integer."
   }
 
   const issues = validateModelProviderConfig({
-    providerType: input.providerType,
-    engineKind: input.engineKind,
+    vendor: input.vendor,
     modelName: input.modelName,
-    maxTokens: Number.isFinite(parsedMaxTokens) ? parsedMaxTokens : undefined,
+    maxOutputTokens: Number.isFinite(parsedMaxOutputTokens)
+      ? parsedMaxOutputTokens
+      : undefined,
   })
 
   return issues[0]?.message || ""
 }
 
-export function getKnownModelOptions(providerType: string, engineKind: string) {
-  return getKnownModelDefinitions(providerType, engineKind)
+export function getKnownModelOptions(vendor: string) {
+  return getKnownModelDefinitions(vendor)
 }
 
 export function getEffectiveMaxTokensLimit(
-  providerType: string,
-  engineKind: string,
+  vendor: string,
   modelName: string
 ): number | undefined {
-  return getModelMaxTokensLimit(
-    providerType,
-    engineKind,
-    modelName.trim() || undefined
-  )
+  return getModelMaxTokensLimit(vendor, modelName.trim() || undefined)
 }
 
 export function getSaveErrorMessage(error: unknown, fallback: string): string {

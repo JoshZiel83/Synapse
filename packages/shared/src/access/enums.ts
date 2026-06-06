@@ -51,7 +51,6 @@ export const ACCESS_RESOURCE_TYPE = {
   MEMORY_SPACE: "memory_space",
   MEMORY_ITEM: "memory_item",
   MODEL_GROUP: "model_group",
-  MODEL_PROFILE: "model_profile",
 } as const
 
 export const ACCESS_RESOURCE_TYPES = [
@@ -71,7 +70,6 @@ export const ACCESS_RESOURCE_TYPES = [
   ACCESS_RESOURCE_TYPE.MEMORY_SPACE,
   ACCESS_RESOURCE_TYPE.MEMORY_ITEM,
   ACCESS_RESOURCE_TYPE.MODEL_GROUP,
-  ACCESS_RESOURCE_TYPE.MODEL_PROFILE,
 ] as const
 
 export type AccessResourceType = (typeof ACCESS_RESOURCE_TYPES)[number]

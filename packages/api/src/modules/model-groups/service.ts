@@ -1,5 +1,6 @@
 import {
-  resolveModelEngineKind,
+  getProviderKindForVendor,
+  isKnownModelVendor,
   validateModelProviderConfig,
 } from "@synapse/shared"
 import type {
@@ -158,40 +159,22 @@ function toIsoString(value: string | Date | null | undefined) {
   return value instanceof Date ? value.toISOString() : value
 }
 
-function withEngineKind(
-  extraConfig: JsonMap | undefined,
-  engineKind?: string
-): JsonMap | undefined {
-  const next = { ...(extraConfig || {}) }
-  if (engineKind) {
-    next.engine_kind = engineKind
-  }
-  return Object.keys(next).length > 0 ? next : undefined
-}
-
-function assertValidModelRevisionInput(input: {
-  providerType: string
-  engineKind?: string
+function assertValidModelVersionInput(input: {
+  vendor: string
   modelName: string
-  maxTokens?: number
-  extraConfig?: JsonMap
+  maxOutputTokens?: number
 }) {
-  const engineKind =
-    input.engineKind ||
-    resolveModelEngineKind(input.providerType, input.extraConfig)
+  if (!isKnownModelVendor(input.vendor)) {
+    throw new ModelGroupError(400, `Unknown model vendor "${input.vendor}".`)
+  }
   const issues = validateModelProviderConfig({
-    providerType: input.providerType,
-    engineKind,
+    vendor: input.vendor,
     modelName: input.modelName,
-    maxTokens: input.maxTokens,
+    maxOutputTokens: input.maxOutputTokens,
   })
 
   if (issues.length > 0) {
     throw new ModelGroupError(400, issues[0].message)
-  }
-
-  return {
-    engineKind,
   }
 }
 
@@ -216,29 +199,28 @@ function mapGroupRow(row: ModelGroupRow) {
 }
 
 function mapGroupItem(row: any) {
-  const extraConfig = asObject(row.extra_config)
-  const engineKind = resolveModelEngineKind(
-    row.provider_type || "anthropic",
-    extraConfig
-  )
+  const features = asObject(row.features)
+  const providerKind =
+    row.provider_kind || getProviderKindForVendor(row.vendor || "anthropic")
 
   return {
     id: row.item_id ?? row.id,
     group_id: row.group_id,
-    profile_id: row.profile_id,
-    current_revision_id: row.current_revision_id || null,
+    binding_id: row.binding_id ?? row.item_id ?? row.id,
+    current_version_id: row.current_version_id || null,
     display_name: row.display_name,
     priority: row.priority,
     weight: row.weight,
     is_enabled: Boolean(row.item_enabled ?? row.is_enabled),
     version: row.version || null,
-    provider_type: row.provider_type || null,
-    engine_kind: engineKind,
+    provider_kind: providerKind,
+    vendor: row.vendor || null,
     base_url: row.base_url || null,
     model_name: row.model_name || null,
-    max_tokens: row.max_tokens || null,
+    max_output_tokens: row.max_output_tokens || null,
     capability_tags: row.capability_tags || [],
-    extra_config: extraConfig,
+    features,
+    provider_options: asObject(row.provider_options),
     request_timeout_ms: row.request_timeout_ms ?? null,
     max_retries: row.max_retries ?? null,
     created_at: row.created_at,
@@ -330,42 +312,44 @@ async function getGroupRow(groupId: string) {
   return row
 }
 
-async function createProfileRevision(input: {
-  profileId: string
+async function createBindingVersion(input: {
+  bindingId: string
   version: number
-  providerType: string
-  engineKind?: string
+  providerKind: string
+  vendor: string
   apiKey: string
   baseUrl: string
   modelName: string
-  maxTokens?: number
+  maxOutputTokens?: number
   capabilityTags?: string[]
-  extraConfig?: JsonMap
+  features?: JsonMap
+  providerOptions?: JsonMap
   requestTimeoutMs?: number
   maxRetries?: number
 }) {
-  const validated = assertValidModelRevisionInput({
-    providerType: input.providerType,
-    engineKind: input.engineKind,
+  assertValidModelVersionInput({
+    vendor: input.vendor,
     modelName: input.modelName,
-    maxTokens: input.maxTokens,
-    extraConfig: input.extraConfig,
+    maxOutputTokens: input.maxOutputTokens,
   })
-  const effectiveMaxTokens = input.maxTokens ?? 4096
+  const effectiveMaxTokens = input.maxOutputTokens ?? 4096
 
   return db
-    .insertInto("model_profile_revisions")
+    .insertInto("model_binding_versions")
     .values({
-      profile_id: input.profileId,
+      binding_id: input.bindingId,
       version: input.version,
-      provider_type: input.providerType,
+      provider_kind: input.providerKind,
+      vendor: input.vendor,
       api_key: input.apiKey,
       base_url: input.baseUrl,
       model_name: input.modelName,
-      max_tokens: effectiveMaxTokens,
+      max_output_tokens: effectiveMaxTokens,
       capability_tags: input.capabilityTags || [],
-      extra_config: (withEngineKind(input.extraConfig, validated.engineKind) ||
-        {}) as TableInsert<"model_profile_revisions">["extra_config"],
+      features: (input.features ||
+        {}) as TableInsert<"model_binding_versions">["features"],
+      provider_options: (input.providerOptions ||
+        {}) as TableInsert<"model_binding_versions">["provider_options"],
       request_timeout_ms: input.requestTimeoutMs ?? null,
       max_retries: input.maxRetries ?? null,
     })
@@ -549,6 +533,7 @@ export async function listPlatformModelGroupsForImport(): Promise<
     .selectFrom("model_groups")
     .select(["id", "name", "is_default", "is_enabled"])
     .where("owner_type", "=", "platform")
+    .where("deleted_at", "is", null)
     .execute()
   return rows.map((row) => ({
     id: row.id as string,
@@ -634,37 +619,35 @@ export async function getModelGroup(groupId: string) {
 
   const [itemsResult, grantsResult] = await Promise.all([
     db
-      .selectFrom("model_group_profiles as mgp")
-      .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
-      .leftJoin(
-        "model_profile_revisions as r",
-        "r.id",
-        "mp.current_revision_id"
-      )
+      .selectFrom("model_bindings_live as mb")
+      .leftJoin("model_binding_versions as v", "v.id", "mb.current_version_id")
       .select([
-        "mgp.id as item_id",
-        "mgp.group_id",
-        "mgp.priority",
-        "mgp.weight",
-        "mgp.is_enabled as item_enabled",
-        "mgp.created_at",
-        "mgp.updated_at",
-        "mp.id as profile_id",
-        "mp.display_name",
-        "mp.current_revision_id",
-        "r.version",
-        "r.provider_type",
-        "r.base_url",
-        "r.model_name",
-        "r.max_tokens",
-        "r.capability_tags",
-        "r.extra_config",
-        "r.request_timeout_ms",
-        "r.max_retries",
+        "mb.id as item_id",
+        "mb.group_id",
+        "mb.priority",
+        "mb.weight",
+        "mb.is_enabled as item_enabled",
+        "mb.created_at",
+        "mb.updated_at",
+        "mb.id as binding_id",
+        "mb.display_name",
+        "mb.current_version_id",
+        "v.version",
+        "v.provider_kind",
+        "v.vendor",
+        "v.base_url",
+        "v.model_name",
+        "v.max_output_tokens",
+        "v.capability_tags",
+        "v.features",
+        "v.provider_options",
+        "v.request_timeout_ms",
+        "v.max_retries",
       ])
-      .where("mgp.group_id", "=", groupId)
-      .orderBy("mgp.priority", "asc")
-      .orderBy("mp.display_name")
+      .where("mb.group_id", "=", groupId)
+      .where("mb.deleted_at", "is", null)
+      .orderBy("mb.priority", "asc")
+      .orderBy("mb.display_name")
       .execute(),
     db
       .selectFrom("model_group_grants as mgg")
@@ -884,32 +867,19 @@ export async function deleteModelGroup(groupId: string) {
     .set({
       is_enabled: false,
       is_default: false,
+      deleted_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
     .where("id", "=", groupId)
     .execute()
   await db
-    .updateTable("model_group_profiles")
+    .updateTable("model_bindings")
     .set({
       is_enabled: false,
+      deleted_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
     .where("group_id", "=", groupId)
-    .execute()
-  await db
-    .updateTable("model_profiles")
-    .set({
-      is_enabled: false,
-      updated_at: sql`NOW()`,
-    })
-    .where(
-      "id",
-      "in",
-      db
-        .selectFrom("model_group_profiles")
-        .select("profile_id")
-        .where("group_id", "=", groupId)
-    )
     .execute()
   await sql`SELECT sd_replace_group_actor_assignments(${groupId}::uuid)`.execute(
     db
@@ -922,14 +892,15 @@ export async function addModelItem(
     displayName: string
     priority?: number
     weight?: number
-    providerType: string
-    engineKind?: string
+    providerKind?: string
+    vendor: string
     apiKey: string
     baseUrl: string
     modelName: string
-    maxTokens?: number
+    maxOutputTokens?: number
     capabilityTags?: string[]
-    extraConfig?: JsonMap
+    features?: JsonMap
+    providerOptions?: JsonMap
     requestTimeoutMs?: number
     maxRetries?: number
     installedByWorkspaceMemberId?: string
@@ -937,12 +908,13 @@ export async function addModelItem(
 ) {
   const group = await getGroupRow(groupId)
 
-  const profile = await db
-    .insertInto("model_profiles")
+  const binding = await db
+    .insertInto("model_bindings")
     .values({
-      workspace_id:
-        group.owner_type === "workspace" ? group.owner_workspace_id : null,
+      group_id: groupId,
       display_name: data.displayName,
+      priority: data.priority ?? 0,
+      weight: data.weight ?? 100,
       is_enabled: true,
       installed_by_workspace_member_id:
         data.installedByWorkspaceMemberId ||
@@ -952,57 +924,53 @@ export async function addModelItem(
     .returningAll()
     .executeTakeFirstOrThrow()
 
-  const revision = await createProfileRevision({
-    profileId: profile.id as string,
+  const version = await createBindingVersion({
+    bindingId: binding.id as string,
     version: 1,
-    providerType: data.providerType,
-    engineKind: data.engineKind,
+    providerKind: data.providerKind || getProviderKindForVendor(data.vendor),
+    vendor: data.vendor,
     apiKey: data.apiKey,
     baseUrl: data.baseUrl,
     modelName: data.modelName,
-    maxTokens: data.maxTokens,
+    maxOutputTokens: data.maxOutputTokens,
     capabilityTags: data.capabilityTags,
-    extraConfig: data.extraConfig,
+    features: data.features,
+    providerOptions: data.providerOptions,
     requestTimeoutMs: data.requestTimeoutMs,
     maxRetries: data.maxRetries,
   })
 
   await db
-    .updateTable("model_profiles")
+    .updateTable("model_bindings")
     .set({
-      current_revision_id: revision.id,
+      current_version_id: version.id,
       updated_at: sql`NOW()`,
     })
-    .where("id", "=", profile.id)
+    .where("id", "=", binding.id)
     .execute()
 
-  const item = await db
-    .insertInto("model_group_profiles")
-    .values({
-      group_id: groupId,
-      profile_id: profile.id,
-      priority: data.priority ?? 0,
-      weight: data.weight ?? 100,
-      is_enabled: true,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow()
-
   return mapGroupItem({
-    ...item,
+    item_id: binding.id,
     group_id: groupId,
-    profile_id: profile.id,
-    display_name: profile.display_name,
-    current_revision_id: revision.id,
-    version: revision.version,
-    provider_type: revision.provider_type,
-    base_url: revision.base_url,
-    model_name: revision.model_name,
-    max_tokens: revision.max_tokens,
-    capability_tags: revision.capability_tags,
-    extra_config: revision.extra_config,
-    request_timeout_ms: revision.request_timeout_ms,
-    max_retries: revision.max_retries,
+    binding_id: binding.id,
+    display_name: binding.display_name,
+    priority: binding.priority,
+    weight: binding.weight,
+    item_enabled: binding.is_enabled,
+    current_version_id: version.id,
+    version: version.version,
+    provider_kind: version.provider_kind,
+    vendor: version.vendor,
+    base_url: version.base_url,
+    model_name: version.model_name,
+    max_output_tokens: version.max_output_tokens,
+    capability_tags: version.capability_tags,
+    features: version.features,
+    provider_options: version.provider_options,
+    request_timeout_ms: version.request_timeout_ms,
+    max_retries: version.max_retries,
+    created_at: binding.created_at,
+    updated_at: binding.updated_at,
   })
 }
 
@@ -1014,130 +982,108 @@ export async function updateModelItem(
     priority?: number
     weight?: number
     isEnabled?: boolean
-    providerType?: string
-    engineKind?: string
+    providerKind?: string
+    vendor?: string
     apiKey?: string
     baseUrl?: string
     modelName?: string
-    maxTokens?: number
+    maxOutputTokens?: number
     capabilityTags?: string[]
-    extraConfig?: JsonMap
+    features?: JsonMap
+    providerOptions?: JsonMap
     requestTimeoutMs?: number
     maxRetries?: number
   }
 ) {
+  // itemId IS the binding id (the M:N profile/group join is gone).
   const item = await db
-    .selectFrom("model_group_profiles as mgp")
-    .innerJoin("model_groups as mg", "mg.id", "mgp.group_id")
-    .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
-    .leftJoin("model_profile_revisions as r", "r.id", "mp.current_revision_id")
+    .selectFrom("model_bindings_live as mb")
+    .leftJoin("model_binding_versions as v", "v.id", "mb.current_version_id")
     .select([
-      "mgp.id as item_id",
-      "mgp.group_id",
-      "mgp.priority",
-      "mgp.weight",
-      "mgp.is_enabled as item_enabled",
-      "mp.id as profile_id",
-      "mp.workspace_id as profile_workspace_id",
-      "mp.display_name",
-      "mp.current_revision_id",
-      "mp.is_enabled as profile_enabled",
-      "mp.installed_by_workspace_member_id",
-      "mg.is_enabled as group_enabled",
-      "r.version",
-      "r.provider_type",
-      "r.api_key",
-      "r.base_url",
-      "r.model_name",
-      "r.max_tokens",
-      "r.capability_tags",
-      "r.extra_config",
-      "r.request_timeout_ms",
-      "r.max_retries",
+      "mb.id as item_id",
+      "mb.group_id",
+      "mb.priority",
+      "mb.weight",
+      "mb.is_enabled as item_enabled",
+      "mb.display_name",
+      "mb.current_version_id",
+      "v.version",
+      "v.provider_kind",
+      "v.vendor",
+      "v.api_key",
+      "v.base_url",
+      "v.model_name",
+      "v.max_output_tokens",
+      "v.capability_tags",
+      "v.features",
+      "v.provider_options",
+      "v.request_timeout_ms",
+      "v.max_retries",
     ])
-    .where("mgp.id", "=", itemId)
-    .where("mgp.group_id", "=", groupId)
+    .where("mb.id", "=", itemId)
+    .where("mb.group_id", "=", groupId)
+    .where("mb.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!item) {
     throw new ModelGroupError(404, "Model group item not found")
   }
-  const itemUpdate: Record<string, unknown> = {}
-  if (data.priority !== undefined) {
-    itemUpdate.priority = data.priority
-  }
-  if (data.weight !== undefined) {
-    itemUpdate.weight = data.weight
-  }
-  if (data.isEnabled !== undefined) {
-    itemUpdate.is_enabled = data.isEnabled
+
+  const bindingUpdate: Record<string, unknown> = {}
+  if (data.priority !== undefined) bindingUpdate.priority = data.priority
+  if (data.weight !== undefined) bindingUpdate.weight = data.weight
+  if (data.isEnabled !== undefined) bindingUpdate.is_enabled = data.isEnabled
+  if (data.displayName !== undefined) {
+    bindingUpdate.display_name = data.displayName
   }
 
-  if (Object.keys(itemUpdate).length > 0) {
+  if (Object.keys(bindingUpdate).length > 0) {
     await db
-      .updateTable("model_group_profiles")
+      .updateTable("model_bindings")
       .set({
-        ...(itemUpdate as any),
+        ...(bindingUpdate as any),
         updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId)
       .execute()
   }
 
-  if (data.isEnabled !== undefined) {
-    await db
-      .updateTable("model_profiles")
-      .set({
-        is_enabled: data.isEnabled,
-        updated_at: sql`NOW()`,
-      })
-      .where("id", "=", item.profile_id as string)
-      .execute()
-  }
-
-  if (data.displayName !== undefined) {
-    await db
-      .updateTable("model_profiles")
-      .set({
-        display_name: data.displayName,
-        updated_at: sql`NOW()`,
-      })
-      .where("id", "=", item.profile_id as string)
-      .execute()
-  }
-
   const hasConfigChange =
-    data.providerType !== undefined ||
-    data.engineKind !== undefined ||
+    data.providerKind !== undefined ||
+    data.vendor !== undefined ||
     data.apiKey !== undefined ||
     data.baseUrl !== undefined ||
     data.modelName !== undefined ||
-    data.maxTokens !== undefined ||
+    data.maxOutputTokens !== undefined ||
     data.capabilityTags !== undefined ||
-    data.extraConfig !== undefined ||
+    data.features !== undefined ||
+    data.providerOptions !== undefined ||
     data.requestTimeoutMs !== undefined ||
     data.maxRetries !== undefined
 
   if (hasConfigChange) {
+    const vendor = data.vendor || (item.vendor as string)
+    const providerKind =
+      data.providerKind ||
+      (item.provider_kind as string) ||
+      getProviderKindForVendor(vendor)
     const nextVersion = Number(item.version || 0) + 1
-    const revision = await createProfileRevision({
-      profileId: item.profile_id as string,
+    const version = await createBindingVersion({
+      bindingId: itemId,
       version: nextVersion,
-      providerType: data.providerType || (item.provider_type as string),
-      engineKind:
-        data.engineKind ||
-        resolveModelEngineKind(
-          data.providerType || (item.provider_type as string),
-          data.extraConfig ?? asObject(item.extra_config)
-        ),
+      providerKind,
+      vendor,
       apiKey: data.apiKey || (item.api_key as string),
       baseUrl: data.baseUrl || (item.base_url as string),
       modelName: data.modelName || (item.model_name as string),
-      maxTokens:
-        data.maxTokens ?? (item.max_tokens as number | null) ?? undefined,
+      maxOutputTokens:
+        data.maxOutputTokens ??
+        (item.max_output_tokens as number | null) ??
+        undefined,
       capabilityTags:
         data.capabilityTags || (item.capability_tags as string[] | null) || [],
-      extraConfig: data.extraConfig ?? asObject(item.extra_config),
+      features: data.features ?? asObject(item.features),
+      providerOptions: data.providerOptions ?? asObject(item.provider_options),
       requestTimeoutMs:
         data.requestTimeoutMs ??
         (item.request_timeout_ms as number | null) ??
@@ -1146,44 +1092,42 @@ export async function updateModelItem(
         data.maxRetries ?? (item.max_retries as number | null) ?? undefined,
     })
     await db
-      .updateTable("model_profiles")
+      .updateTable("model_bindings")
       .set({
-        current_revision_id: revision.id,
+        current_version_id: version.id,
         updated_at: sql`NOW()`,
       })
-      .where("id", "=", item.profile_id as string)
+      .where("id", "=", itemId)
       .execute()
   }
 
   const updated = await db
-    .selectFrom("model_group_profiles as mgp")
-    .innerJoin("model_groups as mg", "mg.id", "mgp.group_id")
-    .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
-    .leftJoin("model_profile_revisions as r", "r.id", "mp.current_revision_id")
+    .selectFrom("model_bindings_live as mb")
+    .leftJoin("model_binding_versions as v", "v.id", "mb.current_version_id")
     .select([
-      "mgp.id as item_id",
-      "mgp.group_id",
-      "mgp.priority",
-      "mgp.weight",
-      "mgp.is_enabled as item_enabled",
-      "mgp.created_at",
-      "mgp.updated_at",
-      "mp.id as profile_id",
-      "mp.display_name",
-      "mp.current_revision_id",
-      "mp.is_enabled as profile_enabled",
-      "mg.is_enabled as group_enabled",
-      "r.version",
-      "r.provider_type",
-      "r.base_url",
-      "r.model_name",
-      "r.max_tokens",
-      "r.capability_tags",
-      "r.extra_config",
-      "r.request_timeout_ms",
-      "r.max_retries",
+      "mb.id as item_id",
+      "mb.group_id",
+      "mb.priority",
+      "mb.weight",
+      "mb.is_enabled as item_enabled",
+      "mb.created_at",
+      "mb.updated_at",
+      "mb.id as binding_id",
+      "mb.display_name",
+      "mb.current_version_id",
+      "v.version",
+      "v.provider_kind",
+      "v.vendor",
+      "v.base_url",
+      "v.model_name",
+      "v.max_output_tokens",
+      "v.capability_tags",
+      "v.features",
+      "v.provider_options",
+      "v.request_timeout_ms",
+      "v.max_retries",
     ])
-    .where("mgp.id", "=", itemId)
+    .where("mb.id", "=", itemId)
     .limit(1)
     .executeTakeFirstOrThrow()
 
@@ -1192,38 +1136,27 @@ export async function updateModelItem(
 
 export async function deleteModelItem(groupId: string, itemId: string) {
   const item = await db
-    .selectFrom("model_group_profiles as mgp")
-    .innerJoin("model_groups as mg", "mg.id", "mgp.group_id")
-    .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
-    .select([
-      "mgp.profile_id",
-      "mgp.is_enabled as item_enabled",
-      "mg.is_enabled as group_enabled",
-      "mp.is_enabled as profile_enabled",
-    ])
-    .where("mgp.id", "=", itemId)
-    .where("mgp.group_id", "=", groupId)
+    .selectFrom("model_bindings_live as mb")
+    .select(["mb.id", "mb.is_enabled as item_enabled"])
+    .where("mb.id", "=", itemId)
+    .where("mb.group_id", "=", groupId)
+    .where("mb.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!item) {
     throw new ModelGroupError(404, "Model group item not found")
   }
+  // Soft-delete the binding (provider_steps.model_binding_version_id is RESTRICT,
+  // so versions are never hard-deleted; the audit chain survives).
   await db
-    .updateTable("model_group_profiles")
+    .updateTable("model_bindings")
     .set({
       is_enabled: false,
+      deleted_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
     .where("id", "=", itemId)
     .where("group_id", "=", groupId)
-    .execute()
-  await db
-    .updateTable("model_profiles")
-    .set({
-      is_enabled: false,
-      updated_at: sql`NOW()`,
-    })
-    .where("id", "=", item.profile_id as string)
     .execute()
 }
 
@@ -1282,38 +1215,40 @@ async function ensureAssignableModelGroups(
 }
 
 export async function getItemVersions(itemId: string, groupId?: string) {
-  let itemLookup = db
-    .selectFrom("model_group_profiles")
-    .select("profile_id")
+  // itemId IS the binding id now; verify it exists (and belongs to the group).
+  let bindingLookup = db
+    .selectFrom("model_bindings_live")
+    .select("id")
     .where("id", "=", itemId)
+    .where("deleted_at", "is", null)
   if (groupId) {
-    itemLookup = itemLookup.where("group_id", "=", groupId)
+    bindingLookup = bindingLookup.where("group_id", "=", groupId)
   }
-  const itemRow = await itemLookup.limit(1).executeTakeFirst()
-  if (!itemRow) {
+  const bindingRow = await bindingLookup.limit(1).executeTakeFirst()
+  if (!bindingRow) {
     throw new ModelGroupError(404, "Model group item not found")
   }
-  const profileId = itemRow.profile_id as string
 
   return db
-    .selectFrom("model_profile_revisions as r")
+    .selectFrom("model_binding_versions as v")
     .select([
-      "r.id",
-      "r.profile_id",
-      "r.version",
-      "r.provider_type",
-      sql<string | null>`r.extra_config->>'engine_kind'`.as("engine_kind"),
-      "r.base_url",
-      "r.model_name",
-      "r.max_tokens",
-      "r.capability_tags",
-      "r.extra_config",
-      "r.request_timeout_ms",
-      "r.max_retries",
-      "r.created_at",
+      "v.id",
+      "v.binding_id",
+      "v.version",
+      "v.provider_kind",
+      "v.vendor",
+      "v.base_url",
+      "v.model_name",
+      "v.max_output_tokens",
+      "v.capability_tags",
+      "v.features",
+      "v.provider_options",
+      "v.request_timeout_ms",
+      "v.max_retries",
+      "v.created_at",
     ])
-    .where("r.profile_id", "=", profileId)
-    .orderBy("r.version", "desc")
+    .where("v.binding_id", "=", itemId)
+    .orderBy("v.version", "desc")
     .execute()
 }
 
@@ -1561,8 +1496,8 @@ export async function logAIRequest(data: {
   turnId?: string
   round?: number
   groupId?: string
-  profileId?: string
-  profileRevisionId?: string
+  bindingId?: string
+  bindingVersionId?: string
   requestType: string
   inputTokens: number
   outputTokens: number
@@ -1584,8 +1519,8 @@ export async function logAIRequest(data: {
         round: data.round || 1,
         requestType: data.requestType,
         modelGroupId: data.groupId,
-        modelProfileId: data.profileId,
-        modelProfileRevisionId: data.profileRevisionId,
+        modelBindingId: data.bindingId,
+        modelBindingVersionId: data.bindingVersionId,
         inputTokens: data.inputTokens,
         outputTokens: data.outputTokens,
         latencyMs: data.latencyMs,
@@ -1598,32 +1533,32 @@ export async function logAIRequest(data: {
     return
   }
 
-  // No env model fallback: provider/model are sourced from the resolved
-  // revision below. Empty strings are the neutral default when there is no
-  // revision id (the legacy/no-turn path already returned before this point).
-  let providerType = ""
+  // No env model fallback: vendor/model are sourced from the resolved binding
+  // version below. Empty strings are the neutral default when there is no
+  // version id (the legacy/no-turn path already returned before this point).
+  let vendor = ""
   let modelName = ""
-  if (data.profileRevisionId) {
-    const revisionRow = await db
-      .selectFrom("model_profile_revisions")
-      .select(["provider_type", "model_name"])
-      .where("id", "=", data.profileRevisionId)
+  if (data.bindingVersionId) {
+    const versionRow = await db
+      .selectFrom("model_binding_versions")
+      .select(["vendor", "model_name"])
+      .where("id", "=", data.bindingVersionId)
       .limit(1)
       .executeTakeFirst()
-    if (revisionRow) {
-      providerType = revisionRow.provider_type as string
-      modelName = revisionRow.model_name || modelName
+    if (versionRow) {
+      vendor = versionRow.vendor as string
+      modelName = versionRow.model_name || modelName
     }
   }
 
   await logProviderStep({
     turnId: data.turnId,
     stepIndex: data.round || 1,
-    providerType,
+    providerType: vendor,
     requestType: data.requestType as "actor_think" | "ai_complete",
     modelGroupId: data.groupId,
-    modelProfileId: data.profileId,
-    modelProfileRevisionId: data.profileRevisionId,
+    modelBindingId: data.bindingId,
+    modelBindingVersionId: data.bindingVersionId,
     modelName,
     requestPayload: data.requestBody,
     responsePayload: data.responseBody,

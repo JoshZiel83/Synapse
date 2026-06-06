@@ -159,8 +159,6 @@ export type DeviceSyncSourcesSyncMode = "follow" | "snapshot";
 
 export type DeviceToolsStatus = "active" | "hidden" | "removed";
 
-export type EngineBranchCheckpointsCheckpointKind = "compaction" | "snapshot";
-
 export type FileAccessGrantsStatus = "active" | "revoked" | "superseded";
 
 export type FileContentKind = "audio" | "document" | "image" | "video";
@@ -217,7 +215,7 @@ export type ModelGroupGrantsStatus = "active" | "revoked";
 
 export type ModelGroupsOwnerType = "platform" | "workspace" | "workspace_member";
 
-export type ModelGroupsRoutingStrategy = "priority_failover" | "round_robin" | "weighted_random";
+export type ModelGroupsRoutingStrategy = "priority_failover" | "weighted_random";
 
 export type PayloadBlobsContentType = "json" | "text";
 
@@ -290,8 +288,6 @@ export type RuntimeAuthorizationRequestMode = "background" | "blocking";
 export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
 export type RuntimeEventsSource = "conversation" | "device" | "provider" | "system" | "tool";
-
-export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
 
 export type SessionInterruptsType = "remote_control_terminated";
 
@@ -1509,23 +1505,6 @@ export interface DirectConversationBindings {
   participant_two_subject_id: string;
 }
 
-export interface EngineBranchCheckpoints {
-  applied_item_keys: Generated<string[] | null>;
-  binding_key: string;
-  branch_id: string;
-  checkpoint_kind: Generated<EngineBranchCheckpointsCheckpointKind>;
-  conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  engine_kind: string;
-  id: Generated<string>;
-  metadata: Generated<Json | null>;
-  native_state: Generated<Json | null>;
-  private_sequence: Generated<Int8>;
-  provider_type: string;
-  session_id: string;
-  shared_sequence: Generated<Int8>;
-}
-
 export interface EntityAccessRequests {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
@@ -2006,6 +1985,52 @@ export interface MemorySpacesLive {
   workspace_id: string | null;
 }
 
+export interface ModelBindings {
+  created_at: Generated<Timestamp | null>;
+  current_version_id: string | null;
+  deleted_at: Timestamp | null;
+  display_name: string;
+  group_id: string;
+  id: Generated<string>;
+  installed_by_workspace_member_id: string | null;
+  is_enabled: Generated<boolean | null>;
+  priority: Generated<number>;
+  updated_at: Generated<Timestamp | null>;
+  weight: Generated<number>;
+}
+
+export interface ModelBindingsLive {
+  created_at: Timestamp | null;
+  current_version_id: string | null;
+  deleted_at: Timestamp | null;
+  display_name: string | null;
+  group_id: string | null;
+  id: string | null;
+  installed_by_workspace_member_id: string | null;
+  is_enabled: boolean | null;
+  priority: number | null;
+  updated_at: Timestamp | null;
+  weight: number | null;
+}
+
+export interface ModelBindingVersions {
+  api_key: string;
+  base_url: string;
+  binding_id: string;
+  capability_tags: Generated<string[] | null>;
+  created_at: Generated<Timestamp | null>;
+  features: Generated<Json>;
+  id: Generated<string>;
+  max_output_tokens: Generated<number>;
+  max_retries: number | null;
+  model_name: string;
+  provider_kind: string;
+  provider_options: Generated<Json>;
+  request_timeout_ms: number | null;
+  vendor: string;
+  version: Generated<number>;
+}
+
 export interface ModelGroupGrants {
   created_at: Generated<Timestamp | null>;
   granted_by_workspace_member_id: string | null;
@@ -2026,17 +2051,6 @@ export interface ModelGroupGrantsLive {
   revoked_at: Timestamp | null;
   status: ModelGroupGrantsStatus | null;
   subject_id: string | null;
-}
-
-export interface ModelGroupProfiles {
-  created_at: Generated<Timestamp | null>;
-  group_id: string;
-  id: Generated<string>;
-  is_enabled: Generated<boolean | null>;
-  priority: Generated<number>;
-  profile_id: string;
-  updated_at: Generated<Timestamp | null>;
-  weight: Generated<number>;
 }
 
 export interface ModelGroups {
@@ -2071,46 +2085,6 @@ export interface ModelGroupsLive {
   owner_workspace_member_id: string | null;
   routing_strategy: ModelGroupsRoutingStrategy | null;
   updated_at: Timestamp | null;
-}
-
-export interface ModelProfileRevisions {
-  api_key: string;
-  base_url: string;
-  capability_tags: Generated<string[] | null>;
-  created_at: Generated<Timestamp | null>;
-  extra_config: Generated<Json | null>;
-  id: Generated<string>;
-  max_retries: number | null;
-  max_tokens: Generated<number>;
-  model_name: string;
-  profile_id: string;
-  provider_type: string;
-  request_timeout_ms: number | null;
-  version: Generated<number>;
-}
-
-export interface ModelProfiles {
-  created_at: Generated<Timestamp | null>;
-  current_revision_id: string | null;
-  deleted_at: Timestamp | null;
-  display_name: string;
-  id: Generated<string>;
-  installed_by_workspace_member_id: string | null;
-  is_enabled: Generated<boolean | null>;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string | null;
-}
-
-export interface ModelProfilesLive {
-  created_at: Timestamp | null;
-  current_revision_id: string | null;
-  deleted_at: Timestamp | null;
-  display_name: string | null;
-  id: string | null;
-  installed_by_workspace_member_id: string | null;
-  is_enabled: boolean | null;
-  updated_at: Timestamp | null;
-  workspace_id: string | null;
 }
 
 export interface PayloadBlobs {
@@ -2292,10 +2266,10 @@ export interface ProviderSteps {
   id: Generated<string>;
   input_tokens: Generated<number | null>;
   latency_ms: Generated<number | null>;
+  model_binding_id: string | null;
+  model_binding_version_id: string | null;
   model_group_id: string | null;
   model_name: string;
-  model_profile_id: string | null;
-  model_profile_revision_id: string | null;
   output_tokens: Generated<number | null>;
   provider_type: string;
   request_payload_blob_id: string | null;
@@ -2663,23 +2637,6 @@ export interface Session {
 export interface SessionContextStates {
   active_private_archive_point_id: string | null;
   session_id: string;
-  updated_at: Generated<Timestamp | null>;
-}
-
-export interface SessionEngineBranches {
-  applied_item_keys: Generated<string[] | null>;
-  binding_key: string;
-  conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  engine_kind: string;
-  id: Generated<string>;
-  last_private_sequence: Generated<Int8>;
-  last_shared_sequence: Generated<Int8>;
-  metadata: Generated<Json | null>;
-  native_state: Generated<Json | null>;
-  provider_type: string;
-  session_id: string;
-  status: Generated<SessionEngineBranchesStatus>;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -3294,7 +3251,6 @@ export interface DB {
   devices: Devices;
   devices_live: DevicesLive;
   direct_conversation_bindings: DirectConversationBindings;
-  engine_branch_checkpoints: EngineBranchCheckpoints;
   entity_access_requests: EntityAccessRequests;
   file_access_grants: FileAccessGrants;
   file_access_grants_live: FileAccessGrantsLive;
@@ -3326,14 +3282,13 @@ export interface DB {
   memory_recall_runs: MemoryRecallRuns;
   memory_spaces: MemorySpaces;
   memory_spaces_live: MemorySpacesLive;
+  model_binding_versions: ModelBindingVersions;
+  model_bindings: ModelBindings;
+  model_bindings_live: ModelBindingsLive;
   model_group_grants: ModelGroupGrants;
   model_group_grants_live: ModelGroupGrantsLive;
-  model_group_profiles: ModelGroupProfiles;
   model_groups: ModelGroups;
   model_groups_live: ModelGroupsLive;
-  model_profile_revisions: ModelProfileRevisions;
-  model_profiles: ModelProfiles;
-  model_profiles_live: ModelProfilesLive;
   payload_blobs: PayloadBlobs;
   platform_access_bindings: PlatformAccessBindings;
   platform_access_bindings_live: PlatformAccessBindingsLive;
@@ -3369,7 +3324,6 @@ export interface DB {
   schema_migrations: SchemaMigrations;
   session: Session;
   session_context_states: SessionContextStates;
-  session_engine_branches: SessionEngineBranches;
   session_interrupts: SessionInterrupts;
   session_wakeups: SessionWakeups;
   sessions: Sessions;

@@ -42,7 +42,6 @@ const WORKSPACE_SCOPED_ROOTS_NULLABLE_GLOBAL = [
   "catalog_items",
   "publishers",
   "file_assets",
-  "model_profiles",
 ] as const
 
 /** Active grant/binding tables to revoke for a workspace (status flip). */
@@ -119,6 +118,18 @@ export async function markWorkspaceDeleted(
       OR (owner_type = 'workspace_member' AND owner_workspace_member_id IN (
         SELECT id FROM workspace_members WHERE workspace_id = ${workspaceId}
       ))
+    )
+  `.execute(db)
+  // model_bindings: owner-derived via their group (no own workspace_id column).
+  await sql`
+    UPDATE model_bindings SET deleted_at = NOW()
+    WHERE deleted_at IS NULL AND group_id IN (
+      SELECT id FROM model_groups WHERE (
+        (owner_type = 'workspace' AND owner_workspace_id = ${workspaceId})
+        OR (owner_type = 'workspace_member' AND owner_workspace_member_id IN (
+          SELECT id FROM workspace_members WHERE workspace_id = ${workspaceId}
+        ))
+      )
     )
   `.execute(db)
 
