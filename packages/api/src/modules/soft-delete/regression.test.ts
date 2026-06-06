@@ -65,6 +65,14 @@ async function insertActor(db: AnyDb, ws: string): Promise<string> {
     .executeTakeFirstOrThrow()
   return row.id as string
 }
+async function insertConversation(db: AnyDb, ws: string): Promise<string> {
+  const row = await db
+    .insertInto("conversations")
+    .values({ workspace_id: ws, kind: "group", title: "soft-delete conv" })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
 async function rejects(db: AnyDb, fn: () => Promise<unknown>, re: RegExp) {
   await sql`SAVEPOINT sd_probe`.execute(db)
   await assert.rejects(fn, re)
@@ -1465,6 +1473,89 @@ test(
 )
 
 test(
+  "F18: automation event source grants fold in resource-parent liveness",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const subject = await db
+        .insertInto("access_subjects")
+        .values({ kind: "workspace", workspace_id: ws })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const source = await db
+        .insertInto("automation_event_sources")
+        .values({
+          workspace_id: ws,
+          provider_kind: "internal",
+          source_key: uniq("event-source"),
+          name: "internal event source",
+          created_by_kind: "system",
+          status: "active",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const binding = await db
+        .insertInto("resource_access_bindings")
+        .values({
+          workspace_id: ws,
+          resource_type: "automation_event_source",
+          automation_event_source_id: source.id as string,
+          subject_id: subject.id,
+          status: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("automation_event_sources")
+        .set({ status: "archived" })
+        .where("id", "=", source.id)
+        .execute()
+
+      const sourceLive = await db
+        .selectFrom("automation_event_sources_live")
+        .select("id")
+        .where("id", "=", source.id)
+        .execute()
+      assert.equal(
+        sourceLive.length,
+        0,
+        "archived automation event source excluded from _live"
+      )
+
+      const bindingLive = await db
+        .selectFrom("resource_access_bindings_live")
+        .select("id")
+        .where("id", "=", binding.id)
+        .execute()
+      assert.equal(
+        bindingLive.length,
+        0,
+        "binding hidden when automation event source is archived"
+      )
+
+      await db
+        .updateTable("resource_access_bindings")
+        .set({ status: "revoked" })
+        .where("id", "=", binding.id)
+        .execute()
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("resource_access_bindings")
+            .set({ status: "active" })
+            .where("id", "=", binding.id)
+            .execute(),
+        /references non-live automation_event_sources/
+      )
+    })
+  }
+)
+
+test(
   "F19: device derived live views honor liveValues and grant parent liveness",
   { timeout: 5 * 60_000 },
   async () => {
@@ -1623,6 +1714,115 @@ test(
             .where("id", "=", binding.id)
             .execute(),
         /references non-live device_capabilities/
+      )
+    })
+  }
+)
+
+test(
+  "F20: manifest-live child tables get canonical live views and parent-liveness guards",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const u = await insertUser(db)
+      const ws = await insertWorkspace(db, u)
+      const actorId = await insertActor(db, ws)
+      const conversationId = await insertConversation(db, ws)
+      const actorSubject = await db
+        .insertInto("access_subjects")
+        .values({
+          kind: "actor",
+          workspace_id: ws,
+          actor_id: actorId,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const participant = await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conversationId,
+          subject_id: actorSubject.id,
+          state: "active",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      let participantLive = await db
+        .selectFrom("conversation_participants_live")
+        .select("id")
+        .where("id", "=", participant.id)
+        .execute()
+      assert.equal(
+        participantLive.length,
+        1,
+        "active participant appears in canonical _live view"
+      )
+      const rule = await db
+        .insertInto("automation_rules")
+        .values({
+          workspace_id: ws,
+          conversation_id: conversationId,
+          category: "event_subscription",
+          name: "participant provenance rule",
+          created_by_participant_id: participant.id as string,
+          status: "active",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await db
+        .updateTable("conversation_participants")
+        .set({ state: "left" })
+        .where("id", "=", participant.id)
+        .execute()
+
+      participantLive = await db
+        .selectFrom("conversation_participants_live")
+        .select("id")
+        .where("id", "=", participant.id)
+        .execute()
+      assert.equal(
+        participantLive.length,
+        0,
+        "left participant excluded from canonical _live view"
+      )
+
+      await db
+        .updateTable("automation_rules")
+        .set({ status: "archived" })
+        .where("id", "=", rule.id)
+        .execute()
+      await db
+        .updateTable("automation_rules")
+        .set({ status: "active" })
+        .where("id", "=", rule.id)
+        .execute()
+
+      const ruleLive = await db
+        .selectFrom("automation_rules_live")
+        .select("id")
+        .where("id", "=", rule.id)
+        .execute()
+      assert.equal(
+        ruleLive.length,
+        1,
+        "creator participant is provenance and must not hide an active rule"
+      )
+
+      await db
+        .updateTable("conversations")
+        .set({ deleted_at: new Date() })
+        .where("id", "=", conversationId)
+        .execute()
+      await rejects(
+        db,
+        () =>
+          db
+            .updateTable("conversation_participants")
+            .set({ state: "active" })
+            .where("id", "=", participant.id)
+            .execute(),
+        /references non-live conversations/
       )
     })
   }

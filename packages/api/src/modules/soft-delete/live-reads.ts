@@ -22,6 +22,8 @@ export const liveRemoteAgents = (db: Executor) =>
   db.selectFrom("remote_agents_live")
 export const liveConversations = (db: Executor) =>
   db.selectFrom("conversations_live")
+export const liveConversationParticipants = (db: Executor) =>
+  db.selectFrom("conversation_participants_live")
 export const liveDevices = (db: Executor) => db.selectFrom("devices_live")
 export const livePluginInstallations = (db: Executor) =>
   db.selectFrom("plugin_installations_live")

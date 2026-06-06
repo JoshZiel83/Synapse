@@ -57,6 +57,8 @@ const VALID_SOFT_DELETE = ["deleted_at", "status", "none", "immutable"]
 const VALID_ACTIONS = ["RESTRICT", "NO ACTION", "SET NULL", "CASCADE"]
 const VALID_SUBJECT_ROLES = ["user", "member", "scope", "target"]
 const VALID_PRINCIPAL_ACTIONS = ["revoke", "close", "update"]
+const VALID_LIVE_INTEGRITY = ["enforce", "historical", "none"]
+const ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES = new Set(["device_exposures"])
 
 function fail(errors) {
   console.error(`\n✗ derive-fk-policy: ${errors.length} violation(s):\n`)
@@ -80,6 +82,19 @@ function main() {
   const manifest = yaml.load(readFileSync(MANIFEST_PATH, "utf8")) || {}
   const mTables = manifest.tables || {}
   const mForeignKeys = manifest.foreignKeys || {}
+  const tableIsEphemeral = (entry) =>
+    entry?.class === "ephemeral" || entry?.derived === true
+  const tableHasDeclaredLiveSemantics = (entry) =>
+    (Array.isArray(entry?.liveValues) && entry.liveValues.length) ||
+    Boolean(entry?.livePredicate)
+  const tableHasManifestLiveView = (name, entry) =>
+    !tableIsEphemeral(entry) &&
+    (tableHasDeclaredLiveSemantics(entry) ||
+      ADDITIONAL_PARENT_FOLDING_LIVE_VIEW_TABLES.has(name))
+  const tableHasLiveView = (name, entry) =>
+    entry?.softDelete === "deleted_at" ||
+    entry?.softDelete === "status" ||
+    tableHasManifestLiveView(name, entry)
 
   // --- 1. table coverage --------------------------------------------------
   for (const name of tables.keys()) {
@@ -191,6 +206,12 @@ function main() {
     }
     if (!VALID_ACTIONS.includes(reg.targetAction))
       errors.push(`FK ${fk.key}: invalid targetAction '${reg.targetAction}'`)
+    if (
+      reg.liveIntegrity !== undefined &&
+      !VALID_LIVE_INTEGRITY.includes(reg.liveIntegrity)
+    ) {
+      errors.push(`FK ${fk.key}: invalid liveIntegrity '${reg.liveIntegrity}'`)
+    }
 
     // rule 7: no CASCADE on persistent parents/children.
     const childEntry = mTables[fk.childTable]
@@ -221,6 +242,25 @@ function main() {
         errors.push(
           `FK ${fk.key}: setNull.needsSnapshot=true requires snapshotColumn`
         )
+    }
+    if (
+      childEntry &&
+      parentEntry &&
+      !tableIsEphemeral(childEntry) &&
+      tableHasLiveView(fk.referencedTable, parentEntry)
+    ) {
+      if (!reg.liveIntegrity) {
+        errors.push(
+          `FK ${fk.key}: references live parent ${fk.referencedTable}; requires liveIntegrity=enforce|historical|none`
+        )
+      } else if (
+        reg.liveIntegrity === "enforce" &&
+        (fk.childColumns.length !== 1 || fk.referencedColumns.length !== 1)
+      ) {
+        errors.push(
+          `FK ${fk.key}: liveIntegrity=enforce currently supports single-column FKs only`
+        )
+      }
     }
 
     // rule 8 (cutover): the schema's ACTUAL ON DELETE must match the manifest's
@@ -329,6 +369,21 @@ function renderDoc({ tables, foreignKeys, mTables, mForeignKeys }) {
   lines.push(`| **total** | **${foreignKeys.length}** |`)
   lines.push("")
 
+  const byLiveIntegrity = {}
+  for (const fk of foreignKeys) {
+    const v = mForeignKeys[fk.key]?.liveIntegrity || "—"
+    byLiveIntegrity[v] = (byLiveIntegrity[v] || 0) + 1
+  }
+  lines.push("## FK live integrity distribution")
+  lines.push("")
+  lines.push("| live integrity | count |")
+  lines.push("|---|---|")
+  for (const v of [...VALID_LIVE_INTEGRITY, "—"]) {
+    lines.push(`| ${v} | ${byLiveIntegrity[v] || 0} |`)
+  }
+  lines.push(`| **total** | **${foreignKeys.length}** |`)
+  lines.push("")
+
   // SET NULL whitelist
   const setNulls = foreignKeys
     .filter((fk) => mForeignKeys[fk.key]?.targetAction === "SET NULL")
@@ -351,9 +406,9 @@ function renderDoc({ tables, foreignKeys, mTables, mForeignKeys }) {
   lines.push("## All foreign keys (target policy)")
   lines.push("")
   lines.push(
-    "| child(cols) | -> parent(cols) | schema ON DELETE | target ON DELETE | source | key |"
+    "| child(cols) | -> parent(cols) | schema ON DELETE | target ON DELETE | live integrity | source | key |"
   )
-  lines.push("|---|---|---|---|---|---|")
+  lines.push("|---|---|---|---|---|---|---|")
   const sorted = [...foreignKeys].sort(
     (a, b) =>
       a.childTable.localeCompare(b.childTable) ||
@@ -362,7 +417,7 @@ function renderDoc({ tables, foreignKeys, mTables, mForeignKeys }) {
   for (const fk of sorted) {
     const reg = mForeignKeys[fk.key] || {}
     lines.push(
-      `| ${fk.childTable}(${fk.childColumns.join(",")}) | ${fk.referencedTable}(${fk.referencedColumns.join(",")}) | ${fk.onDelete} | ${reg.targetAction || "?"} | ${fk.source} | ${fk.key} |`
+      `| ${fk.childTable}(${fk.childColumns.join(",")}) | ${fk.referencedTable}(${fk.referencedColumns.join(",")}) | ${fk.onDelete} | ${reg.targetAction || "?"} | ${reg.liveIntegrity || "—"} | ${fk.source} | ${fk.key} |`
     )
   }
   lines.push("")
