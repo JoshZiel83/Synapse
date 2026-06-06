@@ -45,8 +45,6 @@ server {
     ssl_session_tickets off;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
-    ssl_stapling on;
-    ssl_stapling_verify on;
     quic_retry on;
     resolver 127.0.0.11 valid=30s ipv6=off;
     resolver_timeout 5s;
@@ -130,8 +128,6 @@ server {
     ssl_session_tickets off;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
-    ssl_stapling on;
-    ssl_stapling_verify on;
     quic_retry on;
     resolver 127.0.0.11 valid=30s ipv6=off;
     resolver_timeout 5s;
@@ -212,8 +208,6 @@ server {
     ssl_session_tickets off;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
-    ssl_stapling on;
-    ssl_stapling_verify on;
     quic_retry on;
     resolver 127.0.0.11 valid=30s ipv6=off;
     resolver_timeout 5s;

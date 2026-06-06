@@ -130,10 +130,15 @@ Issue a SAN certificate for all TLS public hostnames:
 ./infrastructure/scripts/issue-cert.sh
 ```
 
-The public nginx config enables HTTP/2, HTTP/3 over QUIC, OCSP stapling with the
-Let's Encrypt chain, and advertises HTTP/3 with `Alt-Svc`. HTTP/3 requires UDP
-`443` to be open and published by Docker; clients that cannot use QUIC continue
-to use HTTP/2 or HTTP/1.1 over TCP.
+The public nginx config enables HTTP/2, HTTP/3 over QUIC, and advertises HTTP/3
+with `Alt-Svc`. HTTP/3 requires UDP `443` to be open and published by Docker;
+clients that cannot use QUIC continue to use HTTP/2 or HTTP/1.1 over TCP.
+
+Let's Encrypt removed OCSP URLs from production certificates in May 2025 and
+shut down OCSP responders in August 2025, moving revocation status to CRLs. Do
+not enable nginx OCSP stapling for the default Let's Encrypt deployment; current
+certificates do not contain an OCSP responder URL, so stapling only produces
+nginx startup warnings.
 
 Install the renewal cron (substitutes the current repo root into the template; run from the repo root). The substitution shell-escapes the value for single-quote injection and escapes sed metacharacters, so paths containing spaces, `$`, backticks, `"`, `'`, `&`, `|`, and `\` are all preserved literally. The repo path must still avoid `%` (cron metacharacter) and newlines.
 
@@ -324,7 +329,7 @@ curl -I "http://${SYNAPSE_PUBLIC_HOST}:${SYNAPSE_HTTP_PORT}/.env"
 curl -I "http://${SYNAPSE_PUBLIC_HOST}:${SYNAPSE_HTTP_PORT}/mobile/.env"
 ```
 
-Check certificate and OCSP stapling:
+Check the certificate chain:
 
 ```bash
 set -a; . ./.env; set +a
