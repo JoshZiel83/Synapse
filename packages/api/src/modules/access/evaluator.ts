@@ -401,7 +401,7 @@ async function hasActorPermission(
   // join have been replaced by binding rows:
   //   - "workspace_open" actors get a workspace-scoped binding (source=default_open)
   //     written on creation by relationship/service.ts.
-  //   - "approval_required" actors get an actor-scoped or actor_in_conversation-scoped
+  //   - "approval_required" actors get an actor-scoped or conversation-scoped
   //     binding written by the approval flow.
   const canUse =
     canManage ||

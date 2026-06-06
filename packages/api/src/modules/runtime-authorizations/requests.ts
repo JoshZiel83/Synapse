@@ -34,10 +34,7 @@ export interface RuntimeAuthorizationRequestSource {
    * interaction_runtime_authorization_requests). Caller resolves the
    * triggering principal to an access_subjects row via
    * upsertAccessSubject(actor / remote_agent / conversation) and passes the
-   * id here. This is the new canonical principal channel; the legacy
-   * actorId / remoteAgentId / conversationActorContextId fields below are
-   * retained for transitional caller compatibility (consumed only as
-   * resolution hints, not persisted into the new column).
+   * id here.
    */
   principalSubjectId: string
   /**
@@ -53,8 +50,6 @@ export interface RuntimeAuthorizationRequestSource {
   actorId?: string
   /** @deprecated see actorId */
   remoteAgentId?: string
-  /** @deprecated see actorId */
-  conversationActorContextId?: string
   sourceToolName: string
   conversationKind?: "direct" | "group"
   isImConversation?: boolean
@@ -281,7 +276,7 @@ export async function createRuntimeAuthorizationRequest(
     params.source.conversationId
   )
   // Resolve the requester by whichever principal id the caller supplied.
-  // actor / actor_in_conversation principals match on actor_id; remote_agent
+  // actor principals match on actor_id; remote_agent
   // principals match on remote_agent_id (the bridged participant of the
   // conversation). The interaction needs a participant id either way so
   // the dashboard knows whose request this is.
@@ -442,8 +437,6 @@ export async function createRuntimeAuthorizationRequest(
       principalSubjectId: params.source.principalSubjectId,
       principalScopeSubjectId: params.source.principalScopeSubjectId,
       principalRemoteAgentId: params.source.remoteAgentId,
-      principalConversationActorContextId:
-        params.source.conversationActorContextId,
     })
 
     // Detect inner dedupe — see createRuntimeAuthorizationInteractionRequest

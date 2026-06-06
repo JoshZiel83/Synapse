@@ -28,7 +28,7 @@ import {
 } from "./service.js"
 
 /**
- * Round 10 review (P3) regression for the remote_agent_in_conversation
+ * Round 10 review (P3) regression for remote_agent + conversation scope
  * service-level update paths.
  *
  * `updateInstalledSkillAccessGrant` and `updateInstalledSkill` both:
@@ -162,7 +162,7 @@ async function newInstalledSkill(
 }
 
 test(
-  "skillBindingToAccessTarget decodes remote_agent_in_conversation correctly (no collapse to workspace) — round-10 P2",
+  "skillBindingToAccessTarget decodes remote_agent + conversation scope correctly (no collapse to workspace) — round-10 P2",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -197,10 +197,7 @@ test(
 
       // Round-10 fix: the decoded target is the actual scoped shape,
       // not a workspace fallback.
-      assert.equal(
-        subjectScopeLabel(target as any),
-        "remote_agent_in_conversation"
-      )
+      assert.equal(subjectScopeLabel(target as any), "remote_agent")
       assert.equal(target.subject.kind, "remote_agent")
       assert.equal(target.scope?.kind, "conversation")
 
@@ -218,7 +215,7 @@ test(
 )
 
 test(
-  "validateConversationScopedAccessTarget gates remote_agent_in_conversation by participant — round-10 P3",
+  "validateConversationScopedAccessTarget gates remote_agent + conversation scope by participant — round-10 P3",
   { timeout: 5 * 60_000 },
   async () => {
     // Verifies that after decoding the grant (the round-10 fix), the
@@ -375,7 +372,7 @@ async function newPluginInstallation(
 }
 
 test(
-  "installationAccessRowToTarget decodes remote_agent_in_conversation correctly (plugin side parallel of P2)",
+  "installationAccessRowToTarget decodes remote_agent + conversation scope correctly (plugin side parallel of P2)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -407,10 +404,7 @@ test(
         normalizeAccessBindingRow(rows[0] as any) as any
       )
 
-      assert.equal(
-        subjectScopeLabel(target as any),
-        "remote_agent_in_conversation"
-      )
+      assert.equal(subjectScopeLabel(target as any), "remote_agent")
       assert.equal(target.subject.kind, "remote_agent")
       assert.equal(target.scope?.kind, "conversation")
 

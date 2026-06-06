@@ -61,7 +61,7 @@ export type CatalogCategoriesItemKind = "actor_template" | "plugin_package" | "s
 
 export type CatalogItemsItemKind = "actor_template" | "plugin_package" | "skill_package";
 
-export type CatalogItemsSourceKind = "builtin" | "device" | "official" | "user" | "workspace";
+export type CatalogItemsSourceKind = "builtin" | "official" | "user" | "workspace";
 
 export type CatalogItemsVisibility = "private" | "public" | "workspace";
 
@@ -239,7 +239,7 @@ export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation
 
 export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
-export type PluginPackageVersionSpecsTransport = "builtin" | "device" | "http" | "sse" | "stdio";
+export type PluginPackageVersionSpecsTransport = "builtin" | "http" | "sse" | "stdio";
 
 export type PluginSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
@@ -317,8 +317,6 @@ export type ToolCallsSourceKind = "device" | "plugin" | "system";
 
 export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
 
-export type ToolCallsToolKind = "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
-
 export type ToolCallTaskOutputChunksStream = "stderr" | "stdout" | "system";
 
 export type ToolCallTasksDeliveryPolicy = "human_interaction" | "online_only" | "store_and_forward";
@@ -328,8 +326,6 @@ export type ToolCallTasksDispatchStatus = "accepted" | "cancel_requested" | "dis
 export type ToolCallTasksExecutorKind = "device_mcp" | "interaction_user_input" | "plan_approval" | "runtime_authorization";
 
 export type ToolCallTasksStatus = "cancelled" | "completed" | "failed" | "input_required" | "working";
-
-export type ToolExecutionAttemptsExecutorKind = "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
 
 export type ToolExecutionAttemptsStatus = "error" | "success" | "timeout";
 
@@ -978,15 +974,6 @@ export interface ContextCompactionRuns {
   strategy_key: string;
 }
 
-export interface ConversationActorContexts {
-  actor_id: string;
-  conversation_id: string;
-  created_at: Generated<Timestamp | null>;
-  id: Generated<string>;
-  session_id: string | null;
-  updated_at: Generated<Timestamp | null>;
-}
-
 export interface ConversationContextStates {
   active_shared_archive_point_id: string | null;
   conversation_id: string;
@@ -1332,7 +1319,6 @@ export interface DevicePairingSessions {
 export interface DeviceRuntimeSessions {
   actor_id: string | null;
   closed_at: Timestamp | null;
-  conversation_actor_context_id: string | null;
   conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
   device_id: string;
@@ -2784,7 +2770,6 @@ export interface ToolCalls {
   source_kind: ToolCallsSourceKind;
   source_snapshot: Generated<Json>;
   status: Generated<ToolCallsStatus>;
-  tool_kind: ToolCallsToolKind;
   tool_name: string;
   turn_id: string;
 }
@@ -2838,7 +2823,6 @@ export interface ToolExecutionAttempts {
   created_at: Generated<Timestamp | null>;
   duration_ms: number | null;
   error_message: string | null;
-  executor_kind: ToolExecutionAttemptsExecutorKind;
   id: Generated<string>;
   is_error: Generated<boolean | null>;
   request_payload_blob_id: string | null;
@@ -3214,7 +3198,6 @@ export interface DB {
   context_archive_points: ContextArchivePoints;
   context_compaction_run_inputs: ContextCompactionRunInputs;
   context_compaction_runs: ContextCompactionRuns;
-  conversation_actor_contexts: ConversationActorContexts;
   conversation_context_states: ConversationContextStates;
   conversation_device_states: ConversationDeviceStates;
   conversation_item_context_targets: ConversationItemContextTargets;

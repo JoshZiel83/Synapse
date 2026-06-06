@@ -127,7 +127,7 @@ export async function createSandboxGrants(
   await addDeviceCapabilitiesForTarget({
     workspaceId,
     target: {
-      kind: "actor_in_conversation",
+      kind: "actor",
       actorId,
       conversationId,
     },
@@ -221,7 +221,7 @@ export async function revokeSandboxGrants(params: {
     await revokeDeviceCapabilitiesForTarget({
       workspaceId: params.workspaceId,
       target: {
-        kind: "actor_in_conversation",
+        kind: "actor",
         actorId: params.actorId,
         conversationId: params.conversationId,
       },

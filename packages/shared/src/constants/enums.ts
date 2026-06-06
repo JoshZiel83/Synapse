@@ -396,28 +396,19 @@ export const ATTACHMENT_TARGET_TYPES = [
   "actor",
   "workspace_member",
 ] as const
-// subject-scope-refactor: legacy UI label set. The actual D3 payload type
-// (ScopedSubjectTarget) is {subject: SubjectRef, scope?: SubjectRef}; these
-// string labels are kept for UI selector display only (skills / mcp-plugins
-// rendering, web-next dropdowns). subjectScopeLabel emits the same union for
-// derived labels. New code should consume SubjectRef shapes directly.
 export const ACCESS_TARGET_TYPES = [
   "workspace",
   "workspace_member",
   "conversation",
   "actor",
-  "actor_in_conversation",
   "remote_agent",
-  "remote_agent_in_conversation",
 ] as const
 export const CAPABILITY_ACCESS_TARGET_TYPES = [
   "workspace",
   "workspace_member",
   "conversation",
   "actor",
-  "actor_in_conversation",
   "remote_agent",
-  "remote_agent_in_conversation",
 ] as const
 export const REUSE_SCOPES = [
   "turn",
@@ -741,10 +732,8 @@ export const TASK_NOTICE_STATUSES = [
 // subject-scope-refactor: RUNTIME_AUTHORIZATION_GRANT_SCOPE / RUNTIME_AUTHORIZATION_GRANT_SCOPES
 // constants dropped at cutover. Scope is now expressed via subject_id +
 // scope_subject_id on runtime_authorization_grants; the wire-stable
-// `grant_scope` envelope field carries a derived label string via
-// `subjectScopeLabel(target)` (see packages/shared/src/access/subject.ts).
-// 'actor_in_conversation' removed from RUNTIME_AUTHORIZATION_PRESETS; UI
-// renders it via subjectScopeLabel from (subject=actor, scope=conversation).
+// `grant_scope` envelope field carries the subject kind; conversation scoping
+// is represented separately by scope_subject_id.
 
 export const RUNTIME_AUTHORIZATION_PRESETS = [
   "once",
@@ -917,9 +906,9 @@ export const DEVICE_EXPOSURE_TRANSPORTS = [
 // consumer references the one that matches its semantics:
 //  - MCP_SERVER_TRANSPORTS: transports the runtime instance-manager can
 //    actually start (in-process builtin, stdio child, remote http/sse). No
-//    "device" (that goes through the device-exposure path) and no "filesystem".
+//    device exposure transports and no "filesystem".
 //  - PLUGIN_SPEC_TRANSPORTS: the values stored in the DB catalog spec column
-//    (plugin_package_version_specs.transport) — adds "device".
+//    (plugin_package_version_specs.transport).
 //  - PLUGIN_TRANSPORTS: the full application-level union — adds "filesystem".
 export const MCP_SERVER_TRANSPORTS = [
   "builtin",
@@ -932,13 +921,11 @@ export const PLUGIN_SPEC_TRANSPORTS = [
   "stdio",
   "http",
   "sse",
-  "device",
 ] as const
 export const PLUGIN_TRANSPORTS = [
   "builtin",
   "stdio",
   "http",
   "sse",
-  "device",
   "filesystem",
 ] as const

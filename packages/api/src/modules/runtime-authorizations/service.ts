@@ -98,7 +98,7 @@ export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizat
    * Derived display label from subjectScopeLabel({subject, scope?}). Mirrors
    * the wire envelope's `grant_scope` field for UI / audit. Possible values
    * include: 'workspace' | 'workspace_member' | 'actor' | 'remote_agent' |
-   * 'conversation' | 'actor_in_conversation' | 'remote_agent_in_conversation'.
+   * 'conversation' or scoped actor/remote_agent grants.
    */
   scopeLabel: string
   createdByWorkspaceMemberId?: string

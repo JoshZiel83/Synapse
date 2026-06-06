@@ -60,6 +60,7 @@ after(async () => {
 async function buildFixture(opts: {
   toolName: string
   providerCallId?: string
+  sourceKind?: "plugin" | "device" | "system"
 }): Promise<{
   sessionId: string
   toolCallId: string
@@ -72,6 +73,21 @@ async function buildFixture(opts: {
   const toolCallId = uuidv4()
   const providerCallId =
     opts.providerCallId || `toolu_${uuidv4().replace(/-/g, "").slice(0, 16)}`
+  const sourceKind = opts.sourceKind || "plugin"
+  const sourceSnapshot =
+    sourceKind === "device"
+      ? {
+          kind: "device",
+          deviceToolId: "dev-abc",
+          exposureStableKey: "synapse.builtin.filesystem.v1",
+        }
+      : sourceKind === "system"
+        ? { kind: "system", registryKey: opts.toolName }
+        : {
+            kind: "plugin",
+            installationId: uuidv4(),
+            upstreamToolName: opts.toolName,
+          }
 
   const actorRow = await client.query<{ id: string }>(
     `INSERT INTO actors (workspace_id, name, role, title)
@@ -98,9 +114,9 @@ async function buildFixture(opts: {
   await client.query(
     `INSERT INTO tool_calls (
        id, turn_id, conversation_id, session_id,
-       provider_call_id, bundle_id, tool_kind, tool_name,
+       provider_call_id, bundle_id, tool_name,
        source_kind, source_snapshot, normalized_input
-     ) VALUES ($1, $2, $3, $4, $5, $6, 'mcp_plugin', $7, 'plugin', $8, '{}')`,
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '{}')`,
     [
       toolCallId,
       turnId,
@@ -109,11 +125,8 @@ async function buildFixture(opts: {
       providerCallId,
       uuidv4(),
       opts.toolName,
-      JSON.stringify({
-        kind: "plugin",
-        installationId: uuidv4(),
-        upstreamToolName: opts.toolName,
-      }),
+      sourceKind,
+      JSON.stringify(sourceSnapshot),
     ]
   )
 
@@ -123,6 +136,7 @@ async function buildFixture(opts: {
 test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult keyed by provider_call_id", async () => {
   const { sessionId, toolCallId, providerCallId } = await buildFixture({
     toolName: "filesystem__View",
+    sourceKind: "device",
   })
 
   // Write a tool_results row with origin / structuredContent / inner metadata
@@ -135,8 +149,8 @@ test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult 
       toolName: "filesystem__View",
       providerCallId,
       origin: {
-        kind: "mcp_device",
-        deviceId: "dev-abc",
+        kind: "device",
+        deviceToolId: "dev-abc",
         exposureStableKey: "synapse.builtin.filesystem.v1",
       },
       structuredContent: { lines: 1, path: "/tmp/x" },
@@ -159,7 +173,7 @@ test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult 
   assert.equal(byProviderId!.toolCallId, providerCallId)
   assert.equal(byProviderId!.providerCallId, providerCallId)
   assert.equal(byProviderId!.isError, false)
-  assert.equal(byProviderId!.origin?.kind, "mcp_device")
+  assert.equal(byProviderId!.origin.kind, "device")
   assert.deepEqual(byProviderId!.structuredContent, {
     lines: 1,
     path: "/tmp/x",
@@ -189,7 +203,11 @@ test("buildSessionContextItems uses execution map over stale metadata projection
       toolCallId: providerCallId,
       toolName: "real_tool_name",
       providerCallId,
-      origin: { kind: "mcp_remote", serverKey: "real-server" },
+      origin: {
+        kind: "plugin",
+        installationId: uuidv4(),
+        upstreamToolName: "real_tool_name",
+      },
       isError: false,
     },
   })
@@ -208,7 +226,10 @@ test("buildSessionContextItems uses execution map over stale metadata projection
         metadata: {
           toolCallId: providerCallId,
           toolName: "stale_wrong_name",
-          origin: { kind: "callable_plugin", pluginKey: "stale" },
+          origin: {
+            kind: "system",
+            registryKey: "stale_wrong_name",
+          },
         },
       },
     ],
@@ -217,11 +238,7 @@ test("buildSessionContextItems uses execution map over stale metadata projection
 
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolName, "real_tool_name", "tool_calls.tool_name wins")
-  assert.equal(
-    tr.origin.kind,
-    "mcp_remote",
-    "tool_results.metadata.origin wins"
-  )
+  assert.equal(tr.origin.kind, "plugin", "tool_results.metadata.origin wins")
   assert.equal(extractText(tr.content), "AUTHORITATIVE content from tables")
 })
 

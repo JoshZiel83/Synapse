@@ -196,7 +196,7 @@ export interface CredentialValidationInput {
 export interface CredentialValidationResult {
   ok: boolean
   errors?: string[]
-  /** Server-side regularized form, e.g. {appId, appSecret} after alias merging. */
+  /** Server-side regularized form, e.g. {appId, appSecret}. */
   normalized?: Record<string, unknown>
 }
 
@@ -212,7 +212,7 @@ export interface ConfigValidationResult {
   errors?: string[]
   /**
    * Server-side regularized form persisted to DB
-   * (alias-merged, trimmed, defaults filled).
+   * (trimmed, defaults filled).
    */
   normalized?: Record<string, unknown>
 }
@@ -382,7 +382,7 @@ export interface TransportConnector {
    * Connectors that don't care about config can omit this entirely;
    * the service helper treats absence as "any config is acceptable".
    * When provided, the optional `normalized` field is the shape
-   * persisted to DB (alias-merged, trimmed, etc).
+   * persisted to DB (trimmed, defaults filled).
    */
   validateConfig?(input: ConfigValidationInput): ConfigValidationResult
 

@@ -343,7 +343,10 @@ export function startSessionThinkingWorker() {
         ReturnType<typeof resolveActorCapabilitySurface>
       >["mcpTools"] = {
         tools: [],
-        executor: async () => ({ content: [] }),
+        executor: async () => ({
+          content: [],
+          origin: { kind: "system", registryKey: "empty_mcp_tools" },
+        }),
         mcpVersion: 0,
         refresh: async () => ({ tools: [], mcpVersion: 0 }),
         setTurnId: () => {},

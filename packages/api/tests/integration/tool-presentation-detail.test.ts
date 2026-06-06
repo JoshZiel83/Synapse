@@ -88,9 +88,9 @@ async function buildDeviceFixture(opts: {
   await client.query(
     `INSERT INTO tool_calls (
        id, turn_id, conversation_id, session_id,
-       bundle_id, tool_kind, tool_name, status,
+       bundle_id, tool_name, status,
        source_kind, source_snapshot, normalized_input
-     ) VALUES ($1, $2, $3, $4, $5, 'mcp_device', $6, 'completed', 'device', $7, $8)`,
+     ) VALUES ($1, $2, $3, $4, $5, $6, 'completed', 'device', $7, $8)`,
     [
       toolCallId,
       turnId,

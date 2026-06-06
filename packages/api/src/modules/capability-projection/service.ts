@@ -37,7 +37,6 @@ import {
 } from "../mcp-plugins/tool-resolver.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
-import { ensureConversationActorContext } from "../session/service.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import {
@@ -86,6 +85,11 @@ import {
   resolveEffectiveTarget,
 } from "@synapse/device-protocol/browser-tools"
 
+const CAPABILITY_PROJECTION_ORIGIN: ToolResultOrigin = {
+  kind: "system",
+  registryKey: "capability_projection",
+}
+
 /**
  * Discriminated union of principals that capability projection evaluates
  * tools for. See docs/device-runtime-v3.md §10.3.
@@ -107,14 +111,13 @@ import {
  * - `workspace_member` — dashboard introspection; never used for
  *   executable dispatch.
  *
- * subject-scope-refactor: the legacy `actor_in_conversation` discriminator
+ * subject-scope-refactor: the scoped actor discriminator
  * is dropped. Its semantics ("this actor, narrowed to this conversation")
  * are now expressed as `actor` principal + `RuntimePrincipalContext.
  * activeConversationSubjectId`, with the conversation subject also pushed
  * into `runtimeScopeSubjectIds` so `(subject=actor, scope=conversation)`
  * grants match SQL-side rather than requiring an extra principal-kind
- * branch in every dispatcher. The legacy `conversation_actor_context`
- * subject kind is gone with the discriminator.
+ * branch in every dispatcher.
  */
 export type DevicePrincipal =
   | { kind: "actor"; actorId: string; conversationId?: string }
@@ -269,22 +272,19 @@ function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
 
 function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
   return {
-    kind: "mcp_device",
-    deviceId: row.device_id,
+    kind: "device",
+    deviceToolId: row.device_tool_id,
     deviceName: row.device_name,
-    exposureId: row.device_exposure_id,
     exposureStableKey: row.exposure_stable_key,
-    exposureName: row.visible_tool_name,
     visibleToolName: row.visible_tool_name,
-    namespacedToolName: makeDeviceToolId(row.device_tool_id),
   }
 }
 
 function withDeviceToolOrigin(
-  result: NormalizedMcpToolResult,
+  result: Omit<NormalizedMcpToolResult, "origin">,
   origin: ToolResultOrigin
 ): NormalizedMcpToolResult {
-  return result.origin ? result : { ...result, origin }
+  return { ...result, origin }
 }
 
 /**
@@ -865,11 +865,13 @@ function unionWithDevice(
 
 function mcpErrorBlock(
   message: string,
-  synapseError?: SynapseError
+  synapseError?: SynapseError,
+  origin: ToolResultOrigin = CAPABILITY_PROJECTION_ORIGIN
 ): NormalizedMcpToolResult {
   return {
     content: [textBlock(message) as CanonicalContentBlock],
     isError: true,
+    origin,
     // Forward the full SynapseError (code / message / details / interaction_id /
     // retry_nonce / authorization_task_id) when available so the dashboard and
     // downstream observers see the same shape the runtime exposes via
@@ -1101,12 +1103,15 @@ async function requestAuthorizationOrDeny(args: {
   principalScopeSubjectId?: string
 }): Promise<NormalizedMcpToolResult> {
   const { projectInput, row, toolName } = args
+  const origin = deviceToolOrigin(row)
   const supportsAuthRequest =
     projectInput.principal.kind === "actor" ||
     projectInput.principal.kind === "remote_agent"
   if (!supportsAuthRequest) {
     return mcpErrorBlock(
-      `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal`
+      `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal`,
+      undefined,
+      origin
     )
   }
   const principal = projectInput.principal as
@@ -1121,7 +1126,9 @@ async function requestAuthorizationOrDeny(args: {
     projectInput.conversationId
   if (!conversationId) {
     return mcpErrorBlock(
-      `permission_denied: cannot create authorization request without a conversation context`
+      `permission_denied: cannot create authorization request without a conversation context`,
+      undefined,
+      origin
     )
   }
   try {
@@ -1144,6 +1151,7 @@ async function requestAuthorizationOrDeny(args: {
         ) as CanonicalContentBlock,
       ],
       isError: true,
+      origin,
       metadata: {
         synapse_error: {
           code: "runtime_authorization_requested",
@@ -1155,7 +1163,9 @@ async function requestAuthorizationOrDeny(args: {
     }
   } catch (err) {
     return mcpErrorBlock(
-      `authorization request failed: ${(err as Error).message}`
+      `authorization request failed: ${(err as Error).message}`,
+      undefined,
+      origin
     )
   }
 }
@@ -1171,14 +1181,18 @@ async function requestAuthorizationOrDeny(args: {
  * mcpErrorBlock above stays for the unstructured "internal projection
  * failure" path that should never be hit in a happy day.
  */
-function synapseErrorBlock(error: {
-  code: string
-  message: string
-  details?: Record<string, unknown>
-}): NormalizedMcpToolResult {
+function synapseErrorBlock(
+  error: {
+    code: string
+    message: string
+    details?: Record<string, unknown>
+  },
+  origin: ToolResultOrigin = CAPABILITY_PROJECTION_ORIGIN
+): NormalizedMcpToolResult {
   return {
     content: [textBlock(error.message) as CanonicalContentBlock],
     isError: true,
+    origin,
     metadata: {
       synapse_error: {
         code: error.code,

@@ -31,7 +31,10 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+    listen 443 quic reuseport;
+    listen [::]:443 quic reuseport;
     http2 on;
+    http3 on;
     server_name ${SYNAPSE_PUBLIC_DOMAIN} ${SYNAPSE_WWW_DOMAIN};
 
     ssl_certificate /etc/letsencrypt/live/${LETSENCRYPT_CERT_NAME}/fullchain.pem;
@@ -42,12 +45,12 @@ server {
     ssl_session_tickets off;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
-    ssl_stapling on;
-    ssl_stapling_verify on;
+    quic_retry on;
     resolver 127.0.0.11 valid=30s ipv6=off;
     resolver_timeout 5s;
 
     add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header Alt-Svc 'h3=":443"; ma=86400' always;
 
     client_max_body_size 25m;
 
@@ -111,7 +114,10 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+    listen 443 quic;
+    listen [::]:443 quic;
     http2 on;
+    http3 on;
     server_name ${SYNAPSE_MOBILE_SHORT_DOMAIN} ${SYNAPSE_MOBILE_DOMAIN};
 
     ssl_certificate /etc/letsencrypt/live/${LETSENCRYPT_CERT_NAME}/fullchain.pem;
@@ -122,12 +128,12 @@ server {
     ssl_session_tickets off;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
-    ssl_stapling on;
-    ssl_stapling_verify on;
+    quic_retry on;
     resolver 127.0.0.11 valid=30s ipv6=off;
     resolver_timeout 5s;
 
     add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header Alt-Svc 'h3=":443"; ma=86400' always;
 
     client_max_body_size 25m;
 
@@ -188,7 +194,10 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+    listen 443 quic;
+    listen [::]:443 quic;
     http2 on;
+    http3 on;
     server_name ${SYNAPSE_REGISTRY_DOMAIN};
 
     ssl_certificate /etc/letsencrypt/live/${LETSENCRYPT_CERT_NAME}/fullchain.pem;
@@ -199,12 +208,12 @@ server {
     ssl_session_tickets off;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
-    ssl_stapling on;
-    ssl_stapling_verify on;
+    quic_retry on;
     resolver 127.0.0.11 valid=30s ipv6=off;
     resolver_timeout 5s;
 
     add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header Alt-Svc 'h3=":443"; ma=86400' always;
 
     # Sidecar tarballs are ~150-205MB; Verdaccio's own max_body_size is
     # 512mb. The default proxy cap would reject a publish, so raise it here.

@@ -32,7 +32,6 @@ export type AccessBindingRelation =
   | "use_workspace_member"
   | "use_conversation"
   | "use_actor"
-  | "use_actor_in_conversation"
   | "use_remote_agent"
   | "use_scoped"
 
@@ -130,12 +129,6 @@ export function buildResourceAccessBindingRef(input: {
 export function relationForAccessGrantTarget(
   target: AccessGrantTarget
 ): AccessBindingRelation {
-  if (
-    target.subject.kind === SUBJECT_KIND.ACTOR &&
-    target.scope?.kind === SUBJECT_KIND.CONVERSATION
-  ) {
-    return "use_actor_in_conversation"
-  }
   switch (target.subject.kind) {
     case SUBJECT_KIND.WORKSPACE:
       return "use_workspace"
@@ -167,34 +160,26 @@ export function normalizeAccessBindingRow<
     scope_conversation_id_via_join?: string | null
   },
 >(row: T): T & { resource_id: string; relation: AccessBindingRelation } {
-  // D3: derive a relation string from subject_kind + scope_kind (legacy
-  // bookkeeping for the SQL views that still expose `relation`).
+  // Derive a relation string from subject kind; scope lives in scope_subject_id.
   let relation: AccessBindingRelation
-  if (
-    row.subject_kind === SUBJECT_KIND.ACTOR &&
-    row.scope_kind === SUBJECT_KIND.CONVERSATION
-  ) {
-    relation = "use_actor_in_conversation"
-  } else {
-    switch (row.subject_kind) {
-      case SUBJECT_KIND.WORKSPACE:
-        relation = "use_workspace"
-        break
-      case SUBJECT_KIND.WORKSPACE_MEMBER:
-        relation = "use_workspace_member"
-        break
-      case SUBJECT_KIND.CONVERSATION:
-        relation = "use_conversation"
-        break
-      case SUBJECT_KIND.ACTOR:
-        relation = "use_actor"
-        break
-      case SUBJECT_KIND.REMOTE_AGENT:
-        relation = "use_remote_agent"
-        break
-      default:
-        relation = "use_scoped"
-    }
+  switch (row.subject_kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      relation = "use_workspace"
+      break
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      relation = "use_workspace_member"
+      break
+    case SUBJECT_KIND.CONVERSATION:
+      relation = "use_conversation"
+      break
+    case SUBJECT_KIND.ACTOR:
+      relation = "use_actor"
+      break
+    case SUBJECT_KIND.REMOTE_AGENT:
+      relation = "use_remote_agent"
+      break
+    default:
+      relation = "use_scoped"
   }
   return {
     ...row,

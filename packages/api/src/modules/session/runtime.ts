@@ -542,7 +542,7 @@ async function buildToolActivityDetail(turnId: string) {
 
     items.push({
       toolCallId: toolCall.id,
-      toolKind: toolCall.tool_kind,
+      toolKind: toolCall.source_kind,
       toolName: toolCall.tool_name,
       ...(toolSource ? { source: toolSource } : {}),
       icon: rendered.icon,

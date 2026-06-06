@@ -109,7 +109,7 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
   return row.id as string
 }
 
-test("subjectScopeLabel emits remote_agent and remote_agent_in_conversation", () => {
+test("subjectScopeLabel emits subject kind independent of scope", () => {
   assert.equal(
     subjectScopeLabel({ subject: remoteAgentRef("ra-1") }),
     "remote_agent"
@@ -119,7 +119,7 @@ test("subjectScopeLabel emits remote_agent and remote_agent_in_conversation", ()
       subject: remoteAgentRef("ra-1"),
       scope: conversationRef("c-1"),
     }),
-    "remote_agent_in_conversation"
+    "remote_agent"
   )
   // Existing labels still emit their canonical form.
   assert.equal(subjectScopeLabel({ subject: actorRef("a-1") }), "actor")
@@ -128,7 +128,7 @@ test("subjectScopeLabel emits remote_agent and remote_agent_in_conversation", ()
       subject: actorRef("a-1"),
       scope: conversationRef("c-1"),
     }),
-    "actor_in_conversation"
+    "actor"
   )
   assert.equal(subjectScopeLabel({ subject: workspaceRef("w-1") }), "workspace")
 })
@@ -172,11 +172,13 @@ test(
         readAccessBindingTarget(normalizeAccessBindingRow(row as any) as any)
       )
       const labels = decoded.map((t) => subjectScopeLabel(t as any)).sort()
-      // Round-9 fix: BOTH labels must be present. Before the fix the
-      // scoped one would have collapsed to "remote_agent" too because
-      // subjectScopeLabel didn't have the remote_agent + conversation
-      // composite branch.
-      assert.deepEqual(labels, ["remote_agent", "remote_agent_in_conversation"])
+      assert.deepEqual(labels, ["remote_agent", "remote_agent"])
+      assert.equal(
+        decoded.filter((target) => target.scope?.kind === "conversation")
+          .length,
+        1
+      )
+      assert.equal(decoded.filter((target) => !target.scope).length, 1)
     })
   }
 )

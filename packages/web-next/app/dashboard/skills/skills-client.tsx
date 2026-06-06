@@ -122,7 +122,7 @@ type ScopeDraft = {
   userId: string | null
 }
 
-type SkillUseScope = SkillAccessTargetType
+type SkillUseScope = SkillAccessTargetType | "actor_conversation"
 
 type UploadedFile = {
   id: string
@@ -264,7 +264,7 @@ const scopeOptions: Array<{
     description: "One actor can use this skill across its conversations.",
   },
   {
-    value: "actor_in_conversation",
+    value: "actor_conversation",
     label: "Actor in conversation",
     description: "One actor can use this skill inside one conversation.",
   },
@@ -485,7 +485,7 @@ function resolveScopeTarget(
         actors.find((item) => item.id === draft.actorId)?.name ||
         "Choose one actor"
       )
-    case "actor_in_conversation": {
+    case "actor_conversation": {
       const actorName =
         actors.find((item) => item.id === draft.actorId)?.name || "Choose actor"
       const conversationName =
@@ -523,7 +523,7 @@ function buildAccessTargetFromScopeDraft(
       }
     case "actor":
       return { subject: { kind: "actor", actorId: draft.actorId ?? "" } }
-    case "actor_in_conversation":
+    case "actor_conversation":
       return {
         subject: { kind: "actor", actorId: draft.actorId ?? "" },
         scope: {
@@ -767,12 +767,12 @@ function ScopeFields({
             onChange({
               useScope: nextValue,
               actorId:
-                nextValue === "actor" || nextValue === "actor_in_conversation"
+                nextValue === "actor" || nextValue === "actor_conversation"
                   ? value.actorId
                   : null,
               conversationId:
                 nextValue === "conversation" ||
-                nextValue === "actor_in_conversation"
+                nextValue === "actor_conversation"
                   ? value.conversationId
                   : null,
               userId: null,
@@ -796,7 +796,7 @@ function ScopeFields({
       </Field>
 
       {value.useScope === "conversation" ||
-      value.useScope === "actor_in_conversation" ? (
+      value.useScope === "actor_conversation" ? (
         <Field>
           <FieldLabel>Conversation</FieldLabel>
           <Select
@@ -821,8 +821,7 @@ function ScopeFields({
         </Field>
       ) : null}
 
-      {value.useScope === "actor" ||
-      value.useScope === "actor_in_conversation" ? (
+      {value.useScope === "actor" || value.useScope === "actor_conversation" ? (
         <Field>
           <FieldLabel>Actor</FieldLabel>
           <Select

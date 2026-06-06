@@ -9,13 +9,11 @@
 // pin both directions of the contract so the divergence cannot reappear:
 //
 //   (a) The route's body schema accepts the SDK's wire shape verbatim.
-//   (b) The route rejects the legacy flat `{kind: "actor_in_conversation",
-//       actorId, conversationId}` shape (the user explicitly opted out of
-//       legacy-client back-compat).
+//   (b) The route rejects flat target shapes.
 //   (c) The wire schema's `superRefine` whitelist still rejects scoped
 //       combinations outside `(actor|remote_agent, conversation)`.
 //   (d) Batch 19: the server-side mapper actually translates every
-//       wire-accepted combination into a real service-layer flat target.
+//       wire-accepted combination into a real service-layer target DTO.
 //       Previously `(remote_agent, conversation)` parsed at the schema
 //       layer but threw at the mapper, so the route still 400'd.
 
@@ -87,27 +85,6 @@ test("Batch 18: POST body accepts SDK wire shape — remote_agent + scope=conver
   assert.equal(sdkParsed.success, true)
   const serverParsed = setActiveBodySchema.safeParse(wireBody)
   assert.equal(serverParsed.success, true)
-})
-
-// (b) — legacy flat shape MUST NOT parse. The user opted out of back-
-// compat; if a future revert reintroduces the `z.discriminatedUnion("kind"
-// ...)` schema, this test fires.
-test("Batch 18: POST body rejects legacy {kind: 'actor_in_conversation', ...} flat shape", () => {
-  const legacyBody = {
-    workspaceId: wsId,
-    target: {
-      kind: "actor_in_conversation",
-      actorId,
-      conversationId: convId,
-    },
-    device_capability_ids: [capId],
-  }
-  const parsed = setActiveBodySchema.safeParse(legacyBody)
-  assert.equal(
-    parsed.success,
-    false,
-    "server schema accepted the legacy flat target shape — the route diverged back from ScopedSubjectTargetWireSchema"
-  )
 })
 
 test("Batch 18: POST body rejects legacy {kind: 'actor', actorId} flat shape", () => {
@@ -197,7 +174,7 @@ test("Batch 19: wireTargetToInternalAccessTarget — actor + scope=conversation"
       scope: { kind: "conversation", conversationId: convId },
     }),
     {
-      kind: "actor_in_conversation",
+      kind: "actor",
       actorId,
       conversationId: convId,
     }
@@ -207,14 +184,14 @@ test("Batch 19: wireTargetToInternalAccessTarget — actor + scope=conversation"
 test("Batch 19: wireTargetToInternalAccessTarget — remote_agent + scope=conversation translates (no longer throws)", () => {
   // Pre-Batch-19 this threw inside the mapper, surfacing as a route 400
   // even though the wire schema admitted the shape. Lock the fix: the
-  // mapper now returns a `remote_agent_in_conversation` flat target.
+  // mapper now returns the canonical remote_agent target with conversationId.
   assert.deepEqual(
     wireTargetToInternalAccessTarget({
       subject: { kind: "remote_agent", remoteAgentId },
       scope: { kind: "conversation", conversationId: convId },
     }),
     {
-      kind: "remote_agent_in_conversation",
+      kind: "remote_agent",
       remoteAgentId,
       conversationId: convId,
     }
@@ -222,14 +199,13 @@ test("Batch 19: wireTargetToInternalAccessTarget — remote_agent + scope=conver
 })
 
 // (e) — resolver round-trip for the new shape. Pre-Batch-19 the
-// `remote_agent_in_conversation` kind didn't exist in the AccessTargetInput
-// union, so even if a caller had constructed it by hand, the
-// resolveScopedSubjectTarget switch had no branch for it. Lock the new
+// remote_agent target did not accept conversationId, so the
+// resolveScopedSubjectTarget switch had no scoped branch for it. Lock the
 // branch via a real DB round-trip: insert remote_agent + conversation
 // fixtures, ask the resolver, assert both subject_id + scope_subject_id
 // are populated and FK-valid.
 test(
-  "Batch 19: resolveScopedSubjectTarget(remote_agent_in_conversation) returns (subjectId, scopeSubjectId)",
+  "Batch 19: resolveScopedSubjectTarget(remote_agent + conversationId) returns (subjectId, scopeSubjectId)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db: Kysely<any>) => {
@@ -272,7 +248,7 @@ test(
         .executeTakeFirstOrThrow()
       const resolved = await resolveScopedSubjectTarget(
         {
-          kind: "remote_agent_in_conversation",
+          kind: "remote_agent",
           remoteAgentId: agent.id as string,
           conversationId: conv.id as string,
         },
@@ -280,7 +256,7 @@ test(
       )
       assert.ok(
         resolved.subjectId,
-        "resolver returned no subjectId for remote_agent_in_conversation"
+        "resolver returned no subjectId for scoped remote_agent"
       )
       assert.ok(
         resolved.scopeSubjectId,

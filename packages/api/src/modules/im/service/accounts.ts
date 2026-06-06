@@ -59,7 +59,8 @@ import {
 /**
  * Validate credentials via the connector and return the connector's
  * normalized form when available. The normalized form is what should be
- * persisted to the DB (it has alias keys merged, whitespace trimmed, etc.).
+ * persisted to the DB (it has whitespace trimmed and connector defaults
+ * applied).
  *
  * Disabled accounts skip validation entirely — they may legitimately have
  * blank or expired credentials waiting to be filled in.

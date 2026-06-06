@@ -64,7 +64,7 @@ function getStorage(ctx: IngestContext) {
  * Translate a CanonicalToolResult ToolResultOrigin into the FileOriginInput
  * shape the storage layer expects. The mapping is:
  *
- *   mcp_remote / mcp_device / builtin / callable_plugin → tool_output family
+ *   system / plugin / device / provider_native → tool_output family
  *     (system always MCP_TOOL_RESULT_INGEST; the discriminator + per-kind
  *     fields are preserved in origin.details so downstream audit can see
  *     where the file came from)
@@ -93,15 +93,15 @@ function originToFileOrigin(
 
   let providerKey: string | undefined
   let pluginId: string | undefined
-  if (origin.kind === "mcp_remote") {
-    providerKey = origin.serverKey
-  } else if (origin.kind === "callable_plugin") {
-    providerKey = origin.pluginKey
-    pluginId = origin.pluginKey
-  } else if (origin.kind === "mcp_device") {
+  if (origin.kind === "system") {
+    providerKey = origin.registryKey
+  } else if (origin.kind === "plugin") {
+    providerKey = origin.installationId
+    pluginId = origin.installationId
+  } else if (origin.kind === "device") {
     providerKey = origin.exposureStableKey
-  } else if (origin.kind === "builtin") {
-    providerKey = origin.toolKind
+  } else if (origin.kind === "provider_native") {
+    providerKey = `${origin.providerType}:${origin.toolName}`
   }
 
   return buildToolOutputOrigin({

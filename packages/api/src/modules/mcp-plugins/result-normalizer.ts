@@ -7,10 +7,9 @@
  * delegated to the unified ingest funnel (files/ingest.ts) so binary
  * download/save and pre-canonical pass-through are handled in one place.
  *
- * Callers should supply `origin` (ToolResultOrigin) so downstream
+ * Callers must supply `origin` (ToolResultOrigin) so downstream
  * CanonicalToolResult.origin and stored FileRecord.origin can be attributed
- * correctly. The legacy `binaryMetadata` option remains as a fallback for
- * call sites that haven't migrated yet; it lands in FileRecord.origin.details.
+ * correctly. `binaryMetadata` lands in FileRecord.origin.details.
  */
 import {
   textBlocks,
@@ -21,30 +20,22 @@ import type { NormalizedMcpToolResult } from "@synapse/shared/types"
 import { ingestToolOutput } from "../files/ingest.js"
 
 export interface McpResultNormalizeOptions {
-  // Preferred: where this result came from. Will be persisted to
+  // Where this result came from. Persisted to
   // NormalizedMcpToolResult.origin and used when saving any binary content.
-  origin?: ToolResultOrigin
-  // Legacy: arbitrary metadata merged into FileRecord.origin.details when
-  // binaries are stored. Phase 2 keeps it for backward-compat; Phase 4
-  // migrates remaining call sites to use `origin` exclusively.
+  origin: ToolResultOrigin
+  // Arbitrary metadata merged into FileRecord.origin.details when binaries are
+  // stored.
   binaryMetadata?: Record<string, unknown>
-}
-
-function resolveOrigin(opts?: McpResultNormalizeOptions): ToolResultOrigin {
-  if (opts?.origin) return opts.origin
-  // Synthetic fallback for callers that haven't migrated. Records the
-  // raw binaryMetadata in serverName so it's still visible in audit.
-  return { kind: "mcp_remote", serverKey: "unknown_mcp_caller" }
 }
 
 async function ingestContentArray(
   content: unknown[],
   workspaceId: string,
-  opts?: McpResultNormalizeOptions
+  opts: McpResultNormalizeOptions
 ): Promise<CanonicalContentBlock[]> {
   return ingestToolOutput(content, {
     workspaceId,
-    origin: resolveOrigin(opts),
+    origin: opts.origin,
     binaryMetadata: opts?.binaryMetadata,
   })
 }
@@ -52,12 +43,11 @@ async function ingestContentArray(
 export async function normalizeMcpToolResult(
   rawResult: unknown,
   workspaceId: string,
-  options?: McpResultNormalizeOptions
+  options: McpResultNormalizeOptions
 ): Promise<NormalizedMcpToolResult> {
-  const origin = options?.origin
   const wrap = (
     base: Omit<NormalizedMcpToolResult, "origin">
-  ): NormalizedMcpToolResult => (origin ? { ...base, origin } : base)
+  ): NormalizedMcpToolResult => ({ ...base, origin: options.origin })
 
   if (typeof rawResult === "string") {
     return wrap({ content: textBlocks(rawResult), rawResult })

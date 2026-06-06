@@ -117,27 +117,19 @@ import {
   type PreparedSkillSnapshot,
 } from "./mirror-import.js"
 
-// PR2/D3: SkillUseScope is the string label used by skill SQL
-// (`bind_scope`) and the controller input. Round 10 review (P2): extended
-// to include `remote_agent` / `remote_agent_in_conversation` so the
-// label round-trip through skillUseScopeFromTarget +
-// scopedTargetFromSkillUseScope is lossless for remote_agent targets —
-// otherwise attachSkillToInstallation would collapse a remote_agent
-// accessTarget down to "workspace" and silently drop the remote-agent
-// identity at bind time.
 type SkillUseScope =
   | "workspace"
   | "workspace_member"
   | "conversation"
   | "actor"
-  | "actor_in_conversation"
   | "remote_agent"
-  | "remote_agent_in_conversation"
+type SkillAccessSuggestion =
+  | SkillUseScope
+  | "actor_conversation"
+  | "remote_agent_conversation"
 
 /**
- * D3: build a ScopedSubjectTarget from the legacy SkillUseScope label +
- * IDs. Used to fold the controller's legacy input into the canonical
- * scoped-subject shape before handing off to access/* helpers.
+ * Build a ScopedSubjectTarget from the public scope label + ids.
  */
 function scopedTargetFromSkillUseScope(input: {
   useScope: SkillUseScope
@@ -170,17 +162,11 @@ function scopedTargetFromSkillUseScope(input: {
       if (!input.actorId) {
         throw new SkillError(400, "actorId is required for actor scope")
       }
-      return { subject: actorRef(input.actorId) }
-    case "actor_in_conversation":
-      if (!input.actorId || !input.conversationId) {
-        throw new SkillError(
-          400,
-          "actorId and conversationId are required for actor_in_conversation scope"
-        )
-      }
       return {
         subject: actorRef(input.actorId),
-        scope: conversationRef(input.conversationId),
+        ...(input.conversationId
+          ? { scope: conversationRef(input.conversationId) }
+          : {}),
       }
     case "remote_agent":
       if (!input.remoteAgentId) {
@@ -189,25 +175,17 @@ function scopedTargetFromSkillUseScope(input: {
           "remoteAgentId is required for remote_agent scope"
         )
       }
-      return { subject: remoteAgentRef(input.remoteAgentId) }
-    case "remote_agent_in_conversation":
-      if (!input.remoteAgentId || !input.conversationId) {
-        throw new SkillError(
-          400,
-          "remoteAgentId and conversationId are required for remote_agent_in_conversation scope"
-        )
-      }
       return {
         subject: remoteAgentRef(input.remoteAgentId),
-        scope: conversationRef(input.conversationId),
+        ...(input.conversationId
+          ? { scope: conversationRef(input.conversationId) }
+          : {}),
       }
   }
 }
 
 /**
- * D3: collapse a ScopedSubjectTarget back to the legacy SkillUseScope label
- * for display / SQL projection. Subjects of other kinds (remote_agent etc.)
- * fall back to "workspace" since the skill UI can't yet render them.
+ * Collapse a ScopedSubjectTarget back to the public subject label.
  */
 function skillUseScopeFromTarget(target: ScopedSubjectTarget): SkillUseScope {
   const label = subjectScopeLabel(target)
@@ -216,9 +194,7 @@ function skillUseScopeFromTarget(target: ScopedSubjectTarget): SkillUseScope {
     case "workspace_member":
     case "conversation":
     case "actor":
-    case "actor_in_conversation":
     case "remote_agent":
-    case "remote_agent_in_conversation":
       return label
     default:
       return "workspace"
@@ -276,10 +252,6 @@ export type SkillScopeTarget = {
   bindScope: RuntimeBindingScope
   useScope: SkillUseScope
   actorId: string | null
-  // Round 10 review (P2): include remoteAgentId so SkillScopeTarget
-  // can faithfully carry a remote_agent / remote_agent_in_conversation
-  // target through the legacy intermediate-shape pipeline (instead of
-  // silently collapsing the remote_agent identity into workspace).
   remoteAgentId: string | null
   // Round 11 review (P2): same fix for workspace_member — controller
   // accepts workspace_member targets, scopedTargetFromSkillUseScope
@@ -413,6 +385,7 @@ type VisibleSkillRow = {
   access_bind_scope: RuntimeBindingScope
   conversation_id: string | null
   actor_id: string | null
+  remote_agent_id: string | null
   workspace_member_id: string | null
   slug: string
   name: string
@@ -684,22 +657,7 @@ function normalizeScopeTarget(input: {
         actorId: input.actorId,
         remoteAgentId: null,
         workspaceMemberId: null,
-        conversationId: null,
-      }
-    case "actor_in_conversation":
-      if (!input.actorId || !input.conversationId) {
-        throw new SkillError(
-          400,
-          "actorId and conversationId are required for actor_in_conversation scope"
-        )
-      }
-      return {
-        bindScope: "actor_in_conversation",
-        useScope: "actor_in_conversation",
-        actorId: input.actorId,
-        remoteAgentId: null,
-        workspaceMemberId: null,
-        conversationId: input.conversationId,
+        conversationId: input.conversationId ?? null,
       }
     case "remote_agent":
       if (!input.remoteAgentId) {
@@ -714,22 +672,7 @@ function normalizeScopeTarget(input: {
         actorId: null,
         remoteAgentId: input.remoteAgentId,
         workspaceMemberId: null,
-        conversationId: null,
-      }
-    case "remote_agent_in_conversation":
-      if (!input.remoteAgentId || !input.conversationId) {
-        throw new SkillError(
-          400,
-          "remoteAgentId and conversationId are required for remote_agent_in_conversation scope"
-        )
-      }
-      return {
-        bindScope: "remote_agent_in_conversation",
-        useScope: "remote_agent_in_conversation",
-        actorId: null,
-        remoteAgentId: input.remoteAgentId,
-        workspaceMemberId: null,
-        conversationId: input.conversationId,
+        conversationId: input.conversationId ?? null,
       }
     default:
       throw new SkillError(
@@ -947,13 +890,19 @@ function buildSnapshotAttachmentFiles(
   return [buildSyntheticEntryAttachment(row, timestamp), ...(files || [])]
 }
 
-function resolvePublicUseScope(bindScope: RuntimeBindingScope): SkillUseScope {
-  switch (bindScope) {
+function resolvePublicUseScope(row: SkillAccessRow): SkillAccessSuggestion {
+  if (row.bind_scope === "actor" && row.conversation_id) {
+    return "actor_conversation"
+  }
+  if (row.bind_scope === "remote_agent" && row.conversation_id) {
+    return "remote_agent_conversation"
+  }
+  switch (row.bind_scope) {
     case "workspace":
     case "conversation":
     case "actor":
-    case "actor_in_conversation":
-      return bindScope
+    case "remote_agent":
+      return row.bind_scope
     case "workspace_member":
       // workspace_member-scoped skill bindings are individual approvals.
       // For UI grouping purposes treat them as workspace-level visibility.
@@ -968,14 +917,9 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
     active: 0,
     revoked: 1,
   }
-  // Round 9 review: include remote_agent_in_conversation / remote_agent
-  // alongside the actor variants so the priority order doesn't crash on
-  // a remote_agent grant.
   const scopeOrder: Record<RuntimeBindingScope, number> = {
-    actor_in_conversation: 0,
-    remote_agent_in_conversation: 0,
-    actor: 1,
-    remote_agent: 1,
+    actor: 0,
+    remote_agent: 0,
     workspace_member: 2,
     conversation: 3,
     workspace: 4,
@@ -1001,10 +945,8 @@ function compareVisibleBindingPriority(
     revoked: 1,
   }
   const scopeOrder: Record<RuntimeBindingScope, number> = {
-    actor_in_conversation: 0,
-    remote_agent_in_conversation: 0,
-    actor: 1,
-    remote_agent: 1,
+    actor: 0,
+    remote_agent: 0,
     workspace_member: 2,
     conversation: 3,
     workspace: 4,
@@ -1207,16 +1149,13 @@ function buildInstalledSkillPayload(
 }
 
 /**
- * Round 10 review (P2): collapse the legacy label switch into a direct
+ * Collapse the label switch into a direct
  * call to readAccessBindingTarget. The old switch fell back to
- * `workspace` for any unrecognized `bind_scope` — including `remote_agent`
- * and `remote_agent_in_conversation` (round 9 widened RuntimeBindingScope
- * to admit those labels, but this reverse mapper was a separate copy of
- * the switch that wasn't updated). The mapper feeds into
+ * `workspace` for any unrecognized `bind_scope`. The mapper feeds into
  * `validateConversationScopedAccessTarget` and
  * `assertGrantConversationTypeOverrideAllowed` from
  * updateInstalledSkill / updateInstalledSkillAccessGrant — so a
- * remote_agent + scope=conversation grant being updated would silently
+ * remote_agent grant being updated would silently
  * decode as workspace, skipping the conversation-scoped policy check
  * and the active-participant check.
  *
@@ -1269,18 +1208,25 @@ function visibleRowToAccessTarget(
         : { subject: workspaceRef(row.workspace_id) }
     case "actor":
       return row.actor_id
-        ? { subject: actorRef(row.actor_id) }
+        ? {
+            subject: actorRef(row.actor_id),
+            ...(row.conversation_id
+              ? { scope: conversationRef(row.conversation_id) }
+              : {}),
+          }
+        : { subject: workspaceRef(row.workspace_id) }
+    case "remote_agent":
+      return row.remote_agent_id
+        ? {
+            subject: remoteAgentRef(row.remote_agent_id),
+            ...(row.conversation_id
+              ? { scope: conversationRef(row.conversation_id) }
+              : {}),
+          }
         : { subject: workspaceRef(row.workspace_id) }
     case "conversation":
       return row.conversation_id
         ? { subject: conversationRef(row.conversation_id) }
-        : { subject: workspaceRef(row.workspace_id) }
-    case "actor_in_conversation":
-      return row.actor_id && row.conversation_id
-        ? {
-            subject: actorRef(row.actor_id),
-            scope: conversationRef(row.conversation_id),
-          }
         : { subject: workspaceRef(row.workspace_id) }
     default:
       return { subject: workspaceRef(row.workspace_id) }
@@ -1744,21 +1690,13 @@ async function loadInstalledSkillRows(params: {
 export function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
   const target = readAccessBindingTarget(row as any)
   const label = subjectScopeLabel(target)
-  // Round 9 review (P2): include remote_agent / remote_agent_in_conversation
-  // in the label switch so those grants don't silently collapse to a
-  // "workspace" label. The dedup paths in skills/service.ts and
-  // mcp-plugins/service.ts compare grants by this string; without
-  // remote_agent here, a second create of the same remote_agent target
-  // would miss the existing row and crash on the DB unique constraint.
   let bindScope: RuntimeBindingScope
   switch (label) {
     case "workspace":
     case "workspace_member":
     case "conversation":
     case "actor":
-    case "actor_in_conversation":
     case "remote_agent":
-    case "remote_agent_in_conversation":
       bindScope = label
       break
     default:
@@ -1823,6 +1761,7 @@ async function loadAccessBindingsBySkillIdsForContext(
     contextWorkspaceId: string
     workspaceMemberId?: string
     actorId?: string
+    remoteAgentId?: string
     conversationId?: string
   }
 ) {
@@ -1836,6 +1775,7 @@ async function loadAccessBindingsBySkillIdsForContext(
     contextWorkspaceId: context.contextWorkspaceId,
     workspaceMemberId: context.workspaceMemberId,
     actorId: context.actorId,
+    remoteAgentId: context.remoteAgentId,
     conversationId: context.conversationId,
   })
 
@@ -2864,8 +2804,8 @@ export async function getInstalledSkillAccessState(
   )
   const initialGrant = selectInitialSkillGrant(accessRows)
   const suggestedGrantScope = initialGrant
-    ? resolvePublicUseScope(initialGrant.bind_scope)
-    : ("workspace" as SkillUseScope)
+    ? resolvePublicUseScope(initialGrant)
+    : ("workspace" as SkillAccessSuggestion)
 
   return {
     grants,
@@ -3531,12 +3471,14 @@ async function buildVisibilitySubjects(input: {
   workspaceId: string
   workspaceMemberId?: string
   actorId?: string
+  remoteAgentId?: string
   conversationId?: string
 }) {
   return buildConversationCapabilitySubjects(db, {
     workspaceId: input.workspaceId,
     workspaceMemberId: input.workspaceMemberId,
     actorId: input.actorId,
+    remoteAgentId: input.remoteAgentId,
     conversationId: input.conversationId,
   })
 }
@@ -3562,8 +3504,8 @@ function visibleRowToAccessRow(
     case "actor":
       relation = "use_actor"
       break
-    case "actor_in_conversation":
-      relation = "use_actor_in_conversation"
+    case "remote_agent":
+      relation = "use_remote_agent"
       break
     default:
       relation = "use_scoped"
@@ -3591,6 +3533,7 @@ function visibleRowToAccessRow(
     bind_scope: row.access_bind_scope,
     actor_id: row.actor_id,
     conversation_id: row.conversation_id,
+    remote_agent_id: row.remote_agent_id,
     workspace_member_id: row.workspace_member_id,
   }
 }
@@ -3599,6 +3542,7 @@ export async function listVisibleSkills(input: {
   workspaceId: string
   workspaceMemberId?: string
   actorId?: string
+  remoteAgentId?: string
   sessionId?: string
   conversationId?: string
   conversationKind?: "direct" | "group"
@@ -3614,6 +3558,7 @@ export async function listVisibleSkills(input: {
     workspaceId: input.workspaceId,
     workspaceMemberId: input.workspaceMemberId,
     actorId: input.actorId,
+    remoteAgentId: input.remoteAgentId,
     conversationId: input.conversationId,
   })
   // P1 fix (post-D4): subject_ids the principal can claim, including the
@@ -3624,6 +3569,7 @@ export async function listVisibleSkills(input: {
     workspaceId: input.workspaceId,
     workspaceMemberId: input.workspaceMemberId,
     actorId: input.actorId,
+    remoteAgentId: input.remoteAgentId,
     conversationId: input.conversationId,
   })
   const autoLoadedSkills = await listAutoLoadedSkills({
@@ -3677,6 +3623,7 @@ export async function listVisibleSkills(input: {
 	                 'workspace'::varchar AS access_bind_scope,
                  NULL::uuid AS conversation_id,
                  NULL::uuid AS actor_id,
+                 NULL::uuid AS remote_agent_id,
                  NULL::uuid AS workspace_member_id,
                  skill.updated_at AS access_created_at
                FROM installed_skills skill
@@ -3700,6 +3647,7 @@ export async function listVisibleSkills(input: {
                 contextWorkspaceId: input.workspaceId,
                 workspaceMemberId: input.workspaceMemberId,
                 actorId: input.actorId,
+                remoteAgentId: input.remoteAgentId,
                 conversationId: input.conversationId,
               }
             ),
@@ -3748,6 +3696,7 @@ export async function listVisibleSkills(input: {
               access_bind_scope: chosenBinding?.bind_scope || "workspace",
               conversation_id: chosenBinding?.conversation_id || null,
               actor_id: chosenBinding?.actor_id || null,
+              remote_agent_id: chosenBinding?.remote_agent_id || null,
               workspace_member_id: chosenBinding?.workspace_member_id || null,
               access_created_at:
                 chosenBinding?.created_at || row.access_created_at,
@@ -3786,6 +3735,7 @@ export async function listVisibleSkills(input: {
 export async function readVisibleSkill(input: {
   workspaceId: string
   actorId?: string
+  remoteAgentId?: string
   sessionId?: string
   conversationId?: string
   conversationKind?: "direct" | "group"
@@ -3796,6 +3746,7 @@ export async function readVisibleSkill(input: {
   const visibleSkills = await listVisibleSkills({
     workspaceId: input.workspaceId,
     actorId: input.actorId,
+    remoteAgentId: input.remoteAgentId,
     sessionId: input.sessionId,
     conversationId: input.conversationId,
     conversationKind: input.conversationKind,

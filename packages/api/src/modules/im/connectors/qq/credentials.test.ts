@@ -7,13 +7,9 @@ import {
   validateQqCredentialsForMode,
 } from "./credentials.js"
 
-test("extractQqCredentials: snake_case + camelCase + secret alias", () => {
+test("extractQqCredentials: canonical fields", () => {
   const camel = extractQqCredentials({ appId: "X", clientSecret: "Y" })
   assert.deepEqual(camel.credentials, { appId: "X", clientSecret: "Y" })
-  const snake = extractQqCredentials({ app_id: "X", client_secret: "Y" })
-  assert.deepEqual(snake.credentials, { appId: "X", clientSecret: "Y" })
-  const aliased = extractQqCredentials({ app_id: "X", secret: "Y" })
-  assert.deepEqual(aliased.credentials, { appId: "X", clientSecret: "Y" })
 })
 
 test("extractQqCredentials: missing fields surface errors", () => {
@@ -24,11 +20,11 @@ test("extractQqCredentials: missing fields surface errors", () => {
   assert.equal(empty.errors.length, 2)
 })
 
-test("extractQqCredentials: botSecret is optional (alias supported)", () => {
+test("extractQqCredentials: botSecret is optional", () => {
   const withBot = extractQqCredentials({
     appId: "X",
     clientSecret: "Y",
-    bot_secret: "Z",
+    botSecret: "Z",
   })
   assert.deepEqual(withBot.credentials, {
     appId: "X",

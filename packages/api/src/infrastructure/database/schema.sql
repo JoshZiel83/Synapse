@@ -33,11 +33,11 @@ CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'p
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
 CREATE TYPE catalog_categories_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
 CREATE TYPE catalog_items_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
-CREATE TYPE catalog_items_source_kind AS ENUM ('builtin', 'official', 'workspace', 'user', 'device');
+CREATE TYPE catalog_items_source_kind AS ENUM ('builtin', 'official', 'workspace', 'user');
 CREATE TYPE catalog_items_visibility AS ENUM ('public', 'workspace', 'private');
 CREATE TYPE catalog_versions_status AS ENUM ('draft', 'active', 'deprecated', 'archived');
 CREATE TYPE catalog_version_files_file_role AS ENUM ('document', 'reference', 'script', 'image', 'json', 'binary');
-CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'sse', 'device');
+CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'sse');
 CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'workspace_member');
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
@@ -98,10 +98,7 @@ CREATE TYPE payload_blobs_content_type AS ENUM ('json', 'text');
 CREATE TYPE payload_blobs_retention_class AS ENUM ('ephemeral', 'debug', 'audit');
 CREATE TYPE provider_steps_request_type AS ENUM ('actor_think', 'ai_complete');
 CREATE TYPE provider_steps_status AS ENUM ('success', 'error', 'timeout');
-CREATE TYPE tool_calls_tool_kind AS ENUM ('callable', 'mcp_plugin', 'mcp_device', 'provider_builtin');
--- Routed source family (tool provenance & routing refactor). Distinct from the
--- execution-kind above (tool_kind); source_kind is the audit provenance axis and
--- is stored as a GENERATED column off source_snapshot->>'kind'.
+-- Routed source family (tool provenance & routing refactor).
 CREATE TYPE tool_calls_source_kind AS ENUM ('system', 'plugin', 'device');
 CREATE TYPE tool_calls_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
 CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('interaction_user_input', 'plan_approval', 'runtime_authorization', 'device_mcp');
@@ -109,7 +106,6 @@ CREATE TYPE tool_call_tasks_delivery_policy AS ENUM ('online_only', 'store_and_f
 CREATE TYPE tool_call_tasks_status AS ENUM ('working', 'input_required', 'completed', 'failed', 'cancelled');
 CREATE TYPE tool_call_tasks_dispatch_status AS ENUM ('accepted', 'queued', 'dispatched', 'received', 'started', 'input_requested', 'cancel_requested');
 CREATE TYPE tool_call_task_output_chunks_stream AS ENUM ('stdout', 'stderr', 'system');
-CREATE TYPE tool_execution_attempts_executor_kind AS ENUM ('callable', 'mcp_plugin', 'mcp_device', 'provider_builtin');
 CREATE TYPE tool_execution_attempts_status AS ENUM ('success', 'error', 'timeout');
 CREATE TYPE tool_result_parts_part_type AS ENUM ('text', 'file_ref', 'json');
 CREATE TYPE session_wakeups_source_type AS ENUM ('user_message', 'actor_message', 'automation', 'system_interrupt', 'retry');
@@ -1476,24 +1472,6 @@ CREATE UNIQUE INDEX uq_sessions_active_plan_approval_interaction
   ON sessions(active_plan_approval_interaction_id)
   WHERE active_plan_approval_interaction_id IS NOT NULL;
 
-CREATE TABLE conversation_actor_contexts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE RESTRICT,
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE RESTRICT,
-  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(conversation_id, actor_id)
-);
-
-CREATE INDEX idx_conversation_actor_contexts_conversation
-  ON conversation_actor_contexts(conversation_id, created_at DESC);
-CREATE INDEX idx_conversation_actor_contexts_actor
-  ON conversation_actor_contexts(actor_id, created_at DESC);
-CREATE UNIQUE INDEX uq_conversation_actor_contexts_session
-  ON conversation_actor_contexts(session_id)
-  WHERE session_id IS NOT NULL;
-
 -- ============ access_subjects: unified polymorphic subject registry ============
 -- Replaces the historical pattern of "kind + N nullable FK columns + CHECK" that
 -- was duplicated across 10+ tables. Authorization/relationship/binding tables
@@ -1533,10 +1511,8 @@ CREATE TABLE access_subjects (
   -- workspace_id NOT NULL), so conversation subjects also require workspace_id,
   -- and a composite FK keeps it consistent with the conversation's real
   -- workspace. `user` / `platform` are platform-wide subjects and intentionally
-  -- have no workspace. The `conversation_actor_context` subject kind was dropped
-  -- at the subject-scope-refactor cutover (D2): the semantics it carried —
-  -- "actor X in conversation Y" — are now expressed as (subject=actor,
-  -- scope=conversation) at the binding/grant layer.
+  -- have no workspace. Conversation-scoped actor semantics are expressed as
+  -- (subject=actor, scope=conversation) at the binding/grant layer.
   CONSTRAINT chk_access_subjects_payload CHECK (
     (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
     (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND transport_address_id IS NULL) OR
@@ -2182,9 +2158,6 @@ CREATE TABLE tool_calls (
   call_index INT NOT NULL DEFAULT 0,
   provider_call_id VARCHAR(255),
   bundle_id UUID NOT NULL,
-  -- Execution kind (how the call was dispatched). Derived from the source via
-  -- execKindForSource at write time; kept for backward-compatible reporting.
-  tool_kind tool_calls_tool_kind NOT NULL,
   -- The WIRE name the model actually saw (collision-safe, possibly qualified).
   -- History replay reads this verbatim — no NameRegistry needed for old turns.
   tool_name VARCHAR(255) NOT NULL,
@@ -2288,7 +2261,6 @@ CREATE TABLE tool_execution_attempts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   tool_call_id UUID NOT NULL REFERENCES tool_calls(id) ON DELETE RESTRICT,
   attempt_no INT NOT NULL,
-  executor_kind tool_execution_attempts_executor_kind NOT NULL,
   -- Provenance (plugin_installation / device_tool) is NOT duplicated here: it is
   -- the parent tool_calls row's single source of truth. attempts only carry
   -- execution-state. (tool provenance & routing refactor)
@@ -3640,8 +3612,8 @@ ALTER TABLE remote_agent_runs ADD CONSTRAINT fk_remote_agent_runs_interaction
   ON DELETE SET NULL;
 
 -- Runtime authorization grants (renamed from relay_authorization_grants in
--- PR #20; subject-scope-refactor: scope enum + conversation_actor_context_id
--- column dropped in favor of subject_id + scope_subject_id pair).
+-- PR #20; subject-scope-refactor: scope enum dropped in favor of the
+-- subject_id + scope_subject_id pair).
 CREATE TABLE runtime_authorization_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
@@ -3651,7 +3623,7 @@ CREATE TABLE runtime_authorization_grants (
   -- subject-scope-refactor: grant subject is unconditional now (NOT NULL).
   -- Deferred FK applied below in the post-access_subjects ALTER section.
   -- Wire-level "scope" labels (once / actor / conversation /
-  -- actor_in_conversation / remote_agent / workspace) are derived from
+  -- scoped actor / remote_agent / workspace) are derived from
   -- (subject_kind, scope_subject_id, retention) via
   -- `subjectScopeLabel` + `presetToOwnerScope` in the runtime-authorizations
   -- service. The legacy `scope` enum column was dropped.
@@ -3981,7 +3953,6 @@ CREATE TABLE device_runtime_sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   device_id UUID NOT NULL REFERENCES devices(id) ON DELETE RESTRICT,
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE SET NULL,
   actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   status device_runtime_sessions_status NOT NULL DEFAULT 'open',
   opened_at TIMESTAMPTZ DEFAULT NOW(),
@@ -4100,7 +4071,7 @@ CREATE TABLE device_operation_results (
 );
 
 -- Forward-reference FKs deferred because their target tables (devices,
--- device_capabilities, device_exposures, conversation_actor_contexts) sit
+-- device_capabilities, device_exposures) sit
 -- after the consuming tables in the file. v3 ALTER block below.
 ALTER TABLE device_services
   ADD CONSTRAINT fk_device_services_current_session
@@ -4117,9 +4088,8 @@ ALTER TABLE runtime_authorization_grants
 ALTER TABLE runtime_authorization_grants
   ADD CONSTRAINT fk_runtime_authorization_grants_device_exposure
   FOREIGN KEY (device_exposure_id) REFERENCES device_exposures(id) ON DELETE RESTRICT;
--- subject-scope-refactor: runtime_authorization_grants.conversation_actor_context_id
--- column and FK dropped. The "actor_in_conversation" scope semantics is now
--- expressed by (subject_id → actor subject, scope_subject_id → conversation
+-- subject-scope-refactor: conversation context is expressed by
+-- (subject_id → actor/remote_agent subject, scope_subject_id → conversation
 -- subject) and enforced by tg_runtime_authorization_grant_validate.
 ALTER TABLE interaction_runtime_authorization_requests
   ADD CONSTRAINT fk_interaction_runtime_auth_requests_device
@@ -5311,8 +5281,6 @@ DROP TRIGGER IF EXISTS sd_reject_delete ON context_archive_frames;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON context_archive_frames FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON context_archive_points;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON context_archive_points FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
-DROP TRIGGER IF EXISTS sd_reject_delete ON conversation_actor_contexts;
-CREATE TRIGGER sd_reject_delete BEFORE DELETE ON conversation_actor_contexts FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON conversation_device_states;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON conversation_device_states FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON conversation_item_context_targets;
@@ -5638,8 +5606,6 @@ DROP TRIGGER IF EXISTS sd_fk_live_model_bindings_installed_by_workspace_member_i
 DROP TRIGGER IF EXISTS sd_fk_live_model_binding_versions_binding_id ON model_binding_versions;
 DROP TRIGGER IF EXISTS sd_fk_live_model_group_grants_group_id ON model_group_grants;
 DROP TRIGGER IF EXISTS sd_fk_live_model_group_grants_granted_by_workspace_member_id ON model_group_grants;
-DROP TRIGGER IF EXISTS sd_fk_live_conversation_actor_contexts_conversation_id ON conversation_actor_contexts;
-DROP TRIGGER IF EXISTS sd_fk_live_conversation_actor_contexts_actor_id ON conversation_actor_contexts;
 DROP TRIGGER IF EXISTS sd_fk_live_access_subjects_workspace_id ON access_subjects;
 DROP TRIGGER IF EXISTS sd_fk_live_access_subjects_workspace_member_id ON access_subjects;
 DROP TRIGGER IF EXISTS sd_fk_live_access_subjects_actor_id ON access_subjects;
@@ -5815,8 +5781,6 @@ CREATE TRIGGER sd_fk_live_model_groups_owner_workspace_member_id BEFORE INSERT O
 CREATE TRIGGER sd_fk_live_model_bindings_group_id BEFORE INSERT OR UPDATE OF group_id, deleted_at ON model_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('model_groups', 'group_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_model_binding_versions_binding_id BEFORE INSERT OR UPDATE OF binding_id ON model_binding_versions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('model_bindings', 'binding_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_model_group_grants_group_id BEFORE INSERT OR UPDATE OF group_id, status ON model_group_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('model_groups', 'group_id', 'id', 'false', 'active');
-CREATE TRIGGER sd_fk_live_conversation_actor_contexts_conversation_id BEFORE INSERT OR UPDATE OF conversation_id ON conversation_actor_contexts FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'false', '');
-CREATE TRIGGER sd_fk_live_conversation_actor_contexts_actor_id BEFORE INSERT OR UPDATE OF actor_id ON conversation_actor_contexts FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('actors', 'actor_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_access_subjects_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON access_subjects FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_access_subjects_workspace_member_id BEFORE INSERT OR UPDATE OF workspace_member_id ON access_subjects FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspace_members', 'workspace_member_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_access_subjects_actor_id BEFORE INSERT OR UPDATE OF actor_id ON access_subjects FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('actors', 'actor_id', 'id', 'false', '');
@@ -6248,7 +6212,6 @@ BEGIN
   UPDATE model_groups t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.owner_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE model_bindings t0 SET installed_by_workspace_member_id = NULL WHERE installed_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.installed_by_workspace_member_id AND t1_0.workspace_id = p_workspace_id));
   UPDATE model_group_grants t0 SET granted_by_workspace_member_id = NULL WHERE granted_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.granted_by_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.subject_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE conversation_actor_contexts t0 SET session_id = NULL WHERE session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.actor_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE transport_accounts t0 SET inbound_actor_id = NULL WHERE inbound_actor_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE conversation_transport_bindings t0 SET inbound_actor_id = NULL WHERE inbound_actor_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE conversation_items t0 SET session_id = NULL WHERE session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id));
@@ -6327,7 +6290,6 @@ BEGIN
   UPDATE device_pairing_sessions t0 SET device_id = NULL WHERE device_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_exposures t0 SET sync_source_id = NULL WHERE sync_source_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id));
   UPDATE device_runtime_sessions t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
-  UPDATE device_runtime_sessions t0 SET conversation_actor_context_id = NULL WHERE conversation_actor_context_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE device_runtime_sessions t0 SET actor_id = NULL WHERE actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE device_operations t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_operations t0 SET task_id = NULL WHERE task_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
@@ -6381,7 +6343,6 @@ BEGIN
   DELETE FROM chat_push_tokens t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM context_archive_frame_parts t0 WHERE (EXISTS (SELECT 1 FROM context_archive_frames t1_0 WHERE t1_0.id = t0.archive_frame_id AND (EXISTS (SELECT 1 FROM context_archive_points t2_0 WHERE t2_0.id = t1_0.archive_point_id AND (EXISTS (SELECT 1 FROM conversations t3_0 WHERE t3_0.id = t2_0.conversation_id AND t3_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t3_1 WHERE t3_1.id = t2_0.session_id AND t3_1.workspace_id = p_workspace_id)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM context_compaction_run_inputs t0 WHERE (EXISTS (SELECT 1 FROM context_compaction_runs t1_0 WHERE t1_0.id = t0.run_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM context_archive_points t1_1 WHERE t1_1.id = t0.archive_point_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_1.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_1.session_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM conversation_items t1_2 WHERE t1_2.id = t0.item_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_2.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_2.session_id AND t2_1.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM conversation_actor_contexts t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.actor_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_context_states t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_device_states t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM chat_client_instances t1_1 WHERE t1_1.id = t0.client_instance_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_item_context_targets t0 WHERE (EXISTS (SELECT 1 FROM conversation_items t1_0 WHERE t1_0.id = t0.item_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM conversation_participants t1_1 WHERE t1_1.id = t0.target_participant_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_1.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t2_1 WHERE t2_1.id = t1_1.subject_id AND t2_1.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6545,7 +6506,6 @@ BEGIN
   DELETE FROM chat_push_tokens t0 WHERE EXISTS (SELECT 1 FROM workspace_members r1 WHERE r1.id = t0.workspace_member_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM context_archive_frame_parts t0 WHERE EXISTS (SELECT 1 FROM context_archive_frames r1 WHERE r1.id = t0.archive_frame_id AND (EXISTS (SELECT 1 FROM context_archive_points r2 WHERE r2.id = r1.archive_point_id AND (EXISTS (SELECT 1 FROM conversations r3 WHERE r3.id = r2.conversation_id AND (r3.deleted_at IS NOT NULL AND r3.deleted_at < p_before)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM context_compaction_run_inputs t0 WHERE EXISTS (SELECT 1 FROM context_compaction_runs r1 WHERE r1.id = t0.run_id AND (EXISTS (SELECT 1 FROM conversations r2 WHERE r2.id = r1.conversation_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM conversation_actor_contexts t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_context_states t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_device_states t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_item_context_targets t0 WHERE EXISTS (SELECT 1 FROM conversation_items r1 WHERE r1.id = t0.item_id AND (EXISTS (SELECT 1 FROM conversations r2 WHERE r2.id = r1.conversation_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6674,7 +6634,7 @@ $$;
 ALTER FUNCTION sd_purge_expired_soft_deleted(timestamptz) OWNER TO synapse_purge_fn_owner;
 REVOKE EXECUTE ON FUNCTION sd_purge_expired_soft_deleted(timestamptz) FROM PUBLIC;
 
-GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_actor_contexts, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, entity_access_requests, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, interaction_action_tokens, interaction_plan_approval_requests, interaction_requests, interaction_response_commands, interaction_runtime_authorization_requests, interaction_transport_projections, interaction_user_input_requests, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_interaction_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, resource_access_bindings, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_output_chunks, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspaces TO synapse_purge_fn_owner;
+GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, entity_access_requests, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, interaction_action_tokens, interaction_plan_approval_requests, interaction_requests, interaction_response_commands, interaction_runtime_authorization_requests, interaction_transport_projections, interaction_user_input_requests, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_interaction_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, resource_access_bindings, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_output_chunks, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspaces TO synapse_purge_fn_owner;
 GRANT SELECT ON access_subjects, transport_addresses TO synapse_purge_fn_owner;
 GRANT INSERT ON audit_logs TO synapse_purge_fn_owner;
 

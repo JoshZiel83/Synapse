@@ -10,9 +10,7 @@ import type { McpInstanceParams } from "../instance-manager.js"
  * a single `registerTransport(...)` call rather than an edit to the switch plus
  * the type unions.
  *
- * NOTE: only MCP_SERVER_TRANSPORTS values are ever registered here. The catalog
- * "device" transport is handled by the device-exposure path and must be
- * filtered out by callers (tool-resolver) before reaching the instance manager.
+ * NOTE: only MCP_SERVER_TRANSPORTS values are ever registered here.
  */
 export type TransportFactory = (
   params: McpInstanceParams,

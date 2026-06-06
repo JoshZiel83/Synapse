@@ -91,8 +91,9 @@ function makeStorage() {
 }
 
 const TEST_ORIGIN: ToolResultOrigin = {
-  kind: "mcp_remote",
-  serverKey: "test-server",
+  kind: "plugin",
+  installationId: "plugin-installation-1",
+  upstreamToolName: "search",
 }
 
 test("string input → single text block", async () => {
@@ -288,8 +289,8 @@ test("storage receives our ToolResultOrigin via origin.details.originKind", asyn
     {
       workspaceId: "ws",
       origin: {
-        kind: "mcp_device",
-        deviceId: "dev-1",
+        kind: "device",
+        deviceToolId: "device-tool-1",
         exposureStableKey: "synapse.builtin.filesystem.v1",
       },
       storage,
@@ -297,8 +298,8 @@ test("storage receives our ToolResultOrigin via origin.details.originKind", asyn
   )
   assert.equal(saveBase64Calls.length, 1)
   assert.equal(saveBase64Calls[0].origin.family, "tool_output")
-  assert.equal(saveBase64Calls[0].origin.details.originKind, "mcp_device")
-  assert.equal(saveBase64Calls[0].origin.details.deviceId, "dev-1")
+  assert.equal(saveBase64Calls[0].origin.details.originKind, "device")
+  assert.equal(saveBase64Calls[0].origin.details.deviceToolId, "device-tool-1")
 })
 
 test("model_response origin routes to model_output family", async () => {
@@ -321,7 +322,11 @@ test("binaryMetadata is merged into origin.details", async () => {
     [{ type: "image", data: PNG_1X1_B64, mimeType: "image/png" }],
     {
       workspaceId: "ws",
-      origin: { kind: "mcp_remote", serverKey: "test-server" },
+      origin: {
+        kind: "plugin",
+        installationId: "plugin-installation-1",
+        upstreamToolName: "search",
+      },
       binaryMetadata: { taskId: "task-123" },
       storage,
     }
@@ -344,7 +349,11 @@ test("resource(blob) merges resource.metadata into origin.details", async () => 
     ],
     {
       workspaceId: "ws",
-      origin: { kind: "mcp_remote", serverKey: "test-server" },
+      origin: {
+        kind: "plugin",
+        installationId: "plugin-installation-1",
+        upstreamToolName: "search",
+      },
       storage,
     }
   )

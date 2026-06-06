@@ -131,9 +131,9 @@ export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
 // which never carry a ToolRef. `toPublicOrigin` covers only the routed three;
 // the union itself admits the extra kinds for the non-ToolRef paths.
 //
-// NOTE (Phase 1 naming): named `PublicToolOrigin` to avoid colliding with the
-// legacy `ToolResultOrigin` still living in types/index.ts. Phase 4 converges
-// the canonical `ToolResultOrigin` onto this shape and drops the legacy union.
+// NOTE: `ToolResultOrigin` in types/index.ts is structurally the same public
+// shape. The alias here keeps the ToolRef layer independent from the large
+// shared types barrel.
 // ---------------------------------------------------------------------------
 
 export const PUBLIC_TOOL_ORIGIN_KINDS = [

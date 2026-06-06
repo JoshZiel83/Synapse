@@ -27,7 +27,7 @@
  * Kept as a structurally-identical local type (not an import) only to avoid a
  * circular-feeling dependency for this otherwise-pure helper — it MUST stay in
  * lock-step with DevicePrincipal. subject-scope-refactor dropped the legacy
- * `actor_in_conversation` discriminator, so it is intentionally absent here;
+ * flat scoped-actor discriminator, so it is intentionally absent here;
  * the exhaustive switch below throws on any kind DevicePrincipal grows that
  * this helper hasn't handled, forcing an explicit decision.
  */

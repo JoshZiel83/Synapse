@@ -225,11 +225,9 @@ test(
   }
 )
 
-// D2: the previous "upsertAccessSubject for a conversation_actor_context"
-// test is gone — the subject kind was dropped from both the TS union and
-// the SQL ENUM, so there is no code path that resolves an owning workspace
-// from a joined CAC row. The `conversation_actor_contexts` table itself
-// stays (session/runtime state), but never participates in access_subjects.
+// D2: the previous runtime-pair subject test is gone — the subject kind was
+// dropped from both the TS union and the SQL ENUM, so there is no code path
+// that resolves an owning workspace from joined runtime-pair state.
 
 test(
   "upsertAccessSubject: user kind leaves workspace_id null; external carries its workspace",
@@ -334,8 +332,8 @@ test(
   }
 )
 
-// D2: "missing conversation_actor_context FK" test removed — the kind is
-// gone from the TS union and SQL ENUM, so this codepath no longer exists.
+// D2: the missing runtime-pair FK test was removed — the kind is gone from the
+// TS union and SQL ENUM, so this codepath no longer exists.
 
 test(
   "loadAccessSubject returns null for a non-existent subject id",

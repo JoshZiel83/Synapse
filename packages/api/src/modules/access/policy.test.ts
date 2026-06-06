@@ -19,13 +19,19 @@ import {
 
 type AnyDb = import("kysely").Kysely<any>
 
-test("targetSupportsConversationTypeOverride accepts workspace + actor only", () => {
+test("targetSupportsConversationTypeOverride accepts unscoped workspace, actor, and remote_agent", () => {
   assert.equal(
     targetSupportsConversationTypeOverride({ subject: workspaceRef("ws-1") }),
     true
   )
   assert.equal(
     targetSupportsConversationTypeOverride({ subject: actorRef("a-1") }),
+    true
+  )
+  assert.equal(
+    targetSupportsConversationTypeOverride({
+      subject: remoteAgentRef("ra-1"),
+    }),
     true
   )
   assert.equal(
@@ -43,6 +49,13 @@ test("targetSupportsConversationTypeOverride accepts workspace + actor only", ()
   assert.equal(
     targetSupportsConversationTypeOverride({
       subject: actorRef("a-1"),
+      scope: conversationRef("c-1"),
+    }),
+    false
+  )
+  assert.equal(
+    targetSupportsConversationTypeOverride({
+      subject: remoteAgentRef("ra-1"),
       scope: conversationRef("c-1"),
     }),
     false
@@ -105,7 +118,7 @@ test("assertGrantConversationTypeOverrideAllowed rejects an override on a conver
   )
 })
 
-test("assertGrantConversationTypeOverrideAllowed allows overrides on workspace + actor scopes", () => {
+test("assertGrantConversationTypeOverrideAllowed allows overrides on unscoped workspace, actor, and remote_agent", () => {
   const ws = assertGrantConversationTypeOverrideAllowed({
     target: { subject: workspaceRef("ws-1") },
     parentConversationTypeMask: 0b1111,
@@ -122,6 +135,14 @@ test("assertGrantConversationTypeOverrideAllowed allows overrides on workspace +
     invalidMaskMessage: "x",
   })
   assert.equal(actor, 0b1111)
+  const remoteAgent = assertGrantConversationTypeOverrideAllowed({
+    target: { subject: remoteAgentRef("ra-1") },
+    parentConversationTypeMask: 0b1111,
+    conversationTypeMaskOverride: 0b0011,
+    buildError: (m) => new Error(m),
+    invalidMaskMessage: "x",
+  })
+  assert.equal(remoteAgent, 0b0011)
 })
 
 test(
@@ -236,8 +257,8 @@ test(
   { timeout: 5 * 60_000 },
   async () => {
     // Round-8 P2 regression: validator used to only know about actor +
-    // scope=conversation. The runtime visibility path matches
-    // remote_agent_in_conversation (tool-resolver) so creation must
+    // scope=conversation. The runtime visibility path also checks
+    // remote_agent + scope=conversation, so creation must
     // validate it too — otherwise a remote_agent + scope=conv grant
     // could be written for a remote agent that isn't in the
     // conversation.

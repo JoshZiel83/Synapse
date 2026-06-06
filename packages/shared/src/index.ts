@@ -43,8 +43,7 @@ export * from "./automation/index.js"
 export * from "./access/index.js"
 export * from "./chat-catalog/index.js"
 export * from "./chat-queue/index.js"
-// Tool provenance & routing (Layer A/B primitives). Distinct names from the
-// legacy ToolResultOrigin in ./types until Phase 4 converges them.
+// Tool provenance & routing (Layer A/B primitives).
 export * from "./tool-source/index.js"
 // Tool-call presentation — re-export the FE-facing surface from the base
 // package so web/mobile (which depend only on @synapse/shared) can render the

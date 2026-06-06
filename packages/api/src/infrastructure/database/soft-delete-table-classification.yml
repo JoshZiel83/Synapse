@@ -175,10 +175,6 @@ tables:
     workspaceScope: none
     deleteWhitelist:
       - securityDefinerFn
-  conversation_actor_contexts:
-    class: child
-    softDelete: none
-    workspaceScope: none
   conversation_context_states:
     class: ephemeral
     softDelete: none
@@ -1622,26 +1618,6 @@ foreignKeys:
     _child: sessions(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
-  digest:9ea280124928abfd:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: conversation_actor_contexts(conversation_id)
-    _parent: conversations(id)
-    _was: CASCADE
-  digest:1f576baae995f4e2:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: conversation_actor_contexts(actor_id)
-    _parent: actors(id)
-    _was: CASCADE
-  digest:52c1e11612d54c5e:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: conversation_actor_contexts(session_id)
-    _parent: sessions(id)
-    _was: SET NULL
   digest:382157128151b5c4:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -3223,14 +3199,6 @@ foreignKeys:
       needsSnapshot: false
     _child: device_runtime_sessions(conversation_id)
     _parent: conversations(id)
-    _was: SET NULL
-  digest:5098288549a8e0ce:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: device_runtime_sessions(conversation_actor_context_id)
-    _parent: conversation_actor_contexts(id)
     _was: SET NULL
   digest:3aff297aa0f654f8:
     targetAction: SET NULL

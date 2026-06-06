@@ -282,7 +282,6 @@ export async function createToolCall(params: {
   callIndex: number
   providerCallId?: string
   bundleId: string
-  toolKind: "callable" | "mcp_plugin" | "mcp_device" | "provider_builtin"
   toolName: string
   // Tool provenance & routing: the immutable public source snapshot + its
   // discriminator, plus optional soft pointers to the live source entity.
@@ -303,7 +302,6 @@ export async function createToolCall(params: {
       call_index: params.callIndex,
       provider_call_id: params.providerCallId || null,
       bundle_id: params.bundleId,
-      tool_kind: params.toolKind,
       tool_name: params.toolName,
       source_kind: params.sourceKind,
       source_snapshot:
@@ -347,7 +345,6 @@ export async function updateToolCallStatus(
 export async function createToolExecutionAttempt(params: {
   toolCallId: string
   attemptNo: number
-  executorKind: "callable" | "mcp_plugin" | "mcp_device" | "provider_builtin"
   transport?: string
   requestPayload?: unknown
 }) {
@@ -362,7 +359,6 @@ export async function createToolExecutionAttempt(params: {
       id: uuidv4(),
       tool_call_id: params.toolCallId,
       attempt_no: params.attemptNo,
-      executor_kind: params.executorKind,
       transport: params.transport || null,
       request_payload_blob_id: requestPayloadBlobId,
       status: "success",
@@ -488,7 +484,6 @@ export async function getToolHistoryForSession(sessionId: string) {
       "tc.call_index",
       "tc.provider_call_id",
       "tc.bundle_id",
-      "tc.tool_kind",
       "tc.tool_name",
       "tc.source_kind",
       "tc.source_snapshot",

@@ -16,7 +16,10 @@ const log = createLogger("capabilities")
 
 const EMPTY_MCP_TOOLS: ResolvedMcpTools = {
   tools: [],
-  executor: async () => ({ content: [] }),
+  executor: async () => ({
+    content: [],
+    origin: { kind: "system", registryKey: "empty_mcp_tools" },
+  }),
   mcpVersion: 0,
   refresh: async () => ({ tools: [], mcpVersion: 0 }),
   setTurnId: () => {},

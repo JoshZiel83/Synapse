@@ -113,33 +113,20 @@ const updateAutomationSchema = z.object({
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const accessTargetSchema = z
   .object({
-    type: z.enum([
-      "workspace",
-      "workspace_member",
-      "conversation",
-      "actor",
-      "actor_in_conversation",
-    ]),
+    type: z.enum(["workspace", "workspace_member", "conversation", "actor"]),
     conversationId: z.uuid().optional(),
     actorId: z.uuid().optional(),
     workspaceMemberId: z.uuid().optional(),
   })
   .superRefine((value, ctx) => {
-    if (
-      (value.type === "conversation" ||
-        value.type === "actor_in_conversation") &&
-      !value.conversationId
-    ) {
+    if (value.type === "conversation" && !value.conversationId) {
       ctx.addIssue({
         code: "custom",
         path: ["conversationId"],
         message: "conversationId is required for this access target",
       })
     }
-    if (
-      (value.type === "actor" || value.type === "actor_in_conversation") &&
-      !value.actorId
-    ) {
+    if (value.type === "actor" && !value.actorId) {
       ctx.addIssue({
         code: "custom",
         path: ["actorId"],
@@ -172,14 +159,14 @@ function inputToCapabilityAccessTarget(
     case "workspace_member":
       return { subject: workspaceMemberRef(input.workspaceMemberId!) }
     case "actor":
-      return { subject: actorRef(input.actorId!) }
-    case "conversation":
-      return { subject: conversationRef(input.conversationId!) }
-    case "actor_in_conversation":
       return {
         subject: actorRef(input.actorId!),
-        scope: conversationRef(input.conversationId!),
+        ...(input.conversationId
+          ? { scope: conversationRef(input.conversationId) }
+          : {}),
       }
+    case "conversation":
+      return { subject: conversationRef(input.conversationId!) }
   }
 }
 const accessGrantUpdateSchema = z.object({

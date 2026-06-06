@@ -31,10 +31,10 @@ import {
   isToolResultOrigin,
   isTransportKind,
   computeWireNames,
-  execKindForSource,
   stripForProvider,
   stripForAuditSnapshot,
   systemToolId,
+  toPublicOrigin,
   type NameRegistry,
   type NamePolicyItem,
   type ProjectedToolDefinition,
@@ -374,38 +374,17 @@ async function loadToolResolveConversationParticipants(params: {
   return entries
 }
 
-// Best-effort origin synthesizer for situations where we know a tool is in
-// the MCP family (because it has a namespaced `org__plugin__tool` shape)
-// but we couldn't get to the real instance.transport to distinguish
-// remote/device/callable. Used in the replan-skip path of appendMcpFailureResult
-// where the tool didn't actually run.
-// Map a routed ToolRef to the legacy ToolResultOrigin shape used by
-// CanonicalToolResult until Phase 4 converges the origin type. Used on the
-// replan-skip path where the tool didn't actually run. A missing ref (stale /
-// unknown wire name) falls back to a callable-builtin origin.
+// Map a routed ToolRef to the public ToolResultOrigin used by
+// CanonicalToolResult. Used on the replan-skip path where the tool didn't
+// actually run. A missing ref (stale / unknown wire name) falls back to a
+// system origin.
 function originFromRef(
   ref: ToolRef | undefined,
   fallbackName: string
 ): ToolResultOrigin {
-  if (!ref) return { kind: "builtin", toolKind: fallbackName }
-  switch (ref.source.kind) {
-    case "device":
-      return {
-        kind: "mcp_device",
-        deviceId:
-          ref.binding.transport === "device_tunnel" ? ref.binding.deviceId : "",
-        deviceName: ref.source.deviceName,
-        exposureStableKey: ref.source.exposureStableKey,
-        exposureName: ref.source.deviceName,
-        visibleToolName: ref.identity.stableKey,
-      }
-    case "plugin":
-      return ref.binding.transport === "in_process"
-        ? { kind: "callable_plugin", pluginKey: ref.source.installationId }
-        : { kind: "mcp_remote", serverKey: ref.source.installationId }
-    case "system":
-      return { kind: "builtin", toolKind: ref.source.registryKey }
-  }
+  return ref
+    ? toPublicOrigin(ref)
+    : { kind: "system", registryKey: fallbackName }
 }
 
 function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
@@ -480,8 +459,6 @@ function buildSleepWithoutSendToReminder(params: {
   }
 }
 
-type ExecutableModelToolKind = "callable" | "mcp_plugin" | "mcp_device"
-
 // A per-turn registry mapping the wire name the model sees to the routed
 // ToolRef. Built by NamePolicy from the projected mcp/device tools; system
 // callable tools occupy the collision space as reserved bare names.
@@ -518,12 +495,6 @@ function buildToolWireRegistry(
   return { refByWireName, wireTools, mcpWireNames }
 }
 
-function execKindFor(ref: ToolRef): "mcp_plugin" | "mcp_device" {
-  // Only plugin/device tools route through the mcpExecutor; both map onto the
-  // MCP execution-kind axis. (system tools never reach this path.)
-  return ref.source.kind === "device" ? "mcp_device" : "mcp_plugin"
-}
-
 // Derive the tool_calls provenance columns for one model tool call. A routed
 // ref (plugin/device) yields its snapshot + soft pointer; everything else is a
 // system tool whose source is the bare wire name.
@@ -531,7 +502,6 @@ function toolCallProvenance(
   wireName: string,
   ref: ToolRef | undefined
 ): {
-  toolKind: ExecutableModelToolKind
   sourceKind: ToolSourceKind
   sourceSnapshot: SourceSnapshot
   pluginInstallationId: string | null
@@ -539,7 +509,6 @@ function toolCallProvenance(
 } {
   if (!ref) {
     return {
-      toolKind: "callable",
       sourceKind: "system",
       // System stableKey IS the registry/wire name (systemToolId(registryKey)).
       // Persist it on the snapshot so the display resolver dispatches uniformly
@@ -555,7 +524,6 @@ function toolCallProvenance(
   }
   const snapshot = stripForAuditSnapshot(ref)
   return {
-    toolKind: execKindFor(ref),
     sourceKind: ref.source.kind,
     sourceSnapshot: snapshot,
     pluginInstallationId:
@@ -1322,7 +1290,6 @@ export async function actorThink(
               callIndex,
               providerCallId: tc.providerCallId,
               bundleId: roundBundleId,
-              toolKind: provenance.toolKind,
               toolName: tc.toolName,
               sourceKind: provenance.sourceKind,
               sourceSnapshot: provenance.sourceSnapshot,
@@ -1347,7 +1314,6 @@ export async function actorThink(
               ? await createToolExecutionAttempt({
                   toolCallId: callRow.id,
                   attemptNo: 1,
-                  executorKind: "callable",
                   transport: "callable",
                   requestPayload: tc.input,
                 })
@@ -1370,14 +1336,9 @@ export async function actorThink(
 
           if (executionEnabled && callRow && attempt) {
             const blocks = res.content
-            // Keep the existing {kind:"builtin"} result origin for local
-            // callable ToolPlugin results so tool_results.metadata
-            // always carries origin alongside structuredContent. Reading
-            // this back via context-builder's tool_result_batch path
-            // restores the discriminator without any out-of-band lookup.
             const persistedMetadata: Record<string, unknown> = {
               ...(res.metadata || {}),
-              origin: { kind: "builtin", toolKind: tc.toolName },
+              origin: { kind: "system", registryKey: tc.toolName },
               ...((res as any).structuredContent !== undefined
                 ? { structuredContent: (res as any).structuredContent }
                 : {}),
@@ -1441,17 +1402,11 @@ export async function actorThink(
           content: CanonicalContentBlock[]
           isError?: boolean
           structuredContent?: Record<string, unknown>
-          origin?: ToolResultOrigin
+          origin: ToolResultOrigin
           metadata?: Record<string, unknown>
         }[] = []
         let mcpReplanRequired = false
         if (mcpCalls.length > 0 && options?.mcpExecutor) {
-          const mcpExecutorKindFor = (
-            toolName: string
-          ): "mcp_plugin" | "mcp_device" => {
-            const ref = toolWireRegistry.refByWireName.get(toolName)
-            return ref ? execKindFor(ref) : "mcp_plugin"
-          }
           const appendMcpFailureResult = async (params: {
             tc: (typeof mcpCalls)[number]
             callRow: any
@@ -1460,13 +1415,15 @@ export async function actorThink(
             message: string
             metadata?: Record<string, unknown>
             responsePayload?: unknown
-            // Phase 8 review: origin must be carried into failures so audit
-            // trails attribute the failure to the right transport (mcp_device /
-            // mcp_remote / callable_plugin) instead of falling back to the
-            // synthesized {kind:"builtin"} default.
             origin?: ToolResultOrigin
           }) => {
             const content = textBlocks(params.message)
+            const origin =
+              params.origin ??
+              originFromRef(
+                toolWireRegistry.refByWireName.get(params.tc.toolName),
+                params.tc.toolName
+              )
             const failureMetadata: Record<string, unknown> = {
               ...(params.metadata || {}),
               toolCallId: params.tc.callId,
@@ -1475,7 +1432,7 @@ export async function actorThink(
                 ? { providerCallId: params.tc.providerCallId }
                 : {}),
               isError: true,
-              ...(params.origin ? { origin: params.origin } : {}),
+              origin,
             }
             mcpResults.push({
               toolCallId: params.tc.callId,
@@ -1483,7 +1440,7 @@ export async function actorThink(
               toolName: params.tc.toolName,
               content,
               isError: true,
-              ...(params.origin ? { origin: params.origin } : {}),
+              origin,
               metadata: failureMetadata,
             })
 
@@ -1493,7 +1450,6 @@ export async function actorThink(
                 (await createToolExecutionAttempt({
                   toolCallId: params.callRow.id,
                   attemptNo: 1,
-                  executorKind: mcpExecutorKindFor(params.tc.toolName),
                   transport: "mcp",
                   requestPayload: params.tc.input,
                 }))
@@ -1529,7 +1485,6 @@ export async function actorThink(
                 ? await createToolExecutionAttempt({
                     toolCallId: callRow.id,
                     attemptNo: 1,
-                    executorKind: mcpExecutorKindFor(tc.toolName),
                     transport: "mcp",
                     requestPayload: tc.input,
                   })
@@ -1571,9 +1526,7 @@ export async function actorThink(
                 ...(normalizedResult.isError !== undefined
                   ? { isError: normalizedResult.isError }
                   : {}),
-                ...(normalizedResult.origin
-                  ? { origin: normalizedResult.origin }
-                  : {}),
+                origin: normalizedResult.origin,
                 ...(normalizedResult.structuredContent
                   ? { structuredContent: normalizedResult.structuredContent }
                   : {}),
@@ -1597,9 +1550,7 @@ export async function actorThink(
                 ...(normalizedResult.structuredContent
                   ? { structuredContent: normalizedResult.structuredContent }
                   : {}),
-                ...(normalizedResult.origin
-                  ? { origin: normalizedResult.origin }
-                  : {}),
+                origin: normalizedResult.origin,
                 metadata,
               })
               allSupplementalBlocks.push(
@@ -1639,10 +1590,6 @@ export async function actorThink(
                 classifiedError.message,
                 classifiedError.requiresReplan
               )
-              // tool-resolver attaches origin to the thrown error (when it
-              // can derive transport from the instance lookup). If for some
-              // reason it's missing, leave origin undefined and let the
-              // downstream roundToolResults map handle it.
               const failureOrigin: ToolResultOrigin | undefined =
                 isToolResultOrigin((err as any)?.origin)
                   ? (err as any).origin
@@ -1725,30 +1672,29 @@ export async function actorThink(
 
         // Build ToolRound for DB storage
         const roundToolCalls: CanonicalToolCall[] = allContinuableCalls.map(
-          (tc: any) => ({
-            callId: tc.callId,
-            providerCallId: tc.providerCallId,
-            toolName: tc.toolName,
-            input: tc.input,
-          })
+          (tc: any) => {
+            const origin = originFromRef(
+              toolWireRegistry.refByWireName.get(tc.toolName),
+              tc.toolName
+            )
+            return {
+              callId: tc.callId,
+              providerCallId: tc.providerCallId,
+              toolName: tc.toolName,
+              input: tc.input,
+              metadata: { origin },
+            }
+          }
         )
         const callableResultIds = new Set(
           callableResults.map((r) => r.toolCallId)
         )
         const roundToolResults: CanonicalToolResult[] = toolResults.map(
           (tr) => {
-            // Both callableResults and mcpResults now carry origin (Phase
-            // 7b/7d/8). Distinguish their fallback semantics:
-            //   - callable path: synth {kind:"builtin", toolKind: toolName}
-            //     as a result-origin discriminator. This is intentionally
-            //     separate from the execution kind, which is "callable".
-            //   - mcp path: synth a derived mcp_remote origin from the
-            //     namespaced tool name (Phase 8 bug: was falling back to
-            //     "builtin" for MCP failures, mis-tagging audit + context)
             const trAny = tr as any
             const isCallableEntry = callableResultIds.has(tr.toolCallId)
             const fallbackOrigin: ToolResultOrigin = isCallableEntry
-              ? { kind: "builtin", toolKind: tr.toolName }
+              ? { kind: "system", registryKey: tr.toolName }
               : originFromRef(
                   toolWireRegistry.refByWireName.get(tr.toolName),
                   tr.toolName

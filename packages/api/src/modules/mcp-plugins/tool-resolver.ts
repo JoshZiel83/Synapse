@@ -5,6 +5,7 @@ import {
   maskAllowsConversationType,
   resolveNarrowedConversationTypeMask,
   pluginToolId,
+  toPublicOrigin,
   type McpServerTransport,
   type PluginSpecTransport,
   type ToolDefinition,
@@ -31,7 +32,6 @@ import {
   type McpInstance,
 } from "./instance-manager.js"
 import { getMcpVersion } from "./runtime-version.js"
-import { logToolCall } from "./audit.js"
 import { normalizeMcpToolResult } from "./result-normalizer.js"
 
 const log = createLogger("mcp.tool-resolver")
@@ -52,7 +52,10 @@ export interface ResolvedMcpTools {
     executionContext?: McpExecutionContext
   ) => Promise<NormalizedMcpToolResult>
   mcpVersion: number
-  refresh: () => Promise<{ tools: ProjectedToolDefinition[]; mcpVersion: number }>
+  refresh: () => Promise<{
+    tools: ProjectedToolDefinition[]
+    mcpVersion: number
+  }>
   setTurnId: (turnId: string, round?: number) => void
   shutdown: () => Promise<void>
 }
@@ -67,10 +70,8 @@ interface PluginDispatchEntry {
 interface ResolveParams extends Omit<RuntimeActorContext, "actorId"> {
   conversationId: string
   // Exactly one of actorId / remoteAgentId is set for a given resolver call.
-  // Actors flow through the original conversation_actor_context grant path;
-  // remote_agents pick up workspace-shared resources plus an extra
-  // conversation-target grant pass (since they have no actor identity and
-  // therefore can't be evaluated against actor / actor_in_conversation grants).
+  // Remote agents pick up workspace-shared resources plus an extra
+  // conversation-target grant pass.
   actorId?: string
   remoteAgentId?: string
 }
@@ -105,9 +106,7 @@ type VisibleAccessBindingRow = {
     | "workspace_member"
     | "conversation"
     | "actor"
-    | "actor_in_conversation"
     | "remote_agent"
-    | "remote_agent_in_conversation"
   subject_workspace_id: string | null
   subject_workspace_member_id: string | null
   subject_actor_id: string | null
@@ -135,14 +134,16 @@ function buildPluginToolRef(
   upstreamToolName: string
 ): ToolRef {
   const transport: ToolRef["binding"]["transport"] =
-    instance.transport === "builtin" ? "in_process" : (instance.transport as
-      | "stdio"
-      | "http"
-      | "sse")
+    instance.transport === "builtin"
+      ? "in_process"
+      : (instance.transport as "stdio" | "http" | "sse")
   const binding: ToolRef["binding"] =
     transport === "in_process"
       ? { transport: "in_process", dispatch: "callable" }
-      : { transport, instanceKey: `${instance.installationId}:${instance.configHash}:${instance.scope}:${instance.scopeId}` }
+      : {
+          transport,
+          instanceKey: `${instance.installationId}:${instance.configHash}:${instance.scope}:${instance.scopeId}`,
+        }
   return {
     toolId: pluginToolId(instance.installationId, upstreamToolName),
     source: {
@@ -208,23 +209,16 @@ function accessBindingMatchesContext(
     case "conversation":
       return row.conversation_id === params.conversationId
     case "actor":
-      return params.actorId !== undefined && row.actor_id === params.actorId
-    case "actor_in_conversation":
       return (
         params.actorId !== undefined &&
         row.actor_id === params.actorId &&
-        row.conversation_id === params.conversationId
+        (!row.conversation_id || row.conversation_id === params.conversationId)
       )
     case "remote_agent":
       return (
         params.remoteAgentId !== undefined &&
-        row.remote_agent_id === params.remoteAgentId
-      )
-    case "remote_agent_in_conversation":
-      return (
-        params.remoteAgentId !== undefined &&
         row.remote_agent_id === params.remoteAgentId &&
-        row.conversation_id === params.conversationId
+        (!row.conversation_id || row.conversation_id === params.conversationId)
       )
   }
 }
@@ -261,33 +255,24 @@ async function loadVisibleAccessBindings(params: {
       scope_conversation_id_via_join?: string | null
     }
     let target_type: VisibleAccessBindingRow["target_type"] | null
-    if (row.subject_kind === "actor" && row.scope_kind === "conversation") {
-      target_type = "actor_in_conversation"
-    } else if (
-      row.subject_kind === "remote_agent" &&
-      row.scope_kind === "conversation"
-    ) {
-      target_type = "remote_agent_in_conversation"
-    } else {
-      switch (row.subject_kind) {
-        case "workspace":
-          target_type = "workspace"
-          break
-        case "workspace_member":
-          target_type = "workspace_member"
-          break
-        case "conversation":
-          target_type = "conversation"
-          break
-        case "actor":
-          target_type = "actor"
-          break
-        case "remote_agent":
-          target_type = "remote_agent"
-          break
-        default:
-          target_type = null
-      }
+    switch (row.subject_kind) {
+      case "workspace":
+        target_type = "workspace"
+        break
+      case "workspace_member":
+        target_type = "workspace_member"
+        break
+      case "conversation":
+        target_type = "conversation"
+        break
+      case "actor":
+        target_type = "actor"
+        break
+      case "remote_agent":
+        target_type = "remote_agent"
+        break
+      default:
+        target_type = null
     }
     if (target_type === null) {
       // Unknown subject kind — fail closed by dropping the row entirely.
@@ -392,11 +377,9 @@ async function loadConversationTargetedResourceIds(params: {
   conversationId: string
 }): Promise<string[]> {
   // Discover grants that target a whole conversation ("any participant in
-  // conversation X can use resource Y"). The standard subject machinery only
-  // surfaces these when the caller has a conversation_actor_context subject,
-  // which actors get for free. Remote agents do not have a
-  // conversation_actor_context row, so we have to ask the bindings table
-  // directly. Workspace-scoped grants are still discovered via the normal
+  // conversation X can use resource Y"). Remote agents need this direct
+  // bindings-table pass because they are not actor subjects. Workspace-scoped
+  // grants are still discovered via the normal
   // lookupResources({type:'workspace'}) path; this helper only fills the
   // conversation-target gap.
   const column = "plugin_installation_id"
@@ -530,9 +513,8 @@ async function resolveTools(
       continue
     }
 
-    // Narrow to runtime-startable server transports. The catalog spec column
-    // also allows "device", which is served by the separate device-exposure
-    // path, not the instance-manager — never forward it to getOrCreateInstance.
+    // Narrow to runtime-startable server transports before forwarding to
+    // getOrCreateInstance.
     if (
       !(MCP_SERVER_TRANSPORTS as readonly string[]).includes(plugin.transport)
     ) {
@@ -624,12 +606,7 @@ async function resolveMcpToolsCommon(
   const dispatch = new Map<string, PluginDispatchEntry>()
   const allTools = await resolveTools(params, dispatch, turnOwnerKey)
 
-  let currentTurnId: string | undefined
-  let currentRound: number | undefined
-  const setTurnId = (turnId: string, round?: number) => {
-    currentTurnId = turnId
-    currentRound = round
-  }
+  const setTurnId = (_turnId: string, _round?: number) => {}
 
   const executor = async (
     toolId: string,
@@ -642,30 +619,10 @@ async function resolveMcpToolsCommon(
     }
     const { instance, upstreamToolName, ref } = entry
 
-    const startTime = Date.now()
-    let rawOutput: unknown
-    let isError = false
-    let errorMessage: string | undefined
-
-    // Legacy ToolResultOrigin (mcp_remote / callable_plugin) derived from the
-    // ref's binding transport. Phase 4 converges NormalizedMcpToolResult.origin
-    // onto the public projection; until then we emit the legacy shape so the
-    // un-migrated ingest/normalizer types still line up.
-    const origin: ToolResultOrigin =
-      ref.binding.transport === "in_process"
-        ? {
-            kind: "callable_plugin",
-            pluginKey: `${instance.orgSlug}/${instance.pluginSlug}`,
-            pluginName: instance.pluginSlug,
-          }
-        : {
-            kind: "mcp_remote",
-            serverKey: `${instance.orgSlug}/${instance.pluginSlug}`,
-            serverName: instance.pluginSlug,
-          }
+    const origin: ToolResultOrigin = toPublicOrigin(ref)
 
     try {
-      rawOutput = await instance.execute(
+      const rawOutput = await instance.execute(
         upstreamToolName,
         input,
         executionContext
@@ -674,46 +631,12 @@ async function resolveMcpToolsCommon(
         origin,
       })
     } catch (error: any) {
-      isError = true
-      errorMessage = error.message
       if (error && typeof error === "object" && !error.origin) {
         try {
           error.origin = origin
         } catch {}
       }
       throw error
-    } finally {
-      const durationMs = Date.now() - startTime
-      const output =
-        rawOutput === undefined
-          ? undefined
-          : typeof rawOutput === "string"
-            ? rawOutput
-            : JSON.stringify(rawOutput)
-
-      await logToolCall({
-        workspaceId: params.workspaceId,
-        sessionId: params.sessionId,
-        turnId: currentTurnId,
-        round: currentRound,
-        actorId: params.actorId,
-        userId: params.userId,
-        pluginId: instance.pluginId,
-        toolName: upstreamToolName,
-        toolType: "mcp_plugin",
-        input,
-        output,
-        isError,
-        errorMessage,
-        durationMs,
-        transport: instance.transport,
-        instanceKey: toolId,
-      }).catch((logError) => {
-        log.error(
-          { err: logError },
-          "[MCP ToolResolver] Failed to log tool call"
-        )
-      })
     }
   }
 

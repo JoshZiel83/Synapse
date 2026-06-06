@@ -22,7 +22,7 @@ systemctl enable --now docker
 
 The public host must allow the selected inbound port:
 
-- TLS mode: TCP `80` and `443`
+- TLS mode: TCP `80` and `443`, plus UDP `443` for HTTP/3 over QUIC
 - HTTP-only mode: TCP `${SYNAPSE_HTTP_PORT:-80}`
 
 ## 2. DNS or IP
@@ -130,7 +130,15 @@ Issue a SAN certificate for all TLS public hostnames:
 ./infrastructure/scripts/issue-cert.sh
 ```
 
-The public nginx config enables OCSP stapling with the Let's Encrypt chain.
+The public nginx config enables HTTP/2, HTTP/3 over QUIC, and advertises HTTP/3
+with `Alt-Svc`. HTTP/3 requires UDP `443` to be open and published by Docker;
+clients that cannot use QUIC continue to use HTTP/2 or HTTP/1.1 over TCP.
+
+Let's Encrypt removed OCSP URLs from production certificates in May 2025 and
+shut down OCSP responders in August 2025, moving revocation status to CRLs. Do
+not enable nginx OCSP stapling for the default Let's Encrypt deployment; current
+certificates do not contain an OCSP responder URL, so stapling only produces
+nginx startup warnings.
 
 Install the renewal cron (substitutes the current repo root into the template; run from the repo root). The substitution shell-escapes the value for single-quote injection and escapes sed metacharacters, so paths containing spaces, `$`, backticks, `"`, `'`, `&`, `|`, and `\` are all preserved literally. The repo path must still avoid `%` (cron metacharacter) and newlines.
 
@@ -321,12 +329,25 @@ curl -I "http://${SYNAPSE_PUBLIC_HOST}:${SYNAPSE_HTTP_PORT}/.env"
 curl -I "http://${SYNAPSE_PUBLIC_HOST}:${SYNAPSE_HTTP_PORT}/mobile/.env"
 ```
 
-Check certificate and OCSP stapling:
+Check the certificate chain:
 
 ```bash
 set -a; . ./.env; set +a
 openssl s_client -connect "${SYNAPSE_PUBLIC_DOMAIN}:443" -servername "$SYNAPSE_PUBLIC_DOMAIN" -status </dev/null
 ```
+
+Check HTTP protocol negotiation:
+
+```bash
+set -a; . ./.env; set +a
+curl --http2 -I "https://${SYNAPSE_PUBLIC_DOMAIN}/"
+curl --http3 -I "https://${SYNAPSE_PUBLIC_DOMAIN}/"
+```
+
+The TLS config intentionally leaves `ssl_early_data` off. If 0-RTT is enabled
+later, reject replayable early-data requests at nginx and pass the signal to the
+API, for example by returning `425` when `$ssl_early_data` is set on non-static
+or non-idempotent locations and forwarding `Early-Data: $ssl_early_data`.
 
 ## 8b. Server-side actor isolation (sandbox)
 
