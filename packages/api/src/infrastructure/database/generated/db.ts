@@ -3169,6 +3169,7 @@ export interface WorkspaceMemberSyncEvents {
   created_at: Generated<Timestamp>;
   event_type: string;
   item_id: string | null;
+  member_seq: Int8;
   occurred_at: Generated<Timestamp>;
   payload: Generated<Json>;
   sync_seq: Generated<Int8>;

@@ -12,6 +12,7 @@ import {
 } from "../database/kysely.js"
 import { redisPub, redisSub } from "../redis/index.js"
 import { createLogger } from "../logger/index.js"
+import { maybeEnqueuePush } from "../../modules/chat/push.js"
 
 const log = createLogger("events")
 
@@ -157,6 +158,12 @@ async function processRealtimeOutboxEntry(entry: RealtimeEventOutboxRow) {
     const event = await materializeRealtimeOutboxEvent(entry)
     await emitEvent(event)
     await markRealtimeOutboxEntryDispatched(entry.id)
+    // WI-4 reserved seam (no-op today): push delivery for recipients with no
+    // live socket. See modules/chat/push.ts. Never throws / never blocks
+    // dispatch success.
+    void maybeEnqueuePush(event).catch((err) =>
+      log.error({ err }, "[events] maybeEnqueuePush hook failed")
+    )
     return true
   } catch (error) {
     await markRealtimeOutboxEntryFailed(entry.id, error)
@@ -292,18 +299,67 @@ export async function gcRealtimeEventOutbox(
   return Number(result.numDeletedRows ?? 0)
 }
 
+/**
+ * Recover rows stuck in `status='processing'`. A row enters 'processing' when
+ * claimPendingRealtimeOutboxEntries claims it; on success it becomes
+ * 'dispatched', on failure 'failed'. But if the dispatcher process crashes
+ * between the claim and either terminal write, the row stays 'processing'
+ * forever — claimPending only re-claims ('pending','failed'), so nothing ever
+ * picks it up again and the realtime event is silently never delivered.
+ *
+ * This sweeper resets rows whose processing_started_at is older than the
+ * configured timeout back to 'failed' with immediate availability, so the next
+ * drain re-claims and re-publishes them (at-least-once). Bounded by the same
+ * GC cadence so it is cheap. Returns the number of rows recovered.
+ */
+export async function recoverStuckProcessingRealtimeOutboxEntries(
+  timeoutMs = config.realtime.outboxProcessingTimeoutMs
+) {
+  if (timeoutMs <= 0) return 0
+  const result = await db
+    .updateTable("realtime_event_outbox")
+    .set({
+      status: "failed",
+      last_error: "recovered: stuck in processing past timeout",
+      available_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    })
+    .where("status", "=", "processing")
+    .where(
+      "processing_started_at",
+      "<",
+      sql<Date>`NOW() - (${String(timeoutMs)} || ' milliseconds')::interval`
+    )
+    .executeTakeFirst()
+  return Number(result.numUpdatedRows ?? 0)
+}
+
 async function runRealtimeOutboxDispatcherLoop() {
   let lastGcAt = 0
   while (realtimeOutboxDispatcherRunning) {
     try {
       const processed = await drainRealtimeEventOutbox()
 
-      // Periodic GC of dispatched rows (NOT failed — those are
-      // retryable; see gcRealtimeEventOutbox). Bounded by
-      // outboxGcIntervalMs so it doesn't run on every drain iteration.
+      // Periodic maintenance (bounded by outboxGcIntervalMs so it doesn't run
+      // on every drain): (1) recover rows stuck in 'processing' from a crashed
+      // dispatcher, BEFORE GC so recovered rows get re-claimed next drain;
+      // (2) GC dispatched rows (NOT failed — those are retryable).
       const now = Date.now()
       if (now - lastGcAt >= config.realtime.outboxGcIntervalMs) {
         lastGcAt = now
+        try {
+          const recovered = await recoverStuckProcessingRealtimeOutboxEntries()
+          if (recovered > 0) {
+            log.warn(
+              `[events] realtime_event_outbox: recovered ${recovered} rows stuck in processing`
+            )
+          }
+        } catch (recoverError) {
+          log.error(
+            { err: recoverError },
+            "[events] realtime_event_outbox stuck-processing recovery failed"
+          )
+        }
         try {
           const gced = await gcRealtimeEventOutbox()
           if (gced > 0) {

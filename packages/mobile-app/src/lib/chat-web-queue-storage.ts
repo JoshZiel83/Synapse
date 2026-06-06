@@ -1,10 +1,9 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb"
 
-import { isUuid } from "@/lib/ids"
-import type {
-  ChatWorkspaceQueueState,
-  PendingChatOutboxMessage,
-  PendingChatRead,
+import {
+  createEmptyChatWorkspaceQueueState,
+  normalizeChatWorkspaceQueueState,
+  type ChatWorkspaceQueueState,
 } from "@/lib/chat-data"
 import {
   CHAT_QUEUE_DB_NAME,
@@ -106,107 +105,17 @@ function getWorkerDatabase() {
 export function createEmptyStoredChatWorkspaceQueueState(
   workspaceId: string
 ): ChatWorkspaceQueueState {
-  return {
-    version: 1,
-    workspaceId,
-    inboxCursor: 0,
-    pendingReads: {},
-    outbox: {},
-  }
-}
-
-function normalizePendingReads(
-  value: unknown
-): Record<string, PendingChatRead> {
-  if (!value || typeof value !== "object") {
-    return {}
-  }
-
-  return Object.fromEntries(
-    Object.values(value as Record<string, unknown>)
-      .filter((entry): entry is PendingChatRead =>
-        Boolean(
-          entry &&
-          typeof entry === "object" &&
-          typeof (entry as { conversationId?: unknown }).conversationId ===
-            "string" &&
-          typeof (entry as { readUpToSequence?: unknown }).readUpToSequence ===
-            "number" &&
-          typeof (entry as { lastVisibleSequence?: unknown })
-            .lastVisibleSequence === "number" &&
-          typeof (entry as { updatedAt?: unknown }).updatedAt === "string"
-        )
-      )
-      .map((entry) => [entry.conversationId, entry] as const)
-  )
-}
-
-function normalizeOutbox(
-  value: unknown
-): Record<string, PendingChatOutboxMessage> {
-  if (!value || typeof value !== "object") {
-    return {}
-  }
-
-  return Object.fromEntries(
-    Object.values(value as Record<string, unknown>)
-      .filter((entry): entry is PendingChatOutboxMessage =>
-        Boolean(
-          entry &&
-          typeof entry === "object" &&
-          typeof (entry as { clientMessageId?: unknown }).clientMessageId ===
-            "string" &&
-          typeof (entry as { conversationId?: unknown }).conversationId ===
-            "string" &&
-          Array.isArray((entry as { contentBlocks?: unknown }).contentBlocks) &&
-          typeof (entry as { createdAt?: unknown }).createdAt === "string" &&
-          typeof (entry as { optimisticSequence?: unknown })
-            .optimisticSequence === "number" &&
-          typeof (entry as { status?: unknown }).status === "string" &&
-          typeof (entry as { attemptCount?: unknown }).attemptCount === "number"
-        )
-      )
-      .map((entry) => [entry.clientMessageId, entry] as const)
-  )
+  // Delegate to the canonical factory so the version + shape (incl. tombstones)
+  // stay in lockstep with chat-data.ts — this web-queue shim must not fork it.
+  return createEmptyChatWorkspaceQueueState(workspaceId)
 }
 
 export function normalizeStoredChatWorkspaceQueueState(
   workspaceId: string,
   value: unknown
 ): ChatWorkspaceQueueState {
-  if (!value || typeof value !== "object") {
-    return createEmptyStoredChatWorkspaceQueueState(workspaceId)
-  }
-
-  const queueState = value as Partial<ChatWorkspaceQueueState>
-  if (queueState.version !== 1 || queueState.workspaceId !== workspaceId) {
-    return createEmptyStoredChatWorkspaceQueueState(workspaceId)
-  }
-
-  return {
-    version: 1,
-    workspaceId,
-    workspaceMemberId:
-      typeof queueState.workspaceMemberId === "string"
-        ? queueState.workspaceMemberId
-        : undefined,
-    clientInstanceId:
-      typeof queueState.clientInstanceId === "string" &&
-      isUuid(queueState.clientInstanceId)
-        ? queueState.clientInstanceId
-        : undefined,
-    inboxCursor:
-      typeof queueState.inboxCursor === "number" &&
-      Number.isFinite(queueState.inboxCursor)
-        ? queueState.inboxCursor
-        : 0,
-    lastBootstrappedAt:
-      typeof queueState.lastBootstrappedAt === "string"
-        ? queueState.lastBootstrappedAt
-        : undefined,
-    pendingReads: normalizePendingReads(queueState.pendingReads),
-    outbox: normalizeOutbox(queueState.outbox),
-  }
+  // Delegate to the canonical normalizer (handles v1→v2 migration + tombstones).
+  return normalizeChatWorkspaceQueueState(workspaceId, value)
 }
 
 export async function loadStoredChatWorkspaceQueueState(workspaceId: string) {

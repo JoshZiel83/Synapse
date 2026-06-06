@@ -57,7 +57,7 @@ export interface ChatConversationMeta {
 }
 
 export interface ChatWorkspaceSnapshot {
-  version: 4
+  version: 5
   workspaceId: string
   workspaceMemberId?: string
   clientInstanceId?: string
@@ -68,10 +68,22 @@ export interface ChatWorkspaceSnapshot {
   metaByConversationId: Record<string, ChatConversationMeta>
   pendingReads: Record<string, PendingChatRead>
   outbox: Record<string, PendingChatOutboxMessage>
+  /** conversationId -> { conversationId, removedSeq }. See ConversationTombstone. */
+  tombstones: Record<string, ConversationTombstone>
+}
+
+/**
+ * Locally-recorded "removed at member_seq=removedSeq" marker. Prevents a stale
+ * lower-seq conversation.upsert from resurrecting a conversation the member was
+ * removed from (or pruned at bootstrap). Mirror of the web/shared tombstone.
+ */
+export interface ConversationTombstone {
+  conversationId: string
+  removedSeq: number
 }
 
 export interface ChatWorkspaceQueueState {
-  version: 1
+  version: 2
   workspaceId: string
   workspaceMemberId?: string
   clientInstanceId?: string
@@ -79,6 +91,7 @@ export interface ChatWorkspaceQueueState {
   lastBootstrappedAt?: string
   pendingReads: Record<string, PendingChatRead>
   outbox: Record<string, PendingChatOutboxMessage>
+  tombstones: Record<string, ConversationTombstone>
 }
 
 export type MobileChatItem = ChatConversationItem & {
@@ -91,7 +104,7 @@ export function createEmptyChatWorkspaceSnapshot(
   workspaceId: string
 ): ChatWorkspaceSnapshot {
   return {
-    version: 4,
+    version: 5,
     workspaceId,
     inboxCursor: 0,
     conversations: [],
@@ -99,6 +112,7 @@ export function createEmptyChatWorkspaceSnapshot(
     metaByConversationId: {},
     pendingReads: {},
     outbox: {},
+    tombstones: {},
   }
 }
 
@@ -106,12 +120,34 @@ export function createEmptyChatWorkspaceQueueState(
   workspaceId: string
 ): ChatWorkspaceQueueState {
   return {
-    version: 1,
+    version: 2,
     workspaceId,
     inboxCursor: 0,
     pendingReads: {},
     outbox: {},
+    tombstones: {},
   }
+}
+
+function normalizeTombstones(
+  value: unknown
+): Record<string, ConversationTombstone> {
+  if (!value || typeof value !== "object") {
+    return {}
+  }
+  return Object.fromEntries(
+    Object.values(value as Record<string, unknown>)
+      .filter((entry): entry is ConversationTombstone =>
+        Boolean(
+          entry &&
+          typeof entry === "object" &&
+          typeof (entry as { conversationId?: unknown }).conversationId ===
+            "string" &&
+          typeof (entry as { removedSeq?: unknown }).removedSeq === "number"
+        )
+      )
+      .map((entry) => [entry.conversationId, entry] as const)
+  )
 }
 
 function normalizePendingReads(
@@ -189,9 +225,18 @@ export function normalizeChatWorkspaceSnapshot(
     return createEmptyChatWorkspaceSnapshot(workspaceId)
   }
 
-  const snapshot = value as Partial<ChatWorkspaceSnapshot>
+  const snapshot = value as Partial<ChatWorkspaceSnapshot> & {
+    version?: number
+  }
 
-  if (snapshot.version !== 4 || snapshot.workspaceId !== workspaceId) {
+  // v4 (pre-member_seq) is migratable: its inboxCursor was a global sync_seq,
+  // meaningless under the member_seq cursor → RESET to 0 (forces one full
+  // bootstrap+sync). conversations/items/reads/outbox preserved; tombstones
+  // start empty. Any other version wiped.
+  const version: number = snapshot.version ?? 0
+  const isV4 = version === 4
+  const isV5 = version === 5
+  if ((!isV4 && !isV5) || snapshot.workspaceId !== workspaceId) {
     return createEmptyChatWorkspaceSnapshot(workspaceId)
   }
 
@@ -221,7 +266,7 @@ export function normalizeChatWorkspaceSnapshot(
   )
 
   return {
-    version: 4,
+    version: 5,
     workspaceId,
     workspaceMemberId:
       typeof snapshot.workspaceMemberId === "string"
@@ -233,6 +278,7 @@ export function normalizeChatWorkspaceSnapshot(
         ? snapshot.clientInstanceId
         : undefined,
     inboxCursor:
+      isV5 &&
       typeof snapshot.inboxCursor === "number" &&
       Number.isFinite(snapshot.inboxCursor)
         ? snapshot.inboxCursor
@@ -292,6 +338,8 @@ export function normalizeChatWorkspaceSnapshot(
       validConversationIds
     ),
     outbox: normalizeOutbox(snapshot.outbox, validConversationIds),
+    // tombstones only present from v5; v4 migrates to empty.
+    tombstones: isV5 ? normalizeTombstones(snapshot.tombstones) : {},
   }
 }
 
@@ -303,13 +351,20 @@ export function normalizeChatWorkspaceQueueState(
     return createEmptyChatWorkspaceQueueState(workspaceId)
   }
 
-  const queueState = value as Partial<ChatWorkspaceQueueState>
-  if (queueState.version !== 1 || queueState.workspaceId !== workspaceId) {
+  const queueState = value as Partial<ChatWorkspaceQueueState> & {
+    version?: number
+  }
+  // v1 (pre-member_seq) is migratable: reset cursor=0 (global sync_seq → member_seq),
+  // preserve outbox/reads, tombstones empty. Other versions wiped.
+  const version: number = queueState.version ?? 0
+  const isV1 = version === 1
+  const isV2 = version === 2
+  if ((!isV1 && !isV2) || queueState.workspaceId !== workspaceId) {
     return createEmptyChatWorkspaceQueueState(workspaceId)
   }
 
   return {
-    version: 1,
+    version: 2,
     workspaceId,
     workspaceMemberId:
       typeof queueState.workspaceMemberId === "string"
@@ -321,6 +376,7 @@ export function normalizeChatWorkspaceQueueState(
         ? queueState.clientInstanceId
         : undefined,
     inboxCursor:
+      isV2 &&
       typeof queueState.inboxCursor === "number" &&
       Number.isFinite(queueState.inboxCursor)
         ? queueState.inboxCursor
@@ -331,6 +387,7 @@ export function normalizeChatWorkspaceQueueState(
         : undefined,
     pendingReads: normalizePendingReads(queueState.pendingReads),
     outbox: normalizeOutbox(queueState.outbox),
+    tombstones: isV2 ? normalizeTombstones(queueState.tombstones) : {},
   }
 }
 
@@ -338,7 +395,7 @@ export function toChatWorkspaceQueueState(
   snapshot: ChatWorkspaceSnapshot
 ): ChatWorkspaceQueueState {
   return {
-    version: 1,
+    version: 2,
     workspaceId: snapshot.workspaceId,
     workspaceMemberId: snapshot.workspaceMemberId,
     clientInstanceId: snapshot.clientInstanceId,
@@ -346,6 +403,7 @@ export function toChatWorkspaceQueueState(
     lastBootstrappedAt: snapshot.lastBootstrappedAt,
     pendingReads: snapshot.pendingReads,
     outbox: snapshot.outbox,
+    tombstones: snapshot.tombstones,
   }
 }
 
@@ -364,6 +422,7 @@ export function applyChatWorkspaceQueueState(
       queueState.lastBootstrappedAt ?? snapshot.lastBootstrappedAt,
     pendingReads: queueState.pendingReads,
     outbox: queueState.outbox,
+    tombstones: queueState.tombstones ?? snapshot.tombstones,
   }
 }
 
@@ -552,6 +611,90 @@ export function updateConversationInSnapshot(
       snapshot.conversations,
       updater(current)
     ),
+  }
+}
+
+/**
+ * Remove a conversation and record a tombstone at removedSeq. Mirror of the
+ * web/shared helper: also purges the conversation's items/meta/pendingReads/
+ * outbox so nothing keeps POSTing to a conversation the member was removed from.
+ */
+export function pruneConversationFromSnapshot(
+  snapshot: ChatWorkspaceSnapshot,
+  conversationId: string,
+  removedSeq: number
+): ChatWorkspaceSnapshot {
+  const itemsByConversationId = { ...snapshot.itemsByConversationId }
+  delete itemsByConversationId[conversationId]
+  const metaByConversationId = { ...snapshot.metaByConversationId }
+  delete metaByConversationId[conversationId]
+  const pendingReads = { ...snapshot.pendingReads }
+  delete pendingReads[conversationId]
+  const outbox = Object.fromEntries(
+    Object.entries(snapshot.outbox).filter(
+      ([, entry]) => entry.conversationId !== conversationId
+    )
+  )
+  const existing = snapshot.tombstones[conversationId]
+  return {
+    ...snapshot,
+    conversations: snapshot.conversations.filter(
+      (conversation) => conversation.conversationId !== conversationId
+    ),
+    itemsByConversationId,
+    metaByConversationId,
+    pendingReads,
+    outbox,
+    tombstones: {
+      ...snapshot.tombstones,
+      [conversationId]: {
+        conversationId,
+        removedSeq: Math.max(removedSeq, existing?.removedSeq ?? 0),
+      },
+    },
+  }
+}
+
+export function clearConversationTombstone(
+  snapshot: ChatWorkspaceSnapshot,
+  conversationId: string,
+  memberSeq?: number
+): ChatWorkspaceSnapshot {
+  const tombstone = snapshot.tombstones[conversationId]
+  if (!tombstone) {
+    return snapshot
+  }
+  // Seq-guarded: a stale {active} (memberSeq <= removedSeq) must not clear a
+  // newer kick tombstone. undefined memberSeq (bootstrap liveness) clears
+  // unconditionally — bootstrap is the authoritative current set.
+  if (typeof memberSeq === "number" && memberSeq <= tombstone.removedSeq) {
+    return snapshot
+  }
+  const tombstones = { ...snapshot.tombstones }
+  delete tombstones[conversationId]
+  return { ...snapshot, tombstones }
+}
+
+/**
+ * Upsert a conversation unless a live frame is stale relative to a tombstone
+ * (memberSeq <= removedSeq). Returns the snapshot unchanged when guarded.
+ */
+export function upsertConversationWithTombstoneGuard(
+  snapshot: ChatWorkspaceSnapshot,
+  incoming: ChatConversationView,
+  memberSeq?: number
+): ChatWorkspaceSnapshot {
+  const tombstone = snapshot.tombstones[incoming.conversationId]
+  if (
+    tombstone &&
+    typeof memberSeq === "number" &&
+    memberSeq <= tombstone.removedSeq
+  ) {
+    return snapshot
+  }
+  return {
+    ...snapshot,
+    conversations: upsertChatConversation(snapshot.conversations, incoming),
   }
 }
 

@@ -539,6 +539,19 @@ export function setupWebSocket(app: FastifyInstance) {
         continue
       }
 
+      // Defense-in-depth: even on a recipient-id match, require the event's
+      // workspace to match the socket's workspace. workspaceMemberId is a
+      // per-workspace surrogate today (so this is belt-and-suspenders), but it
+      // guards against any future id reuse / mis-stamped recipient leaking a
+      // chat.sync.event across a tenant boundary.
+      if (
+        event.recipientWorkspaceMemberId &&
+        event.workspaceId &&
+        client.workspaceId !== event.workspaceId
+      ) {
+        continue
+      }
+
       if (
         !event.recipientWorkspaceMemberId &&
         event.workspaceId &&
@@ -556,35 +569,63 @@ export function setupWebSocket(app: FastifyInstance) {
         continue
       }
 
-      const isConversationAllowed =
-        conversationId && client.workspaceMemberId
-          ? await canWorkspaceMemberAccessConversation(
-              conversationId,
-              client.workspaceMemberId
-            )
-          : false
+      // Lazily resolve conversation access only when a conversation-topic
+      // delivery path actually needs it. chat.sync.event delivered via the
+      // inbox subscription does NOT consult this — authorization for those is
+      // asserted at WRITE time (the producer computes recipients from the
+      // active participant set and stamps recipient_workspace_member_id, which
+      // the recipient gate above already enforces). This avoids running a heavy
+      // 11-join roster query per event per socket on the hot inbox path. Only
+      // the conversation-topic branches (runtime.updated, chat.typing, and the
+      // conversation-topic disjunct of chat.sync.event for a member with NO
+      // inbox subscription) pay for it, and the result is memoized.
+      let conversationAllowedCache: boolean | undefined
+      const isConversationAllowed = async () => {
+        if (conversationAllowedCache !== undefined) {
+          return conversationAllowedCache
+        }
+        conversationAllowedCache =
+          conversationId && client.workspaceMemberId
+            ? await canWorkspaceMemberAccessConversation(
+                conversationId,
+                client.workspaceMemberId
+              )
+            : false
+        return conversationAllowedCache
+      }
 
       if (outbound.type === "chat.sync.event") {
+        // Fast path: inbox subscribers get it on the recipient match alone (no
+        // roster query). A conversation-topic-only subscriber (no inbox) still
+        // requires the access recheck.
+        const allowed =
+          inboxSubscriptions.length > 0
+            ? true
+            : conversationId && hasConversationTopic
+              ? await isConversationAllowed()
+              : false
+        if (!allowed) {
+          continue
+        }
         const chatSyncPayload =
           outbound.payload as ChatSocketEventPayloadMap["chat.sync.event"]
         const enrichedPayload = await enrichChatSyncSocketEventForViewer(
           chatSyncPayload,
           client.userId
         )
-        if (
-          inboxSubscriptions.length > 0 ||
-          (conversationId && hasConversationTopic && isConversationAllowed)
-        ) {
-          safeSendSocketEvent(clientId, {
-            ...outbound,
-            payload: enrichedPayload,
-          })
-        }
+        safeSendSocketEvent(clientId, {
+          ...outbound,
+          payload: enrichedPayload,
+        })
         continue
       }
 
       if (outbound.type === "runtime.updated") {
-        if (conversationId && hasConversationTopic && isConversationAllowed) {
+        if (
+          conversationId &&
+          hasConversationTopic &&
+          (await isConversationAllowed())
+        ) {
           safeSendSocketEvent(clientId, outbound)
         }
         continue
@@ -597,7 +638,11 @@ export function setupWebSocket(app: FastifyInstance) {
         if (client.workspaceMemberId === typingPayload.fromWorkspaceMemberId) {
           continue
         }
-        if (conversationId && hasConversationTopic && isConversationAllowed) {
+        if (
+          conversationId &&
+          hasConversationTopic &&
+          (await isConversationAllowed())
+        ) {
           safeSendSocketEvent(clientId, outbound)
         }
         continue

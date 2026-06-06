@@ -1975,7 +1975,11 @@
       inboxCursor: Math.max(latestQueueState.inboxCursor || 0, processedQueueState.inboxCursor || 0),
       lastBootstrappedAt: latestQueueState.lastBootstrappedAt || processedQueueState.lastBootstrappedAt,
       pendingReads: { ...latestQueueState.pendingReads },
-      outbox: { ...latestQueueState.outbox }
+      outbox: { ...latestQueueState.outbox },
+      // The SW never mutates tombstones (it only flushes outbox/reads), so
+      // preserve whatever the latest UI-thread state holds. Carried through so the
+      // round-trip save doesn't strip the field.
+      tombstones: latestQueueState.tombstones ? { ...latestQueueState.tombstones } : processedQueueState.tombstones ? { ...processedQueueState.tombstones } : void 0
     };
     for (const conversationId of Object.keys(baseQueueState.pendingReads)) {
       const baseEntry = baseQueueState.pendingReads[conversationId];
@@ -2053,6 +2057,81 @@
     return next;
   }
 
+  // src/lib/chat-data.ts
+  function createEmptyChatWorkspaceQueueState(workspaceId) {
+    return {
+      version: 2,
+      workspaceId,
+      inboxCursor: 0,
+      pendingReads: {},
+      outbox: {},
+      tombstones: {}
+    };
+  }
+  function normalizeTombstones(value) {
+    if (!value || typeof value !== "object") {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.values(value).filter(
+        (entry) => Boolean(
+          entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.removedSeq === "number"
+        )
+      ).map((entry) => [entry.conversationId, entry])
+    );
+  }
+  function normalizePendingReads(value, validConversationIds) {
+    if (!value || typeof value !== "object") {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.values(value).filter(
+        (entry) => Boolean(
+          entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.readUpToSequence === "number" && typeof entry.lastVisibleSequence === "number" && typeof entry.updatedAt === "string"
+        )
+      ).filter(
+        (entry) => !validConversationIds || validConversationIds.has(entry.conversationId)
+      ).map((entry) => [entry.conversationId, entry])
+    );
+  }
+  function normalizeOutbox(value, validConversationIds) {
+    if (!value || typeof value !== "object") {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.values(value).filter(
+        (entry) => Boolean(
+          entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string" && Array.isArray(entry.contentBlocks) && typeof entry.createdAt === "string" && typeof entry.optimisticSequence === "number" && typeof entry.status === "string" && typeof entry.attemptCount === "number"
+        )
+      ).filter(
+        (entry) => !validConversationIds || validConversationIds.has(entry.conversationId)
+      ).map((entry) => [entry.clientMessageId, entry])
+    );
+  }
+  function normalizeChatWorkspaceQueueState(workspaceId, value) {
+    if (!value || typeof value !== "object") {
+      return createEmptyChatWorkspaceQueueState(workspaceId);
+    }
+    const queueState = value;
+    const version = queueState.version ?? 0;
+    const isV1 = version === 1;
+    const isV2 = version === 2;
+    if (!isV1 && !isV2 || queueState.workspaceId !== workspaceId) {
+      return createEmptyChatWorkspaceQueueState(workspaceId);
+    }
+    return {
+      version: 2,
+      workspaceId,
+      workspaceMemberId: typeof queueState.workspaceMemberId === "string" ? queueState.workspaceMemberId : void 0,
+      clientInstanceId: typeof queueState.clientInstanceId === "string" && isUuid(queueState.clientInstanceId) ? queueState.clientInstanceId : void 0,
+      inboxCursor: isV2 && typeof queueState.inboxCursor === "number" && Number.isFinite(queueState.inboxCursor) ? queueState.inboxCursor : 0,
+      lastBootstrappedAt: typeof queueState.lastBootstrappedAt === "string" ? queueState.lastBootstrappedAt : void 0,
+      pendingReads: normalizePendingReads(queueState.pendingReads),
+      outbox: normalizeOutbox(queueState.outbox),
+      tombstones: isV2 ? normalizeTombstones(queueState.tombstones) : {}
+    };
+  }
+
   // src/lib/chat-web-queue-storage.ts
   var CHAT_WEB_QUEUE_DB_NAME = CHAT_QUEUE_DB_NAME;
   var CHAT_WEB_QUEUE_DB_VERSION = CHAT_QUEUE_DB_VERSION;
@@ -2101,56 +2180,10 @@
     return workerDbPromise;
   }
   function createEmptyStoredChatWorkspaceQueueState(workspaceId) {
-    return {
-      version: 1,
-      workspaceId,
-      inboxCursor: 0,
-      pendingReads: {},
-      outbox: {}
-    };
-  }
-  function normalizePendingReads(value) {
-    if (!value || typeof value !== "object") {
-      return {};
-    }
-    return Object.fromEntries(
-      Object.values(value).filter(
-        (entry) => Boolean(
-          entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.readUpToSequence === "number" && typeof entry.lastVisibleSequence === "number" && typeof entry.updatedAt === "string"
-        )
-      ).map((entry) => [entry.conversationId, entry])
-    );
-  }
-  function normalizeOutbox(value) {
-    if (!value || typeof value !== "object") {
-      return {};
-    }
-    return Object.fromEntries(
-      Object.values(value).filter(
-        (entry) => Boolean(
-          entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string" && Array.isArray(entry.contentBlocks) && typeof entry.createdAt === "string" && typeof entry.optimisticSequence === "number" && typeof entry.status === "string" && typeof entry.attemptCount === "number"
-        )
-      ).map((entry) => [entry.clientMessageId, entry])
-    );
+    return createEmptyChatWorkspaceQueueState(workspaceId);
   }
   function normalizeStoredChatWorkspaceQueueState(workspaceId, value) {
-    if (!value || typeof value !== "object") {
-      return createEmptyStoredChatWorkspaceQueueState(workspaceId);
-    }
-    const queueState = value;
-    if (queueState.version !== 1 || queueState.workspaceId !== workspaceId) {
-      return createEmptyStoredChatWorkspaceQueueState(workspaceId);
-    }
-    return {
-      version: 1,
-      workspaceId,
-      workspaceMemberId: typeof queueState.workspaceMemberId === "string" ? queueState.workspaceMemberId : void 0,
-      clientInstanceId: typeof queueState.clientInstanceId === "string" && isUuid(queueState.clientInstanceId) ? queueState.clientInstanceId : void 0,
-      inboxCursor: typeof queueState.inboxCursor === "number" && Number.isFinite(queueState.inboxCursor) ? queueState.inboxCursor : 0,
-      lastBootstrappedAt: typeof queueState.lastBootstrappedAt === "string" ? queueState.lastBootstrappedAt : void 0,
-      pendingReads: normalizePendingReads(queueState.pendingReads),
-      outbox: normalizeOutbox(queueState.outbox)
-    };
+    return normalizeChatWorkspaceQueueState(workspaceId, value);
   }
   async function loadStoredChatWorkspaceQueueState(workspaceId) {
     const database = await getQueueDatabase();

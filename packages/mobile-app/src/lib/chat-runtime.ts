@@ -10,6 +10,9 @@ import {
   getConfirmedConversationMaxSequence,
   getConversationMetaOrDefault,
   mergeChatItems,
+  pruneConversationFromSnapshot,
+  clearConversationTombstone,
+  upsertConversationWithTombstoneGuard,
   updateConversationInSnapshot,
   upsertChatConversation,
   upsertChatConversations,
@@ -95,6 +98,12 @@ export class ChatRuntime {
   private persistPromise: Promise<void> = Promise.resolve()
   private syncPromise: Promise<void> | null = null
   private initializePromise: Promise<void> | null = null
+  // In-memory (not persisted) live high-water mark per workspace for durable
+  // sync-frame ordering. Initialized from / refreshed to the persisted
+  // inboxCursor on every sync/bootstrap.
+  private liveCursorByWorkspace = new Map<string, number>()
+  // Set when a live gap arrives mid-sync; the in-flight sync reruns once after.
+  private needsResync = false
   private state: ChatRuntimeState = {
     status: "idle",
     syncing: false,
@@ -243,6 +252,7 @@ export class ChatRuntime {
       return this.syncPromise
     }
 
+    this.needsResync = false
     this.replaceState({
       ...this.state,
       syncing: true,
@@ -267,6 +277,16 @@ export class ChatRuntime {
             if (this.state.activeWorkspaceId !== workspaceId) {
               return
             }
+            // Skip frames the live path already applied (memberSeq <= live
+            // cursor): re-applying a stale membership.updated{active}/upsert
+            // could clear/resurrect a newer kick. Cursor still advances below.
+            const liveBase = Math.max(
+              this.liveCursorByWorkspace.get(workspaceId) ?? 0,
+              this.state.snapshot?.inboxCursor ?? 0
+            )
+            if (event.memberSeq <= liveBase) {
+              continue
+            }
             this.applyChatEvent(event)
           }
 
@@ -277,6 +297,15 @@ export class ChatRuntime {
         if (this.state.activeWorkspaceId !== workspaceId) {
           return
         }
+
+        // Advance the authoritative resume cursor to the drained position
+        // (the reducer no longer advances it), and refresh the live cursor so
+        // the next live frame isn't misjudged as a gap.
+        this.updateSnapshot((snap) => ({ ...snap, inboxCursor: cursor }))
+        this.liveCursorByWorkspace.set(
+          workspaceId,
+          Math.max(this.liveCursorByWorkspace.get(workspaceId) ?? 0, cursor)
+        )
 
         // When the SW is owning the flush (see markConversationRead +
         // sendMessage above), the provider triggers it on every queue
@@ -294,6 +323,10 @@ export class ChatRuntime {
           ...this.state,
           syncing: false,
         })
+        if (this.needsResync) {
+          this.needsResync = false
+          void this.syncFromServer()
+        }
       }
     })()
 
@@ -306,7 +339,9 @@ export class ChatRuntime {
 
   handleSocketEvent(event: ChatSocketEvent | Record<string, unknown>) {
     if (event.type === "chat.sync.event") {
-      this.applyChatEvent((event as ChatSocketEvent<"chat.sync.event">).payload)
+      this.applyLiveSyncEvent(
+        (event as ChatSocketEvent<"chat.sync.event">).payload
+      )
       return
     }
 
@@ -883,18 +918,48 @@ export class ChatRuntime {
       clientInstanceId = response.clientInstanceId
     }
 
+    // Authoritative prune: bootstrap conversations are the member's current
+    // live set. Locally-known conversations absent from it (removed while
+    // offline) are pruned + tombstoned at the bootstrap cursor; live ones get
+    // any tombstone cleared (legitimate re-add).
+    const liveIds = new Set(
+      bootstrap.conversations.map((conversation) => conversation.conversationId)
+    )
+    let prunedBase = baseSnapshot
+    for (const conversation of baseSnapshot.conversations) {
+      if (!liveIds.has(conversation.conversationId)) {
+        prunedBase = pruneConversationFromSnapshot(
+          prunedBase,
+          conversation.conversationId,
+          bootstrap.nextInboxCursor
+        )
+      }
+    }
+    for (const conversationId of liveIds) {
+      prunedBase = clearConversationTombstone(prunedBase, conversationId)
+    }
+
+    const nextInboxCursor = Math.max(
+      prunedBase.inboxCursor,
+      bootstrap.nextInboxCursor
+    )
+    this.liveCursorByWorkspace.set(
+      workspaceId,
+      Math.max(
+        this.liveCursorByWorkspace.get(workspaceId) ?? 0,
+        nextInboxCursor
+      )
+    )
+
     this.replaceSnapshot({
-      ...baseSnapshot,
+      ...prunedBase,
       workspaceId,
       workspaceMemberId: bootstrap.workspaceMemberId,
       clientInstanceId,
-      inboxCursor: Math.max(
-        baseSnapshot.inboxCursor,
-        bootstrap.nextInboxCursor
-      ),
+      inboxCursor: nextInboxCursor,
       lastBootstrappedAt: new Date().toISOString(),
       conversations: upsertChatConversations(
-        baseSnapshot.conversations,
+        prunedBase.conversations,
         bootstrap.conversations
       ),
     })
@@ -943,29 +1008,94 @@ export class ChatRuntime {
     })
   }
 
+  /**
+   * Live durable-frame handler with strict member_seq ordering. base is the
+   * unified high-water mark across the persisted resume cursor and the in-memory
+   * live cursor. Stale (<=base) frames are dropped; in-order (==base+1) frames
+   * apply and advance the live cursor; gaps (>base+1) trigger a contiguous
+   * resync instead of a blind (potentially clobbering/resurrecting) apply.
+   */
+  private applyLiveSyncEvent(event: ChatSyncEvent) {
+    const snapshot = this.state.snapshot
+    if (!snapshot || snapshot.workspaceId !== event.workspaceId) {
+      return
+    }
+    const workspaceId = event.workspaceId
+    const base = Math.max(
+      this.liveCursorByWorkspace.get(workspaceId) ?? 0,
+      snapshot.inboxCursor
+    )
+
+    if (event.memberSeq <= base) {
+      return
+    }
+    if (event.memberSeq > base + 1) {
+      if (this.syncPromise) {
+        this.needsResync = true
+      } else {
+        void this.syncFromServer()
+      }
+      return
+    }
+
+    this.liveCursorByWorkspace.set(workspaceId, event.memberSeq)
+    this.applyChatEvent(event)
+  }
+
   private applyChatEvent(event: ChatSyncEvent) {
     this.updateSnapshot((current) => {
-      let nextSnapshot: ChatWorkspaceSnapshot = {
-        ...current,
-        inboxCursor: Math.max(current.inboxCursor, event.syncSeq),
-      }
+      // Persisted inboxCursor is NOT advanced here — only the contiguous sync
+      // drain and bootstrap advance it (the authoritative resume cursor). Live
+      // ordering uses the in-memory liveCursor (see handleSocketEvent).
+      let nextSnapshot: ChatWorkspaceSnapshot = current
 
       switch (event.eventType) {
         case "conversation.upsert": {
           const payload =
             event.payload as ChatSyncEvent<"conversation.upsert">["payload"]
-          nextSnapshot = {
-            ...nextSnapshot,
-            conversations: upsertChatConversation(
-              nextSnapshot.conversations,
-              payload.conversation
-            ),
+          nextSnapshot = upsertConversationWithTombstoneGuard(
+            nextSnapshot,
+            payload.conversation,
+            event.memberSeq
+          )
+          break
+        }
+        case "conversation.membership.updated": {
+          const payload =
+            event.payload as ChatSyncEvent<"conversation.membership.updated">["payload"]
+          if (payload.selfState === "active") {
+            nextSnapshot = clearConversationTombstone(
+              nextSnapshot,
+              payload.conversationId,
+              event.memberSeq
+            )
+          } else {
+            nextSnapshot = pruneConversationFromSnapshot(
+              nextSnapshot,
+              payload.conversationId,
+              event.memberSeq
+            )
           }
           break
         }
         case "conversation.item.created": {
           const { conversationId, item } =
             event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+          // Guard against a stale item resurrecting a tombstoned conversation's
+          // orphan item map.
+          const tombstone = nextSnapshot.tombstones[conversationId]
+          if (
+            tombstone &&
+            typeof event.memberSeq === "number" &&
+            event.memberSeq <= tombstone.removedSeq
+          ) {
+            // Still clear any delivered outbox echo, but don't recreate state.
+            nextSnapshot = {
+              ...nextSnapshot,
+              outbox: clearDeliveredOutbox(nextSnapshot.outbox, [item]),
+            }
+            break
+          }
           const currentItems =
             nextSnapshot.itemsByConversationId[conversationId] ?? []
           const alreadyExists = currentItems.some(
@@ -985,24 +1115,34 @@ export class ChatRuntime {
           nextSnapshot = updateConversationInSnapshot(
             nextSnapshot,
             conversationId,
-            (entry) => ({
-              ...entry,
-              unreadCount:
-                !alreadyExists && shouldIncrementUnreadCount(entry, item)
-                  ? entry.unreadCount + 1
-                  : entry.unreadCount,
-              updatedAt: item.createdAt,
-              lastItem: {
-                itemId: item.id,
-                sequence: item.sequence,
-                itemType: item.itemType,
-                subtype: item.subtype,
-                previewText: buildPreviewTextFromItem(item),
-                authorParticipantId: item.authorParticipantId,
-                author: item.author,
-                createdAt: item.createdAt,
-              },
-            })
+            (entry) => {
+              // Idempotency: replay must not double-count unread or regress
+              // lastItem. Skip when this item is not newer than what the
+              // conversation already reflects.
+              const isNewerItem =
+                !entry.lastItem || item.sequence > entry.lastItem.sequence
+              if (!isNewerItem) {
+                return entry
+              }
+              return {
+                ...entry,
+                unreadCount:
+                  !alreadyExists && shouldIncrementUnreadCount(entry, item)
+                    ? entry.unreadCount + 1
+                    : entry.unreadCount,
+                updatedAt: item.createdAt,
+                lastItem: {
+                  itemId: item.id,
+                  sequence: item.sequence,
+                  itemType: item.itemType,
+                  subtype: item.subtype,
+                  previewText: buildPreviewTextFromItem(item),
+                  authorParticipantId: item.authorParticipantId,
+                  author: item.author,
+                  createdAt: item.createdAt,
+                },
+              }
+            }
           )
           break
         }

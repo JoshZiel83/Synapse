@@ -23,13 +23,13 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 // refactor (this branch). A single combined version slug + description records
 // both so schema_migrations is not mislabeled. Slug kept <=64 chars (VARCHAR(64);
 // bootstrap.test.ts enforces); full narrative lives in the (unbounded) description.
-export const CURRENT_SCHEMA_VERSION = "2026-06-04-better-auth-after-mcp-sandbox"
+export const CURRENT_SCHEMA_VERSION =
+  "2026-06-04-chat-member-seq-after-soft-delete"
 export const CURRENT_SCHEMA_DESCRIPTION =
-  "Account/auth redesign onto Better Auth (better-auth@1.6.13), merged on top of the MCP-remote-transports + server-side actor sandbox release. " +
-  "(A) Account/auth: users.password_hash dropped (password now lives in account); users gains email_verified (NOT NULL default false), image (BA core avatar URL, separate from avatar_file_id), and feishu_open_id/feishu_union_id/feishu_tenant_key. New BA core tables account (provider_id+account_id unique; credential provider holds the scrypt password, OAuth providers hold encrypted tokens), session (opaque token, BA-owned), verification, and device_code (deviceAuthorization RFC 8628 cross-device QR login; user_code/device_code unique). Dropped legacy hand-rolled auth_sessions + auth_qr_login_requests tables and their enums (auth_sessions_client_type/transport, auth_qr_login_requests_status/approved_session_persistence). All BA-table ids carry DEFAULT uuid_generate_v4() because BA runs with generateId:false (omits id on INSERT). user/account/session FKs and access_subjects(kind='user') are unchanged (still reference users(id)). " +
-  "(B) MCP official remote endpoints (from dev): plugin_package_version_specs_transport enum gains 'sse' (AMiner proxies the official SSE-only MCP server; AMap/Mijia use http) — a NON-migratable enum change, so pre-existing databases must be rebuilt (db:rebuild). " +
-  "(C) Server-side actor sandbox (from dev): file_mounts.sandbox_backend/sandbox_resource_id + idx_file_mounts_live_backend. " +
-  "(D) Prior combined release (conversation-type derived-IM + file-service CAS) carried forward unchanged from the merge base."
+  "Chat multi-client broadcast correctness: workspace_member_sync_events gains member_seq BIGINT NOT NULL + UNIQUE(workspace_member_id, member_seq) + idx_workspace_member_sync_events_member_seq — a per-member, commit-ordered, gap-free client sync cursor assigned under an advisory lock inside the producing transaction (appendWorkspaceMemberSyncEventInTransaction). Replaces the global INSERT-time sync_seq as the authoritative getChatSync cursor (sync_seq retained as the PK). Merged on top of the soft-delete systematic release. " +
+  "(PRIOR) Soft-delete: deleted_at on 24 root tables, _live views, sd_reject_delete (hard-delete guard) + sd_assert_parent_live (FK-liveness) triggers, sd_* SECURITY DEFINER purge fns. " +
+  "(PRIOR) Account/auth redesign onto Better Auth (better-auth@1.6.13): users.password_hash dropped (password lives in account), users gains email_verified/image/feishu_*; BA core tables account/session/verification/device_code; dropped legacy auth_sessions + auth_qr_login_requests. " +
+  "(PRIOR) MCP official remote endpoints: plugin_package_version_specs_transport enum gains 'sse'. Server-side actor sandbox: file_mounts.sandbox_backend/sandbox_resource_id. conversation-type derived-IM + file-service CAS carried forward unchanged."
 
 async function ensureSchemaMigrationsTable() {
   await sql`
