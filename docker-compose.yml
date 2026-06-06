@@ -207,6 +207,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
     environment:
       SYNAPSE_PUBLIC_DOMAIN: ${SYNAPSE_PUBLIC_DOMAIN:?SYNAPSE_PUBLIC_DOMAIN is required. Run ./setup.sh first.}
       SYNAPSE_WWW_DOMAIN: ${SYNAPSE_WWW_DOMAIN:?SYNAPSE_WWW_DOMAIN is required. Run ./setup.sh first.}
