@@ -76,7 +76,7 @@ export function canExitPlanMode(
   )
 }
 
-export function isBuiltinToolAllowedInCollaborationMode(
+export function isLocalCallableToolAllowedInCollaborationMode(
   toolName: string,
   collaborationMode: SessionCollaborationMode | string | null | undefined,
   conversationKind: string | null | undefined

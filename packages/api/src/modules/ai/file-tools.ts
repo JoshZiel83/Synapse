@@ -207,7 +207,6 @@ const getFileInfoDefinition: ToolDefinition = {
 export function registerActorFileToolPlugins(): void {
   registerToolPlugin({
     name: "upload_file",
-    kind: "callable",
     definition: uploadFileDefinition,
     resolve: (ctx) => ({
       active: Boolean(ctx.workspaceId),
@@ -283,7 +282,6 @@ export function registerActorFileToolPlugins(): void {
 
   registerToolPlugin({
     name: "get_file_link",
-    kind: "callable",
     definition: getFileLinkDefinition,
     resolve: (ctx) => ({
       active: Boolean(ctx.workspaceId),
@@ -315,7 +313,6 @@ export function registerActorFileToolPlugins(): void {
 
   registerToolPlugin({
     name: "get_file_info",
-    kind: "callable",
     definition: getFileInfoDefinition,
     resolve: (ctx) => ({
       active: Boolean(ctx.workspaceId),

@@ -5,7 +5,7 @@ import {
   canEnterPlanMode,
   canExitPlanMode,
   canUpdatePlan,
-  isBuiltinToolAllowedInCollaborationMode,
+  isLocalCallableToolAllowedInCollaborationMode,
 } from "./session-plan-mode.js"
 
 test("plan mode is available only in direct conversations", () => {
@@ -26,7 +26,7 @@ test("drafting state enables update and exit plan tools", () => {
 
 test("tool allowance changes across drafting and awaiting-approval states", () => {
   assert.equal(
-    isBuiltinToolAllowedInCollaborationMode(
+    isLocalCallableToolAllowedInCollaborationMode(
       "request_user_input",
       "plan_drafting",
       "direct"
@@ -34,7 +34,7 @@ test("tool allowance changes across drafting and awaiting-approval states", () =
     true
   )
   assert.equal(
-    isBuiltinToolAllowedInCollaborationMode(
+    isLocalCallableToolAllowedInCollaborationMode(
       "request_user_input",
       "plan_awaiting_approval",
       "direct"
@@ -42,7 +42,7 @@ test("tool allowance changes across drafting and awaiting-approval states", () =
     false
   )
   assert.equal(
-    isBuiltinToolAllowedInCollaborationMode(
+    isLocalCallableToolAllowedInCollaborationMode(
       "enter_plan_mode",
       "default",
       "group"
@@ -50,7 +50,7 @@ test("tool allowance changes across drafting and awaiting-approval states", () =
     false
   )
   assert.equal(
-    isBuiltinToolAllowedInCollaborationMode(
+    isLocalCallableToolAllowedInCollaborationMode(
       "tail_task_output",
       "plan_awaiting_approval",
       "direct"

@@ -10,16 +10,18 @@ import {
   type ToolResolveContext,
 } from "@synapse/shared"
 import { getToolErrorMessage, getToolErrorMetadata } from "./tool-errors.js"
-import { isBuiltinToolAllowedInCollaborationMode } from "./session-plan-mode.js"
+import { isLocalCallableToolAllowedInCollaborationMode } from "./session-plan-mode.js"
 
 /**
- * Unified Built-in Tool Plugin Registry
+ * Local Callable Tool Registry
  *
- * Replaces the old callable-tools.ts + action tools pattern.
- * Every built-in tool is a ToolPlugin with:
- *   - kind: 'action' (terminal, dispatched by orchestrator) or 'callable' (returns result to model)
- *   - resolve(ctx): optional — determines if the tool is active and returns its (possibly dynamic) definition
- *   - execute(input): optional — for callable tools, the handler that produces the result
+ * Registers Synapse-owned tools that execute in-process and return a result to
+ * the model. Actor business actions still exist below these tools, but they are
+ * no longer a separate model tool kind.
+ *
+ * Every local callable tool is a ToolPlugin with:
+ *   - resolve(ctx): optional — determines if the tool is active and returns its definition
+ *   - execute(input): the handler that produces the result
  */
 
 const registry = new Map<string, ToolPlugin>()
@@ -29,16 +31,16 @@ export function registerToolPlugin(plugin: ToolPlugin): void {
 }
 
 /**
- * Resolve active built-in tools for the given context.
+ * Resolve active local callable tools for the given context.
  * Calls each plugin's resolve() if present; plugins without resolve are always active.
  */
-export async function resolveBuiltinTools(
+export async function resolveLocalCallableTools(
   ctx: ToolResolveContext
 ): Promise<ToolDefinition[]> {
   const tools: ToolDefinition[] = []
   for (const plugin of registry.values()) {
     if (
-      !isBuiltinToolAllowedInCollaborationMode(
+      !isLocalCallableToolAllowedInCollaborationMode(
         plugin.name,
         ctx.collaborationMode,
         ctx.conversationKind
@@ -79,7 +81,8 @@ function coerceCallableReturn(
 }
 
 /**
- * Execute callable tool calls. Only dispatches to tools with kind='callable' and an execute handler.
+ * Execute local callable tool calls. Unknown/stale model-requested names are
+ * returned as model-actionable tool errors so the model can recover in-round.
  */
 export async function executeCallableTools(
   toolCalls: ToolCall[]
@@ -87,7 +90,7 @@ export async function executeCallableTools(
   const results: ToolResult[] = []
   for (const tc of toolCalls) {
     const plugin = registry.get(tc.toolName)
-    if (!plugin || plugin.kind !== "callable" || !plugin.execute) {
+    if (!plugin) {
       results.push({
         toolCallId: tc.callId,
         providerCallId: tc.providerCallId,
@@ -136,15 +139,5 @@ export async function executeCallableTools(
 }
 
 export function isCallableTool(name: string): boolean {
-  const plugin = registry.get(name)
-  return !!plugin && plugin.kind === "callable"
-}
-
-export function isActionTool(name: string): boolean {
-  const plugin = registry.get(name)
-  return !!plugin && plugin.kind === "action"
-}
-
-export function isBuiltinTool(name: string): boolean {
   return registry.has(name)
 }

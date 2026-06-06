@@ -282,13 +282,7 @@ export async function createToolCall(params: {
   callIndex: number
   providerCallId?: string
   bundleId: string
-  toolKind:
-    | "builtin"
-    | "callable"
-    | "action"
-    | "mcp_plugin"
-    | "mcp_device"
-    | "provider_builtin"
+  toolKind: "callable" | "mcp_plugin" | "mcp_device" | "provider_builtin"
   toolName: string
   pluginId?: string | null
   deviceId?: string
@@ -346,13 +340,7 @@ export async function updateToolCallStatus(
 export async function createToolExecutionAttempt(params: {
   toolCallId: string
   attemptNo: number
-  executorKind:
-    | "builtin"
-    | "callable"
-    | "action"
-    | "mcp_plugin"
-    | "mcp_device"
-    | "provider_builtin"
+  executorKind: "callable" | "mcp_plugin" | "mcp_device" | "provider_builtin"
   pluginId?: string | null
   deviceId?: string
   transport?: string

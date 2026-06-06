@@ -63,7 +63,7 @@ import {
   recoverFailedSandboxMounts,
   reconcileSandboxes,
 } from "./modules/sandbox/index.js"
-import { registerActionToolPlugins } from "./modules/ai/tools.js"
+import { registerActorStateCallableToolPlugins } from "./modules/ai/tools.js"
 import { registerActorFileToolPlugins } from "./modules/ai/file-tools.js"
 import { registerCallableToolPlugins } from "./modules/ai/session-tools.js"
 import { startSessionThinkingWorker } from "./workers/session-thinking.js"
@@ -327,7 +327,7 @@ async function main() {
     }
   }
 
-  registerActionToolPlugins()
+  registerActorStateCallableToolPlugins()
   registerCallableToolPlugins()
   registerActorFileToolPlugins()
   await ensureAutomationSchedulerJob()

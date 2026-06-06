@@ -15,6 +15,7 @@ import type {
   NormalizedMcpToolResult,
   RuntimeActorContext,
   CanonicalContentBlock,
+  ToolResultOrigin,
 } from "@synapse/shared/types"
 import { SUBJECT_KIND, textBlock, type SubjectRef } from "@synapse/shared"
 import type { RuntimeAuthorizationGrantSpec as RuntimeAuthorizationGrantWireSpec } from "@synapse/device-protocol"
@@ -238,6 +239,29 @@ const DEVICE_TOOL_PREFIX = "device__"
 
 function namespaceDeviceToolName(row: DeviceCapabilityToolRow): string {
   return `${DEVICE_TOOL_PREFIX}${row.device_capability_id}__${row.visible_tool_name}`
+}
+
+function deviceToolOrigin(
+  row: DeviceCapabilityToolRow,
+  namespacedToolName: string
+): ToolResultOrigin {
+  return {
+    kind: "mcp_device",
+    deviceId: row.device_id,
+    deviceName: row.device_name,
+    exposureId: row.device_exposure_id,
+    exposureStableKey: row.exposure_stable_key,
+    exposureName: row.visible_tool_name,
+    visibleToolName: row.visible_tool_name,
+    namespacedToolName,
+  }
+}
+
+function withDeviceToolOrigin(
+  result: NormalizedMcpToolResult,
+  origin: ToolResultOrigin
+): NormalizedMcpToolResult {
+  return result.origin ? result : { ...result, origin }
 }
 
 /**
@@ -469,6 +493,7 @@ function unionWithDevice(
     if (!row) {
       return mcpErrorBlock(`device tool ${toolName} not found in projection`)
     }
+    const origin = deviceToolOrigin(row, toolName)
     // Normalize device platform ONCE per dispatch so both the
     // grant-coverage try block AND the authorization-request try block
     // read the same value. Each try has its own lexical scope, so
@@ -496,11 +521,14 @@ function unionWithDevice(
         sanitizedInput
       )
       if (denial) {
-        return synapseErrorBlock({
-          code: denial.code,
-          message: denial.message,
-          details: denial.details,
-        })
+        return withDeviceToolOrigin(
+          synapseErrorBlock({
+            code: denial.code,
+            message: denial.message,
+            details: denial.details,
+          }),
+          origin
+        )
       }
     }
     // canonicalized arguments — the device verifier rejects envelopes whose
@@ -535,11 +563,14 @@ function unionWithDevice(
       })
     } catch (err) {
       if (err instanceof InvalidExecFileArgsError) {
-        return synapseErrorBlock({
-          code: err.synapseCode,
-          message: err.message,
-          details: err.details,
-        })
+        return withDeviceToolOrigin(
+          synapseErrorBlock({
+            code: err.synapseCode,
+            message: err.message,
+            details: err.details,
+          }),
+          origin
+        )
       }
       throw err
     }
@@ -553,12 +584,15 @@ function unionWithDevice(
       devicePlatform === "win32" &&
       requestedAction.commandline?.workingDirectory
     ) {
-      return synapseErrorBlock({
-        code: "permission_denied",
-        message:
-          "Windows commandline policy v1 does not support working_directory",
-        details: { reason: "windows_workdir_unsupported" },
-      })
+      return withDeviceToolOrigin(
+        synapseErrorBlock({
+          code: "permission_denied",
+          message:
+            "Windows commandline policy v1 does not support working_directory",
+          details: { reason: "windows_workdir_unsupported" },
+        }),
+        origin
+      )
     }
 
     let claim
@@ -654,36 +688,49 @@ function unionWithDevice(
         },
       })
     } catch (err) {
-      return mcpErrorBlock(
-        `grant claim failed for capability ${row.device_capability_id}: ${(err as Error).message}`
+      return withDeviceToolOrigin(
+        mcpErrorBlock(
+          `grant claim failed for capability ${row.device_capability_id}: ${(err as Error).message}`
+        ),
+        origin
       )
     }
 
     if (claim.kind === "no_match") {
-      return await requestAuthorizationOrDeny({
-        projectInput,
-        row,
-        toolName,
-        input,
-        sanitizedInput,
-        requestedAction,
-        principalSubjectId: device.subjects.principalSubjectId ?? "",
-        principalScopeSubjectId: device.subjects.activeConversationSubjectId,
-      })
+      return withDeviceToolOrigin(
+        await requestAuthorizationOrDeny({
+          projectInput,
+          row,
+          toolName,
+          input,
+          sanitizedInput,
+          requestedAction,
+          principalSubjectId: device.subjects.principalSubjectId ?? "",
+          principalScopeSubjectId: device.subjects.activeConversationSubjectId,
+        }),
+        origin
+      )
     }
     if (claim.kind === "race_lost") {
-      return mcpErrorBlock(
-        `runtime_constraint: grant race lost (${claim.reason}); please retry`
+      return withDeviceToolOrigin(
+        mcpErrorBlock(
+          `runtime_constraint: grant race lost (${claim.reason}); please retry`
+        ),
+        origin
       )
     }
     if (claim.kind === "lock_timeout") {
-      return mcpErrorBlock(
-        `runtime_constraint: catalog lock timeout; please retry`
+      return withDeviceToolOrigin(
+        mcpErrorBlock(`runtime_constraint: catalog lock timeout; please retry`),
+        origin
       )
     }
     if (claim.kind === "denied") {
-      return mcpErrorBlock(
-        `runtime_constraint: ${claim.reason}${claim.grantId ? ` (grant ${claim.grantId})` : ""}`
+      return withDeviceToolOrigin(
+        mcpErrorBlock(
+          `runtime_constraint: ${claim.reason}${claim.grantId ? ` (grant ${claim.grantId})` : ""}`
+        ),
+        origin
       )
     }
 
@@ -725,15 +772,18 @@ function unionWithDevice(
       // `_meta.synapse_error.details` block emitted by the chrome-devtools-mcp
       // provider's permission_denied path gets collapsed to plain text
       // before chat ever sees it.
-      return {
-        content: [
-          textBlock(
-            `device dispatch failed (${err?.code}): ${err?.message}`
-          ) as CanonicalContentBlock,
-        ],
-        isError: true,
-        metadata: { synapse_error: err },
-      }
+      return withDeviceToolOrigin(
+        {
+          content: [
+            textBlock(
+              `device dispatch failed (${err?.code}): ${err?.message}`
+            ) as CanonicalContentBlock,
+          ],
+          isError: true,
+          metadata: { synapse_error: err },
+        },
+        origin
+      )
     }
     const tool = result.result as
       | {
@@ -745,11 +795,14 @@ function unionWithDevice(
     // Forward non-error _meta back to the planner too — runtime providers
     // attach contextual data (e.g. synapse_list_pages) that the chat-side
     // renderer may want to read.
-    return {
-      content: tool?.content ?? [],
-      isError: tool?.isError,
-      metadata: tool?._meta,
-    }
+    return withDeviceToolOrigin(
+      {
+        content: tool?.content ?? [],
+        isError: tool?.isError,
+        metadata: tool?._meta,
+      },
+      origin
+    )
   }
 
   const executor = async (

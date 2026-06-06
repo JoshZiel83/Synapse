@@ -1,4 +1,4 @@
-import type { ToolCall, ActorAction } from "@synapse/shared"
+import type { ActorAction } from "@synapse/shared"
 import { textResult } from "@synapse/shared"
 import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
@@ -203,14 +203,14 @@ function buildChangeAvatarAction(input: ChangeAvatarToolInput): ActorAction {
 }
 
 /**
- * Register action tool plugins.
+ * Register actor state callable tools.
+ *
  * These state-mutating built-in tools are callable so the model receives the
  * result and can continue reasoning before it explicitly sleeps.
  */
-export function registerActionToolPlugins(): void {
+export function registerActorStateCallableToolPlugins(): void {
   registerToolPlugin({
     name: "create_memory",
-    kind: "callable",
     definition: {
       name: "create_memory",
       description:
@@ -303,7 +303,6 @@ export function registerActionToolPlugins(): void {
 
   registerToolPlugin({
     name: "rename_self",
-    kind: "callable",
     definition: {
       name: "rename_self",
       description:
@@ -347,7 +346,6 @@ export function registerActionToolPlugins(): void {
 
   registerToolPlugin({
     name: "change_avatar",
-    kind: "callable",
     definition: {
       name: "change_avatar",
       description:
@@ -524,40 +522,5 @@ export function registerActionToolPlugins(): void {
         })
       )
     },
-  })
-}
-
-export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
-  return toolCalls.map((tc) => {
-    const input = tc.input as Record<string, any>
-
-    switch (tc.toolName) {
-      case "create_memory":
-        return buildCreateMemoryAction(input)
-
-      case "rename_self":
-        return buildRenameSelfAction(input)
-
-      case "change_avatar": {
-        const parsed = parseChangeAvatarToolInput(input)
-        return buildChangeAvatarAction(
-          parsed.success
-            ? parsed.data
-            : {
-                mode: EMOJI_MODE,
-                emoji:
-                  typeof input.emoji === "string" && input.emoji.trim()
-                    ? input.emoji.trim()
-                    : "🙂",
-              }
-        )
-      }
-
-      default:
-        return {
-          type: "respond" as const,
-          content: `Unknown tool: ${tc.toolName}`,
-        }
-    }
   })
 }

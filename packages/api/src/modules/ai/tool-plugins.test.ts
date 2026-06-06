@@ -27,7 +27,6 @@ function call(name: string, input: Record<string, unknown> = {}): ToolCall {
 test("plugin returning CanonicalContentBlock[] flows through to ToolResult.content", async () => {
   registerToolPlugin({
     name: "blocks_only_tool",
-    kind: "callable",
     definition: {
       name: "blocks_only_tool",
       description: "test",
@@ -48,7 +47,6 @@ test("plugin returning CanonicalContentBlock[] flows through to ToolResult.conte
 test("plugin returning CallableToolResult propagates structuredContent + isError + metadata", async () => {
   registerToolPlugin({
     name: "structured_tool",
-    kind: "callable",
     definition: {
       name: "structured_tool",
       description: "test",
@@ -75,7 +73,6 @@ test("plugin returning CallableToolResult propagates structuredContent + isError
 test("textResult() helper produces canonical CallableToolResult", async () => {
   registerToolPlugin({
     name: "text_result_helper",
-    kind: "callable",
     definition: {
       name: "text_result_helper",
       description: "test",
@@ -92,7 +89,6 @@ test("textResult() helper produces canonical CallableToolResult", async () => {
 test("textResult() with isError true flows the flag through", async () => {
   registerToolPlugin({
     name: "error_via_helper",
-    kind: "callable",
     definition: {
       name: "error_via_helper",
       description: "test",
@@ -110,7 +106,6 @@ test("textResult() with isError true flows the flag through", async () => {
 test("plugin throwing wraps error message in canonical text block with isError=true", async () => {
   registerToolPlugin({
     name: "throws_tool",
-    kind: "callable",
     definition: {
       name: "throws_tool",
       description: "test",
@@ -141,7 +136,6 @@ test("unknown callable returns canonical text block with unknown_tool error meta
 test("multiple tool calls produce results in input order", async () => {
   registerToolPlugin({
     name: "echo_a",
-    kind: "callable",
     definition: {
       name: "echo_a",
       description: "test",
@@ -151,7 +145,6 @@ test("multiple tool calls produce results in input order", async () => {
   })
   registerToolPlugin({
     name: "echo_b",
-    kind: "callable",
     definition: {
       name: "echo_b",
       description: "test",
@@ -179,7 +172,6 @@ test("plugin returning canonical file_ref array passes through unchanged", async
   }
   registerToolPlugin({
     name: "returns_file_ref",
-    kind: "callable",
     definition: {
       name: "returns_file_ref",
       description: "test",

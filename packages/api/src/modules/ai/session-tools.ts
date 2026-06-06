@@ -1063,7 +1063,6 @@ export function registerCallableToolPlugins(): void {
   // ============ send_to (callable) ============
   registerToolPlugin({
     name: "read_skill",
-    kind: "callable",
     definition: {
       name: "read_skill",
       description:
@@ -1183,7 +1182,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "get_current_time",
-    kind: "callable",
     definition: {
       name: "get_current_time",
       description:
@@ -1240,7 +1238,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "send_to",
-    kind: "callable",
     definition: {
       name: "send_to",
       description:
@@ -1379,7 +1376,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "request_user_input",
-    kind: "callable",
     definition: {
       name: "request_user_input",
       description: buildRequestUserInputToolDescription({ kind: "generic" }),
@@ -1660,7 +1656,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "enter_plan_mode",
-    kind: "callable",
     definition: {
       name: "enter_plan_mode",
       description: buildEnterPlanModeToolDescription(),
@@ -1747,7 +1742,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "update_plan",
-    kind: "callable",
     definition: {
       name: "update_plan",
       description: buildUpdatePlanToolDescription(),
@@ -1863,7 +1857,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "exit_plan_mode",
-    kind: "callable",
     definition: {
       name: "exit_plan_mode",
       description: buildExitPlanModeToolDescription({ kind: "generic" }),
@@ -2130,7 +2123,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "list_tasks",
-    kind: "callable",
     definition: {
       name: "list_tasks",
       description:
@@ -2194,7 +2186,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "get_task_status",
-    kind: "callable",
     definition: {
       name: "get_task_status",
       description:
@@ -2242,7 +2233,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "cancel_task",
-    kind: "callable",
     definition: {
       name: "cancel_task",
       description:
@@ -2328,7 +2318,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "tail_task_output",
-    kind: "callable",
     definition: {
       name: "tail_task_output",
       description:
@@ -2420,7 +2409,6 @@ export function registerCallableToolPlugins(): void {
   // ============ invite_actor (callable) ============
   registerToolPlugin({
     name: "invite_actor",
-    kind: "callable",
     conversationTypeMask: CONVERSATION_TYPE_MASK_PRESETS.NATIVE_GROUP_ONLY,
     definition: {
       name: "invite_actor",
@@ -2706,7 +2694,6 @@ export function registerCallableToolPlugins(): void {
   // ============ memory_search (callable) ============
   registerToolPlugin({
     name: "memory_search",
-    kind: "callable",
     definition: {
       name: "memory_search",
       description:
@@ -2779,7 +2766,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "schedule_self_wakeup",
-    kind: "callable",
     definition: {
       name: "schedule_self_wakeup",
       description:
@@ -2987,7 +2973,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "list_event_sources",
-    kind: "callable",
     definition: {
       name: "list_event_sources",
       description:
@@ -3067,7 +3052,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "subscribe_event",
-    kind: "callable",
     definition: {
       name: "subscribe_event",
       description:
@@ -3295,7 +3279,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "view_event_source_history",
-    kind: "callable",
     definition: {
       name: "view_event_source_history",
       description:
@@ -3383,7 +3366,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "list_automations",
-    kind: "callable",
     definition: {
       name: "list_automations",
       description: "List the automations owned by the current session.",
@@ -3456,7 +3438,6 @@ export function registerCallableToolPlugins(): void {
 
   registerToolPlugin({
     name: "cancel_automation",
-    kind: "callable",
     definition: {
       name: "cancel_automation",
       description:
@@ -3541,7 +3522,6 @@ export function registerCallableToolPlugins(): void {
   // ============ sleep (callable) ============
   registerToolPlugin({
     name: "sleep",
-    kind: "callable",
     definition: {
       name: "sleep",
       description:

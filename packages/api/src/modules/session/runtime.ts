@@ -403,7 +403,7 @@ async function buildDeviceBuiltinToolBlocks(params: {
   }
 }
 
-async function buildBuiltinToolBlocks(params: {
+async function buildCallableToolBlocks(params: {
   toolName: string
   input: unknown
   requestPayload?: Record<string, unknown>
@@ -593,8 +593,8 @@ async function buildToolActivityDetail(turnId: string) {
     }
 
     const blocks =
-      toolCall.tool_kind === "builtin"
-        ? await buildBuiltinToolBlocks(blockParams)
+      toolCall.tool_kind === "callable"
+        ? await buildCallableToolBlocks(blockParams)
         : toolCall.tool_kind === "mcp_device"
           ? await buildDeviceBuiltinToolBlocks(blockParams)
           : {
