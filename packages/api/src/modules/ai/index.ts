@@ -541,7 +541,14 @@ function toolCallProvenance(
     return {
       toolKind: "callable",
       sourceKind: "system",
-      sourceSnapshot: { kind: "system", registryKey: wireName },
+      // System stableKey IS the registry/wire name (systemToolId(registryKey)).
+      // Persist it on the snapshot so the display resolver dispatches uniformly
+      // off source_snapshot.stableKey across all source kinds.
+      sourceSnapshot: {
+        kind: "system",
+        registryKey: wireName,
+        stableKey: wireName,
+      },
       pluginInstallationId: null,
       deviceToolId: null,
     }
