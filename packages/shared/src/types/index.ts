@@ -930,10 +930,23 @@ export interface ActorRuntimeProcessingTarget {
   attachedAt?: Timestamp
 }
 
+// Structured tool provenance surfaced to the runtime UI so two same-leaf tools
+// from different sources are distinguishable (a source badge + secondary text),
+// rather than inferring from the wire name. Derived from tool_calls.source_kind
+// + source_snapshot (tool provenance & routing refactor).
+export interface ActorRuntimeToolSource {
+  kind: "system" | "plugin" | "device"
+  /** Primary label, e.g. plugin "publisher/item" or the device name. */
+  displayName?: string
+  /** The source-native (visible/upstream) tool name, when distinct from leaf. */
+  upstreamToolName?: string
+}
+
 export interface ActorRuntimeTurnPreviewTool {
   toolCallId: UUID
   toolKind: ActorRuntimeToolKind
   toolName: string
+  source?: ActorRuntimeToolSource
   state: ActorRuntimeActivityState
   displayTitle: string
   displayDetail?: string
@@ -958,6 +971,7 @@ export interface ActorRuntimeTurnActivityItem {
   toolCallId: UUID
   toolKind: ActorRuntimeToolKind
   toolName: string
+  source?: ActorRuntimeToolSource
   state: ActorRuntimeActivityState
   displayTitle: string
   displayDetail?: string

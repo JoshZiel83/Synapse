@@ -16,6 +16,7 @@ import {
   type ActorRuntimePhase,
   type ActorRuntimeProcessingTarget,
   type ActorRuntimeState,
+  type ActorRuntimeToolSource,
   type ActorRuntimeTurnActivityDetail,
   type ActorRuntimeTurnActivityItem,
   type ActorRuntimeTurnPreview,
@@ -182,6 +183,52 @@ function getToolDisplayTitle(
   // name (e.g. "github__read" → "read"); bare names pass through unchanged.
   const segments = toolName.split("__").filter(Boolean)
   return segments[segments.length - 1] || toolName
+}
+
+// Build the structured UI source from the persisted source_kind + source_snapshot
+// (tool provenance & routing). Lets the UI render a source badge / secondary text
+// so two same-leaf tools from different sources are distinguishable, instead of
+// inferring from the wire name. Tolerant of older rows with a thin snapshot.
+function getToolSource(
+  sourceKind: unknown,
+  sourceSnapshot: unknown
+): ActorRuntimeToolSource | undefined {
+  if (
+    sourceKind !== "system" &&
+    sourceKind !== "plugin" &&
+    sourceKind !== "device"
+  ) {
+    return undefined
+  }
+  const snap =
+    sourceSnapshot && typeof sourceSnapshot === "object"
+      ? (sourceSnapshot as Record<string, unknown>)
+      : {}
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.length > 0 ? v : undefined
+  if (sourceKind === "plugin") {
+    const publisher = str(snap.publisherSlug)
+    const item = str(snap.itemSlug)
+    const displayName =
+      publisher && item ? `${publisher}/${item}` : (item ?? publisher)
+    return {
+      kind: "plugin",
+      ...(displayName ? { displayName } : {}),
+      ...(str(snap.upstreamToolName)
+        ? { upstreamToolName: str(snap.upstreamToolName) }
+        : {}),
+    }
+  }
+  if (sourceKind === "device") {
+    return {
+      kind: "device",
+      ...(str(snap.deviceName) ? { displayName: str(snap.deviceName) } : {}),
+      ...(str(snap.visibleToolName)
+        ? { upstreamToolName: str(snap.visibleToolName) }
+        : {}),
+    }
+  }
+  return { kind: "system" }
 }
 
 function getToolDisplayDetail(params: {
@@ -573,6 +620,10 @@ async function buildToolActivityDetail(turnId: string) {
       latestResultIsError: latestResult?.is_error === true,
     })
     const displayTitle = getToolDisplayTitle(toolCall.tool_name, requestPayload)
+    const toolSource = getToolSource(
+      toolCall.source_kind,
+      toolCall.source_snapshot
+    )
     const displayDetail = getToolDisplayDetail({
       toolCallStatus: toolCall.status,
       taskStatus: task?.status || undefined,
@@ -616,6 +667,7 @@ async function buildToolActivityDetail(turnId: string) {
       toolCallId: toolCall.id,
       toolKind: toolCall.tool_kind,
       toolName: toolCall.tool_name,
+      ...(toolSource ? { source: toolSource } : {}),
       state,
       displayTitle,
       displayDetail,
@@ -701,6 +753,7 @@ function buildTurnPreviewFromDetail(
           toolCallId: activeTool.toolCallId,
           toolKind: activeTool.toolKind,
           toolName: activeTool.toolName,
+          ...(activeTool.source ? { source: activeTool.source } : {}),
           state: activeTool.state,
           displayTitle: activeTool.displayTitle,
           displayDetail: activeTool.displayDetail,
@@ -714,6 +767,9 @@ function buildTurnPreviewFromDetail(
           toolCallId: lastCompletedTool.toolCallId,
           toolKind: lastCompletedTool.toolKind,
           toolName: lastCompletedTool.toolName,
+          ...(lastCompletedTool.source
+            ? { source: lastCompletedTool.source }
+            : {}),
           state: lastCompletedTool.state,
           displayTitle: lastCompletedTool.displayTitle,
           displayDetail: lastCompletedTool.displayDetail,

@@ -149,6 +149,9 @@ function buildPluginToolRef(
       kind: "plugin",
       installationId: instance.installationId,
       upstreamToolName,
+      // Durable display fields so post-purge audit shows a readable name.
+      publisherSlug: instance.orgSlug,
+      itemSlug: instance.pluginSlug,
     },
     binding,
     identity: {

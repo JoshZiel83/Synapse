@@ -27,6 +27,14 @@ import { isLocalCallableToolAllowedInCollaborationMode } from "./session-plan-mo
 const registry = new Map<string, ToolPlugin>()
 
 export function registerToolPlugin(plugin: ToolPlugin): void {
+  // System tool names are the reserved bare-name set the NameRegistry protects;
+  // a duplicate registration would silently shadow one at module load. Fail loud
+  // so the collision is caught in dev, not masked at runtime.
+  if (registry.has(plugin.name)) {
+    throw new Error(
+      `Duplicate system tool plugin registration for "${plugin.name}"`
+    )
+  }
   registry.set(plugin.name, plugin)
 }
 

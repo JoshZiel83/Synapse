@@ -22,12 +22,21 @@ import { type ToolSourceKind } from "./kinds.js"
 
 export type ToolSource =
   | { kind: "system"; registryKey: string }
-  | { kind: "plugin"; installationId: string; upstreamToolName: string }
+  | {
+      kind: "plugin"
+      installationId: string
+      upstreamToolName: string
+      // Durable display fields so post-purge audit reads as a name, not a UUID.
+      publisherSlug?: string
+      itemSlug?: string
+    }
   | {
       kind: "device"
       deviceToolId: string
       exposureStableKey: string
       deviceName?: string
+      // Durable display field (the device-visible tool name) for the same reason.
+      visibleToolName?: string
     }
 
 // Route-only binding coordinates. Never serialized outward.
@@ -87,6 +96,12 @@ export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
         kind: "plugin",
         installationId: ref.source.installationId,
         upstreamToolName: ref.source.upstreamToolName,
+        ...(ref.source.publisherSlug !== undefined
+          ? { publisherSlug: ref.source.publisherSlug }
+          : {}),
+        ...(ref.source.itemSlug !== undefined
+          ? { itemSlug: ref.source.itemSlug }
+          : {}),
       }
     case "device":
       return {
@@ -95,6 +110,9 @@ export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
         exposureStableKey: ref.source.exposureStableKey,
         ...(ref.source.deviceName !== undefined
           ? { deviceName: ref.source.deviceName }
+          : {}),
+        ...(ref.source.visibleToolName !== undefined
+          ? { visibleToolName: ref.source.visibleToolName }
           : {}),
       }
   }
@@ -122,12 +140,19 @@ export type PublicToolOriginKind = (typeof PUBLIC_TOOL_ORIGIN_KINDS)[number]
 
 export type PublicToolOrigin =
   | { kind: "system"; registryKey: string }
-  | { kind: "plugin"; installationId: string; upstreamToolName: string }
+  | {
+      kind: "plugin"
+      installationId: string
+      upstreamToolName: string
+      publisherSlug?: string
+      itemSlug?: string
+    }
   | {
       kind: "device"
       deviceToolId: string
       exposureStableKey: string
       deviceName?: string
+      visibleToolName?: string
     }
   | { kind: "provider_native"; providerType: ProviderType; toolName: string }
   | { kind: "model_response"; providerType: ProviderType }
@@ -142,6 +167,12 @@ export function toPublicOrigin(ref: ToolRef): PublicToolOrigin {
         kind: "plugin",
         installationId: ref.source.installationId,
         upstreamToolName: ref.source.upstreamToolName,
+        ...(ref.source.publisherSlug !== undefined
+          ? { publisherSlug: ref.source.publisherSlug }
+          : {}),
+        ...(ref.source.itemSlug !== undefined
+          ? { itemSlug: ref.source.itemSlug }
+          : {}),
       }
     case "device":
       return {
@@ -150,6 +181,9 @@ export function toPublicOrigin(ref: ToolRef): PublicToolOrigin {
         exposureStableKey: ref.source.exposureStableKey,
         ...(ref.source.deviceName !== undefined
           ? { deviceName: ref.source.deviceName }
+          : {}),
+        ...(ref.source.visibleToolName !== undefined
+          ? { visibleToolName: ref.source.visibleToolName }
           : {}),
       }
   }

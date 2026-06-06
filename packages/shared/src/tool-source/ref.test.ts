@@ -19,6 +19,7 @@ const deviceRef: ToolRef = {
     deviceToolId: "dt-1",
     exposureStableKey: "builtin/filesystem",
     deviceName: "laptop",
+    visibleToolName: "fs_read",
   },
   binding: {
     transport: "device_tunnel",
@@ -32,7 +33,13 @@ const deviceRef: ToolRef = {
 
 const pluginRef: ToolRef = {
   toolId: pluginToolId("inst-1", "create_issue"),
-  source: { kind: "plugin", installationId: "inst-1", upstreamToolName: "create_issue" },
+  source: {
+    kind: "plugin",
+    installationId: "inst-1",
+    upstreamToolName: "create_issue",
+    publisherSlug: "acme",
+    itemSlug: "github",
+  },
   binding: { transport: "stdio", instanceKey: "inst-1:h:turn:x" },
   identity: { stableKey: "acme/github/create_issue" },
 }
@@ -49,11 +56,14 @@ test("stripForAuditSnapshot carries the full public source per kind", () => {
     deviceToolId: "dt-1",
     exposureStableKey: "builtin/filesystem",
     deviceName: "laptop",
+    visibleToolName: "fs_read",
   })
   assert.deepEqual(stripForAuditSnapshot(pluginRef), {
     kind: "plugin",
     installationId: "inst-1",
     upstreamToolName: "create_issue",
+    publisherSlug: "acme",
+    itemSlug: "github",
   })
 })
 

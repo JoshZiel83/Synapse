@@ -250,6 +250,7 @@ function buildDeviceToolRef(row: DeviceCapabilityToolRow): ToolRef {
       deviceToolId: row.device_tool_id,
       exposureStableKey: row.exposure_stable_key,
       deviceName: row.device_name,
+      visibleToolName: row.visible_tool_name,
     },
     binding: {
       transport: "device_tunnel",

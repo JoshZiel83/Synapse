@@ -745,6 +745,17 @@ export async function actorThink(
     wireTools: [],
     mcpWireNames: new Set(),
   }
+  // Union of every candidate's provider-native server tool names. These keys
+  // are merged into the ToolSet via buildServerTools after buildAiTools, so the
+  // NameRegistry must reserve them (any candidate may be selected at attempt
+  // time). Anthropic-only today; the providerKind gate lives in buildServerTools.
+  const providerNativeReservedNames = Array.from(
+    new Set(
+      effectiveModelPlan.candidates.flatMap(
+        (candidate: ResolvedModelConfig) => candidate.serverTools ?? []
+      )
+    )
+  )
   let currentToolConversationParticipants = options?.conversationParticipants
   const getThreadSemantics = () =>
     resolveThreadSemantics({
@@ -813,12 +824,18 @@ export async function actorThink(
         fallback: currentToolConversationParticipants,
       })
     const resolvedCallable = await resolveLocalCallableTools(buildResolveCtx())
-    // System (callable) tool names are reserved: the NameRegistry keeps them
-    // bare and forces any colliding plugin/device tool to qualify instead.
-    toolWireRegistry = buildToolWireRegistry(
-      mcpToolDefs,
-      resolvedCallable.map((tool) => tool.name)
-    )
+    // Reserved names the NameRegistry must NOT hand to a plugin/device tool:
+    //   - system (callable) tool names — kept bare, collisions qualify.
+    //   - provider-native server tool names (web_search/web_fetch) that any
+    //     candidate may merge into the ToolSet after buildAiTools (see the
+    //     `...buildServerTools(...)` spread). Without reserving these, a plugin
+    //     /device tool NamePolicy happened to name `web_search` would be
+    //     silently shadowed by the server tool, desyncing model<->routing.
+    const reservedNames = [
+      ...resolvedCallable.map((tool) => tool.name),
+      ...providerNativeReservedNames,
+    ]
+    toolWireRegistry = buildToolWireRegistry(mcpToolDefs, reservedNames)
     const filteredCallable = resolvedCallable.filter(
       (tool) => !toolWireRegistry.mcpWireNames.has(tool.name)
     )
@@ -986,12 +1003,26 @@ export async function actorThink(
 
             // Merge custom (execute-less) tools with provider-defined server
             // tools (Anthropic web_search/web_fetch) for this candidate.
+            const customTools = buildAiTools(allTools)
+            const serverTools = buildServerTools(
+              candidate.providerKind,
+              candidate.serverTools
+            )
+            // Invariant: server tool names are reserved in the NameRegistry, so
+            // they must never collide with a custom (plugin/device/system) tool
+            // name. If this fires, a provider-native name leaked into the wire
+            // surface and the spread below would silently shadow it.
+            for (const serverToolName of Object.keys(serverTools)) {
+              if (serverToolName in customTools) {
+                throw new Error(
+                  `Tool name collision: provider-native server tool "${serverToolName}" ` +
+                    `collides with a custom tool. NamePolicy must reserve it.`
+                )
+              }
+            }
             const aiTools = {
-              ...buildAiTools(allTools),
-              ...buildServerTools(
-                candidate.providerKind,
-                candidate.serverTools
-              ),
+              ...customTools,
+              ...serverTools,
             }
 
             // Real cancellation on timeout: AbortController fed to the SDK so the

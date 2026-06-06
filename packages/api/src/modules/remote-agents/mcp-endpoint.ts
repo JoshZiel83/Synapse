@@ -278,6 +278,9 @@ async function buildResolvedTools(params: {
   conversationKind: "direct" | "group"
   isImConversation: boolean
   sessionKey: string
+  /** Names already taken on this surface (e.g. built-in IM tools). Projected
+   *  plugin/device tools must qualify rather than shadow these. */
+  reservedNames?: readonly string[]
 }): Promise<{ tools: RegisteredTool[]; shutdown: () => Promise<void> }> {
   // The resolver evaluates resource_access_bindings exactly like an actor
   // would and returns ready-to-execute plugin + device_capability tools.
@@ -297,13 +300,15 @@ async function buildResolvedTools(params: {
 
   const tools: RegisteredTool[] = []
   const projected = resolved.tools as ProjectedToolDefinition[]
-  // Build this surface's own wire-name registry (no reserved names: reverse-MCP
-  // exposes only routed plugin/device tools). Dispatch maps wireName→toolId.
+  // Build this surface's wire-name registry. Built-in IM tool names (passed as
+  // reservedNames) are kept bare; a projected plugin/device tool that shares a
+  // leaf name with one of them is forced to qualify, so it can never overwrite
+  // the core IM handler in the unified byName registry.
   const items: NamePolicyItem[] = projected.map((def) => ({
     ref: def.ref,
     leafName: def.name,
   }))
-  const registry = computeWireNames(items)
+  const registry = computeWireNames(items, params.reservedNames ?? [])
   const defByToolId = new Map<string, ProjectedToolDefinition>(
     projected.map((d) => [d.ref.toolId, d])
   )
@@ -352,7 +357,19 @@ function installUnifiedToolRegistry(
   server: McpServer,
   tools: RegisteredTool[]
 ): void {
-  const byName = new Map(tools.map((t) => [t.name, t]))
+  // Fail loud on a duplicate wire name rather than silently overwriting a
+  // handler (e.g. a plugin tool shadowing a built-in IM tool). NamePolicy +
+  // reservedNames should already prevent this; this is the backstop.
+  const byName = new Map<string, RegisteredTool>()
+  for (const t of tools) {
+    if (byName.has(t.name)) {
+      throw new Error(
+        `Reverse-MCP tool name collision: "${t.name}" registered twice ` +
+          `(a projected tool must not shadow a built-in/IM tool).`
+      )
+    }
+    byName.set(t.name, t)
+  }
   // Low-level handlers live on McpServer.server.
   const lowLevel = server.server
   lowLevel.registerCapabilities({ tools: {} })
@@ -463,6 +480,9 @@ async function createSessionTransport(params: {
       conversationKind: params.conversationKind,
       isImConversation: params.isImConversation,
       sessionKey,
+      // Reserve the built-in IM tool names so projected plugin/device tools
+      // that share a leaf name qualify instead of shadowing the IM handler.
+      reservedNames: imTools.map((t) => t.name),
     })
   installUnifiedToolRegistry(server, [...imTools, ...resolvedTools])
 
