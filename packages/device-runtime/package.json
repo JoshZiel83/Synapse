@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./builtin-presentation": {
+      "types": "./dist/builtin-presentation/index.d.ts",
+      "default": "./dist/builtin-presentation/index.js"
     }
   },
   "bin": {
