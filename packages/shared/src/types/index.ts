@@ -1487,9 +1487,26 @@ export interface ThinkingResult {
 
 export interface ServerToolCall {
   type: "web_search" | "web_fetch"
+  // The provider-native tool name as reported by the SDK. `type` is the coarse
+  // bucket the FE historically branched on; `toolName` is authoritative and lets
+  // an unknown provider tool render its real name instead of being mislabeled
+  // web_search. (Provider-executed tools never create tool_calls rows.)
+  toolName?: string
   query?: string // web_search query
   url?: string // web_fetch URL
   results?: ServerToolSearchResult[]
+  // Unified, FE-agnostic display model computed server-side so the client just
+  // renders structure (icon + title + optional detail + clickable result links),
+  // mirroring the activity-bubble presentation contract. No per-type if/else in
+  // the FE. `displayTitle` is the Chinese fallback; titleKey/params reserved for
+  // a future FE i18n layer (parallels PresentationString).
+  display?: {
+    icon: string
+    displayTitle: string
+    displayDetail?: string
+    titleKey?: string
+    resultLinks?: ServerToolSearchResult[]
+  }
 }
 
 export interface ServerToolSearchResult {

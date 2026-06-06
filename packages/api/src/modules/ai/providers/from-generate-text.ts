@@ -83,16 +83,20 @@ function extractServerToolCalls(
 
   const out: ServerToolCall[] = []
   for (const tc of serverCalls as any[]) {
+    const toolName = typeof tc.toolName === "string" ? tc.toolName : ""
+    // `type` is the coarse bucket; only web_fetch is distinct, everything else
+    // (web_search and any other provider-native search tool) buckets as
+    // web_search for back-compat — but the authoritative name is preserved so
+    // the UI can label an unknown provider tool correctly (fix: was silently
+    // mislabeling every non-web_fetch tool "web_search").
     const type: ServerToolCall["type"] =
-      tc.toolName === "web_fetch" ? "web_fetch" : "web_search"
-    const call: ServerToolCall = { type }
+      toolName === "web_fetch" ? "web_fetch" : "web_search"
+    const call: ServerToolCall = { type, ...(toolName ? { toolName } : {}) }
     const input = (tc.input ?? {}) as Record<string, unknown>
-    if (type === "web_search" && typeof input.query === "string") {
-      call.query = input.query
-    }
-    if (type === "web_fetch" && typeof input.url === "string") {
-      call.url = input.url
-    }
+    const query = typeof input.query === "string" ? input.query : undefined
+    const url = typeof input.url === "string" ? input.url : undefined
+    if (type === "web_search" && query) call.query = query
+    if (type === "web_fetch" && url) call.url = url
     // Pull search results out of the provider-executed tool output when present.
     const output = resultsByCallId.get(tc.toolCallId)?.output
     const items = Array.isArray(output)
@@ -113,9 +117,43 @@ function extractServerToolCalls(
       }))
       .filter((r: any) => r.url)
     if (results.length > 0) call.results = results
+    call.display = buildServerToolDisplay(call)
     out.push(call)
   }
   return out
+}
+
+// Unified display model so the FE renders structure (icon + title + links) with
+// no per-tool branching. Chinese fallback strings mirror the activity-bubble
+// presentation contract.
+function buildServerToolDisplay(
+  call: ServerToolCall
+): NonNullable<ServerToolCall["display"]> {
+  if (call.type === "web_fetch") {
+    return {
+      icon: "globe",
+      titleKey: "tool.server.web_fetch.title",
+      displayTitle: call.url
+        ? `读取网页 ${truncate(call.url, 60)}`
+        : "读取网页",
+    }
+  }
+  // web_search (and any other provider-native search-like tool)
+  const label = call.query ? `搜索 ${truncate(call.query, 60)}` : "网络搜索"
+  const count = call.results?.length ?? 0
+  return {
+    icon: "search",
+    titleKey: "tool.server.web_search.title",
+    displayTitle: label,
+    ...(count > 0 ? { displayDetail: `${count} 个结果` } : {}),
+    ...(call.results && call.results.length > 0
+      ? { resultLinks: call.results }
+      : {}),
+  }
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + "…" : s
 }
 
 export function fromGenerateText(
