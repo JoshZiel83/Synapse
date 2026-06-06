@@ -39,6 +39,7 @@ function synthesizedResult(
     toolName,
     content,
     isError: true,
+    origin: { kind: "system", registryKey: "tool_execution_interrupted" },
     metadata: { synthesized: "interrupted" },
   }
 }

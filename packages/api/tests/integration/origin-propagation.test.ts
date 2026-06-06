@@ -72,7 +72,7 @@ after(async () => {
 // Set up minimal session+turn+conversation+tool_call rows so we can write
 // to tool_results without going through the full actor pipeline.
 async function buildToolCall(opts: {
-  toolKind: "callable" | "mcp_plugin" | "mcp_device" | "builtin"
+  sourceKind: "system" | "plugin" | "device"
   toolName: string
 }): Promise<string> {
   if (!seed || !client) throw new Error("test fixtures missing")
@@ -80,24 +80,16 @@ async function buildToolCall(opts: {
   const sessionId = uuidv4()
   const turnId = uuidv4()
   const toolCallId = uuidv4()
-  // Tool provenance & routing: tool_calls now requires source_kind +
-  // source_snapshot (NOT NULL, CHECK-consistent). Map the test execution-kind
-  // to a routed source + minimal snapshot. Legacy "builtin" → callable/system.
-  const execKind = opts.toolKind === "builtin" ? "callable" : opts.toolKind
-  const sourceKind =
-    execKind === "mcp_device"
-      ? "device"
-      : execKind === "mcp_plugin"
-        ? "plugin"
-        : "system"
+  // Tool provenance & routing: tool_calls requires source_kind + source_snapshot
+  // (NOT NULL, CHECK-consistent).
   const sourceSnapshot =
-    sourceKind === "device"
+    opts.sourceKind === "device"
       ? {
           kind: "device",
           deviceToolId: uuidv4(),
           exposureStableKey: "synapse.builtin.filesystem.v1",
         }
-      : sourceKind === "plugin"
+      : opts.sourceKind === "plugin"
         ? {
             kind: "plugin",
             installationId: uuidv4(),
@@ -136,17 +128,16 @@ async function buildToolCall(opts: {
   await client.query(
     `INSERT INTO tool_calls (
        id, turn_id, conversation_id, session_id,
-       bundle_id, tool_kind, tool_name, source_kind, source_snapshot, normalized_input
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '{}')`,
+       bundle_id, tool_name, source_kind, source_snapshot, normalized_input
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '{}')`,
     [
       toolCallId,
       turnId,
       conversationId,
       sessionId,
       uuidv4(),
-      execKind,
       opts.toolName,
-      sourceKind,
+      opts.sourceKind,
       JSON.stringify(sourceSnapshot),
     ]
   )
@@ -154,11 +145,11 @@ async function buildToolCall(opts: {
   return toolCallId
 }
 
-test("MCP path: createToolResult persists origin into tool_results.metadata JSONB", async () => {
+test("Device path: createToolResult persists origin into tool_results.metadata JSONB", async () => {
   if (!client || !seed) throw new Error("fixtures missing")
 
   const toolCallId = await buildToolCall({
-    toolKind: "mcp_plugin",
+    sourceKind: "device",
     toolName: "filesystem__View",
   })
 
@@ -169,10 +160,9 @@ test("MCP path: createToolResult persists origin into tool_results.metadata JSON
       toolCallId: "call-1",
       toolName: "filesystem__View",
       origin: {
-        kind: "mcp_device",
-        deviceId: "dev-mcp-1",
+        kind: "device",
+        deviceToolId: "dev-mcp-1",
         exposureStableKey: "synapse.builtin.filesystem.v1",
-        runtimeSessionId: "rs-1",
       },
       structuredContent: { entries: 12 },
       isError: false,
@@ -185,27 +175,27 @@ test("MCP path: createToolResult persists origin into tool_results.metadata JSON
   )
   assert.equal(rows.rows.length, 1)
   const meta = rows.rows[0].metadata
-  assert.equal(meta.origin.kind, "mcp_device")
-  assert.equal(meta.origin.deviceId, "dev-mcp-1")
+  assert.equal(meta.origin.kind, "device")
+  assert.equal(meta.origin.deviceToolId, "dev-mcp-1")
   assert.equal(meta.origin.exposureStableKey, "synapse.builtin.filesystem.v1")
   assert.deepEqual(meta.structuredContent, { entries: 12 })
 })
 
-test("Callable path: createToolResult persists synthesized builtin origin", async () => {
+test("System path: createToolResult persists synthesized system origin", async () => {
   if (!client || !seed) throw new Error("fixtures missing")
 
   const toolCallId = await buildToolCall({
-    toolKind: "callable",
+    sourceKind: "system",
     toolName: "create_memory",
   })
 
-  // This is the metadata shape that ai/index.ts:1242 (after Phase 7b) writes
-  // for callable ToolPlugin results.
+  // This is the metadata shape that ai/index.ts writes for local system-tool
+  // results.
   await createToolResult({
     toolCallId,
     parts: [{ type: "text", text: "memory saved" }],
     metadata: {
-      origin: { kind: "builtin", toolKind: "create_memory" },
+      origin: { kind: "system", registryKey: "create_memory" },
       toolCallId: "call-2",
       toolName: "create_memory",
       isError: false,
@@ -218,8 +208,8 @@ test("Callable path: createToolResult persists synthesized builtin origin", asyn
   )
   assert.equal(rows.rows.length, 1)
   const meta = rows.rows[0].metadata
-  assert.equal(meta.origin.kind, "builtin")
-  assert.equal(meta.origin.toolKind, "create_memory")
+  assert.equal(meta.origin.kind, "system")
+  assert.equal(meta.origin.registryKey, "create_memory")
   assert.equal(meta.toolName, "create_memory")
 })
 
@@ -227,20 +217,29 @@ test("Origin survives all 5 ToolResultOrigin kinds through the JSONB column", as
   if (!client || !seed) throw new Error("fixtures missing")
 
   const kinds = [
-    { kind: "mcp_remote", serverKey: "github" },
+    { kind: "system", registryKey: "sleep" },
     {
-      kind: "mcp_device",
-      deviceId: "dev-x",
+      kind: "plugin",
+      installationId: uuidv4(),
+      upstreamToolName: "github_search",
+    },
+    {
+      kind: "device",
+      deviceToolId: "dev-x",
       exposureStableKey: "syn.builtin.cua.v1",
     },
-    { kind: "callable_plugin", pluginKey: "amap/openapi" },
-    { kind: "builtin", toolKind: "sleep" },
+    { kind: "provider_native", providerType: "openai", toolName: "web_search" },
     { kind: "model_response", providerType: "anthropic" },
   ]
 
   for (const origin of kinds) {
     const toolCallId = await buildToolCall({
-      toolKind: "mcp_plugin",
+      sourceKind:
+        origin.kind === "device"
+          ? "device"
+          : origin.kind === "plugin"
+            ? "plugin"
+            : "system",
       toolName: `probe_${origin.kind}`,
     })
     await createToolResult({
@@ -266,7 +265,7 @@ test("Failure path: origin persisted into tool_results.metadata even when isErro
   // the failure branch (previous bug: origin was only on success path).
   if (!client || !seed) throw new Error("fixtures missing")
   const toolCallId = await buildToolCall({
-    toolKind: "mcp_plugin",
+    sourceKind: "plugin",
     toolName: "github__find_issue",
   })
   await createToolResult({
@@ -281,7 +280,13 @@ test("Failure path: origin persisted into tool_results.metadata even when isErro
       toolCallId: "call-fail-1",
       toolName: "github__find_issue",
       isError: true,
-      origin: { kind: "mcp_remote", serverKey: "github/openapi" },
+      origin: {
+        kind: "plugin",
+        installationId: uuidv4(),
+        upstreamToolName: "github__find_issue",
+        publisherSlug: "github",
+        itemSlug: "openapi",
+      },
       errorCode: "upstream_unavailable",
     },
   })
@@ -293,8 +298,9 @@ test("Failure path: origin persisted into tool_results.metadata even when isErro
   assert.equal(rows.rows.length, 1)
   assert.equal(rows.rows[0].is_error, true)
   const meta = rows.rows[0].metadata
-  assert.equal(meta.origin.kind, "mcp_remote")
-  assert.equal(meta.origin.serverKey, "github/openapi")
+  assert.equal(meta.origin.kind, "plugin")
+  assert.equal(meta.origin.publisherSlug, "github")
+  assert.equal(meta.origin.itemSlug, "openapi")
   assert.equal(meta.isError, true)
   assert.equal(meta.errorCode, "upstream_unavailable")
 })

@@ -540,6 +540,7 @@ function expandToolHistoryContextItems(
           toolName: toolResult.toolName,
           content: toolResult.content,
           isError: toolResult.isError,
+          origin: toolResult.origin,
           metadata: toolResult.metadata,
         }
         // Phase 1+ first-class fields — carry them through, otherwise the

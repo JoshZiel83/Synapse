@@ -85,6 +85,11 @@ import {
   resolveEffectiveTarget,
 } from "@synapse/device-protocol/browser-tools"
 
+const CAPABILITY_PROJECTION_ORIGIN: ToolResultOrigin = {
+  kind: "system",
+  registryKey: "capability_projection",
+}
+
 /**
  * Discriminated union of principals that capability projection evaluates
  * tools for. See docs/device-runtime-v3.md §10.3.
@@ -279,7 +284,7 @@ function withDeviceToolOrigin(
   result: NormalizedMcpToolResult,
   origin: ToolResultOrigin
 ): NormalizedMcpToolResult {
-  return result.origin ? result : { ...result, origin }
+  return { ...result, origin }
 }
 
 /**
@@ -860,11 +865,13 @@ function unionWithDevice(
 
 function mcpErrorBlock(
   message: string,
-  synapseError?: SynapseError
+  synapseError?: SynapseError,
+  origin: ToolResultOrigin = CAPABILITY_PROJECTION_ORIGIN
 ): NormalizedMcpToolResult {
   return {
     content: [textBlock(message) as CanonicalContentBlock],
     isError: true,
+    origin,
     // Forward the full SynapseError (code / message / details / interaction_id /
     // retry_nonce / authorization_task_id) when available so the dashboard and
     // downstream observers see the same shape the runtime exposes via
@@ -1096,12 +1103,15 @@ async function requestAuthorizationOrDeny(args: {
   principalScopeSubjectId?: string
 }): Promise<NormalizedMcpToolResult> {
   const { projectInput, row, toolName } = args
+  const origin = deviceToolOrigin(row)
   const supportsAuthRequest =
     projectInput.principal.kind === "actor" ||
     projectInput.principal.kind === "remote_agent"
   if (!supportsAuthRequest) {
     return mcpErrorBlock(
-      `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal`
+      `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal`,
+      undefined,
+      origin
     )
   }
   const principal = projectInput.principal as
@@ -1116,7 +1126,9 @@ async function requestAuthorizationOrDeny(args: {
     projectInput.conversationId
   if (!conversationId) {
     return mcpErrorBlock(
-      `permission_denied: cannot create authorization request without a conversation context`
+      `permission_denied: cannot create authorization request without a conversation context`,
+      undefined,
+      origin
     )
   }
   try {
@@ -1139,6 +1151,7 @@ async function requestAuthorizationOrDeny(args: {
         ) as CanonicalContentBlock,
       ],
       isError: true,
+      origin,
       metadata: {
         synapse_error: {
           code: "runtime_authorization_requested",
@@ -1150,7 +1163,9 @@ async function requestAuthorizationOrDeny(args: {
     }
   } catch (err) {
     return mcpErrorBlock(
-      `authorization request failed: ${(err as Error).message}`
+      `authorization request failed: ${(err as Error).message}`,
+      undefined,
+      origin
     )
   }
 }
@@ -1166,14 +1181,18 @@ async function requestAuthorizationOrDeny(args: {
  * mcpErrorBlock above stays for the unstructured "internal projection
  * failure" path that should never be hit in a happy day.
  */
-function synapseErrorBlock(error: {
-  code: string
-  message: string
-  details?: Record<string, unknown>
-}): NormalizedMcpToolResult {
+function synapseErrorBlock(
+  error: {
+    code: string
+    message: string
+    details?: Record<string, unknown>
+  },
+  origin: ToolResultOrigin = CAPABILITY_PROJECTION_ORIGIN
+): NormalizedMcpToolResult {
   return {
     content: [textBlock(error.message) as CanonicalContentBlock],
     isError: true,
+    origin,
     metadata: {
       synapse_error: {
         code: error.code,

@@ -123,6 +123,7 @@ type SkillUseScope =
   | "conversation"
   | "actor"
   | "remote_agent"
+type SkillAccessSuggestion = SkillUseScope | "actor_conversation"
 
 /**
  * Build a ScopedSubjectTarget from the public scope label + ids.
@@ -885,8 +886,11 @@ function buildSnapshotAttachmentFiles(
   return [buildSyntheticEntryAttachment(row, timestamp), ...(files || [])]
 }
 
-function resolvePublicUseScope(bindScope: RuntimeBindingScope): SkillUseScope {
-  switch (bindScope) {
+function resolvePublicUseScope(row: SkillAccessRow): SkillAccessSuggestion {
+  if (row.bind_scope === "actor" && row.conversation_id) {
+    return "actor_conversation"
+  }
+  switch (row.bind_scope) {
     case "workspace":
     case "conversation":
     case "actor":
@@ -2782,8 +2786,8 @@ export async function getInstalledSkillAccessState(
   )
   const initialGrant = selectInitialSkillGrant(accessRows)
   const suggestedGrantScope = initialGrant
-    ? resolvePublicUseScope(initialGrant.bind_scope)
-    : ("workspace" as SkillUseScope)
+    ? resolvePublicUseScope(initialGrant)
+    : ("workspace" as SkillAccessSuggestion)
 
   return {
     grants,

@@ -1132,6 +1132,18 @@ function buildPluginGrantPlan(input: {
   }
 }
 
+function suggestedAccessTargetType(
+  target: CapabilityAccessTarget
+): RuntimeBindingScope | "actor_conversation" {
+  if (
+    target.subject.kind === "actor" &&
+    target.scope?.kind === "conversation"
+  ) {
+    return "actor_conversation"
+  }
+  return subjectScopeLabel(target) as RuntimeBindingScope
+}
+
 function defaultAccessTargetForAttachment(
   attachmentTarget: AttachmentTarget,
   workspaceId: string
@@ -2393,7 +2405,9 @@ export async function getPluginInstallationAccessState(
     grants,
     summary: {
       requiredPermissions: plugin.authorization?.requiredPermissions || [],
-      suggestedAccessTargetType: subjectScopeLabel(installation.access_target),
+      suggestedAccessTargetType: suggestedAccessTargetType(
+        installation.access_target
+      ),
       sourceDefaultConversationTypeMask:
         installation.source_default_conversation_type_mask ||
         DEFAULT_CONVERSATION_TYPE_MASK,
