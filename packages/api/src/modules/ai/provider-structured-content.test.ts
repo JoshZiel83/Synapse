@@ -83,6 +83,7 @@ test("error tool result → error-text output", async () => {
     toolName: "lookup",
     content: textBlocks("boom"),
     isError: true,
+    origin: { kind: "system", registryKey: "lookup" },
   }
   const messages = await toModelMessages([
     { role: "tool_result", results: [tr] },

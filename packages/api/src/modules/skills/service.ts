@@ -895,7 +895,7 @@ function resolvePublicUseScope(row: SkillAccessRow): SkillAccessSuggestion {
     case "conversation":
     case "actor":
     case "remote_agent":
-      return bindScope
+      return row.bind_scope
     case "workspace_member":
       // workspace_member-scoped skill bindings are individual approvals.
       // For UI grouping purposes treat them as workspace-level visibility.

@@ -188,7 +188,14 @@ test("reconcileToolPairing is a no-op when every tool-call has a result", () => 
     },
     {
       role: "tool_result",
-      results: [{ toolCallId: "c1", toolName: "t", content: [] }],
+      results: [
+        {
+          toolCallId: "c1",
+          toolName: "t",
+          content: [],
+          origin: { kind: "system", registryKey: "t" },
+        },
+      ],
     },
   ]
   const out = reconcileToolPairing(messages)

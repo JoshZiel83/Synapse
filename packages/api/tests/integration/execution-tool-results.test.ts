@@ -60,6 +60,7 @@ after(async () => {
 async function buildFixture(opts: {
   toolName: string
   providerCallId?: string
+  sourceKind?: "plugin" | "device" | "system"
 }): Promise<{
   sessionId: string
   toolCallId: string
@@ -72,6 +73,21 @@ async function buildFixture(opts: {
   const toolCallId = uuidv4()
   const providerCallId =
     opts.providerCallId || `toolu_${uuidv4().replace(/-/g, "").slice(0, 16)}`
+  const sourceKind = opts.sourceKind || "plugin"
+  const sourceSnapshot =
+    sourceKind === "device"
+      ? {
+          kind: "device",
+          deviceToolId: "dev-abc",
+          exposureStableKey: "synapse.builtin.filesystem.v1",
+        }
+      : sourceKind === "system"
+        ? { kind: "system", registryKey: opts.toolName }
+        : {
+            kind: "plugin",
+            installationId: uuidv4(),
+            upstreamToolName: opts.toolName,
+          }
 
   const actorRow = await client.query<{ id: string }>(
     `INSERT INTO actors (workspace_id, name, role, title)
@@ -100,7 +116,7 @@ async function buildFixture(opts: {
        id, turn_id, conversation_id, session_id,
        provider_call_id, bundle_id, tool_name,
        source_kind, source_snapshot, normalized_input
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'plugin', $8, '{}')`,
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '{}')`,
     [
       toolCallId,
       turnId,
@@ -109,11 +125,8 @@ async function buildFixture(opts: {
       providerCallId,
       uuidv4(),
       opts.toolName,
-      JSON.stringify({
-        kind: "plugin",
-        installationId: uuidv4(),
-        upstreamToolName: opts.toolName,
-      }),
+      sourceKind,
+      JSON.stringify(sourceSnapshot),
     ]
   )
 
@@ -123,6 +136,7 @@ async function buildFixture(opts: {
 test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult keyed by provider_call_id", async () => {
   const { sessionId, toolCallId, providerCallId } = await buildFixture({
     toolName: "filesystem__View",
+    sourceKind: "device",
   })
 
   // Write a tool_results row with origin / structuredContent / inner metadata

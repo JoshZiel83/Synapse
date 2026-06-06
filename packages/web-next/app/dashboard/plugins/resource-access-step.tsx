@@ -14,6 +14,7 @@ type PluginGrantScope =
   | "actor"
   | "actor_conversation"
   | "remote_agent"
+  | "remote_agent_conversation"
 import {
   MODEL_GROUP_GRANT_SCOPE,
   CONVERSATION_PARTICIPANT_TYPE,
@@ -367,6 +368,10 @@ function getScopeLabel(scope: PluginGrantScope) {
       return "Actor"
     case "actor_conversation":
       return "Actor in Conversation"
+    case "remote_agent":
+      return "Remote Agent"
+    case "remote_agent_conversation":
+      return "Remote Agent in Conversation"
     default:
       return scope
   }
@@ -385,6 +390,12 @@ function targetScopeOf(
   ) {
     return "actor_conversation"
   }
+  if (
+    target.subject.kind === "remote_agent" &&
+    target.scope?.kind === "conversation"
+  ) {
+    return "remote_agent_conversation"
+  }
   switch (target.subject.kind) {
     case "workspace":
       return "workspace"
@@ -394,6 +405,8 @@ function targetScopeOf(
       return "conversation"
     case "actor":
       return "actor"
+    case "remote_agent":
+      return "remote_agent"
     default:
       return "workspace"
   }
@@ -407,6 +420,14 @@ function targetActorId(target: ResourceAccessGrant["target"]): string | null {
   if (!target) return null
   return target.subject.kind === "actor"
     ? (target.subject as { actorId: string }).actorId
+    : null
+}
+function targetRemoteAgentId(
+  target: ResourceAccessGrant["target"]
+): string | null {
+  if (!target) return null
+  return target.subject.kind === "remote_agent"
+    ? (target.subject as { remoteAgentId: string }).remoteAgentId
     : null
 }
 function targetConversationId(
@@ -431,6 +452,7 @@ function formatGrantTarget(
   if (!target) return "Entire workspace"
   const label = targetScopeOf(target)
   const actorId = targetActorId(target)
+  const remoteAgentId = targetRemoteAgentId(target)
   const conversationId = targetConversationId(target)
   switch (label) {
     case "workspace":
@@ -457,6 +479,21 @@ function formatGrantTarget(
           ? `Conversation ${String(conversationId).slice(0, 8)}`
           : "Selected conversation")
       return `${actorName} in ${conversationName}`
+    }
+    case "remote_agent":
+      return remoteAgentId
+        ? `Remote Agent ${String(remoteAgentId).slice(0, 8)}`
+        : "Selected remote agent"
+    case "remote_agent_conversation": {
+      const remoteAgentName = remoteAgentId
+        ? `Remote Agent ${String(remoteAgentId).slice(0, 8)}`
+        : "Selected remote agent"
+      const conversationName =
+        (conversationId ? conversationsById.get(conversationId) : null) ||
+        (conversationId
+          ? `Conversation ${String(conversationId).slice(0, 8)}`
+          : "Selected conversation")
+      return `${remoteAgentName} in ${conversationName}`
     }
     default:
       return "Selected target"
@@ -2006,92 +2043,107 @@ export default function ResourceAccessStep({
                   </TableCell>
                 </TableRow>
               ) : (
-                grants.map((grant) => (
-                  <TableRow key={grant.id}>
-                    <TableCell className="px-6 font-medium">
-                      {getScopeLabel(targetScopeOf(grant.target))}
-                    </TableCell>
-                    <TableCell className="max-w-0">
-                      <div className="truncate">
-                        {formatGrantTarget(
-                          grant,
-                          actorNamesById,
-                          conversationNamesById
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-0">
-                      {supportsGrantConversationTypeOverride(
-                        targetScopeOf(grant.target)
-                      ) ? (
-                        <div className="space-y-1">
-                          <div className="truncate">
-                            {formatConversationTypeKeys(
-                              conversationTypeMaskToKeys(
-                                normalizeConversationTypeMask(
-                                  grant.effectiveConversationTypeMask,
-                                  effectiveConversationTypeMask
-                                )
-                              )
-                            )}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {grant.conversationTypeMaskOverride
-                              ? `Override ${grant.conversationTypeMaskOverride}`
-                              : "Follow instance"}
-                          </div>
+                grants.map((grant) => {
+                  const grantScope = targetScopeOf(grant.target)
+                  const grantConversationId = targetConversationId(
+                    grant.target
+                  )
+                  const canEditGrantConversationTypes =
+                    supportsGrantConversationTypeOverride(grantScope)
+                  const effectiveGrantConversationTypes =
+                    formatConversationTypeKeys(
+                      conversationTypeMaskToKeys(
+                        normalizeConversationTypeMask(
+                          grant.effectiveConversationTypeMask,
+                          effectiveConversationTypeMask
+                        )
+                      )
+                    )
+
+                  return (
+                    <TableRow key={grant.id}>
+                      <TableCell className="px-6 font-medium">
+                        {getScopeLabel(grantScope)}
+                      </TableCell>
+                      <TableCell className="max-w-0">
+                        <div className="truncate">
+                          {formatGrantTarget(
+                            grant,
+                            actorNamesById,
+                            conversationNamesById
+                          )}
                         </div>
-                      ) : (
-                        <div className="space-y-1">
-                          <div className="truncate">
-                            {(() => {
-                              const cid = targetConversationId(grant.target)
-                              return cid && conversationsById.get(cid)
+                      </TableCell>
+                      <TableCell className="max-w-0">
+                        {canEditGrantConversationTypes ? (
+                          <div className="space-y-1">
+                            <div className="truncate">
+                              {effectiveGrantConversationTypes}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {grant.conversationTypeMaskOverride
+                                ? `Override ${grant.conversationTypeMaskOverride}`
+                                : "Follow instance"}
+                            </div>
+                          </div>
+                        ) : grantConversationId ? (
+                          <div className="space-y-1">
+                            <div className="truncate">
+                              {conversationsById.get(grantConversationId)
                                 ? formatConversationTypeLabel(
-                                    conversationsById.get(cid)
+                                    conversationsById.get(grantConversationId)
                                       ?.conversationTypeKey || null
                                   )
-                                : "Selected conversation"
-                            })()}
+                                : "Selected conversation"}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Fixed by the selected conversation
+                            </div>
                           </div>
-                          <div className="text-xs text-muted-foreground">
-                            Fixed by the selected conversation
+                        ) : (
+                          <div className="space-y-1">
+                            <div className="truncate">
+                              {effectiveGrantConversationTypes}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {grant.conversationTypeMaskOverride
+                                ? `Override ${grant.conversationTypeMaskOverride}`
+                                : "Follow instance"}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatTimestamp(grant.createdAt || grant.grantedAt)}
-                    </TableCell>
-                    <TableCell className="px-6 text-right">
-                      <div className="flex justify-end gap-2">
-                        {canManageGrantConversationTypes &&
-                        supportsGrantConversationTypeOverride(
-                          targetScopeOf(grant.target)
-                        ) ? (
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatTimestamp(grant.createdAt || grant.grantedAt)}
+                      </TableCell>
+                      <TableCell className="px-6 text-right">
+                        <div className="flex justify-end gap-2">
+                          {canManageGrantConversationTypes &&
+                          canEditGrantConversationTypes ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                openGrantConversationTypeDialog(grant)
+                              }
+                            >
+                              Types
+                            </Button>
+                          ) : null}
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() =>
-                              openGrantConversationTypeDialog(grant)
-                            }
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => revokeGrant(grant.id)}
                           >
-                            Types
+                            <Trash2 />
+                            <span className="sr-only">Remove access</span>
                           </Button>
-                        ) : null}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-muted-foreground hover:text-destructive"
-                          onClick={() => revokeGrant(grant.id)}
-                        >
-                          <Trash2 />
-                          <span className="sr-only">Remove access</span>
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
               )}
             </TableBody>
           </Table>
