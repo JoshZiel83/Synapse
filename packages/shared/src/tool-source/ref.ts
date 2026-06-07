@@ -83,14 +83,19 @@ export function deviceToolId(deviceToolsId: string): string {
 // the whole discriminated public source, not just an id.
 // ---------------------------------------------------------------------------
 
-export type SourceSnapshot = ToolSource
+// The audit snapshot IS the public source plus the durable dispatch key. The
+// `stableKey` (= ref.identity.stableKey) is frozen here so the display-time
+// presentation resolver can dispatch a formatter without re-deriving the key
+// from the discriminated source fields (which would risk drift vs the builders).
+export type SourceSnapshot = ToolSource & { stableKey?: string }
 
 export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
+  const stableKey = ref.identity.stableKey
   // The audit snapshot IS the public source — a structural clone keeps it
   // decoupled from the live ref object.
   switch (ref.source.kind) {
     case "system":
-      return { kind: "system", registryKey: ref.source.registryKey }
+      return { kind: "system", registryKey: ref.source.registryKey, stableKey }
     case "plugin":
       return {
         kind: "plugin",
@@ -102,6 +107,7 @@ export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
         ...(ref.source.itemSlug !== undefined
           ? { itemSlug: ref.source.itemSlug }
           : {}),
+        stableKey,
       }
     case "device":
       return {
@@ -114,6 +120,7 @@ export function stripForAuditSnapshot(ref: ToolRef): SourceSnapshot {
         ...(ref.source.visibleToolName !== undefined
           ? { visibleToolName: ref.source.visibleToolName }
           : {}),
+        stableKey,
       }
   }
 }

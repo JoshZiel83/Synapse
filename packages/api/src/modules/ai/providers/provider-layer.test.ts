@@ -86,6 +86,53 @@ test("fromGenerateText splits provider-executed server tools from Synapse tool c
   assert.equal(adapted.serverToolCalls![0].type, "web_search")
   assert.equal(adapted.serverToolCalls![0].query, "weather")
   assert.equal(adapted.serverToolCalls![0].results?.[0].url, "https://e.com")
+  // Phase 7: unified display model so the FE renders structure, not per-type JSX.
+  const disp = adapted.serverToolCalls![0].display
+  assert.ok(disp, "server tool call should carry a display model")
+  assert.equal(disp!.icon, "search")
+  assert.equal(disp!.displayTitle, "搜索 weather")
+  assert.equal(disp!.displayDetail, "1 个结果")
+  assert.equal(disp!.resultLinks?.[0].url, "https://e.com")
+})
+
+test("fromGenerateText: web_fetch + unknown provider tool keep their real name", () => {
+  const adapted = fromGenerateText({
+    text: "",
+    toolCalls: [
+      {
+        toolCallId: "f1",
+        toolName: "web_fetch",
+        input: { url: "https://docs.example.com/page" },
+        providerExecuted: true,
+      },
+      {
+        toolCallId: "x1",
+        toolName: "code_execution",
+        input: {},
+        providerExecuted: true,
+      },
+    ],
+    toolResults: [],
+    usage: { inputTokens: 1, outputTokens: 1 },
+    finishReason: "tool-calls",
+    files: [],
+    sources: [],
+    response: {},
+    request: {},
+  } as any)
+  const calls = adapted.serverToolCalls ?? []
+  const fetchCall = calls.find((c) => c.toolName === "web_fetch")
+  assert.ok(fetchCall)
+  assert.equal(fetchCall!.type, "web_fetch")
+  assert.equal(fetchCall!.display?.icon, "globe")
+  assert.match(fetchCall!.display!.displayTitle, /读取网页/)
+  // The unknown provider tool is NOT silently mislabeled web_search: its real
+  // toolName is preserved even though `type` buckets it as web_search, and its
+  // display label derives from the tool name (not the generic "网络搜索").
+  const unknown = calls.find((c) => c.toolName === "code_execution")
+  assert.ok(unknown, "unknown provider tool should be preserved")
+  assert.equal(unknown!.toolName, "code_execution")
+  assert.equal(unknown!.display?.displayTitle, "code_execution")
 })
 
 test("bigModelChatBase normalizes all three baseUrl shapes to /paas/v4", () => {

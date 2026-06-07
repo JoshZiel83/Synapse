@@ -29,9 +29,7 @@ import { isToolResultOrigin, textBlock } from "@synapse/shared"
 const INTERRUPTED_TEXT =
   "Tool execution was interrupted; no result was produced."
 
-function synthesizedResult(
-  toolCall: CanonicalToolCall
-): CanonicalToolResult {
+function synthesizedResult(toolCall: CanonicalToolCall): CanonicalToolResult {
   const content: CanonicalContentBlock[] = [textBlock(INTERRUPTED_TEXT)]
   const origin = interruptedOriginForToolCall(toolCall)
   return {

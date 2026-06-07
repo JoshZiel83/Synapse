@@ -149,11 +149,7 @@ export async function loadDeviceCapabilityToolsForSubjects(
 }
 
 export interface AccessTargetInput {
-  kind:
-    | "workspace"
-    | "actor"
-    | "conversation"
-    | "remote_agent"
+  kind: "workspace" | "actor" | "conversation" | "remote_agent"
   workspaceId?: string
   actorId?: string
   conversationId?: string

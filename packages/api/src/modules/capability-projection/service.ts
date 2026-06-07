@@ -281,7 +281,7 @@ function deviceToolOrigin(row: DeviceCapabilityToolRow): ToolResultOrigin {
 }
 
 function withDeviceToolOrigin(
-  result: NormalizedMcpToolResult,
+  result: Omit<NormalizedMcpToolResult, "origin">,
   origin: ToolResultOrigin
 ): NormalizedMcpToolResult {
   return { ...result, origin }

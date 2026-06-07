@@ -197,10 +197,7 @@ test(
 
       // Round-10 fix: the decoded target is the actual scoped shape,
       // not a workspace fallback.
-      assert.equal(
-        subjectScopeLabel(target as any),
-        "remote_agent"
-      )
+      assert.equal(subjectScopeLabel(target as any), "remote_agent")
       assert.equal(target.subject.kind, "remote_agent")
       assert.equal(target.scope?.kind, "conversation")
 
@@ -407,10 +404,7 @@ test(
         normalizeAccessBindingRow(rows[0] as any) as any
       )
 
-      assert.equal(
-        subjectScopeLabel(target as any),
-        "remote_agent"
-      )
+      assert.equal(subjectScopeLabel(target as any), "remote_agent")
       assert.equal(target.subject.kind, "remote_agent")
       assert.equal(target.scope?.kind, "conversation")
 

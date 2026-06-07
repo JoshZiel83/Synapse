@@ -9,6 +9,7 @@ import {
   getActorRuntimeCurrentTool,
   getActorRuntimeProcessingTargets,
   isActorRuntimeActive,
+  resolvePresentation,
   ActorRuntimeState,
   ActorRuntimeTurnActivityDetail,
   CanonicalContentBlock,
@@ -278,7 +279,10 @@ export function ActorActivityBubble({
                 </Text>
               </View>
               <Text numberOfLines={2} style={styles.toolText}>
-                <Text style={styles.toolTitle}>{previewTool.displayTitle}</Text>
+                <Text style={styles.toolTitle}>
+                  {resolvePresentation(previewTool.titlePresentation) ??
+                    previewTool.displayTitle}
+                </Text>
                 {previewTool.displayDetail
                   ? ` · ${previewTool.displayDetail}`
                   : ""}
@@ -329,7 +333,8 @@ export function ActorActivityBubble({
                           </Text>
                         </View>
                         <Text style={styles.itemTitle}>
-                          {item.displayTitle}
+                          {resolvePresentation(item.titlePresentation) ??
+                            item.displayTitle}
                         </Text>
                       </View>
                       {item.displayDetail ? (
@@ -343,6 +348,11 @@ export function ActorActivityBubble({
                       </View>
                       <View style={styles.section}>
                         <Text style={styles.sectionLabel}>结果</Text>
+                        {resolvePresentation(item.resultSummary) ? (
+                          <Text style={styles.itemDetail}>
+                            {resolvePresentation(item.resultSummary)}
+                          </Text>
+                        ) : null}
                         <ActivityBlocks blocks={item.resultBlocks} />
                       </View>
                     </View>

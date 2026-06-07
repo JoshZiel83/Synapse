@@ -52,7 +52,10 @@ export interface ResolvedMcpTools {
     executionContext?: McpExecutionContext
   ) => Promise<NormalizedMcpToolResult>
   mcpVersion: number
-  refresh: () => Promise<{ tools: ProjectedToolDefinition[]; mcpVersion: number }>
+  refresh: () => Promise<{
+    tools: ProjectedToolDefinition[]
+    mcpVersion: number
+  }>
   setTurnId: (turnId: string, round?: number) => void
   shutdown: () => Promise<void>
 }
@@ -131,14 +134,16 @@ function buildPluginToolRef(
   upstreamToolName: string
 ): ToolRef {
   const transport: ToolRef["binding"]["transport"] =
-    instance.transport === "builtin" ? "in_process" : (instance.transport as
-      | "stdio"
-      | "http"
-      | "sse")
+    instance.transport === "builtin"
+      ? "in_process"
+      : (instance.transport as "stdio" | "http" | "sse")
   const binding: ToolRef["binding"] =
     transport === "in_process"
       ? { transport: "in_process", dispatch: "callable" }
-      : { transport, instanceKey: `${instance.installationId}:${instance.configHash}:${instance.scope}:${instance.scopeId}` }
+      : {
+          transport,
+          instanceKey: `${instance.installationId}:${instance.configHash}:${instance.scope}:${instance.scopeId}`,
+        }
   return {
     toolId: pluginToolId(instance.installationId, upstreamToolName),
     source: {

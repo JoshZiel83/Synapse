@@ -1384,9 +1384,7 @@ export default function ResourceAccessStep({
       return nextRemoteAgents
     } catch (error) {
       const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to load remote agents."
+        error instanceof Error ? error.message : "Failed to load remote agents."
       setRemoteAgentsError(message)
       setRemoteAgents([])
       throw error
@@ -1853,9 +1851,7 @@ export default function ResourceAccessStep({
   }
 
   const openGrantConversationTypeDialog = (grant: ResourceAccessGrant) => {
-    if (
-      !supportsGrantConversationTypeOverride(targetScopeOf(grant.target))
-    ) {
+    if (!supportsGrantConversationTypeOverride(targetScopeOf(grant.target))) {
       return
     }
     setEditingGrant(grant)
@@ -2392,9 +2388,7 @@ export default function ResourceAccessStep({
               ) : (
                 grants.map((grant) => {
                   const grantScope = targetScopeOf(grant.target)
-                  const grantConversationId = targetConversationId(
-                    grant.target
-                  )
+                  const grantConversationId = targetConversationId(grant.target)
                   const canEditGrantConversationTypes =
                     supportsGrantConversationTypeOverride(grantScope)
                   const effectiveGrantConversationTypes =

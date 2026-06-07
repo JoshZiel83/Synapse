@@ -40,11 +40,13 @@ export async function getToolCallLogs(
     .selectFrom("tool_calls as tc")
     .innerJoin("conversations as c", "c.id", "tc.conversation_id")
     .innerJoin("turns as t", "t.id", "tc.turn_id")
-    .leftJoin("plugin_installations as pi", "pi.id", "tc.plugin_installation_id")
+    .leftJoin(
+      "plugin_installations as pi",
+      "pi.id",
+      "tc.plugin_installation_id"
+    )
     .leftJoin("tool_results as tr", (join) =>
-      join
-        .onRef("tr.tool_call_id", "=", "tc.id")
-        .on("tr.result_index", "=", 0)
+      join.onRef("tr.tool_call_id", "=", "tc.id").on("tr.result_index", "=", 0)
     )
     .select([
       "tc.id",
@@ -86,10 +88,15 @@ export async function getToolCallLogs(
     statement = statement.where("tc.created_at", "<", new Date(filters.before))
   }
 
-  const rows = await statement.orderBy("tc.created_at", "desc").limit(limit).execute()
+  const rows = await statement
+    .orderBy("tc.created_at", "desc")
+    .limit(limit)
+    .execute()
   return rows.map((row) => ({
     ...row,
-    normalized_input: redactSecrets(row.normalized_input as Record<string, unknown>),
+    normalized_input: redactSecrets(
+      row.normalized_input as Record<string, unknown>
+    ),
   }))
 }
 

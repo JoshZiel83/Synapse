@@ -821,8 +821,7 @@ function ScopeFields({
         </Field>
       ) : null}
 
-      {value.useScope === "actor" ||
-      value.useScope === "actor_conversation" ? (
+      {value.useScope === "actor" || value.useScope === "actor_conversation" ? (
         <Field>
           <FieldLabel>Actor</FieldLabel>
           <Select

@@ -174,7 +174,8 @@ test(
       const labels = decoded.map((t) => subjectScopeLabel(t as any)).sort()
       assert.deepEqual(labels, ["remote_agent", "remote_agent"])
       assert.equal(
-        decoded.filter((target) => target.scope?.kind === "conversation").length,
+        decoded.filter((target) => target.scope?.kind === "conversation")
+          .length,
         1
       )
       assert.equal(decoded.filter((target) => !target.scope).length, 1)

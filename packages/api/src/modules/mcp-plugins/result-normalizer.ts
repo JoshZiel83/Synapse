@@ -70,12 +70,21 @@ export async function normalizeMcpToolResult(
     typeof candidate.structuredContent === "object"
       ? (candidate.structuredContent as Record<string, unknown>)
       : undefined
+  // Capture the MCP `_meta` envelope field so the presentation layer can read
+  // structured result data (it used to be dropped). Lands in
+  // NormalizedMcpToolResult.metadata and is namespaced under
+  // tool_results.metadata.toolMeta at the persist site.
+  const meta =
+    candidate._meta && typeof candidate._meta === "object"
+      ? (candidate._meta as Record<string, unknown>)
+      : undefined
 
   if (typeof candidate.content === "string") {
     return wrap({
       content: textBlocks(candidate.content),
       isError: candidate.isError === true,
       structuredContent,
+      ...(meta ? { metadata: meta } : {}),
       rawResult,
     })
   }
@@ -89,6 +98,7 @@ export async function normalizeMcpToolResult(
       ),
       isError: candidate.isError === true,
       structuredContent,
+      ...(meta ? { metadata: meta } : {}),
       rawResult,
     })
   }
@@ -98,6 +108,7 @@ export async function normalizeMcpToolResult(
       content: textBlocks(JSON.stringify(structuredContent)),
       isError: candidate.isError === true,
       structuredContent,
+      ...(meta ? { metadata: meta } : {}),
       rawResult,
     })
   }
@@ -105,6 +116,7 @@ export async function normalizeMcpToolResult(
   return wrap({
     content: textBlocks(JSON.stringify(rawResult)),
     isError: candidate.isError === true,
+    ...(meta ? { metadata: meta } : {}),
     rawResult,
   })
 }

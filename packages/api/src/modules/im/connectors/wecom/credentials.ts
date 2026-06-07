@@ -142,9 +142,7 @@ export function validateWecomConfig(
       if (typeof raw !== "string") {
         return {
           ok: false,
-          errors: [
-            `wecom config.${key} must be a string (got ${typeof raw})`,
-          ],
+          errors: [`wecom config.${key} must be a string (got ${typeof raw})`],
         }
       }
       if (raw.trim() === "") {

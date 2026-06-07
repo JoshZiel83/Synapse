@@ -149,7 +149,11 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
     toolName: "real_tool",
     content: textBlocks("authoritative payload from tool_results table"),
     isError: false,
-    origin: { kind: "device", deviceToolId: "device-tool-1", exposureStableKey: "k" },
+    origin: {
+      kind: "device",
+      deviceToolId: "device-tool-1",
+      exposureStableKey: "k",
+    },
     structuredContent: { authoritative: true },
   })
 
@@ -176,11 +180,7 @@ test("buildSessionContextItems: executionToolResults map overrides metadata-base
 
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolName, "real_tool", "tool_calls table wins over metadata")
-  assert.equal(
-    tr.origin.kind,
-    "device",
-    "tool_results.metadata origin wins"
-  )
+  assert.equal(tr.origin.kind, "device", "tool_results.metadata origin wins")
   assert.deepEqual(tr.structuredContent, { authoritative: true })
   assert.equal(
     extractText(tr.content),

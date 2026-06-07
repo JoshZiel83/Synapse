@@ -1,10 +1,7 @@
 // Tool provenance & routing — public barrel.
 // See docs/tool-provenance-and-routing.md and the plan §1.
 
-export {
-  TOOL_SOURCE_KINDS,
-  type ToolSourceKind,
-} from "./kinds.js"
+export { TOOL_SOURCE_KINDS, type ToolSourceKind } from "./kinds.js"
 
 export {
   type ToolSource,

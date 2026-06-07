@@ -45,6 +45,16 @@ export * from "./chat-catalog/index.js"
 export * from "./chat-queue/index.js"
 // Tool provenance & routing (Layer A/B primitives).
 export * from "./tool-source/index.js"
+// Tool-call presentation — re-export the FE-facing surface from the base
+// package so web/mobile (which depend only on @synapse/shared) can render the
+// pre-computed `fallback` without taking a device-protocol dependency. This
+// subpath is pure types + a no-op helper (no zod, no node), so it is
+// SW-bundle-safe. The descriptor schema (zod) stays on its own subpath and is
+// NOT re-exported here.
+export {
+  resolvePresentation,
+  type PresentationString,
+} from "@synapse/device-protocol/tool-presentation"
 // NOTE: ./schemas is NOT re-exported from the root barrel on purpose.
 // schemas/* pulls in zod, and the chat service workers (web + mobile)
 // transitively reach the root barrel via @synapse/shared / @shared

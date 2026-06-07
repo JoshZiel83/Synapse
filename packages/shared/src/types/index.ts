@@ -946,6 +946,12 @@ export interface ActorRuntimeTurnPreviewTool {
   state: ActorRuntimeActivityState
   displayTitle: string
   displayDetail?: string
+  // Presentation layer: semantic icon name + i18n-ready strings. The FE renders
+  // `icon` + resolvePresentation(titlePresentation) (falling back to
+  // displayTitle). Preview stays light: no result blocks/summary here.
+  icon?: string
+  titlePresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  detailPresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
   startedAt: Timestamp
   updatedAt: Timestamp
   completedAt?: Timestamp
@@ -971,6 +977,13 @@ export interface ActorRuntimeTurnActivityItem {
   state: ActorRuntimeActivityState
   displayTitle: string
   displayDetail?: string
+  // Presentation layer (see ActorRuntimeTurnPreviewTool). `resultSummary` is the
+  // friendly one-line result; requestBlocks/resultBlocks are the (redacted)
+  // rendered bodies.
+  icon?: string
+  titlePresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  detailPresentation?: import("@synapse/device-protocol/tool-presentation").PresentationString
+  resultSummary?: import("@synapse/device-protocol/tool-presentation").PresentationString
   requestBlocks: CanonicalContentBlock[]
   resultBlocks: CanonicalContentBlock[]
   taskStatus?: ActorRuntimeTaskStatus
@@ -1470,9 +1483,26 @@ export interface ThinkingResult {
 
 export interface ServerToolCall {
   type: "web_search" | "web_fetch"
+  // The provider-native tool name as reported by the SDK. `type` is the coarse
+  // bucket the FE historically branched on; `toolName` is authoritative and lets
+  // an unknown provider tool render its real name instead of being mislabeled
+  // web_search. (Provider-executed tools never create tool_calls rows.)
+  toolName?: string
   query?: string // web_search query
   url?: string // web_fetch URL
   results?: ServerToolSearchResult[]
+  // Unified, FE-agnostic display model computed server-side so the client just
+  // renders structure (icon + title + optional detail + clickable result links),
+  // mirroring the activity-bubble presentation contract. No per-type if/else in
+  // the FE. `displayTitle` is the Chinese fallback; titleKey/params reserved for
+  // a future FE i18n layer (parallels PresentationString).
+  display?: {
+    icon: string
+    displayTitle: string
+    displayDetail?: string
+    titleKey?: string
+    resultLinks?: ServerToolSearchResult[]
+  }
 }
 
 export interface ServerToolSearchResult {
@@ -2302,6 +2332,10 @@ export interface CapabilitySurface {
 export interface ToolPlugin {
   name: string
   definition: ToolDefinition
+  // Optional presentation descriptor co-located with the system tool. The API
+  // display resolver reads it (keyed by the tool's registry name = its system
+  // stableKey) to render a friendly title/result. Type from the base package.
+  presentation?: import("@synapse/device-protocol/tool-presentation").ToolPresentationDescriptor
   conversationTypeMask?: ConversationTypeMask
   resolve?: (ctx: ToolResolveContext) =>
     | {
@@ -2372,10 +2406,7 @@ export type MarketplaceSourceType =
   | "official"
   | "workspace_upload"
   | "user_upload"
-export type MarketplaceLineageKind =
-  | "installed_copy"
-  | "fork"
-  | "share"
+export type MarketplaceLineageKind = "installed_copy" | "fork" | "share"
 export type MarketplaceSyncMode =
   | "notify"
   | "manual_merge"
@@ -4996,7 +5027,9 @@ export function isToolResultOrigin(value: unknown): value is ToolResultOrigin {
         typeof v.exposureStableKey === "string"
       )
     case "provider_native":
-      return typeof v.providerType === "string" && typeof v.toolName === "string"
+      return (
+        typeof v.providerType === "string" && typeof v.toolName === "string"
+      )
     case "model_response":
       return typeof v.providerType === "string"
     default:
@@ -5023,13 +5056,13 @@ export function canonicalToolResult(input: {
     toolCallId: input.toolCallId,
     toolName: input.toolName,
     content: input.content,
+    origin: input.origin,
   }
   if (input.providerCallId !== undefined)
     result.providerCallId = input.providerCallId
   if (input.structuredContent !== undefined)
     result.structuredContent = input.structuredContent
   if (input.isError !== undefined) result.isError = input.isError
-  result.origin = input.origin
   if (input.metadata !== undefined) result.metadata = input.metadata
   return result
 }
@@ -5387,21 +5420,14 @@ export type CatalogItemKind =
   | "actor_template"
   | "skill_package"
   | "plugin_package"
-export type CatalogSourceKind =
-  | "builtin"
-  | "official"
-  | "workspace"
-  | "user"
+export type CatalogSourceKind = "builtin" | "official" | "workspace" | "user"
 export type CatalogVisibility = "public" | "workspace" | "private"
 export type CatalogVersionStatus =
   | "draft"
   | "active"
   | "deprecated"
   | "archived"
-export type CatalogLineageKind =
-  | "installed_copy"
-  | "fork"
-  | "share"
+export type CatalogLineageKind = "installed_copy" | "fork" | "share"
 export type CatalogSyncMode =
   | "notify"
   | "manual_merge"

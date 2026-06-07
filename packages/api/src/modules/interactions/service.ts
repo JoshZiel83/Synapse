@@ -2035,10 +2035,7 @@ async function resolveInsertConflictWinner(
   )
 }
 
-async function findInteractionIdByTaskId(
-  taskId: string,
-  queryable?: Executor
-) {
+async function findInteractionIdByTaskId(taskId: string, queryable?: Executor) {
   const compiled = db
     .selectFrom("interaction_requests")
     .select("id")
@@ -3499,16 +3496,8 @@ export async function resolveInteractionRequest(
           db
             .selectFrom("remote_agent_group_interaction_grants")
             .select("workspace_member_id")
-            .where(
-              "remote_agent_id",
-              "=",
-              locked.requester_remote_agent_id
-            )
-            .where(
-              "workspace_member_id",
-              "=",
-              params.resolverWorkspaceMemberId
-            )
+            .where("remote_agent_id", "=", locked.requester_remote_agent_id)
+            .where("workspace_member_id", "=", params.resolverWorkspaceMemberId)
             .limit(1)
         )
         if (!grantRow.rows[0]?.workspace_member_id) {

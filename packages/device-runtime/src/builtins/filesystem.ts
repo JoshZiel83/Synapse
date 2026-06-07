@@ -1469,7 +1469,14 @@ async function handleFsEdit(
             }),
           },
         ],
-        _meta: { edits_applied: editsApplied },
+        // _meta carries the structured result the presentation layer reads
+        // (ResultRef meta.*). Mirror the summary-relevant fields from the body
+        // so a friendly result summary ("已写入 N 字节, M 处生效") can render.
+        _meta: {
+          edits_applied: editsApplied,
+          bytes_written: result.bytesWritten,
+          sha256: result.sha256,
+        },
       }
     })
   )

@@ -27,6 +27,14 @@
     "./browser-tools": {
       "types": "./dist/browser-tools.d.ts",
       "default": "./dist/browser-tools.js"
+    },
+    "./tool-presentation": {
+      "types": "./dist/tool-presentation.d.ts",
+      "default": "./dist/tool-presentation.js"
+    },
+    "./tool-presentation/schema": {
+      "types": "./dist/tool-presentation.schema.d.ts",
+      "default": "./dist/tool-presentation.schema.js"
     }
   },
   "scripts": {

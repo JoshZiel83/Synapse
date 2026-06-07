@@ -59,7 +59,10 @@ test("isToolResultOrigin rejects malformed input", () => {
   assert.equal(isToolResultOrigin({ kind: "magic", serverKey: "x" }), false)
   // missing required field per kind
   assert.equal(isToolResultOrigin({ kind: "system" }), false)
-  assert.equal(isToolResultOrigin({ kind: "plugin", installationId: "x" }), false)
+  assert.equal(
+    isToolResultOrigin({ kind: "plugin", installationId: "x" }),
+    false
+  )
   assert.equal(isToolResultOrigin({ kind: "device", deviceToolId: "x" }), false)
   assert.equal(isToolResultOrigin({ kind: "provider_native" }), false)
   assert.equal(isToolResultOrigin({ kind: "model_response" }), false)

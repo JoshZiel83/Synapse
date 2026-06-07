@@ -238,11 +238,7 @@ test("buildSessionContextItems uses execution map over stale metadata projection
 
   const tr = (items[0] as any).toolResults[0]
   assert.equal(tr.toolName, "real_tool_name", "tool_calls.tool_name wins")
-  assert.equal(
-    tr.origin.kind,
-    "plugin",
-    "tool_results.metadata.origin wins"
-  )
+  assert.equal(tr.origin.kind, "plugin", "tool_results.metadata.origin wins")
   assert.equal(extractText(tr.content), "AUTHORITATIVE content from tables")
 })
 

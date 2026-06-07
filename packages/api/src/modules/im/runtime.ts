@@ -14,9 +14,7 @@ import {
   renewTransportRuntimeLease,
 } from "./runtime/lease.js"
 import { ingestInboundEnvelope } from "./service/ingest.js"
-import {
-  listActiveTransportAccounts,
-} from "./service.js"
+import { listActiveTransportAccounts } from "./service.js"
 
 const RUNTIME_RECONCILE_INTERVAL_MS = 15_000
 let reconcileTimer: NodeJS.Timeout | null = null

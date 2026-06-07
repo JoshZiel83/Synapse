@@ -113,30 +113,20 @@ const updateAutomationSchema = z.object({
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const accessTargetSchema = z
   .object({
-    type: z.enum([
-      "workspace",
-      "workspace_member",
-      "conversation",
-      "actor",
-    ]),
+    type: z.enum(["workspace", "workspace_member", "conversation", "actor"]),
     conversationId: z.uuid().optional(),
     actorId: z.uuid().optional(),
     workspaceMemberId: z.uuid().optional(),
   })
   .superRefine((value, ctx) => {
-    if (
-      (value.type === "conversation") &&
-      !value.conversationId
-    ) {
+    if (value.type === "conversation" && !value.conversationId) {
       ctx.addIssue({
         code: "custom",
         path: ["conversationId"],
         message: "conversationId is required for this access target",
       })
     }
-    if (
-      value.type === "actor" && !value.actorId
-    ) {
+    if (value.type === "actor" && !value.actorId) {
       ctx.addIssue({
         code: "custom",
         path: ["actorId"],

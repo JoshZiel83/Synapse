@@ -91,6 +91,7 @@ import {
 } from "../execution/service.js"
 import { getSession } from "../session/service.js"
 import { getTransportConnectorCapability } from "../im/connectors/index.js"
+import { buildToolMeta } from "../session/tool-presentation/tool-meta.js"
 
 export { buildActorPrompt } from "./prompt-builder.js"
 
@@ -373,8 +374,17 @@ async function loadToolResolveConversationParticipants(params: {
   return entries
 }
 
-function originFromRef(ref: ToolRef | undefined, fallbackName: string): ToolResultOrigin {
-  return ref ? toPublicOrigin(ref) : { kind: "system", registryKey: fallbackName }
+// Map a routed ToolRef to the public ToolResultOrigin used by
+// CanonicalToolResult. Used on the replan-skip path where the tool didn't
+// actually run. A missing ref (stale / unknown wire name) falls back to a
+// system origin.
+function originFromRef(
+  ref: ToolRef | undefined,
+  fallbackName: string
+): ToolResultOrigin {
+  return ref
+    ? toPublicOrigin(ref)
+    : { kind: "system", registryKey: fallbackName }
 }
 
 function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
@@ -500,7 +510,14 @@ function toolCallProvenance(
   if (!ref) {
     return {
       sourceKind: "system",
-      sourceSnapshot: { kind: "system", registryKey: wireName },
+      // System stableKey IS the registry/wire name (systemToolId(registryKey)).
+      // Persist it on the snapshot so the display resolver dispatches uniformly
+      // off source_snapshot.stableKey across all source kinds.
+      sourceSnapshot: {
+        kind: "system",
+        registryKey: wireName,
+        stableKey: wireName,
+      },
       pluginInstallationId: null,
       deviceToolId: null,
     }
@@ -1332,6 +1349,14 @@ export async function actorThink(
                 : {}),
               ...(res.isError !== undefined ? { isError: res.isError } : {}),
             }
+            // Phase 2 (R1): namespace the callable's structured result under
+            // `toolMeta` for the presentation renderer (meta.*). res.metadata is
+            // still spread top-level above for back-compat consumers.
+            const callableToolMeta = buildToolMeta({
+              meta: res.metadata,
+              structuredContent: (res as any).structuredContent,
+            })
+            if (callableToolMeta) persistedMetadata.toolMeta = callableToolMeta
             // Phase 7b: res.content is strictly CanonicalContentBlock[] post
             // Phase 3, so the old `typeof res.content === "string"` check is
             // dead. Use extractText to get a meaningful error message body.
@@ -1506,6 +1531,15 @@ export async function actorThink(
                   ? { structuredContent: normalizedResult.structuredContent }
                   : {}),
               }
+              // Phase 2 (R1): expose the tool's structured result (MCP _meta /
+              // device _meta / structuredContent) under a single `toolMeta`
+              // namespace the presentation renderer reads via ResultRef meta.*.
+              // Additive — top-level fields above are unchanged.
+              const toolMeta = buildToolMeta({
+                meta: normalizedResult.metadata,
+                structuredContent: normalizedResult.structuredContent,
+              })
+              if (toolMeta) metadata.toolMeta = toolMeta
 
               mcpResults.push({
                 toolCallId: tc.callId,

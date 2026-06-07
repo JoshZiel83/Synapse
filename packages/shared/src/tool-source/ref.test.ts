@@ -41,22 +41,26 @@ const pluginRef: ToolRef = {
     itemSlug: "github",
   },
   binding: { transport: "stdio", instanceKey: "inst-1:h:turn:x" },
-  identity: { stableKey: "acme/github/create_issue" },
+  identity: { stableKey: "plugin/acme/github/create_issue" },
 }
 
 test("toolId constructors are deterministic", () => {
   assert.equal(systemToolId("send_to"), "system:send_to")
-  assert.equal(pluginToolId("inst-1", "create_issue"), "plugin:inst-1:create_issue")
+  assert.equal(
+    pluginToolId("inst-1", "create_issue"),
+    "plugin:inst-1:create_issue"
+  )
   assert.equal(deviceToolId("dt-1"), "device:dt-1")
 })
 
-test("stripForAuditSnapshot carries the full public source per kind", () => {
+test("stripForAuditSnapshot carries the full public source + stableKey per kind", () => {
   assert.deepEqual(stripForAuditSnapshot(deviceRef), {
     kind: "device",
     deviceToolId: "dt-1",
     exposureStableKey: "builtin/filesystem",
     deviceName: "laptop",
     visibleToolName: "fs_read",
+    stableKey: "builtin/filesystem/fs_read",
   })
   assert.deepEqual(stripForAuditSnapshot(pluginRef), {
     kind: "plugin",
@@ -64,7 +68,18 @@ test("stripForAuditSnapshot carries the full public source per kind", () => {
     upstreamToolName: "create_issue",
     publisherSlug: "acme",
     itemSlug: "github",
+    stableKey: "plugin/acme/github/create_issue",
   })
+  // The frozen stableKey must equal the ref's identity (the display resolver's
+  // dispatch key) — no drift from re-deriving it out of the source fields.
+  assert.equal(
+    stripForAuditSnapshot(deviceRef).stableKey,
+    deviceRef.identity.stableKey
+  )
+  assert.equal(
+    stripForAuditSnapshot(pluginRef).stableKey,
+    pluginRef.identity.stableKey
+  )
 })
 
 test("toPublicOrigin projects without the binding (route-only) details", () => {
@@ -80,15 +95,22 @@ test("stripForProvider yields a source-free ToolDefinition with the wire name", 
     name: "create_issue",
     description: "[acme/github] Create an issue",
     parameters: { type: "object", properties: {}, required: [] },
-    rawInputSchema: { type: "object", properties: { title: { type: "string" } } },
+    rawInputSchema: {
+      type: "object",
+      properties: { title: { type: "string" } },
+    },
   }
-  const out = stripForProvider({ definition: def, wireName: "github__create_issue" })
+  const out = stripForProvider({
+    definition: def,
+    wireName: "github__create_issue",
+  })
   assert.equal(out.name, "github__create_issue")
   assert.equal(out.description, def.description)
   assert.deepEqual(out.rawInputSchema, def.rawInputSchema)
-  // No provenance fields exist on the provider-facing shape.
-  assert.equal((out as Record<string, unknown>).ref, undefined)
-  assert.equal((out as Record<string, unknown>).source, undefined)
+  // No provenance fields exist on the provider-facing shape. (ToolDefinition
+  // doesn't index-overlap Record, so go through `unknown` for the cast.)
+  assert.equal((out as unknown as Record<string, unknown>).ref, undefined)
+  assert.equal((out as unknown as Record<string, unknown>).source, undefined)
 })
 
 test("originKindToSourceKind maps routed kinds, rejects non-routed", () => {
