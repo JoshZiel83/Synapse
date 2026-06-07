@@ -83,7 +83,7 @@ import {
 import { isActorActiveConversationParticipant } from "../access/subject-resolution.js"
 import {
   cancelToolCallTask,
-  createToolCallTask,
+  createToolCallTaskDeduped,
   deliverResolvedToolCallTask,
   getToolCallTaskForSession,
   getToolCallTaskOutput,
@@ -639,7 +639,11 @@ async function createGovernedToolCallTask(params: {
       kind: "actor",
       actorId: context.actorId,
     })
-    return await createToolCallTask({
+    // Deduped mint: a retried turn with the same source tool-call dedupes onto
+    // the existing live task (partial-unique on request_key) instead of erroring
+    // on the unique constraint. user_input / plan_approval have no CTI detail
+    // table, so no onCreatedInTx callback is needed.
+    const { task } = await createToolCallTaskDeduped({
       workspaceId: context.workspaceId,
       conversationId: context.conversationId,
       executorKind: params.executorKind,
@@ -658,6 +662,7 @@ async function createGovernedToolCallTask(params: {
       deadlineAt: params.expiresAt,
       expiresAt: params.expiresAt,
     })
+    return task
   } catch (error) {
     throwToolError(
       error instanceof Error ? error.message : "Failed to create tool-call task"

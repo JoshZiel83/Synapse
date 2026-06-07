@@ -415,13 +415,23 @@ export async function createToolCallTask(params: CreateToolCallTaskParams) {
  * Dedupe-aware create: mints a task, or returns the existing live task that won
  * the request_key race (design §3.4 — the loser never materializes, so there is
  * no orphan to clean up). `deduped` is true when an existing task was returned.
+ *
+ * `onCreatedInTx` runs INSIDE the same transaction as a freshly-minted parent
+ * (only when NOT deduped), so CTI detail tables (runtime_authorization /
+ * device_tool / external_mcp) are written before the deferred consistency
+ * trigger fires at COMMIT. Without this the parent commit would fail
+ * "must have exactly one detail row".
  */
 export async function createToolCallTaskDeduped(
-  params: CreateToolCallTaskParams
+  params: CreateToolCallTaskParams,
+  onCreatedInTx?: (task: ToolCallTaskRecord, trx: Executor) => Promise<void>
 ): Promise<{ task: ToolCallTaskRecord; deduped: boolean }> {
   return withDbTransaction(async (trx) => {
     const created = await insertToolCallTaskDeduped(trx, params)
     if (created) {
+      if (onCreatedInTx) {
+        await onCreatedInTx(created, trx)
+      }
       if (created.sessionId) {
         await publishSessionRuntime(created.workspaceId, created.sessionId)
       }
@@ -487,23 +497,41 @@ export async function appendToolCallTaskOutput(
       .execute()
     appendedSeq = Math.max(0, chunk.seq)
   } else {
-    // Atomic seq allocation: COALESCE(MAX(seq),0)+1 computed inside the INSERT
-    // so concurrent appends can't collide on a stale read (no silent drop).
-    const inserted = await sql<{ seq: number | string }>`
-      INSERT INTO tool_call_task_output_chunks (task_id, seq, stream, text_value, metadata, created_at)
-      SELECT
-        ${taskId}::uuid,
-        COALESCE(MAX(seq), 0) + 1,
-        ${chunk.stream},
-        ${text},
-        ${JSON.stringify(chunk.metadata || {})}::jsonb,
-        ${toDate(chunk.createdAt)}
-      FROM tool_call_task_output_chunks
-      WHERE task_id = ${taskId}::uuid
-      RETURNING seq
-    `.execute(db)
-    const raw = inserted.rows[0]?.seq
-    appendedSeq = typeof raw === "number" ? raw : Number(raw || 0)
+    // Atomic-ish seq allocation: COALESCE(MAX(seq),0)+1 computed inside the
+    // INSERT. Under READ COMMITTED two concurrent appends can still read the
+    // same MAX and collide on the (task_id, seq) unique constraint — so retry on
+    // unique-violation (23505) until we win a distinct seq, rather than silently
+    // dropping the chunk (which onConflict-doNothing would). Bounded retries.
+    let appended: number | null = null
+    for (let attempt = 0; attempt < 8 && appended === null; attempt++) {
+      try {
+        const inserted = await sql<{ seq: number | string }>`
+          INSERT INTO tool_call_task_output_chunks (task_id, seq, stream, text_value, metadata, created_at)
+          SELECT
+            ${taskId}::uuid,
+            COALESCE(MAX(seq), 0) + 1,
+            ${chunk.stream},
+            ${text},
+            ${JSON.stringify(chunk.metadata || {})}::jsonb,
+            ${toDate(chunk.createdAt)}
+          FROM tool_call_task_output_chunks
+          WHERE task_id = ${taskId}::uuid
+          RETURNING seq
+        `.execute(db)
+        const raw = inserted.rows[0]?.seq
+        appended = typeof raw === "number" ? raw : Number(raw || 0)
+      } catch (err) {
+        // 23505 = unique_violation: a concurrent append took our seq. Retry.
+        if ((err as { code?: string })?.code === "23505") continue
+        throw err
+      }
+    }
+    if (appended === null) {
+      throw new Error(
+        `Failed to allocate output seq for task ${taskId} after retries`
+      )
+    }
+    appendedSeq = appended
   }
 
   return updateToolCallTaskRecord(taskId, {
@@ -970,6 +998,15 @@ export async function deliverResolvedToolCallTask(
   if (!record) {
     throw new Error(`Tool-call task ${taskId} not found`)
   }
+  // Idempotency / crash-recovery (P0): a session_wakeup task is "delivered" once
+  // its completion_item_id (the actor-private task_notice) exists. If a retry
+  // (e.g. duplicate-command resolve) reaches here and delivery already happened,
+  // skip re-delivery so we don't emit a second notice + wakeup. For
+  // remote_agent_channel / none there is no durable delivery marker; re-pushing
+  // is harmless (best-effort nudge), so we let it through.
+  if (record.deliveryKind === "session_wakeup" && record.completionItemId) {
+    return record
+  }
   // Persist any post-commit result payload (auto-retry output) without the
   // terminal guard (the row is already terminal from the in-tx flip).
   let current = record
@@ -991,6 +1028,39 @@ export async function deliverResolvedToolCallTask(
     return current
   }
   return deliverTaskNotice(current, status, params)
+}
+
+/**
+ * Crash-recovery delivery (P0): re-fire delivery for a task that is terminal but
+ * may never have been delivered (process died between the resolve commit and the
+ * post-commit delivery). Driven entirely by persisted task state, so it works on
+ * a retry where the in-memory decision is gone. Idempotent: deliverResolved-
+ * ToolCallTask skips session_wakeup tasks that already have a completion item,
+ * and only terminal tasks are delivered. Non-terminal or already-delivered →
+ * no-op.
+ */
+export async function recoverUndeliveredResolvedTask(taskId: string) {
+  const task = await getToolCallTask(taskId)
+  if (!task) return null
+  if (!TERMINAL_TOOL_CALL_TASK_STATUSES.has(task.lifecycleStatus)) return task
+  // Already delivered (session_wakeup) → nothing to recover.
+  if (task.deliveryKind === "session_wakeup" && task.completionItemId) {
+    return task
+  }
+  // Map the terminal lifecycle/outcome back to a TaskNoticeStatus for the notice.
+  const noticeStatus: TaskNoticeStatus =
+    task.lifecycleStatus === "completed"
+      ? "completed"
+      : task.lifecycleStatus === "cancelled"
+        ? "cancelled"
+        : "failed"
+  const summary =
+    task.statusMessage ||
+    `${task.sourceToolName.replace(/_/g, " ")} ${noticeStatus}.`
+  return deliverResolvedToolCallTask(taskId, noticeStatus, {
+    summary,
+    // Don't overwrite the persisted result payload on recovery — deliver only.
+  })
 }
 
 export async function markToolCallTaskInputRequired(

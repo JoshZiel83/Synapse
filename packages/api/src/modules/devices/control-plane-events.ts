@@ -12,6 +12,7 @@ import {
   getToolCallTask,
   markToolCallTaskWorking,
   completeToolCallTask,
+  failToolCallTask,
 } from "../tool-call-tasks/service.js"
 import { textBlocks } from "@synapse/shared"
 
@@ -322,9 +323,10 @@ export async function failInFlightDeviceTasksForDevice(
     if (!row.task_id) continue
     const task = await getToolCallTask(row.task_id)
     if (!task) continue
-    await completeToolCallTask(row.task_id, {
+    // Disconnect is a machinery breakdown → lifecycle `failed` (retryable), not
+    // completed/tool_error (which means the tool ran and returned an error).
+    await failToolCallTask(row.task_id, {
       summary: reason,
-      outcome: "tool_error",
       finalResultPayload: { content: textBlocks(reason), isError: true },
       finalErrorPayload: { code: "device_disconnected", message: reason },
     }).catch(() => undefined)
@@ -357,9 +359,9 @@ export async function sweepExpiredDeviceTasks(
   let swept = 0
   for (const row of rows) {
     const reason = "Device tool timed out."
-    await completeToolCallTask(row.id, {
+    // Timeout is a machinery breakdown → lifecycle `failed`, not tool_error.
+    await failToolCallTask(row.id, {
       summary: reason,
-      outcome: "tool_error",
       finalResultPayload: { content: textBlocks(reason), isError: true },
       finalErrorPayload: { code: "device_tool_timeout", message: reason },
     }).catch(() => undefined)

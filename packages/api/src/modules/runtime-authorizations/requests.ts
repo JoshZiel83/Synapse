@@ -20,6 +20,7 @@ import {
   findOpenRuntimeAuthorizationInteraction,
   getTaskSummary,
   markRuntimeAuthorizationInteractionSuperseded,
+  writeRuntimeAuthorizationTaskDetailInTx,
 } from "../interactions/service.js"
 import {
   cancelToolCallTask,
@@ -399,38 +400,64 @@ export async function createRuntimeAuthorizationRequest(
     requesterParticipantId: requesterMember.id,
     dedupeKey,
   })
-  const { task, deduped } = await createToolCallTaskDeduped({
-    workspaceId: params.source.workspaceId,
-    conversationId: params.source.conversationId,
-    executorKind: "runtime_authorization",
-    deliveryKind: isRemoteAgent ? "remote_agent_channel" : "session_wakeup",
-    humanSurface: "needs_response",
-    principalSubjectId: params.source.principalSubjectId,
-    sessionId: isRemoteAgent ? undefined : params.source.sessionId,
-    turnId: params.source.turnId,
-    sourceToolCallId: params.source.sourceToolCallId,
-    sourceToolName: params.source.sourceToolName,
-    requestKey,
-    requesterParticipantId: requesterMember.id,
-    lifecycleStatus: "auth_required",
-    statusMessage: buildWaitingSummary(params.runtimeTarget.deviceDisplayName),
-    supportsCancel: true,
-    requestPayload: {
-      deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
-      deviceId: params.runtimeTarget.deviceId,
-      deviceExposureId: params.runtimeTarget.deviceExposureId,
-      runtimeSessionId: params.runtimeTarget.runtimeSessionId,
-      requestedToolName: params.runtimeTarget.requestedToolName,
-      deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
-      reason: params.reason,
-      requestMode: params.requestMode,
-      requestedAction: params.authorizationPlan.requestedAction,
-      grantOptions: params.authorizationPlan.grantOptions,
-      availablePresets: params.availablePresets,
-      sourceRetryNonce: retryNonce,
-      sourceRequestArgs: params.sourceRequestArgs,
+  const { task, deduped } = await createToolCallTaskDeduped(
+    {
+      workspaceId: params.source.workspaceId,
+      conversationId: params.source.conversationId,
+      executorKind: "runtime_authorization",
+      deliveryKind: isRemoteAgent ? "remote_agent_channel" : "session_wakeup",
+      humanSurface: "needs_response",
+      principalSubjectId: params.source.principalSubjectId,
+      sessionId: isRemoteAgent ? undefined : params.source.sessionId,
+      turnId: params.source.turnId,
+      sourceToolCallId: params.source.sourceToolCallId,
+      sourceToolName: params.source.sourceToolName,
+      requestKey,
+      requesterParticipantId: requesterMember.id,
+      lifecycleStatus: "auth_required",
+      statusMessage: buildWaitingSummary(
+        params.runtimeTarget.deviceDisplayName
+      ),
+      supportsCancel: true,
+      requestPayload: {
+        deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
+        deviceId: params.runtimeTarget.deviceId,
+        deviceExposureId: params.runtimeTarget.deviceExposureId,
+        runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+        requestedToolName: params.runtimeTarget.requestedToolName,
+        deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+        reason: params.reason,
+        requestMode: params.requestMode,
+        requestedAction: params.authorizationPlan.requestedAction,
+        grantOptions: params.authorizationPlan.grantOptions,
+        availablePresets: params.availablePresets,
+        sourceRetryNonce: retryNonce,
+        sourceRequestArgs: params.sourceRequestArgs,
+      },
     },
-  })
+    // CTI: write the runtime_authorization detail row in the SAME tx as the
+    // parent so the deferred consistency trigger passes at COMMIT (P0 fix).
+    async (createdTask, trx) => {
+      await writeRuntimeAuthorizationTaskDetailInTx(trx, {
+        taskId: createdTask.id,
+        deviceId: params.runtimeTarget.deviceId,
+        deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
+        deviceExposureId: params.runtimeTarget.deviceExposureId,
+        requestedToolName: params.runtimeTarget.requestedToolName,
+        deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+        reason: params.reason,
+        requestMode: params.requestMode,
+        runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+        sourceRetryNonce: retryNonce,
+        sourceRequestArgs: params.sourceRequestArgs,
+        principalSubjectId: params.source.principalSubjectId,
+        principalScopeSubjectId: params.source.principalScopeSubjectId,
+        requestedAction: params.authorizationPlan.requestedAction,
+        grantOptions: params.authorizationPlan.grantOptions,
+        availablePresets: params.availablePresets,
+      })
+    }
+  )
 
   try {
     // Task unification: if the task mint deduped onto an existing live task, the

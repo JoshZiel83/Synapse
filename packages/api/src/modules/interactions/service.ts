@@ -47,6 +47,7 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import {
   deliverResolvedToolCallTask,
+  recoverUndeliveredResolvedTask,
   insertToolCallTaskDeduped,
   findLiveToolCallTaskByRequestKey,
   type ToolCallTaskExecutorKind,
@@ -2176,6 +2177,67 @@ async function insertRuntimeAuthorizationInteractionDetails(
   )
 }
 
+/**
+ * Write the runtime_authorization CTI detail row for a freshly-minted task,
+ * INSIDE the caller's transaction (createToolCallTaskDeduped's onCreatedInTx).
+ * This must run in the same tx as the parent INSERT so the deferred CTI
+ * consistency trigger sees exactly one detail row at COMMIT. Computes the
+ * content dedupe_key (also used by findOpenRuntimeAuthorizationInteraction).
+ */
+export async function writeRuntimeAuthorizationTaskDetailInTx(
+  client: Executor,
+  params: {
+    taskId: string
+    deviceId: string
+    deviceCapabilityId: string
+    deviceExposureId: string
+    requestedToolName: string
+    deviceToolStableKey: string
+    reason: string
+    requestMode: RuntimeAuthorizationRequestMode
+    runtimeSessionId: string
+    sourceRetryNonce?: string
+    sourceRequestArgs: Record<string, unknown>
+    principalSubjectId: string
+    principalScopeSubjectId?: string | null
+    requestedAction: RuntimeAuthorizationRequestedAction
+    grantOptions: RuntimeAuthorizationGrantOption[]
+    availablePresets: RuntimeAuthorizationPreset[]
+  }
+) {
+  const dedupeKey = buildRuntimeAuthorizationDedupeKey({
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
+    requestedToolName: params.requestedToolName,
+    deviceToolStableKey: params.deviceToolStableKey,
+    requestMode: params.requestMode,
+    requestedAction: params.requestedAction,
+    grantOptions: params.grantOptions,
+    availablePresets: params.availablePresets,
+    runtimeSessionId: params.runtimeSessionId,
+  })
+  await insertRuntimeAuthorizationInteractionDetails(client, {
+    interactionId: params.taskId,
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
+    requestedToolName: params.requestedToolName,
+    deviceToolStableKey: params.deviceToolStableKey,
+    reason: params.reason,
+    requestMode: params.requestMode,
+    sourceRuntimeSessionId: params.runtimeSessionId,
+    sourceRetryNonce: params.sourceRetryNonce,
+    sourceRequestArgs: params.sourceRequestArgs || {},
+    principalSubjectId: params.principalSubjectId,
+    principalScopeSubjectId: params.principalScopeSubjectId,
+    requestedAction: params.requestedAction,
+    grantOptions: params.grantOptions,
+    availablePresets: params.availablePresets,
+    dedupeKey,
+  })
+}
+
 async function updateInteractionConversationItemId(
   client: Executor,
   interactionId: string,
@@ -2692,12 +2754,12 @@ export async function createRuntimeAuthorizationInteractionRequest(
   params: CreateRuntimeAuthorizationInteractionParams
 ) {
   return withDbTransaction(async (client) => {
-    // Task unification: the caller (runtime-authorizations/requests.ts) has
-    // already minted the tool_call_tasks row with the content-derived
-    // request_key + ON CONFLICT dedupe (design §3.4). So dedupe is settled at
-    // the task layer — here we just attach the human-facing participant fields
-    // onto that task and insert the runtime_authorization CTI detail row +
-    // feed item. No second dedupe, no orphan-task cleanup.
+    // Task unification: the caller (runtime-authorizations/requests.ts) minted
+    // the tool_call_tasks parent AND wrote the runtime_authorization CTI detail
+    // row in ONE transaction (createToolCallTaskDeduped's onCreatedInTx
+    // callback) so the deferred consistency trigger passes at that commit. Here
+    // we only attach the human-facing participant fields and the feed item —
+    // neither is CTI-gated, so a separate tx is fine.
     if (!params.taskId) {
       throw new Error(
         "createRuntimeAuthorizationInteractionRequest requires a taskId (the task IS the interaction)"
@@ -2714,51 +2776,15 @@ export async function createRuntimeAuthorizationInteractionRequest(
     })
     if (interactionId === null) {
       // The task was concurrently terminalized (cancelled / expired) between
-      // mint and detail-insert — surface the current summary.
+      // mint and feed-item creation — surface the current summary.
       const current = await getTaskSummary(params.taskId, client)
       if (!current) {
         throw new Error(
-          "Runtime authorization task was concurrently resolved before its detail could be written"
+          "Runtime authorization task was concurrently resolved before its feed item could be written"
         )
       }
       return current
     }
-
-    // The detail row stores the content dedupe_key (for audit + the
-    // findOpenRuntimeAuthorizationInteraction background-dedupe lookup).
-    const dedupeKey = buildRuntimeAuthorizationDedupeKey({
-      deviceId: params.deviceId,
-      deviceCapabilityId: params.deviceCapabilityId,
-      deviceExposureId: params.deviceExposureId,
-      requestedToolName: params.requestedToolName,
-      deviceToolStableKey: params.deviceToolStableKey,
-      requestMode: params.requestMode,
-      requestedAction: params.requestedAction,
-      grantOptions: params.grantOptions,
-      availablePresets: params.availablePresets,
-      runtimeSessionId: params.runtimeSessionId,
-    })
-
-    await insertRuntimeAuthorizationInteractionDetails(client, {
-      interactionId,
-      deviceId: params.deviceId,
-      deviceCapabilityId: params.deviceCapabilityId,
-      deviceExposureId: params.deviceExposureId,
-      requestedToolName: params.requestedToolName,
-      deviceToolStableKey: params.deviceToolStableKey,
-      reason: params.reason,
-      requestMode: params.requestMode,
-      sourceRuntimeSessionId: params.runtimeSessionId,
-      sourceRetryNonce: params.sourceRetryNonce,
-      sourceRequestArgs: params.sourceRequestArgs || {},
-      principalSubjectId: params.principalSubjectId,
-      principalScopeSubjectId: params.principalScopeSubjectId,
-      principalRemoteAgentId: params.principalRemoteAgentId,
-      requestedAction: params.requestedAction,
-      grantOptions: params.grantOptions,
-      availablePresets: params.availablePresets,
-      dedupeKey,
-    })
 
     let interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
@@ -3846,6 +3872,16 @@ export async function resolveInteractionRequest(
   })
 
   if (result.outcome !== "applied") {
+    // Crash-recovery (P0): a duplicate-command retry means a prior resolve
+    // committed the terminal task but may have crashed before post-commit
+    // delivery ran. Re-fire delivery from the persisted task state; it is
+    // idempotent (skips if a session_wakeup notice already exists), so a
+    // genuinely-already-delivered task is a no-op and a lost wakeup is recovered.
+    if (result.interaction?.taskId) {
+      await recoverUndeliveredResolvedTask(result.interaction.taskId).catch(
+        () => undefined
+      )
+    }
     return {
       outcome: result.outcome,
       interaction: result.interaction,
