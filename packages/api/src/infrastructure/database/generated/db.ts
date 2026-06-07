@@ -317,7 +317,7 @@ export type ToolCallTaskOutputChunksStream = "stderr" | "stdout" | "system";
 
 export type ToolCallTasksDeliveryKind = "none" | "remote_agent_channel" | "session_wakeup";
 
-export type ToolCallTasksExecutorKind = "device_tool" | "external_mcp" | "human_input" | "plan_approval" | "runtime_authorization";
+export type ToolCallTasksExecutorKind = "device_tool" | "external_mcp" | "plan_approval" | "runtime_authorization" | "user_input";
 
 export type ToolCallTasksHumanSurface = "needs_response" | "silent";
 

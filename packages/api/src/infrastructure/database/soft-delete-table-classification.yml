@@ -3706,12 +3706,12 @@ foreignKeys:
     liveIntegrity: historical
     _child: tool_call_task_response_commands(created_by_workspace_member_id)
     _parent: workspace_members(id)
-  digest:3e5ab079ab05436d:
+  digest:6fb2a515460640f8:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: runtime_authorization_grants(so)
+    _child: runtime_authorization_grants(source_task_id)
     _parent: tool_call_tasks(id)
   digest:20c47282040c3007:
     targetAction: SET NULL

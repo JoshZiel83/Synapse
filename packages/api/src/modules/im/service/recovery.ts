@@ -9,7 +9,7 @@
  *   - Build a transport-neutral SQL that lifts `outbound_enabled = TRUE`
  *     for bindings whose `metadata.autoDisabledReason` matches a given
  *     marker (and atomically removes the marker).
- *   - Re-arm `interaction_transport_projections` rows that were skipped
+ *   - Re-arm `tool_call_task_transport_projections` rows that were skipped
  *     for a now-resolvable reason (account/connection-mode/config
  *     transitions + binding-level events). The QQ merge-prep brought
  *     in the interaction projection table and these helpers; they're
@@ -136,7 +136,7 @@ export function buildReEnableAutoDisabledBindingsSql(params: {
     .compile()
 }
 
-// ─── Projection-aware recovery (interaction_transport_projections) ───
+// ─── Projection-aware recovery (tool_call_task_transport_projections) ───
 
 export type CanDeliverNowResult =
   | { ok: true }
@@ -205,7 +205,7 @@ export async function recoverSkippedDisabledLink(
 /**
  * Called from the delivery worker's binding-mismatch branch when the
  * current binding has been replaced. Resets any
- * `interaction_transport_projections` row that points at this link AND
+ * `tool_call_task_transport_projections` row that points at this link AND
  * terminalizes the old link with
  * `metadata.replacedByProjectionRecovery=true` so the sweeper knows
  * this isn't retryable. Same tx by default.
@@ -216,7 +216,7 @@ export async function recoverProjectionForBindingChangedLink(
 ): Promise<void> {
   const run = async (tx: DbOrTx) => {
     await sql`
-      UPDATE interaction_transport_projections
+      UPDATE tool_call_task_transport_projections
       SET status = 'pending',
           transport_message_link_id = NULL,
           error = NULL,
@@ -286,7 +286,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
     case "connection_mode_changed_to_long_connection":
     case "account_status_activated": {
       const result = await sql<{ id: string }>`
-        UPDATE interaction_transport_projections p
+        UPDATE tool_call_task_transport_projections p
         SET status = 'pending',
             next_attempt_at = NOW(),
             attempts = 0,
@@ -304,7 +304,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
     }
     case "outbound_re_enabled": {
       const result = await sql<{ id: string }>`
-        UPDATE interaction_transport_projections p
+        UPDATE tool_call_task_transport_projections p
         SET status = 'pending',
             next_attempt_at = NOW(),
             attempts = 0,
@@ -323,7 +323,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
     }
     case "binding_created_or_replaced": {
       const result = await sql<{ id: string }>`
-        UPDATE interaction_transport_projections p
+        UPDATE tool_call_task_transport_projections p
         SET status = 'pending',
             next_attempt_at = NOW(),
             attempts = 0,

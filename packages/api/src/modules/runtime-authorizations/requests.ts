@@ -14,6 +14,8 @@ import { authorizeAction } from "../access/service.js"
 import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js"
 import { listConversationParticipants } from "../chat/service.js"
 import {
+  buildRuntimeAuthorizationDedupeKey,
+  buildRuntimeAuthorizationRequestKey,
   createRuntimeAuthorizationInteractionRequest,
   findOpenRuntimeAuthorizationInteraction,
   getInteractionRequestSummary,
@@ -21,7 +23,7 @@ import {
 } from "../interactions/service.js"
 import {
   cancelToolCallTask,
-  createToolCallTask,
+  createToolCallTaskDeduped,
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js"
 
@@ -375,51 +377,87 @@ export async function createRuntimeAuthorizationRequest(
     }
   }
 
-  // Skip the tool_call_task for remote_agent principals: tool_call_tasks
-  // requires actor_id NOT NULL and is wired to chat session wakeups, which
-  // remote agents don't have. The bridged agent retries its own tool call
-  // on the next round-trip, so the interaction alone is enough to gate
-  // approval.
-  const task = params.source.remoteAgentId
-    ? null
-    : await createToolCallTask({
-        workspaceId: params.source.workspaceId,
-        conversationId: params.source.conversationId,
-        sessionId: params.source.sessionId,
-        actorId: params.source.actorId!,
-        turnId: params.source.turnId,
-        sourceToolCallId: params.source.sourceToolCallId,
-        sourceToolName: params.source.sourceToolName,
-        executorKind: "runtime_authorization",
-        deliveryPolicy: "human_interaction",
-        status: "input_required",
-        statusMessage: buildWaitingSummary(
-          params.runtimeTarget.deviceDisplayName
-        ),
-        dispatchStatus: "input_requested",
-        supportsCancel: true,
-        requestPayload: {
-          deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
-          deviceId: params.runtimeTarget.deviceId,
-          deviceExposureId: params.runtimeTarget.deviceExposureId,
-          runtimeSessionId: params.runtimeTarget.runtimeSessionId,
-          requestedToolName: params.runtimeTarget.requestedToolName,
-          deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
-          reason: params.reason,
-          requestMode: params.requestMode,
-          requestedAction: params.authorizationPlan.requestedAction,
-          grantOptions: params.authorizationPlan.grantOptions,
-          availablePresets: params.availablePresets,
-          sourceRetryNonce: retryNonce,
-          sourceRequestArgs: params.sourceRequestArgs,
-        },
-      })
+  // Task unification: every runtime-authorization is a task. The waiter is the
+  // triggering principal (actor → session_wakeup; remote_agent →
+  // remote_agent_channel). The request_key is content-derived so concurrent
+  // dispatches dedupe onto one task (partial-unique on tool_call_tasks).
+  const isRemoteAgent = !!params.source.remoteAgentId
+  const dedupeKey = buildRuntimeAuthorizationDedupeKey({
+    deviceId: params.runtimeTarget.deviceId,
+    deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
+    deviceExposureId: params.runtimeTarget.deviceExposureId,
+    requestedToolName: params.runtimeTarget.requestedToolName,
+    deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+    requestMode: params.requestMode,
+    requestedAction: params.authorizationPlan.requestedAction,
+    grantOptions: params.authorizationPlan.grantOptions,
+    availablePresets: params.availablePresets,
+    runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+  })
+  const requestKey = buildRuntimeAuthorizationRequestKey({
+    conversationId: params.source.conversationId,
+    requesterParticipantId: requesterMember.id,
+    dedupeKey,
+  })
+  const { task, deduped } = await createToolCallTaskDeduped({
+    workspaceId: params.source.workspaceId,
+    conversationId: params.source.conversationId,
+    executorKind: "runtime_authorization",
+    deliveryKind: isRemoteAgent ? "remote_agent_channel" : "session_wakeup",
+    humanSurface: "needs_response",
+    principalSubjectId: params.source.principalSubjectId,
+    sessionId: isRemoteAgent ? undefined : params.source.sessionId,
+    turnId: params.source.turnId,
+    sourceToolCallId: params.source.sourceToolCallId,
+    sourceToolName: params.source.sourceToolName,
+    requestKey,
+    requesterParticipantId: requesterMember.id,
+    lifecycleStatus: "auth_required",
+    statusMessage: buildWaitingSummary(params.runtimeTarget.deviceDisplayName),
+    supportsCancel: true,
+    requestPayload: {
+      deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
+      deviceId: params.runtimeTarget.deviceId,
+      deviceExposureId: params.runtimeTarget.deviceExposureId,
+      runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+      requestedToolName: params.runtimeTarget.requestedToolName,
+      deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+      reason: params.reason,
+      requestMode: params.requestMode,
+      requestedAction: params.authorizationPlan.requestedAction,
+      grantOptions: params.authorizationPlan.grantOptions,
+      availablePresets: params.availablePresets,
+      sourceRetryNonce: retryNonce,
+      sourceRequestArgs: params.sourceRequestArgs,
+    },
+  })
 
   try {
+    // Task unification: if the task mint deduped onto an existing live task, the
+    // interaction detail + feed item already exist — return the existing summary
+    // without re-creating (no orphan-task cleanup; the loser never materialized).
+    if (deduped) {
+      const existing = await getInteractionRequestSummary(task.id)
+      if (!existing) {
+        throw new Error(
+          "Deduped runtime-authorization task has no interaction summary"
+        )
+      }
+      return {
+        interaction: existing,
+        task,
+        availableAuthorizerCount: availableAuthorizers.length,
+        availableAuthorizers,
+        requesterParticipantId: requesterMember.id,
+        reused: true,
+        retryNonce: pickPersistedRetryNonce(existing, retryNonce),
+      }
+    }
+
     const interaction = await createRuntimeAuthorizationInteractionRequest({
       workspaceId: params.source.workspaceId,
       conversationId: params.source.conversationId,
-      taskId: task?.id,
+      taskId: task.id,
       requesterParticipantId: requesterMember.id,
       deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
       deviceId: params.runtimeTarget.deviceId,
@@ -439,73 +477,29 @@ export async function createRuntimeAuthorizationRequest(
       principalRemoteAgentId: params.source.remoteAgentId,
     })
 
-    // Detect inner dedupe — see createRuntimeAuthorizationInteractionRequest
-    // (interactions/service.ts). When that fires we got back an existing
-    // interaction whose row carries the original source_retry_nonce, not the
-    // one we just generated above. Same bug class as the outer background
-    // dedupe: surfacing our fresh nonce here would hand the model a token no
-    // future grant can accept. This also fires for the concurrent INSERT
-    // race — when our INSERT lost to ON CONFLICT DO NOTHING, the inner
-    // request re-resolves the conflict winner, whose row carries the OTHER
-    // caller's nonce.
-    const reusedByInnerDedupe = didInnerDedupeReuseRow(interaction, retryNonce)
-
-    // Orphan-task cleanup. If inner dedupe fired, our freshly-created
-    // tool_call_task has no interaction pointing at it (the existing
-    // interaction is either taskless or bound to a different,
-    // already-existing task). Approval completion only touches the
-    // interaction's bound task — our orphan would stay `input_required`
-    // forever, AND the caller would receive an `authorization_task_id`
-    // pointing at a task that the approval flow will never complete.
-    // Cancel the orphan and return `task: null` so projection surfaces no
-    // misleading task id. The original interaction's bound task (if any) is
-    // what the user will see in the dashboard, and its existing state is
-    // preserved.
-    let effectiveTask: ToolCallTaskRecord | null = task
-    if (reusedByInnerDedupe && task) {
-      try {
-        await cancelToolCallTask(task.id, {
-          summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} merged into an existing pending request — this task is no longer needed.`,
-          finalResultPayload: {
-            content: textBlocks(
-              `Runtime authorization request merged with an existing pending request for the same target. The original request handles approval; this duplicate was cancelled.`
-            ),
-            isError: false,
-          },
-        })
-      } catch {
-        // Best-effort: leaving the task in input_required is bad but
-        // failing the whole dispatch is worse. Audit will still show the
-        // orphan; a follow-up sweeper or operator action can resolve it.
-      }
-      effectiveTask = null
-    }
-
     return {
       interaction,
-      task: effectiveTask,
+      task,
       availableAuthorizerCount: availableAuthorizers.length,
       availableAuthorizers,
       requesterParticipantId: requesterMember.id,
-      reused: reusedByInnerDedupe,
+      reused: false,
       retryNonce: pickPersistedRetryNonce(interaction, retryNonce),
     }
   } catch (error) {
-    if (task) {
-      await cancelToolCallTask(task.id, {
-        summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`,
-        finalResultPayload: {
-          content: textBlocks(
-            `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`
-          ),
-          isError: true,
-        },
-        finalErrorPayload: {
-          message: error instanceof Error ? error.message : String(error),
-        },
-        notifyActor: false,
-      })
-    }
+    await cancelToolCallTask(task.id, {
+      summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`,
+      finalResultPayload: {
+        content: textBlocks(
+          `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`
+        ),
+        isError: true,
+      },
+      finalErrorPayload: {
+        message: error instanceof Error ? error.message : String(error),
+      },
+      notifyActor: false,
+    })
     throw error
   }
 }

@@ -102,7 +102,6 @@ export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizat
    */
   scopeLabel: string
   createdByWorkspaceMemberId?: string
-  sourceInteractionId?: string
   sourceTaskId?: string
   sourceRetryNonce?: string
   sourceRuntimeSessionId?: string
@@ -353,7 +352,6 @@ function runtimeAuthorizationGrantSelectColumns() {
     "g.subject_id",
     "g.scope_subject_id",
     "g.created_by_workspace_member_id",
-    "g.source_interaction_id",
     "g.source_task_id",
     "g.retention",
     "g.status",
@@ -404,7 +402,6 @@ export function mapRuntimeAuthorizationGrantCandidate(
     scope: candidate.scope,
     scopeLabel,
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
-    sourceInteractionId: row.source_interaction_id || undefined,
     sourceTaskId: row.source_task_id || undefined,
     sourceRetryNonce: row.source_retry_nonce || undefined,
     sourceRuntimeSessionId: row.source_runtime_session_id || undefined,
@@ -467,7 +464,6 @@ export interface CreateRuntimeAuthorizationGrantParams {
   retention: RuntimeAuthorizationGrantRetention
   policy: SharedRuntimeAuthorizationGrantSpec
   createdByWorkspaceMemberId?: string
-  sourceInteractionId?: string
   sourceTaskId?: string
   sourceRetryNonce?: string
   sourceRuntimeSessionId?: string
@@ -610,7 +606,6 @@ async function createGrantInKyselyTx(
       subject_id: subjectId,
       scope_subject_id: scopeSubjectId,
       created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
-      source_interaction_id: params.sourceInteractionId || null,
       source_task_id: params.sourceTaskId || null,
       retention: params.retention,
       status: "active",

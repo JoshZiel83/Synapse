@@ -2844,11 +2844,21 @@ export async function notifyRemoteAgentInteractionResolved(
     return false
   }
   return safeSend(connection, {
-    type: "agent:interaction:resolved",
+    type: "agent:task:resolved",
     remoteAgentId: interaction.requester.remoteAgentId,
     interactionId,
     interaction,
   })
+}
+
+/**
+ * Task unification: the delivery-registry adapter for delivery_kind=
+ * remote_agent_channel. Pushes a best-effort `agent:task:resolved` nudge over
+ * the machine WS (the task IS the interaction, so taskId == the interaction id).
+ * Resume is grant-gated / re-poll on the agent side — this only affects latency.
+ */
+export async function notifyRemoteAgentTaskResolved(taskId: string) {
+  return notifyRemoteAgentInteractionResolved(taskId)
 }
 
 function closeMachineConnection(

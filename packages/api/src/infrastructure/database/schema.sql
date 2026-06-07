@@ -109,7 +109,7 @@ CREATE TYPE tool_calls_status AS ENUM ('pending', 'running', 'completed', 'faile
 --   human_surface  — whether a human sees/answers it (gates the chat-feed card)
 -- plus a lifecycle ⟂ outcome split (lifecycle = pure state machine the agent
 -- polls; outcome = business verdict, set only on `completed`).
-CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('human_input', 'plan_approval', 'runtime_authorization', 'device_tool', 'external_mcp');
+CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('user_input', 'plan_approval', 'runtime_authorization', 'device_tool', 'external_mcp');
 CREATE TYPE tool_call_tasks_delivery_kind AS ENUM ('session_wakeup', 'remote_agent_channel', 'none');
 CREATE TYPE tool_call_tasks_human_surface AS ENUM ('needs_response', 'silent');
 -- Pure lifecycle state machine. submitted? → working ⇄ input_required ⇄
@@ -3567,7 +3567,7 @@ BEGIN
     v_has_device_tool::INT +
     v_has_external_mcp::INT;
 
-  IF v_executor_kind IN ('human_input', 'plan_approval') THEN
+  IF v_executor_kind IN ('user_input', 'plan_approval') THEN
     IF v_detail_count <> 0 THEN
       RAISE EXCEPTION
         'tool_call_task % has executor_kind=% but carries a detail row (count=%)',
@@ -3679,8 +3679,8 @@ CREATE TABLE runtime_authorization_grants (
   -- synchronously; callers must upsert subject + scope BEFORE inserting.
   scope_subject_id UUID,                           -- FK added at bottom
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  -- source_interaction_id dropped in the task unification — the task IS the
-  -- interaction, so source_task_id is the single provenance backref.
+  -- (task unification dropped the old source_interaction_id pointer; the task
+  -- is the interaction, and source_task_id below is the single backref.)
   source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
   retention runtime_authorization_grants_retention NOT NULL,
   status runtime_authorization_grants_status NOT NULL DEFAULT 'active',
@@ -6392,7 +6392,7 @@ BEGIN
   UPDATE tool_call_task_transport_projections t0 SET transport_message_link_id = NULL WHERE transport_message_link_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_call_task_response_commands t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE runtime_authorization_grants t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE runtime_authorization_grants t0 SET so = NULL WHERE so IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE runtime_authorization_grants t0 SET source_task_id = NULL WHERE source_task_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE devices t0 SET owner_workspace_member_id = NULL WHERE owner_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_pairing_sessions t0 SET requested_by_workspace_member_id = NULL WHERE requested_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_pairing_sessions t0 SET device_id = NULL WHERE device_id IS NOT NULL AND t0.workspace_id = p_workspace_id;

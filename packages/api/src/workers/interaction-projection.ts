@@ -1,7 +1,7 @@
 /**
  * Interaction-projection worker (G5 / Stage 8).
  *
- * Consumes `interaction_transport_projections(status='pending')` rows
+ * Consumes `tool_call_task_transport_projections(status='pending')` rows
  * (inserted by `createRuntimeAuthorizationInteractionRequest`) and
  * materializes them into transport_message_links so a supporting
  * connector can render the interaction as an IM message + keyboard.
@@ -97,7 +97,7 @@ const FALLBACK_TEXT_DEFAULT = "需要审批，请回到 Synapse dashboard 处理
 
 interface PendingRow {
   id: string
-  interaction_request_id: string
+  task_id: string
   workspace_id: string
   conversation_id: string
   transport_message_link_id: string | null
@@ -195,9 +195,9 @@ export async function runOneTick(): Promise<ProjectionTickStats> {
     const result = await runOn<PendingRow>(
       client,
       `
-        SELECT id, interaction_request_id, workspace_id, conversation_id,
+        SELECT id, task_id, workspace_id, conversation_id,
                transport_message_link_id, attempts
-        FROM interaction_transport_projections
+        FROM tool_call_task_transport_projections
         WHERE status = 'pending' AND next_attempt_at <= NOW()
         ORDER BY next_attempt_at
         LIMIT $1
@@ -272,19 +272,24 @@ async function processOne(
   }>(
     client,
     `
-      SELECT id, status, expires_at
-      FROM interaction_requests
+      SELECT id, lifecycle_status AS status, expires_at
+      FROM tool_call_tasks
       WHERE id = $1
       FOR UPDATE
     `,
-    [row.interaction_request_id]
+    [row.task_id]
   )
   const lock = lockedInteraction.rows[0]
   if (!lock) {
     await skipRow(client, row.id, "interaction_missing")
     return "skipped"
   }
-  if (lock.status !== "pending") {
+  if (
+    lock.status !== "working" &&
+    lock.status !== "input_required" &&
+    lock.status !== "auth_required" &&
+    lock.status !== "submitted"
+  ) {
     await skipRow(client, row.id, "interaction_already_resolved_or_expired")
     return "skipped"
   }
@@ -349,10 +354,7 @@ async function processOne(
 
   // Load the full interaction summary so we know what grant options /
   // presets to mint tokens for.
-  const interaction = await getInteractionRequestSummary(
-    row.interaction_request_id,
-    client
-  )
+  const interaction = await getInteractionRequestSummary(row.task_id, client)
   if (
     !interaction ||
     interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
@@ -455,7 +457,7 @@ async function markRowProjected(
   await runOn(
     client,
     `
-      UPDATE interaction_transport_projections
+      UPDATE tool_call_task_transport_projections
       SET status = 'projected',
           transport_message_link_id = $2,
           error = NULL,
@@ -474,7 +476,7 @@ async function skipRow(
   await runOn(
     client,
     `
-      UPDATE interaction_transport_projections
+      UPDATE tool_call_task_transport_projections
       SET status = 'skipped',
           error = $2,
           updated_at = NOW()
@@ -494,7 +496,7 @@ async function bumpAttemptsOnRow(
     await runOn(
       client,
       `
-        UPDATE interaction_transport_projections
+        UPDATE tool_call_task_transport_projections
         SET status = 'failed',
             attempts = $2,
             error = $3,
@@ -510,7 +512,7 @@ async function bumpAttemptsOnRow(
   await runOn(
     client,
     `
-      UPDATE interaction_transport_projections
+      UPDATE tool_call_task_transport_projections
       SET attempts = $2,
           next_attempt_at = NOW() + ($3 || ' seconds')::interval,
           error = $4,

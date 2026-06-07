@@ -48,6 +48,11 @@ import {
 import {
   completeToolCallTask,
   failToolCallTask,
+  insertToolCallTaskDeduped,
+  findLiveToolCallTaskByRequestKey,
+  type ToolCallTaskExecutorKind,
+  type ToolCallTaskLifecycleStatus,
+  type ToolCallTaskOutcome,
 } from "../tool-call-tasks/service.js"
 import { updateSessionCollaboration } from "../session/service.js"
 import {
@@ -122,11 +127,14 @@ type RawInteractionRow = {
   id: string
   workspace_id: string
   conversation_id: string
-  task_id: string | null
+  // Task unification: the row IS the task. session_id lives on it (nullable for
+  // remote_agent_channel delivery). The legacy task_id pointer is gone.
+  session_id: string | null
   remote_agent_run_id: string | null
   conversation_item_id: string | null
   kind: InteractionRequestKind
   status: InteractionRequestStatus
+  outcome: ToolCallTaskOutcome | null
   revision: string | number
   prompt_payload: unknown
   plan_payload: unknown
@@ -558,7 +566,7 @@ function buildRemoteAgentInteractionRequestKey(params: {
   return `remote-agent-run:${params.remoteAgentRunId}:${params.kind}`
 }
 
-function buildRuntimeAuthorizationInteractionRequestKey(params: {
+export function buildRuntimeAuthorizationRequestKey(params: {
   conversationId: string
   requesterParticipantId: string
   dedupeKey: string
@@ -1025,6 +1033,66 @@ function requireEntityRef(
   return entity
 }
 
+/**
+ * Reverse of interactionStatusToTaskFields: project the task's lifecycle_status
+ * ⟂ outcome back into the legacy interaction-status vocabulary the wire/FE still
+ * speak (until the Step-3 task-surface migration). Non-terminal → 'pending';
+ * completed → answered/approved/rejected by outcome; cancelled/expired direct.
+ */
+function taskFieldsToInteractionStatus(
+  lifecycle: ToolCallTaskLifecycleStatus,
+  outcome: ToolCallTaskOutcome | null
+): InteractionRequestStatus {
+  switch (lifecycle) {
+    case "completed":
+      switch (outcome) {
+        case "answered":
+          return "answered"
+        case "approved":
+        case "granted":
+          return "approved"
+        case "revision_requested":
+        case "denied":
+          return "rejected"
+        default:
+          return "answered"
+      }
+    case "cancelled":
+      return "cancelled"
+    case "expired":
+      return "expired"
+    case "failed":
+      return "rejected"
+    case "submitted":
+    case "working":
+    case "input_required":
+    case "auth_required":
+    default:
+      return "pending"
+  }
+}
+
+/**
+ * Resolve a conversation participant to its access_subjects id (the task
+ * delivery key). Used by the remote-agent interaction paths that mint their own
+ * task (the principal is the requesting remote_agent's participant subject).
+ */
+async function resolveParticipantSubjectId(
+  client: Executor,
+  participantId: string
+): Promise<string> {
+  const row = await client
+    .selectFrom("conversation_participants")
+    .select("subject_id")
+    .where("id", "=", participantId)
+    .limit(1)
+    .executeTakeFirst()
+  if (!row?.subject_id) {
+    throw new Error(`Participant ${participantId} has no subject`)
+  }
+  return row.subject_id
+}
+
 function buildInteractionSummary(
   row: RawInteractionRow
 ): InteractionRequestSummary {
@@ -1046,12 +1114,16 @@ function buildInteractionSummary(
 
   const baseInteraction = {
     id: row.id,
-    taskId: row.task_id || undefined,
+    // Task unification: the task IS the interaction; taskId == the row id.
+    taskId: row.id,
     remoteAgentRunId: row.remote_agent_run_id || undefined,
     workspaceId: row.workspace_id,
     conversationId: row.conversation_id,
     itemId: row.conversation_item_id || undefined,
-    status: row.status,
+    status: taskFieldsToInteractionStatus(
+      row.status as unknown as ToolCallTaskLifecycleStatus,
+      row.outcome
+    ),
     revision: toRevisionNumber(row.revision, `Interaction ${row.id} revision`),
     requester,
     resolvedBy,
@@ -1213,8 +1285,10 @@ async function getInteractionRowById(
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
-            user_input.prompt_payload AS prompt_payload,
-            plan.plan_payload AS plan_payload,
+            ir.lifecycle_status AS status,
+            ir.executor_kind AS kind,
+            ir.request_payload AS prompt_payload,
+            ir.request_payload AS plan_payload,
             auth.requested_tool_name AS requested_tool_name,
             auth.reason AS reason,
             auth.request_mode AS request_mode,
@@ -1228,12 +1302,7 @@ async function getInteractionRowById(
             auth.principal_scope_subject_id AS principal_scope_subject_id,
             principal_subj.kind AS principal_subject_kind,
             principal_subj.remote_agent_id AS principal_remote_agent_id,
-            COALESCE(
-              user_input.resolution_payload,
-              plan.resolution_payload,
-              auth.resolution_payload,
-              '{}'::jsonb
-            ) AS resolution_payload,
+            ir.final_result_payload AS resolution_payload,
             auth.device_id,
             auth.device_capability_id,
             auth.device_exposure_id,
@@ -1274,13 +1343,9 @@ async function getInteractionRowById(
             device.title AS device_display_name,
             exposure.display_name AS exposure_display_name,
             exposure.stable_key AS exposure_stable_key
-     FROM interaction_requests ir
-     LEFT JOIN interaction_user_input_requests user_input
-       ON user_input.interaction_id = ir.id
-     LEFT JOIN interaction_plan_approval_requests plan
-       ON plan.interaction_id = ir.id
-     LEFT JOIN interaction_runtime_authorization_requests auth
-       ON auth.interaction_id = ir.id
+     FROM tool_call_tasks ir
+     LEFT JOIN tool_call_task_runtime_authorization auth
+       ON auth.task_id = ir.id
      LEFT JOIN access_subjects principal_subj
        ON principal_subj.id = auth.principal_subject_id
      LEFT JOIN conversation_participants requester
@@ -1369,9 +1434,9 @@ async function getInteractionCommandRow(
   queryable?: Executor
 ) {
   const compiled = db
-    .selectFrom("interaction_response_commands")
+    .selectFrom("tool_call_task_response_commands")
     .selectAll()
-    .where("interaction_id", "=", interactionId)
+    .where("task_id", "=", interactionId)
     .where("command_id", "=", commandId)
     .limit(1)
     .compile()
@@ -1388,8 +1453,10 @@ async function getInteractionRowByIdForUpdate(
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
-            user_input.prompt_payload AS prompt_payload,
-            plan.plan_payload AS plan_payload,
+            ir.lifecycle_status AS status,
+            ir.executor_kind AS kind,
+            ir.request_payload AS prompt_payload,
+            ir.request_payload AS plan_payload,
             auth.requested_tool_name AS requested_tool_name,
             auth.reason AS reason,
             auth.request_mode AS request_mode,
@@ -1403,12 +1470,7 @@ async function getInteractionRowByIdForUpdate(
             auth.principal_scope_subject_id AS principal_scope_subject_id,
             principal_subj.kind AS principal_subject_kind,
             principal_subj.remote_agent_id AS principal_remote_agent_id,
-            COALESCE(
-              user_input.resolution_payload,
-              plan.resolution_payload,
-              auth.resolution_payload,
-              '{}'::jsonb
-            ) AS resolution_payload,
+            ir.final_result_payload AS resolution_payload,
             auth.device_id,
             auth.device_capability_id,
             auth.device_exposure_id,
@@ -1449,13 +1511,9 @@ async function getInteractionRowByIdForUpdate(
             device.title AS device_display_name,
             exposure.display_name AS exposure_display_name,
             exposure.stable_key AS exposure_stable_key
-     FROM interaction_requests ir
-     LEFT JOIN interaction_user_input_requests user_input
-       ON user_input.interaction_id = ir.id
-     LEFT JOIN interaction_plan_approval_requests plan
-       ON plan.interaction_id = ir.id
-     LEFT JOIN interaction_runtime_authorization_requests auth
-       ON auth.interaction_id = ir.id
+     FROM tool_call_tasks ir
+     LEFT JOIN tool_call_task_runtime_authorization auth
+       ON auth.task_id = ir.id
      LEFT JOIN access_subjects principal_subj
        ON principal_subj.id = auth.principal_subject_id
      LEFT JOIN conversation_participants requester
@@ -1520,18 +1578,18 @@ async function insertInteractionCommandRow(
 ) {
   await runBuilder(
     client,
-    db.insertInto("interaction_response_commands").values({
-      interaction_id: params.interactionId,
+    db.insertInto("tool_call_task_response_commands").values({
+      task_id: params.interactionId,
       command_id: params.commandId,
       base_revision:
-        params.baseRevision as unknown as TableInsert<"interaction_response_commands">["base_revision"],
+        params.baseRevision as unknown as TableInsert<"tool_call_task_response_commands">["base_revision"],
       outcome: params.outcome,
       request_payload: jsonbValue(
         params.requestPayload
-      ) as unknown as TableInsert<"interaction_response_commands">["request_payload"],
+      ) as unknown as TableInsert<"tool_call_task_response_commands">["request_payload"],
       response_payload: jsonbValue(
         params.responsePayload
-      ) as unknown as TableInsert<"interaction_response_commands">["response_payload"],
+      ) as unknown as TableInsert<"tool_call_task_response_commands">["response_payload"],
       created_by_workspace_member_id: params.createdByWorkspaceMemberId,
     })
   )
@@ -1949,63 +2007,34 @@ async function insertInteractionRequest(
     expiresAt?: string
   }
 ): Promise<string | null> {
-  const interactionId = uuidv4()
-  // ON CONFLICT DO NOTHING on the pending-request unique index
-  // (idx_interaction_requests_pending_request_key, schema.sql).
-  //
-  // Without this, two concurrent callers racing on the same dedupe key
-  // would both pass the pre-INSERT lookup, one would succeed, the other
-  // would crash on the unique-constraint violation, abort its enclosing
-  // transaction, and the caller would surface "authorization request
-  // failed" — instead of treating the call as deduped against the
-  // winner. ON CONFLICT keeps the transaction alive so the caller can
-  // re-query for the winner via findPendingInteractionIdByRequestKey and
-  // fall through to its existing dedupe-reuse path (including the
-  // orphan-task cleanup downstream).
-  //
-  // The partial unique index (WHERE status='pending') means ON CONFLICT
-  // must specify the same predicate or the planner can't match it. We
-  // use the column list + predicate form.
-  //
-  // Returns the new id on a fresh insert, or null when the row already
-  // existed at insert time. Callers MUST handle null by re-querying for
-  // the conflict winner — see the create*InteractionRequest functions.
-  const created = await runCompiledOn<{ id: string }>(
+  // Task unification: the task IS the interaction. The caller already created
+  // the tool_call_tasks row (with its request_key + dedupe). Here we attach the
+  // human-facing participant fields onto that task and return its id. The dedupe
+  // ON CONFLICT now lives at task creation; this UPDATE only succeeds while the
+  // task is still non-terminal-pending (mirrors the old WHERE status='pending').
+  if (!params.taskId) {
+    // Remote-agent-run-only interactions previously had task_id=null; under the
+    // unification every interaction is a task, so a missing taskId is a caller
+    // error.
+    throw new Error(
+      "insertInteractionRequest requires a taskId (the task IS the interaction)"
+    )
+  }
+  const updated = await runCompiledOn<{ id: string }>(
     client,
     sql<{ id: string }>`
-      INSERT INTO interaction_requests (
-        id,
-        workspace_id,
-        conversation_id,
-        task_id,
-        remote_agent_run_id,
-        requester_participant_id,
-        kind,
-        status,
-        request_key,
-        target_participant_id,
-        expires_at
-      )
-      VALUES (
-        ${interactionId},
-        ${params.workspaceId},
-        ${params.conversationId},
-        ${params.taskId || null},
-        ${params.remoteAgentRunId || null},
-        ${params.requesterParticipantId},
-        ${params.kind},
-        'pending',
-        ${params.requestKey},
-        ${params.targetParticipantId || null},
-        ${params.expiresAt || null}
-      )
-      ON CONFLICT (workspace_id, request_key)
-        WHERE status = 'pending'
-        DO NOTHING
+      UPDATE tool_call_tasks
+      SET requester_participant_id = ${params.requesterParticipantId},
+          target_participant_id = ${params.targetParticipantId || null},
+          remote_agent_run_id = COALESCE(${params.remoteAgentRunId || null}, remote_agent_run_id),
+          expires_at = COALESCE(${params.expiresAt || null}, expires_at),
+          updated_at = NOW()
+      WHERE id = ${params.taskId}
+        AND lifecycle_status IN ('submitted', 'working', 'input_required', 'auth_required')
       RETURNING id
     `.compile(db)
   )
-  return created.rows[0]?.id ?? null
+  return updated.rows[0]?.id ?? null
 }
 
 /**
@@ -2036,10 +2065,13 @@ async function resolveInsertConflictWinner(
 }
 
 async function findInteractionIdByTaskId(taskId: string, queryable?: Executor) {
+  // The task IS the interaction now (1:1). The interaction id == the task id;
+  // confirm the task exists and is non-terminal-pending so dedupe-reuse only
+  // returns a live row.
   const compiled = db
-    .selectFrom("interaction_requests")
+    .selectFrom("tool_call_tasks")
     .select("id")
-    .where("task_id", "=", taskId)
+    .where("id", "=", taskId)
     .limit(1)
     .compile()
   const result = await runCompiledOn<{ id: string }>(queryable, compiled)
@@ -2052,11 +2084,16 @@ async function findPendingInteractionIdByRequestKey(
   queryable?: Executor
 ) {
   const compiled = db
-    .selectFrom("interaction_requests")
+    .selectFrom("tool_call_tasks")
     .select("id")
     .where("workspace_id", "=", workspaceId)
     .where("request_key", "=", requestKey)
-    .where("status", "=", "pending")
+    .where("lifecycle_status", "in", [
+      "submitted",
+      "working",
+      "input_required",
+      "auth_required",
+    ])
     .limit(1)
     .compile()
   const result = await runCompiledOn<{ id: string }>(queryable, compiled)
@@ -2064,45 +2101,26 @@ async function findPendingInteractionIdByRequestKey(
 }
 
 async function insertUserInputInteractionDetails(
-  client: Executor,
-  params: {
+  _client: Executor,
+  _params: {
     interactionId: string
     promptPayload: Record<string, unknown>
   }
 ) {
-  await runBuilder(
-    client,
-    db.insertInto("interaction_user_input_requests").values({
-      interaction_id: params.interactionId,
-      prompt_payload: jsonbValue(
-        params.promptPayload
-      ) as unknown as TableInsert<"interaction_user_input_requests">["prompt_payload"],
-      resolution_payload: jsonbValue(
-        {}
-      ) as unknown as TableInsert<"interaction_user_input_requests">["resolution_payload"],
-    })
-  )
+  // No-op under the task unification: the prompt payload lives in
+  // tool_call_tasks.request_payload (written at task creation). human_input has
+  // no CTI detail table.
 }
 
 async function insertPlanApprovalInteractionDetails(
-  client: Executor,
-  params: {
+  _client: Executor,
+  _params: {
     interactionId: string
     planPayload: Record<string, unknown>
   }
 ) {
-  await runBuilder(
-    client,
-    db.insertInto("interaction_plan_approval_requests").values({
-      interaction_id: params.interactionId,
-      plan_payload: jsonbValue(
-        params.planPayload
-      ) as unknown as TableInsert<"interaction_plan_approval_requests">["plan_payload"],
-      resolution_payload: jsonbValue(
-        {}
-      ) as unknown as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
-    })
-  )
+  // No-op under the task unification: the plan payload lives in
+  // tool_call_tasks.request_payload. plan_approval has no CTI detail table.
 }
 
 async function insertRuntimeAuthorizationInteractionDetails(
@@ -2141,8 +2159,8 @@ async function insertRuntimeAuthorizationInteractionDetails(
 ) {
   await runBuilder(
     client,
-    db.insertInto("interaction_runtime_authorization_requests").values({
-      interaction_id: params.interactionId,
+    db.insertInto("tool_call_task_runtime_authorization").values({
+      task_id: params.interactionId,
       device_id: params.deviceId,
       device_capability_id: params.deviceCapabilityId,
       device_exposure_id: params.deviceExposureId,
@@ -2154,21 +2172,18 @@ async function insertRuntimeAuthorizationInteractionDetails(
       source_retry_nonce: params.sourceRetryNonce || null,
       source_request_args: jsonbValue(
         params.sourceRequestArgs
-      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["source_request_args"],
+      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["source_request_args"],
       principal_subject_id: params.principalSubjectId,
       principal_scope_subject_id: params.principalScopeSubjectId || null,
       requested_action: jsonbValue(
         params.requestedAction
-      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["requested_action"],
+      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["requested_action"],
       grant_options: jsonbValue(
         params.grantOptions
-      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["grant_options"],
+      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["grant_options"],
       available_presets: jsonbValue(
         params.availablePresets
-      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["available_presets"],
-      resolution_payload: jsonbValue(
-        {}
-      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["resolution_payload"],
+      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["available_presets"],
       dedupe_key: params.dedupeKey,
     })
   )
@@ -2182,7 +2197,7 @@ async function updateInteractionConversationItemId(
   const result = await runBuilder(
     client,
     db
-      .updateTable("interaction_requests")
+      .updateTable("tool_call_tasks")
       .set({
         conversation_item_id: conversationItemId,
         updated_at: sql`NOW()`,
@@ -2196,6 +2211,55 @@ async function updateInteractionConversationItemId(
   }
 }
 
+/**
+ * Translate the legacy interaction-resolution vocabulary (the wire-facing
+ * status the API/FE still speak) into the task's lifecycle_status ⟂ outcome.
+ *   answered      → completed / answered
+ *   approved      → completed / (plan→approved | runtime_authorization→granted)
+ *   rejected      → completed / (plan→revision_requested | runtime_authorization→denied)
+ *   cancelled     → cancelled  (no outcome)
+ *   superseded    → cancelled  (no outcome; a newer request replaced it)
+ *   expired       → expired    (no outcome)
+ * "pending" is non-terminal and never written here.
+ */
+function interactionStatusToTaskFields(
+  status: InteractionRequestStatus,
+  kind: InteractionRequestKind
+): {
+  lifecycle_status: ToolCallTaskLifecycleStatus
+  outcome: ToolCallTaskOutcome | null
+} {
+  switch (status) {
+    case "answered":
+      return { lifecycle_status: "completed", outcome: "answered" }
+    case "approved":
+      return {
+        lifecycle_status: "completed",
+        outcome:
+          kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+            ? "granted"
+            : "approved",
+      }
+    case "rejected":
+      return {
+        lifecycle_status: "completed",
+        outcome:
+          kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+            ? "denied"
+            : "revision_requested",
+      }
+    case "cancelled":
+      return { lifecycle_status: "cancelled", outcome: null }
+    case "superseded":
+      return { lifecycle_status: "cancelled", outcome: null }
+    case "expired":
+      return { lifecycle_status: "expired", outcome: null }
+    case "pending":
+    default:
+      return { lifecycle_status: "working", outcome: null }
+  }
+}
+
 async function updateInteractionRequestRow(
   client: Executor,
   interactionId: string,
@@ -2204,7 +2268,7 @@ async function updateInteractionRequestRow(
   const result = await runBuilder(
     client,
     db
-      .updateTable("interaction_requests")
+      .updateTable("tool_call_tasks")
       .set(values)
       .where("id", "=", interactionId)
   )
@@ -2217,64 +2281,26 @@ async function updateInteractionRequestRow(
 
 async function updateInteractionResolutionPayload(
   client: Executor,
-  interactionKind: InteractionRequestKind,
+  _interactionKind: InteractionRequestKind,
   interactionId: string,
   payload: Record<string, unknown>
 ) {
-  if (interactionKind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    const result = await runBuilder(
-      client,
-      db
-        .updateTable("interaction_user_input_requests")
-        .set({
-          resolution_payload: jsonbValue(
-            payload
-          ) as unknown as TableInsert<"interaction_user_input_requests">["resolution_payload"],
-        })
-        .where("interaction_id", "=", interactionId)
-    )
-    if (result.rowCount !== 1) {
-      throw new Error(
-        `Expected user_input details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
-      )
-    }
-    return
-  }
-
-  if (interactionKind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-    const result = await runBuilder(
-      client,
-      db
-        .updateTable("interaction_plan_approval_requests")
-        .set({
-          resolution_payload: jsonbValue(
-            payload
-          ) as unknown as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
-        })
-        .where("interaction_id", "=", interactionId)
-    )
-    if (result.rowCount !== 1) {
-      throw new Error(
-        `Expected plan_approval details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
-      )
-    }
-    return
-  }
-
+  // Task unification: resolution payload lives on the task (final_result_payload)
+  // for all kinds — no per-kind detail-table write.
   const result = await runBuilder(
     client,
     db
-      .updateTable("interaction_runtime_authorization_requests")
+      .updateTable("tool_call_tasks")
       .set({
-        resolution_payload: jsonbValue(
+        final_result_payload: jsonbValue(
           payload
-        ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["resolution_payload"],
+        ) as unknown as TableInsert<"tool_call_tasks">["final_result_payload"],
       })
-      .where("interaction_id", "=", interactionId)
+      .where("id", "=", interactionId)
   )
   if (result.rowCount !== 1) {
     throw new Error(
-      `Expected runtime_authorization details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+      `Expected to update task ${interactionId} resolution payload, but affected ${result.rowCount ?? 0} rows`
     )
   }
 }
@@ -2283,53 +2309,27 @@ export async function createUserInputInteractionRequest(
   params: CreateUserInputInteractionParams
 ) {
   return withDbTransaction(async (client) => {
-    const requestKey = buildTaskInteractionRequestKey(params.taskId)
-    const existingInteractionId =
-      (await findInteractionIdByTaskId(params.taskId, client)) ||
-      (await findPendingInteractionIdByRequestKey(
-        params.workspaceId,
-        requestKey,
-        client
-      ))
-    if (existingInteractionId) {
-      const existing = await getInteractionRequestSummary(
-        existingInteractionId,
-        client
-      )
-      if (existing) {
-        return existing
-      }
-    }
-
+    // Task unification: the caller (session-tools createGovernedToolCallTask)
+    // already minted the fresh task (deduped at the task layer). Attach the
+    // participant fields and create the feed item — no second dedupe.
     const interactionId = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
       kind: INTERACTION_REQUEST_KIND.USER_INPUT,
-      requestKey,
+      requestKey: "",
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
     if (interactionId === null) {
-      // Concurrent dedupe race won by another caller — re-resolve and
-      // return the conflict winner instead of crashing on the unique
-      // index. Same outcome as the pre-INSERT dedupe-hit path.
-      const winnerId = await resolveInsertConflictWinner(client, {
-        workspaceId: params.workspaceId,
-        requestKey,
-        taskId: params.taskId,
-      })
-      if (!winnerId) {
+      const current = await getInteractionRequestSummary(params.taskId, client)
+      if (!current) {
         throw new Error(
-          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+          "User-input task was concurrently resolved before its detail could be written"
         )
       }
-      const winner = await getInteractionRequestSummary(winnerId, client)
-      if (!winner) {
-        throw new Error("Failed to load conflict-winning interaction request")
-      }
-      return winner
+      return current
     }
 
     await insertUserInputInteractionDetails(client, {
@@ -2383,51 +2383,52 @@ export async function createRemoteAgentUserInputInteractionRequest(
       remoteAgentRunId: params.remoteAgentRunId,
       kind: INTERACTION_REQUEST_KIND.USER_INPUT,
     })
-    const existingInteractionId = await findPendingInteractionIdByRequestKey(
-      params.workspaceId,
-      requestKey,
-      client
+    // Task unification: the remote-agent path has no caller-minted task, so we
+    // mint it here with delivery_kind=remote_agent_channel. The principal is the
+    // requesting remote_agent (its participant's subject). Dedupe via the task's
+    // request_key ON CONFLICT (run-derived).
+    const principalSubjectId = await resolveParticipantSubjectId(
+      client,
+      params.requesterParticipantId
     )
-    if (existingInteractionId) {
-      const existing = await getInteractionRequestSummary(
-        existingInteractionId,
-        client
+    const minted = await insertToolCallTaskDeduped(client, {
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      executorKind: "user_input",
+      deliveryKind: "remote_agent_channel",
+      humanSurface: "needs_response",
+      principalSubjectId,
+      remoteAgentRunId: params.remoteAgentRunId,
+      sourceToolName: "request_user_input",
+      requestKey,
+      requesterParticipantId: params.requesterParticipantId,
+      targetParticipantId: params.targetParticipantId,
+      lifecycleStatus: "input_required",
+      supportsCancel: true,
+      requestPayload: {
+        title: params.title,
+        instructions: params.instructions,
+        questions: params.questions,
+      },
+      expiresAt: params.expiresAt,
+    })
+    if (!minted) {
+      const winner = await findLiveToolCallTaskByRequestKey(
+        client,
+        params.workspaceId,
+        requestKey
       )
+      const existing = winner
+        ? await getInteractionRequestSummary(winner.id, client)
+        : null
       if (existing) {
         return existing
       }
+      throw new Error(
+        "Remote-agent user-input dedupe hit but no live winner found"
+      )
     }
-
-    const interactionId = await insertInteractionRequest(client, {
-      workspaceId: params.workspaceId,
-      conversationId: params.conversationId,
-      remoteAgentRunId: params.remoteAgentRunId,
-      requesterParticipantId: params.requesterParticipantId,
-      kind: INTERACTION_REQUEST_KIND.USER_INPUT,
-      requestKey,
-      targetParticipantId: params.targetParticipantId,
-      expiresAt: params.expiresAt,
-    })
-    if (interactionId === null) {
-      // Concurrent dedupe race — re-resolve and return the conflict
-      // winner. See createUserInputInteractionRequest for the rationale.
-      const winnerId = await resolveInsertConflictWinner(client, {
-        workspaceId: params.workspaceId,
-        requestKey,
-      })
-      if (!winnerId) {
-        throw new Error(
-          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
-        )
-      }
-      const winner = await getInteractionRequestSummary(winnerId, client)
-      if (!winner) {
-        throw new Error(
-          "Failed to load conflict-winning remote-agent interaction request"
-        )
-      }
-      return winner
-    }
+    const interactionId = minted.id
 
     await insertUserInputInteractionDetails(client, {
       interactionId,
@@ -2481,54 +2482,25 @@ export async function createPlanApprovalInteractionRequest(
   params: CreatePlanApprovalInteractionParams
 ) {
   return withDbTransaction(async (client) => {
-    const requestKey = buildTaskInteractionRequestKey(params.taskId)
-    const existingInteractionId =
-      (await findInteractionIdByTaskId(params.taskId, client)) ||
-      (await findPendingInteractionIdByRequestKey(
-        params.workspaceId,
-        requestKey,
-        client
-      ))
-    if (existingInteractionId) {
-      const existing = await getInteractionRequestSummary(
-        existingInteractionId,
-        client
-      )
-      if (existing) {
-        return existing
-      }
-    }
-
+    // Task unification: caller already minted the fresh deduped task.
     const interactionId = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
       kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
-      requestKey,
+      requestKey: "",
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
     if (interactionId === null) {
-      // Concurrent dedupe race — re-resolve and return the conflict
-      // winner. See createUserInputInteractionRequest for the rationale.
-      const winnerId = await resolveInsertConflictWinner(client, {
-        workspaceId: params.workspaceId,
-        requestKey,
-        taskId: params.taskId,
-      })
-      if (!winnerId) {
+      const current = await getInteractionRequestSummary(params.taskId, client)
+      if (!current) {
         throw new Error(
-          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
+          "Plan-approval task was concurrently resolved before its detail could be written"
         )
       }
-      const winner = await getInteractionRequestSummary(winnerId, client)
-      if (!winner) {
-        throw new Error(
-          "Failed to load conflict-winning plan approval interaction request"
-        )
-      }
-      return winner
+      return current
     }
 
     await insertPlanApprovalInteractionDetails(client, {
@@ -2600,51 +2572,51 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       remoteAgentRunId: params.remoteAgentRunId,
       kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
     })
-    const existingInteractionId = await findPendingInteractionIdByRequestKey(
-      params.workspaceId,
-      requestKey,
-      client
+    // Task unification: mint the remote-agent task (delivery_kind=
+    // remote_agent_channel) here; the principal is the requesting remote_agent.
+    const principalSubjectId = await resolveParticipantSubjectId(
+      client,
+      params.requesterParticipantId
     )
-    if (existingInteractionId) {
-      const existing = await getInteractionRequestSummary(
-        existingInteractionId,
-        client
+    const minted = await insertToolCallTaskDeduped(client, {
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      executorKind: "plan_approval",
+      deliveryKind: "remote_agent_channel",
+      humanSurface: "needs_response",
+      principalSubjectId,
+      remoteAgentRunId: params.remoteAgentRunId,
+      sourceToolName: "submit_plan",
+      requestKey,
+      requesterParticipantId: params.requesterParticipantId,
+      targetParticipantId: params.targetParticipantId,
+      lifecycleStatus: "input_required",
+      supportsCancel: true,
+      requestPayload: {
+        title: params.title,
+        summary: params.summary,
+        planMarkdown: params.planMarkdown,
+        checklist: params.checklist,
+      },
+      expiresAt: params.expiresAt,
+    })
+    if (!minted) {
+      const winner = await findLiveToolCallTaskByRequestKey(
+        client,
+        params.workspaceId,
+        requestKey
       )
+      const existing = winner
+        ? await getInteractionRequestSummary(winner.id, client)
+        : null
       if (existing) {
         return existing
       }
+      throw new Error(
+        "Remote-agent plan-approval dedupe hit but no live winner found"
+      )
     }
-
-    const interactionId = await insertInteractionRequest(client, {
-      workspaceId: params.workspaceId,
-      conversationId: params.conversationId,
-      remoteAgentRunId: params.remoteAgentRunId,
-      requesterParticipantId: params.requesterParticipantId,
-      kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
-      requestKey,
-      targetParticipantId: params.targetParticipantId,
-      expiresAt: params.expiresAt,
-    })
-    if (interactionId === null) {
-      // Concurrent dedupe race — re-resolve and return the conflict
-      // winner. See createUserInputInteractionRequest for the rationale.
-      const winnerId = await resolveInsertConflictWinner(client, {
-        workspaceId: params.workspaceId,
-        requestKey,
-      })
-      if (!winnerId) {
-        throw new Error(
-          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
-        )
-      }
-      const winner = await getInteractionRequestSummary(winnerId, client)
-      if (!winner) {
-        throw new Error(
-          "Failed to load conflict-winning remote-agent plan approval interaction request"
-        )
-      }
-      return winner
-    }
+    const interactionId = minted.id
 
     await insertPlanApprovalInteractionDetails(client, {
       interactionId,
@@ -2737,6 +2709,40 @@ export async function createRuntimeAuthorizationInteractionRequest(
   params: CreateRuntimeAuthorizationInteractionParams
 ) {
   return withDbTransaction(async (client) => {
+    // Task unification: the caller (runtime-authorizations/requests.ts) has
+    // already minted the tool_call_tasks row with the content-derived
+    // request_key + ON CONFLICT dedupe (design §3.4). So dedupe is settled at
+    // the task layer — here we just attach the human-facing participant fields
+    // onto that task and insert the runtime_authorization CTI detail row +
+    // feed item. No second dedupe, no orphan-task cleanup.
+    if (!params.taskId) {
+      throw new Error(
+        "createRuntimeAuthorizationInteractionRequest requires a taskId (the task IS the interaction)"
+      )
+    }
+    const interactionId = await insertInteractionRequest(client, {
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      taskId: params.taskId,
+      requesterParticipantId: params.requesterParticipantId,
+      kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+      requestKey: "",
+      expiresAt: params.expiresAt,
+    })
+    if (interactionId === null) {
+      // The task was concurrently terminalized (cancelled / expired) between
+      // mint and detail-insert — surface the current summary.
+      const current = await getInteractionRequestSummary(params.taskId, client)
+      if (!current) {
+        throw new Error(
+          "Runtime authorization task was concurrently resolved before its detail could be written"
+        )
+      }
+      return current
+    }
+
+    // The detail row stores the content dedupe_key (for audit + the
+    // findOpenRuntimeAuthorizationInteraction background-dedupe lookup).
     const dedupeKey = buildRuntimeAuthorizationDedupeKey({
       deviceId: params.deviceId,
       deviceCapabilityId: params.deviceCapabilityId,
@@ -2749,74 +2755,6 @@ export async function createRuntimeAuthorizationInteractionRequest(
       availablePresets: params.availablePresets,
       runtimeSessionId: params.runtimeSessionId,
     })
-    const requestKey = buildRuntimeAuthorizationInteractionRequestKey({
-      conversationId: params.conversationId,
-      requesterParticipantId: params.requesterParticipantId,
-      dedupeKey,
-    })
-    const existingInteractionId =
-      (params.taskId
-        ? await findInteractionIdByTaskId(params.taskId, client)
-        : null) ||
-      (await findPendingInteractionIdByRequestKey(
-        params.workspaceId,
-        requestKey,
-        client
-      ))
-    if (existingInteractionId) {
-      const existing = await getInteractionRequestSummary(
-        existingInteractionId,
-        client
-      )
-      if (existing) {
-        // Re-arm the transport projection so the projection worker
-        // re-tries delivery even though we returned an existing
-        // interaction. Only re-arms rows that were skipped for
-        // recoverable reasons (binding gone, outbound disabled,
-        // webhook not yet confirmed); skipped='not_supported_in_v1'
-        // requires a binding_created_or_replaced recovery event.
-        await upsertInteractionTransportProjection(client, {
-          interactionRequestId: existingInteractionId,
-          workspaceId: params.workspaceId,
-          conversationId: params.conversationId,
-        })
-        return existing
-      }
-    }
-
-    const interactionId = await insertInteractionRequest(client, {
-      workspaceId: params.workspaceId,
-      conversationId: params.conversationId,
-      taskId: params.taskId,
-      requesterParticipantId: params.requesterParticipantId,
-      kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
-      requestKey,
-      expiresAt: params.expiresAt,
-    })
-    if (interactionId === null) {
-      // Concurrent dedupe race — re-resolve and return the conflict
-      // winner. The outer createRuntimeAuthorizationRequest detects this
-      // as a row-reuse via didInnerDedupeReuseRow (the winner's row
-      // carries the OTHER caller's source_retry_nonce, not ours) and
-      // cancels the orphan tool_call_task it created upstream.
-      const winnerId = await resolveInsertConflictWinner(client, {
-        workspaceId: params.workspaceId,
-        requestKey,
-        taskId: params.taskId,
-      })
-      if (!winnerId) {
-        throw new Error(
-          "Insert returned conflict but no winner could be located — request_key may have been concurrently completed"
-        )
-      }
-      const winner = await getInteractionRequestSummary(winnerId, client)
-      if (!winner) {
-        throw new Error(
-          "Failed to load conflict-winning runtime authorization interaction request"
-        )
-      }
-      return winner
-    }
 
     await insertRuntimeAuthorizationInteractionDetails(client, {
       interactionId,
@@ -2898,10 +2836,10 @@ export async function findOpenRuntimeAuthorizationInteraction(
     runtimeSessionId: params.runtimeSessionId,
   })
   const row = await db
-    .selectFrom("interaction_requests as ir")
+    .selectFrom("tool_call_tasks as ir")
     .innerJoin(
-      "interaction_runtime_authorization_requests as auth",
-      "auth.interaction_id",
+      "tool_call_task_runtime_authorization as auth",
+      "auth.task_id",
       "ir.id"
     )
     .select("ir.id")
@@ -2910,8 +2848,13 @@ export async function findOpenRuntimeAuthorizationInteraction(
     .where(
       sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`
     )
-    .where("ir.kind", "=", INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION)
-    .where("ir.status", "=", "pending")
+    .where("ir.executor_kind", "=", "runtime_authorization")
+    .where("ir.lifecycle_status", "in", [
+      "submitted",
+      "working",
+      "input_required",
+      "auth_required",
+    ])
     .where((eb) =>
       eb.or([
         eb("ir.expires_at", "is", null),
@@ -2947,19 +2890,8 @@ export async function getInteractionRequestSummary(
 }
 
 export async function getInteractionRequestSummaryByTaskId(taskId: string) {
-  const row = await db
-    .selectFrom("interaction_requests")
-    .select("id")
-    .where("task_id", "=", taskId)
-    .orderBy("created_at", "desc")
-    .limit(1)
-    .executeTakeFirst()
-
-  const interactionId = row?.id
-  if (!interactionId) {
-    return null
-  }
-  return getInteractionRequestSummary(interactionId)
+  // Task unification: the task IS the interaction (interaction id == task id).
+  return getInteractionRequestSummary(taskId)
 }
 
 export async function cancelInteractionRequestByTaskId(
@@ -2982,7 +2914,12 @@ export async function cancelInteractionRequest(
     throw new Error("Interaction request not found")
   }
 
-  if (existing.status !== "pending") {
+  if (
+    taskFieldsToInteractionStatus(
+      existing.status as unknown as ToolCallTaskLifecycleStatus,
+      existing.outcome
+    ) !== "pending"
+  ) {
     const current = await getInteractionRequestSummary(interactionId)
     if (!current) {
       throw new Error("Failed to reload interaction request")
@@ -2993,7 +2930,7 @@ export async function cancelInteractionRequest(
   const resolutionPayload = parseJsonObject(existing.resolution_payload)
   const interaction = await withDbTransaction(async (client) => {
     await updateInteractionRequestRow(client, interactionId, {
-      status: "cancelled",
+      lifecycle_status: "cancelled",
       revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
@@ -3031,7 +2968,7 @@ export async function canUserViewInteraction(params: {
   userId: string
 }) {
   const row = await db
-    .selectFrom("interaction_requests as ir")
+    .selectFrom("tool_call_tasks as ir")
     .select("ir.id")
     .where("ir.id", "=", params.interactionId)
     .where((eb) =>
@@ -3046,10 +2983,10 @@ export async function canUserViewInteraction(params: {
             AND wm.user_id = ${params.userId}
         )`,
         eb.and([
-          eb("ir.kind", "in", [
-            INTERACTION_REQUEST_KIND.USER_INPUT,
-            INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
-          ]),
+          eb("ir.executor_kind", "in", [
+            "user_input",
+            "plan_approval",
+          ] satisfies ToolCallTaskExecutorKind[]),
           eb.or([
             sql<boolean>`EXISTS (
               SELECT 1
@@ -3078,7 +3015,11 @@ export async function canUserViewInteraction(params: {
           ]),
         ]),
         eb.and([
-          eb("ir.kind", "=", INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION),
+          eb(
+            "ir.executor_kind",
+            "=",
+            INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+          ),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM conversation_participants cm
@@ -3535,7 +3476,13 @@ export async function resolveInteractionRequest(
       locked.revision,
       `Interaction ${locked.id} revision`
     )
-    if (locked.status !== "pending" || lockedRevision !== params.baseRevision) {
+    if (
+      taskFieldsToInteractionStatus(
+        locked.status as unknown as ToolCallTaskLifecycleStatus,
+        locked.outcome
+      ) !== "pending" ||
+      lockedRevision !== params.baseRevision
+    ) {
       const currentInteraction = buildInteractionSummary(locked)
       const responsePayload: StoredInteractionResolveResponse = {
         outcome: "conflict",
@@ -3604,22 +3551,11 @@ export async function resolveInteractionRequest(
           .where("conversation_id", "=", locked.conversation_id)
           .execute()
       } else {
-        if (!locked.task_id) {
+        // Task unification: locked IS the task row, so session_id is on it.
+        if (!locked.session_id) {
           throw new Error(`Interaction ${locked.id} is missing task governance`)
         }
-        const taskRow = await takeFirstOn(
-          client,
-          db
-            .selectFrom("tool_call_tasks")
-            .select("session_id")
-            .where("id", "=", locked.task_id)
-            .limit(1)
-        )
-        if (!taskRow?.session_id) {
-          throw new Error(
-            `Plan approval interaction ${locked.id} is missing a session`
-          )
-        }
+        const taskRow = { session_id: locked.session_id }
         const sessionRow = await takeFirstOn(
           client,
           db
@@ -3820,8 +3756,7 @@ export async function resolveInteractionRequest(
             scope: presetTriple.scope,
             retention: presetTriple.retention,
             createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
-            sourceInteractionId: locked.id,
-            sourceTaskId: locked.task_id || undefined,
+            sourceTaskId: locked.id || undefined,
             sourceRetryNonce: locked.source_retry_nonce || undefined,
             sourceRuntimeSessionId:
               locked.source_runtime_session_id || undefined,
@@ -3841,8 +3776,14 @@ export async function resolveInteractionRequest(
       }
     }
 
+    // Task unification (design §3.4): the in-tx update records the human
+    // resolution (resolver, revision bump, resolution payload) but does NOT
+    // flip the lifecycle to terminal. The post-commit fan-out below does the
+    // SINGLE terminal flip + delivery via completeToolCallTask/failToolCallTask
+    // (so runtime-auth auto-retry can run first and its result drives the
+    // terminal notice). The SQL terminal guard makes that flip idempotent.
+    void interactionStatusToTaskFields // (kept for outcome derivation in fan-out)
     await updateInteractionRequestRow(client, params.interactionId, {
-      status: nextStatus,
       revision: sql`revision + 1`,
       resolved_by_participant_id: params.resolverParticipantId,
       resolved_at: sql`NOW()`,
@@ -3896,7 +3837,7 @@ export async function resolveInteractionRequest(
           ? (locked.source_request_args as Record<string, unknown>)
           : undefined,
       lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
-      lockedSourceTaskId: locked.task_id ?? undefined,
+      lockedSourceTaskId: locked.id ?? undefined,
       // subject-scope-refactor: skip-task gate is now keyed on
       // principal_subj.kind (resolved via JOIN at SELECT time), not the
       // dropped principal_remote_agent_id column. principal_subject_kind
@@ -3912,6 +3853,10 @@ export async function resolveInteractionRequest(
       lockedPrincipalScopeSubjectId:
         locked.principal_scope_subject_id ?? undefined,
       lockedPrincipalSubject: lockedPrincipalSubjectForReturn,
+      // Task unification: the decision (interaction vocabulary) computed in-tx,
+      // so the post-commit delivery fan-out can branch on it without relying on
+      // the (still non-terminal) lifecycle_status.
+      nextStatus,
     }
   })
 
@@ -3935,65 +3880,44 @@ export async function resolveInteractionRequest(
     }
   }
 
-  // runtime_authorization requests created for a remote_agent principal
-  // deliberately skip the tool_call_task (the bridged agent retries its
-  // own tool call on the next round-trip instead of being woken up via
-  // chat session machinery). PR #31's createRuntimeAuthorizationRequest
-  // sets task=null in that branch, so by the time we reach this point
-  // interaction.taskId is undefined. Without this short-circuit the
-  // generic "missing task governance" guard below would throw AFTER the
-  // approval transaction already created the grant — leaving the grant
-  // valid but the API caller seeing a 500.
-  if (
-    runtimeAuthorizationApprovalSkipsTaskCompletion({
-      kind: interaction.kind,
-      taskId: interaction.taskId,
-      principalSubjectKind: result.lockedPrincipalSubjectKind,
-    })
-  ) {
-    return {
-      outcome: result.outcome,
-      interaction,
-      createdGrant: result.createdGrant,
-      createdGrants: result.createdGrant ? [result.createdGrant] : undefined,
-    }
-  }
-
+  // Task unification: every interaction IS a task (no task=null remote-agent
+  // special-case). The post-commit fan-out fires the SINGLE terminal flip +
+  // delivery; the delivery registry inside completeToolCallTask routes by
+  // delivery_kind (session_wakeup → wakeup spine; remote_agent_channel → push).
+  // P1: a human "no" (plan revision / authz deny) is completed+outcome, NOT a
+  // machinery failure — so we always completeToolCallTask with the right outcome.
   if (!interaction.taskId) {
     throw new Error(`Interaction ${interaction.id} is missing task governance`)
   }
 
   if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    await completeToolCallTask(
-      interaction.taskId,
-      buildUserInputAsyncNotice(interaction)
-    )
+    await completeToolCallTask(interaction.taskId, {
+      ...buildUserInputAsyncNotice(interaction),
+      outcome: "answered",
+    })
   } else if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-    if (interaction.status === "approved") {
-      await completeToolCallTask(
-        interaction.taskId,
-        buildPlanApprovalApprovedNotice(interaction)
-      )
+    if (result.nextStatus === "approved") {
+      await completeToolCallTask(interaction.taskId, {
+        ...buildPlanApprovalApprovedNotice(interaction),
+        outcome: "approved",
+      })
     } else {
-      await failToolCallTask(
-        interaction.taskId,
-        buildPlanApprovalRevisionNotice(interaction)
-      )
+      await completeToolCallTask(interaction.taskId, {
+        ...buildPlanApprovalRevisionNotice(interaction),
+        outcome: "revision_requested",
+      })
     }
-  } else if (interaction.status === "rejected") {
-    await failToolCallTask(
-      interaction.taskId,
-      buildRuntimeAuthorizationRejectedNotice(interaction)
-    )
+  } else if (result.nextStatus === "rejected") {
+    await completeToolCallTask(interaction.taskId, {
+      ...buildRuntimeAuthorizationRejectedNotice(interaction),
+      outcome: "denied",
+    })
   } else {
-    // Approved runtime authorization: try to re-dispatch the original
-    // tool call server-side using the persisted sourceRequestArgs +
-    // retry_nonce + the grant we just created. The model never sees the
-    // nonce — the dispatcher injects it into the envelope on its behalf,
-    // so the previously-failing call's tool result lands directly in the
-    // task notice. Falls back to a plain approval notice if the auto-
-    // retry can't be performed (device went offline, grant was created
-    // without source args, etc.).
+    // Approved runtime authorization: re-dispatch the original tool call
+    // server-side using the persisted sourceRequestArgs + retry_nonce + the
+    // grant we just created (design §3.4: auto-retry BEFORE the single terminal
+    // flip; its result drives the completion notice). Falls back to a plain
+    // approval notice if auto-retry can't run (device offline, no source args).
     const approvedRetry = await maybeAutoRetryAfterApproval({
       interaction,
       sourceRequestArgs: result.lockedSourceRequestArgs,
@@ -4004,10 +3928,11 @@ export async function resolveInteractionRequest(
       lockedPrincipalScopeSubjectId: result.lockedPrincipalScopeSubjectId,
       resolverWorkspaceMemberId: params.resolverWorkspaceMemberId,
     })
-    await completeToolCallTask(
-      interaction.taskId,
-      approvedRetry ?? buildRuntimeAuthorizationApprovedNotice(interaction)
-    )
+    await completeToolCallTask(interaction.taskId, {
+      ...(approvedRetry ??
+        buildRuntimeAuthorizationApprovedNotice(interaction)),
+      outcome: "granted",
+    })
   }
 
   return {
@@ -4028,7 +3953,10 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
   }
   if (
     existing.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
-    existing.status !== "pending"
+    taskFieldsToInteractionStatus(
+      existing.status as unknown as ToolCallTaskLifecycleStatus,
+      existing.outcome
+    ) !== "pending"
   ) {
     const current = await getInteractionRequestSummary(interactionId)
     if (!current) {
@@ -4040,7 +3968,7 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
   const resolutionPayload = parseJsonObject(existing.resolution_payload)
   const interaction = await withDbTransaction(async (client) => {
     await updateInteractionRequestRow(client, interactionId, {
-      status: "superseded",
+      lifecycle_status: "cancelled",
       revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,

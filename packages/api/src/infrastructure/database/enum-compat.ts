@@ -73,7 +73,6 @@ import type {
   AutomationTriggersScheduleKind,
   AutomationTriggersSourceKind,
   AutomationTriggersTriggerKind,
-  InteractionRequestsStatus,
   MemoryItemsCategory,
   MemoryItemsIndexStatus,
   MemoryItemsState,
@@ -96,7 +95,7 @@ import type {
   SessionsStatus,
   SessionWakeupsSourceType,
   SessionWakeupsStatus,
-  ToolCallTasksStatus,
+  ToolCallTasksLifecycleStatus,
   PluginPackageVersionSpecsTransport,
   TransportAccountsConnectionMode,
   TransportAccountsInboundActorMode,
@@ -297,7 +296,7 @@ type _PluginAuthConnectionStatusMatchesDb = Assert<
 type _TaskNoticeStatusMatchesTerminalToolTaskStatuses = Assert<
   IsEqual<
     TaskNoticeStatus,
-    Extract<ToolCallTasksStatus, "completed" | "failed" | "cancelled">
+    Extract<ToolCallTasksLifecycleStatus, "completed" | "failed" | "cancelled">
   >
 >
 type _CatalogFileRoleMatchesDb = Assert<
@@ -307,21 +306,6 @@ type _CatalogFileRoleMatchesDb = Assert<
       "document" | "reference" | "script" | "image" | "json" | "binary"
     >,
     CatalogVersionFilesFileRole
-  >
->
-type _InteractionRequestStatusHasAppTerminalStates = Assert<
-  IsEqual<
-    Extract<
-      InteractionRequestsStatus,
-      | "pending"
-      | "answered"
-      | "approved"
-      | "rejected"
-      | "cancelled"
-      | "expired"
-      | "superseded"
-    >,
-    InteractionRequestsStatus
   >
 >
 

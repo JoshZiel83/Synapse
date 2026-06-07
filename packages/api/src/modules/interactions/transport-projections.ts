@@ -40,19 +40,19 @@ export async function upsertInteractionTransportProjection(
   params: UpsertProjectionParams
 ): Promise<void> {
   await sql`
-    INSERT INTO interaction_transport_projections (
-      interaction_request_id, workspace_id, conversation_id, status
+    INSERT INTO tool_call_task_transport_projections (
+      task_id, workspace_id, conversation_id, status
     )
     VALUES (${params.interactionRequestId}, ${params.workspaceId}, ${params.conversationId}, 'pending')
-    ON CONFLICT (interaction_request_id) DO UPDATE
+    ON CONFLICT (task_id) DO UPDATE
       SET status = 'pending',
           next_attempt_at = NOW(),
           attempts = 0,
           error = NULL,
           transport_message_link_id = NULL,
           updated_at = NOW()
-      WHERE interaction_transport_projections.status = 'skipped'
-        AND interaction_transport_projections.error IN (
+      WHERE tool_call_task_transport_projections.status = 'skipped'
+        AND tool_call_task_transport_projections.error IN (
           'no_binding',
           'outbound_disabled',
           'webhook_inbound_unavailable'
