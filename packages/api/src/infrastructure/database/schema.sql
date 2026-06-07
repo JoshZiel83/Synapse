@@ -101,10 +101,27 @@ CREATE TYPE provider_steps_status AS ENUM ('success', 'error', 'timeout');
 -- Routed source family (tool provenance & routing refactor).
 CREATE TYPE tool_calls_source_kind AS ENUM ('system', 'plugin', 'device');
 CREATE TYPE tool_calls_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
-CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('interaction_user_input', 'plan_approval', 'runtime_authorization', 'device_mcp');
-CREATE TYPE tool_call_tasks_delivery_policy AS ENUM ('online_only', 'store_and_forward', 'human_interaction');
-CREATE TYPE tool_call_tasks_status AS ENUM ('working', 'input_required', 'completed', 'failed', 'cancelled');
-CREATE TYPE tool_call_tasks_dispatch_status AS ENUM ('accepted', 'queued', 'dispatched', 'received', 'started', 'input_requested', 'cancel_requested');
+-- ── Task unification (docs/task-unification-design.md) ──────────────────────
+-- A Task is "everything a principal (actor or remote agent) waits on", modelled
+-- on three ORTHOGONAL axes:
+--   executor_kind  — where the result comes from
+--   delivery_kind  — how the blocked waiter (agent) is woken
+--   human_surface  — whether a human sees/answers it (gates the chat-feed card)
+-- plus a lifecycle ⟂ outcome split (lifecycle = pure state machine the agent
+-- polls; outcome = business verdict, set only on `completed`).
+CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('human_input', 'plan_approval', 'runtime_authorization', 'device_tool', 'external_mcp');
+CREATE TYPE tool_call_tasks_delivery_kind AS ENUM ('session_wakeup', 'remote_agent_channel', 'none');
+CREATE TYPE tool_call_tasks_human_surface AS ENUM ('needs_response', 'silent');
+-- Pure lifecycle state machine. submitted? → working ⇄ input_required ⇄
+-- auth_required → {completed | failed | cancelled | expired}. Terminals are
+-- irreversible (SQL-predicate guarded).
+CREATE TYPE tool_call_tasks_lifecycle_status AS ENUM ('submitted', 'working', 'input_required', 'auth_required', 'completed', 'failed', 'cancelled', 'expired');
+-- Business verdict, NULL unless lifecycle_status='completed'. Discriminated by
+-- executor_kind: human_input→answered; plan_approval→approved|revision_requested;
+-- runtime_authorization→granted|denied; device_tool/external_mcp→ok|tool_error.
+CREATE TYPE tool_call_tasks_outcome AS ENUM ('answered', 'approved', 'revision_requested', 'granted', 'denied', 'ok', 'tool_error');
+-- Transport sub-state for device tasks (queued/dispatched/received/started/
+-- output_streaming) lives on the device_operations ledger, NOT on the task.
 CREATE TYPE tool_call_task_output_chunks_stream AS ENUM ('stdout', 'stderr', 'system');
 CREATE TYPE tool_execution_attempts_status AS ENUM ('success', 'error', 'timeout');
 CREATE TYPE tool_result_parts_part_type AS ENUM ('text', 'file_ref', 'json');
@@ -158,10 +175,11 @@ CREATE TYPE plugin_connections_owner_scope AS ENUM ('installation', 'workspace_m
 CREATE TYPE plugin_connections_status AS ENUM ('active', 'expired', 'revoked');
 CREATE TYPE plugin_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
 -- Runtime authorization enums (renamed from relay_* in PR #20). These back the
--- runtime_authorization_grants + interaction_runtime_authorization_requests
+-- runtime_authorization_grants + tool_call_task_runtime_authorization (detail)
 -- tables and the matching shared enum re-exports.
-CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'runtime_authorization');
-CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved', 'rejected', 'cancelled', 'expired', 'superseded');
+-- (interaction_requests_kind / interaction_requests_status removed in the task
+-- unification: kind → tool_call_tasks_executor_kind; status → lifecycle_status
+-- ⟂ outcome.)
 CREATE TYPE runtime_authorization_request_mode AS ENUM ('background', 'blocking');
 -- Runtime authorization grant scope enum dropped at subject-scope-refactor cutover.
 -- Scope is now expressed by `runtime_authorization_grants.subject_id + scope_subject_id`
@@ -2200,29 +2218,66 @@ CREATE INDEX idx_tool_calls_turn ON tool_calls(turn_id, created_at);
 CREATE INDEX idx_tool_calls_bundle ON tool_calls(bundle_id);
 CREATE INDEX idx_tool_calls_provider_step ON tool_calls(provider_step_id);
 
+-- ── tool_call_tasks — the unified Task (docs/task-unification-design.md) ─────
+-- Single source of truth for "everything a principal waits on". Absorbs the old
+-- interaction_requests lifecycle (revision / request_key / resolved_* / the
+-- conversation feed item) so there is no second hand-synced row. Kind-specific
+-- payload lives in request_payload (human_input / plan_approval) or in a 1:1
+-- detail table (runtime_authorization / device_tool / external_mcp; CTI).
 CREATE TABLE tool_call_tasks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE RESTRICT,
-  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE RESTRICT,
+  -- Axis 1: where the result comes from.
+  executor_kind tool_call_tasks_executor_kind NOT NULL,
+  -- Axis 2: how the blocked waiter (agent) is woken. Derivable from the
+  -- principal subject kind; denormalized for indexability. The DELIVERY KEY is
+  -- principal_subject_id, never remote_agent_run_id.
+  delivery_kind tool_call_tasks_delivery_kind NOT NULL,
+  -- Axis 3: does a human see/answer this? needs_response ⇒ a task_requested
+  -- feed card; silent ⇒ no chat item (agent-only, e.g. device_tool execution).
+  human_surface tool_call_tasks_human_surface NOT NULL,
+  -- The waiter principal (actor OR remote_agent). THE delivery key. Replaces the
+  -- old actor_id NOT NULL. Deferred FK → access_subjects (added post-section).
+  principal_subject_id UUID NOT NULL,
+  -- Delivery-specific columns (conditional CHECK below):
+  --   session_wakeup       ⇒ session_id NOT NULL (in-session actor)
+  --   remote_agent_channel ⇒ principal subject is a remote_agent;
+  --                          remote_agent_run_id OPTIONAL (ask/plan have it,
+  --                          runtime_auth does not) — never the delivery key.
+  session_id UUID REFERENCES sessions(id) ON DELETE RESTRICT,
+  remote_agent_run_id UUID REFERENCES remote_agent_runs(id) ON DELETE RESTRICT,
   turn_id UUID REFERENCES turns(id) ON DELETE SET NULL,
   source_tool_call_id UUID REFERENCES tool_calls(id) ON DELETE SET NULL,
   source_tool_name VARCHAR(255) NOT NULL,
-  executor_kind tool_call_tasks_executor_kind NOT NULL,
-  delivery_policy tool_call_tasks_delivery_policy NOT NULL,
-  status tool_call_tasks_status NOT NULL DEFAULT 'working',
+  -- Lifecycle (pure state machine the agent polls) ⟂ outcome (business verdict).
+  lifecycle_status tool_call_tasks_lifecycle_status NOT NULL DEFAULT 'working',
+  outcome tool_call_tasks_outcome,
   status_message TEXT,
-  dispatch_status tool_call_tasks_dispatch_status NOT NULL DEFAULT 'accepted',
   supports_cancel BOOLEAN NOT NULL DEFAULT FALSE,
   supports_output_tail BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Optimistic-concurrency token for human resolution (was interaction.revision).
+  revision BIGINT NOT NULL DEFAULT 1,
+  -- Dedupe key (content-derived for runtime_authorization, task-derived for
+  -- human_input/plan_approval). Partial-unique while non-terminal (below) so a
+  -- losing concurrent dispatch never materializes a second task.
+  request_key TEXT NOT NULL,
+  -- Human resolution provenance (was interaction.resolved_*).
+  requester_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
+  target_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
+  resolved_by_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
+  resolved_at TIMESTAMPTZ,
   request_payload JSONB NOT NULL DEFAULT '{}',
   immediate_result_payload JSONB NOT NULL DEFAULT '{}',
   final_result_payload JSONB NOT NULL DEFAULT '{}',
   final_error_payload JSONB NOT NULL DEFAULT '{}',
   metadata JSONB NOT NULL DEFAULT '{}',
+  -- The task_requested feed item (needs_response tasks) — was
+  -- interaction.conversation_item_id; also the completion notice anchor.
+  conversation_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
   completion_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
   deadline_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
   retention_ttl_ms INT,
   retain_until TIMESTAMPTZ,
   cancel_requested_at TIMESTAMPTZ,
@@ -2231,16 +2286,35 @@ CREATE TABLE tool_call_tasks (
   last_output_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  -- outcome is set only on a completed lifecycle.
+  CONSTRAINT tool_call_tasks_outcome_requires_completed_chk CHECK (
+    outcome IS NULL OR lifecycle_status = 'completed'
+  ),
+  -- Delivery-specific column requirement (the principal-subject-kind half is
+  -- enforced by tg_tool_call_tasks_delivery_validate after access_subjects).
+  CONSTRAINT tool_call_tasks_delivery_columns_chk CHECK (
+    (delivery_kind = 'session_wakeup' AND session_id IS NOT NULL)
+    OR (delivery_kind = 'remote_agent_channel')
+    OR (delivery_kind = 'none')
+  )
 );
 
 CREATE INDEX idx_tool_call_tasks_session_status
-  ON tool_call_tasks(session_id, status, created_at DESC);
+  ON tool_call_tasks(session_id, lifecycle_status, created_at DESC)
+  WHERE session_id IS NOT NULL;
 CREATE INDEX idx_tool_call_tasks_source_tool_call
   ON tool_call_tasks(source_tool_call_id)
   WHERE source_tool_call_id IS NOT NULL;
 CREATE INDEX idx_tool_call_tasks_conversation_status
-  ON tool_call_tasks(conversation_id, status, created_at DESC);
+  ON tool_call_tasks(conversation_id, lifecycle_status, created_at DESC);
+CREATE INDEX idx_tool_call_tasks_remote_agent_run
+  ON tool_call_tasks(remote_agent_run_id)
+  WHERE remote_agent_run_id IS NOT NULL;
+-- Dedupe: at most one live (non-terminal) task per (workspace, request_key).
+CREATE UNIQUE INDEX idx_tool_call_tasks_pending_request_key
+  ON tool_call_tasks(workspace_id, request_key)
+  WHERE lifecycle_status IN ('submitted', 'working', 'input_required', 'auth_required');
 
 CREATE TABLE tool_call_task_output_chunks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3289,60 +3363,17 @@ CREATE INDEX idx_resource_access_bindings_scope_subject_id
   ON resource_access_bindings(scope_subject_id)
   WHERE scope_subject_id IS NOT NULL;
 
-CREATE TABLE interaction_requests (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
-  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE RESTRICT,
-  task_id UUID REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
-  remote_agent_run_id UUID REFERENCES remote_agent_runs(id) ON DELETE RESTRICT,
-  conversation_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
-  requester_participant_id UUID NOT NULL REFERENCES conversation_participants(id) ON DELETE RESTRICT,
-  kind interaction_requests_kind NOT NULL,
-  status interaction_requests_status NOT NULL DEFAULT 'pending',
-  revision BIGINT NOT NULL DEFAULT 1,
-  request_key TEXT NOT NULL,
-  target_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
-  resolved_by_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
-  resolved_at TIMESTAMPTZ,
-  expires_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT interaction_requests_task_or_remote_agent_run_chk CHECK (
-    (task_id IS NOT NULL AND remote_agent_run_id IS NULL) OR
-    (task_id IS NULL AND remote_agent_run_id IS NOT NULL)
-  ),
-  CONSTRAINT interaction_requests_target_requirement_chk CHECK (
-    (
-      kind IN ('user_input', 'plan_approval')
-      AND (
-        target_participant_id IS NOT NULL
-        OR remote_agent_run_id IS NOT NULL
-      )
-    )
-    OR (
-      kind = 'runtime_authorization'
-      AND target_participant_id IS NULL
-      AND remote_agent_run_id IS NULL
-    )
-  )
-);
-
-CREATE TABLE interaction_user_input_requests (
-  interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE RESTRICT,
-  prompt_payload JSONB NOT NULL DEFAULT '{}',
-  resolution_payload JSONB NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE interaction_plan_approval_requests (
-  interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE RESTRICT,
-  plan_payload JSONB NOT NULL DEFAULT '{}',
-  resolution_payload JSONB NOT NULL DEFAULT '{}'
-);
-
--- Runtime authorization requests (renamed from interaction_relay_authorization_requests
--- in PR #20). Device-only; legacy relay_* columns are gone.
-CREATE TABLE interaction_runtime_authorization_requests (
-  interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE RESTRICT,
+-- ── tool_call_task_runtime_authorization (CTI detail) ───────────────────────
+-- 1:1 detail for executor_kind='runtime_authorization' (was
+-- interaction_runtime_authorization_requests). Kept as a typed detail table
+-- (not folded into request_payload JSONB) precisely because these are real FK
+-- columns with ON DELETE RESTRICT + dispatch indexes — a device delete must not
+-- silently orphan a pending authorization, and the scope-drift gate compares
+-- the frozen principal_scope_subject_id. The 1:1 binding to tool_call_tasks is
+-- enforced by tg_tool_call_tasks_detail_consistency (retargeted from the old
+-- interaction subtype-consistency trigger).
+CREATE TABLE tool_call_task_runtime_authorization (
+  task_id UUID PRIMARY KEY REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
   device_id UUID NOT NULL,                         -- FK added at bottom
   device_capability_id UUID NOT NULL,              -- FK added at bottom
   device_exposure_id UUID NOT NULL,                -- FK added at bottom
@@ -3353,81 +3384,87 @@ CREATE TABLE interaction_runtime_authorization_requests (
   source_runtime_session_id TEXT,
   source_retry_nonce TEXT,
   source_request_args JSONB NOT NULL DEFAULT '{}',
-  -- subject-scope-refactor: principal columns normalized to (subject_id,
-  -- scope_subject_id) — both reference access_subjects via deferred FK
-  -- (added at the post-access_subjects ALTER section). principal_subject_id is
-  -- NOT NULL because every dispatch that creates a runtime authorization
-  -- request has a known principal subject. principal_scope_subject_id is
-  -- nullable and only populated when the principal is actor/remote_agent and
-  -- the conversation is an active participant (corresponds to
-  -- RuntimePrincipalContext.activeConversationSubjectId at request creation
-  -- time). ON DELETE RESTRICT so durable audit/request records can't lose
-  -- their principal when a subject is deleted.
+  -- subject-scope-refactor: principal columns (subject_id, scope_subject_id),
+  -- both → access_subjects via deferred FK (post-access_subjects ALTER).
+  -- principal_subject_id NOT NULL (every dispatch has a known principal);
+  -- principal_scope_subject_id nullable (only when actor/remote_agent is an
+  -- active conversation participant). ON DELETE RESTRICT so durable audit can't
+  -- lose its principal. NOTE: this scope subject is the runtime-auth-specific
+  -- frozen value used by the scope-drift gate, distinct from the parent task's
+  -- principal_subject_id (the delivery key).
   principal_subject_id UUID NOT NULL,              -- FK added at bottom
   principal_scope_subject_id UUID,                 -- FK added at bottom
   requested_action JSONB NOT NULL DEFAULT '{}',
   grant_options JSONB NOT NULL DEFAULT '[]',
   available_presets JSONB NOT NULL DEFAULT '[]',
-  resolution_payload JSONB NOT NULL DEFAULT '{}',
   dedupe_key TEXT NOT NULL
 );
 
--- ────────────────────────────────────────────────────────────────────
--- interaction_action_tokens (G5)
---
+-- ── tool_call_task_device_tool (CTI detail) ─────────────────────────────────
+-- 1:1 detail for executor_kind='device_tool'. Fully wired in the device
+-- rendezvous (design §3.6 / step 4). The async device lifecycle is recorded on
+-- the device_operations ledger (transport sub-state); this row carries the
+-- task-side device binding. FK columns added at the bottom ALTER section.
+CREATE TABLE tool_call_task_device_tool (
+  task_id UUID PRIMARY KEY REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
+  device_id UUID NOT NULL,                          -- FK added at bottom
+  device_capability_id UUID NOT NULL,               -- FK added at bottom
+  device_exposure_id UUID NOT NULL,                 -- FK added at bottom
+  tool_id UUID NOT NULL,                            -- FK added at bottom
+  tool_revision_id UUID NOT NULL,                   -- FK added at bottom
+  device_operation_id UUID,                         -- FK added at bottom (the ledger row)
+  task_mode device_operations_task_mode NOT NULL DEFAULT 'async',
+  input_hash VARCHAR(128) NOT NULL DEFAULT '',
+  operation_timeout_ms INT
+);
+
+-- ── tool_call_task_external_mcp (CTI detail) ────────────────────────────────
+-- 1:1 detail for executor_kind='external_mcp'. Wired behind the RC-shaped MCP
+-- wire adapter (design §3.3 / step 5). Mirrors the upstream MCP task handle.
+CREATE TABLE tool_call_task_external_mcp (
+  task_id UUID PRIMARY KEY REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
+  plugin_installation_id UUID,                      -- FK added at bottom
+  upstream_task_id TEXT,
+  wire_version TEXT NOT NULL DEFAULT '2026-07-28',
+  poll_interval_ms INT,
+  ttl_ms INT
+);
+
+-- ── tool_call_task_action_tokens (was interaction_action_tokens) ────────────
 -- Short, opaque tokens minted by `interactions/action-tokens.ts` when a
--- runtime-authorization interaction is projected onto an IM transport
--- that supports interaction_prompt (e.g. QQ Inline Keyboard). The token
--- lives in the button's `action.data` field; on click, the connector's
--- INTERACTION_CREATE handler redeems it to recover the full
--- ResolveInteractionRequestParams payload (decision, baseRevision,
--- preset, selectedGrantOptionId, …) without having to encode all of
--- those in the limited button_data string.
---
--- The redeem path is intentionally NOT one-shot: ACK round-trips can
--- fail, and QQ replays the same INTERACTION_CREATE event on retry. The
--- redeem helper only checks the token's own `expires_at`; idempotence
--- comes from `resolveInteractionRequest`'s (interaction_id, command_id)
--- dedup, with command_id deterministically derived from
--- uuidv5(qqEvent.id + actionToken + clickerExternalId).
--- ────────────────────────────────────────────────────────────────────
-CREATE TABLE interaction_action_tokens (
+-- needs_response task is projected onto an IM transport that supports
+-- interaction_prompt (e.g. QQ Inline Keyboard). The token lives in the button's
+-- `action.data`; on click the connector redeems it to recover the full respond
+-- payload. NOT one-shot — idempotence comes from tool_call_task_response_commands'
+-- (task_id, command_id) dedup.
+CREATE TABLE tool_call_task_action_tokens (
   token UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  interaction_request_id UUID NOT NULL REFERENCES interaction_requests(id) ON DELETE RESTRICT,
+  task_id UUID NOT NULL REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
   payload JSONB NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_interaction_action_tokens_interaction
-  ON interaction_action_tokens(interaction_request_id);
-CREATE INDEX idx_interaction_action_tokens_expires
-  ON interaction_action_tokens(expires_at);
+CREATE INDEX idx_tool_call_task_action_tokens_task
+  ON tool_call_task_action_tokens(task_id);
+CREATE INDEX idx_tool_call_task_action_tokens_expires
+  ON tool_call_task_action_tokens(expires_at);
 
 -- ────────────────────────────────────────────────────────────────────
--- interaction_transport_projections (G5)
+-- tool_call_task_transport_projections (was interaction_transport_projections)
 --
--- Durable "this interaction needs to be (re)projected onto an IM
--- transport" state. Inserted from the core RUNTIME_AUTHORIZATION
--- creation tx so projection cannot be lost on crash. Consumed by the
--- interaction-projection worker which performs:
+-- Durable "this needs_response task must be (re)projected onto an IM
+-- transport" state. Inserted from the core task-creation tx so projection
+-- cannot be lost on crash. Consumed by the projection worker:
 --    binding resolve → mint tokens → create conversation item →
---    persist link → enqueue delivery
--- inside a SAVEPOINT so partial failure cleans up.
+--    persist link → enqueue delivery   (inside a SAVEPOINT).
 --
--- Status lifecycle:
---   pending → projected (everything ok; link queued)
---   pending → skipped   (no binding / not QQ in v1 / outbound disabled /
---                        webhook_inbound_unavailable / etc.)
---   pending → failed    (sweeper budget exhausted, or 5 retries)
---
--- `ON CONFLICT (interaction_request_id) DO UPDATE … WHERE status='skipped'
---  AND error IN ('no_binding','outbound_disabled','webhook_inbound_unavailable')`
--- in the creation path lets existing-interaction reuse trigger a re-project
--- after the user fixes the binding.
+-- Status lifecycle: pending → projected | skipped | failed.
+-- `ON CONFLICT (task_id) DO UPDATE … WHERE status='skipped' AND error IN (...)`
+-- in the creation path lets reuse trigger a re-project after a binding fix.
 -- ────────────────────────────────────────────────────────────────────
-CREATE TABLE interaction_transport_projections (
+CREATE TABLE tool_call_task_transport_projections (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  interaction_request_id UUID NOT NULL UNIQUE REFERENCES interaction_requests(id) ON DELETE RESTRICT,
+  task_id UUID NOT NULL UNIQUE REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE RESTRICT,
   status TEXT NOT NULL DEFAULT 'pending'
@@ -3439,14 +3476,14 @@ CREATE TABLE interaction_transport_projections (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_interaction_transport_projections_pending
-  ON interaction_transport_projections(next_attempt_at)
+CREATE INDEX idx_tool_call_task_transport_projections_pending
+  ON tool_call_task_transport_projections(next_attempt_at)
   WHERE status = 'pending';
-CREATE INDEX idx_interaction_transport_projections_skipped_recovery
-  ON interaction_transport_projections(workspace_id, conversation_id, error)
+CREATE INDEX idx_tool_call_task_transport_projections_skipped_recovery
+  ON tool_call_task_transport_projections(workspace_id, conversation_id, error)
   WHERE status = 'skipped';
-CREATE INDEX idx_interaction_transport_projections_link
-  ON interaction_transport_projections(transport_message_link_id)
+CREATE INDEX idx_tool_call_task_transport_projections_link
+  ON tool_call_task_transport_projections(transport_message_link_id)
   WHERE transport_message_link_id IS NOT NULL;
 
 -- Help the account/binding recovery helpers find bindings to flip when a
@@ -3454,161 +3491,168 @@ CREATE INDEX idx_interaction_transport_projections_link
 CREATE INDEX idx_conversation_transport_bindings_account
   ON conversation_transport_bindings(transport_account_id, conversation_id);
 
-CREATE TABLE interaction_response_commands (
+-- Idempotency ledger for task resolution (was interaction_response_commands).
+CREATE TABLE tool_call_task_response_commands (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  interaction_id UUID NOT NULL REFERENCES interaction_requests(id) ON DELETE RESTRICT,
+  task_id UUID NOT NULL REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
   command_id UUID NOT NULL,
   base_revision BIGINT NOT NULL,
   outcome TEXT NOT NULL,
   request_payload JSONB NOT NULL DEFAULT '{}',
   response_payload JSONB NOT NULL DEFAULT '{}',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  -- Snapshot so the append-only audit row keeps its actor after the member is
+  -- soft-deleted/purged (matches the prevailing created_by_* pattern).
+  created_by_workspace_member_id_snapshot UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT interaction_response_commands_interaction_command_unique
-    UNIQUE (interaction_id, command_id)
+  CONSTRAINT tool_call_task_response_commands_task_command_unique
+    UNIQUE (task_id, command_id)
 );
 
-CREATE OR REPLACE FUNCTION validate_interaction_request_subtype_consistency()
+CREATE OR REPLACE FUNCTION validate_tool_call_task_detail_consistency()
 RETURNS trigger AS $$
 DECLARE
-  v_interaction_id UUID;
-  v_kind interaction_requests_kind;
-  v_has_user_input BOOLEAN;
-  v_has_plan_approval BOOLEAN;
+  v_task_id UUID;
+  v_executor_kind tool_call_tasks_executor_kind;
   v_has_runtime_authorization BOOLEAN;
-  v_subtype_count INT;
+  v_has_device_tool BOOLEAN;
+  v_has_external_mcp BOOLEAN;
+  v_detail_count INT;
 BEGIN
+  -- CTI consistency: a task whose executor_kind has a detail table must have
+  -- exactly that one detail row; human_input / plan_approval have none (their
+  -- payload lives in tool_call_tasks.request_payload).
   IF TG_OP = 'DELETE' THEN
-    IF TG_TABLE_NAME = 'interaction_requests' THEN
-      v_interaction_id := OLD.id;
+    IF TG_TABLE_NAME = 'tool_call_tasks' THEN
+      v_task_id := OLD.id;
     ELSE
-      v_interaction_id := OLD.interaction_id;
+      v_task_id := OLD.task_id;
     END IF;
   ELSE
-    IF TG_TABLE_NAME = 'interaction_requests' THEN
-      v_interaction_id := NEW.id;
+    IF TG_TABLE_NAME = 'tool_call_tasks' THEN
+      v_task_id := NEW.id;
     ELSE
-      v_interaction_id := NEW.interaction_id;
+      v_task_id := NEW.task_id;
     END IF;
   END IF;
 
-  SELECT ir.kind,
+  SELECT t.executor_kind,
          EXISTS (
-           SELECT 1
-           FROM interaction_user_input_requests user_input
-           WHERE user_input.interaction_id = ir.id
-         ) AS has_user_input,
+           SELECT 1 FROM tool_call_task_runtime_authorization d
+           WHERE d.task_id = t.id
+         ) AS has_runtime_authorization,
          EXISTS (
-           SELECT 1
-           FROM interaction_plan_approval_requests plan
-           WHERE plan.interaction_id = ir.id
-         ) AS has_plan_approval,
+           SELECT 1 FROM tool_call_task_device_tool d
+           WHERE d.task_id = t.id
+         ) AS has_device_tool,
          EXISTS (
-           SELECT 1
-           FROM interaction_runtime_authorization_requests auth
-           WHERE auth.interaction_id = ir.id
-         ) AS has_runtime_authorization
+           SELECT 1 FROM tool_call_task_external_mcp d
+           WHERE d.task_id = t.id
+         ) AS has_external_mcp
     INTO
-      v_kind,
-      v_has_user_input,
-      v_has_plan_approval,
-      v_has_runtime_authorization
-    FROM interaction_requests ir
-   WHERE ir.id = v_interaction_id;
+      v_executor_kind,
+      v_has_runtime_authorization,
+      v_has_device_tool,
+      v_has_external_mcp
+    FROM tool_call_tasks t
+   WHERE t.id = v_task_id;
 
   IF NOT FOUND THEN
     RETURN NULL;
   END IF;
 
-  v_subtype_count :=
-    v_has_user_input::INT +
-    v_has_plan_approval::INT +
-    v_has_runtime_authorization::INT;
+  v_detail_count :=
+    v_has_runtime_authorization::INT +
+    v_has_device_tool::INT +
+    v_has_external_mcp::INT;
 
-  IF v_subtype_count <> 1 THEN
-    RAISE EXCEPTION
-      'interaction_request % must have exactly one subtype row, found user_input=% plan_approval=% runtime_authorization=%',
-      v_interaction_id,
-      v_has_user_input,
-      v_has_plan_approval,
-      v_has_runtime_authorization
-      USING ERRCODE = '23514',
-            CONSTRAINT = 'interaction_requests_exactly_one_subtype_chk';
+  IF v_executor_kind IN ('human_input', 'plan_approval') THEN
+    IF v_detail_count <> 0 THEN
+      RAISE EXCEPTION
+        'tool_call_task % has executor_kind=% but carries a detail row (count=%)',
+        v_task_id, v_executor_kind, v_detail_count
+        USING ERRCODE = '23514',
+              CONSTRAINT = 'tool_call_tasks_no_detail_chk';
+    END IF;
+    RETURN NULL;
   END IF;
 
-  IF v_kind = 'user_input' AND NOT v_has_user_input THEN
+  IF v_detail_count <> 1 THEN
     RAISE EXCEPTION
-      'interaction_request % has kind=user_input but is missing interaction_user_input_requests row',
-      v_interaction_id
+      'tool_call_task % must have exactly one detail row, found runtime_authorization=% device_tool=% external_mcp=%',
+      v_task_id, v_has_runtime_authorization, v_has_device_tool, v_has_external_mcp
       USING ERRCODE = '23514',
-            CONSTRAINT = 'interaction_requests_kind_subtype_match_chk';
+            CONSTRAINT = 'tool_call_tasks_exactly_one_detail_chk';
   END IF;
 
-  IF v_kind = 'plan_approval' AND NOT v_has_plan_approval THEN
+  IF v_executor_kind = 'runtime_authorization' AND NOT v_has_runtime_authorization THEN
     RAISE EXCEPTION
-      'interaction_request % has kind=plan_approval but is missing interaction_plan_approval_requests row',
-      v_interaction_id
-      USING ERRCODE = '23514',
-            CONSTRAINT = 'interaction_requests_kind_subtype_match_chk';
+      'tool_call_task % has executor_kind=runtime_authorization but is missing its detail row',
+      v_task_id USING ERRCODE = '23514', CONSTRAINT = 'tool_call_tasks_kind_detail_match_chk';
   END IF;
-
-  IF v_kind = 'runtime_authorization' AND NOT v_has_runtime_authorization THEN
+  IF v_executor_kind = 'device_tool' AND NOT v_has_device_tool THEN
     RAISE EXCEPTION
-      'interaction_request % has kind=runtime_authorization but is missing interaction_runtime_authorization_requests row',
-      v_interaction_id
-      USING ERRCODE = '23514',
-            CONSTRAINT = 'interaction_requests_kind_subtype_match_chk';
+      'tool_call_task % has executor_kind=device_tool but is missing its detail row',
+      v_task_id USING ERRCODE = '23514', CONSTRAINT = 'tool_call_tasks_kind_detail_match_chk';
+  END IF;
+  IF v_executor_kind = 'external_mcp' AND NOT v_has_external_mcp THEN
+    RAISE EXCEPTION
+      'tool_call_task % has executor_kind=external_mcp but is missing its detail row',
+      v_task_id USING ERRCODE = '23514', CONSTRAINT = 'tool_call_tasks_kind_detail_match_chk';
   END IF;
 
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE CONSTRAINT TRIGGER interaction_requests_subtype_consistency_chk
-AFTER INSERT OR UPDATE OF kind OR DELETE ON interaction_requests
+CREATE CONSTRAINT TRIGGER tool_call_tasks_detail_consistency_chk
+AFTER INSERT OR UPDATE OF executor_kind OR DELETE ON tool_call_tasks
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
+EXECUTE FUNCTION validate_tool_call_task_detail_consistency();
 
-CREATE CONSTRAINT TRIGGER interaction_user_input_requests_parent_kind_chk
-AFTER INSERT OR UPDATE OR DELETE ON interaction_user_input_requests
+CREATE CONSTRAINT TRIGGER tool_call_task_runtime_authorization_parent_chk
+AFTER INSERT OR UPDATE OR DELETE ON tool_call_task_runtime_authorization
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
+EXECUTE FUNCTION validate_tool_call_task_detail_consistency();
 
-CREATE CONSTRAINT TRIGGER interaction_plan_approval_requests_parent_kind_chk
-AFTER INSERT OR UPDATE OR DELETE ON interaction_plan_approval_requests
+CREATE CONSTRAINT TRIGGER tool_call_task_device_tool_parent_chk
+AFTER INSERT OR UPDATE OR DELETE ON tool_call_task_device_tool
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
+EXECUTE FUNCTION validate_tool_call_task_detail_consistency();
 
-CREATE CONSTRAINT TRIGGER interaction_runtime_authorization_requests_parent_kind_chk
-AFTER INSERT OR UPDATE OR DELETE ON interaction_runtime_authorization_requests
+CREATE CONSTRAINT TRIGGER tool_call_task_external_mcp_parent_chk
+AFTER INSERT OR UPDATE OR DELETE ON tool_call_task_external_mcp
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
+EXECUTE FUNCTION validate_tool_call_task_detail_consistency();
 
--- This FK cannot be declared inline on sessions because interaction_requests
--- depends on conversation_items, and conversation_items already depends on sessions.
+-- The active_*_interaction_id columns now reference tool_call_tasks(id) (the
+-- task IS the interaction after the unification). Column names kept for now
+-- (cosmetic rename deferred per the design's sequencing). These FKs cannot be
+-- inline because tool_call_tasks depends on conversation_items which depends on
+-- sessions.
 ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_interaction
   FOREIGN KEY (active_plan_approval_interaction_id)
-  REFERENCES interaction_requests(id)
+  REFERENCES tool_call_tasks(id)
   ON DELETE SET NULL;
 
 ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_interaction
   FOREIGN KEY (active_interaction_id)
-  REFERENCES interaction_requests(id)
+  REFERENCES tool_call_tasks(id)
   ON DELETE SET NULL;
 
 ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_plan_approval_interaction
   FOREIGN KEY (active_plan_approval_interaction_id)
-  REFERENCES interaction_requests(id)
+  REFERENCES tool_call_tasks(id)
   ON DELETE SET NULL;
 
 ALTER TABLE remote_agent_runs ADD CONSTRAINT fk_remote_agent_runs_interaction
   FOREIGN KEY (interaction_id)
-  REFERENCES interaction_requests(id)
+  REFERENCES tool_call_tasks(id)
   ON DELETE SET NULL;
 
 -- Runtime authorization grants (renamed from relay_authorization_grants in
@@ -3635,7 +3679,8 @@ CREATE TABLE runtime_authorization_grants (
   -- synchronously; callers must upsert subject + scope BEFORE inserting.
   scope_subject_id UUID,                           -- FK added at bottom
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
+  -- source_interaction_id dropped in the task unification — the task IS the
+  -- interaction, so source_task_id is the single provenance backref.
   source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
   retention runtime_authorization_grants_retention NOT NULL,
   status runtime_authorization_grants_status NOT NULL DEFAULT 'active',
@@ -3650,25 +3695,12 @@ CREATE TABLE runtime_authorization_grants (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_interaction_requests_conversation
-  ON interaction_requests(conversation_id, created_at DESC);
-CREATE UNIQUE INDEX idx_interaction_requests_task
-  ON interaction_requests(task_id)
-  WHERE task_id IS NOT NULL;
-CREATE INDEX idx_interaction_requests_remote_agent_run
-  ON interaction_requests(remote_agent_run_id, created_at DESC)
-  WHERE remote_agent_run_id IS NOT NULL;
-CREATE INDEX idx_interaction_requests_target
-  ON interaction_requests(target_participant_id, status, created_at DESC);
-CREATE UNIQUE INDEX idx_interaction_requests_pending_request_key
-  ON interaction_requests(workspace_id, request_key)
-  WHERE status = 'pending';
-CREATE INDEX idx_interaction_runtime_authorization_requests_device
-  ON interaction_runtime_authorization_requests(device_id, interaction_id);
-CREATE INDEX idx_interaction_runtime_authorization_requests_dedupe
-  ON interaction_runtime_authorization_requests(dedupe_key);
-CREATE INDEX idx_interaction_response_commands_interaction
-  ON interaction_response_commands(interaction_id, created_at DESC);
+CREATE INDEX idx_tool_call_task_runtime_authorization_device
+  ON tool_call_task_runtime_authorization(device_id, task_id);
+CREATE INDEX idx_tool_call_task_runtime_authorization_dedupe
+  ON tool_call_task_runtime_authorization(dedupe_key);
+CREATE INDEX idx_tool_call_task_response_commands_task
+  ON tool_call_task_response_commands(task_id, created_at DESC);
 CREATE INDEX idx_runtime_authorization_grants_capability
   ON runtime_authorization_grants(device_capability_id, status, created_at DESC);
 CREATE INDEX idx_runtime_authorization_grants_subject
@@ -3692,17 +3724,64 @@ ALTER TABLE runtime_authorization_grants
   ADD CONSTRAINT fk_runtime_authorization_grants_scope_subject
   FOREIGN KEY (scope_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
 -- subject-scope-refactor: principal_subject_id / principal_scope_subject_id
--- FKs on interaction_runtime_authorization_requests. ON DELETE RESTRICT keeps
--- durable audit/request rows from losing their principal when a subject is
--- deleted (admins must explicitly archive/delete the request first).
-ALTER TABLE interaction_runtime_authorization_requests
-  ADD CONSTRAINT fk_interaction_runtime_authorization_requests_principal_subject
+-- FKs on tool_call_task_runtime_authorization. ON DELETE RESTRICT keeps durable
+-- audit/request rows from losing their principal when a subject is deleted.
+ALTER TABLE tool_call_task_runtime_authorization
+  ADD CONSTRAINT fk_tool_call_task_runtime_authorization_principal_subject
   FOREIGN KEY (principal_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
-ALTER TABLE interaction_runtime_authorization_requests
-  ADD CONSTRAINT fk_interaction_runtime_authorization_requests_principal_scope_subject
+ALTER TABLE tool_call_task_runtime_authorization
+  ADD CONSTRAINT fk_tool_call_task_runtime_authorization_principal_scope_subject
   FOREIGN KEY (principal_scope_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
-CREATE INDEX idx_interaction_runtime_authorization_requests_principal_subject
-  ON interaction_runtime_authorization_requests(principal_subject_id);
+CREATE INDEX idx_tool_call_task_runtime_authorization_principal_subject
+  ON tool_call_task_runtime_authorization(principal_subject_id);
+
+-- Task delivery key: principal_subject_id → access_subjects (deferred FK; the
+-- table is created earlier than access_subjects at bootstrap). ON DELETE RESTRICT
+-- so a task never loses its waiter principal.
+ALTER TABLE tool_call_tasks
+  ADD CONSTRAINT fk_tool_call_tasks_principal_subject
+  FOREIGN KEY (principal_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
+CREATE INDEX idx_tool_call_tasks_principal_subject
+  ON tool_call_tasks(principal_subject_id);
+
+-- delivery_kind ↔ principal-subject-kind consistency (the half the inline CHECK
+-- can't express without reading access_subjects): session_wakeup ⇒ actor;
+-- remote_agent_channel ⇒ remote_agent. Deferred so callers may upsert the
+-- subject within the same tx before the task row is visible.
+CREATE OR REPLACE FUNCTION validate_tool_call_task_delivery()
+RETURNS trigger AS $$
+DECLARE
+  v_subject_kind subject_kind;
+BEGIN
+  SELECT kind INTO v_subject_kind
+    FROM access_subjects WHERE id = NEW.principal_subject_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'tool_call_task % principal_subject_id % not found',
+      NEW.id, NEW.principal_subject_id
+      USING ERRCODE = '23503';
+  END IF;
+
+  IF NEW.delivery_kind = 'session_wakeup' AND v_subject_kind <> 'actor' THEN
+    RAISE EXCEPTION
+      'tool_call_task % delivery_kind=session_wakeup requires an actor principal (got %)',
+      NEW.id, v_subject_kind
+      USING ERRCODE = '23514', CONSTRAINT = 'tool_call_tasks_delivery_principal_chk';
+  END IF;
+  IF NEW.delivery_kind = 'remote_agent_channel' AND v_subject_kind <> 'remote_agent' THEN
+    RAISE EXCEPTION
+      'tool_call_task % delivery_kind=remote_agent_channel requires a remote_agent principal (got %)',
+      NEW.id, v_subject_kind
+      USING ERRCODE = '23514', CONSTRAINT = 'tool_call_tasks_delivery_principal_chk';
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER tool_call_tasks_delivery_validate_chk
+AFTER INSERT OR UPDATE OF delivery_kind, principal_subject_id ON tool_call_tasks
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_tool_call_task_delivery();
 
 -- ============ Device Runtime v3 (devices subsystem) ============
 -- See docs/device-runtime-v3.md §6. Device tables now own all runtime
@@ -4091,20 +4170,47 @@ ALTER TABLE runtime_authorization_grants
 -- subject-scope-refactor: conversation context is expressed by
 -- (subject_id → actor/remote_agent subject, scope_subject_id → conversation
 -- subject) and enforced by tg_runtime_authorization_grant_validate.
-ALTER TABLE interaction_runtime_authorization_requests
-  ADD CONSTRAINT fk_interaction_runtime_auth_requests_device
+ALTER TABLE tool_call_task_runtime_authorization
+  ADD CONSTRAINT fk_tool_call_task_runtime_auth_device
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE RESTRICT;
-ALTER TABLE interaction_runtime_authorization_requests
-  ADD CONSTRAINT fk_interaction_runtime_auth_requests_device_capability
+ALTER TABLE tool_call_task_runtime_authorization
+  ADD CONSTRAINT fk_tool_call_task_runtime_auth_device_capability
   FOREIGN KEY (device_capability_id) REFERENCES device_capabilities(id) ON DELETE RESTRICT;
-ALTER TABLE interaction_runtime_authorization_requests
-  ADD CONSTRAINT fk_interaction_runtime_auth_requests_device_exposure
+ALTER TABLE tool_call_task_runtime_authorization
+  ADD CONSTRAINT fk_tool_call_task_runtime_auth_device_exposure
   FOREIGN KEY (device_exposure_id) REFERENCES device_exposures(id) ON DELETE RESTRICT;
 
 -- Indexes covering device-side columns so chat dispatch reading device-capability
 -- grants stays on an index plan.
-CREATE INDEX idx_interaction_runtime_auth_requests_device_capability
-  ON interaction_runtime_authorization_requests(device_capability_id, interaction_id);
+CREATE INDEX idx_tool_call_task_runtime_auth_device_capability
+  ON tool_call_task_runtime_authorization(device_capability_id, task_id);
+
+-- device_tool detail FKs (executor_kind='device_tool'; design §3.6 / step 4).
+ALTER TABLE tool_call_task_device_tool
+  ADD CONSTRAINT fk_tool_call_task_device_tool_device
+  FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE RESTRICT;
+ALTER TABLE tool_call_task_device_tool
+  ADD CONSTRAINT fk_tool_call_task_device_tool_device_capability
+  FOREIGN KEY (device_capability_id) REFERENCES device_capabilities(id) ON DELETE RESTRICT;
+ALTER TABLE tool_call_task_device_tool
+  ADD CONSTRAINT fk_tool_call_task_device_tool_device_exposure
+  FOREIGN KEY (device_exposure_id) REFERENCES device_exposures(id) ON DELETE RESTRICT;
+ALTER TABLE tool_call_task_device_tool
+  ADD CONSTRAINT fk_tool_call_task_device_tool_tool
+  FOREIGN KEY (tool_id) REFERENCES device_tools(id) ON DELETE RESTRICT;
+ALTER TABLE tool_call_task_device_tool
+  ADD CONSTRAINT fk_tool_call_task_device_tool_tool_revision
+  FOREIGN KEY (tool_revision_id) REFERENCES device_tool_revisions(id) ON DELETE RESTRICT;
+ALTER TABLE tool_call_task_device_tool
+  ADD CONSTRAINT fk_tool_call_task_device_tool_operation
+  FOREIGN KEY (device_operation_id) REFERENCES device_operations(id) ON DELETE SET NULL;
+CREATE INDEX idx_tool_call_task_device_tool_device_capability
+  ON tool_call_task_device_tool(device_capability_id, task_id);
+
+-- external_mcp detail FK (executor_kind='external_mcp'; design §3.3 / step 5).
+ALTER TABLE tool_call_task_external_mcp
+  ADD CONSTRAINT fk_tool_call_task_external_mcp_installation
+  FOREIGN KEY (plugin_installation_id) REFERENCES plugin_installations(id) ON DELETE SET NULL;
 
 -- ============ Chat push notification tokens (S7) ============
 CREATE TABLE IF NOT EXISTS chat_push_tokens (
@@ -4742,7 +4848,9 @@ CREATE TABLE memory_access_grants (
   status memory_access_grants_status NOT NULL DEFAULT 'active',
   source TEXT,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
+  -- task unification: repointed from interaction_requests → tool_call_tasks
+  -- (the task is the interaction). Column name kept (cosmetic rename deferred).
+  source_interaction_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -4952,7 +5060,8 @@ CREATE TABLE file_access_grants (
   status file_access_grants_status NOT NULL DEFAULT 'active',
   source TEXT,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
+  -- task unification: repointed from interaction_requests → tool_call_tasks.
+  source_interaction_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -5339,8 +5448,6 @@ DROP TRIGGER IF EXISTS sd_reject_delete ON file_spaces;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON file_spaces FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON installed_skills;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON installed_skills FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
-DROP TRIGGER IF EXISTS sd_reject_delete ON interaction_response_commands;
-CREATE TRIGGER sd_reject_delete BEFORE DELETE ON interaction_response_commands FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON memory_access_grants;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON memory_access_grants FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON memory_item_parts;
@@ -5409,6 +5516,8 @@ DROP TRIGGER IF EXISTS sd_reject_delete ON skill_versions;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON skill_versions FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON tool_call_task_output_chunks;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON tool_call_task_output_chunks FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
+DROP TRIGGER IF EXISTS sd_reject_delete ON tool_call_task_response_commands;
+CREATE TRIGGER sd_reject_delete BEFORE DELETE ON tool_call_task_response_commands FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON tool_calls;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON tool_calls FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON tool_execution_attempts;
@@ -5701,7 +5810,7 @@ DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_automation_event_sour
 DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_actor_id ON resource_access_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_remote_agent_id ON resource_access_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_created_by_workspace_member_id ON resource_access_bindings;
-DROP TRIGGER IF EXISTS sd_fk_live_interaction_response_commands_created_by_workspace_member_id ON interaction_response_commands;
+DROP TRIGGER IF EXISTS sd_fk_live_tool_call_task_response_commands_created_by_workspace_member_id ON tool_call_task_response_commands;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_workspace_id ON runtime_authorization_grants;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_created_by_workspace_member_id ON runtime_authorization_grants;
 DROP TRIGGER IF EXISTS sd_fk_live_devices_workspace_id ON devices;
@@ -6027,7 +6136,7 @@ REVOKE EXECUTE ON FUNCTION sd_replace_memory_item_chunks(uuid, int) FROM PUBLIC;
 CREATE OR REPLACE FUNCTION sd_gc_expired_action_tokens()
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
-  DELETE FROM interaction_action_tokens WHERE expires_at < NOW();
+  DELETE FROM tool_call_task_action_tokens WHERE expires_at < NOW();
 END;
 $$;
 ALTER FUNCTION sd_gc_expired_action_tokens() OWNER TO synapse_purge_fn_owner;
@@ -6068,7 +6177,7 @@ BEGIN
   END IF;
 END
 $sd_exec_grants$;
-GRANT SELECT, DELETE ON memory_item_parts, conversation_participant_addresses, device_services, workspace_member_preferences, actor_model_group_assignments, plugin_version_runtime_permissions, catalog_item_categories, remote_agent_group_interaction_grants, memory_item_chunks, interaction_action_tokens, realtime_event_outbox, chat_push_tokens TO synapse_purge_fn_owner;
+GRANT SELECT, DELETE ON memory_item_parts, conversation_participant_addresses, device_services, workspace_member_preferences, actor_model_group_assignments, plugin_version_runtime_permissions, catalog_item_categories, remote_agent_group_interaction_grants, memory_item_chunks, tool_call_task_action_tokens, realtime_event_outbox, chat_push_tokens TO synapse_purge_fn_owner;
 
 -- 5. Live views: canonical read surface that hides soft-deleted rows.
 -- Single-table views over a base table are auto-updatable; WITH CASCADED
@@ -6194,7 +6303,7 @@ BEGIN
   UPDATE remote_agents t0 SET avatar_file_id = NULL WHERE avatar_file_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE remote_agents t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE remote_agent_machines t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE remote_agent_runs t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE remote_agent_runs t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE remote_agent_group_interaction_grants t0 SET granted_by_workspace_member_id = NULL WHERE granted_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE workspace_relationship_profiles t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE workspace_friend_requests t0 SET requested_via_profile_id = NULL WHERE requested_via_profile_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.requester_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_relationship_profiles t1_1 WHERE t1_1.id = t0.requested_via_profile_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.resolved_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_3 WHERE t1_3.id = t0.target_subject_id AND t1_3.workspace_id = p_workspace_id));
@@ -6230,6 +6339,7 @@ BEGIN
   UPDATE tool_calls t0 SET session_id = NULL WHERE session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE tool_call_tasks t0 SET turn_id = NULL WHERE turn_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_call_tasks t0 SET source_tool_call_id = NULL WHERE source_tool_call_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE tool_call_tasks t0 SET conversation_item_id = NULL WHERE conversation_item_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_call_tasks t0 SET completion_item_id = NULL WHERE completion_item_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_execution_attempts t0 SET request_payload_blob_id = NULL WHERE request_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id))));
   UPDATE tool_execution_attempts t0 SET response_payload_blob_id = NULL WHERE response_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id))));
@@ -6279,12 +6389,10 @@ BEGIN
   UPDATE plugin_source_refs t0 SET source_catalog_item_id = NULL WHERE source_catalog_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM plugin_installations t1_0 WHERE t1_0.id = t0.installation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE plugin_source_refs t0 SET source_catalog_version_id = NULL WHERE source_catalog_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM plugin_installations t1_0 WHERE t1_0.id = t0.installation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE resource_access_bindings t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE interaction_requests t0 SET conversation_item_id = NULL WHERE conversation_item_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE interaction_transport_projections t0 SET transport_message_link_id = NULL WHERE transport_message_link_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE interaction_response_commands t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM interaction_requests t1_0 WHERE t1_0.id = t0.interaction_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE tool_call_task_transport_projections t0 SET transport_message_link_id = NULL WHERE transport_message_link_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE tool_call_task_response_commands t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE runtime_authorization_grants t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE runtime_authorization_grants t0 SET source_interaction_id = NULL WHERE source_interaction_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE runtime_authorization_grants t0 SET source_task_id = NULL WHERE source_task_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE runtime_authorization_grants t0 SET so = NULL WHERE so IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE devices t0 SET owner_workspace_member_id = NULL WHERE owner_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_pairing_sessions t0 SET requested_by_workspace_member_id = NULL WHERE requested_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_pairing_sessions t0 SET device_id = NULL WHERE device_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
@@ -6316,11 +6424,13 @@ BEGIN
   UPDATE conversation_items t0 SET author_participant_id = NULL WHERE author_participant_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE conversation_items t0 SET turn_id = NULL WHERE turn_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE sessions t0 SET active_plan_approval_interaction_id = NULL WHERE active_plan_approval_interaction_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE remote_agent_conversation_contexts t0 SET active_interaction_id = NULL WHERE active_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE remote_agent_conversation_contexts t0 SET active_plan_approval_interaction_id = NULL WHERE active_plan_approval_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE remote_agent_runs t0 SET interaction_id = NULL WHERE interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE remote_agent_conversation_contexts t0 SET active_interaction_id = NULL WHERE active_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE remote_agent_conversation_contexts t0 SET active_plan_approval_interaction_id = NULL WHERE active_plan_approval_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE remote_agent_runs t0 SET interaction_id = NULL WHERE interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE device_tools t0 SET latest_revision_id = NULL WHERE latest_revision_id IS NOT NULL AND (EXISTS (SELECT 1 FROM device_exposures t1_0 WHERE t1_0.id = t0.exposure_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_0.device_id AND t2_0.workspace_id = p_workspace_id))));
   UPDATE device_services t0 SET current_session_id = NULL WHERE current_session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t1_1 WHERE t1_1.id = t0.remote_agent_machine_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE tool_call_task_device_tool t0 SET device_operation_id = NULL WHERE device_operation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_1 WHERE t1_1.id = t0.device_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_capabilities t1_2 WHERE t1_2.id = t0.device_capability_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_operations t1_3 WHERE t1_3.id = t0.device_operation_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE tool_call_task_external_mcp t0 SET plugin_installation_id = NULL WHERE plugin_installation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_1 WHERE t1_1.id = t0.plugin_installation_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE file_spaces t0 SET current_snapshot_id = NULL WHERE current_snapshot_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_calls t0 SET plugin_installation_id = NULL WHERE plugin_installation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE tool_calls t0 SET device_tool_id = NULL WHERE device_tool_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
@@ -6366,12 +6476,6 @@ BEGIN
   DELETE FROM file_mounts t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_parse_outputs t0 WHERE (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.derived_asset_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_snapshots t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_action_tokens t0 WHERE (EXISTS (SELECT 1 FROM interaction_requests t1_0 WHERE t1_0.id = t0.interaction_request_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_plan_approval_requests t0 WHERE (EXISTS (SELECT 1 FROM interaction_requests t1_0 WHERE t1_0.id = t0.interaction_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_response_commands t0 WHERE (EXISTS (SELECT 1 FROM interaction_requests t1_0 WHERE t1_0.id = t0.interaction_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_runtime_authorization_requests t0 WHERE (EXISTS (SELECT 1 FROM interaction_requests t1_0 WHERE t1_0.id = t0.interaction_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.principal_subject_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_2 WHERE t1_2.id = t0.principal_scope_subject_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_3 WHERE t1_3.id = t0.device_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_capabilities t1_4 WHERE t1_4.id = t0.device_capability_id AND t1_4.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_transport_projections t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_user_input_requests t0 WHERE (EXISTS (SELECT 1 FROM interaction_requests t1_0 WHERE t1_0.id = t0.interaction_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_access_grants t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_item_chunks t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_item_parts t0 WHERE (EXISTS (SELECT 1 FROM memory_items t1_0 WHERE t1_0.id = t0.memory_item_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6386,7 +6490,7 @@ BEGIN
   DELETE FROM provider_steps t0 WHERE (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM realtime_event_outbox t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_bindings t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t1_1 WHERE t1_1.id = t0.machine_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_conversation_contexts t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_conversation_contexts t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_conversation_views t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_group_interaction_grants t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machine_sessions t0 WHERE (EXISTS (SELECT 1 FROM remote_agent_machines t1_0 WHERE t1_0.id = t0.machine_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6402,7 +6506,13 @@ BEGIN
   DELETE FROM skill_package_version_specs t0 WHERE (EXISTS (SELECT 1 FROM catalog_versions t1_0 WHERE t1_0.id = t0.catalog_version_id AND (EXISTS (SELECT 1 FROM catalog_items t2_0 WHERE t2_0.id = t1_0.catalog_item_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM skill_source_refs t0 WHERE (EXISTS (SELECT 1 FROM installed_skills t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM skill_versions t0 WHERE (EXISTS (SELECT 1 FROM installed_skills t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_action_tokens t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_device_tool t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_1 WHERE t1_1.id = t0.device_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_capabilities t1_2 WHERE t1_2.id = t0.device_capability_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_operations t1_3 WHERE t1_3.id = t0.device_operation_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_external_mcp t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_1 WHERE t1_1.id = t0.plugin_installation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_output_chunks t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_response_commands t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_runtime_authorization t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.principal_subject_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_2 WHERE t1_2.id = t0.principal_scope_subject_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_3 WHERE t1_3.id = t0.device_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_capabilities t1_4 WHERE t1_4.id = t0.device_capability_id AND t1_4.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_transport_projections t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_execution_attempts t0 WHERE (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_result_parts t0 WHERE (EXISTS (SELECT 1 FROM tool_results t1_0 WHERE t1_0.id = t0.tool_result_id AND (EXISTS (SELECT 1 FROM tool_calls t2_0 WHERE t2_0.id = t1_0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t3_0 WHERE t3_0.id = t2_0.conversation_id AND t3_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t3_1 WHERE t3_1.id = t2_0.session_id AND t3_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t3_2 WHERE t3_2.id = t2_0.plugin_installation_id AND t3_2.workspace_id = p_workspace_id)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM transport_message_links t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6428,10 +6538,10 @@ BEGIN
   DELETE FROM file_parse_runs t0 WHERE (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.asset_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_spaces t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM installed_skills t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_requests t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_items t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_recall_runs t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM model_binding_versions t0 WHERE (EXISTS (SELECT 1 FROM model_bindings t1_0 WHERE t1_0.id = t0.binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_0.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_tasks t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_results t0 WHERE (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM transport_endpoints t0 WHERE (EXISTS (SELECT 1 FROM transport_accounts t1_0 WHERE t1_0.id = t0.transport_account_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_integration_bindings t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6443,8 +6553,7 @@ BEGIN
   DELETE FROM file_assets t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_spaces t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM model_bindings t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.installed_by_workspace_member_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_runs t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM interaction_requests t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_call_tasks t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_runs t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_calls t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_webhook_endpoints t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_participants t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.subject_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6529,12 +6638,6 @@ BEGIN
   DELETE FROM file_mounts t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_parse_outputs t0 WHERE EXISTS (SELECT 1 FROM file_assets r1 WHERE r1.id = t0.derived_asset_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_snapshots t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_action_tokens t0 WHERE EXISTS (SELECT 1 FROM interaction_requests r1 WHERE r1.id = t0.interaction_request_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_plan_approval_requests t0 WHERE EXISTS (SELECT 1 FROM interaction_requests r1 WHERE r1.id = t0.interaction_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_response_commands t0 WHERE EXISTS (SELECT 1 FROM interaction_requests r1 WHERE r1.id = t0.interaction_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_runtime_authorization_requests t0 WHERE EXISTS (SELECT 1 FROM devices r1 WHERE r1.id = t0.device_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_transport_projections t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_user_input_requests t0 WHERE EXISTS (SELECT 1 FROM interaction_requests r1 WHERE r1.id = t0.interaction_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_access_grants t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_item_chunks t0 WHERE EXISTS (SELECT 1 FROM memory_items r1 WHERE r1.id = t0.memory_item_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_item_parts t0 WHERE EXISTS (SELECT 1 FROM memory_items r1 WHERE r1.id = t0.memory_item_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6563,7 +6666,13 @@ BEGIN
   DELETE FROM skill_package_version_specs t0 WHERE EXISTS (SELECT 1 FROM catalog_versions r1 WHERE r1.id = t0.catalog_version_id AND (EXISTS (SELECT 1 FROM catalog_items r2 WHERE r2.id = r1.catalog_item_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM skill_source_refs t0 WHERE EXISTS (SELECT 1 FROM installed_skills r1 WHERE r1.id = t0.skill_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM skill_versions t0 WHERE EXISTS (SELECT 1 FROM installed_skills r1 WHERE r1.id = t0.skill_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_action_tokens t0 WHERE EXISTS (SELECT 1 FROM tool_call_tasks r1 WHERE r1.id = t0.task_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_device_tool t0 WHERE EXISTS (SELECT 1 FROM devices r1 WHERE r1.id = t0.device_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_external_mcp t0 WHERE EXISTS (SELECT 1 FROM plugin_installations r1 WHERE r1.id = t0.plugin_installation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_output_chunks t0 WHERE EXISTS (SELECT 1 FROM tool_call_tasks r1 WHERE r1.id = t0.task_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_response_commands t0 WHERE EXISTS (SELECT 1 FROM tool_call_tasks r1 WHERE r1.id = t0.task_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_runtime_authorization t0 WHERE EXISTS (SELECT 1 FROM devices r1 WHERE r1.id = t0.device_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_transport_projections t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_execution_attempts t0 WHERE EXISTS (SELECT 1 FROM tool_calls r1 WHERE r1.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations r2 WHERE r2.id = r1.conversation_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_result_parts t0 WHERE EXISTS (SELECT 1 FROM tool_results r1 WHERE r1.id = t0.tool_result_id AND (EXISTS (SELECT 1 FROM tool_calls r2 WHERE r2.id = r1.tool_call_id AND (EXISTS (SELECT 1 FROM conversations r3 WHERE r3.id = r2.conversation_id AND (r3.deleted_at IS NOT NULL AND r3.deleted_at < p_before)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM transport_message_links t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6586,8 +6695,8 @@ BEGIN
   DELETE FROM device_operations t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_runtime_sessions t0 WHERE EXISTS (SELECT 1 FROM devices r1 WHERE r1.id = t0.device_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_parse_runs t0 WHERE EXISTS (SELECT 1 FROM file_assets r1 WHERE r1.id = t0.asset_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM interaction_requests t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_recall_runs t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_tasks t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_results t0 WHERE EXISTS (SELECT 1 FROM tool_calls r1 WHERE r1.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations r2 WHERE r2.id = r1.conversation_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM transport_endpoints t0 WHERE EXISTS (SELECT 1 FROM transport_accounts r1 WHERE r1.id = t0.transport_account_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_occurrences t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6595,7 +6704,6 @@ BEGIN
   DELETE FROM device_capabilities t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_tool_revisions t0 WHERE EXISTS (SELECT 1 FROM device_tools r1 WHERE r1.id = t0.tool_id AND (EXISTS (SELECT 1 FROM device_exposures r2 WHERE r2.id = r1.exposure_id AND (EXISTS (SELECT 1 FROM devices r3 WHERE r3.id = r2.device_id AND (r3.deleted_at IS NOT NULL AND r3.deleted_at < p_before)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_runs t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_call_tasks t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_calls t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_participants t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_catalog_revisions t0 WHERE EXISTS (SELECT 1 FROM device_exposures r1 WHERE r1.id = t0.exposure_id AND (EXISTS (SELECT 1 FROM devices r2 WHERE r2.id = r1.device_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6634,7 +6742,7 @@ $$;
 ALTER FUNCTION sd_purge_expired_soft_deleted(timestamptz) OWNER TO synapse_purge_fn_owner;
 REVOKE EXECUTE ON FUNCTION sd_purge_expired_soft_deleted(timestamptz) FROM PUBLIC;
 
-GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, entity_access_requests, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, interaction_action_tokens, interaction_plan_approval_requests, interaction_requests, interaction_response_commands, interaction_runtime_authorization_requests, interaction_transport_projections, interaction_user_input_requests, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_interaction_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, resource_access_bindings, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_output_chunks, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspaces TO synapse_purge_fn_owner;
+GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, entity_access_requests, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_interaction_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, resource_access_bindings, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_action_tokens, tool_call_task_device_tool, tool_call_task_external_mcp, tool_call_task_output_chunks, tool_call_task_response_commands, tool_call_task_runtime_authorization, tool_call_task_transport_projections, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspaces TO synapse_purge_fn_owner;
 GRANT SELECT ON access_subjects, transport_addresses TO synapse_purge_fn_owner;
 GRANT INSERT ON audit_logs TO synapse_purge_fn_owner;
 

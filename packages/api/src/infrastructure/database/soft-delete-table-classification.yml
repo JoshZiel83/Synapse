@@ -399,46 +399,6 @@ tables:
     class: root
     softDelete: deleted_at
     workspaceScope: workspace_id
-  interaction_action_tokens:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: none
-    deleteWhitelist:
-      - securityDefinerFn
-  interaction_plan_approval_requests:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: none
-    deleteWhitelist:
-      - securityDefinerFn
-  interaction_requests:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: workspace_id
-    deleteWhitelist:
-      - securityDefinerFn
-  interaction_response_commands:
-    class: append-only
-    softDelete: none
-    workspaceScope: none
-  interaction_runtime_authorization_requests:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: none
-    deleteWhitelist:
-      - securityDefinerFn
-  interaction_transport_projections:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: workspace_id
-    deleteWhitelist:
-      - securityDefinerFn
-  interaction_user_input_requests:
-    class: ephemeral
-    softDelete: none
-    workspaceScope: none
-    deleteWhitelist:
-      - securityDefinerFn
   memory_access_grants:
     class: junction
     softDelete: status
@@ -509,7 +469,8 @@ tables:
     workspaceScope: owner-derived
     workspaceScopePredicate: >-
       group_id IN (SELECT id FROM model_groups WHERE (owner_type = 'workspace' AND owner_workspace_id = $1) OR
-      (owner_type = 'workspace_member' AND owner_workspace_member_id IN (SELECT id FROM workspace_members WHERE workspace_id = $1)))
+      (owner_type = 'workspace_member' AND owner_workspace_member_id IN (SELECT id FROM workspace_members WHERE
+      workspace_id = $1)))
   model_binding_versions:
     class: append-only
     softDelete: none
@@ -657,10 +618,6 @@ tables:
         resolvesSubject: scope
         action: revoke
   runtime_authorization_grants:
-    # Reclassified ephemeral -> status junction (review F4): the service uses it
-    # as a revocable authorization-state table (active/consumed/revoked/
-    # superseded), so it must be delete-protected like the other grant tables.
-    # Its only sanctioned hard delete is the offline purge fn (owner-role bypass).
     class: junction
     softDelete: status
     workspaceScope: workspace_id
@@ -876,6 +833,40 @@ tables:
   workspaces:
     class: root
     softDelete: deleted_at
+    workspaceScope: none
+  tool_call_task_runtime_authorization:
+    class: ephemeral
+    softDelete: none
+    workspaceScope: none
+    deleteWhitelist:
+      - securityDefinerFn
+  tool_call_task_device_tool:
+    class: ephemeral
+    softDelete: none
+    workspaceScope: none
+    deleteWhitelist:
+      - securityDefinerFn
+  tool_call_task_external_mcp:
+    class: ephemeral
+    softDelete: none
+    workspaceScope: none
+    deleteWhitelist:
+      - securityDefinerFn
+  tool_call_task_action_tokens:
+    class: ephemeral
+    softDelete: none
+    workspaceScope: none
+    deleteWhitelist:
+      - securityDefinerFn
+  tool_call_task_transport_projections:
+    class: ephemeral
+    softDelete: none
+    workspaceScope: workspace_id
+    deleteWhitelist:
+      - securityDefinerFn
+  tool_call_task_response_commands:
+    class: append-only
+    softDelete: none
     workspaceScope: none
 foreignKeys:
   digest:e8948e1046f77257:
@@ -2100,11 +2091,6 @@ foreignKeys:
     _child: tool_call_tasks(session_id)
     _parent: sessions(id)
     _was: CASCADE
-  digest:cf0afc0de4e962c8:
-    targetAction: RESTRICT
-    _child: tool_call_tasks(actor_id)
-    _parent: actors(id)
-    _was: CASCADE
   digest:9dbcd3b844962be6:
     targetAction: SET NULL
     setNull:
@@ -2929,107 +2915,6 @@ foreignKeys:
     _child: resource_access_bindings(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
-  digest:248c93543c62d7ed:
-    targetAction: RESTRICT
-    _child: interaction_requests(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
-  digest:184d5422ba9640cc:
-    targetAction: RESTRICT
-    _child: interaction_requests(conversation_id)
-    _parent: conversations(id)
-    _was: CASCADE
-  digest:5948514b4ac74cb6:
-    targetAction: RESTRICT
-    _child: interaction_requests(task_id)
-    _parent: tool_call_tasks(id)
-    _was: CASCADE
-  digest:643fbda852a1d3a8:
-    targetAction: RESTRICT
-    _child: interaction_requests(remote_agent_run_id)
-    _parent: remote_agent_runs(id)
-    _was: CASCADE
-  digest:0e4644c902824dac:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: interaction_requests(conversation_item_id)
-    _parent: conversation_items(id)
-    _was: SET NULL
-  digest:caa34470afb55724:
-    targetAction: RESTRICT
-    _child: interaction_requests(requester_participant_id)
-    _parent: conversation_participants(id)
-    _was: RESTRICT
-  digest:cce2d05eaf47823e:
-    targetAction: RESTRICT
-    _child: interaction_requests(target_participant_id)
-    _parent: conversation_participants(id)
-    _was: RESTRICT
-  digest:46c30ce62cd39f24:
-    targetAction: RESTRICT
-    _child: interaction_requests(resolved_by_participant_id)
-    _parent: conversation_participants(id)
-    _was: RESTRICT
-  digest:44bc6a5d2c7e4d53:
-    targetAction: RESTRICT
-    _child: interaction_user_input_requests(interaction_id)
-    _parent: interaction_requests(id)
-    _was: CASCADE
-  digest:13ce3a636509500b:
-    targetAction: RESTRICT
-    _child: interaction_plan_approval_requests(interaction_id)
-    _parent: interaction_requests(id)
-    _was: CASCADE
-  digest:134c8ec891701fcf:
-    targetAction: RESTRICT
-    _child: interaction_runtime_authorization_requests(interaction_id)
-    _parent: interaction_requests(id)
-    _was: CASCADE
-  digest:78827b5d19b6b57c:
-    targetAction: RESTRICT
-    _child: interaction_action_tokens(interaction_request_id)
-    _parent: interaction_requests(id)
-    _was: CASCADE
-  digest:23ad6c2a64e02061:
-    targetAction: RESTRICT
-    _child: interaction_transport_projections(interaction_request_id)
-    _parent: interaction_requests(id)
-    _was: CASCADE
-  digest:d4129b413f6a8857:
-    targetAction: RESTRICT
-    _child: interaction_transport_projections(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
-  digest:5fd55bf3b5165b71:
-    targetAction: RESTRICT
-    _child: interaction_transport_projections(conversation_id)
-    _parent: conversations(id)
-    _was: CASCADE
-  digest:61f058283fcb04bd:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: interaction_transport_projections(transport_message_link_id)
-    _parent: transport_message_links(id)
-    _was: SET NULL
-  digest:b45662a7bbcc7ea6:
-    targetAction: RESTRICT
-    _child: interaction_response_commands(interaction_id)
-    _parent: interaction_requests(id)
-    _was: CASCADE
-  digest:7122bda38b2e9340:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: created_by_workspace_member_id_snapshot
-    _child: interaction_response_commands(created_by_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: SET NULL
   digest:ceb9df2e88119237:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -3045,22 +2930,6 @@ foreignKeys:
       snapshotColumn: created_by_workspace_member_id_snapshot
     _child: runtime_authorization_grants(created_by_workspace_member_id)
     _parent: workspace_members(id)
-    _was: SET NULL
-  digest:f332f4400f786d5e:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: runtime_authorization_grants(source_interaction_id)
-    _parent: interaction_requests(id)
-    _was: SET NULL
-  digest:6fb2a515460640f8:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: runtime_authorization_grants(source_task_id)
-    _parent: tool_call_tasks(id)
     _was: SET NULL
   digest:0d0b1dc1ef7278c2:
     targetAction: RESTRICT
@@ -3374,14 +3243,6 @@ foreignKeys:
     _child: memory_access_grants(created_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
-  digest:9583af217513fac8:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: memory_access_grants(source_interaction_id)
-    _parent: interaction_requests(id)
-    _was: SET NULL
   digest:ebc0c71736e724a9:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -3469,14 +3330,6 @@ foreignKeys:
       snapshotColumn: created_by_workspace_member_id_snapshot
     _child: file_access_grants(created_by_workspace_member_id)
     _parent: workspace_members(id)
-    _was: SET NULL
-  digest:d46249ef3c8359e7:
-    targetAction: SET NULL
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: file_access_grants(source_interaction_id)
-    _parent: interaction_requests(id)
     _was: SET NULL
   digest:603d55e10d7303be:
     targetAction: RESTRICT
@@ -3734,16 +3587,6 @@ foreignKeys:
     _child: runtime_authorization_grants(scope_subject_id)
     _parent: access_subjects(id)
     _was: CASCADE
-  constraint:fk_interaction_runtime_authorization_requests_principal_subject:
-    targetAction: RESTRICT
-    _child: interaction_runtime_authorization_requests(principal_subject_id)
-    _parent: access_subjects(id)
-    _was: RESTRICT
-  constraint:fk_interaction_runtime_authorization_requests_principal_scope_subject:
-    targetAction: RESTRICT
-    _child: interaction_runtime_authorization_requests(principal_scope_subject_id)
-    _parent: access_subjects(id)
-    _was: RESTRICT
   constraint:fk_device_tools_latest_revision:
     targetAction: SET NULL
     setNull:
@@ -3784,21 +3627,6 @@ foreignKeys:
     _child: runtime_authorization_grants(device_exposure_id)
     _parent: device_exposures(id)
     _was: CASCADE
-  constraint:fk_interaction_runtime_auth_requests_device:
-    targetAction: RESTRICT
-    _child: interaction_runtime_authorization_requests(device_id)
-    _parent: devices(id)
-    _was: CASCADE
-  constraint:fk_interaction_runtime_auth_requests_device_capability:
-    targetAction: RESTRICT
-    _child: interaction_runtime_authorization_requests(device_capability_id)
-    _parent: device_capabilities(id)
-    _was: CASCADE
-  constraint:fk_interaction_runtime_auth_requests_device_exposure:
-    targetAction: RESTRICT
-    _child: interaction_runtime_authorization_requests(device_exposure_id)
-    _parent: device_exposures(id)
-    _was: CASCADE
   constraint:file_spaces_current_snapshot_fkey:
     targetAction: SET NULL
     setNull:
@@ -3807,3 +3635,153 @@ foreignKeys:
     _child: file_spaces(current_snapshot_id,id)
     _parent: file_snapshots(id,file_space_id)
     _was: SET NULL
+  digest:f0387b02bf017134:
+    targetAction: RESTRICT
+    _child: tool_call_tasks(remote_agent_run_id)
+    _parent: remote_agent_runs(id)
+  digest:7422a1c4adab1026:
+    targetAction: RESTRICT
+    _child: tool_call_tasks(requester_participant_id)
+    _parent: conversation_participants(id)
+  digest:93f1bf51fe72984f:
+    targetAction: RESTRICT
+    _child: tool_call_tasks(target_participant_id)
+    _parent: conversation_participants(id)
+  digest:575d00c4fe21a57c:
+    targetAction: RESTRICT
+    _child: tool_call_tasks(resolved_by_participant_id)
+    _parent: conversation_participants(id)
+  digest:5a9f726952bd093f:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: tool_call_tasks(conversation_item_id)
+    _parent: conversation_items(id)
+  digest:c70e82d38241c60f:
+    targetAction: RESTRICT
+    _child: tool_call_task_runtime_authorization(task_id)
+    _parent: tool_call_tasks(id)
+  digest:a0e93efe8454dfe5:
+    targetAction: RESTRICT
+    _child: tool_call_task_device_tool(task_id)
+    _parent: tool_call_tasks(id)
+  digest:e7e69fab11a9c08c:
+    targetAction: RESTRICT
+    _child: tool_call_task_external_mcp(task_id)
+    _parent: tool_call_tasks(id)
+  digest:550742be28d56b62:
+    targetAction: RESTRICT
+    _child: tool_call_task_action_tokens(task_id)
+    _parent: tool_call_tasks(id)
+  digest:38f43c5809dc5b63:
+    targetAction: RESTRICT
+    _child: tool_call_task_transport_projections(task_id)
+    _parent: tool_call_tasks(id)
+  digest:ea5dc3151795a3a1:
+    targetAction: RESTRICT
+    _child: tool_call_task_transport_projections(workspace_id)
+    _parent: workspaces(id)
+  digest:766e96e40489b6e6:
+    targetAction: RESTRICT
+    _child: tool_call_task_transport_projections(conversation_id)
+    _parent: conversations(id)
+  digest:4afed1513bed74b6:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: tool_call_task_transport_projections(transport_message_link_id)
+    _parent: transport_message_links(id)
+  digest:0bfb75b5d0190e4b:
+    targetAction: RESTRICT
+    _child: tool_call_task_response_commands(task_id)
+    _parent: tool_call_tasks(id)
+  digest:9690d75242a8b0d4:
+    targetAction: SET NULL
+    setNull:
+      canLose: false
+      needsSnapshot: true
+      snapshotColumn: created_by_workspace_member_id_snapshot
+    liveIntegrity: historical
+    _child: tool_call_task_response_commands(created_by_workspace_member_id)
+    _parent: workspace_members(id)
+  digest:3e5ab079ab05436d:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: runtime_authorization_grants(so)
+    _parent: tool_call_tasks(id)
+  digest:20c47282040c3007:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: memory_access_grants(source_interaction_id)
+    _parent: tool_call_tasks(id)
+  digest:2c657cbf82977c82:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: file_access_grants(source_interaction_id)
+    _parent: tool_call_tasks(id)
+  constraint:fk_tool_call_task_runtime_authorization_principal_subject:
+    targetAction: RESTRICT
+    _child: tool_call_task_runtime_authorization(principal_subject_id)
+    _parent: access_subjects(id)
+  constraint:fk_tool_call_task_runtime_authorization_principal_scope_subject:
+    targetAction: RESTRICT
+    _child: tool_call_task_runtime_authorization(principal_scope_subject_id)
+    _parent: access_subjects(id)
+  constraint:fk_tool_call_tasks_principal_subject:
+    targetAction: RESTRICT
+    _child: tool_call_tasks(principal_subject_id)
+    _parent: access_subjects(id)
+  constraint:fk_tool_call_task_runtime_auth_device:
+    targetAction: RESTRICT
+    _child: tool_call_task_runtime_authorization(device_id)
+    _parent: devices(id)
+  constraint:fk_tool_call_task_runtime_auth_device_capability:
+    targetAction: RESTRICT
+    _child: tool_call_task_runtime_authorization(device_capability_id)
+    _parent: device_capabilities(id)
+  constraint:fk_tool_call_task_runtime_auth_device_exposure:
+    targetAction: RESTRICT
+    _child: tool_call_task_runtime_authorization(device_exposure_id)
+    _parent: device_exposures(id)
+  constraint:fk_tool_call_task_device_tool_device:
+    targetAction: RESTRICT
+    _child: tool_call_task_device_tool(device_id)
+    _parent: devices(id)
+  constraint:fk_tool_call_task_device_tool_device_capability:
+    targetAction: RESTRICT
+    _child: tool_call_task_device_tool(device_capability_id)
+    _parent: device_capabilities(id)
+  constraint:fk_tool_call_task_device_tool_device_exposure:
+    targetAction: RESTRICT
+    _child: tool_call_task_device_tool(device_exposure_id)
+    _parent: device_exposures(id)
+  constraint:fk_tool_call_task_device_tool_tool:
+    targetAction: RESTRICT
+    _child: tool_call_task_device_tool(tool_id)
+    _parent: device_tools(id)
+  constraint:fk_tool_call_task_device_tool_tool_revision:
+    targetAction: RESTRICT
+    _child: tool_call_task_device_tool(tool_revision_id)
+    _parent: device_tool_revisions(id)
+  constraint:fk_tool_call_task_device_tool_operation:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: tool_call_task_device_tool(device_operation_id)
+    _parent: device_operations(id)
+  constraint:fk_tool_call_task_external_mcp_installation:
+    targetAction: SET NULL
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: tool_call_task_external_mcp(plugin_installation_id)
+    _parent: plugin_installations(id)

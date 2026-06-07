@@ -575,7 +575,7 @@ function emitSecurityDefinerFns() {
     {
       name: "sd_gc_expired_action_tokens",
       args: "",
-      body: "DELETE FROM interaction_action_tokens WHERE expires_at < NOW();",
+      body: "DELETE FROM tool_call_task_action_tokens WHERE expires_at < NOW();",
     },
     {
       name: "sd_gc_dispatched_outbox",
@@ -635,7 +635,7 @@ $sd_exec_grants$;`)
     "catalog_item_categories",
     "remote_agent_group_interaction_grants",
     "memory_item_chunks",
-    "interaction_action_tokens",
+    "tool_call_task_action_tokens",
     "realtime_event_outbox",
     "chat_push_tokens",
   ]
