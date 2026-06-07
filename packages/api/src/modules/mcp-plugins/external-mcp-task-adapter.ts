@@ -77,25 +77,30 @@ function toOptionalNumber(v: unknown): number | undefined {
 }
 
 /**
- * Project an upstream MCP task status (+ tool-result isError) onto our internal
- * lifecycle_status ⟂ outcome:
+ * Project an upstream MCP task status onto our internal lifecycle_status ⟂
+ * outcome. Per the MCP spec, `failed` covers BOTH (a) a JSON-RPC/execution
+ * breakdown of the request itself, and (b) a tools/call whose result has
+ * isError:true. Those mean different things to us:
  *   working          → working
  *   input_required   → input_required
  *   cancelled        → cancelled
- *   failed           → completed/tool_error   (MCP `failed` for a tools/call is a
- *                      tool error with isError:true — a concluded call, not a
- *                      machinery breakdown; our `failed` is reserved for the
- *                      latter, e.g. transport loss surfaced elsewhere)
+ *   failed + protocol error (isJsonRpcError) → failed   (machinery breakdown;
+ *                      retryable — our `failed` lane)
+ *   failed (tool isError, not protocol)      → completed/tool_error  (the call
+ *                      concluded with a negative result)
  *   completed        → completed/ok  (or /tool_error if the result carries
- *                      isError, mirroring our device_tool semantics)
+ *                      isError, mirroring device_tool semantics)
  */
 export function projectMcpStatusToLifecycle(
   status: McpTaskStatus,
-  resultIsError = false
+  opts: { resultIsError?: boolean; isJsonRpcError?: boolean } | boolean = {}
 ): {
   lifecycleStatus: ToolCallTaskLifecycleStatus
   outcome: ToolCallTaskOutcome | null
 } {
+  // Back-compat: a bare boolean is the old `resultIsError` positional arg.
+  const resultIsError = typeof opts === "boolean" ? opts : opts.resultIsError
+  const isJsonRpcError = typeof opts === "boolean" ? false : opts.isJsonRpcError
   switch (status) {
     case "working":
       return { lifecycleStatus: "working", outcome: null }
@@ -104,7 +109,9 @@ export function projectMcpStatusToLifecycle(
     case "cancelled":
       return { lifecycleStatus: "cancelled", outcome: null }
     case "failed":
-      return { lifecycleStatus: "completed", outcome: "tool_error" }
+      return isJsonRpcError
+        ? { lifecycleStatus: "failed", outcome: null }
+        : { lifecycleStatus: "completed", outcome: "tool_error" }
     case "completed":
       return {
         lifecycleStatus: "completed",

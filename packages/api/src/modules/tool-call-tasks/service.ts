@@ -19,6 +19,7 @@ import {
   type TableInsert,
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
 import {
   createConversationEvent,
   getConversationParticipant,
@@ -454,7 +455,9 @@ export async function getToolCallTask(taskId: string) {
 export async function appendToolCallTaskOutput(
   taskId: string,
   chunk: {
-    seq: number
+    /** Explicit seq for callers that own ordering; omit for atomic server-side
+     *  allocation (race-safe under concurrent device.task.output frames). */
+    seq?: number
     stream: "stdout" | "stderr" | "system"
     text: string
     createdAt?: string
@@ -466,24 +469,45 @@ export async function appendToolCallTaskOutput(
     return getToolCallTask(taskId)
   }
 
-  const row: TableInsert<"tool_call_task_output_chunks"> = {
-    task_id: taskId,
-    seq: chunk.seq,
-    stream: chunk.stream,
-    text_value: text,
-    metadata: (chunk.metadata ||
-      {}) as TableInsert<"tool_call_task_output_chunks">["metadata"],
-    created_at: toDate(chunk.createdAt),
+  let appendedSeq: number
+  if (typeof chunk.seq === "number") {
+    const row: TableInsert<"tool_call_task_output_chunks"> = {
+      task_id: taskId,
+      seq: chunk.seq,
+      stream: chunk.stream,
+      text_value: text,
+      metadata: (chunk.metadata ||
+        {}) as TableInsert<"tool_call_task_output_chunks">["metadata"],
+      created_at: toDate(chunk.createdAt),
+    }
+    await db
+      .insertInto("tool_call_task_output_chunks")
+      .values(row)
+      .onConflict((oc) => oc.columns(["task_id", "seq"]).doNothing())
+      .execute()
+    appendedSeq = Math.max(0, chunk.seq)
+  } else {
+    // Atomic seq allocation: COALESCE(MAX(seq),0)+1 computed inside the INSERT
+    // so concurrent appends can't collide on a stale read (no silent drop).
+    const inserted = await sql<{ seq: number | string }>`
+      INSERT INTO tool_call_task_output_chunks (task_id, seq, stream, text_value, metadata, created_at)
+      SELECT
+        ${taskId}::uuid,
+        COALESCE(MAX(seq), 0) + 1,
+        ${chunk.stream},
+        ${text},
+        ${JSON.stringify(chunk.metadata || {})}::jsonb,
+        ${toDate(chunk.createdAt)}
+      FROM tool_call_task_output_chunks
+      WHERE task_id = ${taskId}::uuid
+      RETURNING seq
+    `.execute(db)
+    const raw = inserted.rows[0]?.seq
+    appendedSeq = typeof raw === "number" ? raw : Number(raw || 0)
   }
 
-  await db
-    .insertInto("tool_call_task_output_chunks")
-    .values(row)
-    .onConflict((oc) => oc.columns(["task_id", "seq"]).doNothing())
-    .execute()
-
   return updateToolCallTaskRecord(taskId, {
-    lastOutputSeq: Math.max(0, chunk.seq),
+    lastOutputSeq: appendedSeq,
     lastOutputAt: chunk.createdAt || new Date().toISOString(),
   })
 }
@@ -774,21 +798,50 @@ async function emitTaskNotice(
 ) {
   const lifecycleStatus = noticeStatusToLifecycle(status)
 
-  // Flip to terminal (status + outcome + payloads) first, then deliver.
-  const flipped = await updateToolCallTaskRecord(record.id, {
-    lifecycleStatus,
-    outcome: params.outcome,
-    statusMessage: params.summary,
-    finalResultPayload: params.finalResultPayload,
-    finalErrorPayload: params.finalErrorPayload,
-    metadata: params.metadata,
-  })
+  // Atomically flip to terminal ONLY if still non-terminal — RETURNING tells us
+  // whether THIS call won the transition. Concurrent terminal callers (e.g.
+  // device result vs socket-close fail vs TTL sweep) thus deliver exactly once;
+  // the losers see zero rows and skip delivery (no duplicate wakeup).
+  const flipRow = await db
+    .updateTable("tool_call_tasks")
+    .set({
+      lifecycle_status: lifecycleStatus,
+      outcome:
+        params.outcome ??
+        (record.outcome as ToolCallTaskOutcome | undefined) ??
+        null,
+      status_message: params.summary ?? record.statusMessage ?? null,
+      final_result_payload: (params.finalResultPayload ??
+        record.finalResultPayload ??
+        {}) as TableInsert<"tool_call_tasks">["final_result_payload"],
+      final_error_payload: (params.finalErrorPayload ??
+        record.finalErrorPayload ??
+        {}) as TableInsert<"tool_call_tasks">["final_error_payload"],
+      metadata: (params.metadata
+        ? { ...record.metadata, ...params.metadata }
+        : record.metadata) as TableInsert<"tool_call_tasks">["metadata"],
+      completed_at: new Date(),
+      updated_at: new Date(),
+    })
+    .where("id", "=", record.id)
+    .where("lifecycle_status", "in", NON_TERMINAL_TOOL_CALL_TASK_STATUSES)
+    .returningAll()
+    .executeTakeFirst()
+
+  // Zero rows = another caller already terminalized; do not re-deliver.
+  if (!flipRow) {
+    return (await getToolCallTask(record.id)) ?? record
+  }
+  const flipped = mapToolCallTaskRow(flipRow) ?? record
+  if (flipped.sessionId) {
+    await publishSessionRuntime(flipped.workspaceId, flipped.sessionId)
+  }
 
   if (params.notifyActor === false || record.deliveryKind === "none") {
     return flipped
   }
 
-  return deliverTaskNotice(flipped ?? record, status, params)
+  return deliverTaskNotice(flipped, status, params)
 }
 
 /**

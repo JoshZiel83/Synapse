@@ -215,11 +215,15 @@ async function assertOperationOwnership(args: {
 // dispatch), the device.task.* persisters ALSO drive that task: received/started
 // → working; output → output chunk; result → terminal completion + delivery
 // (notice + session wakeup). The task's SQL-predicate terminal guard +
-// completeToolCallTask's pre-check make a retransmitted device.task.result an
-// idempotent no-op (no duplicate wakeup). Monotonic sequencing is enforced via
-// device_control_plane_sessions.last_sequence (wired below); an out-of-order /
-// replayed device.task.output after result therefore can't re-open a completed
-// task because the task is already terminal.
+// emitTaskNotice's atomic RETURNING flip make a retransmitted device.task.result
+// an idempotent no-op (delivery fires exactly once even under concurrent
+// terminal sources). Output seq is allocated atomically in-DB
+// (appendToolCallTaskOutput without an explicit seq), and driveDeviceTaskOutput
+// skips already-terminal tasks, so a replayed/out-of-order output can neither
+// collide on seq nor mutate a completed task. NOTE: per-frame monotonic
+// ordering across the control-plane socket is NOT yet enforced
+// (device_control_plane_sessions.last_sequence is still unused); the guards
+// above are what make replay/out-of-order safe today.
 
 async function taskIdForOperation(operationId: string): Promise<string | null> {
   const row = await db
@@ -245,11 +249,22 @@ async function driveDeviceTaskOutput(operationId: string, output: unknown) {
   if (!taskId) return
   const task = await getToolCallTask(taskId)
   if (!task) return
+  // Don't append to an already-terminal task (a late/replayed output after the
+  // result frame); it can't reopen the task and shouldn't mutate it.
+  if (
+    task.lifecycleStatus === "completed" ||
+    task.lifecycleStatus === "failed" ||
+    task.lifecycleStatus === "cancelled" ||
+    task.lifecycleStatus === "expired"
+  ) {
+    return
+  }
   const text =
     typeof output === "string" ? output : JSON.stringify(output ?? "")
   if (!text.trim()) return
+  // Omit seq → atomic server-side allocation (race-safe under concurrent
+  // device.task.output frames; explicit seq + ON CONFLICT would silently drop).
   await appendToolCallTaskOutput(taskId, {
-    seq: (task.lastOutputSeq ?? 0) + 1,
     stream: "stdout",
     text,
   }).catch(() => undefined)

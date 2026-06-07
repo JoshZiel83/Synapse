@@ -50,11 +50,23 @@ test("projectMcpStatusToLifecycle: working/input_required/cancelled pass through
   })
 })
 
-test("projectMcpStatusToLifecycle: failed → completed/tool_error (concluded, not machinery breakdown)", () => {
+test("projectMcpStatusToLifecycle: failed → completed/tool_error (tool isError, concluded)", () => {
   assert.deepEqual(projectMcpStatusToLifecycle("failed"), {
     lifecycleStatus: "completed",
     outcome: "tool_error",
   })
+  // explicit tool-error (not protocol) → still completed/tool_error
+  assert.deepEqual(
+    projectMcpStatusToLifecycle("failed", { isJsonRpcError: false }),
+    { lifecycleStatus: "completed", outcome: "tool_error" }
+  )
+})
+
+test("projectMcpStatusToLifecycle: failed + JSON-RPC error → failed (machinery breakdown)", () => {
+  assert.deepEqual(
+    projectMcpStatusToLifecycle("failed", { isJsonRpcError: true }),
+    { lifecycleStatus: "failed", outcome: null }
+  )
 })
 
 test("projectMcpStatusToLifecycle: completed maps ok vs tool_error by result isError", () => {
