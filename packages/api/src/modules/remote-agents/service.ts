@@ -2844,7 +2844,9 @@ export async function notifyRemoteAgentInteractionResolved(
     return false
   }
   return safeSend(connection, {
-    type: "agent:task:resolved",
+    // Wire string kept as-is (the daemon listens for it); the task-vocabulary
+    // rename is deferred to the Step-3 surface migration.
+    type: "agent:interaction:resolved",
     remoteAgentId: interaction.requester.remoteAgentId,
     interactionId,
     interaction,
