@@ -1,5 +1,5 @@
 import type {
-  InteractionRequestSummary,
+  TaskSummary,
   RuntimeAuthorizationGrantOption,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
@@ -18,7 +18,7 @@ import {
   buildRuntimeAuthorizationRequestKey,
   createRuntimeAuthorizationInteractionRequest,
   findOpenRuntimeAuthorizationInteraction,
-  getInteractionRequestSummary,
+  getTaskSummary,
   markRuntimeAuthorizationInteractionSuperseded,
 } from "../interactions/service.js"
 import {
@@ -100,7 +100,7 @@ export interface CreateRuntimeAuthorizationRequestParams {
  * nonce only when the row truly lacks one (legacy data, defense in depth).
  */
 export function pickPersistedRetryNonce(
-  interaction: InteractionRequestSummary,
+  interaction: TaskSummary,
   freshNonce: string
 ): string {
   if (
@@ -120,7 +120,7 @@ export function pickPersistedRetryNonce(
  * matches the one the caller just generated.
  */
 export function didInnerDedupeReuseRow(
-  interaction: InteractionRequestSummary,
+  interaction: TaskSummary,
   freshNonce: string
 ): boolean {
   if (interaction.kind !== "runtime_authorization") return false
@@ -129,7 +129,7 @@ export function didInnerDedupeReuseRow(
 }
 
 export interface RuntimeAuthorizationRequestResult {
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
   task: ToolCallTaskRecord | null
   availableAuthorizerCount: number
   availableAuthorizers: Array<{
@@ -147,19 +147,19 @@ export interface WaitForRuntimeAuthorizationResolutionParams<T> {
   interactionId: string
   conversationId: string
   createdAt: string
-  onApproved: (interaction: InteractionRequestSummary) => Promise<T>
+  onApproved: (interaction: TaskSummary) => Promise<T>
   maxWaitMs?: number
 }
 
 export type RuntimeAuthorizationWaitResult<T> =
   | {
       status: "approved"
-      interaction: InteractionRequestSummary
+      interaction: TaskSummary
       approvedValue: T
     }
   | {
       status: "superseded" | "rejected" | "cancelled" | "expired"
-      interaction: InteractionRequestSummary | null
+      interaction: TaskSummary | null
     }
 
 function buildWaitingSummary(deviceDisplayName?: string) {
@@ -437,7 +437,7 @@ export async function createRuntimeAuthorizationRequest(
     // interaction detail + feed item already exist — return the existing summary
     // without re-creating (no orphan-task cleanup; the loser never materialized).
     if (deduped) {
-      const existing = await getInteractionRequestSummary(task.id)
+      const existing = await getTaskSummary(task.id)
       if (!existing) {
         throw new Error(
           "Deduped runtime-authorization task has no interaction summary"
@@ -527,7 +527,7 @@ export async function waitForRuntimeAuthorizationResolution<T>(
       }
     }
 
-    const interaction = await getInteractionRequestSummary(params.interactionId)
+    const interaction = await getTaskSummary(params.interactionId)
     if (!interaction) {
       throw new Error("Authorization interaction could not be reloaded.")
     }
@@ -559,6 +559,6 @@ export async function waitForRuntimeAuthorizationResolution<T>(
 
   return {
     status: "expired",
-    interaction: await getInteractionRequestSummary(params.interactionId),
+    interaction: await getTaskSummary(params.interactionId),
   }
 }

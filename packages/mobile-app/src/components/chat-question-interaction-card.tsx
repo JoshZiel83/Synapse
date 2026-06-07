@@ -24,7 +24,7 @@ import { theme } from "@/theme/tokens"
 import {
   INTERACTION_REQUEST_KIND,
   type InteractionInputQuestionSummary,
-  type InteractionRequestSummary,
+  type TaskSummary,
   type RuntimeAuthorizationGrantSpec,
   type RuntimeAuthorizationRequestedAction,
 } from "@shared"
@@ -44,7 +44,7 @@ const EMPTY_DRAFT: DraftQuestionAnswer = {
 }
 
 function buildDraftQuestionAnswers(
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
 ): Record<string, DraftQuestionAnswer> {
   if (
     interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
@@ -85,7 +85,7 @@ function summarizeQuestionFieldAnswer(
   return parts.join(" | ")
 }
 
-function summarizeInteractionAnswers(interaction: InteractionRequestSummary) {
+function summarizeInteractionAnswers(interaction: TaskSummary) {
   if (
     interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
     !interaction.userInput
@@ -107,7 +107,7 @@ function summarizeInteractionAnswers(interaction: InteractionRequestSummary) {
     .join(" | ")
 }
 
-function getStatusMeta(status: InteractionRequestSummary["status"]) {
+function getStatusMeta(status: TaskSummary["status"]) {
   switch (status) {
     case "pending":
       return {
@@ -177,7 +177,7 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
 }
 
 function getStatusNote(
-  interaction: InteractionRequestSummary,
+  interaction: TaskSummary,
   viewerCanResolve: boolean,
   canResolve: boolean
 ) {
@@ -417,7 +417,7 @@ function buildAnswersPayload(
 }
 
 function withInteractionCommandMetadata(
-  interaction: InteractionRequestSummary,
+  interaction: TaskSummary,
   payload: InteractionResolutionDraftPayload
 ): ChatInteractionResolveInput {
   return {
@@ -584,11 +584,11 @@ export function ChatQuestionInteractionCard({
   interaction,
   onResolveInteraction,
 }: {
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
   onResolveInteraction?: (
     interactionId: string,
     input: ChatInteractionResolveInput
-  ) => Promise<InteractionRequestSummary>
+  ) => Promise<TaskSummary>
 }) {
   const insets = useSafeAreaInsets()
   const [open, setOpen] = useState(false)

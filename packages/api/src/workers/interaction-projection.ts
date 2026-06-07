@@ -44,7 +44,7 @@ import {
   sweepExpiredActionTokens,
   type ActionTokenPayload,
 } from "../modules/interactions/action-tokens.js"
-import { getInteractionRequestSummary } from "../modules/interactions/service.js"
+import { getTaskSummary } from "../modules/interactions/service.js"
 import {
   createConversationItem,
   type ConversationItemPartInput,
@@ -354,7 +354,7 @@ async function processOne(
 
   // Load the full interaction summary so we know what grant options /
   // presets to mint tokens for.
-  const interaction = await getInteractionRequestSummary(row.task_id, client)
+  const interaction = await getTaskSummary(row.task_id, client)
   if (
     !interaction ||
     interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION

@@ -58,11 +58,11 @@ type ChatRuntimeListener = (state: ChatRuntimeState) => void
 
 function patchInteractionInConversationItem(
   item: ChatConversationItem,
-  payload: ChatSyncEvent<"interaction.updated">["payload"]
+  payload: ChatSyncEvent<"task.updated">["payload"]
 ) {
   if (
     item.itemType !== "event" ||
-    item.subtype !== "interaction_requested" ||
+    item.subtype !== "task_requested" ||
     !item.eventPayload ||
     typeof item.eventPayload !== "object"
   ) {
@@ -70,16 +70,13 @@ function patchInteractionInConversationItem(
   }
 
   const currentInteraction =
-    "interaction" in item.eventPayload
-      ? ((item.eventPayload as { interaction?: unknown }).interaction as
+    "task" in item.eventPayload
+      ? ((item.eventPayload as { task?: unknown }).task as
           | { id?: string }
           | undefined)
       : undefined
 
-  if (
-    item.id !== payload.itemId &&
-    currentInteraction?.id !== payload.interactionId
-  ) {
+  if (item.id !== payload.itemId && currentInteraction?.id !== payload.taskId) {
     return item
   }
 
@@ -87,7 +84,7 @@ function patchInteractionInConversationItem(
     ...item,
     eventPayload: {
       ...(item.eventPayload as Record<string, unknown>),
-      interaction: payload.interaction,
+      task: payload.task,
     },
   }
 }
@@ -1191,9 +1188,9 @@ export class ChatRuntime {
           )
           break
         }
-        case "interaction.updated": {
+        case "task.updated": {
           const payload =
-            event.payload as ChatSyncEvent<"interaction.updated">["payload"]
+            event.payload as ChatSyncEvent<"task.updated">["payload"]
           const currentItems =
             nextSnapshot.itemsByConversationId[payload.conversationId] ?? []
           const nextItems = currentItems.map((item) =>
@@ -1219,9 +1216,9 @@ export class ChatRuntime {
                   ? {
                       ...conversation.lastItem,
                       previewText: summarizeConversationEvent(
-                        "interaction_requested",
+                        "task_requested",
                         {
-                          interaction: payload.interaction,
+                          task: payload.task,
                         }
                       ),
                     }

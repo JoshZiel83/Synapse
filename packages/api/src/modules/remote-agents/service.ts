@@ -573,12 +573,9 @@ async function replayResolvedRemoteAgentInteractions(params: {
     return
   }
 
-  const { getInteractionRequestSummary } =
-    await import("../interactions/service.js")
+  const { getTaskSummary } = await import("../interactions/service.js")
   for (const row of rows.rows) {
-    const interaction = await getInteractionRequestSummary(
-      row.active_interaction_id
-    )
+    const interaction = await getTaskSummary(row.active_interaction_id)
     if (!interaction) {
       continue
     }
@@ -2815,9 +2812,8 @@ export async function searchRemoteAgentMessages(params: {
 export async function notifyRemoteAgentInteractionResolved(
   interactionId: string
 ) {
-  const { getInteractionRequestSummary } =
-    await import("../interactions/service.js")
-  const interaction = await getInteractionRequestSummary(interactionId)
+  const { getTaskSummary } = await import("../interactions/service.js")
+  const interaction = await getTaskSummary(interactionId)
   if (
     !interaction ||
     interaction.requester?.participantType !== "remote_agent" ||

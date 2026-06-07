@@ -21,7 +21,7 @@ import type {
   ChatInteractionResolvePayload,
   ChatInteractionResolveResponse,
   ChatSyncResponse,
-  InteractionRequestSummary,
+  TaskSummary,
 } from "@shared"
 import { Platform } from "react-native"
 
@@ -528,7 +528,7 @@ class ApiClient {
     input: ChatInteractionResolveInput
   ): Promise<ChatInteractionResolveResponse> {
     return this.request<ChatInteractionResolveResponse>(
-      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/interactions/${interactionId}/respond`,
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/tasks/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(input),

@@ -30,7 +30,7 @@ import { theme } from "@/theme/tokens"
 import {
   extractText,
   summarizeConversationEvent,
-  type InteractionRequestSummary,
+  type TaskSummary,
 } from "@shared"
 import { formatChatTimestamp } from "@shared/datetime"
 
@@ -267,19 +267,19 @@ export function MessageItem({
   onResolveInteraction?: (
     interactionId: string,
     input: ChatInteractionResolveInput
-  ) => Promise<InteractionRequestSummary>
+  ) => Promise<TaskSummary>
   onLongPress?: (event: GestureResponderEvent) => void
   /** Invoked when the user taps "Retry" on a failed outbox entry. */
   onRetry?: (clientMessageId: string) => void
 }) {
   if (item.itemType === "event") {
     const interaction =
-      item.subtype === "interaction_requested" &&
+      item.subtype === "task_requested" &&
       item.eventPayload &&
       typeof item.eventPayload === "object" &&
-      "interaction" in item.eventPayload
-        ? ((item.eventPayload as { interaction?: unknown }).interaction as
-            | InteractionRequestSummary
+      "task" in item.eventPayload
+        ? ((item.eventPayload as { task?: unknown }).task as
+            | TaskSummary
             | undefined)
         : undefined
 

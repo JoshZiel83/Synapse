@@ -14,14 +14,14 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 
-import type { InteractionRequestSummary } from "@synapse/shared/types"
+import type { TaskSummary } from "@synapse/shared/types"
 import { pickPersistedRetryNonce, didInnerDedupeReuseRow } from "./requests.js"
 
 function makeRuntimeAuthSummary(
   overrides?: Partial<{
     sourceRetryNonce?: string
   }>
-): InteractionRequestSummary {
+): TaskSummary {
   return {
     kind: "runtime_authorization",
     id: "00000000-0000-0000-0000-000000000001",
@@ -58,10 +58,10 @@ function makeRuntimeAuthSummary(
       requestMode: "background",
       sourceRetryNonce: overrides?.sourceRetryNonce,
     },
-  } as InteractionRequestSummary
+  } as TaskSummary
 }
 
-function makeUserInputSummary(): InteractionRequestSummary {
+function makeUserInputSummary(): TaskSummary {
   return {
     kind: "user_input",
     id: "00000000-0000-0000-0000-00000000ff01",
@@ -81,7 +81,7 @@ function makeUserInputSummary(): InteractionRequestSummary {
       kind: "freeform",
       prompt: "say something",
     },
-  } as unknown as InteractionRequestSummary
+  } as unknown as TaskSummary
 }
 
 // ─── pickPersistedRetryNonce ────────────────────────────────────────────────
@@ -106,8 +106,8 @@ test("pickPersistedRetryNonce falls back to the fresh nonce when the row has non
 })
 
 test("pickPersistedRetryNonce returns the fresh nonce for non-runtime-authorization interactions", () => {
-  // Defensive: the function is typed to accept any InteractionRequestSummary
-  // because the caller hands it the result of getInteractionRequestSummary.
+  // Defensive: the function is typed to accept any TaskSummary
+  // because the caller hands it the result of getTaskSummary.
   // A user_input summary has no runtimeAuthorization.sourceRetryNonce, so
   // we must not crash and must not invent a value.
   const fresh = "nonce-from-caller"

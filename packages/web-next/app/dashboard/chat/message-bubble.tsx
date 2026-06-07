@@ -11,7 +11,7 @@ import type {
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
   ConversationReplyRef,
-  InteractionRequestSummary,
+  TaskSummary,
   RemoteAgentRuntimeState,
 } from "@synapse/shared"
 import {
@@ -127,7 +127,7 @@ interface MessageBubbleProps {
   }>
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
-  interaction?: InteractionRequestSummary
+  interaction?: TaskSummary
   enableTablePreview?: boolean
   viewerWorkspaceMemberId?: string
   contactBasePath?: string
@@ -138,10 +138,7 @@ interface MessageBubbleProps {
   onResolveInteraction?: (
     interactionId: string,
     payload: ChatInteractionResolveInput
-  ) =>
-    | Promise<InteractionRequestSummary | void>
-    | InteractionRequestSummary
-    | void
+  ) => Promise<TaskSummary | void> | TaskSummary | void
 }
 
 function formatToolsUsed(tools: string[]): string {
@@ -458,9 +455,7 @@ function MessageReplyPreview({
   )
 }
 
-function getInteractionStatusLabel(
-  status: InteractionRequestSummary["status"]
-) {
+function getInteractionStatusLabel(status: TaskSummary["status"]) {
   switch (status) {
     case "pending":
       return "Pending"
@@ -479,9 +474,7 @@ function getInteractionStatusLabel(
   }
 }
 
-function getInteractionStatusBadgeClassName(
-  status: InteractionRequestSummary["status"]
-) {
+function getInteractionStatusBadgeClassName(status: TaskSummary["status"]) {
   switch (status) {
     case "answered":
     case "approved":
@@ -664,7 +657,7 @@ type DraftQuestionAnswer = {
 }
 
 function buildDraftQuestionAnswers(
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
 ): Record<string, DraftQuestionAnswer> {
   if (
     interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
@@ -686,9 +679,7 @@ function buildDraftQuestionAnswers(
 }
 
 function summarizeQuestionFieldAnswer(
-  question: NonNullable<
-    InteractionRequestSummary["userInput"]
-  >["questions"][number]
+  question: NonNullable<TaskSummary["userInput"]>["questions"][number]
 ) {
   const parts: string[] = []
   if (question.answer?.selectedOptionLabels?.length) {
@@ -707,7 +698,7 @@ function InteractionStatusNote({
   interaction,
   viewerCanResolve,
 }: {
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
   viewerCanResolve: boolean
 }) {
   const targetName = interaction.target?.name || "the selected user"
@@ -815,7 +806,7 @@ function InteractionCard({
   interaction,
   onResolveInteraction,
 }: {
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
   onResolveInteraction?: MessageBubbleProps["onResolveInteraction"]
 }) {
   const [submittingAction, setSubmittingAction] = useState<string | null>(null)

@@ -26,7 +26,7 @@ import type {
   InteractionInputQuestionSummary,
   InteractionRequestKind,
   InteractionRequestStatus,
-  InteractionRequestSummary,
+  TaskSummary,
   PlanApprovalDecision,
   PlanChecklistStep,
   RuntimeAuthorizationGrantOption,
@@ -380,7 +380,7 @@ export type ResolveInteractionRequestParams = ChatInteractionResolveInput & {
 
 export interface ResolveInteractionRequestResult {
   outcome: ChatInteractionResolveOutcome
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
   createdGrant?: RuntimeAuthorizationGrantRecord
   createdGrants?: RuntimeAuthorizationGrantRecord[]
 }
@@ -922,7 +922,7 @@ function buildUserInputQuestionSummaries(
 }
 
 function summarizeUserInputAnswers(
-  userInput: InteractionRequestSummary["userInput"]
+  userInput: TaskSummary["userInput"]
 ): string {
   if (!userInput) {
     return "a response"
@@ -1092,9 +1092,7 @@ async function resolveParticipantSubjectId(
   return row.subject_id
 }
 
-function buildInteractionSummary(
-  row: RawInteractionRow
-): InteractionRequestSummary {
+function buildInteractionSummary(row: RawInteractionRow): TaskSummary {
   const requester = requireEntityRef(
     mapEntityRefFromRow("requester", row),
     `Interaction ${row.id} requester`
@@ -1396,7 +1394,7 @@ async function getInteractionRowById(
 
 type StoredInteractionResolveResponse = {
   outcome: ChatInteractionResolveOutcome
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
 }
 
 function requireInteractionResolveOutcome(
@@ -1423,7 +1421,7 @@ function parseStoredInteractionResolveResponse(
   }
   return {
     outcome,
-    interaction: payload.interaction as InteractionRequestSummary,
+    interaction: payload.interaction as TaskSummary,
   }
 }
 
@@ -1596,7 +1594,7 @@ async function insertInteractionCommandRow(
 
 async function appendInteractionUpdatedSyncEvent(
   queryable: Executor,
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
 ) {
   const allRecipients = await listConversationRealtimeRecipients(
     interaction.conversationId,
@@ -1621,30 +1619,30 @@ async function appendInteractionUpdatedSyncEvent(
       workspaceMemberId: recipient.workspaceMemberId,
       conversationId: interaction.conversationId,
       itemId: interaction.itemId,
-      eventType: "interaction.updated",
+      eventType: "task.updated",
       payload: {
         conversationId: interaction.conversationId,
-        interactionId: interaction.id,
+        taskId: interaction.id,
         itemId: interaction.itemId,
-        interaction,
+        task: interaction,
       },
     })
   }
 }
 
 async function syncInteractionEventPayload(
-  interaction: InteractionRequestSummary,
+  interaction: TaskSummary,
   queryable?: Executor
 ) {
   if (!interaction.itemId) return
   await updateConversationItemEventPayload(
     interaction.itemId,
-    { interaction },
+    { task: interaction },
     queryable
   )
 }
 
-function buildUserInputAsyncNotice(interaction: InteractionRequestSummary) {
+function buildUserInputAsyncNotice(interaction: TaskSummary) {
   const prompt = interaction.userInput?.title?.trim() || "Input request"
   const answer = summarizeUserInputAnswers(interaction.userInput)
   const targetName = interaction.target?.name || "A user"
@@ -1676,9 +1674,7 @@ function buildUserInputAsyncNotice(interaction: InteractionRequestSummary) {
   }
 }
 
-function buildPlanApprovalApprovedNotice(
-  interaction: InteractionRequestSummary
-) {
+function buildPlanApprovalApprovedNotice(interaction: TaskSummary) {
   const resolverName = interaction.resolvedBy?.name || "A user"
   const title = interaction.planApproval?.title?.trim() || "Plan"
   const summary = `${resolverName} approved "${title}".`
@@ -1709,9 +1705,7 @@ function buildPlanApprovalApprovedNotice(
   }
 }
 
-function buildPlanApprovalRevisionNotice(
-  interaction: InteractionRequestSummary
-) {
+function buildPlanApprovalRevisionNotice(interaction: TaskSummary) {
   const resolverName = interaction.resolvedBy?.name || "A user"
   const title = interaction.planApproval?.title?.trim() || "Plan"
   const summary = `${resolverName} requested revisions for "${title}".`
@@ -1746,9 +1740,7 @@ function buildPlanApprovalRevisionNotice(
   }
 }
 
-function buildRuntimeAuthorizationRejectedNotice(
-  interaction: InteractionRequestSummary
-) {
+function buildRuntimeAuthorizationRejectedNotice(interaction: TaskSummary) {
   const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
     interaction.runtimeAuthorization?.deviceDisplayName || "the device"
@@ -1784,9 +1776,7 @@ function buildRuntimeAuthorizationRejectedNotice(
   }
 }
 
-function buildRuntimeAuthorizationApprovedNotice(
-  interaction: InteractionRequestSummary
-) {
+function buildRuntimeAuthorizationApprovedNotice(interaction: TaskSummary) {
   const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
     interaction.runtimeAuthorization?.deviceDisplayName || "the device"
@@ -1836,7 +1826,7 @@ function buildRuntimeAuthorizationApprovedNotice(
  * the once-grant safely.
  */
 async function maybeAutoRetryAfterApproval(args: {
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
   sourceRequestArgs?: Record<string, unknown>
   sourceRetryNonce?: string
   sourceTaskId?: string
@@ -1962,9 +1952,7 @@ async function maybeAutoRetryAfterApproval(args: {
   }
 }
 
-function buildRuntimeAuthorizationSupersededNotice(
-  interaction: InteractionRequestSummary
-) {
+function buildRuntimeAuthorizationSupersededNotice(interaction: TaskSummary) {
   const summary =
     "This authorization request was superseded by a newer user message."
   const messageBlocks = textBlocks(summary)
@@ -2322,7 +2310,7 @@ export async function createUserInputInteractionRequest(
       expiresAt: params.expiresAt,
     })
     if (interactionId === null) {
-      const current = await getInteractionRequestSummary(params.taskId, client)
+      const current = await getTaskSummary(params.taskId, client)
       if (!current) {
         throw new Error(
           "User-input task was concurrently resolved before its detail could be written"
@@ -2340,7 +2328,7 @@ export async function createUserInputInteractionRequest(
       },
     })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client)
+    let interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to load created interaction request")
     }
@@ -2348,9 +2336,9 @@ export async function createUserInputInteractionRequest(
     const created = await createConversationEvent({
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
-      eventType: "interaction_requested",
+      eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { interaction },
+      eventPayload: { task: interaction },
       timelinePolicy: "targeted_members",
       contextPolicy: "targeted_members",
       restrictedAudienceParticipantIds: [params.targetParticipantId],
@@ -2364,7 +2352,7 @@ export async function createUserInputInteractionRequest(
       created.item.id
     )
 
-    interaction = await getInteractionRequestSummary(interactionId, client)
+    interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to reload created interaction request")
     }
@@ -2417,9 +2405,7 @@ export async function createRemoteAgentUserInputInteractionRequest(
         params.workspaceId,
         requestKey
       )
-      const existing = winner
-        ? await getInteractionRequestSummary(winner.id, client)
-        : null
+      const existing = winner ? await getTaskSummary(winner.id, client) : null
       if (existing) {
         return existing
       }
@@ -2438,7 +2424,7 @@ export async function createRemoteAgentUserInputInteractionRequest(
       },
     })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client)
+    let interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to load created remote agent input interaction")
     }
@@ -2447,9 +2433,9 @@ export async function createRemoteAgentUserInputInteractionRequest(
     const created = await createConversationEvent({
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
-      eventType: "interaction_requested",
+      eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { interaction },
+      eventPayload: { task: interaction },
       timelinePolicy: targeted ? "targeted_members" : "all_members",
       contextPolicy: targeted ? "targeted_members" : "shared",
       restrictedAudienceParticipantIds: targeted
@@ -2467,7 +2453,7 @@ export async function createRemoteAgentUserInputInteractionRequest(
       created.item.id
     )
 
-    interaction = await getInteractionRequestSummary(interactionId, client)
+    interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to reload created remote agent input interaction")
     }
@@ -2493,7 +2479,7 @@ export async function createPlanApprovalInteractionRequest(
       expiresAt: params.expiresAt,
     })
     if (interactionId === null) {
-      const current = await getInteractionRequestSummary(params.taskId, client)
+      const current = await getTaskSummary(params.taskId, client)
       if (!current) {
         throw new Error(
           "Plan-approval task was concurrently resolved before its detail could be written"
@@ -2512,7 +2498,7 @@ export async function createPlanApprovalInteractionRequest(
       },
     })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client)
+    let interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to load created interaction request")
     }
@@ -2520,9 +2506,9 @@ export async function createPlanApprovalInteractionRequest(
     const created = await createConversationEvent({
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
-      eventType: "interaction_requested",
+      eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { interaction },
+      eventPayload: { task: interaction },
       timelinePolicy: "targeted_members",
       contextPolicy: "targeted_members",
       restrictedAudienceParticipantIds: [params.targetParticipantId],
@@ -2536,7 +2522,7 @@ export async function createPlanApprovalInteractionRequest(
       created.item.id
     )
 
-    interaction = await getInteractionRequestSummary(interactionId, client)
+    interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to reload created interaction request")
     }
@@ -2605,9 +2591,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
         params.workspaceId,
         requestKey
       )
-      const existing = winner
-        ? await getInteractionRequestSummary(winner.id, client)
-        : null
+      const existing = winner ? await getTaskSummary(winner.id, client) : null
       if (existing) {
         return existing
       }
@@ -2627,7 +2611,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       },
     })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client)
+    let interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to load created remote agent plan interaction")
     }
@@ -2636,9 +2620,9 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
     const created = await createConversationEvent({
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
-      eventType: "interaction_requested",
+      eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { interaction },
+      eventPayload: { task: interaction },
       timelinePolicy: targeted ? "targeted_members" : "all_members",
       contextPolicy: targeted ? "targeted_members" : "shared",
       restrictedAudienceParticipantIds: targeted
@@ -2694,7 +2678,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       throw new Error("Remote agent requester participant is invalid")
     }
 
-    interaction = await getInteractionRequestSummary(interactionId, client)
+    interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to reload created remote agent plan interaction")
     }
@@ -2731,7 +2715,7 @@ export async function createRuntimeAuthorizationInteractionRequest(
     if (interactionId === null) {
       // The task was concurrently terminalized (cancelled / expired) between
       // mint and detail-insert — surface the current summary.
-      const current = await getInteractionRequestSummary(params.taskId, client)
+      const current = await getTaskSummary(params.taskId, client)
       if (!current) {
         throw new Error(
           "Runtime authorization task was concurrently resolved before its detail could be written"
@@ -2776,7 +2760,7 @@ export async function createRuntimeAuthorizationInteractionRequest(
       dedupeKey,
     })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client)
+    let interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to load created interaction request")
     }
@@ -2784,9 +2768,9 @@ export async function createRuntimeAuthorizationInteractionRequest(
     const created = await createConversationEvent({
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
-      eventType: "interaction_requested",
+      eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { interaction },
+      eventPayload: { task: interaction },
       timelinePolicy: "all_members",
       contextPolicy: "shared",
       queryable: client,
@@ -2798,7 +2782,7 @@ export async function createRuntimeAuthorizationInteractionRequest(
       created.item.id
     )
 
-    interaction = await getInteractionRequestSummary(interactionId, client)
+    interaction = await getTaskSummary(interactionId, client)
     if (!interaction) {
       throw new Error("Failed to reload created interaction request")
     }
@@ -2877,10 +2861,10 @@ export async function findOpenRuntimeAuthorizationInteraction(
   if (!interactionId) {
     return null
   }
-  return getInteractionRequestSummary(interactionId)
+  return getTaskSummary(interactionId)
 }
 
-export async function getInteractionRequestSummary(
+export async function getTaskSummary(
   interactionId: string,
   queryable?: Executor
 ) {
@@ -2888,16 +2872,16 @@ export async function getInteractionRequestSummary(
   return row ? buildInteractionSummary(row) : null
 }
 
-export async function getInteractionRequestSummaryByTaskId(taskId: string) {
+export async function getTaskSummaryByTaskId(taskId: string) {
   // Task unification: the task IS the interaction (interaction id == task id).
-  return getInteractionRequestSummary(taskId)
+  return getTaskSummary(taskId)
 }
 
 export async function cancelInteractionRequestByTaskId(
   taskId: string,
   note?: string
 ) {
-  const interaction = await getInteractionRequestSummaryByTaskId(taskId)
+  const interaction = await getTaskSummaryByTaskId(taskId)
   if (!interaction) {
     return null
   }
@@ -2919,7 +2903,7 @@ export async function cancelInteractionRequest(
       existing.outcome
     ) !== "pending"
   ) {
-    const current = await getInteractionRequestSummary(interactionId)
+    const current = await getTaskSummary(interactionId)
     if (!current) {
       throw new Error("Failed to reload interaction request")
     }
@@ -2947,10 +2931,7 @@ export async function cancelInteractionRequest(
       interactionId,
       payload
     )
-    const nextInteraction = await getInteractionRequestSummary(
-      interactionId,
-      client
-    )
+    const nextInteraction = await getTaskSummary(interactionId, client)
     if (!nextInteraction) {
       throw new Error("Failed to reload cancelled interaction")
     }
@@ -3038,7 +3019,7 @@ export async function canUserViewInteraction(params: {
 }
 
 export async function canUserResolveInteraction(params: {
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
   userId: string
 }) {
   const { interaction, userId } = params
@@ -3122,9 +3103,9 @@ export async function canUserResolveInteraction(params: {
 }
 
 export async function enrichInteractionForUser(
-  interaction: InteractionRequestSummary,
+  interaction: TaskSummary,
   userId?: string
-): Promise<InteractionRequestSummary> {
+): Promise<TaskSummary> {
   if (!userId) {
     return {
       ...interaction,
@@ -3145,15 +3126,15 @@ export async function enrichFeedItemInteractionsForUser(
   item: ConversationFeedItem,
   userId?: string
 ): Promise<ConversationFeedItem> {
-  if (item.kind !== "event" || item.eventType !== "interaction_requested") {
+  if (item.kind !== "event" || item.eventType !== "task_requested") {
     return item
   }
 
   const payload =
-    item.payload as ConversationFeedEventPayloadMap["interaction_requested"]
+    item.payload as ConversationFeedEventPayloadMap["task_requested"]
   const interaction =
-    payload.interaction && typeof payload.interaction === "object"
-      ? (payload.interaction as InteractionRequestSummary)
+    payload.task && typeof payload.task === "object"
+      ? (payload.task as TaskSummary)
       : null
   if (!interaction) {
     return item
@@ -3163,7 +3144,7 @@ export async function enrichFeedItemInteractionsForUser(
     ...item,
     payload: {
       ...payload,
-      interaction: await enrichInteractionForUser(interaction, userId),
+      task: await enrichInteractionForUser(interaction, userId),
     },
   }
 }
@@ -3804,10 +3785,7 @@ export async function resolveInteractionRequest(
       resolutionPayload
     )
 
-    const nextInteraction = await getInteractionRequestSummary(
-      params.interactionId,
-      client
-    )
+    const nextInteraction = await getTaskSummary(params.interactionId, client)
     if (!nextInteraction) {
       throw new Error("Failed to reload resolved interaction")
     }
@@ -3956,7 +3934,7 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
       existing.outcome
     ) !== "pending"
   ) {
-    const current = await getInteractionRequestSummary(interactionId)
+    const current = await getTaskSummary(interactionId)
     if (!current) {
       throw new Error("Failed to reload interaction request")
     }
@@ -3981,10 +3959,7 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
         superseded: true,
       }
     )
-    const nextInteraction = await getInteractionRequestSummary(
-      interactionId,
-      client
-    )
+    const nextInteraction = await getTaskSummary(interactionId, client)
     if (!nextInteraction) {
       throw new Error("Failed to reload superseded interaction")
     }

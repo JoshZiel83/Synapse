@@ -37,7 +37,7 @@ import type {
   ChatSyncResponse,
   CurrentUserWeixinBindingSummary,
   InstalledSkill,
-  InteractionRequestSummary,
+  TaskSummary,
   ContactHubDetailResponse,
   ContactHubEntryView,
   ContactHubKind,
@@ -1560,7 +1560,7 @@ class ApiClient {
     data: ChatInteractionResolveInput
   ): Promise<ChatInteractionResolveResponse> {
     return this.fetch(
-      `/workspaces/${workspaceId}/chat/conversations/${threadId}/interactions/${interactionId}/respond`,
+      `/workspaces/${workspaceId}/chat/conversations/${threadId}/tasks/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),

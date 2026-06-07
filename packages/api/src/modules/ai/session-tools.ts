@@ -94,7 +94,7 @@ import {
   cancelInteractionRequestByTaskId,
   createPlanApprovalInteractionRequest,
   createUserInputInteractionRequest,
-  getInteractionRequestSummaryByTaskId,
+  getTaskSummaryByTaskId,
 } from "../interactions/service.js"
 
 type InviteableActor = {
@@ -2232,7 +2232,7 @@ export function registerCallableToolPlugins(): void {
         task.executorKind === "user_input" ||
         task.executorKind === "plan_approval" ||
         task.executorKind === "runtime_authorization"
-          ? await getInteractionRequestSummaryByTaskId(task.id)
+          ? await getTaskSummaryByTaskId(task.id)
           : null
 
       return textResult(
@@ -2313,7 +2313,7 @@ export function registerCallableToolPlugins(): void {
         current.executorKind === "user_input" ||
         current.executorKind === "plan_approval" ||
         current.executorKind === "runtime_authorization"
-          ? await getInteractionRequestSummaryByTaskId(current.id)
+          ? await getTaskSummaryByTaskId(current.id)
           : null
 
       return textResult(

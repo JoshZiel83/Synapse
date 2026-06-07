@@ -3,7 +3,7 @@
 import type {
   Actor,
   ActorRuntimeState,
-  InteractionRequestSummary,
+  TaskSummary,
   ConversationReplyRef,
   RemoteAgentRuntimeState,
 } from "@synapse/shared"
@@ -609,7 +609,7 @@ export default function ConversationChat({
   async function handleResolveInteraction(
     interactionId: string,
     data: ChatInteractionResolveInput
-  ): Promise<InteractionRequestSummary> {
+  ): Promise<TaskSummary> {
     if (!workspaceId) {
       throw new Error(
         "Workspace context is required to respond to interactions."
@@ -624,9 +624,9 @@ export default function ConversationChat({
     )
     handleInteractionUpdated({
       conversationId: conversation.id,
-      interactionId: result.interaction.id,
+      taskId: result.interaction.id,
       itemId: result.interaction.itemId,
-      interaction: result.interaction,
+      task: result.interaction,
     })
     return result.interaction
   }
