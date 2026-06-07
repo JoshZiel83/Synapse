@@ -78,6 +78,10 @@ import {
   stopInteractionProjectionWorker,
 } from "./workers/interaction-projection.js"
 import {
+  startDeviceTaskSweeper,
+  stopDeviceTaskSweeper,
+} from "./workers/device-task-sweeper.js"
+import {
   startTransportOutboxSweeper,
   stopTransportOutboxSweeper,
 } from "./workers/outbox-sweeper.js"
@@ -337,6 +341,7 @@ async function main() {
   startImTransportDeliveryWorker()
   startTransportOutboxSweeper()
   startInteractionProjectionWorker()
+  startDeviceTaskSweeper()
   installActorStatusHooks()
   startMemoryIndexingWorker()
   startFileParsingWorker()
@@ -403,6 +408,13 @@ async function main() {
           { err },
           "Interaction projection worker shutdown timed out"
         )
+      })
+      await waitWithTimeout(
+        "device task sweeper shutdown",
+        stopDeviceTaskSweeper(),
+        3000
+      ).catch((err) => {
+        app.log.error({ err }, "Device task sweeper shutdown timed out")
       })
       await waitWithTimeout(
         "worker shutdown",

@@ -7,6 +7,13 @@
 import { z } from "zod"
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
+import {
+  appendToolCallTaskOutput,
+  getToolCallTask,
+  markToolCallTaskWorking,
+  completeToolCallTask,
+} from "../tool-call-tasks/service.js"
+import { textBlocks } from "@synapse/shared"
 
 export type PersistResult =
   | { ok: true; payload?: Record<string, unknown> }
@@ -203,6 +210,149 @@ async function assertOperationOwnership(args: {
   return { ok: true }
 }
 
+// ─── device_tool rendezvous (design §3.6) ───────────────────────────────────
+// When a device operation carries a tool_call_tasks.id (task_mode='async'
+// dispatch), the device.task.* persisters ALSO drive that task: received/started
+// → working; output → output chunk; result → terminal completion + delivery
+// (notice + session wakeup). The task's SQL-predicate terminal guard +
+// completeToolCallTask's pre-check make a retransmitted device.task.result an
+// idempotent no-op (no duplicate wakeup). Monotonic sequencing is enforced via
+// device_control_plane_sessions.last_sequence (wired below); an out-of-order /
+// replayed device.task.output after result therefore can't re-open a completed
+// task because the task is already terminal.
+
+async function taskIdForOperation(operationId: string): Promise<string | null> {
+  const row = await db
+    .selectFrom("device_operations")
+    .select("task_id")
+    .where("id", "=", operationId)
+    .executeTakeFirst()
+  return row?.task_id || null
+}
+
+/** Drive the task to `working` when the device acks/starts (best-effort). */
+async function driveDeviceTaskWorking(operationId: string) {
+  const taskId = await taskIdForOperation(operationId)
+  if (!taskId) return
+  const task = await getToolCallTask(taskId)
+  if (!task || task.lifecycleStatus === "completed") return
+  await markToolCallTaskWorking(taskId).catch(() => undefined)
+}
+
+/** Append a device output chunk to the task's output tail (best-effort). */
+async function driveDeviceTaskOutput(operationId: string, output: unknown) {
+  const taskId = await taskIdForOperation(operationId)
+  if (!taskId) return
+  const task = await getToolCallTask(taskId)
+  if (!task) return
+  const text =
+    typeof output === "string" ? output : JSON.stringify(output ?? "")
+  if (!text.trim()) return
+  await appendToolCallTaskOutput(taskId, {
+    seq: (task.lastOutputSeq ?? 0) + 1,
+    stream: "stdout",
+    text,
+  }).catch(() => undefined)
+}
+
+/** Terminalize the task from the device result + deliver (idempotent). */
+async function driveDeviceTaskResult(
+  operationId: string,
+  result: { ok: boolean; errorMessage?: string; resultHash?: string }
+) {
+  const taskId = await taskIdForOperation(operationId)
+  if (!taskId) return
+  const summary = result.ok
+    ? "Device tool completed."
+    : result.errorMessage?.trim() || "Device tool failed."
+  await completeToolCallTask(taskId, {
+    summary,
+    outcome: result.ok ? "ok" : "tool_error",
+    finalResultPayload: {
+      content: textBlocks(summary),
+      isError: !result.ok,
+      resultHash: result.resultHash,
+    },
+    finalErrorPayload: result.ok
+      ? undefined
+      : { code: "device_tool_error", message: summary },
+  }).catch(() => undefined)
+}
+
+/**
+ * On device disconnect (control-plane socket close), fail every in-flight
+ * device_tool task for that device so the waiting agent is woken with a
+ * failure instead of hanging forever (design §3.6). Operations that already
+ * completed are skipped via the task's terminal guard.
+ */
+export async function failInFlightDeviceTasksForDevice(
+  deviceId: string,
+  reason = "Device disconnected before the tool finished."
+): Promise<number> {
+  const rows = await db
+    .selectFrom("device_operations as op")
+    .innerJoin("tool_call_tasks as t", "t.id", "op.task_id")
+    .select("op.task_id as task_id")
+    .where("op.device_id", "=", deviceId)
+    .where("op.task_id", "is not", null)
+    .where("t.lifecycle_status", "in", [
+      "submitted",
+      "working",
+      "input_required",
+      "auth_required",
+    ])
+    .execute()
+  let failed = 0
+  for (const row of rows) {
+    if (!row.task_id) continue
+    const task = await getToolCallTask(row.task_id)
+    if (!task) continue
+    await completeToolCallTask(row.task_id, {
+      summary: reason,
+      outcome: "tool_error",
+      finalResultPayload: { content: textBlocks(reason), isError: true },
+      finalErrorPayload: { code: "device_disconnected", message: reason },
+    }).catch(() => undefined)
+    failed += 1
+  }
+  return failed
+}
+
+/**
+ * TTL sweeper: fail device_tool tasks whose deadline has elapsed while still
+ * non-terminal (design §3.6 — `expires_at` was written but never enforced).
+ * Returns the count swept. Call from a periodic worker.
+ */
+export async function sweepExpiredDeviceTasks(
+  now = new Date()
+): Promise<number> {
+  const rows = await db
+    .selectFrom("tool_call_tasks")
+    .select("id")
+    .where("executor_kind", "=", "device_tool")
+    .where("lifecycle_status", "in", [
+      "submitted",
+      "working",
+      "input_required",
+      "auth_required",
+    ])
+    .where("expires_at", "is not", null)
+    .where("expires_at", "<", now)
+    .execute()
+  let swept = 0
+  for (const row of rows) {
+    const reason = "Device tool timed out."
+    await completeToolCallTask(row.id, {
+      summary: reason,
+      outcome: "tool_error",
+      finalResultPayload: { content: textBlocks(reason), isError: true },
+      finalErrorPayload: { code: "device_tool_timeout", message: reason },
+    }).catch(() => undefined)
+    swept += 1
+  }
+  return swept
+}
+
 export async function persistTaskReceived(
   deviceId: string,
   serviceId: string,
@@ -233,6 +383,7 @@ export async function persistTaskReceived(
       .where("device_service_id", "=", serviceId)
       .execute()
   }
+  await driveDeviceTaskWorking(parsed.data.operation_id)
   return { ok: true }
 }
 
@@ -258,6 +409,7 @@ export async function persistTaskStarted(
     .where("id", "=", parsed.data.operation_id)
     .where("device_id", "=", deviceId)
     .execute()
+  await driveDeviceTaskWorking(parsed.data.operation_id)
   return { ok: true }
 }
 
@@ -284,6 +436,7 @@ export async function persistTaskOutput(
     .where("device_id", "=", deviceId)
     .where("status", "in", ["started", "output_streaming"])
     .execute()
+  await driveDeviceTaskOutput(parsed.data.operation_id, parsed.data.output)
   return { ok: true }
 }
 
@@ -338,6 +491,11 @@ export async function persistTaskResult(
         .where("device_service_id", "=", serviceId)
         .execute()
     }
+  })
+  await driveDeviceTaskResult(parsed.data.operation_id, {
+    ok: parsed.data.ok,
+    errorMessage: parsed.data.error_message,
+    resultHash: parsed.data.result_hash,
   })
   return { ok: true }
 }

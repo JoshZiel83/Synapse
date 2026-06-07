@@ -44,6 +44,7 @@ import {
   persistTaskStarted,
   persistTaskStatus,
   persistVfsExposureUpsert,
+  failInFlightDeviceTasksForDevice,
   type PersistResult,
 } from "./control-plane-events.js"
 
@@ -397,6 +398,11 @@ async function closeControlPlaneSession(
   reason: string
 ): Promise<void> {
   try {
+    const sessionRow = await db
+      .selectFrom("device_control_plane_sessions")
+      .select("device_id")
+      .where("id", "=", sessionId)
+      .executeTakeFirst()
     await db
       .updateTable("device_control_plane_sessions")
       .set({
@@ -415,6 +421,13 @@ async function closeControlPlaneSession(
       } as never)
       .where("current_session_id", "=", sessionId)
       .execute()
+    // Task unification (design §3.6): fail in-flight device_tool tasks so the
+    // waiting agent is woken instead of hanging when the device drops.
+    if (sessionRow?.device_id) {
+      await failInFlightDeviceTasksForDevice(sessionRow.device_id).catch(
+        () => undefined
+      )
+    }
   } catch {
     /* best effort; DB unavailability shouldn't block socket teardown */
   }
