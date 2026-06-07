@@ -774,17 +774,34 @@ async function emitTaskNotice(
 ) {
   const lifecycleStatus = noticeStatusToLifecycle(status)
 
+  // Flip to terminal (status + outcome + payloads) first, then deliver.
+  const flipped = await updateToolCallTaskRecord(record.id, {
+    lifecycleStatus,
+    outcome: params.outcome,
+    statusMessage: params.summary,
+    finalResultPayload: params.finalResultPayload,
+    finalErrorPayload: params.finalErrorPayload,
+    metadata: params.metadata,
+  })
+
   if (params.notifyActor === false || record.deliveryKind === "none") {
-    return updateToolCallTaskRecord(record.id, {
-      lifecycleStatus,
-      outcome: params.outcome,
-      statusMessage: params.summary,
-      finalResultPayload: params.finalResultPayload,
-      finalErrorPayload: params.finalErrorPayload,
-      metadata: params.metadata,
-    })
+    return flipped
   }
 
+  return deliverTaskNotice(flipped ?? record, status, params)
+}
+
+/**
+ * Delivery-only core (no status flip): emits the agent-facing notice + wakeup
+ * (session_wakeup) or the machine-WS push (remote_agent_channel). Used both by
+ * emitTaskNotice (after its in-function flip) and by deliverResolvedToolCallTask
+ * (where the interactions resolve tx already flipped the lifecycle in-tx).
+ */
+async function deliverTaskNotice(
+  record: ToolCallTaskRecord,
+  status: TaskNoticeStatus,
+  params: ToolCallTaskTerminalNoticeParams
+) {
   const messageBlocks =
     params.messageBlocks && params.messageBlocks.length > 0
       ? params.messageBlocks
@@ -834,15 +851,11 @@ async function emitTaskNotice(
       completionItemId = created.item.id
     }
 
-    const updated = await updateToolCallTaskRecord(record.id, {
-      lifecycleStatus,
-      outcome: params.outcome,
-      statusMessage: params.summary,
-      finalResultPayload: params.finalResultPayload,
-      finalErrorPayload: params.finalErrorPayload,
-      metadata: params.metadata,
-      completionItemId,
-    })
+    // Persist the completion item pointer (payload-only update; not terminal-
+    // guarded so it lands on the already-terminal row).
+    const updated = completionItemId
+      ? await updateToolCallTaskRecord(record.id, { completionItemId })
+      : record
 
     if (principal.actorId) {
       await enqueueSessionWakeup({
@@ -872,17 +885,8 @@ async function emitTaskNotice(
   }
 
   // ── delivery: remote_agent_channel ────────────────────────────────────────
-  // Write the terminal state first (the grant — for runtime_auth — is already
-  // durable; the push is a best-effort nudge to retry sooner). Then push.
-  const updated = await updateToolCallTaskRecord(record.id, {
-    lifecycleStatus,
-    outcome: params.outcome,
-    statusMessage: params.summary,
-    finalResultPayload: params.finalResultPayload,
-    finalErrorPayload: params.finalErrorPayload,
-    metadata: params.metadata,
-  })
-
+  // The grant (for runtime_auth) is already durable; the push is a best-effort
+  // nudge to retry sooner (resume is grant-gated / re-poll, design §3.8).
   if (record.deliveryKind === "remote_agent_channel") {
     try {
       const { notifyRemoteAgentTaskResolved } =
@@ -893,7 +897,47 @@ async function emitTaskNotice(
     }
   }
 
-  return updated
+  return record
+}
+
+/**
+ * Deliver a task whose terminal lifecycle/outcome were ALREADY set in the
+ * caller's transaction (the interactions resolve flow flips in-tx so its
+ * broadcast/HTTP view is correct). Optionally writes a post-commit result
+ * payload (e.g. runtime-auth auto-retry output) via an unguarded update, then
+ * fires the notice + wakeup/push. Idempotent-safe: if the task is somehow no
+ * longer terminal it still just delivers.
+ */
+export async function deliverResolvedToolCallTask(
+  taskId: string,
+  status: TaskNoticeStatus,
+  params: ToolCallTaskTerminalNoticeParams
+) {
+  const record = await getToolCallTask(taskId)
+  if (!record) {
+    throw new Error(`Tool-call task ${taskId} not found`)
+  }
+  // Persist any post-commit result payload (auto-retry output) without the
+  // terminal guard (the row is already terminal from the in-tx flip).
+  let current = record
+  if (
+    params.finalResultPayload !== undefined ||
+    params.finalErrorPayload !== undefined ||
+    params.metadata !== undefined ||
+    params.summary
+  ) {
+    current =
+      (await updateToolCallTaskRecord(taskId, {
+        statusMessage: params.summary,
+        finalResultPayload: params.finalResultPayload,
+        finalErrorPayload: params.finalErrorPayload,
+        metadata: params.metadata,
+      })) ?? record
+  }
+  if (params.notifyActor === false || current.deliveryKind === "none") {
+    return current
+  }
+  return deliverTaskNotice(current, status, params)
 }
 
 export async function markToolCallTaskInputRequired(

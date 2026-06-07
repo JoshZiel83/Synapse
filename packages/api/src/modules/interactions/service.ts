@@ -46,8 +46,7 @@ import {
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import {
-  completeToolCallTask,
-  failToolCallTask,
+  deliverResolvedToolCallTask,
   insertToolCallTaskDeduped,
   findLiveToolCallTaskByRequestKey,
   type ToolCallTaskExecutorKind,
@@ -3781,9 +3780,17 @@ export async function resolveInteractionRequest(
     // flip the lifecycle to terminal. The post-commit fan-out below does the
     // SINGLE terminal flip + delivery via completeToolCallTask/failToolCallTask
     // (so runtime-auth auto-retry can run first and its result drives the
-    // terminal notice). The SQL terminal guard makes that flip idempotent.
-    void interactionStatusToTaskFields // (kept for outcome derivation in fan-out)
+    // Task unification (design §3.4, corrected): flip the task to its terminal
+    // lifecycle + outcome IN-TX, so every in-tx-derived view is correct — the
+    // reloaded summary, the interaction.updated broadcast, the HTTP response,
+    // and the command-idempotency row all see the resolved state. Delivery
+    // (notice + wakeup/push) and runtime-auth auto-retry happen post-commit
+    // (auto-retry writes only final_result_payload, which is NOT terminal-
+    // guarded, so it lands on the already-terminal row).
+    const taskFields = interactionStatusToTaskFields(nextStatus, locked.kind)
     await updateInteractionRequestRow(client, params.interactionId, {
+      lifecycle_status: taskFields.lifecycle_status,
+      outcome: taskFields.outcome,
       revision: sql`revision + 1`,
       resolved_by_participant_id: params.resolverParticipantId,
       resolved_at: sql`NOW()`,
@@ -3868,56 +3875,47 @@ export async function resolveInteractionRequest(
   }
 
   const interaction = result.interaction
-  if (interaction.remoteAgentRunId) {
-    const { notifyRemoteAgentInteractionResolved } =
-      await import("../remote-agents/service.js")
-    await notifyRemoteAgentInteractionResolved(interaction.id)
-    return {
-      outcome: result.outcome,
-      interaction,
-      createdGrant: result.createdGrant,
-      createdGrants: result.createdGrant ? [result.createdGrant] : undefined,
-    }
-  }
 
-  // Task unification: every interaction IS a task (no task=null remote-agent
-  // special-case). The post-commit fan-out fires the SINGLE terminal flip +
-  // delivery; the delivery registry inside completeToolCallTask routes by
-  // delivery_kind (session_wakeup → wakeup spine; remote_agent_channel → push).
-  // P1: a human "no" (plan revision / authz deny) is completed+outcome, NOT a
-  // machinery failure — so we always completeToolCallTask with the right outcome.
+  // Task unification: the lifecycle/outcome were flipped IN-TX (so result.
+  // interaction already reads resolved). Here we only DELIVER (notice + wakeup
+  // for session_wakeup; machine-WS push for remote_agent_channel) — no second
+  // flip. Every interaction IS a task now, including remote-agent ones, so
+  // there is no task=null / early-return special-case. P1: a human "no" (plan
+  // revision / authz deny) is completed+outcome 'revision_requested'/'denied',
+  // never a machinery failure.
   if (!interaction.taskId) {
     throw new Error(`Interaction ${interaction.id} is missing task governance`)
   }
 
   if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    await completeToolCallTask(interaction.taskId, {
+    await deliverResolvedToolCallTask(interaction.taskId, "completed", {
       ...buildUserInputAsyncNotice(interaction),
       outcome: "answered",
     })
   } else if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
     if (result.nextStatus === "approved") {
-      await completeToolCallTask(interaction.taskId, {
+      await deliverResolvedToolCallTask(interaction.taskId, "completed", {
         ...buildPlanApprovalApprovedNotice(interaction),
         outcome: "approved",
       })
     } else {
-      await completeToolCallTask(interaction.taskId, {
+      await deliverResolvedToolCallTask(interaction.taskId, "completed", {
         ...buildPlanApprovalRevisionNotice(interaction),
         outcome: "revision_requested",
       })
     }
   } else if (result.nextStatus === "rejected") {
-    await completeToolCallTask(interaction.taskId, {
+    await deliverResolvedToolCallTask(interaction.taskId, "completed", {
       ...buildRuntimeAuthorizationRejectedNotice(interaction),
       outcome: "denied",
     })
   } else {
     // Approved runtime authorization: re-dispatch the original tool call
     // server-side using the persisted sourceRequestArgs + retry_nonce + the
-    // grant we just created (design §3.4: auto-retry BEFORE the single terminal
-    // flip; its result drives the completion notice). Falls back to a plain
-    // approval notice if auto-retry can't run (device offline, no source args).
+    // grant we just created (design §3.4: auto-retry runs post-commit; its
+    // result drives the completion notice's final_result_payload — written via
+    // the unguarded payload update inside deliverResolvedToolCallTask). Falls
+    // back to a plain approval notice if auto-retry can't run.
     const approvedRetry = await maybeAutoRetryAfterApproval({
       interaction,
       sourceRequestArgs: result.lockedSourceRequestArgs,
@@ -3928,7 +3926,7 @@ export async function resolveInteractionRequest(
       lockedPrincipalScopeSubjectId: result.lockedPrincipalScopeSubjectId,
       resolverWorkspaceMemberId: params.resolverWorkspaceMemberId,
     })
-    await completeToolCallTask(interaction.taskId, {
+    await deliverResolvedToolCallTask(interaction.taskId, "completed", {
       ...(approvedRetry ??
         buildRuntimeAuthorizationApprovedNotice(interaction)),
       outcome: "granted",
@@ -3995,10 +3993,10 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
     return nextInteraction
   })
   if (interaction.taskId) {
-    await failToolCallTask(
-      interaction.taskId,
-      buildRuntimeAuthorizationSupersededNotice(interaction)
-    )
+    // Lifecycle already flipped to cancelled in-tx; deliver the supersede notice.
+    await deliverResolvedToolCallTask(interaction.taskId, "cancelled", {
+      ...buildRuntimeAuthorizationSupersededNotice(interaction),
+    })
   }
   return interaction
 }

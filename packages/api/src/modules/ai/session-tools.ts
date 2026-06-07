@@ -84,6 +84,7 @@ import { isActorActiveConversationParticipant } from "../access/subject-resoluti
 import {
   cancelToolCallTask,
   createToolCallTask,
+  deliverResolvedToolCallTask,
   getToolCallTaskForSession,
   getToolCallTaskOutput,
   listToolCallTasksForSession,
@@ -709,12 +710,15 @@ async function cancelHumanInteractionTask(
   reason?: string
 ) {
   const note = reason?.trim()
+  // cancelInteractionRequestByTaskId flips lifecycle=cancelled in-tx; here we
+  // just persist the cancellation payload (the agent is the canceller, so no
+  // self-wakeup is needed → notifyActor:false).
   const interaction = await cancelInteractionRequestByTaskId(task.id, note)
   const summary =
     note ||
     `Cancelled ${task.sourceToolName.replace(/_/g, " ")} before it completed.`
 
-  return cancelToolCallTask(task.id, {
+  return deliverResolvedToolCallTask(task.id, "cancelled", {
     summary,
     finalResultPayload: {
       content: textBlocks(summary),
@@ -730,6 +734,7 @@ async function cancelHumanInteractionTask(
           interactionId: interaction.id,
         }
       : undefined,
+    notifyActor: false,
   })
 }
 
