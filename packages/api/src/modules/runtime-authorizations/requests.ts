@@ -25,6 +25,7 @@ import {
 import {
   cancelToolCallTask,
   createToolCallTaskDeduped,
+  getToolCallTask,
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js"
 
@@ -131,7 +132,12 @@ export function didInnerDedupeReuseRow(
 
 export interface RuntimeAuthorizationRequestResult {
   interaction: TaskSummary
-  task: ToolCallTaskRecord | null
+  // Task unification: every runtime-authorization IS a task, including a
+  // background request that reuses an existing live authorization task. This is
+  // never null — the create, dedupe, and reuse paths all surface the task so
+  // consumers can read authorization_task_id (capability-projection stamps it
+  // into the synapse_error envelope the agent retries against).
+  task: ToolCallTaskRecord
   availableAuthorizerCount: number
   availableAuthorizers: Array<{
     participantId: string
@@ -359,9 +365,26 @@ export async function createRuntimeAuthorizationRequest(
     })
 
     if (existing) {
+      // Task unification: the reused interaction IS a live task. Reload its
+      // task record so the caller gets a real authorization_task_id (the
+      // interaction summary always carries taskId; this surfaces the full
+      // record consistently with the create/dedupe branches). Returning null
+      // here would drop the id capability-projection stamps into the
+      // synapse_error envelope the agent retries against.
+      if (!existing.taskId) {
+        throw new Error(
+          "Reused runtime-authorization interaction has no taskId (task unification invariant)"
+        )
+      }
+      const existingTask = await getToolCallTask(existing.taskId)
+      if (!existingTask) {
+        throw new Error(
+          `Reused runtime-authorization task ${existing.taskId} not found`
+        )
+      }
       return {
         interaction: existing,
-        task: null,
+        task: existingTask,
         availableAuthorizerCount: availableAuthorizers.length,
         availableAuthorizers,
         requesterParticipantId: requesterMember.id,

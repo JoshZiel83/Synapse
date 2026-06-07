@@ -549,22 +549,22 @@ async function replayResolvedRemoteAgentInteractions(params: {
   const rows = await runOnDb<{
     remote_agent_id: string
     active_interaction_id: string
-    status: string
+    lifecycle_status: string
   }>(
     `
       SELECT
         ctx.remote_agent_id,
         ctx.active_interaction_id,
-        interaction.status
+        task.lifecycle_status
       FROM remote_agent_conversation_contexts ctx
       INNER JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = ctx.remote_agent_id
-      INNER JOIN interaction_requests interaction
-        ON interaction.id = ctx.active_interaction_id
+      INNER JOIN tool_call_tasks task
+        ON task.id = ctx.active_interaction_id
       WHERE binding.machine_id = $1
         AND ctx.remote_agent_id = ANY($2::uuid[])
         AND ctx.active_interaction_id IS NOT NULL
-        AND interaction.status <> 'pending'
+        AND task.lifecycle_status IN ('completed', 'failed', 'cancelled', 'expired')
     `,
     [params.machineId, params.remoteAgentIds]
   )

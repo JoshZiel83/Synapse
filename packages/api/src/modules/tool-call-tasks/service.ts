@@ -25,10 +25,13 @@ import {
   getConversationParticipant,
 } from "../chat/service.js"
 import {
-  enqueueSessionWakeup,
+  insertSessionWakeupRow,
+  nudgeSessionAfterWakeup,
   publishSessionRuntime,
   scheduleSessionRuntimeRefresh,
+  type EnqueueSessionWakeupParams,
 } from "../session/runtime.js"
+import { getSession } from "../session/service.js"
 
 export type ToolCallTaskLifecycleStatus = ToolCallTasksLifecycleStatus
 export type ToolCallTaskOutcome = ToolCallTasksOutcome
@@ -898,6 +901,7 @@ async function deliverTaskNotice(
 
   // ── delivery: session_wakeup ──────────────────────────────────────────────
   if (record.deliveryKind === "session_wakeup" && record.sessionId) {
+    const sessionId = record.sessionId
     const actorMember = principal.actorId
       ? await getConversationParticipant({
           conversationId: record.conversationId,
@@ -905,61 +909,122 @@ async function deliverTaskNotice(
         })
       : null
 
-    let completionItemId: string | undefined
-    if (actorMember?.id) {
-      const created = await createConversationEvent({
-        workspaceId: record.workspaceId,
-        conversationId: record.conversationId,
-        sessionId: record.sessionId,
-        turnId: record.turnId,
-        eventType: "task_notice",
-        eventPayload: {
-          taskId: record.id,
-          toolName: record.sourceToolName,
-          status,
-          summary: params.summary,
-          message,
-          messageBlocks,
-        },
-        timelinePolicy: "none",
-        contextPolicy: "actor_private",
-        contextTargetParticipantIds: [actorMember.id],
-        metadata: {
-          taskId: record.id,
-          sourceToolName: record.sourceToolName,
-        },
-      })
-      completionItemId = created.item.id
+    // Guard: a closed session can't be woken. Check before the tx so we don't
+    // emit a notice + wakeup row for a session that will never drain it.
+    const session = await getSession(sessionId)
+    if (!session || session.status === "closed") {
+      return record
     }
 
-    // Persist the completion item pointer (payload-only update; not terminal-
-    // guarded so it lands on the already-terminal row).
-    const updated = completionItemId
-      ? await updateToolCallTaskRecord(record.id, { completionItemId })
-      : record
+    // P0 durable delivery: the actor-private task_notice, the durable
+    // session_wakeups row, and the task's completion_item_id marker all commit
+    // in ONE transaction. The marker is what crash-recovery treats as "already
+    // delivered" — so it must mean "wakeup is durably enqueued", not "notice
+    // was created". Previously the marker was written before the wakeup row, so
+    // a crash in between left a delivered-looking task with no wakeup and the
+    // agent hung forever. completionItemId is also the wakeup's ON CONFLICT
+    // dedup key, so a partial-reorder alone is unsafe (a recovery retry would
+    // mint a fresh event id and double-enqueue); atomic commit is the fix.
+    const wakeupParams: EnqueueSessionWakeupParams | null = principal.actorId
+      ? {
+          sessionId,
+          actorId: principal.actorId,
+          workspaceId: record.workspaceId,
+          sourceType: "system_interrupt",
+          // sourceItemId set inside the tx once the event id exists.
+          sourceParticipantType: "system",
+          sourceName: record.sourceToolName,
+          summary: params.summary,
+          reasonText: message || params.summary,
+          metadata: {
+            taskId: record.id,
+            taskStatus: status,
+            executorKind: record.executorKind,
+            sourceToolName: record.sourceToolName,
+            activationKind: "tool_call_task",
+            delivery: record.id,
+            ...(params.metadata || {}),
+          },
+          trigger: "system_interrupt",
+        }
+      : null
 
-    if (principal.actorId) {
-      await enqueueSessionWakeup({
-        sessionId: record.sessionId,
-        actorId: principal.actorId,
-        workspaceId: record.workspaceId,
-        sourceType: "system_interrupt",
-        sourceItemId: completionItemId,
-        sourceParticipantType: "system",
-        sourceName: record.sourceToolName,
-        summary: params.summary,
-        reasonText: message || params.summary,
-        metadata: {
-          taskId: record.id,
-          taskStatus: status,
-          executorKind: record.executorKind,
-          sourceToolName: record.sourceToolName,
-          activationKind: "tool_call_task",
-          delivery: record.id,
-          ...(params.metadata || {}),
-        },
-        trigger: "system_interrupt",
+    const { updated, reusedExistingWakeup, wakeupEnqueued } =
+      await withDbTransaction(async (trx) => {
+        let completionItemId: string | undefined
+        if (actorMember?.id) {
+          const created = await createConversationEvent({
+            workspaceId: record.workspaceId,
+            conversationId: record.conversationId,
+            sessionId,
+            turnId: record.turnId,
+            eventType: "task_notice",
+            eventPayload: {
+              taskId: record.id,
+              toolName: record.sourceToolName,
+              status,
+              summary: params.summary,
+              message,
+              messageBlocks,
+            },
+            timelinePolicy: "none",
+            contextPolicy: "actor_private",
+            contextTargetParticipantIds: [actorMember.id],
+            metadata: {
+              taskId: record.id,
+              sourceToolName: record.sourceToolName,
+            },
+            queryable: trx,
+          })
+          completionItemId = created.item.id
+        }
+
+        let reused = false
+        let enqueued = false
+        if (wakeupParams) {
+          const { reusedExistingWakeup } = await insertSessionWakeupRow(trx, {
+            ...wakeupParams,
+            sourceItemId: completionItemId,
+          })
+          reused = reusedExistingWakeup
+          enqueued = true
+        }
+
+        // Persist the completion-item pointer LAST in the tx (payload-only;
+        // the row is already terminal so no terminal guard). On commit, marker
+        // set ⟺ wakeup row durably present.
+        const updatedRecord = completionItemId
+          ? (mapToolCallTaskRow(
+              (await trx
+                .updateTable("tool_call_tasks")
+                .set({
+                  completion_item_id: completionItemId,
+                  updated_at: sql`NOW()`,
+                })
+                .where("id", "=", record.id)
+                .returningAll()
+                .executeTakeFirst()) ?? null
+            ) ?? record)
+          : record
+
+        return {
+          updated: updatedRecord,
+          reusedExistingWakeup: reused,
+          wakeupEnqueued: enqueued,
+        }
       })
+
+    // Post-commit nudges (Redis publish + think-queue): non-durable, safe to
+    // run after commit. The worker drains ALL pending wakeups for the session,
+    // so even a lost nudge self-heals; firing it keeps latency low. Skipped on
+    // reuse (an existing pending wakeup already has a live driver).
+    if (wakeupParams && wakeupEnqueued && !reusedExistingWakeup) {
+      await nudgeSessionAfterWakeup(wakeupParams, session)
+    }
+    // Refresh the runtime snapshot for the completion-marker write (mirrors the
+    // publish updateToolCallTaskRecord did before this became transactional).
+    if (updated.completionItemId) {
+      await publishSessionRuntime(updated.workspaceId, sessionId)
     }
 
     return updated

@@ -3,7 +3,6 @@ import {
   INTERACTION_INPUT_QUESTION_TYPES,
   INTERACTION_REQUEST_KIND,
   parseJsonObject,
-  SUBJECT_KIND,
   textBlocks,
   type SubjectRef,
 } from "@synapse/shared"
@@ -336,41 +335,6 @@ export interface CreateRuntimeAuthorizationInteractionParams {
    * The approval flow now uses principalSubjectId + presetToOwnerScope.
    */
   principalRemoteAgentId?: string
-}
-
-/**
- * Returns true when an approved runtime_authorization interaction
- * deliberately has no tool_call_task to complete. The ONLY supported
- * case is a remote_agent principal: capability-projection's
- * createRuntimeAuthorizationRequest skips createToolCallTask because
- * the bridged agent retries its own tool call on the next round-trip
- * (no chat session to wake). Every other principal kind MUST carry a
- * taskId — if one slips through without it, the generic
- * "missing task governance" guard should still fire so a regression
- * doesn't silently succeed.
- *
- * The previous version of this helper short-circuited on
- * `kind=runtime_authorization && !taskId` alone, which would mask
- * task-governance bugs on the actor path. Narrowed here to also
- * require the principal kind is `remote_agent` (the only legitimate
- * case where a runtime_authorization interaction can lack a task —
- * bridged remote agents don't open chat-session tasks). Keyed on
- * SUBJECT_KIND so the gate moves with the subject registry rather
- * than the legacy `principal_remote_agent_id` column.
- *
- * Pure function — exported so regression tests can pin the contract
- * without spinning up the full resolveInteractionRequest transaction.
- */
-export function runtimeAuthorizationApprovalSkipsTaskCompletion(input: {
-  kind: InteractionRequestKind
-  taskId?: string | null
-  principalSubjectKind?: string | null
-}): boolean {
-  return (
-    input.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    !input.taskId &&
-    input.principalSubjectKind === SUBJECT_KIND.REMOTE_AGENT
-  )
 }
 
 export type ResolveInteractionRequestParams = ChatInteractionResolveInput & {
