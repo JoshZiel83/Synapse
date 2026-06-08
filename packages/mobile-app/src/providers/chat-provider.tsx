@@ -41,7 +41,7 @@ import {
   type ChatConversationCreateResponse,
   type ChatConversationMessagesPage,
   type ChatConversationView,
-  type InteractionRequestSummary,
+  type TaskSummary,
   type ChatSocketEvent,
 } from "@shared"
 
@@ -83,7 +83,7 @@ interface ChatContextValue {
     conversationId: string,
     interactionId: string,
     input: ChatInteractionResolveInput
-  ) => Promise<InteractionRequestSummary>
+  ) => Promise<TaskSummary>
   createConversation: (
     input: Omit<ChatConversationCreateInput, "clientRequestId"> & {
       workspaceId?: string

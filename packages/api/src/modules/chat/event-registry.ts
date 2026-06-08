@@ -146,7 +146,7 @@ const EVENT_SPECS: Record<ConversationFeedEventType, ConversationEventSpec> = {
         "Automation notice"
       ),
   },
-  interaction_requested: {
+  task_requested: {
     timelinePolicy: "targeted_members",
     contextPolicy: "targeted_members",
     renderTimeline: ({ eventType, payload }) =>

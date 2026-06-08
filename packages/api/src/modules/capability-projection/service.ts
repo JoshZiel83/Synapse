@@ -1156,7 +1156,7 @@ async function requestAuthorizationOrDeny(args: {
         synapse_error: {
           code: "runtime_authorization_requested",
           message: "user approval required",
-          authorization_task_id: result.task?.id,
+          authorization_task_id: result.task.id,
           retry_nonce: result.retryNonce,
         },
       },

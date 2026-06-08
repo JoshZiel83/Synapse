@@ -32,7 +32,7 @@
 import { v5 as uuidv5 } from "uuid"
 import { SYNAPSE_INTERACTION_NAMESPACE } from "@synapse/shared"
 import {
-  getInteractionRequestSummary,
+  getTaskSummary,
   resolveInteractionRequest,
   type ResolveInteractionRequestParams,
 } from "../../../interactions/service.js"
@@ -71,7 +71,7 @@ export interface QqInteractionHandlerDeps {
   /** Same. */
   resolveInteractionRequest: typeof resolveInteractionRequest
   /** Same. */
-  getInteractionRequestSummary: typeof getInteractionRequestSummary
+  getTaskSummary: typeof getTaskSummary
   /** Same. */
   getTransportAddressByExternalId: typeof getTransportAddressByExternalId
   /** Same. */
@@ -100,7 +100,7 @@ export function defaultQqInteractionHandlerDeps(): QqInteractionHandlerDeps {
   return {
     lookupActionToken,
     resolveInteractionRequest,
-    getInteractionRequestSummary,
+    getTaskSummary,
     getTransportAddressByExternalId,
     syncTransportAddressConversationParticipant,
     ackInteraction: defaultAckInteraction,
@@ -177,7 +177,7 @@ export async function handleQqInteractionCreate(params: {
   // Need the interaction summary to learn its workspace + conversation
   // (for participant sync) and so we can short-circuit before calling
   // resolve if the interaction is already gone.
-  const interaction = await deps.getInteractionRequestSummary(
+  const interaction = await deps.getTaskSummary(
     tokenRecord.interactionRequestId
   )
   if (!interaction) {

@@ -51,7 +51,7 @@ import type {
   ConversationFeedMessageItem,
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
-  InteractionRequestSummary,
+  TaskSummary,
   TransportKind,
 } from "@synapse/shared/types"
 import { CompiledQuery, sql, type RawBuilder } from "kysely"
@@ -411,15 +411,14 @@ async function enrichChatConversationItemForViewer(
   item: ChatConversationItem,
   userId: string
 ): Promise<ChatConversationItem> {
-  if (item.itemType !== "event" || item.subtype !== "interaction_requested") {
+  if (item.itemType !== "event" || item.subtype !== "task_requested") {
     return item
   }
 
   const payload = item.eventPayload
   const interaction =
-    payload && typeof payload === "object" && "interaction" in payload
-      ? (payload as ConversationFeedEventPayloadMap["interaction_requested"])
-          .interaction
+    payload && typeof payload === "object" && "task" in payload
+      ? (payload as ConversationFeedEventPayloadMap["task_requested"]).task
       : undefined
 
   if (!interaction) {
@@ -430,10 +429,7 @@ async function enrichChatConversationItemForViewer(
     ...item,
     eventPayload: {
       ...payload,
-      interaction: await enrichInteractionForUser(
-        interaction as InteractionRequestSummary,
-        userId
-      ),
+      task: await enrichInteractionForUser(interaction as TaskSummary, userId),
     },
   } as ChatConversationItem
 }
@@ -465,15 +461,11 @@ async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
     } as ChatSyncEventPayloadMap[T]
   }
 
-  if (eventType === "interaction.updated") {
-    const eventPayload =
-      payload as ChatSyncEventPayloadMap["interaction.updated"]
+  if (eventType === "task.updated") {
+    const eventPayload = payload as ChatSyncEventPayloadMap["task.updated"]
     return {
       ...eventPayload,
-      interaction: await enrichInteractionForUser(
-        eventPayload.interaction,
-        userId
-      ),
+      task: await enrichInteractionForUser(eventPayload.task, userId),
     } as ChatSyncEventPayloadMap[T]
   }
 

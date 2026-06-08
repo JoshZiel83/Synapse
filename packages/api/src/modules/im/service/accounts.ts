@@ -679,7 +679,7 @@ async function executeAccountRecoveryActions(params: {
    * The account whose update triggered planning. We need its id so the
    * `recoverSkippedInteractionProjections` dispatch can target the
    * correct `transport_account_id` in
-   * `interaction_transport_projections` recovery — the connector hook
+   * `tool_call_task_transport_projections` recovery — the connector hook
    * is account-scoped and doesn't carry the id through the action
    * data shape.
    */
@@ -706,7 +706,7 @@ async function executeAccountRecoveryActions(params: {
         break
       }
       case "recoverSkippedInteractionProjections": {
-        // Re-arm skipped `interaction_transport_projections` rows
+        // Re-arm skipped `tool_call_task_transport_projections` rows
         // matching this account's id + the connector-supplied event
         // kind. Same tx so the recovery commits with the account
         // UPDATE; a crash between the two would leave projections

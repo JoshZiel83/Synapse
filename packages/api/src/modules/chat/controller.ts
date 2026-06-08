@@ -46,7 +46,7 @@ import {
 import {
   canUserViewInteraction,
   enrichInteractionForUser,
-  getInteractionRequestSummary,
+  getTaskSummary,
   resolveInteractionRequest,
 } from "../interactions/service.js"
 import { getChatDedupCountersSnapshot } from "./observability.js"
@@ -514,10 +514,10 @@ export default async function chatController(app: FastifyInstance) {
     Params: {
       workspaceId: string
       conversationId: string
-      interactionId: string
+      taskId: string
     }
   }>(
-    `${CHAT_BASE_PATH}/conversations/:conversationId/interactions/:interactionId/respond`,
+    `${CHAT_BASE_PATH}/conversations/:conversationId/tasks/:taskId/respond`,
     async (request, reply) => {
       try {
         const params = chatInteractionParamsSchema.parse(request.params)
@@ -529,9 +529,7 @@ export default async function chatController(app: FastifyInstance) {
         )
         if (!workspaceMemberId) return
 
-        const interaction = await getInteractionRequestSummary(
-          params.interactionId
-        )
+        const interaction = await getTaskSummary(params.taskId)
         if (
           !interaction ||
           interaction.workspaceId !== params.workspaceId ||

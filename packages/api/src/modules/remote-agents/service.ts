@@ -549,22 +549,22 @@ async function replayResolvedRemoteAgentInteractions(params: {
   const rows = await runOnDb<{
     remote_agent_id: string
     active_interaction_id: string
-    status: string
+    lifecycle_status: string
   }>(
     `
       SELECT
         ctx.remote_agent_id,
         ctx.active_interaction_id,
-        interaction.status
+        task.lifecycle_status
       FROM remote_agent_conversation_contexts ctx
       INNER JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = ctx.remote_agent_id
-      INNER JOIN interaction_requests interaction
-        ON interaction.id = ctx.active_interaction_id
+      INNER JOIN tool_call_tasks task
+        ON task.id = ctx.active_interaction_id
       WHERE binding.machine_id = $1
         AND ctx.remote_agent_id = ANY($2::uuid[])
         AND ctx.active_interaction_id IS NOT NULL
-        AND interaction.status <> 'pending'
+        AND task.lifecycle_status IN ('completed', 'failed', 'cancelled', 'expired')
     `,
     [params.machineId, params.remoteAgentIds]
   )
@@ -573,12 +573,9 @@ async function replayResolvedRemoteAgentInteractions(params: {
     return
   }
 
-  const { getInteractionRequestSummary } =
-    await import("../interactions/service.js")
+  const { getTaskSummary } = await import("../interactions/service.js")
   for (const row of rows.rows) {
-    const interaction = await getInteractionRequestSummary(
-      row.active_interaction_id
-    )
+    const interaction = await getTaskSummary(row.active_interaction_id)
     if (!interaction) {
       continue
     }
@@ -2815,9 +2812,8 @@ export async function searchRemoteAgentMessages(params: {
 export async function notifyRemoteAgentInteractionResolved(
   interactionId: string
 ) {
-  const { getInteractionRequestSummary } =
-    await import("../interactions/service.js")
-  const interaction = await getInteractionRequestSummary(interactionId)
+  const { getTaskSummary } = await import("../interactions/service.js")
+  const interaction = await getTaskSummary(interactionId)
   if (
     !interaction ||
     interaction.requester?.participantType !== "remote_agent" ||
@@ -2844,11 +2840,23 @@ export async function notifyRemoteAgentInteractionResolved(
     return false
   }
   return safeSend(connection, {
+    // Wire string kept as-is (the daemon listens for it); the task-vocabulary
+    // rename is deferred to the Step-3 surface migration.
     type: "agent:interaction:resolved",
     remoteAgentId: interaction.requester.remoteAgentId,
     interactionId,
     interaction,
   })
+}
+
+/**
+ * Task unification: the delivery-registry adapter for delivery_kind=
+ * remote_agent_channel. Pushes a best-effort `agent:task:resolved` nudge over
+ * the machine WS (the task IS the interaction, so taskId == the interaction id).
+ * Resume is grant-gated / re-poll on the agent side — this only affects latency.
+ */
+export async function notifyRemoteAgentTaskResolved(taskId: string) {
+  return notifyRemoteAgentInteractionResolved(taskId)
 }
 
 function closeMachineConnection(

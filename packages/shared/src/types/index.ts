@@ -3763,7 +3763,7 @@ export interface RuntimeAuthorizationInteractionSummary {
   sourceRetryNonce?: string
 }
 
-export interface InteractionRequestSummaryBase {
+export interface TaskSummaryBase {
   id: UUID
   taskId?: UUID
   remoteAgentRunId?: UUID
@@ -3782,7 +3782,7 @@ export interface InteractionRequestSummaryBase {
   viewerCanResolve: boolean
 }
 
-export interface UserInputInteractionRequestSummary extends InteractionRequestSummaryBase {
+export interface UserInputTaskSummary extends TaskSummaryBase {
   kind: "user_input"
   target?: ConversationEntityRef
   userInput: UserInputInteractionSummary
@@ -3790,7 +3790,7 @@ export interface UserInputInteractionRequestSummary extends InteractionRequestSu
   runtimeAuthorization?: never
 }
 
-export interface PlanApprovalInteractionRequestSummary extends InteractionRequestSummaryBase {
+export interface PlanApprovalTaskSummary extends TaskSummaryBase {
   kind: "plan_approval"
   target?: ConversationEntityRef
   userInput?: never
@@ -3798,7 +3798,7 @@ export interface PlanApprovalInteractionRequestSummary extends InteractionReques
   runtimeAuthorization?: never
 }
 
-export interface RuntimeAuthorizationInteractionRequestSummary extends InteractionRequestSummaryBase {
+export interface RuntimeAuthorizationTaskSummary extends TaskSummaryBase {
   kind: "runtime_authorization"
   target?: never
   userInput?: never
@@ -3806,10 +3806,16 @@ export interface RuntimeAuthorizationInteractionRequestSummary extends Interacti
   runtimeAuthorization: RuntimeAuthorizationInteractionSummary
 }
 
-export type InteractionRequestSummary =
-  | UserInputInteractionRequestSummary
-  | PlanApprovalInteractionRequestSummary
-  | RuntimeAuthorizationInteractionRequestSummary
+/**
+ * The human-facing projection of a Task that needs a response (task unification).
+ * Carries the kind-specific request payload the FE card renders from. `status`
+ * is the legacy interaction vocabulary, reverse-projected from the task's
+ * lifecycle_status ⟂ outcome on the API side.
+ */
+export type TaskSummary =
+  | UserInputTaskSummary
+  | PlanApprovalTaskSummary
+  | RuntimeAuthorizationTaskSummary
 
 export type TaskNoticeStatus = (typeof TASK_NOTICE_STATUSES)[number]
 
@@ -3831,7 +3837,7 @@ export type ConversationFeedEventType =
   | "actor_renamed"
   | "actor_avatar_changed"
   | "automation_notice"
-  | "interaction_requested"
+  | "task_requested"
   | "task_notice"
 
 export interface ConversationFeedEventPayloadMap {
@@ -3907,8 +3913,8 @@ export interface ConversationFeedEventPayloadMap {
     message: string
     messageBlocks?: CanonicalContentBlock[]
   }
-  interaction_requested: {
-    interaction: InteractionRequestSummary
+  task_requested: {
+    task: TaskSummary
   }
   task_notice: TaskNoticeSummary
 }
@@ -4165,13 +4171,13 @@ export function summarizeConversationEvent(
     return `${toolName} ${status}`
   }
 
-  if (eventType === "interaction_requested") {
+  if (eventType === "task_requested") {
     const interaction =
-      eventPayload.interaction && typeof eventPayload.interaction === "object"
-        ? (eventPayload.interaction as InteractionRequestSummary)
+      eventPayload.task && typeof eventPayload.task === "object"
+        ? (eventPayload.task as TaskSummary)
         : undefined
     if (!interaction) {
-      return "Interaction requested"
+      return "Task requested"
     }
     if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
       const targetName =
@@ -4379,11 +4385,11 @@ export interface ChatSyncEventPayloadMap {
     readWatermarkSequence: number
     lastReadAt: Timestamp
   }
-  "interaction.updated": {
+  "task.updated": {
     conversationId: UUID
-    interactionId: UUID
+    taskId: UUID
     itemId?: UUID
-    interaction: InteractionRequestSummary
+    task: TaskSummary
   }
   "remote_agent.runtime_updated": {
     remoteAgentId: UUID
@@ -4590,14 +4596,14 @@ export type ChatInteractionResolveOutcome = "applied" | "duplicate" | "conflict"
 
 export interface ChatInteractionResolveAppliedResponse {
   outcome: "applied" | "duplicate"
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
 }
 
 export interface ChatInteractionResolveConflictResponse {
   outcome: "conflict"
   code: "interaction_conflict"
   error: string
-  interaction: InteractionRequestSummary
+  interaction: TaskSummary
 }
 
 export type ChatInteractionResolveResponse =

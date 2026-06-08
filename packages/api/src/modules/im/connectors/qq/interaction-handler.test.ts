@@ -69,9 +69,7 @@ function makeDeps(
           return overrides.resolveInteractionRequest!(p)
         }
       : real.resolveInteractionRequest,
-    getInteractionRequestSummary:
-      overrides.getInteractionRequestSummary ??
-      real.getInteractionRequestSummary,
+    getTaskSummary: overrides.getTaskSummary ?? real.getTaskSummary,
     getTransportAddressByExternalId:
       overrides.getTransportAddressByExternalId ??
       real.getTransportAddressByExternalId,
@@ -191,7 +189,7 @@ test("handleQqInteractionCreate: happy approve path → resolve + ack", async ()
         created_at: new Date(),
         updated_at: new Date(),
       }) as any,
-    getInteractionRequestSummary: async () =>
+    getTaskSummary: async () =>
       ({
         id: "ir-42",
         workspaceId: "ws-1",
@@ -254,7 +252,7 @@ test("handleQqInteractionCreate: same event replayed → same commandId (determi
           id: "addr",
           workspace_member_id: "wm",
         }) as any,
-      getInteractionRequestSummary: async () =>
+      getTaskSummary: async () =>
         ({
           id: "ir-99",
           workspaceId: "ws-1",
@@ -330,7 +328,7 @@ test("handleQqInteractionCreate: transient resolve error → do NOT ack (user re
     }),
     getTransportAddressByExternalId: async () =>
       ({ id: "addr", workspace_member_id: "wm" }) as any,
-    getInteractionRequestSummary: async () =>
+    getTaskSummary: async () =>
       ({
         id: "ir-z",
         workspaceId: "ws-1",
@@ -369,7 +367,7 @@ test("handleQqInteractionCreate: permanent resolve error → ack + drop", async 
     }),
     getTransportAddressByExternalId: async () =>
       ({ id: "addr", workspace_member_id: "wm" }) as any,
-    getInteractionRequestSummary: async () =>
+    getTaskSummary: async () =>
       ({
         id: "ir-p",
         workspaceId: "ws-1",

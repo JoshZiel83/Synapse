@@ -1,6 +1,7 @@
 import { redis } from "../../infrastructure/redis/index.js"
 import {
   db,
+  type Executor,
   type TableInsert,
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
@@ -938,7 +939,7 @@ export async function removeSessionRuntime(sessionId: string) {
   await redis.hdel(runtimeHashKey(session.conversation_id), session.actor_id)
 }
 
-export async function enqueueSessionWakeup(params: {
+export interface EnqueueSessionWakeupParams {
   sessionId: string
   actorId: string
   workspaceId: string
@@ -959,15 +960,25 @@ export async function enqueueSessionWakeup(params: {
   automationOccurrenceId?: string
   metadata?: Record<string, unknown>
   trigger?: SessionTrigger
-}) {
-  const session = await getSession(params.sessionId)
-  if (!session) {
-    throw new Error(`Session ${params.sessionId} not found`)
-  }
-  if (session.status === "closed") {
-    throw new Error(`Session ${params.sessionId} is closed`)
-  }
+}
 
+/**
+ * Durable half of {@link enqueueSessionWakeup}: insert (or idempotently reuse)
+ * the `session_wakeups` row on the given executor. No Redis/queue side effects —
+ * pure DB write, so it can run INSIDE a caller's transaction (e.g. resolved
+ * task delivery, which commits the wakeup row + the task's completion marker
+ * atomically so a crash can't leave a "delivered" marker without a wakeup).
+ *
+ * Returns the row plus `reusedExistingWakeup` (true when ON CONFLICT hit an
+ * existing pending wakeup for the same source item — the nudge is then a no-op).
+ */
+export async function insertSessionWakeupRow(
+  executor: Executor,
+  params: EnqueueSessionWakeupParams
+): Promise<{
+  created: TableRow<"session_wakeups">
+  reusedExistingWakeup: boolean
+}> {
   let created: TableRow<"session_wakeups"> | undefined
   let reusedExistingWakeup = false
 
@@ -1009,11 +1020,11 @@ export async function enqueueSessionWakeup(params: {
         WHERE source_item_id IS NOT NULL
         DO NOTHING
         RETURNING *
-      `.execute(db)
+      `.execute(executor)
     created = insertResult.rows[0]
 
     if (!created) {
-      const existing = await db
+      const existing = await executor
         .selectFrom("session_wakeups")
         .selectAll()
         .where("session_id", "=", params.sessionId)
@@ -1026,7 +1037,7 @@ export async function enqueueSessionWakeup(params: {
       reusedExistingWakeup = Boolean(created)
     }
   } else {
-    created = await db
+    created = await executor
       .insertInto("session_wakeups")
       .values({
         id: crypto.randomUUID(),
@@ -1051,11 +1062,21 @@ export async function enqueueSessionWakeup(params: {
   if (!created) {
     throw new Error("Failed to enqueue session wakeup")
   }
+  return { created, reusedExistingWakeup }
+}
 
-  if (reusedExistingWakeup) {
-    return created
-  }
-
+/**
+ * Non-durable half of {@link enqueueSessionWakeup}: flip the session out of
+ * idle/blocked, publish the runtime snapshot, and enqueue the think job that
+ * drives the session. Safe to call POST-COMMIT (after the durable wakeup row is
+ * persisted): the worker drains ALL pending wakeups for the session, so even a
+ * lost nudge is recovered by the worker's pending-wakeup self-heal — but firing
+ * it keeps latency low. A no-op when the wakeup was a reuse.
+ */
+export async function nudgeSessionAfterWakeup(
+  params: EnqueueSessionWakeupParams,
+  session: { status: string }
+): Promise<void> {
   if (session.status === "idle" || session.status === "blocked") {
     await updateSessionStatus(params.sessionId, "queued", {
       errorMessage: null,
@@ -1093,6 +1114,27 @@ export async function enqueueSessionWakeup(params: {
         params.trigger || mapWakeupSourceTypeToTrigger(params.sourceType),
     })
   }
+}
+
+export async function enqueueSessionWakeup(params: EnqueueSessionWakeupParams) {
+  const session = await getSession(params.sessionId)
+  if (!session) {
+    throw new Error(`Session ${params.sessionId} not found`)
+  }
+  if (session.status === "closed") {
+    throw new Error(`Session ${params.sessionId} is closed`)
+  }
+
+  const { created, reusedExistingWakeup } = await insertSessionWakeupRow(
+    db,
+    params
+  )
+
+  if (reusedExistingWakeup) {
+    return created
+  }
+
+  await nudgeSessionAfterWakeup(params, session)
 
   return created
 }

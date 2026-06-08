@@ -53,6 +53,7 @@ import {
   type UserInteractionCandidate,
 } from "./session-tool-user-interactions.js"
 import { db } from "../../infrastructure/database/kysely.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import { sql } from "kysely"
 import { getSession, updateSessionCollaboration } from "../session/service.js"
 import { getTransportConnectorCapability } from "../im/connectors/index.js"
@@ -82,7 +83,8 @@ import {
 import { isActorActiveConversationParticipant } from "../access/subject-resolution.js"
 import {
   cancelToolCallTask,
-  createToolCallTask,
+  createToolCallTaskDeduped,
+  deliverResolvedToolCallTask,
   getToolCallTaskForSession,
   getToolCallTaskOutput,
   listToolCallTasksForSession,
@@ -92,7 +94,7 @@ import {
   cancelInteractionRequestByTaskId,
   createPlanApprovalInteractionRequest,
   createUserInputInteractionRequest,
-  getInteractionRequestSummaryByTaskId,
+  getTaskSummaryByTaskId,
 } from "../interactions/service.js"
 
 type InviteableActor = {
@@ -609,11 +611,7 @@ function parsePlanChecklist(rawPlan: unknown): {
 
 async function createGovernedToolCallTask(params: {
   context: NonNullable<ReturnType<typeof getToolExecutionContext>>
-  executorKind:
-    | "interaction_user_input"
-    | "plan_approval"
-    | "runtime_authorization"
-  deliveryPolicy: "human_interaction"
+  executorKind: "user_input" | "plan_approval" | "runtime_authorization"
   requestPayload: Record<string, unknown>
   summary: string
   expiresAt?: string
@@ -628,25 +626,43 @@ async function createGovernedToolCallTask(params: {
       "Current tool call is not attached to a conversation that supports deferred follow-up"
     )
   }
+  if (!context.actorId) {
+    throwToolError("No actor context available for task governance")
+  }
 
   try {
-    return await createToolCallTask({
+    // The waiter is the in-session actor → session_wakeup delivery, and these
+    // are all human-answerable → needs_response. The principal subject is the
+    // actor's access_subjects row (the delivery key). request_key is derived
+    // from the originating tool call so a retried turn dedupes onto one task.
+    const principalSubjectId = await upsertAccessSubject(db, {
+      kind: "actor",
+      actorId: context.actorId,
+    })
+    // Deduped mint: a retried turn with the same source tool-call dedupes onto
+    // the existing live task (partial-unique on request_key) instead of erroring
+    // on the unique constraint. user_input / plan_approval have no CTI detail
+    // table, so no onCreatedInTx callback is needed.
+    const { task } = await createToolCallTaskDeduped({
       workspaceId: context.workspaceId,
       conversationId: context.conversationId,
+      executorKind: params.executorKind,
+      deliveryKind: "session_wakeup",
+      humanSurface: "needs_response",
+      principalSubjectId,
       sessionId: context.sessionId,
-      actorId: context.actorId,
       turnId: context.turnId,
       sourceToolCallId: context.toolCallId,
       sourceToolName: context.toolName,
-      executorKind: params.executorKind,
-      deliveryPolicy: params.deliveryPolicy,
-      status: "input_required",
+      requestKey: `tool-call:${context.toolCallId}`,
+      lifecycleStatus: "input_required",
       statusMessage: params.summary,
-      dispatchStatus: "input_requested",
       supportsCancel: params.supportsCancel === true,
       requestPayload: params.requestPayload,
       deadlineAt: params.expiresAt,
+      expiresAt: params.expiresAt,
     })
+    return task
   } catch (error) {
     throwToolError(
       error instanceof Error ? error.message : "Failed to create tool-call task"
@@ -659,10 +675,11 @@ function serializeTaskSummary(task: ToolCallTaskRecord) {
     taskId: task.id,
     toolName: task.sourceToolName,
     executorKind: task.executorKind,
-    deliveryPolicy: task.deliveryPolicy,
-    status: task.status,
+    deliveryKind: task.deliveryKind,
+    humanSurface: task.humanSurface,
+    lifecycleStatus: task.lifecycleStatus,
+    outcome: task.outcome,
     statusMessage: task.statusMessage,
-    dispatchStatus: task.dispatchStatus,
     supportsCancel: task.supportsCancel,
     supportsOutputTail: task.supportsOutputTail,
     createdAt: task.createdAt,
@@ -698,12 +715,15 @@ async function cancelHumanInteractionTask(
   reason?: string
 ) {
   const note = reason?.trim()
+  // cancelInteractionRequestByTaskId flips lifecycle=cancelled in-tx; here we
+  // just persist the cancellation payload (the agent is the canceller, so no
+  // self-wakeup is needed → notifyActor:false).
   const interaction = await cancelInteractionRequestByTaskId(task.id, note)
   const summary =
     note ||
     `Cancelled ${task.sourceToolName.replace(/_/g, " ")} before it completed.`
 
-  return cancelToolCallTask(task.id, {
+  return deliverResolvedToolCallTask(task.id, "cancelled", {
     summary,
     finalResultPayload: {
       content: textBlocks(summary),
@@ -719,6 +739,7 @@ async function cancelHumanInteractionTask(
           interactionId: interaction.id,
         }
       : undefined,
+    notifyActor: false,
   })
 }
 
@@ -1607,8 +1628,7 @@ export function registerCallableToolPlugins(): void {
 
       const task = await createGovernedToolCallTask({
         context,
-        executorKind: "interaction_user_input",
-        deliveryPolicy: "human_interaction",
+        executorKind: "user_input",
         supportsCancel: true,
         requestPayload: {
           targetParticipantId: resolution.candidate.participantId,
@@ -2063,7 +2083,6 @@ export function registerCallableToolPlugins(): void {
       const task = await createGovernedToolCallTask({
         context,
         executorKind: "plan_approval",
-        deliveryPolicy: "human_interaction",
         supportsCancel: true,
         requestPayload: {
           targetParticipantId: resolution.candidate.participantId,
@@ -2215,10 +2234,10 @@ export function registerCallableToolPlugins(): void {
 
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
       const interaction =
-        task.executorKind === "interaction_user_input" ||
+        task.executorKind === "user_input" ||
         task.executorKind === "plan_approval" ||
         task.executorKind === "runtime_authorization"
-          ? await getInteractionRequestSummaryByTaskId(task.id)
+          ? await getTaskSummaryByTaskId(task.id)
           : null
 
       return textResult(
@@ -2272,9 +2291,9 @@ export function registerCallableToolPlugins(): void {
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
 
       if (
-        task.status === "completed" ||
-        task.status === "failed" ||
-        task.status === "cancelled"
+        task.lifecycleStatus === "completed" ||
+        task.lifecycleStatus === "failed" ||
+        task.lifecycleStatus === "cancelled"
       ) {
         return textResult(
           JSON.stringify({
@@ -2296,17 +2315,17 @@ export function registerCallableToolPlugins(): void {
       const updated = await cancelHumanInteractionTask(task, reason)
       const current = await loadSessionTaskOrThrow(context.sessionId, task.id)
       const interaction =
-        current.executorKind === "interaction_user_input" ||
+        current.executorKind === "user_input" ||
         current.executorKind === "plan_approval" ||
         current.executorKind === "runtime_authorization"
-          ? await getInteractionRequestSummaryByTaskId(current.id)
+          ? await getTaskSummaryByTaskId(current.id)
           : null
 
       return textResult(
         JSON.stringify({
           success: true,
           message:
-            updated?.status === "cancelled"
+            updated?.lifecycleStatus === "cancelled"
               ? `Task ${task.id} was cancelled.`
               : `Cancellation requested for task ${task.id}.`,
           task: serializeTaskDetails(current),

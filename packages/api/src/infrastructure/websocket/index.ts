@@ -117,23 +117,20 @@ async function enrichChatSyncSocketEventForViewer(
     const eventPayload =
       payload.payload as ChatSyncEventPayloadMap["conversation.item.created"]
     const item = eventPayload.item
-    if (item.itemType !== "event" || item.subtype !== "interaction_requested") {
+    if (item.itemType !== "event" || item.subtype !== "task_requested") {
       return payload
     }
 
     const eventItem = item as Extract<
       ChatSyncEventPayloadMap["conversation.item.created"]["item"],
-      { itemType: "event"; subtype: "interaction_requested" }
+      { itemType: "event"; subtype: "task_requested" }
     >
     const itemPayload =
-      eventItem.eventPayload as ConversationFeedEventPayloadMap["interaction_requested"]
+      eventItem.eventPayload as ConversationFeedEventPayloadMap["task_requested"]
     const interaction =
-      itemPayload &&
-      typeof itemPayload === "object" &&
-      "interaction" in itemPayload
-        ? (
-            itemPayload as ConversationFeedEventPayloadMap["interaction_requested"]
-          ).interaction
+      itemPayload && typeof itemPayload === "object" && "task" in itemPayload
+        ? (itemPayload as ConversationFeedEventPayloadMap["task_requested"])
+            .task
         : undefined
 
     if (!interaction) {
@@ -148,27 +145,23 @@ async function enrichChatSyncSocketEventForViewer(
           ...eventItem,
           eventPayload: {
             ...itemPayload,
-            interaction: await enrichInteractionForUser(
-              interaction,
-              viewerUserId
-            ),
+            task: await enrichInteractionForUser(interaction, viewerUserId),
           },
         },
       },
     }
   }
 
-  if (payload.eventType !== "interaction.updated") {
+  if (payload.eventType !== "task.updated") {
     return payload
   }
 
   return {
     ...payload,
     payload: {
-      ...(payload.payload as ChatSyncEventPayloadMap["interaction.updated"]),
-      interaction: await enrichInteractionForUser(
-        (payload.payload as ChatSyncEventPayloadMap["interaction.updated"])
-          .interaction,
+      ...(payload.payload as ChatSyncEventPayloadMap["task.updated"]),
+      task: await enrichInteractionForUser(
+        (payload.payload as ChatSyncEventPayloadMap["task.updated"]).task,
         viewerUserId
       ),
     },

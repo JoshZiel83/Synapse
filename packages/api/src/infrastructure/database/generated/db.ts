@@ -181,10 +181,6 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
-export type InteractionRequestsKind = "plan_approval" | "runtime_authorization" | "user_input";
-
-export type InteractionRequestsStatus = "answered" | "approved" | "cancelled" | "expired" | "pending" | "rejected" | "superseded";
-
 export type Json = JsonValue;
 
 export type JsonArray = JsonValue[];
@@ -319,13 +315,15 @@ export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "
 
 export type ToolCallTaskOutputChunksStream = "stderr" | "stdout" | "system";
 
-export type ToolCallTasksDeliveryPolicy = "human_interaction" | "online_only" | "store_and_forward";
+export type ToolCallTasksDeliveryKind = "none" | "remote_agent_channel" | "session_wakeup";
 
-export type ToolCallTasksDispatchStatus = "accepted" | "cancel_requested" | "dispatched" | "input_requested" | "queued" | "received" | "started";
+export type ToolCallTasksExecutorKind = "device_tool" | "external_mcp" | "plan_approval" | "runtime_authorization" | "user_input";
 
-export type ToolCallTasksExecutorKind = "device_mcp" | "interaction_user_input" | "plan_approval" | "runtime_authorization";
+export type ToolCallTasksHumanSurface = "needs_response" | "silent";
 
-export type ToolCallTasksStatus = "cancelled" | "completed" | "failed" | "input_required" | "working";
+export type ToolCallTasksLifecycleStatus = "auth_required" | "cancelled" | "completed" | "expired" | "failed" | "input_required" | "submitted" | "working";
+
+export type ToolCallTasksOutcome = "answered" | "approved" | "denied" | "granted" | "ok" | "revision_requested" | "tool_error";
 
 export type ToolExecutionAttemptsStatus = "error" | "success" | "timeout";
 
@@ -1701,94 +1699,6 @@ export interface InstalledSkillsLive {
   workspace_id: string | null;
 }
 
-export interface InteractionActionTokens {
-  created_at: Generated<Timestamp>;
-  expires_at: Timestamp;
-  interaction_request_id: string;
-  payload: Json;
-  token: Generated<string>;
-}
-
-export interface InteractionPlanApprovalRequests {
-  interaction_id: string;
-  plan_payload: Generated<Json>;
-  resolution_payload: Generated<Json>;
-}
-
-export interface InteractionRequests {
-  conversation_id: string;
-  conversation_item_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  expires_at: Timestamp | null;
-  id: Generated<string>;
-  kind: InteractionRequestsKind;
-  remote_agent_run_id: string | null;
-  request_key: string;
-  requester_participant_id: string;
-  resolved_at: Timestamp | null;
-  resolved_by_participant_id: string | null;
-  revision: Generated<Int8>;
-  status: Generated<InteractionRequestsStatus>;
-  target_participant_id: string | null;
-  task_id: string | null;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
-}
-
-export interface InteractionResponseCommands {
-  base_revision: Int8;
-  command_id: string;
-  created_at: Generated<Timestamp>;
-  created_by_workspace_member_id: string | null;
-  id: Generated<string>;
-  interaction_id: string;
-  outcome: string;
-  request_payload: Generated<Json>;
-  response_payload: Generated<Json>;
-  updated_at: Generated<Timestamp>;
-}
-
-export interface InteractionRuntimeAuthorizationRequests {
-  available_presets: Generated<Json>;
-  dedupe_key: string;
-  device_capability_id: string;
-  device_exposure_id: string;
-  device_id: string;
-  device_tool_stable_key: string;
-  grant_options: Generated<Json>;
-  interaction_id: string;
-  principal_scope_subject_id: string | null;
-  principal_subject_id: string;
-  reason: Generated<string>;
-  request_mode: RuntimeAuthorizationRequestMode;
-  requested_action: Generated<Json>;
-  requested_tool_name: string;
-  resolution_payload: Generated<Json>;
-  source_request_args: Generated<Json>;
-  source_retry_nonce: string | null;
-  source_runtime_session_id: string | null;
-}
-
-export interface InteractionTransportProjections {
-  attempts: Generated<number>;
-  conversation_id: string;
-  created_at: Generated<Timestamp>;
-  error: string | null;
-  id: Generated<string>;
-  interaction_request_id: string;
-  next_attempt_at: Generated<Timestamp>;
-  status: Generated<string>;
-  transport_message_link_id: string | null;
-  updated_at: Generated<Timestamp>;
-  workspace_id: string;
-}
-
-export interface InteractionUserInputRequests {
-  interaction_id: string;
-  prompt_payload: Generated<Json>;
-  resolution_payload: Generated<Json>;
-}
-
 export interface MemoryAccessGrants {
   created_at: Generated<Timestamp>;
   created_by_workspace_member_id: string | null;
@@ -2551,7 +2461,6 @@ export interface RuntimeAuthorizationGrants {
   retention: RuntimeAuthorizationGrantsRetention;
   revoked_at: Timestamp | null;
   scope_subject_id: string | null;
-  source_interaction_id: string | null;
   source_request_args: Generated<Json>;
   source_retry_nonce: string | null;
   source_runtime_session_id: string | null;
@@ -2575,7 +2484,6 @@ export interface RuntimeAuthorizationGrantsLive {
   retention: RuntimeAuthorizationGrantsRetention | null;
   revoked_at: Timestamp | null;
   scope_subject_id: string | null;
-  source_interaction_id: string | null;
   source_request_args: Json | null;
   source_retry_nonce: string | null;
   source_runtime_session_id: string | null;
@@ -2774,6 +2682,36 @@ export interface ToolCalls {
   turn_id: string;
 }
 
+export interface ToolCallTaskActionTokens {
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  payload: Json;
+  task_id: string;
+  token: Generated<string>;
+}
+
+export interface ToolCallTaskDeviceTool {
+  device_capability_id: string;
+  device_exposure_id: string;
+  device_id: string;
+  device_operation_id: string | null;
+  input_hash: Generated<string>;
+  operation_timeout_ms: number | null;
+  task_id: string;
+  task_mode: Generated<DeviceOperationsTaskMode>;
+  tool_id: string;
+  tool_revision_id: string;
+}
+
+export interface ToolCallTaskExternalMcp {
+  plugin_installation_id: string | null;
+  poll_interval_ms: number | null;
+  task_id: string;
+  ttl_ms: number | null;
+  upstream_task_id: string | null;
+  wire_version: Generated<string>;
+}
+
 export interface ToolCallTaskOutputChunks {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
@@ -2784,37 +2722,95 @@ export interface ToolCallTaskOutputChunks {
   text_value: string;
 }
 
+export interface ToolCallTaskResponseCommands {
+  base_revision: Int8;
+  command_id: string;
+  created_at: Generated<Timestamp>;
+  created_by_workspace_member_id: string | null;
+  created_by_workspace_member_id_snapshot: string | null;
+  id: Generated<string>;
+  outcome: string;
+  request_payload: Generated<Json>;
+  response_payload: Generated<Json>;
+  task_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface ToolCallTaskRuntimeAuthorization {
+  available_presets: Generated<Json>;
+  dedupe_key: string;
+  device_capability_id: string;
+  device_exposure_id: string;
+  device_id: string;
+  device_tool_stable_key: string;
+  grant_options: Generated<Json>;
+  principal_scope_subject_id: string | null;
+  principal_subject_id: string;
+  reason: Generated<string>;
+  request_mode: RuntimeAuthorizationRequestMode;
+  requested_action: Generated<Json>;
+  requested_tool_name: string;
+  source_request_args: Generated<Json>;
+  source_retry_nonce: string | null;
+  source_runtime_session_id: string | null;
+  task_id: string;
+}
+
 export interface ToolCallTasks {
-  actor_id: string;
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;
   completed_at: Timestamp | null;
   completion_item_id: string | null;
   conversation_id: string;
+  conversation_item_id: string | null;
   created_at: Generated<Timestamp | null>;
   deadline_at: Timestamp | null;
-  delivery_policy: ToolCallTasksDeliveryPolicy;
-  dispatch_status: Generated<ToolCallTasksDispatchStatus>;
+  delivery_kind: ToolCallTasksDeliveryKind;
   executor_kind: ToolCallTasksExecutorKind;
+  expires_at: Timestamp | null;
   final_error_payload: Generated<Json>;
   final_result_payload: Generated<Json>;
+  human_surface: ToolCallTasksHumanSurface;
   id: Generated<string>;
   immediate_result_payload: Generated<Json>;
   last_output_at: Timestamp | null;
   last_output_seq: Generated<Int8>;
+  lifecycle_status: Generated<ToolCallTasksLifecycleStatus>;
   metadata: Generated<Json>;
+  outcome: ToolCallTasksOutcome | null;
+  principal_subject_id: string;
+  remote_agent_run_id: string | null;
+  request_key: string;
   request_payload: Generated<Json>;
+  requester_participant_id: string | null;
+  resolved_at: Timestamp | null;
+  resolved_by_participant_id: string | null;
   retain_until: Timestamp | null;
   retention_ttl_ms: number | null;
-  session_id: string;
+  revision: Generated<Int8>;
+  session_id: string | null;
   source_tool_call_id: string | null;
   source_tool_name: string;
-  status: Generated<ToolCallTasksStatus>;
   status_message: string | null;
   supports_cancel: Generated<boolean>;
   supports_output_tail: Generated<boolean>;
+  target_participant_id: string | null;
   turn_id: string | null;
   updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
+export interface ToolCallTaskTransportProjections {
+  attempts: Generated<number>;
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  id: Generated<string>;
+  next_attempt_at: Generated<Timestamp>;
+  status: Generated<string>;
+  task_id: string;
+  transport_message_link_id: string | null;
+  updated_at: Generated<Timestamp>;
   workspace_id: string;
 }
 
@@ -3248,13 +3244,6 @@ export interface DB {
   file_spaces_live: FileSpacesLive;
   installed_skills: InstalledSkills;
   installed_skills_live: InstalledSkillsLive;
-  interaction_action_tokens: InteractionActionTokens;
-  interaction_plan_approval_requests: InteractionPlanApprovalRequests;
-  interaction_requests: InteractionRequests;
-  interaction_response_commands: InteractionResponseCommands;
-  interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
-  interaction_transport_projections: InteractionTransportProjections;
-  interaction_user_input_requests: InteractionUserInputRequests;
   memory_access_grants: MemoryAccessGrants;
   memory_access_grants_live: MemoryAccessGrantsLive;
   memory_embedding_cache: MemoryEmbeddingCache;
@@ -3317,7 +3306,13 @@ export interface DB {
   skill_snapshots: SkillSnapshots;
   skill_source_refs: SkillSourceRefs;
   skill_versions: SkillVersions;
+  tool_call_task_action_tokens: ToolCallTaskActionTokens;
+  tool_call_task_device_tool: ToolCallTaskDeviceTool;
+  tool_call_task_external_mcp: ToolCallTaskExternalMcp;
   tool_call_task_output_chunks: ToolCallTaskOutputChunks;
+  tool_call_task_response_commands: ToolCallTaskResponseCommands;
+  tool_call_task_runtime_authorization: ToolCallTaskRuntimeAuthorization;
+  tool_call_task_transport_projections: ToolCallTaskTransportProjections;
   tool_call_tasks: ToolCallTasks;
   tool_calls: ToolCalls;
   tool_execution_attempts: ToolExecutionAttempts;
