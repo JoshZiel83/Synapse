@@ -27,7 +27,7 @@
     mod
   ));
 
-  // ../../node_modules/fast-deep-equal/index.js
+  // node_modules/fast-deep-equal/index.js
   var require_fast_deep_equal = __commonJS({
     "../../node_modules/fast-deep-equal/index.js"(exports, module) {
       "use strict";
@@ -62,7 +62,7 @@
     }
   });
 
-  // ../../node_modules/idb/build/index.js
+  // node_modules/idb/build/index.js
   var instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
   var idbProxyableTypes;
   var cursorAdvanceMethods;
