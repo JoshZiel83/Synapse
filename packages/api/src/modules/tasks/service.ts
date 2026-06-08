@@ -1,7 +1,7 @@
 import {
   CONVERSATION_PARTICIPANT_TYPE,
-  INTERACTION_INPUT_QUESTION_TYPES,
-  INTERACTION_REQUEST_KIND,
+  TASK_INPUT_QUESTION_TYPES,
+  TASK_REQUEST_KIND,
   parseJsonObject,
   textBlocks,
   type SubjectRef,
@@ -13,24 +13,23 @@ import {
 import { v4 as uuidv4 } from "uuid"
 import type {
   CanonicalContentBlock,
-  ChatInteractionResolveInput,
-  ChatInteractionResolveOutcome,
+  ChatTaskResolveInput,
+  ChatTaskResolveOutcome,
   ConversationFeedItem,
   ConversationFeedEventPayloadMap,
   ConversationEntityRef,
-  InteractionDecision,
-  InteractionInputAnswer,
-  InteractionInputOption,
-  InteractionInputQuestionDefinition,
-  InteractionInputQuestionSummary,
-  InteractionRequestKind,
-  InteractionRequestStatus,
+  TaskDecision,
+  TaskInputAnswer,
+  TaskInputOption,
+  TaskInputQuestionDefinition,
+  TaskInputQuestionSummary,
+  TaskRequestKind,
   TaskSummary,
   PlanApprovalDecision,
   PlanChecklistStep,
   RuntimeAuthorizationGrantOption,
   SharedRuntimeAuthorizationGrantSpec,
-  RuntimeAuthorizationInteractionSummary,
+  RuntimeAuthorizationTaskDetails,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
   RuntimeAuthorizationRequestedAction,
@@ -76,7 +75,7 @@ import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
 } from "../session/collaboration-state.js"
-import { upsertInteractionTransportProjection } from "./transport-projections.js"
+import { upsertTaskTransportProjection } from "./transport-projections.js"
 
 /** Run raw SQL (text+params) on db / trx. */
 async function runOn<T = any>(
@@ -122,7 +121,7 @@ async function runCompiledOn<T = any>(
   }
 }
 
-type RawInteractionRow = {
+type RawTaskRow = {
   id: string
   workspace_id: string
   conversation_id: string
@@ -131,8 +130,8 @@ type RawInteractionRow = {
   session_id: string | null
   remote_agent_run_id: string | null
   conversation_item_id: string | null
-  kind: InteractionRequestKind
-  status: InteractionRequestStatus
+  kind: TaskRequestKind
+  lifecycle_status: ToolCallTaskLifecycleStatus
   outcome: ToolCallTaskOutcome | null
   revision: string | number
   prompt_payload: unknown
@@ -146,13 +145,13 @@ type RawInteractionRow = {
   source_request_args: unknown
   source_runtime_session_id: string | null
   source_retry_nonce: string | null
-  // subject-scope-refactor: principal_remote_agent_id dropped from
-  // interaction_runtime_authorization_requests. Replaced by
+  // subject-scope-refactor: principal_remote_agent_id is derived from
+  // principal_subject_id rather than stored on the runtime authorization detail.
   // principal_subject_id (NOT NULL) + principal_scope_subject_id (nullable),
   // both FK to access_subjects with ON DELETE RESTRICT (durable audit).
   principal_subject_id: string
   principal_scope_subject_id: string | null
-  // Retained on the type for transitional caller compatibility.
+  // Derived alias for dashboard consumers.
   principal_remote_agent_id: string | null
   principal_subject_kind: string | null
   resolution_payload: unknown
@@ -205,12 +204,12 @@ type RawInteractionRow = {
   resolved_by_avatar_emoji: string | null
 }
 
-type RawInteractionCommandRow = {
+type RawTaskCommandRow = {
   id: string
-  interaction_id: string
+  task_id: string
   command_id: string
   base_revision: string | number
-  outcome: ChatInteractionResolveOutcome
+  outcome: ChatTaskResolveOutcome
   request_payload: unknown
   response_payload: unknown
   created_by_workspace_member_id: string | null
@@ -239,7 +238,7 @@ function toRevisionNumber(
   throw new Error(`${label} must be a finite revision number`)
 }
 
-export interface CreateUserInputInteractionParams {
+export interface CreateUserInputTaskParams {
   workspaceId: string
   conversationId: string
   taskId: string
@@ -247,11 +246,11 @@ export interface CreateUserInputInteractionParams {
   targetParticipantId: string
   title: string
   instructions?: string
-  questions: InteractionInputQuestionDefinition[]
+  questions: TaskInputQuestionDefinition[]
   expiresAt?: string
 }
 
-export interface CreateRemoteAgentUserInputInteractionParams {
+export interface CreateRemoteAgentUserInputTaskParams {
   workspaceId: string
   conversationId: string
   remoteAgentRunId: string
@@ -259,11 +258,11 @@ export interface CreateRemoteAgentUserInputInteractionParams {
   targetParticipantId?: string
   title: string
   instructions?: string
-  questions: InteractionInputQuestionDefinition[]
+  questions: TaskInputQuestionDefinition[]
   expiresAt?: string
 }
 
-export interface CreatePlanApprovalInteractionParams {
+export interface CreatePlanApprovalTaskParams {
   workspaceId: string
   conversationId: string
   sessionId: string
@@ -278,7 +277,7 @@ export interface CreatePlanApprovalInteractionParams {
   expiresAt?: string
 }
 
-export interface CreateRemoteAgentPlanApprovalInteractionParams {
+export interface CreateRemoteAgentPlanApprovalTaskParams {
   workspaceId: string
   conversationId: string
   remoteAgentRunId: string
@@ -293,7 +292,7 @@ export interface CreateRemoteAgentPlanApprovalInteractionParams {
   expiresAt?: string
 }
 
-export interface CreateRuntimeAuthorizationInteractionParams {
+export interface CreateRuntimeAuthorizationTaskParams {
   workspaceId: string
   conversationId: string
   /**
@@ -337,20 +336,20 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   principalRemoteAgentId?: string
 }
 
-export type ResolveInteractionRequestParams = ChatInteractionResolveInput & {
-  interactionId: string
+export type ResolveTaskRequestParams = ChatTaskResolveInput & {
+  taskId: string
   resolverWorkspaceMemberId: string
   resolverParticipantId: string
 }
 
-export interface ResolveInteractionRequestResult {
-  outcome: ChatInteractionResolveOutcome
-  interaction: TaskSummary
+export interface ResolveTaskRequestResult {
+  outcome: ChatTaskResolveOutcome
+  task: TaskSummary
   createdGrant?: RuntimeAuthorizationGrantRecord
   createdGrants?: RuntimeAuthorizationGrantRecord[]
 }
 
-export interface FindOpenRuntimeAuthorizationInteractionParams {
+export interface FindOpenRuntimeAuthorizationTaskParams {
   workspaceId: string
   conversationId: string
   requesterParticipantId: string
@@ -365,7 +364,7 @@ export interface FindOpenRuntimeAuthorizationInteractionParams {
   requestMode: RuntimeAuthorizationRequestMode
   /**
    * Source Agent session id (chat-runtime session.id). Must match the
-   * value the caller would write via createRuntimeAuthorizationInteractionRequest's
+   * value the caller would write via createRuntimeAuthorizationTaskRequest's
    * `runtimeSessionId` field so the dedupe key matches a previously-created
    * row. Pass the empty string when the caller has no session context (the
    * dedupe still works within that single bucket).
@@ -479,7 +478,7 @@ function jsonbValue<T>(value: T) {
  * Build the dedupe key used to merge identical pending runtime-authorization
  * requests. Exported for unit-testing the per-session isolation contract —
  * two callers differing only in runtimeSessionId MUST produce different
- * keys so concurrent Agent sessions never share a single pending interaction
+ * keys so concurrent Agent sessions never share a single pending task
  * (and, post-approval, never inherit each other's source_runtime_session_id).
  */
 export function buildRuntimeAuthorizationDedupeKey(params: {
@@ -495,7 +494,7 @@ export function buildRuntimeAuthorizationDedupeKey(params: {
   /**
    * Source Agent session id. Included in the dedupe key so two Agent
    * sessions making the same tool call don't merge into a single pending
-   * interaction — critical for CUA where the per-session focusStore would
+   * task — critical for CUA where the per-session focusStore would
    * end up keyed off whichever session wrote the row first, then the
    * auto-retry would stamp the WRONG cua_focus_scope_id into the approved
    * envelope. Non-cua capabilities also benefit from per-session approval
@@ -519,13 +518,13 @@ export function buildRuntimeAuthorizationDedupeKey(params: {
   })
 }
 
-function buildTaskInteractionRequestKey(taskId: string) {
+function buildTaskRequestKey(taskId: string) {
   return `task:${taskId}`
 }
 
-function buildRemoteAgentInteractionRequestKey(params: {
+function buildRemoteAgentTaskRequestKey(params: {
   remoteAgentRunId: string
-  kind: InteractionRequestKind
+  kind: TaskRequestKind
 }) {
   return `remote-agent-run:${params.remoteAgentRunId}:${params.kind}`
 }
@@ -538,7 +537,7 @@ export function buildRuntimeAuthorizationRequestKey(params: {
   return stableJsonStringify({
     conversationId: params.conversationId,
     requesterParticipantId: params.requesterParticipantId,
-    kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+    kind: TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION,
     dedupeKey: params.dedupeKey,
   })
 }
@@ -557,12 +556,12 @@ function entityAvatarUrl(
 function parseInputOptions(
   value: unknown,
   optionListLabel = "options"
-): InteractionInputOption[] {
+): TaskInputOption[] {
   if (!Array.isArray(value)) {
     return []
   }
 
-  const options: InteractionInputOption[] = []
+  const options: TaskInputOption[] = []
   const usedIds = new Set<string>()
   for (const [index, item] of value.entries()) {
     if (!item || typeof item !== "object") {
@@ -603,26 +602,26 @@ function parseInputOptions(
 
 function normalizeInputQuestionType(
   value: unknown
-): InteractionInputQuestionDefinition["type"] {
+): TaskInputQuestionDefinition["type"] {
   if (
     typeof value === "string" &&
-    (INTERACTION_INPUT_QUESTION_TYPES as readonly string[]).includes(value)
+    (TASK_INPUT_QUESTION_TYPES as readonly string[]).includes(value)
   ) {
-    return value as InteractionInputQuestionDefinition["type"]
+    return value as TaskInputQuestionDefinition["type"]
   }
   throw new Error(`Unsupported user input question type: ${String(value)}`)
 }
 
 function parseUserInputQuestionDefinitions(
   promptPayload: Record<string, unknown>
-): InteractionInputQuestionDefinition[] {
+): TaskInputQuestionDefinition[] {
   const rawQuestions = promptPayload.questions
   if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
     throw new Error(
       "user_input prompt_payload.questions must be a non-empty array"
     )
   }
-  const definitions: InteractionInputQuestionDefinition[] = []
+  const definitions: TaskInputQuestionDefinition[] = []
   const usedIds = new Set<string>()
 
   for (const [index, question] of rawQuestions.entries()) {
@@ -641,7 +640,7 @@ function parseUserInputQuestionDefinitions(
     const type = normalizeInputQuestionType(
       (question as { type?: unknown }).type
     )
-    const definition: InteractionInputQuestionDefinition = {
+    const definition: TaskInputQuestionDefinition = {
       id,
       header: requireTrimmedString(
         (question as { header?: unknown }).header,
@@ -743,16 +742,16 @@ function parseUserInputQuestionDefinitions(
 
 function parseUserInputAnswers(
   resolutionPayload: Record<string, unknown>,
-  questions: InteractionInputQuestionDefinition[]
-): InteractionInputAnswer[] {
-  const answers: InteractionInputAnswer[] = []
+  questions: TaskInputQuestionDefinition[]
+): TaskInputAnswer[] {
+  const answers: TaskInputAnswer[] = []
   const seenQuestionIds = new Set<string>()
 
   if (resolutionPayload.answers === undefined) {
     return answers
   }
   if (!Array.isArray(resolutionPayload.answers)) {
-    throw new Error("interaction resolution_payload.answers must be an array")
+    throw new Error("task resolution_payload.answers must be an array")
   }
 
   for (const [index, answer] of resolutionPayload.answers.entries()) {
@@ -852,10 +851,10 @@ function parseUserInputAnswers(
 function buildUserInputQuestionSummaries(
   promptPayload: Record<string, unknown>,
   resolutionPayload: Record<string, unknown>
-): InteractionInputQuestionSummary[] {
+): TaskInputQuestionSummary[] {
   const definitions = parseUserInputQuestionDefinitions(promptPayload)
   const answers = parseUserInputAnswers(resolutionPayload, definitions)
-  const answerMap = new Map<string, InteractionInputAnswer>()
+  const answerMap = new Map<string, TaskInputAnswer>()
   for (const answer of answers) {
     answerMap.set(answer.questionId, answer)
   }
@@ -866,7 +865,7 @@ function buildUserInputQuestionSummaries(
       answer?.selectedOptionIds?.map(
         (selectedId: string) =>
           (question.options || []).find(
-            (option: InteractionInputOption) => option.id === selectedId
+            (option: TaskInputOption) => option.id === selectedId
           )?.label || selectedId
       ) || undefined
     return {
@@ -925,15 +924,13 @@ function summarizeUserInputAnswers(
 
 function mapEntityRefFromRow(
   prefix: "requester" | "target" | "resolved_by",
-  row: RawInteractionRow
+  row: RawTaskRow
 ): ConversationEntityRef | undefined {
-  const participantType =
-    row[`${prefix}_participant_type` as keyof RawInteractionRow]
+  const participantType = row[`${prefix}_participant_type` as keyof RawTaskRow]
   if (typeof participantType !== "string" || !participantType.trim()) {
     return undefined
   }
-  const participantId =
-    row[`${prefix}_participant_id` as keyof RawInteractionRow]
+  const participantId = row[`${prefix}_participant_id` as keyof RawTaskRow]
   const workspaceMemberId =
     prefix === "requester"
       ? row.requester_workspace_member_id
@@ -952,16 +949,16 @@ function mapEntityRefFromRow(
       : prefix === "target"
         ? row.target_remote_agent_id
         : row.resolved_by_remote_agent_id
-  const name = row[`${prefix}_name` as keyof RawInteractionRow]
-  const title = row[`${prefix}_title` as keyof RawInteractionRow]
-  const role = row[`${prefix}_role` as keyof RawInteractionRow]
+  const name = row[`${prefix}_name` as keyof RawTaskRow]
+  const title = row[`${prefix}_title` as keyof RawTaskRow]
+  const role = row[`${prefix}_role` as keyof RawTaskRow]
   const actorAvatarFileId =
-    row[`${prefix}_actor_avatar_file_id` as keyof RawInteractionRow]
+    row[`${prefix}_actor_avatar_file_id` as keyof RawTaskRow]
   const userAvatarFileId =
-    row[`${prefix}_user_avatar_file_id` as keyof RawInteractionRow]
+    row[`${prefix}_user_avatar_file_id` as keyof RawTaskRow]
   const remoteAgentAvatarFileId =
-    row[`${prefix}_remote_agent_avatar_file_id` as keyof RawInteractionRow]
-  const avatarEmoji = row[`${prefix}_avatar_emoji` as keyof RawInteractionRow]
+    row[`${prefix}_remote_agent_avatar_file_id` as keyof RawTaskRow]
+  const avatarEmoji = row[`${prefix}_avatar_emoji` as keyof RawTaskRow]
 
   return {
     participantId:
@@ -997,48 +994,32 @@ function requireEntityRef(
   return entity
 }
 
-/**
- * Reverse of interactionStatusToTaskFields: project the task's lifecycle_status
- * ⟂ outcome back into the legacy interaction-status vocabulary the wire/FE still
- * speak (until the Step-3 task-surface migration). Non-terminal → 'pending';
- * completed → answered/approved/rejected by outcome; cancelled/expired direct.
- */
-function taskFieldsToInteractionStatus(
-  lifecycle: ToolCallTaskLifecycleStatus,
-  outcome: ToolCallTaskOutcome | null
-): InteractionRequestStatus {
+type TaskResolutionStatus =
+  | "answered"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  | "expired"
+  | "superseded"
+
+function isOpenTaskLifecycle(lifecycle: ToolCallTaskLifecycleStatus): boolean {
   switch (lifecycle) {
-    case "completed":
-      switch (outcome) {
-        case "answered":
-          return "answered"
-        case "approved":
-        case "granted":
-          return "approved"
-        case "revision_requested":
-        case "denied":
-          return "rejected"
-        default:
-          return "answered"
-      }
-    case "cancelled":
-      return "cancelled"
-    case "expired":
-      return "expired"
-    case "failed":
-      return "rejected"
     case "submitted":
     case "working":
     case "input_required":
     case "auth_required":
-    default:
-      return "pending"
+      return true
+    case "completed":
+    case "failed":
+    case "cancelled":
+    case "expired":
+      return false
   }
 }
 
 /**
  * Resolve a conversation participant to its access_subjects id (the task
- * delivery key). Used by the remote-agent interaction paths that mint their own
+ * delivery key). Used by the remote-agent task paths that mint their own
  * task (the principal is the requesting remote_agent's participant subject).
  */
 async function resolveParticipantSubjectId(
@@ -1057,68 +1038,58 @@ async function resolveParticipantSubjectId(
   return row.subject_id
 }
 
-function buildInteractionSummary(row: RawInteractionRow): TaskSummary {
+function buildTaskSummary(row: RawTaskRow): TaskSummary {
   const requester = requireEntityRef(
     mapEntityRefFromRow("requester", row),
-    `Interaction ${row.id} requester`
+    `Task ${row.id} requester`
   )
   const target = mapEntityRefFromRow("target", row)
   const resolvedBy = row.resolved_by_participant_id
     ? requireEntityRef(
         mapEntityRefFromRow("resolved_by", row),
-        `Interaction ${row.id} resolved_by`
+        `Task ${row.id} resolved_by`
       )
     : undefined
   const resolutionPayload = requireJsonObject(
     row.resolution_payload,
-    `Interaction ${row.id} resolution_payload`
+    `Task ${row.id} resolution_payload`
   )
 
-  const baseInteraction = {
+  const baseTask = {
     id: row.id,
-    // Task unification: the task IS the interaction; taskId == the row id.
-    taskId: row.id,
     remoteAgentRunId: row.remote_agent_run_id || undefined,
     workspaceId: row.workspace_id,
     conversationId: row.conversation_id,
     itemId: row.conversation_item_id || undefined,
-    status: taskFieldsToInteractionStatus(
-      row.status as unknown as ToolCallTaskLifecycleStatus,
-      row.outcome
-    ),
-    revision: toRevisionNumber(row.revision, `Interaction ${row.id} revision`),
+    lifecycleStatus: row.lifecycle_status,
+    outcome: row.outcome || undefined,
+    revision: toRevisionNumber(row.revision, `Task ${row.id} revision`),
     requester,
     resolvedBy,
     resolutionNote:
       typeof resolutionPayload.note === "string"
         ? resolutionPayload.note.trim() || undefined
         : undefined,
-    createdAt: requireIsoString(
-      row.created_at,
-      `Interaction ${row.id} created_at`
-    ),
-    updatedAt: requireIsoString(
-      row.updated_at,
-      `Interaction ${row.id} updated_at`
-    ),
+    createdAt: requireIsoString(row.created_at, `Task ${row.id} created_at`),
+    updatedAt: requireIsoString(row.updated_at, `Task ${row.id} updated_at`),
     resolvedAt: toIsoString(row.resolved_at),
     expiresAt: toIsoString(row.expires_at),
     viewerCanResolve: false,
   }
 
-  if (row.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
+  if (row.kind === TASK_REQUEST_KIND.USER_INPUT) {
     const promptPayload = requireJsonObject(
       row.prompt_payload,
-      `Interaction ${row.id} prompt_payload`
+      `Task ${row.id} prompt_payload`
     )
     return {
-      ...baseInteraction,
-      kind: INTERACTION_REQUEST_KIND.USER_INPUT,
+      ...baseTask,
+      kind: TASK_REQUEST_KIND.USER_INPUT,
       target,
       userInput: {
         title: requireTrimmedString(
           promptPayload.title,
-          `Interaction ${row.id} user_input.title`
+          `Task ${row.id} user_input.title`
         ),
         instructions:
           typeof promptPayload.instructions === "string"
@@ -1132,19 +1103,19 @@ function buildInteractionSummary(row: RawInteractionRow): TaskSummary {
     }
   }
 
-  if (row.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+  if (row.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
     const planPayload = requireJsonObject(
       row.plan_payload,
-      `Interaction ${row.id} plan_payload`
+      `Task ${row.id} plan_payload`
     )
     return {
-      ...baseInteraction,
-      kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+      ...baseTask,
+      kind: TASK_REQUEST_KIND.PLAN_APPROVAL,
       target,
       planApproval: {
         title: requireTrimmedString(
           planPayload.title,
-          `Interaction ${row.id} plan_approval.title`
+          `Task ${row.id} plan_approval.title`
         ),
         summary:
           typeof planPayload.summary === "string"
@@ -1152,7 +1123,7 @@ function buildInteractionSummary(row: RawInteractionRow): TaskSummary {
             : undefined,
         planMarkdown: requireTrimmedString(
           planPayload.planMarkdown,
-          `Interaction ${row.id} plan_approval.planMarkdown`
+          `Task ${row.id} plan_approval.planMarkdown`
         ),
         checklist: Array.isArray(planPayload.checklist)
           ? (planPayload.checklist as PlanChecklistStep[])
@@ -1163,49 +1134,46 @@ function buildInteractionSummary(row: RawInteractionRow): TaskSummary {
 
   const requestedAction = requireJsonObject(
     row.requested_action,
-    `Interaction ${row.id} requested_action`
+    `Task ${row.id} requested_action`
   ) as unknown as RuntimeAuthorizationRequestedAction
   const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
     row.grant_options,
-    `Interaction ${row.id} grant_options`
+    `Task ${row.id} grant_options`
   )
   const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
     row.available_presets,
-    `Interaction ${row.id} available_presets`
+    `Task ${row.id} available_presets`
   )
-  const runtimeAuthorization: RuntimeAuthorizationInteractionSummary = {
+  const runtimeAuthorization: RuntimeAuthorizationTaskDetails = {
     requestedToolName: requireTrimmedString(
       row.requested_tool_name,
-      `Interaction ${row.id} requested_tool_name`
+      `Task ${row.id} requested_tool_name`
     ),
     deviceToolStableKey: requireTrimmedString(
       row.device_tool_stable_key,
-      `Interaction ${row.id} device_tool_stable_key`
+      `Task ${row.id} device_tool_stable_key`
     ),
     requestedAction,
     reason: requireTrimmedString(
       row.reason,
-      `Interaction ${row.id} runtime_authorization.reason`
+      `Task ${row.id} runtime_authorization.reason`
     ),
-    deviceId: requireTrimmedString(
-      row.device_id,
-      `Interaction ${row.id} device_id`
-    ),
+    deviceId: requireTrimmedString(row.device_id, `Task ${row.id} device_id`),
     deviceDisplayName: requireTrimmedString(
       row.device_display_name,
-      `Interaction ${row.id} device_display_name`
+      `Task ${row.id} device_display_name`
     ),
     deviceCapabilityId: requireTrimmedString(
       row.device_capability_id,
-      `Interaction ${row.id} device_capability_id`
+      `Task ${row.id} device_capability_id`
     ),
     exposureId: requireTrimmedString(
       row.device_exposure_id,
-      `Interaction ${row.id} device_exposure_id`
+      `Task ${row.id} device_exposure_id`
     ),
     exposureDisplayName: requireTrimmedString(
       row.exposure_display_name,
-      `Interaction ${row.id} exposure_display_name`
+      `Task ${row.id} exposure_display_name`
     ),
     grantOptions,
     availablePresets,
@@ -1217,14 +1185,14 @@ function buildInteractionSummary(row: RawInteractionRow): TaskSummary {
       resolutionPayload.approvedGrant &&
       typeof resolutionPayload.approvedGrant === "object" &&
       !Array.isArray(resolutionPayload.approvedGrant)
-        ? (resolutionPayload.approvedGrant as RuntimeAuthorizationInteractionSummary["approvedGrant"])
+        ? (resolutionPayload.approvedGrant as RuntimeAuthorizationTaskDetails["approvedGrant"])
         : undefined,
     requestMode:
       row.request_mode === "blocking" || row.request_mode === "background"
         ? (row.request_mode as RuntimeAuthorizationRequestMode)
         : (() => {
             throw new Error(
-              `Interaction ${row.id} runtime_authorization.requestMode is invalid`
+              `Task ${row.id} runtime_authorization.requestMode is invalid`
             )
           })(),
     // Surface the persisted retry_nonce so the dedupe-reuse path in
@@ -1235,19 +1203,15 @@ function buildInteractionSummary(row: RawInteractionRow): TaskSummary {
   }
 
   return {
-    ...baseInteraction,
-    kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+    ...baseTask,
+    kind: TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION,
     runtimeAuthorization,
   }
 }
 
-async function getInteractionRowById(
-  interactionId: string,
-  queryable?: Executor
-) {
-  const compiled = sql<RawInteractionRow>`
+async function getTaskRowById(taskId: string, queryable?: Executor) {
+  const compiled = sql<RawTaskRow>`
     SELECT ir.*,
-            ir.lifecycle_status AS status,
             ir.executor_kind AS kind,
             ir.request_payload AS prompt_payload,
             ir.request_payload AS plan_payload,
@@ -1350,72 +1314,62 @@ async function getInteractionRowById(
        ON device.id = auth.device_id
      LEFT JOIN device_exposures exposure
        ON exposure.id = auth.device_exposure_id
-     WHERE ir.id = ${interactionId}
+     WHERE ir.id = ${taskId}
      LIMIT 1
   `.compile(db)
-  const result = await runCompiledOn<RawInteractionRow>(queryable, compiled)
+  const result = await runCompiledOn<RawTaskRow>(queryable, compiled)
   return result.rows[0] || null
 }
 
-type StoredInteractionResolveResponse = {
-  outcome: ChatInteractionResolveOutcome
-  interaction: TaskSummary
+type StoredTaskResolveResponse = {
+  outcome: ChatTaskResolveOutcome
+  task: TaskSummary
 }
 
-function requireInteractionResolveOutcome(
+function requireTaskResolveOutcome(
   value: unknown,
   label: string
-): ChatInteractionResolveOutcome {
+): ChatTaskResolveOutcome {
   if (value === "applied" || value === "duplicate" || value === "conflict") {
     return value
   }
   throw new Error(`${label} is invalid`)
 }
 
-function parseStoredInteractionResolveResponse(
+function parseStoredTaskResolveResponse(
   value: unknown,
   label: string
-): StoredInteractionResolveResponse {
+): StoredTaskResolveResponse {
   const payload = requireJsonObject(value, label)
-  const outcome = requireInteractionResolveOutcome(
-    payload.outcome,
-    `${label}.outcome`
-  )
-  if (!payload.interaction || typeof payload.interaction !== "object") {
-    throw new Error(`${label}.interaction is required`)
+  const outcome = requireTaskResolveOutcome(payload.outcome, `${label}.outcome`)
+  if (!payload.task || typeof payload.task !== "object") {
+    throw new Error(`${label}.task is required`)
   }
   return {
     outcome,
-    interaction: payload.interaction as TaskSummary,
+    task: payload.task as TaskSummary,
   }
 }
 
-async function getInteractionCommandRow(
-  interactionId: string,
+async function getTaskCommandRow(
+  taskId: string,
   commandId: string,
   queryable?: Executor
 ) {
   const compiled = db
     .selectFrom("tool_call_task_response_commands")
     .selectAll()
-    .where("task_id", "=", interactionId)
+    .where("task_id", "=", taskId)
     .where("command_id", "=", commandId)
     .limit(1)
     .compile()
-  const result = await runCompiledOn<RawInteractionCommandRow>(
-    queryable,
-    compiled
-  )
+  const result = await runCompiledOn<RawTaskCommandRow>(queryable, compiled)
   return result.rows[0] || null
 }
 
-async function getInteractionRowByIdForUpdate(
-  interactionId: string,
-  queryable: Executor
-) {
-  const compiled = sql<RawInteractionRow>`
+async function getTaskRowByIdForUpdate(taskId: string, queryable: Executor) {
+  const compiled = sql<RawTaskRow>`
     SELECT ir.*,
-            ir.lifecycle_status AS status,
             ir.executor_kind AS kind,
             ir.request_payload AS prompt_payload,
             ir.request_payload AS plan_payload,
@@ -1518,30 +1472,30 @@ async function getInteractionRowByIdForUpdate(
        ON device.id = auth.device_id
      LEFT JOIN device_exposures exposure
        ON exposure.id = auth.device_exposure_id
-     WHERE ir.id = ${interactionId}
+     WHERE ir.id = ${taskId}
      LIMIT 1
      FOR UPDATE OF ir
   `.compile(db)
-  const result = await runCompiledOn<RawInteractionRow>(queryable, compiled)
+  const result = await runCompiledOn<RawTaskRow>(queryable, compiled)
   return result.rows[0] || null
 }
 
-async function insertInteractionCommandRow(
+async function insertTaskCommandRow(
   client: Executor,
   params: {
-    interactionId: string
+    taskId: string
     commandId: string
     baseRevision: number
-    outcome: ChatInteractionResolveOutcome
+    outcome: ChatTaskResolveOutcome
     requestPayload: Record<string, unknown>
-    responsePayload: StoredInteractionResolveResponse
+    responsePayload: StoredTaskResolveResponse
     createdByWorkspaceMemberId: string
   }
 ) {
   await runBuilder(
     client,
     db.insertInto("tool_call_task_response_commands").values({
-      task_id: params.interactionId,
+      task_id: params.taskId,
       command_id: params.commandId,
       base_revision:
         params.baseRevision as unknown as TableInsert<"tool_call_task_response_commands">["base_revision"],
@@ -1557,61 +1511,52 @@ async function insertInteractionCommandRow(
   )
 }
 
-async function appendInteractionUpdatedSyncEvent(
+async function appendTaskUpdatedSyncEvent(
   queryable: Executor,
-  interaction: TaskSummary
+  task: TaskSummary
 ) {
   const allRecipients = await listConversationRealtimeRecipients(
-    interaction.conversationId,
+    task.conversationId,
     queryable
   )
   const recipients =
-    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
-    (interaction.requester?.participantType ===
+    task.kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
+    (task.requester?.participantType ===
       CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
-      !interaction.target)
+      !task.target)
       ? allRecipients
       : allRecipients.filter(
           (recipient) =>
-            recipient.workspaceMemberId ===
-              interaction.target?.workspaceMemberId ||
-            recipient.workspaceMemberId ===
-              interaction.requester?.workspaceMemberId
+            recipient.workspaceMemberId === task.target?.workspaceMemberId ||
+            recipient.workspaceMemberId === task.requester?.workspaceMemberId
         )
   for (const recipient of recipients) {
     await appendWorkspaceMemberSyncEvent(queryable, {
       workspaceId: recipient.workspaceId,
       workspaceMemberId: recipient.workspaceMemberId,
-      conversationId: interaction.conversationId,
-      itemId: interaction.itemId,
+      conversationId: task.conversationId,
+      itemId: task.itemId,
       eventType: "task.updated",
       payload: {
-        conversationId: interaction.conversationId,
-        taskId: interaction.id,
-        itemId: interaction.itemId,
-        task: interaction,
+        conversationId: task.conversationId,
+        taskId: task.id,
+        itemId: task.itemId,
+        task,
       },
     })
   }
 }
 
-async function syncInteractionEventPayload(
-  interaction: TaskSummary,
-  queryable?: Executor
-) {
-  if (!interaction.itemId) return
-  await updateConversationItemEventPayload(
-    interaction.itemId,
-    { task: interaction },
-    queryable
-  )
+async function syncTaskEventPayload(task: TaskSummary, queryable?: Executor) {
+  if (!task.itemId) return
+  await updateConversationItemEventPayload(task.itemId, { task }, queryable)
 }
 
-function buildUserInputAsyncNotice(interaction: TaskSummary) {
-  const prompt = interaction.userInput?.title?.trim() || "Input request"
-  const answer = summarizeUserInputAnswers(interaction.userInput)
-  const targetName = interaction.target?.name || "A user"
-  const resolutionNote = interaction.resolutionNote?.trim()
+function buildUserInputAsyncNotice(task: TaskSummary) {
+  const prompt = task.userInput?.title?.trim() || "Input request"
+  const answer = summarizeUserInputAnswers(task.userInput)
+  const targetName = task.target?.name || "A user"
+  const resolutionNote = task.resolutionNote?.trim()
   const summary = `${targetName} answered "${prompt}".`
   const lines = [
     summary,
@@ -1626,28 +1571,27 @@ function buildUserInputAsyncNotice(interaction: TaskSummary) {
     finalResultPayload: {
       content: messageBlocks,
       structuredContent: {
-        interactionId: interaction.id,
-        interaction,
+        taskId: task.id,
+        task,
       },
       isError: false,
     },
     metadata: {
-      interactionId: interaction.id,
-      interactionKind: interaction.kind,
-      interactionStatus: interaction.status,
+      taskId: task.id,
+      taskKind: task.kind,
+      taskLifecycleStatus: task.lifecycleStatus,
+      taskOutcome: task.outcome,
     },
   }
 }
 
-function buildPlanApprovalApprovedNotice(interaction: TaskSummary) {
-  const resolverName = interaction.resolvedBy?.name || "A user"
-  const title = interaction.planApproval?.title?.trim() || "Plan"
+function buildPlanApprovalApprovedNotice(task: TaskSummary) {
+  const resolverName = task.resolvedBy?.name || "A user"
+  const title = task.planApproval?.title?.trim() || "Plan"
   const summary = `${resolverName} approved "${title}".`
   const lines = [
     summary,
-    interaction.resolutionNote?.trim()
-      ? `Note: ${interaction.resolutionNote.trim()}`
-      : "",
+    task.resolutionNote?.trim() ? `Note: ${task.resolutionNote.trim()}` : "",
   ].filter(Boolean)
   const messageBlocks = textBlocks(lines.join("\n"))
 
@@ -1657,27 +1601,28 @@ function buildPlanApprovalApprovedNotice(interaction: TaskSummary) {
     finalResultPayload: {
       content: messageBlocks,
       structuredContent: {
-        interactionId: interaction.id,
-        interaction,
+        taskId: task.id,
+        task,
       },
       isError: false,
     },
     metadata: {
-      interactionId: interaction.id,
-      interactionKind: interaction.kind,
-      interactionStatus: interaction.status,
+      taskId: task.id,
+      taskKind: task.kind,
+      taskLifecycleStatus: task.lifecycleStatus,
+      taskOutcome: task.outcome,
     },
   }
 }
 
-function buildPlanApprovalRevisionNotice(interaction: TaskSummary) {
-  const resolverName = interaction.resolvedBy?.name || "A user"
-  const title = interaction.planApproval?.title?.trim() || "Plan"
+function buildPlanApprovalRevisionNotice(task: TaskSummary) {
+  const resolverName = task.resolvedBy?.name || "A user"
+  const title = task.planApproval?.title?.trim() || "Plan"
   const summary = `${resolverName} requested revisions for "${title}".`
   const lines = [
     summary,
-    interaction.resolutionNote?.trim()
-      ? `Feedback: ${interaction.resolutionNote.trim()}`
+    task.resolutionNote?.trim()
+      ? `Feedback: ${task.resolutionNote.trim()}`
       : "",
   ].filter(Boolean)
   const messageBlocks = textBlocks(lines.join("\n"))
@@ -1688,33 +1633,32 @@ function buildPlanApprovalRevisionNotice(interaction: TaskSummary) {
     finalResultPayload: {
       content: messageBlocks,
       structuredContent: {
-        interactionId: interaction.id,
-        interaction,
+        taskId: task.id,
+        task,
       },
       isError: true,
     },
     finalErrorPayload: {
-      interactionId: interaction.id,
+      taskId: task.id,
       reason: "plan_revision_requested",
     },
     metadata: {
-      interactionId: interaction.id,
-      interactionKind: interaction.kind,
-      interactionStatus: interaction.status,
+      taskId: task.id,
+      taskKind: task.kind,
+      taskLifecycleStatus: task.lifecycleStatus,
+      taskOutcome: task.outcome,
     },
   }
 }
 
-function buildRuntimeAuthorizationRejectedNotice(interaction: TaskSummary) {
-  const resolverName = interaction.resolvedBy?.name || "An authorized user"
+function buildRuntimeAuthorizationRejectedNotice(task: TaskSummary) {
+  const resolverName = task.resolvedBy?.name || "An authorized user"
   const deviceName =
-    interaction.runtimeAuthorization?.deviceDisplayName || "the device"
+    task.runtimeAuthorization?.deviceDisplayName || "the device"
   const summary = `${resolverName} rejected access for ${deviceName}.`
   const lines = [
     summary,
-    interaction.resolutionNote?.trim()
-      ? `Note: ${interaction.resolutionNote.trim()}`
-      : "",
+    task.resolutionNote?.trim() ? `Note: ${task.resolutionNote.trim()}` : "",
   ].filter(Boolean)
   const messageBlocks = textBlocks(lines.join("\n"))
 
@@ -1724,35 +1668,34 @@ function buildRuntimeAuthorizationRejectedNotice(interaction: TaskSummary) {
     finalResultPayload: {
       content: messageBlocks,
       structuredContent: {
-        interactionId: interaction.id,
-        interaction,
+        taskId: task.id,
+        task,
       },
       isError: true,
     },
     finalErrorPayload: {
-      interactionId: interaction.id,
+      taskId: task.id,
       reason: "rejected_by_user",
     },
     metadata: {
-      interactionId: interaction.id,
-      interactionKind: interaction.kind,
-      interactionStatus: interaction.status,
+      taskId: task.id,
+      taskKind: task.kind,
+      taskLifecycleStatus: task.lifecycleStatus,
+      taskOutcome: task.outcome,
     },
   }
 }
 
-function buildRuntimeAuthorizationApprovedNotice(interaction: TaskSummary) {
-  const resolverName = interaction.resolvedBy?.name || "An authorized user"
+function buildRuntimeAuthorizationApprovedNotice(task: TaskSummary) {
+  const resolverName = task.resolvedBy?.name || "An authorized user"
   const deviceName =
-    interaction.runtimeAuthorization?.deviceDisplayName || "the device"
+    task.runtimeAuthorization?.deviceDisplayName || "the device"
   const approvedPreset =
-    interaction.runtimeAuthorization?.approvedPreset || "conversation"
+    task.runtimeAuthorization?.approvedPreset || "conversation"
   const summary = `${resolverName} approved ${approvedPreset} access for ${deviceName}.`
   const lines = [
     summary,
-    interaction.resolutionNote?.trim()
-      ? `Note: ${interaction.resolutionNote.trim()}`
-      : "",
+    task.resolutionNote?.trim() ? `Note: ${task.resolutionNote.trim()}` : "",
   ].filter(Boolean)
   const messageBlocks = textBlocks(lines.join("\n"))
 
@@ -1762,21 +1705,22 @@ function buildRuntimeAuthorizationApprovedNotice(interaction: TaskSummary) {
     finalResultPayload: {
       content: messageBlocks,
       structuredContent: {
-        interactionId: interaction.id,
-        interaction,
+        taskId: task.id,
+        task,
       },
       isError: false,
     },
     metadata: {
-      interactionId: interaction.id,
-      interactionKind: interaction.kind,
-      interactionStatus: interaction.status,
+      taskId: task.id,
+      taskKind: task.kind,
+      taskLifecycleStatus: task.lifecycleStatus,
+      taskOutcome: task.outcome,
     },
   }
 }
 
 /**
- * After a runtime_authorization interaction is approved, try to re-issue
+ * After a runtime_authorization task is approved, try to re-issue
  * the original tool call server-side using the persisted args + the grant
  * that was just created. The result becomes the task's finalResultPayload
  * so the model sees the actual tool output instead of a placeholder
@@ -1791,7 +1735,7 @@ function buildRuntimeAuthorizationApprovedNotice(interaction: TaskSummary) {
  * the once-grant safely.
  */
 async function maybeAutoRetryAfterApproval(args: {
-  interaction: TaskSummary
+  task: TaskSummary
   sourceRequestArgs?: Record<string, unknown>
   sourceRetryNonce?: string
   sourceTaskId?: string
@@ -1800,12 +1744,10 @@ async function maybeAutoRetryAfterApproval(args: {
   lockedPrincipalScopeSubjectId?: string
   resolverWorkspaceMemberId?: string
 }) {
-  if (
-    args.interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
-  ) {
+  if (args.task.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
     return null
   }
-  const runtimeAuth = args.interaction.runtimeAuthorization
+  const runtimeAuth = args.task.runtimeAuthorization
   if (!runtimeAuth) return null
   if (!args.createdGrant) return null
   if (!args.sourceRetryNonce) return null
@@ -1829,8 +1771,8 @@ async function maybeAutoRetryAfterApproval(args: {
   try {
     ctx = await buildRuntimePrincipalContext(db, {
       principal: args.lockedPrincipalSubject,
-      workspaceId: args.interaction.workspaceId,
-      conversationId: args.interaction.conversationId ?? null,
+      workspaceId: args.task.workspaceId,
+      conversationId: args.task.conversationId ?? null,
     })
   } catch {
     return null
@@ -1864,8 +1806,8 @@ async function maybeAutoRetryAfterApproval(args: {
     runtimeSubjectIds: ctx.runtimeSubjectIds,
     runtimeScopeSubjectIds: ctx.runtimeScopeSubjectIds,
     audit: {
-      workspaceId: args.interaction.workspaceId,
-      conversationId: args.interaction.conversationId,
+      workspaceId: args.task.workspaceId,
+      conversationId: args.task.conversationId,
       principalKind: audit.principalKind,
       principalSubjectId: audit.principalSubjectId,
       // Thread the source Agent session id from the persisted grant
@@ -1894,8 +1836,8 @@ async function maybeAutoRetryAfterApproval(args: {
       content: contentBlocks,
       isError: retry.result.isError,
       structuredContent: {
-        interactionId: args.interaction.id,
-        interaction: args.interaction,
+        taskId: args.task.id,
+        task: args.task,
         synapseRetry: {
           autoRedispatched: true,
           retryNonce: args.sourceRetryNonce,
@@ -1907,9 +1849,10 @@ async function maybeAutoRetryAfterApproval(args: {
       },
     },
     metadata: {
-      interactionId: args.interaction.id,
-      interactionKind: args.interaction.kind,
-      interactionStatus: args.interaction.status,
+      taskId: args.task.id,
+      taskKind: args.task.kind,
+      taskLifecycleStatus: args.task.lifecycleStatus,
+      taskOutcome: args.task.outcome,
       synapseRetry: {
         autoRedispatched: true,
       },
@@ -1917,7 +1860,7 @@ async function maybeAutoRetryAfterApproval(args: {
   }
 }
 
-function buildRuntimeAuthorizationSupersededNotice(interaction: TaskSummary) {
+function buildRuntimeAuthorizationSupersededNotice(task: TaskSummary) {
   const summary =
     "This authorization request was superseded by a newer user message."
   const messageBlocks = textBlocks(summary)
@@ -1928,24 +1871,25 @@ function buildRuntimeAuthorizationSupersededNotice(interaction: TaskSummary) {
     finalResultPayload: {
       content: messageBlocks,
       structuredContent: {
-        interactionId: interaction.id,
-        interaction,
+        taskId: task.id,
+        task,
       },
       isError: true,
     },
     finalErrorPayload: {
-      interactionId: interaction.id,
+      taskId: task.id,
       reason: "superseded",
     },
     metadata: {
-      interactionId: interaction.id,
-      interactionKind: interaction.kind,
-      interactionStatus: interaction.status,
+      taskId: task.id,
+      taskKind: task.kind,
+      taskLifecycleStatus: task.lifecycleStatus,
+      taskOutcome: task.outcome,
     },
   }
 }
 
-async function insertInteractionRequest(
+async function insertTaskRequest(
   client: Executor,
   params: {
     workspaceId: string
@@ -1953,24 +1897,18 @@ async function insertInteractionRequest(
     taskId?: string
     remoteAgentRunId?: string
     requesterParticipantId: string
-    kind: InteractionRequestKind
+    kind: TaskRequestKind
     requestKey: string
     targetParticipantId?: string
     expiresAt?: string
   }
 ): Promise<string | null> {
-  // Task unification: the task IS the interaction. The caller already created
-  // the tool_call_tasks row (with its request_key + dedupe). Here we attach the
-  // human-facing participant fields onto that task and return its id. The dedupe
-  // ON CONFLICT now lives at task creation; this UPDATE only succeeds while the
-  // task is still non-terminal-pending (mirrors the old WHERE status='pending').
+  // The caller already created the tool_call_tasks row with its request_key and
+  // dedupe metadata. Here we attach the human-facing participant fields and
+  // return the parent id. The dedupe ON CONFLICT lives at task creation; this
+  // UPDATE only succeeds while the task is still non-terminal.
   if (!params.taskId) {
-    // Remote-agent-run-only interactions previously had task_id=null; under the
-    // unification every interaction is a task, so a missing taskId is a caller
-    // error.
-    throw new Error(
-      "insertInteractionRequest requires a taskId (the task IS the interaction)"
-    )
+    throw new Error("insertTaskRequest requires a taskId")
   }
   const updated = await runCompiledOn<{ id: string }>(
     client,
@@ -1990,8 +1928,8 @@ async function insertInteractionRequest(
 }
 
 /**
- * Resolve the existing-pending-interaction id that won an INSERT race
- * against `insertInteractionRequest` (which returned null on conflict).
+ * Resolve the existing-pending-task id that won an INSERT race
+ * against `insertTaskRequest` (which returned null on conflict).
  * Centralized here so every caller does the same lookup the same way —
  * critical for the dedupe contract: the row we return must be exactly
  * the one the conflicting unique index pinned.
@@ -2006,20 +1944,19 @@ async function resolveInsertConflictWinner(
   // the pre-INSERT lookup ordering avoids surprising any cross-callsite
   // assumption.
   if (params.taskId) {
-    const byTask = await findInteractionIdByTaskId(params.taskId, client)
+    const byTask = await findTaskIdByTaskId(params.taskId, client)
     if (byTask) return byTask
   }
-  return findPendingInteractionIdByRequestKey(
+  return findPendingTaskIdByRequestKey(
     params.workspaceId,
     params.requestKey,
     client
   )
 }
 
-async function findInteractionIdByTaskId(taskId: string, queryable?: Executor) {
-  // The task IS the interaction now (1:1). The interaction id == the task id;
-  // confirm the task exists and is non-terminal-pending so dedupe-reuse only
-  // returns a live row.
+async function findTaskIdByTaskId(taskId: string, queryable?: Executor) {
+  // Confirm the task exists and is non-terminal so dedupe-reuse only returns a
+  // live row.
   const compiled = db
     .selectFrom("tool_call_tasks")
     .select("id")
@@ -2030,7 +1967,7 @@ async function findInteractionIdByTaskId(taskId: string, queryable?: Executor) {
   return result.rows[0]?.id || null
 }
 
-async function findPendingInteractionIdByRequestKey(
+async function findPendingTaskIdByRequestKey(
   workspaceId: string,
   requestKey: string,
   queryable?: Executor
@@ -2052,10 +1989,10 @@ async function findPendingInteractionIdByRequestKey(
   return result.rows[0]?.id || null
 }
 
-async function insertUserInputInteractionDetails(
+async function insertUserInputTaskDetails(
   _client: Executor,
   _params: {
-    interactionId: string
+    taskId: string
     promptPayload: Record<string, unknown>
   }
 ) {
@@ -2064,10 +2001,10 @@ async function insertUserInputInteractionDetails(
   // no CTI detail table.
 }
 
-async function insertPlanApprovalInteractionDetails(
+async function insertPlanApprovalTaskDetails(
   _client: Executor,
   _params: {
-    interactionId: string
+    taskId: string
     planPayload: Record<string, unknown>
   }
 ) {
@@ -2075,10 +2012,10 @@ async function insertPlanApprovalInteractionDetails(
   // tool_call_tasks.request_payload. plan_approval has no CTI detail table.
 }
 
-async function insertRuntimeAuthorizationInteractionDetails(
+async function insertRuntimeAuthorizationTaskDetails(
   client: Executor,
   params: {
-    interactionId: string
+    taskId: string
     deviceId: string
     deviceCapabilityId: string
     deviceExposureId: string
@@ -2093,9 +2030,8 @@ async function insertRuntimeAuthorizationInteractionDetails(
     grantOptions: RuntimeAuthorizationGrantOption[]
     availablePresets: RuntimeAuthorizationPreset[]
     dedupeKey: string
-    /** When the triggering dispatch was a remote_agent principal, the
     /** subject-scope-refactor: principal subject_id (NOT NULL on
-     * interaction_runtime_authorization_requests). Caller resolves the
+     * tool_call_task_runtime_authorization). Caller resolves the
      * triggering principal (actor / remote_agent / conversation) to an
      * access_subjects row via upsertAccessSubjectOn(client, ...) and passes
      * the id here. */
@@ -2112,7 +2048,7 @@ async function insertRuntimeAuthorizationInteractionDetails(
   await runBuilder(
     client,
     db.insertInto("tool_call_task_runtime_authorization").values({
-      task_id: params.interactionId,
+      task_id: params.taskId,
       device_id: params.deviceId,
       device_capability_id: params.deviceCapabilityId,
       device_exposure_id: params.deviceExposureId,
@@ -2146,7 +2082,7 @@ async function insertRuntimeAuthorizationInteractionDetails(
  * INSIDE the caller's transaction (createToolCallTaskDeduped's onCreatedInTx).
  * This must run in the same tx as the parent INSERT so the deferred CTI
  * consistency trigger sees exactly one detail row at COMMIT. Computes the
- * content dedupe_key (also used by findOpenRuntimeAuthorizationInteraction).
+ * content dedupe_key (also used by findOpenRuntimeAuthorizationTask).
  */
 export async function writeRuntimeAuthorizationTaskDetailInTx(
   client: Executor,
@@ -2181,8 +2117,8 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
     availablePresets: params.availablePresets,
     runtimeSessionId: params.runtimeSessionId,
   })
-  await insertRuntimeAuthorizationInteractionDetails(client, {
-    interactionId: params.taskId,
+  await insertRuntimeAuthorizationTaskDetails(client, {
+    taskId: params.taskId,
     deviceId: params.deviceId,
     deviceCapabilityId: params.deviceCapabilityId,
     deviceExposureId: params.deviceExposureId,
@@ -2202,9 +2138,9 @@ export async function writeRuntimeAuthorizationTaskDetailInTx(
   })
 }
 
-async function updateInteractionConversationItemId(
+async function updateTaskConversationItemId(
   client: Executor,
-  interactionId: string,
+  taskId: string,
   conversationItemId: string
 ) {
   const result = await runBuilder(
@@ -2215,29 +2151,22 @@ async function updateInteractionConversationItemId(
         conversation_item_id: conversationItemId,
         updated_at: sql`NOW()`,
       })
-      .where("id", "=", interactionId)
+      .where("id", "=", taskId)
   )
   if (result.rowCount !== 1) {
     throw new Error(
-      `Expected to update conversation item for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+      `Expected to update conversation item for task ${taskId}, but affected ${result.rowCount ?? 0} rows`
     )
   }
 }
 
 /**
- * Translate the legacy interaction-resolution vocabulary (the wire-facing
- * status the API/FE still speak) into the task's lifecycle_status ⟂ outcome.
- *   answered      → completed / answered
- *   approved      → completed / (plan→approved | runtime_authorization→granted)
- *   rejected      → completed / (plan→revision_requested | runtime_authorization→denied)
- *   cancelled     → cancelled  (no outcome)
- *   superseded    → cancelled  (no outcome; a newer request replaced it)
- *   expired       → expired    (no outcome)
- * "pending" is non-terminal and never written here.
+ * Translate a resolver's business decision into the task lifecycle/outcome
+ * fields stored on tool_call_tasks.
  */
-function interactionStatusToTaskFields(
-  status: InteractionRequestStatus,
-  kind: InteractionRequestKind
+function taskResolutionStatusToFields(
+  status: TaskResolutionStatus,
+  kind: TaskRequestKind
 ): {
   lifecycle_status: ToolCallTaskLifecycleStatus
   outcome: ToolCallTaskOutcome | null
@@ -2249,7 +2178,7 @@ function interactionStatusToTaskFields(
       return {
         lifecycle_status: "completed",
         outcome:
-          kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+          kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION
             ? "granted"
             : "approved",
       }
@@ -2257,7 +2186,7 @@ function interactionStatusToTaskFields(
       return {
         lifecycle_status: "completed",
         outcome:
-          kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+          kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION
             ? "denied"
             : "revision_requested",
       }
@@ -2267,35 +2196,28 @@ function interactionStatusToTaskFields(
       return { lifecycle_status: "cancelled", outcome: null }
     case "expired":
       return { lifecycle_status: "expired", outcome: null }
-    case "pending":
-    default:
-      return { lifecycle_status: "working", outcome: null }
   }
 }
 
-async function updateInteractionRequestRow(
+async function updateTaskRequestRow(
   client: Executor,
-  interactionId: string,
+  taskId: string,
   values: Record<string, unknown>
 ) {
   const result = await runBuilder(
     client,
-    db
-      .updateTable("tool_call_tasks")
-      .set(values)
-      .where("id", "=", interactionId)
+    db.updateTable("tool_call_tasks").set(values).where("id", "=", taskId)
   )
   if (result.rowCount !== 1) {
     throw new Error(
-      `Expected to update interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+      `Expected to update task ${taskId}, but affected ${result.rowCount ?? 0} rows`
     )
   }
 }
 
-async function updateInteractionResolutionPayload(
+async function updateTaskResolutionPayload(
   client: Executor,
-  _interactionKind: InteractionRequestKind,
-  interactionId: string,
+  taskId: string,
   payload: Record<string, unknown>
 ) {
   // Task unification: resolution payload lives on the task (final_result_payload)
@@ -2309,33 +2231,33 @@ async function updateInteractionResolutionPayload(
           payload
         ) as unknown as TableInsert<"tool_call_tasks">["final_result_payload"],
       })
-      .where("id", "=", interactionId)
+      .where("id", "=", taskId)
   )
   if (result.rowCount !== 1) {
     throw new Error(
-      `Expected to update task ${interactionId} resolution payload, but affected ${result.rowCount ?? 0} rows`
+      `Expected to update task ${taskId} resolution payload, but affected ${result.rowCount ?? 0} rows`
     )
   }
 }
 
-export async function createUserInputInteractionRequest(
-  params: CreateUserInputInteractionParams
+export async function createUserInputTaskRequest(
+  params: CreateUserInputTaskParams
 ) {
   return withDbTransaction(async (client) => {
     // Task unification: the caller (session-tools createGovernedToolCallTask)
     // already minted the fresh task (deduped at the task layer). Attach the
     // participant fields and create the feed item — no second dedupe.
-    const interactionId = await insertInteractionRequest(client, {
+    const taskId = await insertTaskRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
-      kind: INTERACTION_REQUEST_KIND.USER_INPUT,
+      kind: TASK_REQUEST_KIND.USER_INPUT,
       requestKey: "",
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
-    if (interactionId === null) {
+    if (taskId === null) {
       const current = await getTaskSummary(params.taskId, client)
       if (!current) {
         throw new Error(
@@ -2345,8 +2267,8 @@ export async function createUserInputInteractionRequest(
       return current
     }
 
-    await insertUserInputInteractionDetails(client, {
-      interactionId,
+    await insertUserInputTaskDetails(client, {
+      taskId,
       promptPayload: {
         title: params.title,
         instructions: params.instructions,
@@ -2354,9 +2276,9 @@ export async function createUserInputInteractionRequest(
       },
     })
 
-    let interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to load created interaction request")
+    let task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to load created task request")
     }
 
     const created = await createConversationEvent({
@@ -2364,7 +2286,7 @@ export async function createUserInputInteractionRequest(
       conversationId: params.conversationId,
       eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { task: interaction },
+      eventPayload: { task },
       timelinePolicy: "targeted_members",
       contextPolicy: "targeted_members",
       restrictedAudienceParticipantIds: [params.targetParticipantId],
@@ -2372,29 +2294,25 @@ export async function createUserInputInteractionRequest(
       queryable: client,
     })
 
-    await updateInteractionConversationItemId(
-      client,
-      interactionId,
-      created.item.id
-    )
+    await updateTaskConversationItemId(client, taskId, created.item.id)
 
-    interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to reload created interaction request")
+    task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to reload created task request")
     }
-    await syncInteractionEventPayload(interaction, client)
-    await appendInteractionUpdatedSyncEvent(client, interaction)
-    return interaction
+    await syncTaskEventPayload(task, client)
+    await appendTaskUpdatedSyncEvent(client, task)
+    return task
   })
 }
 
-export async function createRemoteAgentUserInputInteractionRequest(
-  params: CreateRemoteAgentUserInputInteractionParams
+export async function createRemoteAgentUserInputTaskRequest(
+  params: CreateRemoteAgentUserInputTaskParams
 ) {
   return withDbTransaction(async (client) => {
-    const requestKey = buildRemoteAgentInteractionRequestKey({
+    const requestKey = buildRemoteAgentTaskRequestKey({
       remoteAgentRunId: params.remoteAgentRunId,
-      kind: INTERACTION_REQUEST_KIND.USER_INPUT,
+      kind: TASK_REQUEST_KIND.USER_INPUT,
     })
     // Task unification: the remote-agent path has no caller-minted task, so we
     // mint it here with delivery_kind=remote_agent_channel. The principal is the
@@ -2439,10 +2357,10 @@ export async function createRemoteAgentUserInputInteractionRequest(
         "Remote-agent user-input dedupe hit but no live winner found"
       )
     }
-    const interactionId = minted.id
+    const taskId = minted.id
 
-    await insertUserInputInteractionDetails(client, {
-      interactionId,
+    await insertUserInputTaskDetails(client, {
+      taskId,
       promptPayload: {
         title: params.title,
         instructions: params.instructions,
@@ -2450,9 +2368,9 @@ export async function createRemoteAgentUserInputInteractionRequest(
       },
     })
 
-    let interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to load created remote agent input interaction")
+    let task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to load created remote agent input task")
     }
 
     const targeted = Boolean(params.targetParticipantId)
@@ -2461,7 +2379,7 @@ export async function createRemoteAgentUserInputInteractionRequest(
       conversationId: params.conversationId,
       eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { task: interaction },
+      eventPayload: { task },
       timelinePolicy: targeted ? "targeted_members" : "all_members",
       contextPolicy: targeted ? "targeted_members" : "shared",
       restrictedAudienceParticipantIds: targeted
@@ -2473,38 +2391,34 @@ export async function createRemoteAgentUserInputInteractionRequest(
       queryable: client,
     })
 
-    await updateInteractionConversationItemId(
-      client,
-      interactionId,
-      created.item.id
-    )
+    await updateTaskConversationItemId(client, taskId, created.item.id)
 
-    interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to reload created remote agent input interaction")
+    task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to reload created remote agent input task")
     }
-    await syncInteractionEventPayload(interaction, client)
-    await appendInteractionUpdatedSyncEvent(client, interaction)
-    return interaction
+    await syncTaskEventPayload(task, client)
+    await appendTaskUpdatedSyncEvent(client, task)
+    return task
   })
 }
 
-export async function createPlanApprovalInteractionRequest(
-  params: CreatePlanApprovalInteractionParams
+export async function createPlanApprovalTaskRequest(
+  params: CreatePlanApprovalTaskParams
 ) {
   return withDbTransaction(async (client) => {
     // Task unification: caller already minted the fresh deduped task.
-    const interactionId = await insertInteractionRequest(client, {
+    const taskId = await insertTaskRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
-      kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+      kind: TASK_REQUEST_KIND.PLAN_APPROVAL,
       requestKey: "",
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     })
-    if (interactionId === null) {
+    if (taskId === null) {
       const current = await getTaskSummary(params.taskId, client)
       if (!current) {
         throw new Error(
@@ -2514,8 +2428,8 @@ export async function createPlanApprovalInteractionRequest(
       return current
     }
 
-    await insertPlanApprovalInteractionDetails(client, {
-      interactionId,
+    await insertPlanApprovalTaskDetails(client, {
+      taskId,
       planPayload: {
         title: params.title,
         summary: params.summary,
@@ -2524,9 +2438,9 @@ export async function createPlanApprovalInteractionRequest(
       },
     })
 
-    let interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to load created interaction request")
+    let task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to load created task request")
     }
 
     const created = await createConversationEvent({
@@ -2534,7 +2448,7 @@ export async function createPlanApprovalInteractionRequest(
       conversationId: params.conversationId,
       eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { task: interaction },
+      eventPayload: { task },
       timelinePolicy: "targeted_members",
       contextPolicy: "targeted_members",
       restrictedAudienceParticipantIds: [params.targetParticipantId],
@@ -2542,22 +2456,18 @@ export async function createPlanApprovalInteractionRequest(
       queryable: client,
     })
 
-    await updateInteractionConversationItemId(
-      client,
-      interactionId,
-      created.item.id
-    )
+    await updateTaskConversationItemId(client, taskId, created.item.id)
 
-    interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to reload created interaction request")
+    task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to reload created task request")
     }
     const collaborationState = parseSessionCollaborationState(
       params.collaborationState
     )
     if (!collaborationState.planDraft) {
       throw new Error(
-        "Plan approval interactions require collaborationState.planDraft"
+        "Plan approval tasks require collaborationState.planDraft"
       )
     }
     await updateSessionCollaboration(
@@ -2565,23 +2475,23 @@ export async function createPlanApprovalInteractionRequest(
         sessionId: params.sessionId,
         collaborationMode: "plan_awaiting_approval",
         collaborationState,
-        activePlanApprovalInteractionId: interactionId,
+        activePlanApprovalTaskId: taskId,
       },
       client
     )
-    await syncInteractionEventPayload(interaction, client)
-    await appendInteractionUpdatedSyncEvent(client, interaction)
-    return interaction
+    await syncTaskEventPayload(task, client)
+    await appendTaskUpdatedSyncEvent(client, task)
+    return task
   })
 }
 
-export async function createRemoteAgentPlanApprovalInteractionRequest(
-  params: CreateRemoteAgentPlanApprovalInteractionParams
+export async function createRemoteAgentPlanApprovalTaskRequest(
+  params: CreateRemoteAgentPlanApprovalTaskParams
 ) {
   return withDbTransaction(async (client) => {
-    const requestKey = buildRemoteAgentInteractionRequestKey({
+    const requestKey = buildRemoteAgentTaskRequestKey({
       remoteAgentRunId: params.remoteAgentRunId,
-      kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+      kind: TASK_REQUEST_KIND.PLAN_APPROVAL,
     })
     // Task unification: mint the remote-agent task (delivery_kind=
     // remote_agent_channel) here; the principal is the requesting remote_agent.
@@ -2625,10 +2535,10 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
         "Remote-agent plan-approval dedupe hit but no live winner found"
       )
     }
-    const interactionId = minted.id
+    const taskId = minted.id
 
-    await insertPlanApprovalInteractionDetails(client, {
-      interactionId,
+    await insertPlanApprovalTaskDetails(client, {
+      taskId,
       planPayload: {
         title: params.title,
         summary: params.summary,
@@ -2637,9 +2547,9 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       },
     })
 
-    let interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to load created remote agent plan interaction")
+    let task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to load created remote agent plan task")
     }
 
     const targeted = Boolean(params.targetParticipantId)
@@ -2648,7 +2558,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       conversationId: params.conversationId,
       eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { task: interaction },
+      eventPayload: { task },
       timelinePolicy: targeted ? "targeted_members" : "all_members",
       contextPolicy: targeted ? "targeted_members" : "shared",
       restrictedAudienceParticipantIds: targeted
@@ -2660,11 +2570,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       queryable: client,
     })
 
-    await updateInteractionConversationItemId(
-      client,
-      interactionId,
-      created.item.id
-    )
+    await updateTaskConversationItemId(client, taskId, created.item.id)
     const contextUpsert = await runOn<{ remote_agent_id: string }>(
       client,
       `
@@ -2673,7 +2579,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
           conversation_id,
           collaboration_mode,
           collaboration_state,
-          active_plan_approval_interaction_id
+          active_plan_approval_task_id
         )
         SELECT
           cpsubj.remote_agent_id,
@@ -2689,14 +2595,14 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
         DO UPDATE SET
           collaboration_mode = EXCLUDED.collaboration_mode,
           collaboration_state = EXCLUDED.collaboration_state,
-          active_plan_approval_interaction_id = EXCLUDED.active_plan_approval_interaction_id,
+          active_plan_approval_task_id = EXCLUDED.active_plan_approval_task_id,
           updated_at = NOW()
         RETURNING remote_agent_id
       `,
       [
         params.conversationId,
         JSON.stringify(params.collaborationState || {}),
-        interactionId,
+        taskId,
         params.requesterParticipantId,
       ]
     )
@@ -2704,18 +2610,18 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       throw new Error("Remote agent requester participant is invalid")
     }
 
-    interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to reload created remote agent plan interaction")
+    task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to reload created remote agent plan task")
     }
-    await syncInteractionEventPayload(interaction, client)
-    await appendInteractionUpdatedSyncEvent(client, interaction)
-    return interaction
+    await syncTaskEventPayload(task, client)
+    await appendTaskUpdatedSyncEvent(client, task)
+    return task
   })
 }
 
-export async function createRuntimeAuthorizationInteractionRequest(
-  params: CreateRuntimeAuthorizationInteractionParams
+export async function createRuntimeAuthorizationTaskRequest(
+  params: CreateRuntimeAuthorizationTaskParams
 ) {
   return withDbTransaction(async (client) => {
     // Task unification: the caller (runtime-authorizations/requests.ts) minted
@@ -2725,20 +2631,18 @@ export async function createRuntimeAuthorizationInteractionRequest(
     // we only attach the human-facing participant fields and the feed item —
     // neither is CTI-gated, so a separate tx is fine.
     if (!params.taskId) {
-      throw new Error(
-        "createRuntimeAuthorizationInteractionRequest requires a taskId (the task IS the interaction)"
-      )
+      throw new Error("createRuntimeAuthorizationTaskRequest requires a taskId")
     }
-    const interactionId = await insertInteractionRequest(client, {
+    const taskId = await insertTaskRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
-      kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+      kind: TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION,
       requestKey: "",
       expiresAt: params.expiresAt,
     })
-    if (interactionId === null) {
+    if (taskId === null) {
       // The task was concurrently terminalized (cancelled / expired) between
       // mint and feed-item creation — surface the current summary.
       const current = await getTaskSummary(params.taskId, client)
@@ -2750,9 +2654,9 @@ export async function createRuntimeAuthorizationInteractionRequest(
       return current
     }
 
-    let interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to load created interaction request")
+    let task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to load created task request")
     }
 
     const created = await createConversationEvent({
@@ -2760,41 +2664,37 @@ export async function createRuntimeAuthorizationInteractionRequest(
       conversationId: params.conversationId,
       eventType: "task_requested",
       authorParticipantId: params.requesterParticipantId,
-      eventPayload: { task: interaction },
+      eventPayload: { task },
       timelinePolicy: "all_members",
       contextPolicy: "shared",
       queryable: client,
     })
 
-    await updateInteractionConversationItemId(
-      client,
-      interactionId,
-      created.item.id
-    )
+    await updateTaskConversationItemId(client, taskId, created.item.id)
 
-    interaction = await getTaskSummary(interactionId, client)
-    if (!interaction) {
-      throw new Error("Failed to reload created interaction request")
+    task = await getTaskSummary(taskId, client)
+    if (!task) {
+      throw new Error("Failed to reload created task request")
     }
-    await syncInteractionEventPayload(interaction, client)
-    await appendInteractionUpdatedSyncEvent(client, interaction)
+    await syncTaskEventPayload(task, client)
+    await appendTaskUpdatedSyncEvent(client, task)
 
-    // G5: enqueue durable projection so the interaction can be rendered
+    // G5: enqueue durable projection so the task can be rendered
     // onto any supporting IM transport (v1: QQ only). The worker
     // consumes this asynchronously; the dashboard / API caller doesn't
     // wait on transport delivery.
-    await upsertInteractionTransportProjection(client, {
-      interactionRequestId: interactionId,
+    await upsertTaskTransportProjection(client, {
+      taskId,
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
     })
 
-    return interaction
+    return task
   })
 }
 
-export async function findOpenRuntimeAuthorizationInteraction(
-  params: FindOpenRuntimeAuthorizationInteractionParams
+export async function findOpenRuntimeAuthorizationTask(
+  params: FindOpenRuntimeAuthorizationTaskParams
 ) {
   const dedupeKey = buildRuntimeAuthorizationDedupeKey({
     deviceId: params.deviceId,
@@ -2847,62 +2747,47 @@ export async function findOpenRuntimeAuthorizationInteraction(
     .limit(1)
     .executeTakeFirst()
 
-  const interactionId = row?.id
-  if (!interactionId) {
+  const taskId = row?.id
+  if (!taskId) {
     return null
   }
-  return getTaskSummary(interactionId)
-}
-
-export async function getTaskSummary(
-  interactionId: string,
-  queryable?: Executor
-) {
-  const row = await getInteractionRowById(interactionId, queryable)
-  return row ? buildInteractionSummary(row) : null
-}
-
-export async function getTaskSummaryByTaskId(taskId: string) {
-  // Task unification: the task IS the interaction (interaction id == task id).
   return getTaskSummary(taskId)
 }
 
-export async function cancelInteractionRequestByTaskId(
-  taskId: string,
-  note?: string
-) {
-  const interaction = await getTaskSummaryByTaskId(taskId)
-  if (!interaction) {
-    return null
-  }
-  return cancelInteractionRequest(interaction.id, note)
+export async function getTaskSummary(taskId: string, queryable?: Executor) {
+  const row = await getTaskRowById(taskId, queryable)
+  return row ? buildTaskSummary(row) : null
 }
 
-export async function cancelInteractionRequest(
-  interactionId: string,
-  note?: string
-) {
-  const existing = await getInteractionRowById(interactionId)
+export async function getTaskSummaryByTaskId(taskId: string) {
+  return getTaskSummary(taskId)
+}
+
+export async function cancelTaskRequestByTaskId(taskId: string, note?: string) {
+  const task = await getTaskSummaryByTaskId(taskId)
+  if (!task) {
+    return null
+  }
+  return cancelTaskRequest(task.id, note)
+}
+
+export async function cancelTaskRequest(taskId: string, note?: string) {
+  const existing = await getTaskRowById(taskId)
   if (!existing) {
-    throw new Error("Interaction request not found")
+    throw new Error("Task request not found")
   }
 
-  if (
-    taskFieldsToInteractionStatus(
-      existing.status as unknown as ToolCallTaskLifecycleStatus,
-      existing.outcome
-    ) !== "pending"
-  ) {
-    const current = await getTaskSummary(interactionId)
+  if (!isOpenTaskLifecycle(existing.lifecycle_status)) {
+    const current = await getTaskSummary(taskId)
     if (!current) {
-      throw new Error("Failed to reload interaction request")
+      throw new Error("Failed to reload task request")
     }
     return current
   }
 
   const resolutionPayload = parseJsonObject(existing.resolution_payload)
-  const interaction = await withDbTransaction(async (client) => {
-    await updateInteractionRequestRow(client, interactionId, {
+  const task = await withDbTransaction(async (client) => {
+    await updateTaskRequestRow(client, taskId, {
       lifecycle_status: "cancelled",
       revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
@@ -2915,32 +2800,27 @@ export async function cancelInteractionRequest(
       cancelled: true,
     }
 
-    await updateInteractionResolutionPayload(
-      client,
-      existing.kind,
-      interactionId,
-      payload
-    )
-    const nextInteraction = await getTaskSummary(interactionId, client)
-    if (!nextInteraction) {
-      throw new Error("Failed to reload cancelled interaction")
+    await updateTaskResolutionPayload(client, taskId, payload)
+    const nextTask = await getTaskSummary(taskId, client)
+    if (!nextTask) {
+      throw new Error("Failed to reload cancelled task")
     }
-    await syncInteractionEventPayload(nextInteraction, client)
-    await appendInteractionUpdatedSyncEvent(client, nextInteraction)
-    return nextInteraction
+    await syncTaskEventPayload(nextTask, client)
+    await appendTaskUpdatedSyncEvent(client, nextTask)
+    return nextTask
   })
 
-  return interaction
+  return task
 }
 
-export async function canUserViewInteraction(params: {
-  interactionId: string
+export async function canUserViewTask(params: {
+  taskId: string
   userId: string
 }) {
   const row = await db
     .selectFrom("tool_call_tasks as ir")
     .select("ir.id")
-    .where("ir.id", "=", params.interactionId)
+    .where("ir.id", "=", params.taskId)
     .where((eb) =>
       eb.or([
         sql<boolean>`EXISTS (
@@ -2985,11 +2865,7 @@ export async function canUserViewInteraction(params: {
           ]),
         ]),
         eb.and([
-          eb(
-            "ir.executor_kind",
-            "=",
-            INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
-          ),
+          eb("ir.executor_kind", "=", TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM conversation_participants cm
@@ -3008,20 +2884,20 @@ export async function canUserViewInteraction(params: {
   return Boolean(row)
 }
 
-export async function canUserResolveInteraction(params: {
-  interaction: TaskSummary
+export async function canUserResolveTask(params: {
+  task: TaskSummary
   userId: string
 }) {
-  const { interaction, userId } = params
-  if (interaction.status !== "pending") {
+  const { task, userId } = params
+  if (!isOpenTaskLifecycle(task.lifecycleStatus)) {
     return false
   }
 
   if (
-    interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    interaction.target?.participantId
+    task.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    task.target?.participantId
   ) {
-    const targetParticipantId = interaction.target?.participantId
+    const targetParticipantId = task.target?.participantId
     const viewerParticipant = await db
       .selectFrom("conversation_participants as cp")
       .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
@@ -3037,10 +2913,10 @@ export async function canUserResolveInteraction(params: {
   }
 
   if (
-    interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    interaction.requester?.participantType ===
+    task.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    task.requester?.participantType ===
       CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
-    interaction.requester.remoteAgentId
+    task.requester.remoteAgentId
   ) {
     const viewerMembership = await db
       .selectFrom("conversation_participants as cp")
@@ -3051,7 +2927,7 @@ export async function canUserResolveInteraction(params: {
         "subj.workspace_member_id as workspace_member_id",
         "c.kind as conversation_kind",
       ])
-      .where("cp.conversation_id", "=", interaction.conversationId)
+      .where("cp.conversation_id", "=", task.conversationId)
       .where("cp.state", "=", "active")
       .where("wm.user_id", "=", userId)
       .limit(1)
@@ -3068,9 +2944,9 @@ export async function canUserResolveInteraction(params: {
     const grant = await runBuilder(
       db,
       db
-        .selectFrom("remote_agent_group_interaction_grants")
+        .selectFrom("remote_agent_group_task_grants")
         .select("workspace_member_id")
-        .where("remote_agent_id", "=", interaction.requester.remoteAgentId)
+        .where("remote_agent_id", "=", task.requester.remoteAgentId)
         .where("workspace_member_id", "=", viewerMembership.workspace_member_id)
         .limit(1)
     )
@@ -3078,9 +2954,8 @@ export async function canUserResolveInteraction(params: {
     return Boolean(grant.rows[0]?.workspace_member_id)
   }
 
-  const deviceId = interaction.runtimeAuthorization?.deviceId
-  const deviceCapabilityId =
-    interaction.runtimeAuthorization?.deviceCapabilityId
+  const deviceId = task.runtimeAuthorization?.deviceId
+  const deviceCapabilityId = task.runtimeAuthorization?.deviceCapabilityId
   if (!deviceId || !deviceCapabilityId) {
     return false
   }
@@ -3092,27 +2967,27 @@ export async function canUserResolveInteraction(params: {
   })
 }
 
-export async function enrichInteractionForUser(
-  interaction: TaskSummary,
+export async function enrichTaskForUser(
+  task: TaskSummary,
   userId?: string
 ): Promise<TaskSummary> {
   if (!userId) {
     return {
-      ...interaction,
-      viewerCanResolve: interaction.viewerCanResolve ?? false,
+      ...task,
+      viewerCanResolve: task.viewerCanResolve ?? false,
     }
   }
 
   return {
-    ...interaction,
-    viewerCanResolve: await canUserResolveInteraction({
-      interaction,
+    ...task,
+    viewerCanResolve: await canUserResolveTask({
+      task,
       userId,
     }),
   }
 }
 
-export async function enrichFeedItemInteractionsForUser(
+export async function enrichFeedItemTasksForUser(
   item: ConversationFeedItem,
   userId?: string
 ): Promise<ConversationFeedItem> {
@@ -3122,11 +2997,11 @@ export async function enrichFeedItemInteractionsForUser(
 
   const payload =
     item.payload as ConversationFeedEventPayloadMap["task_requested"]
-  const interaction =
+  const task =
     payload.task && typeof payload.task === "object"
       ? (payload.task as TaskSummary)
       : null
-  if (!interaction) {
+  if (!task) {
     return item
   }
 
@@ -3134,15 +3009,15 @@ export async function enrichFeedItemInteractionsForUser(
     ...item,
     payload: {
       ...payload,
-      task: await enrichInteractionForUser(interaction, userId),
+      task: await enrichTaskForUser(task, userId),
     },
   }
 }
 
 function buildSubmittedUserInputAnswers(
-  params: ResolveInteractionRequestParams,
-  questions: InteractionInputQuestionDefinition[]
-): InteractionInputAnswer[] {
+  params: ResolveTaskRequestParams,
+  questions: TaskInputQuestionDefinition[]
+): TaskInputAnswer[] {
   if (Array.isArray(params.answers) && params.answers.length > 0) {
     return params.answers.map((answer) => ({
       questionId: String(answer.questionId || "").trim(),
@@ -3171,13 +3046,13 @@ function buildSubmittedUserInputAnswers(
 }
 
 function validateUserInputAnswers(
-  questions: InteractionInputQuestionDefinition[],
-  submittedAnswers: InteractionInputAnswer[]
+  questions: TaskInputQuestionDefinition[],
+  submittedAnswers: TaskInputAnswer[]
 ) {
   const questionMap = new Map(
     questions.map((question) => [question.id, question])
   )
-  const answerMap = new Map<string, InteractionInputAnswer>()
+  const answerMap = new Map<string, TaskInputAnswer>()
 
   for (const answer of submittedAnswers) {
     if (!answer.questionId) {
@@ -3192,7 +3067,7 @@ function validateUserInputAnswers(
     answerMap.set(answer.questionId, answer)
   }
 
-  const normalized: InteractionInputAnswer[] = []
+  const normalized: TaskInputAnswer[] = []
 
   for (const question of questions) {
     const answer = answerMap.get(question.id)
@@ -3221,7 +3096,7 @@ function validateUserInputAnswers(
     for (const selectedOptionId of selectedOptionIds) {
       if (
         !allowedOptions.some(
-          (option: InteractionInputOption) => option.id === selectedOptionId
+          (option: TaskInputOption) => option.id === selectedOptionId
         )
       ) {
         throw new Error(`"${question.prompt}" contains an invalid option`)
@@ -3268,8 +3143,7 @@ function validateUserInputAnswers(
             ? selectedOptionIds.map(
                 (selectedOptionId) =>
                   allowedOptions.find(
-                    (option: InteractionInputOption) =>
-                      option.id === selectedOptionId
+                    (option: TaskInputOption) => option.id === selectedOptionId
                   )?.label || selectedOptionId
               )
             : undefined,
@@ -3281,9 +3155,9 @@ function validateUserInputAnswers(
   return normalized
 }
 
-function normalizeInteractionCommandAnswers(
-  answers?: InteractionInputAnswer[]
-): InteractionInputAnswer[] | undefined {
+function normalizeTaskCommandAnswers(
+  answers?: TaskInputAnswer[]
+): TaskInputAnswer[] | undefined {
   if (!Array.isArray(answers) || answers.length === 0) {
     return undefined
   }
@@ -3311,11 +3185,11 @@ function normalizeInteractionCommandAnswers(
     .sort((left, right) => left.questionId.localeCompare(right.questionId))
 }
 
-function buildNormalizedInteractionCommandPayload(
-  params: ResolveInteractionRequestParams
+function buildNormalizedTaskCommandPayload(
+  params: ResolveTaskRequestParams
 ): Record<string, unknown> {
   return {
-    answers: normalizeInteractionCommandAnswers(params.answers),
+    answers: normalizeTaskCommandAnswers(params.answers),
     decision: params.decision,
     preset: params.preset,
     selectedGrantOptionId:
@@ -3329,64 +3203,60 @@ function buildNormalizedInteractionCommandPayload(
   }
 }
 
-export async function resolveInteractionRequest(
-  params: ResolveInteractionRequestParams
-): Promise<ResolveInteractionRequestResult> {
-  const normalizedCommandPayload =
-    buildNormalizedInteractionCommandPayload(params)
+export async function resolveTaskRequest(
+  params: ResolveTaskRequestParams
+): Promise<ResolveTaskRequestResult> {
+  const normalizedCommandPayload = buildNormalizedTaskCommandPayload(params)
 
   const result = await withDbTransaction(async (client) => {
-    const locked = await getInteractionRowByIdForUpdate(
-      params.interactionId,
-      client
-    )
+    const locked = await getTaskRowByIdForUpdate(params.taskId, client)
     if (!locked) {
-      throw new Error("Interaction request not found")
+      throw new Error("Task request not found")
     }
 
-    const existingCommand = await getInteractionCommandRow(
-      params.interactionId,
+    const existingCommand = await getTaskCommandRow(
+      params.taskId,
       params.commandId,
       client
     )
     if (existingCommand) {
       const storedRequestPayload = requireJsonObject(
         existingCommand.request_payload,
-        `Interaction command ${existingCommand.id} request_payload`
+        `Task command ${existingCommand.id} request_payload`
       )
       if (
         stableJsonStringify(storedRequestPayload) !==
         stableJsonStringify(normalizedCommandPayload)
       ) {
         throw new Error(
-          `commandId ${params.commandId} was already used with a different interaction payload`
+          `commandId ${params.commandId} was already used with a different task payload`
         )
       }
 
-      const storedResponse = parseStoredInteractionResolveResponse(
+      const storedResponse = parseStoredTaskResolveResponse(
         existingCommand.response_payload,
-        `Interaction command ${existingCommand.id} response_payload`
+        `Task command ${existingCommand.id} response_payload`
       )
       return {
         outcome:
           storedResponse.outcome === "applied"
             ? ("duplicate" as const)
             : storedResponse.outcome,
-        interaction: storedResponse.interaction,
+        task: storedResponse.task,
         createdGrant: undefined,
       }
     }
 
     if (
-      locked.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+      locked.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
       locked.target_participant_id &&
       locked.target_participant_id !== params.resolverParticipantId
     ) {
-      throw new Error("Only the targeted user can resolve this interaction")
+      throw new Error("Only the targeted user can resolve this task")
     }
 
     if (
-      locked.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+      locked.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
       !locked.target_participant_id &&
       locked.requester_remote_agent_id
     ) {
@@ -3405,7 +3275,7 @@ export async function resolveInteractionRequest(
         const grantRow = await runBuilder(
           client,
           db
-            .selectFrom("remote_agent_group_interaction_grants")
+            .selectFrom("remote_agent_group_task_grants")
             .select("workspace_member_id")
             .where("remote_agent_id", "=", locked.requester_remote_agent_id)
             .where("workspace_member_id", "=", params.resolverWorkspaceMemberId)
@@ -3413,22 +3283,20 @@ export async function resolveInteractionRequest(
         )
         if (!grantRow.rows[0]?.workspace_member_id) {
           throw new Error(
-            "You are not allowed to resolve this remote agent interaction"
+            "You are not allowed to resolve this remote agent task"
           )
         }
       }
     }
 
-    if (locked.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
+    if (locked.kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
       const deviceId = locked.device_id || ""
       if (!deviceId) {
-        throw new Error(`Interaction ${locked.id} is missing device_id`)
+        throw new Error(`Task ${locked.id} is missing device_id`)
       }
       const deviceCapabilityId = locked.device_capability_id || ""
       if (!deviceCapabilityId) {
-        throw new Error(
-          `Interaction ${locked.id} is missing device_capability_id`
-        )
+        throw new Error(`Task ${locked.id} is missing device_capability_id`)
       }
       const canResolveRuntimeAuthorization = await authorizeAction(db, {
         subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
@@ -3437,29 +3305,26 @@ export async function resolveInteractionRequest(
       })
       if (!canResolveRuntimeAuthorization) {
         throw new Error(
-          "You are not allowed to resolve this runtime authorization interaction"
+          "You are not allowed to resolve this runtime authorization task"
         )
       }
     }
 
     const lockedRevision = toRevisionNumber(
       locked.revision,
-      `Interaction ${locked.id} revision`
+      `Task ${locked.id} revision`
     )
     if (
-      taskFieldsToInteractionStatus(
-        locked.status as unknown as ToolCallTaskLifecycleStatus,
-        locked.outcome
-      ) !== "pending" ||
+      !isOpenTaskLifecycle(locked.lifecycle_status) ||
       lockedRevision !== params.baseRevision
     ) {
-      const currentInteraction = buildInteractionSummary(locked)
-      const responsePayload: StoredInteractionResolveResponse = {
+      const currentTask = buildTaskSummary(locked)
+      const responsePayload: StoredTaskResolveResponse = {
         outcome: "conflict",
-        interaction: currentInteraction,
+        task: currentTask,
       }
-      await insertInteractionCommandRow(client, {
-        interactionId: params.interactionId,
+      await insertTaskCommandRow(client, {
+        taskId: params.taskId,
         commandId: params.commandId,
         baseRevision: params.baseRevision,
         outcome: "conflict",
@@ -3469,17 +3334,17 @@ export async function resolveInteractionRequest(
       })
       return {
         outcome: "conflict" as const,
-        interaction: currentInteraction,
+        task: currentTask,
         createdGrant: undefined,
       }
     }
 
-    let nextStatus: InteractionRequestStatus
+    let nextStatus: TaskResolutionStatus
     let resolutionPayload: Record<string, unknown>
     let createdGrant: RuntimeAuthorizationGrantRecord | undefined
     let lockedPrincipalSubjectForReturn: SubjectRef | undefined
 
-    if (locked.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
+    if (locked.kind === TASK_REQUEST_KIND.USER_INPUT) {
       const promptPayload = parseJsonObject(locked.prompt_payload)
       const questions = parseUserInputQuestionDefinitions(promptPayload)
       if (questions.length === 0) {
@@ -3496,7 +3361,7 @@ export async function resolveInteractionRequest(
         answers,
         note: params.note?.trim() || undefined,
       }
-    } else if (locked.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+    } else if (locked.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
       if (params.decision !== "approve" && params.decision !== "revise") {
         throw new Error("decision must be approve or revise")
       }
@@ -3514,7 +3379,7 @@ export async function resolveInteractionRequest(
             collaboration_mode:
               nextStatus === "approved" ? "default" : "plan_drafting",
             collaboration_state: jsonbValue({}),
-            active_plan_approval_interaction_id: null,
+            active_plan_approval_task_id: null,
             updated_at: sql`NOW()`,
           })
           .where("remote_agent_id", "=", locked.requester_remote_agent_id)
@@ -3523,7 +3388,7 @@ export async function resolveInteractionRequest(
       } else {
         // Task unification: locked IS the task row, so session_id is on it.
         if (!locked.session_id) {
-          throw new Error(`Interaction ${locked.id} is missing task governance`)
+          throw new Error(`Task ${locked.id} is missing task governance`)
         }
         const taskRow = { session_id: locked.session_id }
         const sessionRow = await takeFirstOn(
@@ -3534,7 +3399,7 @@ export async function resolveInteractionRequest(
             .select([
               "s.collaboration_state",
               "s.collaboration_mode",
-              "s.active_plan_approval_interaction_id",
+              "s.active_plan_approval_task_id",
               "c.kind as conversation_kind",
             ])
             .where("s.id", "=", taskRow.session_id)
@@ -3557,14 +3422,14 @@ export async function resolveInteractionRequest(
             `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`
           )
         }
-        if (!sessionRow.active_plan_approval_interaction_id) {
+        if (!sessionRow.active_plan_approval_task_id) {
           throw new Error(
-            `Session ${taskRow.session_id} is missing active_plan_approval_interaction_id`
+            `Session ${taskRow.session_id} is missing active_plan_approval_task_id`
           )
         }
-        if (sessionRow.active_plan_approval_interaction_id !== locked.id) {
+        if (sessionRow.active_plan_approval_task_id !== locked.id) {
           throw new Error(
-            `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_interaction_id}, not ${locked.id}`
+            `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_task_id}, not ${locked.id}`
           )
         }
 
@@ -3599,7 +3464,7 @@ export async function resolveInteractionRequest(
                       enteredAt: existingDraft.enteredAt,
                     }),
                   },
-            activePlanApprovalInteractionId: null,
+            activePlanApprovalTaskId: null,
           },
           client
         )
@@ -3641,11 +3506,11 @@ export async function resolveInteractionRequest(
 
         const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
           locked.grant_options,
-          `Interaction ${locked.id} grant_options`
+          `Task ${locked.id} grant_options`
         )
         const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
           locked.available_presets,
-          `Interaction ${locked.id} available_presets`
+          `Task ${locked.id} available_presets`
         )
         if (!availablePresets.includes(params.preset || "once")) {
           throw new Error(
@@ -3681,7 +3546,7 @@ export async function resolveInteractionRequest(
         )
         if (!lockedPrincipalSubject) {
           throw new Error(
-            `interaction ${locked.id}: principal subject ${locked.principal_subject_id} not found`
+            `task ${locked.id}: principal subject ${locked.principal_subject_id} not found`
           )
         }
         lockedPrincipalSubjectForReturn = lockedPrincipalSubject
@@ -3708,7 +3573,7 @@ export async function resolveInteractionRequest(
         const rebuiltScopeId = rebuiltCtx.activeConversationSubjectId ?? null
         if (lockedScopeId !== rebuiltScopeId) {
           throw new Error(
-            `ScopeRebuildMismatchError: interaction ${locked.id} locked principal_scope_subject_id=${lockedScopeId ?? "NULL"} but rebuilt activeConversationSubjectId=${rebuiltScopeId ?? "NULL"} — principal scope drifted between request and approval`
+            `ScopeRebuildMismatchError: task ${locked.id} locked principal_scope_subject_id=${lockedScopeId ?? "NULL"} but rebuilt activeConversationSubjectId=${rebuiltScopeId ?? "NULL"} — principal scope drifted between request and approval`
           )
         }
         const presetTriple = presetToOwnerScope(
@@ -3753,13 +3618,13 @@ export async function resolveInteractionRequest(
     // (so runtime-auth auto-retry can run first and its result drives the
     // Task unification (design §3.4, corrected): flip the task to its terminal
     // lifecycle + outcome IN-TX, so every in-tx-derived view is correct — the
-    // reloaded summary, the interaction.updated broadcast, the HTTP response,
+    // reloaded summary, the task.updated broadcast, the HTTP response,
     // and the command-idempotency row all see the resolved state. Delivery
     // (notice + wakeup/push) and runtime-auth auto-retry happen post-commit
     // (auto-retry writes only final_result_payload, which is NOT terminal-
     // guarded, so it lands on the already-terminal row).
-    const taskFields = interactionStatusToTaskFields(nextStatus, locked.kind)
-    await updateInteractionRequestRow(client, params.interactionId, {
+    const taskFields = taskResolutionStatusToFields(nextStatus, locked.kind)
+    await updateTaskRequestRow(client, params.taskId, {
       lifecycle_status: taskFields.lifecycle_status,
       outcome: taskFields.outcome,
       revision: sql`revision + 1`,
@@ -3768,43 +3633,38 @@ export async function resolveInteractionRequest(
       updated_at: sql`NOW()`,
     })
 
-    await updateInteractionResolutionPayload(
-      client,
-      locked.kind,
-      params.interactionId,
-      resolutionPayload
-    )
+    await updateTaskResolutionPayload(client, params.taskId, resolutionPayload)
 
-    const nextInteraction = await getTaskSummary(params.interactionId, client)
-    if (!nextInteraction) {
-      throw new Error("Failed to reload resolved interaction")
+    const nextTask = await getTaskSummary(params.taskId, client)
+    if (!nextTask) {
+      throw new Error("Failed to reload resolved task")
     }
 
-    await syncInteractionEventPayload(nextInteraction, client)
-    await appendInteractionUpdatedSyncEvent(client, nextInteraction)
+    await syncTaskEventPayload(nextTask, client)
+    await appendTaskUpdatedSyncEvent(client, nextTask)
 
-    await insertInteractionCommandRow(client, {
-      interactionId: params.interactionId,
+    await insertTaskCommandRow(client, {
+      taskId: params.taskId,
       commandId: params.commandId,
       baseRevision: params.baseRevision,
       outcome: "applied",
       requestPayload: normalizedCommandPayload,
       responsePayload: {
         outcome: "applied",
-        interaction: nextInteraction,
+        task: nextTask,
       },
       createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
     })
 
     return {
       outcome: "applied" as const,
-      interaction: nextInteraction,
+      task: nextTask,
       createdGrant,
       // Surface the original args + retry_nonce to the outer scope so the
       // post-commit auto-retry path (autoDispatchRuntimeAuthorizationRetry)
       // can re-issue the original tool call without the model having to
-      // notice the approval. Drops to undefined for non-RuntimeAuth
-      // interactions (these fields are only populated when locked.kind is
+      // notice the approval. Drops to undefined for non-runtime-authorization
+      // tasks (these fields are only populated when locked.kind is
       // RUNTIME_AUTHORIZATION).
       lockedSourceRequestArgs:
         locked.source_request_args &&
@@ -3828,7 +3688,7 @@ export async function resolveInteractionRequest(
       lockedPrincipalScopeSubjectId:
         locked.principal_scope_subject_id ?? undefined,
       lockedPrincipalSubject: lockedPrincipalSubjectForReturn,
-      // Task unification: the decision (interaction vocabulary) computed in-tx,
+      // Task unification: the decision (task vocabulary) computed in-tx,
       // so the post-commit delivery fan-out can branch on it without relying on
       // the (still non-terminal) lifecycle_status.
       nextStatus,
@@ -3841,50 +3701,45 @@ export async function resolveInteractionRequest(
     // delivery ran. Re-fire delivery from the persisted task state; it is
     // idempotent (skips if a session_wakeup notice already exists), so a
     // genuinely-already-delivered task is a no-op and a lost wakeup is recovered.
-    if (result.interaction?.taskId) {
-      await recoverUndeliveredResolvedTask(result.interaction.taskId).catch(
+    if (result.task?.id) {
+      await recoverUndeliveredResolvedTask(result.task.id).catch(
         () => undefined
       )
     }
     return {
       outcome: result.outcome,
-      interaction: result.interaction,
+      task: result.task,
     }
   }
 
-  const interaction = result.interaction
+  const task = result.task
 
   // Task unification: the lifecycle/outcome were flipped IN-TX (so result.
-  // interaction already reads resolved). Here we only DELIVER (notice + wakeup
+  // task already reads resolved). Here we only DELIVER (notice + wakeup
   // for session_wakeup; machine-WS push for remote_agent_channel) — no second
-  // flip. Every interaction IS a task now, including remote-agent ones, so
-  // there is no task=null / early-return special-case. P1: a human "no" (plan
+  // flip. P1: a human "no" (plan
   // revision / authz deny) is completed+outcome 'revision_requested'/'denied',
   // never a machinery failure.
-  if (!interaction.taskId) {
-    throw new Error(`Interaction ${interaction.id} is missing task governance`)
-  }
-
-  if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    await deliverResolvedToolCallTask(interaction.taskId, "completed", {
-      ...buildUserInputAsyncNotice(interaction),
+  if (task.kind === TASK_REQUEST_KIND.USER_INPUT) {
+    await deliverResolvedToolCallTask(task.id, "completed", {
+      ...buildUserInputAsyncNotice(task),
       outcome: "answered",
     })
-  } else if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+  } else if (task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
     if (result.nextStatus === "approved") {
-      await deliverResolvedToolCallTask(interaction.taskId, "completed", {
-        ...buildPlanApprovalApprovedNotice(interaction),
+      await deliverResolvedToolCallTask(task.id, "completed", {
+        ...buildPlanApprovalApprovedNotice(task),
         outcome: "approved",
       })
     } else {
-      await deliverResolvedToolCallTask(interaction.taskId, "completed", {
-        ...buildPlanApprovalRevisionNotice(interaction),
+      await deliverResolvedToolCallTask(task.id, "completed", {
+        ...buildPlanApprovalRevisionNotice(task),
         outcome: "revision_requested",
       })
     }
   } else if (result.nextStatus === "rejected") {
-    await deliverResolvedToolCallTask(interaction.taskId, "completed", {
-      ...buildRuntimeAuthorizationRejectedNotice(interaction),
+    await deliverResolvedToolCallTask(task.id, "completed", {
+      ...buildRuntimeAuthorizationRejectedNotice(task),
       outcome: "denied",
     })
   } else {
@@ -3895,7 +3750,7 @@ export async function resolveInteractionRequest(
     // the unguarded payload update inside deliverResolvedToolCallTask). Falls
     // back to a plain approval notice if auto-retry can't run.
     const approvedRetry = await maybeAutoRetryAfterApproval({
-      interaction,
+      task,
       sourceRequestArgs: result.lockedSourceRequestArgs,
       sourceRetryNonce: result.lockedSourceRetryNonce,
       sourceTaskId: result.lockedSourceTaskId,
@@ -3904,74 +3759,63 @@ export async function resolveInteractionRequest(
       lockedPrincipalScopeSubjectId: result.lockedPrincipalScopeSubjectId,
       resolverWorkspaceMemberId: params.resolverWorkspaceMemberId,
     })
-    await deliverResolvedToolCallTask(interaction.taskId, "completed", {
-      ...(approvedRetry ??
-        buildRuntimeAuthorizationApprovedNotice(interaction)),
+    await deliverResolvedToolCallTask(task.id, "completed", {
+      ...(approvedRetry ?? buildRuntimeAuthorizationApprovedNotice(task)),
       outcome: "granted",
     })
   }
 
   return {
     outcome: result.outcome,
-    interaction,
+    task,
     createdGrant: result.createdGrant,
     createdGrants: result.createdGrant ? [result.createdGrant] : undefined,
   }
 }
 
-export async function markRuntimeAuthorizationInteractionSuperseded(
-  interactionId: string,
+export async function markRuntimeAuthorizationTaskSuperseded(
+  taskId: string,
   note?: string
 ) {
-  const existing = await getInteractionRowById(interactionId)
+  const existing = await getTaskRowById(taskId)
   if (!existing) {
-    throw new Error("Interaction request not found")
+    throw new Error("Task request not found")
   }
   if (
-    existing.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
-    taskFieldsToInteractionStatus(
-      existing.status as unknown as ToolCallTaskLifecycleStatus,
-      existing.outcome
-    ) !== "pending"
+    existing.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
+    !isOpenTaskLifecycle(existing.lifecycle_status)
   ) {
-    const current = await getTaskSummary(interactionId)
+    const current = await getTaskSummary(taskId)
     if (!current) {
-      throw new Error("Failed to reload interaction request")
+      throw new Error("Failed to reload task request")
     }
     return current
   }
 
   const resolutionPayload = parseJsonObject(existing.resolution_payload)
-  const interaction = await withDbTransaction(async (client) => {
-    await updateInteractionRequestRow(client, interactionId, {
+  const task = await withDbTransaction(async (client) => {
+    await updateTaskRequestRow(client, taskId, {
       lifecycle_status: "cancelled",
       revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
-    await updateInteractionResolutionPayload(
-      client,
-      INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
-      interactionId,
-      {
-        ...resolutionPayload,
-        note: note?.trim() || resolutionPayload.note,
-        superseded: true,
-      }
-    )
-    const nextInteraction = await getTaskSummary(interactionId, client)
-    if (!nextInteraction) {
-      throw new Error("Failed to reload superseded interaction")
-    }
-    await syncInteractionEventPayload(nextInteraction, client)
-    await appendInteractionUpdatedSyncEvent(client, nextInteraction)
-    return nextInteraction
-  })
-  if (interaction.taskId) {
-    // Lifecycle already flipped to cancelled in-tx; deliver the supersede notice.
-    await deliverResolvedToolCallTask(interaction.taskId, "cancelled", {
-      ...buildRuntimeAuthorizationSupersededNotice(interaction),
+    await updateTaskResolutionPayload(client, taskId, {
+      ...resolutionPayload,
+      note: note?.trim() || resolutionPayload.note,
+      superseded: true,
     })
-  }
-  return interaction
+    const nextTask = await getTaskSummary(taskId, client)
+    if (!nextTask) {
+      throw new Error("Failed to reload superseded task")
+    }
+    await syncTaskEventPayload(nextTask, client)
+    await appendTaskUpdatedSyncEvent(client, nextTask)
+    return nextTask
+  })
+  // Lifecycle already flipped to cancelled in-tx; deliver the supersede notice.
+  await deliverResolvedToolCallTask(task.id, "cancelled", {
+    ...buildRuntimeAuthorizationSupersededNotice(task),
+  })
+  return task
 }

@@ -13,7 +13,7 @@ import {
 import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket"
 import { syncChatBackgroundTaskRegistration } from "@/lib/chat-background-task"
 import type { ChatComposerSendPayload } from "@/lib/chat-compose"
-import { api, type ChatInteractionResolveInput } from "@/lib/api"
+import { api, type ChatTaskResolveInput } from "@/lib/api"
 import {
   chatRuntime,
   type ChatRuntimeState,
@@ -79,10 +79,10 @@ interface ChatContextValue {
     input: ChatComposerSendPayload
   ) => Promise<void>
   retryMessage: (clientMessageId: string) => Promise<void>
-  respondInteraction: (
+  respondTask: (
     conversationId: string,
-    interactionId: string,
-    input: ChatInteractionResolveInput
+    taskId: string,
+    input: ChatTaskResolveInput
   ) => Promise<TaskSummary>
   createConversation: (
     input: Omit<ChatConversationCreateInput, "clientRequestId"> & {
@@ -394,24 +394,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     []
   )
 
-  const respondInteraction = useCallback(
+  const respondTask = useCallback(
     async (
       conversationId: string,
-      interactionId: string,
-      input: ChatInteractionResolveInput
+      taskId: string,
+      input: ChatTaskResolveInput
     ) => {
       if (!workspaceId) {
         throw new Error("Workspace context is required to respond.")
       }
 
-      const result = await api.resolveChatInteraction(
+      const result = await api.resolveChatTask(
         workspaceId,
         conversationId,
-        interactionId,
+        taskId,
         input
       )
       await chatRuntime.refreshConversation(conversationId)
-      return result.interaction
+      return result.task
     },
     [workspaceId]
   )
@@ -448,7 +448,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       markConversationRead,
       sendMessage,
       retryMessage,
-      respondInteraction,
+      respondTask,
       createConversation,
       clearLocalState,
     }),
@@ -466,7 +466,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       markConversationRead,
       refreshConversation,
       refreshInbox,
-      respondInteraction,
+      respondTask,
       retryMessage,
       runtimeState.error,
       runtimeState.snapshot?.clientInstanceId,

@@ -60,7 +60,7 @@ export default function ChatDetailScreen() {
     loadOlderMessages,
     markConversationRead,
     refreshConversation,
-    respondInteraction,
+    respondTask,
     retryMessage,
     sendMessage,
     status,
@@ -291,14 +291,10 @@ export default function ChatDetailScreen() {
           key={item.id}
           item={item}
           viewerParticipantId={viewerParticipantId}
-          onResolveInteraction={
+          onResolveTask={
             conversation
-              ? (interactionId, input) =>
-                  respondInteraction(
-                    conversation.conversationId,
-                    interactionId,
-                    input
-                  )
+              ? (taskId, input) =>
+                  respondTask(conversation.conversationId, taskId, input)
               : undefined
           }
           onLongPress={
@@ -315,7 +311,7 @@ export default function ChatDetailScreen() {
           onRetry={retryMessage}
         />
       )),
-    [conversation, items, respondInteraction, retryMessage, viewerParticipantId]
+    [conversation, items, respondTask, retryMessage, viewerParticipantId]
   )
 
   async function handleRefresh() {

@@ -56,7 +56,7 @@ export interface ChatRuntimeState {
 
 type ChatRuntimeListener = (state: ChatRuntimeState) => void
 
-function patchInteractionInConversationItem(
+function patchTaskInConversationItem(
   item: ChatConversationItem,
   payload: ChatSyncEvent<"task.updated">["payload"]
 ) {
@@ -69,14 +69,14 @@ function patchInteractionInConversationItem(
     return item
   }
 
-  const currentInteraction =
+  const currentTask =
     "task" in item.eventPayload
       ? ((item.eventPayload as { task?: unknown }).task as
           | { id?: string }
           | undefined)
       : undefined
 
-  if (item.id !== payload.itemId && currentInteraction?.id !== payload.taskId) {
+  if (item.id !== payload.itemId && currentTask?.id !== payload.taskId) {
     return item
   }
 
@@ -1194,7 +1194,7 @@ export class ChatRuntime {
           const currentItems =
             nextSnapshot.itemsByConversationId[payload.conversationId] ?? []
           const nextItems = currentItems.map((item) =>
-            patchInteractionInConversationItem(item, payload)
+            patchTaskInConversationItem(item, payload)
           )
 
           nextSnapshot = {

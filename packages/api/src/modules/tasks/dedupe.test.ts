@@ -1,7 +1,7 @@
 // Unit tests for buildRuntimeAuthorizationDedupeKey — the per-session
 // isolation contract is the whole reason runtimeSessionId is in the key.
 // If a refactor accidentally drops that field, two Agent sessions making
-// the same CUA call would merge into one pending interaction and the
+// the same CUA call would merge into one pending task and the
 // post-approval auto-retry would stamp the wrong cua_focus_scope_id into
 // the dispatched envelope.
 
@@ -30,7 +30,7 @@ const baseParams = {
 
 test("dedupe key differs for two Agent sessions making the same CUA call", () => {
   // This is the CUA-isolation regression guard. Without runtimeSessionId in
-  // the key, both calls produce the same key → same pending interaction →
+  // the key, both calls produce the same key → same pending task →
   // shared source_runtime_session_id → wrong cua_focus_scope_id after
   // approval. With the field, they're independent.
   const sessionA = buildRuntimeAuthorizationDedupeKey({

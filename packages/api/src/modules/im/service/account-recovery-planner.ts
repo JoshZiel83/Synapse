@@ -51,7 +51,7 @@ export function planActionsFor(
 /**
  * Order the collected actions per the execution-order contract on
  * {@link AccountRecoveryAction}: all `reEnableAutoDisabledBindings`
- * first, then all `recoverSkippedInteractionProjections`. Anything
+ * first, then all `recoverSkippedTaskProjections`. Anything
  * else (future action types) lands after, in the order returned by
  * the connector, so adding a new type doesn't accidentally re-order
  * the two well-known ones.
@@ -66,7 +66,7 @@ export function orderAccountRecoveryActions(
   const other: AccountRecoveryAction[] = []
   for (const a of actions) {
     if (a.type === "reEnableAutoDisabledBindings") reEnable.push(a)
-    else if (a.type === "recoverSkippedInteractionProjections") recover.push(a)
+    else if (a.type === "recoverSkippedTaskProjections") recover.push(a)
     else other.push(a)
   }
   return [...reEnable, ...recover, ...other]

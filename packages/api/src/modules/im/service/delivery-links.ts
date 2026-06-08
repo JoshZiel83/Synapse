@@ -378,7 +378,7 @@ export async function removeTransportMessageLinkMetadataKey(
 
 /**
  * Persist a fully-formed `transport_message_links` row directly.
- * Used by the interaction-projection worker to insert a link
+ * Used by the task-projection worker to insert a link
  * already keyed to a freshly-minted action token before enqueueing
  * delivery.
  */
@@ -418,7 +418,7 @@ export async function persistOutboundLinkRowRaw(params: {
 
 /**
  * Enqueue a freshly-created link for outbound delivery — the
- * interaction-projection worker writes the link row, then calls this
+ * task-projection worker writes the link row, then calls this
  * to push the job onto BullMQ with the standard
  * `IM_TRANSPORT_DELIVERY_JOB_DEFAULTS` (attempts + backoff).
  */

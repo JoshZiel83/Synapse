@@ -132,7 +132,7 @@ export interface FeedMessage {
   transportDeliveries?: ConversationMessageTransportDelivery[]
   eventType?: ConversationFeedEventType
   eventPayload?: ConversationFeedEventPayloadMap[ConversationFeedEventType]
-  interaction?: TaskSummary
+  task?: TaskSummary
 }
 
 export type ThinkingPhase = "thinking" | "tool" | "responding" | "error"
@@ -236,7 +236,7 @@ interface ChatState {
     conversationId: string,
     state: "started" | "stopped"
   ) => Promise<void>
-  handleInteractionUpdated: (payload: {
+  handleTaskUpdated: (payload: {
     conversationId: string
     taskId: string
     itemId?: string
@@ -499,7 +499,7 @@ function mergeRawItems(
   })
 }
 
-function patchInteractionInRawItem(
+function patchTaskInRawItem(
   item: ChatConversationItem,
   payload: ChatSyncEvent<"task.updated">["payload"]
 ) {
@@ -512,12 +512,12 @@ function patchInteractionInRawItem(
     return item
   }
 
-  const currentInteraction =
+  const currentTask =
     "task" in item.eventPayload
       ? (item.eventPayload.task as TaskSummary | undefined)
       : undefined
 
-  if (item.id !== payload.itemId && currentInteraction?.id !== payload.taskId) {
+  if (item.id !== payload.itemId && currentTask?.id !== payload.taskId) {
     return item
   }
 
@@ -530,17 +530,17 @@ function patchInteractionInRawItem(
   }
 }
 
-function patchInteractionInRawItems(
+function patchTaskInRawItems(
   items: ChatConversationItem[],
   payload: ChatSyncEvent<"task.updated">["payload"]
 ) {
   return mergeRawItems(
     [],
-    items.map((item) => patchInteractionInRawItem(item, payload))
+    items.map((item) => patchTaskInRawItem(item, payload))
   )
 }
 
-function applyInteractionUpdatedToSnapshot(
+function applyTaskUpdatedToSnapshot(
   snapshot: ChatWorkspaceSnapshot,
   payload: ChatSyncEvent<"task.updated">["payload"]
 ) {
@@ -853,7 +853,7 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
       typeof item.content === "string" && item.content.length > 0
         ? item.content
         : summarizeConversationEvent(item.subtype, item.eventPayload)
-    const interaction =
+    const task =
       item.subtype === "task_requested" &&
       item.eventPayload &&
       typeof item.eventPayload === "object" &&
@@ -882,7 +882,7 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
       deliveryStatus: "sent",
       eventType: item.subtype,
       eventPayload: item.eventPayload,
-      interaction,
+      task,
     }
   }
 
@@ -1367,7 +1367,7 @@ function applySyncEventToSnapshot(
     }
     case "task.updated": {
       const payload = event.payload as ChatSyncEvent<"task.updated">["payload"]
-      nextSnapshot = applyInteractionUpdatedToSnapshot(nextSnapshot, payload)
+      nextSnapshot = applyTaskUpdatedToSnapshot(nextSnapshot, payload)
       break
     }
   }
@@ -2103,7 +2103,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               (event.payload as ChatSyncEvent<"task.updated">["payload"])
                 .conversationId === state.selectedConversationId
             ) {
-              nextLoadedItems = patchInteractionInRawItems(
+              nextLoadedItems = patchTaskInRawItems(
                 nextLoadedItems,
                 event.payload as ChatSyncEvent<"task.updated">["payload"]
               )
@@ -2388,7 +2388,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const payload =
           event.payload as ChatSyncEvent<"task.updated">["payload"]
         if (payload.conversationId === state.selectedConversationId) {
-          nextLoadedItems = patchInteractionInRawItems(
+          nextLoadedItems = patchTaskInRawItems(
             state.loadedMessageItems,
             payload
           )
@@ -2484,19 +2484,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  handleInteractionUpdated: (payload) => {
+  handleTaskUpdated: (payload) => {
     set((state) => {
       if (!state.snapshot) {
         return state
       }
 
-      const nextSnapshot = applyInteractionUpdatedToSnapshot(
-        state.snapshot,
-        payload
-      )
+      const nextSnapshot = applyTaskUpdatedToSnapshot(state.snapshot, payload)
       const nextLoadedItems =
         payload.conversationId === state.selectedConversationId
-          ? patchInteractionInRawItems(state.loadedMessageItems, payload)
+          ? patchTaskInRawItems(state.loadedMessageItems, payload)
           : state.loadedMessageItems
 
       return createStateFromSnapshot(state, nextSnapshot, {

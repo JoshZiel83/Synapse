@@ -12,9 +12,9 @@
  *   - Re-arm `tool_call_task_transport_projections` rows that were skipped
  *     for a now-resolvable reason (account/connection-mode/config
  *     transitions + binding-level events). The QQ merge-prep brought
- *     in the interaction projection table and these helpers; they're
+ *     in the task projection table and these helpers; they're
  *     transport-neutral by row design — any connector that opts into
- *     interaction projection participates without further code here.
+ *     task projection participates without further code here.
  *   - `canDeliverNow` + `recoverSkippedDisabledLink` for the outbox
  *     sweeper's gate-then-flip-then-enqueue dance.
  *   - `recoverProjectionForBindingChangedLink` for the delivery worker
@@ -247,7 +247,7 @@ export async function recoverProjectionForBindingChangedLink(
  * re-arm `not_supported_in_v1` from anything other than
  * `binding_created_or_replaced` (the new binding may satisfy
  * supportsInteractionPrompt where the old one didn't), and never
- * re-arm `interaction_already_resolved_or_expired` (that's terminal).
+ * re-arm `task_already_resolved_or_expired` (that's terminal).
  */
 export type SkippedRecoveryEvent =
   | { kind: "config_webhook_confirmed"; transportAccountId: string }

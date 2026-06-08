@@ -396,8 +396,8 @@ export async function buildRuntimePrincipalContext(
  *  - takes a pg `Executor` (the same connection / transaction the caller
  *    has open) rather than the global Kysely `db`, so the workspace-bound
  *    + active-participant guards see uncommitted writes from the surrounding
- *    transaction (critical for approval flows that just upserted the
- *    interaction row in the same client).
+ *    transaction (critical for approval flows that just upserted the task
+ *    detail row in the same client).
  *  - calls `upsertAccessSubjectOn(executor, ...)` (pg-form upsert) so the
  *    subject rows it mints are visible to the same transaction.
  *  - uses raw SQL for the membership / participant lookups so we don't

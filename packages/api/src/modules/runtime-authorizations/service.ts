@@ -563,7 +563,7 @@ export async function createRuntimeAuthorizationGrant(
   // normalizeBrowserGrantPolicy unconditionally. This is the final defence
   // before the policy lands in JSONB — manual endpoint + approval path both
   // rely on this so neither can write a scope-less / dead grant. Throws
-  // BrowserGrantPolicyError; callers map to HTTP 400 / interaction reject.
+  // BrowserGrantPolicyError; callers map to HTTP 400 / task rejection.
   const parsedPolicy = GrantPolicySchema.parse(
     params.policy
   ) as SharedRuntimeAuthorizationGrantSpec
@@ -573,8 +573,8 @@ export async function createRuntimeAuthorizationGrant(
   const grantSpec = normalizeGrantSpecForInsert(parsedPolicy)
 
   if (executor) {
-    // Every production caller threads a Kysely executor (interactions approval
-    // runs inside withDbTransaction → Transaction<Database>; the manual
+    // Every production caller threads a Kysely executor (task approval runs
+    // inside withDbTransaction → Transaction<Database>; the manual
     // endpoint passes none).
     return createGrantInKyselyTx(executor, params, grantSpec)
   }

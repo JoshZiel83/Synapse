@@ -677,7 +677,7 @@ async function executeAccountRecoveryActions(params: {
   workspaceId: string
   /**
    * The account whose update triggered planning. We need its id so the
-   * `recoverSkippedInteractionProjections` dispatch can target the
+   * `recoverSkippedTaskProjections` dispatch can target the
    * correct `transport_account_id` in
    * `tool_call_task_transport_projections` recovery — the connector hook
    * is account-scoped and doesn't carry the id through the action
@@ -687,7 +687,7 @@ async function executeAccountRecoveryActions(params: {
   actions: Array<
     | { type: "reEnableAutoDisabledBindings"; reason: string }
     | {
-        type: "recoverSkippedInteractionProjections"
+        type: "recoverSkippedTaskProjections"
         eventKind:
           | "account_status_activated"
           | "connection_mode_changed_to_long_connection"
@@ -705,7 +705,7 @@ async function executeAccountRecoveryActions(params: {
         })
         break
       }
-      case "recoverSkippedInteractionProjections": {
+      case "recoverSkippedTaskProjections": {
         // Re-arm skipped `tool_call_task_transport_projections` rows
         // matching this account's id + the connector-supplied event
         // kind. Same tx so the recovery commits with the account

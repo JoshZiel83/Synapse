@@ -9,7 +9,7 @@ import { runBuilder, runCompilable, takeFirstOn, db } from "./kysely.js"
 // `numAffectedRows` (a bigint) — NOT `rowCount` — so the bridges have to map it.
 // Before the fix the Kysely branch returned `{ rows }` only, leaving
 // `result.rowCount` undefined; callers that do `if (result.rowCount !== 1) throw`
-// (interactions/service.ts update-then-verify helpers) then threw AFTER a
+// (tasks/service.ts update-then-verify helpers) then threw AFTER a
 // successful single-row UPDATE. These tests pin the count on a real PG so the
 // regression can't silently come back.
 
@@ -38,7 +38,7 @@ test(
           .set({ name: "renamed", updated_at: sql`NOW()` })
           .where("id", "=", userId)
       )
-      // The exact check interactions/service.ts performs.
+      // The exact check tasks/service.ts performs.
       assert.equal(result.rowCount, 1)
       assert.notEqual(result.rowCount, undefined)
     })

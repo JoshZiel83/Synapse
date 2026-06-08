@@ -3,7 +3,7 @@
 // The bug this guards against: createRuntimeAuthorizationRequest generates
 // a fresh retry_nonce on every call, but when its background-mode dedupe
 // (or the inner request-key dedupe inside
-// createRuntimeAuthorizationInteractionRequest) reuses an existing pending
+// createRuntimeAuthorizationTaskRequest) reuses an existing pending
 // row, the post-approval grant is created with the OLD row's
 // source_retry_nonce. Surfacing the freshly-generated nonce to the caller
 // would let the model retry with a token the grant matcher never honors,
@@ -27,7 +27,7 @@ function makeRuntimeAuthSummary(
     id: "00000000-0000-0000-0000-000000000001",
     workspaceId: "00000000-0000-0000-0000-00000000000a",
     conversationId: "00000000-0000-0000-0000-00000000000b",
-    status: "pending",
+    lifecycleStatus: "auth_required",
     revision: 1,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -67,21 +67,28 @@ function makeUserInputSummary(): TaskSummary {
     id: "00000000-0000-0000-0000-00000000ff01",
     workspaceId: "00000000-0000-0000-0000-00000000000a",
     conversationId: "00000000-0000-0000-0000-00000000000b",
-    status: "pending",
+    lifecycleStatus: "input_required",
     revision: 1,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     viewerCanResolve: true,
     requester: {
-      kind: "actor",
-      id: "00000000-0000-0000-0000-00000000000c",
-      displayName: "tester",
+      participantType: "actor",
+      actorId: "00000000-0000-0000-0000-00000000000c",
+      name: "tester",
     },
     userInput: {
-      kind: "freeform",
-      prompt: "say something",
+      title: "test input",
+      questions: [
+        {
+          id: "question-1",
+          type: "text",
+          prompt: "say something",
+          required: true,
+        },
+      ],
     },
-  } as unknown as TaskSummary
+  } as TaskSummary
 }
 
 // ─── pickPersistedRetryNonce ────────────────────────────────────────────────
@@ -89,8 +96,8 @@ function makeUserInputSummary(): TaskSummary {
 test("pickPersistedRetryNonce returns the persisted nonce when the row has one", () => {
   const persisted = "nonce-from-row"
   const fresh = "nonce-from-caller"
-  const interaction = makeRuntimeAuthSummary({ sourceRetryNonce: persisted })
-  const got = pickPersistedRetryNonce(interaction, fresh)
+  const task = makeRuntimeAuthSummary({ sourceRetryNonce: persisted })
+  const got = pickPersistedRetryNonce(task, fresh)
   assert.equal(got, persisted)
 })
 
@@ -100,12 +107,12 @@ test("pickPersistedRetryNonce falls back to the fresh nonce when the row has non
   // caller has, so use it as a last resort. This branch must NOT happen on
   // a row created by our current writer (we always persist a nonce).
   const fresh = "nonce-from-caller"
-  const interaction = makeRuntimeAuthSummary({ sourceRetryNonce: undefined })
-  const got = pickPersistedRetryNonce(interaction, fresh)
+  const task = makeRuntimeAuthSummary({ sourceRetryNonce: undefined })
+  const got = pickPersistedRetryNonce(task, fresh)
   assert.equal(got, fresh)
 })
 
-test("pickPersistedRetryNonce returns the fresh nonce for non-runtime-authorization interactions", () => {
+test("pickPersistedRetryNonce returns the fresh nonce for non-runtime-authorization tasks", () => {
   // Defensive: the function is typed to accept any TaskSummary
   // because the caller hands it the result of getTaskSummary.
   // A user_input summary has no runtimeAuthorization.sourceRetryNonce, so
@@ -120,32 +127,32 @@ test("pickPersistedRetryNonce returns the fresh nonce for non-runtime-authorizat
 test("didInnerDedupeReuseRow detects inner dedupe via nonce mismatch", () => {
   // The freshly-generated nonce the caller intended to write differs from
   // what the row actually holds → the row was reused by inner dedupe.
-  const interaction = makeRuntimeAuthSummary({
+  const task = makeRuntimeAuthSummary({
     sourceRetryNonce: "nonce-already-on-row",
   })
-  const got = didInnerDedupeReuseRow(interaction, "nonce-the-caller-generated")
+  const got = didInnerDedupeReuseRow(task, "nonce-the-caller-generated")
   assert.equal(got, true)
 })
 
 test("didInnerDedupeReuseRow returns false when the row's nonce matches the fresh one", () => {
   // No mismatch means the row was newly created with our nonce; not a
   // reuse.
-  const interaction = makeRuntimeAuthSummary({
+  const task = makeRuntimeAuthSummary({
     sourceRetryNonce: "matching-nonce",
   })
-  const got = didInnerDedupeReuseRow(interaction, "matching-nonce")
+  const got = didInnerDedupeReuseRow(task, "matching-nonce")
   assert.equal(got, false)
 })
 
 test("didInnerDedupeReuseRow returns false when the row has no persisted nonce", () => {
   // Can't conclude anything without a persisted value. Default to "not
   // reused" so we don't lie about dedupe to the caller's audit metadata.
-  const interaction = makeRuntimeAuthSummary({ sourceRetryNonce: undefined })
-  const got = didInnerDedupeReuseRow(interaction, "anything")
+  const task = makeRuntimeAuthSummary({ sourceRetryNonce: undefined })
+  const got = didInnerDedupeReuseRow(task, "anything")
   assert.equal(got, false)
 })
 
-test("didInnerDedupeReuseRow returns false for non-runtime-authorization interactions", () => {
+test("didInnerDedupeReuseRow returns false for non-runtime-authorization tasks", () => {
   const got = didInnerDedupeReuseRow(makeUserInputSummary(), "anything")
   assert.equal(got, false)
 })
@@ -160,14 +167,14 @@ test("didInnerDedupeReuseRow returns false for non-runtime-authorization interac
 // weaken the contract from one side without the other tripping.
 test("orphan-task cleanup gate fires on the same condition the helper detects", () => {
   // Scenario: caller created task T1 with fresh nonce N1, then
-  // createRuntimeAuthorizationInteractionRequest inner-deduped to an
+  // createRuntimeAuthorizationTaskRequest inner-deduped to an
   // existing row whose persisted nonce is N0. Helper must say "reused"
   // so the caller knows to cancel T1.
-  const orphaningInteraction = makeRuntimeAuthSummary({
+  const orphaningTask = makeRuntimeAuthSummary({
     sourceRetryNonce: "N0-already-on-row",
   })
   assert.equal(
-    didInnerDedupeReuseRow(orphaningInteraction, "N1-fresh"),
+    didInnerDedupeReuseRow(orphaningTask, "N1-fresh"),
     true,
     "must signal reuse so caller cancels the orphaned task"
   )
@@ -175,11 +182,11 @@ test("orphan-task cleanup gate fires on the same condition the helper detects", 
   // Conversely: when our nonce matches the row, the row was freshly
   // created by THIS call and our task T1 is the one bound to it. Helper
   // must say "not reused" so we leave T1 alone.
-  const freshInteraction = makeRuntimeAuthSummary({
+  const freshTask = makeRuntimeAuthSummary({
     sourceRetryNonce: "N1-fresh",
   })
   assert.equal(
-    didInnerDedupeReuseRow(freshInteraction, "N1-fresh"),
+    didInnerDedupeReuseRow(freshTask, "N1-fresh"),
     false,
     "must NOT signal reuse when the row is the one we just wrote — cancelling here would cancel our own task"
   )
@@ -188,9 +195,9 @@ test("orphan-task cleanup gate fires on the same condition the helper detects", 
 test("concurrent INSERT race: conflict-winner is detected as reuse so orphan cleanup fires", () => {
   // Race scenario: callers A and B both pass the pre-INSERT dedupe lookup
   // (neither sees an existing row). A wins the INSERT with nonce N_A;
-  // B's INSERT hits ON CONFLICT DO NOTHING (interactions/service.ts
-  // insertInteractionRequest) and returns null. B's
-  // createRuntimeAuthorizationInteractionRequest re-resolves the conflict
+  // B's INSERT hits ON CONFLICT DO NOTHING (tasks/service.ts
+  // insertTaskRequest) and returns null. B's
+  // createRuntimeAuthorizationTaskRequest re-resolves the conflict
   // winner via resolveInsertConflictWinner and returns A's row.
   //
   // The returned row carries N_A, not B's freshly-generated N_B. The

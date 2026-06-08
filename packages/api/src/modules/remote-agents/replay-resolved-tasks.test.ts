@@ -5,16 +5,10 @@ import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 
 /**
- * Regression for the round-4 P0: replayResolvedRemoteAgentInteractions (in
- * remote-agents/service.ts, run on machine ready/bind) issued raw SQL that
- * JOINed the dropped `interaction_requests` table and read `interaction.status`.
- * Under the task unification the active interaction pointer references
- * `tool_call_tasks` and the state is `lifecycle_status`, so the old query threw
- * `relation "interaction_requests" does not exist`, breaking the agent
- * machine-ready / start path. This test runs the CURRENT query shape against
- * the real schema (so a re-introduced dropped-table ref fails loudly) and
- * asserts it selects only RESOLVED (terminal-lifecycle) active interactions,
- * mirroring the old `status <> 'pending'` semantics.
+ * Regression for remote-agent startup replay: active_task_id points at
+ * tool_call_tasks, and only terminal lifecycle statuses should be replayed to
+ * the daemon. This runs the current SQL against the real schema so stale table
+ * names or status projections fail loudly.
  */
 
 const NS = "replay-resolved-test"
@@ -23,11 +17,11 @@ function rid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
-// Mirrors the exact query replayResolvedRemoteAgentInteractions runs (kept in
+// Mirrors the exact query replayResolvedRemoteAgentTasks runs (kept in
 // lockstep with remote-agents/service.ts). Parameterized via the kysely `sql`
 // tag so binding matches production; the point under test is that it references
-// `tool_call_tasks` / `lifecycle_status` (not the dropped `interaction_requests`
-// / `status`) and so executes against the real schema without throwing.
+// `tool_call_tasks` / `lifecycle_status` and so executes against the real
+// schema without throwing.
 function runReplayQuery(
   db: Kysely<any>,
   machineId: string,
@@ -35,21 +29,21 @@ function runReplayQuery(
 ) {
   return sql<{
     remote_agent_id: string
-    active_interaction_id: string
+    active_task_id: string
     lifecycle_status: string
   }>`
     SELECT
       ctx.remote_agent_id,
-      ctx.active_interaction_id,
+      ctx.active_task_id,
       task.lifecycle_status
     FROM remote_agent_conversation_contexts ctx
     INNER JOIN remote_agent_bindings binding
       ON binding.remote_agent_id = ctx.remote_agent_id
     INNER JOIN tool_call_tasks task
-      ON task.id = ctx.active_interaction_id
+      ON task.id = ctx.active_task_id
     WHERE binding.machine_id = ${machineId}
       AND ctx.remote_agent_id = ANY(${remoteAgentIds}::uuid[])
-      AND ctx.active_interaction_id IS NOT NULL
+      AND ctx.active_task_id IS NOT NULL
       AND task.lifecycle_status IN ('completed', 'failed', 'cancelled', 'expired')
   `.execute(db)
 }
@@ -150,58 +144,53 @@ async function mintTask(
 }
 
 test(
-  "replay query: runs against the unified schema and returns RESOLVED active interactions",
+  "replay query: runs against the unified schema and returns resolved active tasks",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const fx = await buildAgentMachineFixture(db)
 
-      // A resolved (completed) active interaction → should be replayed.
+      // A resolved (completed) active task should be replayed.
       const resolvedTask = await mintTask(db, fx, "completed")
       await db
         .insertInto("remote_agent_conversation_contexts")
         .values({
           remote_agent_id: fx.remoteAgentId,
           conversation_id: fx.conversationId,
-          active_interaction_id: resolvedTask,
+          active_task_id: resolvedTask,
         } as any)
         .execute()
 
-      // Runs without "relation interaction_requests does not exist".
+      // Runs without "relation tool_call_tasks does not exist".
       const result = await runReplayQuery(db, fx.machineId, [fx.remoteAgentId])
 
-      assert.equal(
-        result.rows.length,
-        1,
-        "the completed interaction is replayed"
-      )
+      assert.equal(result.rows.length, 1, "the completed task is replayed")
       const row = result.rows[0] as {
         remote_agent_id: string
-        active_interaction_id: string
+        active_task_id: string
         lifecycle_status: string
       }
-      assert.equal(row.active_interaction_id, resolvedTask)
+      assert.equal(row.active_task_id, resolvedTask)
       assert.equal(row.lifecycle_status, "completed")
     })
   }
 )
 
 test(
-  "replay query: a still-pending (non-terminal) active interaction is NOT replayed",
+  "replay query: a still-pending (non-terminal) active task is not replayed",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const fx = await buildAgentMachineFixture(db)
 
-      // A non-terminal (auth_required) active interaction → must be skipped,
-      // mirroring the old `interaction.status <> 'pending'` filter.
+      // A non-terminal (auth_required) active task must be skipped.
       const pendingTask = await mintTask(db, fx, "auth_required")
       await db
         .insertInto("remote_agent_conversation_contexts")
         .values({
           remote_agent_id: fx.remoteAgentId,
           conversation_id: fx.conversationId,
-          active_interaction_id: pendingTask,
+          active_task_id: pendingTask,
         } as any)
         .execute()
 
@@ -210,7 +199,7 @@ test(
       assert.equal(
         result.rows.length,
         0,
-        "a non-terminal interaction must not be replayed"
+        "a non-terminal task must not be replayed"
       )
     })
   }

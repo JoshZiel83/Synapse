@@ -78,7 +78,7 @@ test("planQqSends: interaction_prompt falls back to title + fallbackText", () =>
   const msg = buildCanonicalMessage([
     {
       type: "interaction_prompt",
-      interactionRequestId: "ir-1",
+      taskId: "ir-1",
       title: "Approve?",
       fallbackText: "go to dashboard",
       options: [],
@@ -97,7 +97,7 @@ test("planQqSends: interaction_prompt + long_connection emits keyboard plan", ()
   const msg = buildCanonicalMessage([
     {
       type: "interaction_prompt",
-      interactionRequestId: "ir-2",
+      taskId: "ir-2",
       title: "需要审批",
       fallbackText: "请到 dashboard 处理",
       options: [
@@ -120,7 +120,7 @@ test("planQqSends: interaction_prompt + webhook (no connectionMode) → text fal
   const msg = buildCanonicalMessage([
     {
       type: "interaction_prompt",
-      interactionRequestId: "ir-3",
+      taskId: "ir-3",
       title: "x",
       fallbackText: "y",
       options: [{ id: "a", label: "A", actionToken: "t" }],

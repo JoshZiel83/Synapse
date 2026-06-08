@@ -36,11 +36,12 @@ import {
   PLUGIN_SPEC_TRANSPORTS,
   PLUGIN_TRANSPORTS,
   INVITE_TRUST_LEVELS,
-  INTERACTION_DECISIONS,
-  INTERACTION_INPUT_QUESTION_TYPES,
-  INTERACTION_REQUEST_KIND,
-  INTERACTION_REQUEST_KINDS,
-  INTERACTION_REQUEST_STATUSES,
+  TASK_DECISIONS,
+  TASK_INPUT_QUESTION_TYPES,
+  TASK_LIFECYCLE_STATUSES,
+  TASK_OUTCOMES,
+  TASK_REQUEST_KIND,
+  TASK_REQUEST_KINDS,
   IDENTITY_SEARCH_MATCH_STATES,
   IDENTITY_SEARCH_OUTCOMES,
   MEMORY_CATEGORIES,
@@ -55,7 +56,7 @@ import {
   PLUGIN_AUTH_OWNER_SCOPES,
   PLUGIN_AUTH_SESSION_STATUSES,
   PLAN_APPROVAL_DECISIONS,
-  TARGETED_INTERACTION_REQUEST_KINDS,
+  TARGETED_TASK_REQUEST_KINDS,
   REUSE_SCOPES,
   RELATIONSHIP_ACCESS_POLICIES,
   RELATIONSHIP_APPROVAL_MODES,
@@ -836,7 +837,7 @@ export interface Session {
   trigger: SessionTrigger
   status: SessionStatus
   collaborationMode: SessionCollaborationMode
-  activePlanApprovalInteractionId?: UUID
+  activePlanApprovalTaskId?: UUID
   collaborationState: SessionCollaborationState
   errorMessage?: string
   createdAt: Timestamp
@@ -1058,7 +1059,7 @@ export interface RemoteAgentRuntimeState {
   state: RemoteAgentRuntimeStateType
   statusText?: string
   activeConversationId?: UUID
-  activeInteractionId?: UUID
+  activeTaskId?: UUID
   sessionId?: string
   pendingConversationCount: number
   unreadDeliveryCount: number
@@ -1319,7 +1320,7 @@ export interface RemoteAgentRuntimeSummaryView {
   statusText?: string
   sessionId?: string
   activeConversationId?: UUID
-  activeInteractionId?: UUID
+  activeTaskId?: UUID
   pendingConversationCount: number
   unreadDeliveryCount: number
   lastActivityAt?: Timestamp
@@ -1329,7 +1330,7 @@ export interface RemoteAgentRuntimeSummaryView {
   capabilities?: RemoteAgentRuntimeCapabilityView
 }
 
-export interface RemoteAgentGroupInteractionGrantView {
+export interface RemoteAgentGroupTaskGrantView {
   workspaceMemberId: UUID
   grantedByWorkspaceMemberId?: UUID
   createdAt?: Timestamp
@@ -3505,49 +3506,46 @@ export interface ConversationMessageTransportDelivery {
   metadata: Record<string, unknown>
 }
 
-export type InteractionRequestKind = (typeof INTERACTION_REQUEST_KINDS)[number]
-export type TargetedInteractionRequestKind =
-  (typeof TARGETED_INTERACTION_REQUEST_KINDS)[number]
+export type TaskRequestKind = (typeof TASK_REQUEST_KINDS)[number]
+export type TargetedTaskRequestKind =
+  (typeof TARGETED_TASK_REQUEST_KINDS)[number]
 
-export type InteractionRequestStatus =
-  (typeof INTERACTION_REQUEST_STATUSES)[number]
+export type TaskLifecycleStatus = (typeof TASK_LIFECYCLE_STATUSES)[number]
+export type TaskOutcome = (typeof TASK_OUTCOMES)[number]
 
-export function isInteractionRequestKind(
-  value: unknown
-): value is InteractionRequestKind {
+export function isTaskRequestKind(value: unknown): value is TaskRequestKind {
   return (
     typeof value === "string" &&
-    (INTERACTION_REQUEST_KINDS as readonly string[]).includes(value)
+    (TASK_REQUEST_KINDS as readonly string[]).includes(value)
   )
 }
 
-export function isTargetedInteractionKind(
+export function isTargetedTaskRequestKind(
   value: unknown
-): value is TargetedInteractionRequestKind {
+): value is TargetedTaskRequestKind {
   return (
     typeof value === "string" &&
-    (TARGETED_INTERACTION_REQUEST_KINDS as readonly string[]).includes(value)
+    (TARGETED_TASK_REQUEST_KINDS as readonly string[]).includes(value)
   )
 }
 
-export interface InteractionInputOption {
+export interface TaskInputOption {
   id: string
   label: string
   description?: string
   preview?: string
 }
 
-export type InteractionInputQuestionType =
-  (typeof INTERACTION_INPUT_QUESTION_TYPES)[number]
+export type TaskInputQuestionType = (typeof TASK_INPUT_QUESTION_TYPES)[number]
 
-export interface InteractionInputQuestionDefinition {
+export interface TaskInputQuestionDefinition {
   id: string
   header: string
-  type: InteractionInputQuestionType
+  type: TaskInputQuestionType
   prompt: string
   description?: string
   required?: boolean
-  options?: InteractionInputOption[]
+  options?: TaskInputOption[]
   allowOther?: boolean
   placeholder?: string
   minSelections?: number
@@ -3555,7 +3553,7 @@ export interface InteractionInputQuestionDefinition {
   secret?: boolean
 }
 
-export interface InteractionInputAnswer {
+export interface TaskInputAnswer {
   questionId: string
   selectedOptionIds?: string[]
   selectedOptionLabels?: string[]
@@ -3563,25 +3561,25 @@ export interface InteractionInputAnswer {
   text?: string
 }
 
-export interface InteractionInputQuestionSummary extends InteractionInputQuestionDefinition {
+export interface TaskInputQuestionSummary extends TaskInputQuestionDefinition {
   required: boolean
-  answer?: InteractionInputAnswer
+  answer?: TaskInputAnswer
 }
 
-export interface UserInputInteractionSummary {
+export interface UserInputTaskDetails {
   title: string
   instructions?: string
-  questions: InteractionInputQuestionSummary[]
+  questions: TaskInputQuestionSummary[]
 }
 
-export interface PlanApprovalInteractionSummary {
+export interface PlanApprovalTaskDetails {
   title: string
   summary?: string
   planMarkdown: string
   checklist?: PlanChecklistStep[]
 }
 
-export type InteractionDecision = (typeof INTERACTION_DECISIONS)[number]
+export type TaskDecision = (typeof TASK_DECISIONS)[number]
 export type PlanApprovalDecision = (typeof PLAN_APPROVAL_DECISIONS)[number]
 
 export type RuntimeAuthorizationPreset =
@@ -3736,7 +3734,7 @@ export interface RuntimeAuthorizationGrantView extends RuntimeAuthorizationGrant
   exposureId: UUID
 }
 
-export interface RuntimeAuthorizationInteractionSummary {
+export interface RuntimeAuthorizationTaskDetails {
   requestedToolName: string
   deviceToolStableKey: string
   requestedAction: RuntimeAuthorizationRequestedAction
@@ -3757,20 +3755,20 @@ export interface RuntimeAuthorizationInteractionSummary {
    * surfacing it here lets the dedupe-reuse path return the persisted nonce
    * to its caller instead of a freshly-generated one that no grant will
    * ever match. See runtime-authorizations/requests.ts background-mode
-   * dedupe branch. Optional because historical rows may not have one and
-   * non-runtime-authorization summaries don't materialize this field.
+   * dedupe branch. Optional because some callers operate on task kinds that
+   * do not carry runtime-authorization retry metadata.
    */
   sourceRetryNonce?: string
 }
 
 export interface TaskSummaryBase {
   id: UUID
-  taskId?: UUID
   remoteAgentRunId?: UUID
   workspaceId: UUID
   conversationId: UUID
   itemId?: UUID
-  status: InteractionRequestStatus
+  lifecycleStatus: TaskLifecycleStatus
+  outcome?: TaskOutcome
   revision: number
   requester?: ConversationEntityRef
   resolvedBy?: ConversationEntityRef
@@ -3785,7 +3783,7 @@ export interface TaskSummaryBase {
 export interface UserInputTaskSummary extends TaskSummaryBase {
   kind: "user_input"
   target?: ConversationEntityRef
-  userInput: UserInputInteractionSummary
+  userInput: UserInputTaskDetails
   planApproval?: never
   runtimeAuthorization?: never
 }
@@ -3794,7 +3792,7 @@ export interface PlanApprovalTaskSummary extends TaskSummaryBase {
   kind: "plan_approval"
   target?: ConversationEntityRef
   userInput?: never
-  planApproval: PlanApprovalInteractionSummary
+  planApproval: PlanApprovalTaskDetails
   runtimeAuthorization?: never
 }
 
@@ -3803,15 +3801,10 @@ export interface RuntimeAuthorizationTaskSummary extends TaskSummaryBase {
   target?: never
   userInput?: never
   planApproval?: never
-  runtimeAuthorization: RuntimeAuthorizationInteractionSummary
+  runtimeAuthorization: RuntimeAuthorizationTaskDetails
 }
 
-/**
- * The human-facing projection of a Task that needs a response (task unification).
- * Carries the kind-specific request payload the FE card renders from. `status`
- * is the legacy interaction vocabulary, reverse-projected from the task's
- * lifecycle_status ⟂ outcome on the API side.
- */
+/** Human-facing projection of a Task that needs a response. */
 export type TaskSummary =
   | UserInputTaskSummary
   | PlanApprovalTaskSummary
@@ -4172,62 +4165,62 @@ export function summarizeConversationEvent(
   }
 
   if (eventType === "task_requested") {
-    const interaction =
+    const task =
       eventPayload.task && typeof eventPayload.task === "object"
         ? (eventPayload.task as TaskSummary)
         : undefined
-    if (!interaction) {
+    if (!task) {
       return "Task requested"
     }
-    if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
+    if (task.kind === TASK_REQUEST_KIND.USER_INPUT) {
       const targetName =
-        interaction.target?.name?.trim() ||
-        (interaction.requester?.participantType ===
+        task.target?.name?.trim() ||
+        (task.requester?.participantType ===
         CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
           ? "the group"
           : "a user")
-      const prompt = interaction.userInput?.title?.trim() || "A question"
-      if (interaction.status === "cancelled") {
+      const prompt = task.userInput?.title?.trim() || "A question"
+      if (task.lifecycleStatus === "cancelled") {
         return `Input request for ${targetName} was cancelled: ${prompt}`
       }
-      return interaction.status === "answered"
+      return task.lifecycleStatus === "completed" && task.outcome === "answered"
         ? `${targetName} answered: ${prompt}`
         : `Input requested from ${targetName}: ${prompt}`
     }
-    if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+    if (task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
       const targetName =
-        interaction.target?.name?.trim() ||
-        (interaction.requester?.participantType ===
+        task.target?.name?.trim() ||
+        (task.requester?.participantType ===
         CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
           ? "the group"
           : "a user")
-      const title = interaction.planApproval?.title?.trim() || "Plan approval"
-      if (interaction.status === "cancelled") {
+      const title = task.planApproval?.title?.trim() || "Plan approval"
+      if (task.lifecycleStatus === "cancelled") {
         return `Plan approval for ${targetName} was cancelled: ${title}`
       }
-      if (interaction.status === "approved") {
+      if (task.lifecycleStatus === "completed" && task.outcome === "approved") {
         return `${targetName} approved: ${title}`
       }
-      if (interaction.status === "rejected") {
+      if (
+        task.lifecycleStatus === "completed" &&
+        task.outcome === "revision_requested"
+      ) {
         return `${targetName} requested changes: ${title}`
       }
       return `Plan approval requested from ${targetName}: ${title}`
     }
     const deviceName =
-      interaction.runtimeAuthorization?.deviceDisplayName?.trim() || "device"
-    if (interaction.status === "cancelled") {
+      task.runtimeAuthorization?.deviceDisplayName?.trim() || "device"
+    if (task.lifecycleStatus === "cancelled") {
       return `Runtime authorization request was cancelled for ${deviceName}`
     }
-    if (interaction.status === "rejected") {
-      const resolverName = interaction.resolvedBy?.name?.trim() || "A user"
+    if (task.lifecycleStatus === "completed" && task.outcome === "denied") {
+      const resolverName = task.resolvedBy?.name?.trim() || "A user"
       return `${resolverName} rejected access for ${deviceName}`
     }
-    if (interaction.status === "approved") {
-      const resolverName = interaction.resolvedBy?.name?.trim() || "A user"
+    if (task.lifecycleStatus === "completed" && task.outcome === "granted") {
+      const resolverName = task.resolvedBy?.name?.trim() || "A user"
       return `${resolverName} approved access for ${deviceName}`
-    }
-    if (interaction.status === "superseded") {
-      return `Runtime authorization request was superseded for ${deviceName}`
     }
     return `Runtime authorization requested for ${deviceName}`
   }
@@ -4539,27 +4532,27 @@ export interface ChatConversationReadWatermarkResponse {
   lastReadAt: Timestamp
 }
 
-export interface ChatInteractionAnswerInput {
+export interface ChatTaskAnswerInput {
   questionId: string
   selectedOptionIds?: string[]
   otherText?: string
   text?: string
 }
 
-export interface ChatInteractionResolveCommandMetadata {
+export interface ChatTaskResolveCommandMetadata {
   commandId: UUID
   baseRevision: number
 }
 
-export interface ChatInteractionResolveUserInputPayload {
-  answers: ChatInteractionAnswerInput[]
+export interface ChatTaskResolveUserInputPayload {
+  answers: ChatTaskAnswerInput[]
   decision?: never
   preset?: never
   selectedGrantOptionId?: never
   note?: string
 }
 
-export interface ChatInteractionResolvePlanApprovalPayload {
+export interface ChatTaskResolvePlanApprovalPayload {
   answers?: never
   decision: "approve" | "revise"
   preset?: never
@@ -4567,7 +4560,7 @@ export interface ChatInteractionResolvePlanApprovalPayload {
   note?: string
 }
 
-export interface ChatInteractionResolveRuntimeAuthorizationApprovePayload {
+export interface ChatTaskResolveRuntimeAuthorizationApprovePayload {
   answers?: never
   decision: "approve"
   preset: RuntimeAuthorizationPreset
@@ -4575,7 +4568,7 @@ export interface ChatInteractionResolveRuntimeAuthorizationApprovePayload {
   note?: string
 }
 
-export interface ChatInteractionResolveRuntimeAuthorizationRejectPayload {
+export interface ChatTaskResolveRuntimeAuthorizationRejectPayload {
   answers?: never
   decision: "reject"
   preset?: never
@@ -4583,44 +4576,44 @@ export interface ChatInteractionResolveRuntimeAuthorizationRejectPayload {
   note?: string
 }
 
-export type ChatInteractionResolvePayload =
-  | ChatInteractionResolveUserInputPayload
-  | ChatInteractionResolvePlanApprovalPayload
-  | ChatInteractionResolveRuntimeAuthorizationApprovePayload
-  | ChatInteractionResolveRuntimeAuthorizationRejectPayload
+export type ChatTaskResolvePayload =
+  | ChatTaskResolveUserInputPayload
+  | ChatTaskResolvePlanApprovalPayload
+  | ChatTaskResolveRuntimeAuthorizationApprovePayload
+  | ChatTaskResolveRuntimeAuthorizationRejectPayload
 
-export type ChatInteractionResolveInput =
-  ChatInteractionResolveCommandMetadata & ChatInteractionResolvePayload
+export type ChatTaskResolveInput = ChatTaskResolveCommandMetadata &
+  ChatTaskResolvePayload
 
-export type ChatInteractionResolveOutcome = "applied" | "duplicate" | "conflict"
+export type ChatTaskResolveOutcome = "applied" | "duplicate" | "conflict"
 
-export interface ChatInteractionResolveAppliedResponse {
+export interface ChatTaskResolveAppliedResponse {
   outcome: "applied" | "duplicate"
-  interaction: TaskSummary
+  task: TaskSummary
 }
 
-export interface ChatInteractionResolveConflictResponse {
+export interface ChatTaskResolveConflictResponse {
   outcome: "conflict"
-  code: "interaction_conflict"
+  code: "task_conflict"
   error: string
-  interaction: TaskSummary
+  task: TaskSummary
 }
 
-export type ChatInteractionResolveResponse =
-  | ChatInteractionResolveAppliedResponse
-  | ChatInteractionResolveConflictResponse
+export type ChatTaskResolveResponse =
+  | ChatTaskResolveAppliedResponse
+  | ChatTaskResolveConflictResponse
 
-export function isChatInteractionResolveConflictResponse(
+export function isChatTaskResolveConflictResponse(
   value: unknown
-): value is ChatInteractionResolveConflictResponse {
+): value is ChatTaskResolveConflictResponse {
   return Boolean(
     value &&
     typeof value === "object" &&
     (value as { outcome?: unknown }).outcome === "conflict" &&
-    (value as { code?: unknown }).code === "interaction_conflict" &&
+    (value as { code?: unknown }).code === "task_conflict" &&
     typeof (value as { error?: unknown }).error === "string" &&
-    (value as { interaction?: unknown }).interaction &&
-    typeof (value as { interaction?: unknown }).interaction === "object"
+    (value as { task?: unknown }).task &&
+    typeof (value as { task?: unknown }).task === "object"
   )
 }
 

@@ -565,7 +565,7 @@ function emitSecurityDefinerFns() {
     {
       name: "sd_replace_remote_agent_group_grants",
       args: "p_remote_agent_id uuid",
-      body: "DELETE FROM remote_agent_group_interaction_grants WHERE remote_agent_id = p_remote_agent_id;",
+      body: "DELETE FROM remote_agent_group_task_grants WHERE remote_agent_id = p_remote_agent_id;",
     },
     {
       name: "sd_replace_memory_item_chunks",
@@ -633,7 +633,7 @@ $sd_exec_grants$;`)
     "actor_model_group_assignments",
     "plugin_version_runtime_permissions",
     "catalog_item_categories",
-    "remote_agent_group_interaction_grants",
+    "remote_agent_group_task_grants",
     "memory_item_chunks",
     "tool_call_task_action_tokens",
     "realtime_event_outbox",

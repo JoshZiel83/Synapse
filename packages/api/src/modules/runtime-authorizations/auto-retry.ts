@@ -121,7 +121,7 @@ async function resolveAutoRetryTarget(args: {
  * Re-dispatch the original tool call with the freshly approved grant +
  * retry_nonce baked into the envelope. The caller hands us the EXACT args
  * the user originally tried (sourceRequestArgs persisted on the
- * interaction_runtime_authorization_requests row) — we do not let the
+ * tool_call_task_runtime_authorization row) — we do not let the
  * model re-author them.
  */
 export async function autoDispatchRuntimeAuthorizationRetry(args: {

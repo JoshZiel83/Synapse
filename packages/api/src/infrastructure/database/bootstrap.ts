@@ -23,8 +23,9 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 // refactor (this branch). A single combined version slug + description records
 // both so schema_migrations is not mislabeled. Slug kept <=64 chars (VARCHAR(64);
 // bootstrap.test.ts enforces); full narrative lives in the (unbounded) description.
-export const CURRENT_SCHEMA_VERSION = "2026-06-06-tool-provenance-routing"
+export const CURRENT_SCHEMA_VERSION = "2026-06-08-task-unification-naming"
 export const CURRENT_SCHEMA_DESCRIPTION =
+  "Task unification naming cleanup: human-facing requests are first-class tool_call_tasks; removed the remaining task-response compatibility naming from response surfaces, active task pointers, source task pointers, remote-agent group task grants, and remote-agent run task linkage. Requires db:rebuild for existing databases (no in-place migrations during initial design). " +
   "Tool provenance & routing refactor: tool_calls.tool_name now holds the model-facing WIRE name; added immutable source_snapshot JSONB + GENERATED source_kind (system|plugin|device) + soft pointers plugin_installation_id/device_tool_id (ON DELETE SET NULL, snapshot is the durable audit truth) with a source↔column consistency CHECK; dropped legacy tool_calls.plugin_id/device_id and tool_execution_attempts.plugin_id/device_id/instance_key (attempt provenance derives from the parent tool_calls row). Routing no longer parses tool names — projection mints deterministic ToolRefs and a per-turn NameRegistry maps wire↔toolId. Requires db:rebuild for existing databases (no in-place migrations during initial design). " +
   "(PRIOR) Chat multi-client broadcast correctness: workspace_member_sync_events.member_seq commit-ordered client sync cursor. " +
   "(PRIOR) Soft-delete: deleted_at on 24 root tables, _live views, sd_reject_delete + sd_assert_parent_live triggers, sd_* SECURITY DEFINER purge fns. " +

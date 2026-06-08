@@ -8,7 +8,7 @@
  *      `synapse-interaction:` prefix; reject other payloads (some other
  *      bot's button using the same account).
  *   3. lookupActionToken (DB-backed, idempotent — see action-tokens.ts)
- *      returns the original {interactionRequestId, payload}; missing or
+ *      returns the original {taskId, payload}; missing or
  *      expired token → ACK with a "session expired" tip.
  *   4. Resolve the clicker → transport_address.workspace_member_id.
  *      Unbound user → ACK + send a "please bind" message.
@@ -17,8 +17,8 @@
  *      spoken yet won't have one yet).
  *   6. Derive `commandId = uuidv5(qqEvent.id + actionToken + clicker)`
  *      so QQ event replays / our ACK retries land on the same idempotence
- *      cell inside resolveInteractionRequest.
- *   7. resolveInteractionRequest({decision, preset, ...}). Successful
+ *      cell inside resolveTaskRequest.
+ *   7. resolveTaskRequest({decision, preset, ...}). Successful
  *      durable outcomes (applied / duplicate / conflict) → ACK.
  *   8. Transient failures (DB/network) → do NOT ACK; QQ will time the
  *      user's button loading out, and the user can click again.
@@ -33,10 +33,10 @@ import { v5 as uuidv5 } from "uuid"
 import { SYNAPSE_INTERACTION_NAMESPACE } from "@synapse/shared"
 import {
   getTaskSummary,
-  resolveInteractionRequest,
-  type ResolveInteractionRequestParams,
-} from "../../../interactions/service.js"
-import { lookupActionToken } from "../../../interactions/action-tokens.js"
+  resolveTaskRequest,
+  type ResolveTaskRequestParams,
+} from "../../../tasks/service.js"
+import { lookupActionToken } from "../../../tasks/action-tokens.js"
 import {
   getTransportAddressByExternalId,
   syncTransportAddressConversationParticipant,
@@ -69,7 +69,7 @@ export interface QqInteractionHandlerDeps {
   /** Override only in tests; production uses the live `lookupActionToken`. */
   lookupActionToken: typeof lookupActionToken
   /** Same. */
-  resolveInteractionRequest: typeof resolveInteractionRequest
+  resolveTaskRequest: typeof resolveTaskRequest
   /** Same. */
   getTaskSummary: typeof getTaskSummary
   /** Same. */
@@ -99,7 +99,7 @@ const PRESET_FOR_DECISION: Record<string, string> = {
 export function defaultQqInteractionHandlerDeps(): QqInteractionHandlerDeps {
   return {
     lookupActionToken,
-    resolveInteractionRequest,
+    resolveTaskRequest,
     getTaskSummary,
     getTransportAddressByExternalId,
     syncTransportAddressConversationParticipant,
@@ -174,16 +174,14 @@ export async function handleQqInteractionCreate(params: {
     return
   }
 
-  // Need the interaction summary to learn its workspace + conversation
+  // Need the task summary to learn its workspace + conversation
   // (for participant sync) and so we can short-circuit before calling
-  // resolve if the interaction is already gone.
-  const interaction = await deps.getTaskSummary(
-    tokenRecord.interactionRequestId
-  )
-  if (!interaction) {
-    logger.info("qq-interaction: target interaction no longer exists", {
+  // resolve if the task is already gone.
+  const task = await deps.getTaskSummary(tokenRecord.taskId)
+  if (!task) {
+    logger.info("qq-interaction: target task no longer exists", {
       eventId,
-      interactionRequestId: tokenRecord.interactionRequestId,
+      taskId: tokenRecord.taskId,
     })
     await safeAck(deps, account, eventId, 0, logger)
     return
@@ -193,7 +191,7 @@ export async function handleQqInteractionCreate(params: {
   let participantId: string
   try {
     const participant = await deps.syncTransportAddressConversationParticipant({
-      conversationId: interaction.conversationId,
+      conversationId: task.conversationId,
       transportAddressId: clickerAddress.id,
       workspaceMemberId: clickerAddress.workspace_member_id,
       recordJoinEvent: true,
@@ -209,7 +207,7 @@ export async function handleQqInteractionCreate(params: {
   }
 
   // Step 6: deterministic commandId — same input → same UUID, so QQ
-  // replays of the same event hit the resolveInteractionRequest
+  // replays of the same event hit the resolveTaskRequest
   // dedup cell.
   const commandId = deriveCommandId({
     qqEventId: eventId,
@@ -218,12 +216,12 @@ export async function handleQqInteractionCreate(params: {
   })
 
   // Step 7: resolve
-  const baseRevision = interaction.revision
+  const baseRevision = task.revision
   const decision = tokenRecord.payload.decision
-  const params7: ResolveInteractionRequestParams =
+  const params7: ResolveTaskRequestParams =
     decision === "reject"
       ? {
-          interactionId: tokenRecord.interactionRequestId,
+          taskId: tokenRecord.taskId,
           commandId,
           baseRevision,
           resolverWorkspaceMemberId: clickerAddress.workspace_member_id,
@@ -231,7 +229,7 @@ export async function handleQqInteractionCreate(params: {
           decision: "reject",
         }
       : {
-          interactionId: tokenRecord.interactionRequestId,
+          taskId: tokenRecord.taskId,
           commandId,
           baseRevision,
           resolverWorkspaceMemberId: clickerAddress.workspace_member_id,
@@ -245,10 +243,10 @@ export async function handleQqInteractionCreate(params: {
             tokenRecord.payload.selectedGrantOptionId ?? "primary",
         }
   try {
-    const result = await deps.resolveInteractionRequest(params7)
+    const result = await deps.resolveTaskRequest(params7)
     logger.info("qq-interaction: resolved", {
       eventId,
-      interactionRequestId: tokenRecord.interactionRequestId,
+      taskId: tokenRecord.taskId,
       outcome: result.outcome,
     })
     // Step 7 (success / durable outcome): ACK
@@ -298,12 +296,12 @@ function deriveCommandId(params: {
 function isPermanentResolveError(err: unknown): boolean {
   const msg = errorMessage(err).toLowerCase()
   if (!msg) return false
-  // Heuristics based on resolveInteractionRequest's throw sites — these
+  // Heuristics based on resolveTaskRequest's throw sites — these
   // are stable error strings, not codes, so we match on substring. If
   // any of these change we should add a dedicated error class.
   return (
-    msg.includes("interaction request not found") ||
-    msg.includes("only the targeted user can resolve this interaction") ||
+    msg.includes("task request not found") ||
+    msg.includes("only the targeted user can resolve this task") ||
     msg.includes("you are not allowed to resolve") ||
     msg.includes("missing device_id") ||
     msg.includes("missing device_capability_id") ||

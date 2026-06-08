@@ -9,11 +9,11 @@ import {
   type GestureResponderEvent,
 } from "react-native"
 
-import { ChatQuestionInteractionCard } from "@/components/chat-question-interaction-card"
+import { ChatTaskCard } from "@/components/chat-task-card"
 import { ChatMarkdown } from "@/components/chat-markdown"
 import { Avatar } from "@/components/ui"
 import { resolveContentUrl } from "@/lib/config"
-import type { ChatInteractionResolveInput } from "@/lib/api"
+import type { ChatTaskResolveInput } from "@/lib/api"
 import {
   buildChatFilePreviewHref,
   getAttachmentLabel,
@@ -258,22 +258,22 @@ function MessageBlocks({
 export function MessageItem({
   item,
   viewerParticipantId,
-  onResolveInteraction,
+  onResolveTask,
   onLongPress,
   onRetry,
 }: {
   item: MobileChatItem
   viewerParticipantId?: string
-  onResolveInteraction?: (
-    interactionId: string,
-    input: ChatInteractionResolveInput
+  onResolveTask?: (
+    taskId: string,
+    input: ChatTaskResolveInput
   ) => Promise<TaskSummary>
   onLongPress?: (event: GestureResponderEvent) => void
   /** Invoked when the user taps "Retry" on a failed outbox entry. */
   onRetry?: (clientMessageId: string) => void
 }) {
   if (item.itemType === "event") {
-    const interaction =
+    const task =
       item.subtype === "task_requested" &&
       item.eventPayload &&
       typeof item.eventPayload === "object" &&
@@ -283,13 +283,8 @@ export function MessageItem({
             | undefined)
         : undefined
 
-    if (interaction) {
-      return (
-        <ChatQuestionInteractionCard
-          interaction={interaction}
-          onResolveInteraction={onResolveInteraction}
-        />
-      )
+    if (task) {
+      return <ChatTaskCard task={task} onResolveTask={onResolveTask} />
     }
 
     const eventText =
