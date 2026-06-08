@@ -12,7 +12,7 @@ import { QQ_MSG_TYPE } from "./types.js"
 
 test("buildQqInteractionKeyboard: single option produces msg_type=2 with one button", () => {
   const payload = buildQqInteractionKeyboard({
-    interactionRequestId: "ir-1",
+    taskId: "ir-1",
     title: "审批",
     fallbackText: "请处理",
     options: [
@@ -41,7 +41,7 @@ test("buildQqInteractionKeyboard: single option produces msg_type=2 with one but
 
 test("buildQqInteractionKeyboard: danger style maps to 2", () => {
   const payload = buildQqInteractionKeyboard({
-    interactionRequestId: "ir-1",
+    taskId: "ir-1",
     fallbackText: "确认删除",
     options: [
       {
@@ -60,7 +60,7 @@ test("buildQqInteractionKeyboard: danger style maps to 2", () => {
 
 test("buildQqInteractionKeyboard: all buttons share group_id (mutex)", () => {
   const payload = buildQqInteractionKeyboard({
-    interactionRequestId: "ir-mutex",
+    taskId: "ir-mutex",
     fallbackText: "选一个",
     options: [
       { id: "a", label: "A", actionToken: "ta" },
@@ -78,7 +78,7 @@ test("buildQqInteractionKeyboard: all buttons share group_id (mutex)", () => {
 test("buildQqInteractionKeyboard: empty options throws", () => {
   assert.throws(() =>
     buildQqInteractionKeyboard({
-      interactionRequestId: "ir-1",
+      taskId: "ir-1",
       fallbackText: "x",
       options: [],
     })
@@ -88,7 +88,7 @@ test("buildQqInteractionKeyboard: empty options throws", () => {
 test("buildQqInteractionKeyboard: ≥6 options throws (v1 single-row cap)", () => {
   assert.throws(() =>
     buildQqInteractionKeyboard({
-      interactionRequestId: "ir-1",
+      taskId: "ir-1",
       fallbackText: "x",
       options: Array.from({ length: 6 }, (_, i) => ({
         id: `o${i}`,
@@ -102,7 +102,7 @@ test("buildQqInteractionKeyboard: ≥6 options throws (v1 single-row cap)", () =
 test("buildQqInteractionKeyboard: missing actionToken throws", () => {
   assert.throws(() =>
     buildQqInteractionKeyboard({
-      interactionRequestId: "ir-1",
+      taskId: "ir-1",
       fallbackText: "x",
       options: [{ id: "o", label: "L", actionToken: "" }],
     })

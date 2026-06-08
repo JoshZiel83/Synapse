@@ -89,7 +89,7 @@ import {
   requireWorkspaceMemberIdentity,
   type WorkspaceMemberIdentity,
 } from "./workspace-identity.js"
-import { enrichInteractionForUser } from "../interactions/service.js"
+import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
   getSessionRuntimeTurnActivityDetail,
@@ -416,12 +416,12 @@ async function enrichChatConversationItemForViewer(
   }
 
   const payload = item.eventPayload
-  const interaction =
+  const task =
     payload && typeof payload === "object" && "task" in payload
       ? (payload as ConversationFeedEventPayloadMap["task_requested"]).task
       : undefined
 
-  if (!interaction) {
+  if (!task) {
     return item
   }
 
@@ -429,7 +429,7 @@ async function enrichChatConversationItemForViewer(
     ...item,
     eventPayload: {
       ...payload,
-      task: await enrichInteractionForUser(interaction as TaskSummary, userId),
+      task: await enrichTaskForUser(task as TaskSummary, userId),
     },
   } as ChatConversationItem
 }
@@ -465,7 +465,7 @@ async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
     const eventPayload = payload as ChatSyncEventPayloadMap["task.updated"]
     return {
       ...eventPayload,
-      task: await enrichInteractionForUser(eventPayload.task, userId),
+      task: await enrichTaskForUser(eventPayload.task, userId),
     } as ChatSyncEventPayloadMap[T]
   }
 
@@ -1538,7 +1538,7 @@ function isDatabaseTransaction(
  * order equals the `member_seq` order with no holes — which is exactly what the
  * client cursor (`getChatSync` paging by `member_seq > cursor`) relies on.
  *
- * Exported because external producers (interactions, remote-agents) append from
+ * Exported because external producers (tasks, remote-agents) append from
  * inside their OWN business transaction and must keep the domain write + sync +
  * outbox atomic; they call this directly with their `trx`. Bare-`db` callers go
  * through the `appendWorkspaceMemberSyncEvent` wrapper, which opens a tx.

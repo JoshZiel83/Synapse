@@ -26,7 +26,7 @@ export const FEISHU_MESSAGE_CAPABILITIES: MessageCapabilities = {
   // to text placeholders.
   supportsImage: true,
   supportsFile: true,
-  // V1: no audio/video upload implementation; interaction projection
+  // V1: no audio/video upload implementation; task projection
   // not yet wired up for Feishu cards.
   supportsVoice: false,
   supportsVideo: false,

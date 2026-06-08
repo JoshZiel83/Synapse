@@ -7,7 +7,7 @@ export type RemoteAgentConversationContextRecord = {
   runtimeSessionId: string | null
   runtimeState: RemoteAgentRuntimeStateType
   statusText: string | null
-  activeInteractionId: string | null
+  activeTaskId: string | null
   lastRunStartedAt: string | null
   lastRunFinishedAt: string | null
   lastActivityAt: string | null

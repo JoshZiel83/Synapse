@@ -15,8 +15,8 @@
  *     `webhookInboundConfirmed`)
  *   - planAccountRecoveryActions (returns the closed-enum
  *     AccountRecoveryAction[] for the generic executor)
- *   - getInteractionProjectionReadiness (gates QQ webhook accounts
- *     out of interaction projection until the operator confirms
+ *   - getTaskProjectionReadiness (gates QQ webhook accounts
+ *     out of task projection until the operator confirms
  *     OQ2)
  *
  * Status / reaction adapters are null (QQ has no message edit, no
@@ -151,7 +151,7 @@ export const qqConnector: TransportConnector = {
   // Emit closed-enum recovery actions for the transitions QQ cares
   // about. The shared executor in `service/accounts.ts` runs all
   // `reEnableAutoDisabledBindings` before any
-  // `recoverSkippedInteractionProjections` per the order contract on
+  // `recoverSkippedTaskProjections` per the order contract on
   // `AccountRecoveryAction`.
   planAccountRecoveryActions({ previous, next, incomingConfig }) {
     const actions: AccountRecoveryAction[] = []
@@ -177,19 +177,19 @@ export const qqConnector: TransportConnector = {
     }
     if (newlyActive) {
       actions.push({
-        type: "recoverSkippedInteractionProjections",
+        type: "recoverSkippedTaskProjections",
         eventKind: "account_status_activated",
       })
     }
     if (switchedToLongConnection) {
       actions.push({
-        type: "recoverSkippedInteractionProjections",
+        type: "recoverSkippedTaskProjections",
         eventKind: "connection_mode_changed_to_long_connection",
       })
     }
     if (webhookJustConfirmed) {
       actions.push({
-        type: "recoverSkippedInteractionProjections",
+        type: "recoverSkippedTaskProjections",
         eventKind: "config_webhook_confirmed",
       })
     }
@@ -200,10 +200,10 @@ export const qqConnector: TransportConnector = {
   // confirmed webhook inbound — the projection's button click comes
   // back as an INTERACTION_CREATE event on the same webhook channel.
   // Until the operator flips `webhookInboundConfirmed`, the
-  // interaction-projection worker skips the projection and stamps
+  // task-projection worker skips the projection and stamps
   // the reason on the row so the shared recovery code can re-arm
   // when the flag flips later.
-  getInteractionProjectionReadiness(account) {
+  getTaskProjectionReadiness(account) {
     if (account.connectionMode === "long_connection") return { ok: true }
     const config = readQqAccountConfig({
       config: (account.config ?? {}) as Record<string, unknown>,

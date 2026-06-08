@@ -11,17 +11,17 @@ import { db } from "../../infrastructure/database/kysely.js"
 import { sleep } from "../../infrastructure/async/index.js"
 import { randomUUID } from "node:crypto"
 import { authorizeAction } from "../access/service.js"
-import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js"
+import { buildUserTaskTargetCandidatesFromRows } from "../ai/session-tool-user-task-targets.js"
 import { listConversationParticipants } from "../chat/service.js"
 import {
   buildRuntimeAuthorizationDedupeKey,
   buildRuntimeAuthorizationRequestKey,
-  createRuntimeAuthorizationInteractionRequest,
-  findOpenRuntimeAuthorizationInteraction,
+  createRuntimeAuthorizationTaskRequest,
+  findOpenRuntimeAuthorizationTask,
   getTaskSummary,
-  markRuntimeAuthorizationInteractionSuperseded,
+  markRuntimeAuthorizationTaskSuperseded,
   writeRuntimeAuthorizationTaskDetailInTx,
-} from "../interactions/service.js"
+} from "../tasks/service.js"
 import {
   cancelToolCallTask,
   createToolCallTaskDeduped,
@@ -35,7 +35,7 @@ export interface RuntimeAuthorizationRequestSource {
   sessionId: string
   /**
    * subject-scope-refactor: principal subject_id (NOT NULL on
-   * interaction_runtime_authorization_requests). Caller resolves the
+   * tool_call_task_runtime_authorization_requests). Caller resolves the
    * triggering principal to an access_subjects row via
    * upsertAccessSubject(actor / remote_agent / conversation) and passes the
    * id here.
@@ -90,10 +90,10 @@ export interface CreateRuntimeAuthorizationRequestParams {
 }
 
 /**
- * Pick the retry_nonce to surface to the caller. When the interaction was
+ * Pick the retry_nonce to surface to the caller. When the task was
  * reused from the dedupe lookup (either the outer background-mode dedupe in
  * createRuntimeAuthorizationRequest or the inner request-key dedupe in
- * createRuntimeAuthorizationInteractionRequest) we MUST return the
+ * createRuntimeAuthorizationTaskRequest) we MUST return the
  * persisted nonce on the row — that's the only value the post-approval
  * grant will be created with, and the only value the device's grant
  * matcher will accept on retry. Surfacing a freshly-generated nonce in the
@@ -102,42 +102,42 @@ export interface CreateRuntimeAuthorizationRequestParams {
  * nonce only when the row truly lacks one (legacy data, defense in depth).
  */
 export function pickPersistedRetryNonce(
-  interaction: TaskSummary,
+  task: TaskSummary,
   freshNonce: string
 ): string {
   if (
-    interaction.kind === "runtime_authorization" &&
-    interaction.runtimeAuthorization?.sourceRetryNonce
+    task.kind === "runtime_authorization" &&
+    task.runtimeAuthorization?.sourceRetryNonce
   ) {
-    return interaction.runtimeAuthorization.sourceRetryNonce
+    return task.runtimeAuthorization.sourceRetryNonce
   }
   return freshNonce
 }
 
 /**
- * Detect whether the createRuntimeAuthorizationInteractionRequest inner
+ * Detect whether the createRuntimeAuthorizationTaskRequest inner
  * dedupe (taskId or requestKey match) returned a pre-existing row. The
  * outer caller passes `reused: false` until it can prove otherwise — this
  * helper proves it by checking whether the row's persisted retry_nonce
  * matches the one the caller just generated.
  */
 export function didInnerDedupeReuseRow(
-  interaction: TaskSummary,
+  task: TaskSummary,
   freshNonce: string
 ): boolean {
-  if (interaction.kind !== "runtime_authorization") return false
-  const persisted = interaction.runtimeAuthorization?.sourceRetryNonce
+  if (task.kind !== "runtime_authorization") return false
+  const persisted = task.runtimeAuthorization?.sourceRetryNonce
   return Boolean(persisted && persisted !== freshNonce)
 }
 
 export interface RuntimeAuthorizationRequestResult {
-  interaction: TaskSummary
+  task: TaskSummary
   // Task unification: every runtime-authorization IS a task, including a
   // background request that reuses an existing live authorization task. This is
   // never null — the create, dedupe, and reuse paths all surface the task so
   // consumers can read authorization_task_id (capability-projection stamps it
   // into the synapse_error envelope the agent retries against).
-  task: ToolCallTaskRecord
+  taskRecord: ToolCallTaskRecord
   availableAuthorizerCount: number
   availableAuthorizers: Array<{
     participantId: string
@@ -151,26 +151,35 @@ export interface RuntimeAuthorizationRequestResult {
 }
 
 export interface WaitForRuntimeAuthorizationResolutionParams<T> {
-  interactionId: string
+  taskId: string
   conversationId: string
   createdAt: string
-  onApproved: (interaction: TaskSummary) => Promise<T>
+  onApproved: (task: TaskSummary) => Promise<T>
   maxWaitMs?: number
 }
 
 export type RuntimeAuthorizationWaitResult<T> =
   | {
       status: "approved"
-      interaction: TaskSummary
+      task: TaskSummary
       approvedValue: T
     }
   | {
       status: "superseded" | "rejected" | "cancelled" | "expired"
-      interaction: TaskSummary | null
+      task: TaskSummary | null
     }
 
 function buildWaitingSummary(deviceDisplayName?: string) {
   return `Waiting for a user to authorize ${deviceDisplayName?.trim() || "the device"}.`
+}
+
+function isTaskOpen(task: TaskSummary) {
+  return (
+    task.lifecycleStatus === "submitted" ||
+    task.lifecycleStatus === "working" ||
+    task.lifecycleStatus === "input_required" ||
+    task.lifecycleStatus === "auth_required"
+  )
 }
 
 async function loadConversationKindAndBoundary(
@@ -287,7 +296,7 @@ export async function createRuntimeAuthorizationRequest(
   // Resolve the requester by whichever principal id the caller supplied.
   // actor principals match on actor_id; remote_agent
   // principals match on remote_agent_id (the bridged participant of the
-  // conversation). The interaction needs a participant id either way so
+  // conversation). The task needs a participant id either way so
   // the dashboard knows whose request this is.
   const requesterMember = allMembers.find((member) => {
     if (member.state !== "active") return false
@@ -312,7 +321,7 @@ export async function createRuntimeAuthorizationRequest(
     )
   }
 
-  const candidates = buildUserInteractionCandidatesFromRows(allMembers)
+  const candidates = buildUserTaskTargetCandidatesFromRows(allMembers)
   if (candidates.length === 0) {
     throw new Error(
       "This conversation has no active user who could receive a runtime authorization request"
@@ -342,7 +351,7 @@ export async function createRuntimeAuthorizationRequest(
     params.retryNonce?.trim() || buildRuntimeAuthorizationRetryNonce()
 
   if (params.requestMode === "background") {
-    const existing = await findOpenRuntimeAuthorizationInteraction({
+    const existing = await findOpenRuntimeAuthorizationTask({
       workspaceId: params.source.workspaceId,
       conversationId: params.source.conversationId,
       requesterParticipantId: requesterMember.id,
@@ -356,35 +365,30 @@ export async function createRuntimeAuthorizationRequest(
       availablePresets: params.availablePresets,
       requestMode: params.requestMode,
       // Per-session dedupe: matches the value the create path writes to
-      // interaction_runtime_authorization_requests.source_runtime_session_id
+      // tool_call_task_runtime_authorization_requests.source_runtime_session_id
       // and bakes into the dedupe key. Without this match two Agent
       // sessions issuing the same CUA call would reuse one another's
-      // pending interaction, and the post-approval auto-retry would stamp
+      // pending taskRecord, and the post-approval auto-retry would stamp
       // the wrong cua_focus_scope_id into the dispatched envelope.
       runtimeSessionId: params.runtimeTarget.runtimeSessionId,
     })
 
     if (existing) {
-      // Task unification: the reused interaction IS a live task. Reload its
+      // Task unification: the reused task IS a live task. Reload its
       // task record so the caller gets a real authorization_task_id (the
-      // interaction summary always carries taskId; this surfaces the full
+      // task summary id is the task id; this surfaces the full
       // record consistently with the create/dedupe branches). Returning null
       // here would drop the id capability-projection stamps into the
       // synapse_error envelope the agent retries against.
-      if (!existing.taskId) {
-        throw new Error(
-          "Reused runtime-authorization interaction has no taskId (task unification invariant)"
-        )
-      }
-      const existingTask = await getToolCallTask(existing.taskId)
+      const existingTask = await getToolCallTask(existing.id)
       if (!existingTask) {
         throw new Error(
-          `Reused runtime-authorization task ${existing.taskId} not found`
+          `Reused runtime-authorization task ${existing.id} not found`
         )
       }
       return {
-        interaction: existing,
-        task: existingTask,
+        task: existing,
+        taskRecord: existingTask,
         availableAuthorizerCount: availableAuthorizers.length,
         availableAuthorizers,
         requesterParticipantId: requesterMember.id,
@@ -423,7 +427,7 @@ export async function createRuntimeAuthorizationRequest(
     requesterParticipantId: requesterMember.id,
     dedupeKey,
   })
-  const { task, deduped } = await createToolCallTaskDeduped(
+  const { task: taskRecord, deduped } = await createToolCallTaskDeduped(
     {
       workspaceId: params.source.workspaceId,
       conversationId: params.source.conversationId,
@@ -483,19 +487,19 @@ export async function createRuntimeAuthorizationRequest(
   )
 
   try {
-    // Task unification: if the task mint deduped onto an existing live task, the
-    // interaction detail + feed item already exist — return the existing summary
+    // Task unification: if the task mint deduped onto an existing live taskRecord, the
+    // task detail + feed item already exist — return the existing summary
     // without re-creating (no orphan-task cleanup; the loser never materialized).
     if (deduped) {
-      const existing = await getTaskSummary(task.id)
+      const existing = await getTaskSummary(taskRecord.id)
       if (!existing) {
         throw new Error(
-          "Deduped runtime-authorization task has no interaction summary"
+          "Deduped runtime-authorization task has no task summary"
         )
       }
       return {
-        interaction: existing,
-        task,
+        task: existing,
+        taskRecord,
         availableAuthorizerCount: availableAuthorizers.length,
         availableAuthorizers,
         requesterParticipantId: requesterMember.id,
@@ -504,10 +508,10 @@ export async function createRuntimeAuthorizationRequest(
       }
     }
 
-    const interaction = await createRuntimeAuthorizationInteractionRequest({
+    const requestedTask = await createRuntimeAuthorizationTaskRequest({
       workspaceId: params.source.workspaceId,
       conversationId: params.source.conversationId,
-      taskId: task.id,
+      taskId: taskRecord.id,
       requesterParticipantId: requesterMember.id,
       deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
       deviceId: params.runtimeTarget.deviceId,
@@ -528,16 +532,16 @@ export async function createRuntimeAuthorizationRequest(
     })
 
     return {
-      interaction,
-      task,
+      task: requestedTask,
+      taskRecord,
       availableAuthorizerCount: availableAuthorizers.length,
       availableAuthorizers,
       requesterParticipantId: requesterMember.id,
       reused: false,
-      retryNonce: pickPersistedRetryNonce(interaction, retryNonce),
+      retryNonce: pickPersistedRetryNonce(requestedTask, retryNonce),
     }
   } catch (error) {
-    await cancelToolCallTask(task.id, {
+    await cancelToolCallTask(taskRecord.id, {
       summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`,
       finalResultPayload: {
         content: textBlocks(
@@ -567,48 +571,51 @@ export async function waitForRuntimeAuthorizationResolution<T>(
         params.createdAt
       )
     ) {
-      const superseded = await markRuntimeAuthorizationInteractionSuperseded(
-        params.interactionId,
+      const superseded = await markRuntimeAuthorizationTaskSuperseded(
+        params.taskId,
         "Superseded by a newer user message."
       )
       return {
         status: "superseded",
-        interaction: superseded,
+        task: superseded,
       }
     }
 
-    const interaction = await getTaskSummary(params.interactionId)
-    if (!interaction) {
-      throw new Error("Authorization interaction could not be reloaded.")
+    const task = await getTaskSummary(params.taskId)
+    if (!task) {
+      throw new Error("Authorization task could not be reloaded.")
     }
-    if (interaction.status === "pending") {
+    if (isTaskOpen(task)) {
       await sleep(1000)
       continue
     }
-    if (interaction.status === "approved") {
+    if (task.lifecycleStatus === "completed" && task.outcome === "granted") {
       return {
         status: "approved",
-        interaction,
-        approvedValue: await params.onApproved(interaction),
+        task,
+        approvedValue: await params.onApproved(task),
       }
     }
-    if (
-      interaction.status === "rejected" ||
-      interaction.status === "cancelled"
-    ) {
+    if (task.lifecycleStatus === "cancelled") {
       return {
-        status: interaction.status,
-        interaction,
+        status: "cancelled",
+        task,
+      }
+    }
+    if (task.lifecycleStatus === "expired") {
+      return {
+        status: "expired",
+        task,
       }
     }
     return {
-      status: "expired",
-      interaction,
+      status: "rejected",
+      task,
     }
   }
 
   return {
     status: "expired",
-    interaction: await getTaskSummary(params.interactionId),
+    task: await getTaskSummary(params.taskId),
   }
 }

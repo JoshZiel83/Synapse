@@ -1,21 +1,21 @@
 /**
- * interaction_action_tokens (Stage 8 supporting code).
+ * task_action_tokens (Stage 8 supporting code).
  *
- * Short, opaque tokens minted when a runtime-authorization interaction
+ * Short, opaque tokens minted when a runtime-authorization task
  * is projected onto an IM transport that supports interaction_prompt
  * (today: QQ Inline Keyboard). The token rides in the button's
  * `action.data` field — QQ's button payload is space-limited so we
- * can't encode the full ResolveInteractionRequestParams there. On
+ * can't encode the full ResolveTaskRequestParams there. On
  * click, the connector redeems the token to recover the original
  * payload.
  *
  * Crucially, redemption is NOT one-shot: ACK round-trips can fail and
  * QQ replays the same INTERACTION_CREATE event on retry. The redeem
  * helper checks the token's own `expires_at` only; idempotence comes
- * from `resolveInteractionRequest`'s (interaction_id, command_id) dedup
+ * from `resolveTaskRequest`'s (task_id, command_id) dedup
  * (the connector derives command_id deterministically from
  * uuidv5(qqEvent.id + actionToken + clickerExternalId), so a replayed
- * click hits the same (interactionId, commandId) cell and returns the
+ * click hits the same (taskId, commandId) cell and returns the
  * cached result).
  */
 
@@ -39,7 +39,7 @@ export interface ActionTokenPayload {
 
 export interface ActionTokenRecord {
   token: string
-  interactionRequestId: string
+  taskId: string
   payload: ActionTokenPayload
   expiresAt: Date
 }
@@ -48,25 +48,25 @@ export interface ActionTokenRecord {
  * Mint a fresh token. Caller passes a client so the token row commits
  * atomically with the projection that uses it.
  *
- * `interactionExpiresAt` is the interaction_requests.expires_at value
+ * `taskExpiresAt` is the tool_call_tasks.expires_at value
  * (which may be NULL). The token's expires_at is
- * min(interaction.expires_at OR now+24h, now+24h) — so the token can
- * never outlive the underlying interaction.
+ * min(task.expires_at OR now+24h, now+24h) — so the token can
+ * never outlive the underlying task.
  */
 export async function mintActionToken(
   executor: Executor,
   params: {
-    interactionRequestId: string
-    interactionExpiresAt: Date | string | null | undefined
+    taskId: string
+    taskExpiresAt: Date | string | null | undefined
     payload: ActionTokenPayload
   }
 ): Promise<ActionTokenRecord> {
   const token = uuidv4()
   const now = Date.now()
   const twentyFourHours = now + 24 * 60 * 60 * 1000
-  const interactionExpiresMs = parseTimestamp(params.interactionExpiresAt)
+  const taskExpiresMs = parseTimestamp(params.taskExpiresAt)
   const expiresAtMs = Math.min(
-    interactionExpiresMs ?? twentyFourHours,
+    taskExpiresMs ?? twentyFourHours,
     twentyFourHours
   )
   const expiresAt = new Date(expiresAtMs)
@@ -74,7 +74,7 @@ export async function mintActionToken(
     executor,
     db.insertInto("tool_call_task_action_tokens").values({
       token,
-      task_id: params.interactionRequestId,
+      task_id: params.taskId,
       payload: sql`${JSON.stringify(
         params.payload
       )}::jsonb` as unknown as TableInsert<"tool_call_task_action_tokens">["payload"],
@@ -83,7 +83,7 @@ export async function mintActionToken(
   )
   return {
     token,
-    interactionRequestId: params.interactionRequestId,
+    taskId: params.taskId,
     payload: params.payload,
     expiresAt,
   }
@@ -105,7 +105,7 @@ export async function lookupActionToken(
   if (expiresAt.getTime() < Date.now()) return null
   return {
     token: row.token,
-    interactionRequestId: row.task_id,
+    taskId: row.task_id,
     payload: (row.payload ?? {}) as unknown as ActionTokenPayload,
     expiresAt,
   }

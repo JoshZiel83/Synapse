@@ -12,22 +12,22 @@ import {
   checkRemoteAgentMessages,
   completeRemoteAgentDeliveries,
   createRemoteAgent,
-  createRemoteAgentPlanApprovalInteraction,
+  createRemoteAgentPlanApprovalTask,
   createRemoteAgentMachinePairingSession,
-  createRemoteAgentUserInputInteraction,
+  createRemoteAgentUserInputTask,
   deleteRemoteAgent,
   failRemoteAgentDeliveries,
   getMachineKeyFromHeaders,
   getRemoteAgent,
   getRemoteAgentConversationHistory,
   getRemoteAgentMachine,
-  listRemoteAgentGroupInteractionGrants,
+  listRemoteAgentGroupTaskGrants,
   listRemoteAgentConversations,
   listRemoteAgentMachines,
   listRemoteAgents,
   searchRemoteAgentMessages,
   sendRemoteAgentConversationMessage,
-  updateRemoteAgentGroupInteractionGrants,
+  updateRemoteAgentGroupTaskGrants,
   updateRemoteAgent,
 } from "./service.js"
 import { handleRemoteAgentMcpRequest } from "./mcp-endpoint.js"
@@ -66,7 +66,7 @@ const bindRemoteAgentSchema = z.object({
   localRootPath: z.string().trim().min(1).optional(),
 })
 
-const groupInteractionGrantsSchema = z.object({
+const groupTaskGrantsSchema = z.object({
   workspaceMemberIds: z.array(z.uuid()).max(200),
 })
 
@@ -103,7 +103,7 @@ const failDeliveriesSchema = z.object({
   reason: z.string().trim().max(2000).optional(),
 })
 
-const internalUserInputInteractionSchema = z.object({
+const internalUserInputTaskSchema = z.object({
   conversationId: z.uuid(),
   runKey: z.string().trim().min(1).max(255),
   title: z.string().trim().min(1).max(255),
@@ -112,7 +112,7 @@ const internalUserInputInteractionSchema = z.object({
   expiresAt: z.iso.datetime().optional(),
 })
 
-const internalPlanApprovalInteractionSchema = z.object({
+const internalPlanApprovalTaskSchema = z.object({
   conversationId: z.uuid(),
   runKey: z.string().trim().min(1).max(255),
   title: z.string().trim().min(1).max(255),
@@ -316,13 +316,13 @@ export default async function remoteAgentsController(app: FastifyInstance) {
   app.get<{
     Params: { workspaceId: string; remoteAgentId: string }
   }>(
-    "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-interaction-grants",
+    "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-task-grants",
     { preHandler: workspacePreHandler },
     async (request, reply) => {
       if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
       try {
         return reply.send(
-          await listRemoteAgentGroupInteractionGrants({
+          await listRemoteAgentGroupTaskGrants({
             workspaceId: request.params.workspaceId,
             remoteAgentId: request.params.remoteAgentId,
             userId: getRequestUserId(request),
@@ -338,14 +338,14 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     Params: { workspaceId: string; remoteAgentId: string }
     Body: unknown
   }>(
-    "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-interaction-grants",
+    "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-task-grants",
     { preHandler: workspacePreHandler },
     async (request, reply) => {
       if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
       try {
-        const body = groupInteractionGrantsSchema.parse(request.body)
+        const body = groupTaskGrantsSchema.parse(request.body)
         return reply.send(
-          await updateRemoteAgentGroupInteractionGrants({
+          await updateRemoteAgentGroupTaskGrants({
             workspaceId: request.params.workspaceId,
             remoteAgentId: request.params.remoteAgentId,
             userId: getRequestUserId(request),
@@ -437,12 +437,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       Params: { remoteAgentId: string }
       Body: unknown
     }>(
-      `${prefix}/remote-agents/:remoteAgentId/interactions/user-input`,
+      `${prefix}/remote-agents/:remoteAgentId/tasks/user-input`,
       async (request, reply) => {
         try {
-          const body = internalUserInputInteractionSchema.parse(request.body)
+          const body = internalUserInputTaskSchema.parse(request.body)
           return reply.send(
-            await createRemoteAgentUserInputInteraction({
+            await createRemoteAgentUserInputTask({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
               conversationId: body.conversationId,
@@ -463,12 +463,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       Params: { remoteAgentId: string }
       Body: unknown
     }>(
-      `${prefix}/remote-agents/:remoteAgentId/interactions/plan-approval`,
+      `${prefix}/remote-agents/:remoteAgentId/tasks/plan-approval`,
       async (request, reply) => {
         try {
-          const body = internalPlanApprovalInteractionSchema.parse(request.body)
+          const body = internalPlanApprovalTaskSchema.parse(request.body)
           return reply.send(
-            await createRemoteAgentPlanApprovalInteraction({
+            await createRemoteAgentPlanApprovalTask({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
               conversationId: body.conversationId,

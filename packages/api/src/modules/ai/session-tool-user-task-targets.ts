@@ -1,13 +1,13 @@
 import type { ConversationParticipantEntry } from "@synapse/shared/types"
 
-export type UserInteractionCandidate = {
+export type UserTaskTargetCandidate = {
   participantId: string
   workspaceMemberId: string
   name: string
   label: string
 }
 
-export type UserInteractionParticipantRow = {
+export type UserTaskTargetParticipantRow = {
   id: string
   participant_type: string
   state: "active" | "left" | "removed"
@@ -15,11 +15,11 @@ export type UserInteractionParticipantRow = {
   user_name: string | null
 }
 
-function createUserInteractionCandidate(params: {
+function createUserTaskTargetCandidate(params: {
   participantId: string
   workspaceMemberId: string
   name: string
-}): UserInteractionCandidate {
+}): UserTaskTargetCandidate {
   return {
     participantId: params.participantId,
     workspaceMemberId: params.workspaceMemberId,
@@ -28,10 +28,10 @@ function createUserInteractionCandidate(params: {
   }
 }
 
-export function buildUserInteractionCandidatesFromRows(
-  participants: UserInteractionParticipantRow[]
-): UserInteractionCandidate[] {
-  const candidates: UserInteractionCandidate[] = []
+export function buildUserTaskTargetCandidatesFromRows(
+  participants: UserTaskTargetParticipantRow[]
+): UserTaskTargetCandidate[] {
+  const candidates: UserTaskTargetCandidate[] = []
 
   for (const participant of participants) {
     if (participant.state !== "active") continue
@@ -40,7 +40,7 @@ export function buildUserInteractionCandidatesFromRows(
 
     const name = participant.user_name?.trim() || "User"
     candidates.push(
-      createUserInteractionCandidate({
+      createUserTaskTargetCandidate({
         participantId: participant.id,
         workspaceMemberId: participant.workspace_member_id,
         name,
@@ -51,10 +51,10 @@ export function buildUserInteractionCandidatesFromRows(
   return candidates
 }
 
-export function buildUserInteractionCandidatesFromEntries(
+export function buildUserTaskTargetCandidatesFromEntries(
   participants: ConversationParticipantEntry[]
-): UserInteractionCandidate[] {
-  const candidates: UserInteractionCandidate[] = []
+): UserTaskTargetCandidate[] {
+  const candidates: UserTaskTargetCandidate[] = []
 
   for (const participant of participants) {
     if (participant.participantType !== "workspace_member") continue
@@ -62,7 +62,7 @@ export function buildUserInteractionCandidatesFromEntries(
 
     const name = participant.name.trim() || "User"
     candidates.push(
-      createUserInteractionCandidate({
+      createUserTaskTargetCandidate({
         participantId: participant.participantId,
         workspaceMemberId: participant.id,
         name,

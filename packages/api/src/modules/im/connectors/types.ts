@@ -311,7 +311,7 @@ export function unwrapTypingAdapterResult(
  * Execution order contract (`service/accounts.ts` executor must
  * preserve): for any single transition, the executor first runs all
  * `reEnableAutoDisabledBindings` actions, then all
- * `recoverSkippedInteractionProjections` actions. Re-enabling a
+ * `recoverSkippedTaskProjections` actions. Re-enabling a
  * binding first is required because projection recovery would
  * otherwise immediately skip again on `outbound_disabled`.
  */
@@ -326,10 +326,10 @@ export type AccountRecoveryAction =
       reason: string
     }
   | {
-      type: "recoverSkippedInteractionProjections"
+      type: "recoverSkippedTaskProjections"
       /**
        * Account-level event kind that triggered recovery. Worker /
-       * recovery helper looks at `interaction_transport_projections`
+       * recovery helper looks at `tool_call_task_transport_projections`
        * rows where `error` matches a fixed set of reasons keyed off
        * this event.
        *
@@ -505,7 +505,7 @@ export interface TransportConnector {
   }): AccountRecoveryAction[]
 
   /**
-   * Called by the generic interaction-projection worker to gate
+   * Called by the generic task-projection worker to gate
    * whether an account is ready to receive interaction-prompt
    * projections right now. Capability eligibility
    * (`messageCapabilities.supportsInteractionPrompt`) is checked
@@ -513,11 +513,11 @@ export interface TransportConnector {
    * (e.g. QQ requires `webhookInboundConfirmed`).
    *
    * Return `{ ok: false, reason }` to skip the projection AND have
-   * the worker stamp `reason` on `interaction_transport_projections.error`,
+   * the worker stamp `reason` on `tool_call_task_transport_projections.error`,
    * so recovery code that matches on the stable reason string can
    * later re-arm the projection when the precondition flips.
    */
-  getInteractionProjectionReadiness?(
+  getTaskProjectionReadiness?(
     account: TransportAccountSummary
   ): { ok: true } | { ok: false; reason: string }
 }

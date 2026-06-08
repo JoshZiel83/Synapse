@@ -21,7 +21,7 @@ export const chatActorRuntimeParamsSchema = chatConversationParamsSchema.extend(
   }
 )
 
-export const chatInteractionParamsSchema = chatWorkspaceParamsSchema.extend({
+export const chatTaskParamsSchema = chatWorkspaceParamsSchema.extend({
   conversationId: chatUuidSchema,
   taskId: chatUuidSchema,
 })

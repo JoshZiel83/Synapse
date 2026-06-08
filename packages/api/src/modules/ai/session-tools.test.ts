@@ -1,12 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  buildUserInteractionCandidatesFromEntries,
-  buildUserInteractionCandidatesFromRows,
-} from "./session-tool-user-interactions.js"
+  buildUserTaskTargetCandidatesFromEntries,
+  buildUserTaskTargetCandidatesFromRows,
+} from "./session-tool-user-task-targets.js"
 
-test("buildUserInteractionCandidatesFromRows uses workspace_member_id for participant rows", () => {
-  const candidates = buildUserInteractionCandidatesFromRows([
+test("buildUserTaskTargetCandidatesFromRows uses workspace_member_id for participant rows", () => {
+  const candidates = buildUserTaskTargetCandidatesFromRows([
     {
       id: "participant-1",
       participant_type: "workspace_member",
@@ -33,8 +33,8 @@ test("buildUserInteractionCandidatesFromRows uses workspace_member_id for partic
   ])
 })
 
-test("buildUserInteractionCandidatesFromEntries supports tool context workspace_member entries", () => {
-  const candidates = buildUserInteractionCandidatesFromEntries([
+test("buildUserTaskTargetCandidatesFromEntries supports tool context workspace_member entries", () => {
+  const candidates = buildUserTaskTargetCandidatesFromEntries([
     {
       participantType: "workspace_member",
       id: "workspace-member-2",

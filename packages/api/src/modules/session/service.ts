@@ -86,8 +86,7 @@ function normalizeSessionRow(row: any) {
     isImConversation: Boolean(row.conversation_is_im),
     conversationTitle: row.conversation_title,
     collaborationMode: row.collaboration_mode || "default",
-    activePlanApprovalInteractionId:
-      row.active_plan_approval_interaction_id || undefined,
+    activePlanApprovalTaskId: row.active_plan_approval_task_id || undefined,
     collaborationState: parseSessionCollaborationState(
       parseJsonObject(row.collaboration_state)
     ),
@@ -325,7 +324,7 @@ export async function updateSessionCollaboration(
     sessionId: UUID
     collaborationMode?: SessionCollaborationMode
     collaborationState?: SessionCollaborationState
-    activePlanApprovalInteractionId?: UUID | null
+    activePlanApprovalTaskId?: UUID | null
   },
   queryable: Executor = db
 ): Promise<void> {
@@ -341,9 +340,9 @@ export async function updateSessionCollaboration(
       params.collaborationState
     ) as Record<string, unknown>
   }
-  if ("activePlanApprovalInteractionId" in params) {
-    values.active_plan_approval_interaction_id =
-      params.activePlanApprovalInteractionId ?? null
+  if ("activePlanApprovalTaskId" in params) {
+    values.active_plan_approval_task_id =
+      params.activePlanApprovalTaskId ?? null
   }
 
   await runBuilder(

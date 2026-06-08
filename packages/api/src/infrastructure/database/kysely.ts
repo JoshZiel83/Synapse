@@ -46,7 +46,7 @@ export type TableUpdate<T extends keyof Database> = Updateable<Database[T]>
  * `runBuilder`/`runCompilable` bridges expose. Kysely surfaces the affected-row
  * count for insert/update/delete as `numAffectedRows` (a bigint) and leaves it
  * undefined for selects; normalize it to `number | null` so consumers that
- * check `result.rowCount` (e.g. interactions update-then-verify helpers) behave
+ * check `result.rowCount` (e.g. task update-then-verify helpers) behave
  * correctly.
  */
 function toBridgeResult<T>(result: {

@@ -14,7 +14,7 @@ test("auto-retry helper is exported with the contract the approval flow expects"
   assert.equal(
     typeof mod.autoDispatchRuntimeAuthorizationRetry,
     "function",
-    "autoDispatchRuntimeAuthorizationRetry must exist so interactions/service can wire it"
+    "autoDispatchRuntimeAuthorizationRetry must exist so tasks/service can wire it"
   )
 })
 
@@ -65,10 +65,10 @@ test("cuaFocusScopeForAutoRetry returns undefined when sessionId missing — fai
 test("end-to-end wiring: grant record's sourceRuntimeSessionId drives cua_focus_scope_id", () => {
   // Production round-trip:
   //   1. projection writes runtimeSessionId = projectInput.sessionId
-  //      → interaction_runtime_authorization_requests.source_runtime_session_id
+  //      → tool_call_task_runtime_authorization.source_runtime_session_id
   //   2. approval applies it to the new grant
   //      → runtime_authorization_grants.source_runtime_session_id
-  //   3. interactions/service.ts passes grant.sourceRuntimeSessionId as
+  //   3. tasks/service.ts passes grant.sourceRuntimeSessionId as
   //      audit.initiatedBySessionId into autoDispatchRuntimeAuthorizationRetry
   //   4. auto-retry calls cuaFocusScopeForAutoRetry → session:<id>
   //

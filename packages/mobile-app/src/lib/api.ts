@@ -1,7 +1,4 @@
-import {
-  FILE_ORIGIN_SYSTEMS,
-  isChatInteractionResolveConflictResponse,
-} from "@shared"
+import { FILE_ORIGIN_SYSTEMS, isChatTaskResolveConflictResponse } from "@shared"
 import type {
   ActorRuntimeTurnActivityDetail,
   CanonicalContentBlock,
@@ -17,9 +14,9 @@ import type {
   ChatConversationReadWatermarkResponse,
   ChatConversationSendMessageInput,
   ChatConversationSendMessageResponse,
-  ChatInteractionResolveInput,
-  ChatInteractionResolvePayload,
-  ChatInteractionResolveResponse,
+  ChatTaskResolveInput,
+  ChatTaskResolvePayload,
+  ChatTaskResolveResponse,
   ChatSyncResponse,
   TaskSummary,
 } from "@shared"
@@ -50,9 +47,9 @@ let unauthorizedHandler: (() => void | Promise<void>) | null = null
 let unauthorizedHandlerPending = false
 
 export type {
-  ChatInteractionResolveInput,
-  ChatInteractionResolvePayload,
-  ChatInteractionResolveResponse,
+  ChatTaskResolveInput,
+  ChatTaskResolvePayload,
+  ChatTaskResolveResponse,
 }
 export class ApiError extends Error {
   status: number
@@ -521,14 +518,14 @@ class ApiClient {
     )
   }
 
-  resolveChatInteraction(
+  resolveChatTask(
     workspaceId: string,
     conversationId: string,
-    interactionId: string,
-    input: ChatInteractionResolveInput
-  ): Promise<ChatInteractionResolveResponse> {
-    return this.request<ChatInteractionResolveResponse>(
-      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/tasks/${interactionId}/respond`,
+    taskId: string,
+    input: ChatTaskResolveInput
+  ): Promise<ChatTaskResolveResponse> {
+    return this.request<ChatTaskResolveResponse>(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/tasks/${taskId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(input),
@@ -537,7 +534,7 @@ class ApiClient {
       if (
         error instanceof ApiError &&
         error.status === 409 &&
-        isChatInteractionResolveConflictResponse(error.details)
+        isChatTaskResolveConflictResponse(error.details)
       ) {
         return error.details
       }

@@ -1513,7 +1513,7 @@ export interface FileAccessGrants {
   revoked_at: Timestamp | null;
   scope_subject_id: string | null;
   source: string | null;
-  source_interaction_id: string | null;
+  source_task_id: string | null;
   status: Generated<FileAccessGrantsStatus>;
   subject_id: string;
   superseded_at: Timestamp | null;
@@ -1531,7 +1531,7 @@ export interface FileAccessGrantsLive {
   revoked_at: Timestamp | null;
   scope_subject_id: string | null;
   source: string | null;
-  source_interaction_id: string | null;
+  source_task_id: string | null;
   status: FileAccessGrantsStatus | null;
   subject_id: string | null;
   superseded_at: Timestamp | null;
@@ -1709,7 +1709,7 @@ export interface MemoryAccessGrants {
   revoked_at: Timestamp | null;
   scope_subject_id: string | null;
   source: string | null;
-  source_interaction_id: string | null;
+  source_task_id: string | null;
   status: Generated<MemoryAccessGrantsStatus>;
   subject_id: string;
   superseded_at: Timestamp | null;
@@ -1727,7 +1727,7 @@ export interface MemoryAccessGrantsLive {
   revoked_at: Timestamp | null;
   scope_subject_id: string | null;
   source: string | null;
-  source_interaction_id: string | null;
+  source_task_id: string | null;
   status: MemoryAccessGrantsStatus | null;
   subject_id: string | null;
   superseded_at: Timestamp | null;
@@ -2244,8 +2244,8 @@ export interface RemoteAgentBindings {
 }
 
 export interface RemoteAgentConversationContexts {
-  active_interaction_id: string | null;
-  active_plan_approval_interaction_id: string | null;
+  active_plan_approval_task_id: string | null;
+  active_task_id: string | null;
   collaboration_mode: Generated<string>;
   collaboration_state: Generated<Json>;
   conversation_id: string;
@@ -2275,7 +2275,7 @@ export interface RemoteAgentConversationViews {
   updated_at: Generated<Timestamp>;
 }
 
-export interface RemoteAgentGroupInteractionGrants {
+export interface RemoteAgentGroupTaskGrants {
   created_at: Generated<Timestamp | null>;
   granted_by_workspace_member_id: string | null;
   remote_agent_id: string;
@@ -2347,13 +2347,13 @@ export interface RemoteAgentRuns {
   created_at: Generated<Timestamp | null>;
   ended_at: Timestamp | null;
   id: Generated<string>;
-  interaction_id: string | null;
   last_error: string | null;
   remote_agent_id: string;
   run_key: string;
   started_at: Timestamp | null;
   status: Generated<RemoteAgentRunsStatus>;
   status_text: string | null;
+  task_id: string | null;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -2547,7 +2547,7 @@ export interface SessionInterrupts {
 }
 
 export interface Sessions {
-  active_plan_approval_interaction_id: string | null;
+  active_plan_approval_task_id: string | null;
   actor_id: string;
   collaboration_mode: Generated<SessionsCollaborationMode>;
   collaboration_state: Generated<Json>;
@@ -3280,7 +3280,7 @@ export interface DB {
   remote_agent_bindings: RemoteAgentBindings;
   remote_agent_conversation_contexts: RemoteAgentConversationContexts;
   remote_agent_conversation_views: RemoteAgentConversationViews;
-  remote_agent_group_interaction_grants: RemoteAgentGroupInteractionGrants;
+  remote_agent_group_task_grants: RemoteAgentGroupTaskGrants;
   remote_agent_machine_sessions: RemoteAgentMachineSessions;
   remote_agent_machines: RemoteAgentMachines;
   remote_agent_machines_live: RemoteAgentMachinesLive;

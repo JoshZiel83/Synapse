@@ -5,7 +5,7 @@
 // and is the only path to seed a grant out-of-band of the chat approval
 // flow — required so the active-page browser tools (current_page /
 // page_id / all_pages) become usable on first run (those tools produce
-// `grantOptions:[]` interactions, which can't be one-click approved).
+// `grantOptions:[]` tasks, which can't be one-click approved).
 //
 // Non-workspace scopes (actor/conversation/scoped actor/
 // remote_agent/once) are intentionally rejected: those scopes require a

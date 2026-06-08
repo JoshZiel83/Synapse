@@ -73,19 +73,19 @@ export type CanonicalPart =
     }
   | {
       /**
-       * Server-side projection of an `interaction_requests` row into a
-       * conversation. Carries the interaction id + a set of action
+       * Server-side projection of a `tool_call_tasks` row into a
+       * conversation. Carries the task id + a set of action
        * tokens that the receiving connector renders as a native control
        * (e.g. QQ Inline Keyboard buttons). The token is opaque to the
        * connector and is redeemed at click time via
        * `redeemActionToken(...)` to recover the full
-       * ResolveInteractionRequestParams payload.
+       * ResolveTaskRequestParams payload.
        *
        * `fallbackText` is mandatory and rendered verbatim by connectors
        * that don't support `supportsInteractionPrompt`.
        */
       type: "interaction_prompt"
-      interactionRequestId: string
+      taskId: string
       title?: string
       fallbackText: string
       options: Array<{
@@ -298,12 +298,9 @@ function parsePart(input: unknown): CanonicalPart | null {
       }
     }
     case "interaction_prompt": {
-      const interactionRequestId =
-        typeof raw.interactionRequestId === "string" &&
-        raw.interactionRequestId.trim()
-          ? raw.interactionRequestId
-          : ""
-      if (!interactionRequestId) {
+      const taskId =
+        typeof raw.taskId === "string" && raw.taskId.trim() ? raw.taskId : ""
+      if (!taskId) {
         // No anchor — degrade to system_marker so it survives roundtrip
         // but can never be acted on.
         return {
@@ -352,7 +349,7 @@ function parsePart(input: unknown): CanonicalPart | null {
       }
       const part: CanonicalPart & { type: "interaction_prompt" } = {
         type: "interaction_prompt",
-        interactionRequestId,
+        taskId,
         fallbackText,
         options,
       }

@@ -3,7 +3,7 @@ import { ZodError, z } from "zod"
 import {
   CHAT_TYPING_STATES,
   CONVERSATION_KINDS,
-  INTERACTION_DECISIONS,
+  TASK_DECISIONS,
   PLAN_APPROVAL_DECISIONS,
   PUSH_TOKEN_PLATFORMS,
   RUNTIME_AUTHORIZATION_PRESETS,
@@ -15,7 +15,7 @@ import {
   chatActorRuntimeParamsSchema,
   chatClientInstanceParamsSchema,
   chatConversationParamsSchema,
-  chatInteractionParamsSchema,
+  chatTaskParamsSchema,
   chatWorkspaceParamsSchema,
   chatUuidSchema,
 } from "./request-schemas.js"
@@ -44,11 +44,11 @@ import {
   retryAssistantMessage,
 } from "./service.js"
 import {
-  canUserViewInteraction,
-  enrichInteractionForUser,
+  canUserViewTask,
+  enrichTaskForUser,
   getTaskSummary,
-  resolveInteractionRequest,
-} from "../interactions/service.js"
+  resolveTaskRequest,
+} from "../tasks/service.js"
 import { getChatDedupCountersSnapshot } from "./observability.js"
 import { gcRealtimeEventOutbox } from "../../infrastructure/events/index.js"
 import { isPlatformSuperAdmin } from "../platform/admin-service.js"
@@ -162,55 +162,53 @@ const readWatermarkSchema = z.object({
   clientInstanceId: chatUuidSchema,
 })
 
-const interactionAnswerSchema = z.object({
+const taskAnswerSchema = z.object({
   questionId: z.string().trim().min(1),
   selectedOptionIds: z.array(z.string().trim().min(1)).optional(),
   otherText: z.string().trim().optional(),
   text: z.string().trim().optional(),
 })
 
-const resolveInteractionCommandSchema = z.object({
+const resolveTaskCommandSchema = z.object({
   commandId: chatUuidSchema,
   baseRevision: z.number().int().min(1),
 })
 
-const resolveInteractionUserInputSchema = resolveInteractionCommandSchema
+const resolveTaskUserInputSchema = resolveTaskCommandSchema
   .extend({
-    answers: z.array(interactionAnswerSchema).min(1),
+    answers: z.array(taskAnswerSchema).min(1),
     note: z.string().trim().optional(),
   })
   .strict()
 
-const resolveInteractionPlanApprovalSchema = resolveInteractionCommandSchema
+const resolveTaskPlanApprovalSchema = resolveTaskCommandSchema
   .extend({
     decision: z.enum(PLAN_APPROVAL_DECISIONS),
     note: z.string().trim().optional(),
   })
   .strict()
 
-const resolveInteractionRuntimeAuthorizationApproveSchema =
-  resolveInteractionCommandSchema
-    .extend({
-      decision: z.literal(INTERACTION_DECISIONS[0]),
-      preset: z.enum(RUNTIME_AUTHORIZATION_PRESETS),
-      selectedGrantOptionId: z.string().trim().min(1),
-      note: z.string().trim().optional(),
-    })
-    .strict()
+const resolveTaskRuntimeAuthorizationApproveSchema = resolveTaskCommandSchema
+  .extend({
+    decision: z.literal(TASK_DECISIONS[0]),
+    preset: z.enum(RUNTIME_AUTHORIZATION_PRESETS),
+    selectedGrantOptionId: z.string().trim().min(1),
+    note: z.string().trim().optional(),
+  })
+  .strict()
 
-const resolveInteractionRuntimeAuthorizationRejectSchema =
-  resolveInteractionCommandSchema
-    .extend({
-      decision: z.literal(INTERACTION_DECISIONS[1]),
-      note: z.string().trim().optional(),
-    })
-    .strict()
+const resolveTaskRuntimeAuthorizationRejectSchema = resolveTaskCommandSchema
+  .extend({
+    decision: z.literal(TASK_DECISIONS[1]),
+    note: z.string().trim().optional(),
+  })
+  .strict()
 
-const resolveInteractionSchema = z.union([
-  resolveInteractionUserInputSchema,
-  resolveInteractionPlanApprovalSchema,
-  resolveInteractionRuntimeAuthorizationApproveSchema,
-  resolveInteractionRuntimeAuthorizationRejectSchema,
+const resolveTaskSchema = z.union([
+  resolveTaskUserInputSchema,
+  resolveTaskPlanApprovalSchema,
+  resolveTaskRuntimeAuthorizationApproveSchema,
+  resolveTaskRuntimeAuthorizationRejectSchema,
 ])
 
 function getRequestUserId(request: any) {
@@ -520,8 +518,8 @@ export default async function chatController(app: FastifyInstance) {
     `${CHAT_BASE_PATH}/conversations/:conversationId/tasks/:taskId/respond`,
     async (request, reply) => {
       try {
-        const params = chatInteractionParamsSchema.parse(request.params)
-        const body = resolveInteractionSchema.parse(request.body)
+        const params = chatTaskParamsSchema.parse(request.params)
+        const body = resolveTaskSchema.parse(request.body)
         const workspaceMemberId = await resolveRequestWorkspaceMemberId(
           params.workspaceId,
           request,
@@ -529,26 +527,26 @@ export default async function chatController(app: FastifyInstance) {
         )
         if (!workspaceMemberId) return
 
-        const interaction = await getTaskSummary(params.taskId)
+        const task = await getTaskSummary(params.taskId)
         if (
-          !interaction ||
-          interaction.workspaceId !== params.workspaceId ||
-          interaction.conversationId !== params.conversationId
+          !task ||
+          task.workspaceId !== params.workspaceId ||
+          task.conversationId !== params.conversationId
         ) {
           return reply.status(404).send({
-            error: "Interaction not found",
-            code: "interaction_not_found",
+            error: "Task not found",
+            code: "task_not_found",
           })
         }
 
-        const canView = await canUserViewInteraction({
-          interactionId: interaction.id,
+        const canView = await canUserViewTask({
+          taskId: task.id,
           userId: getRequestUserId(request),
         })
         if (!canView) {
           return reply.status(403).send({
-            error: "You cannot access this interaction",
-            code: "interaction_access_denied",
+            error: "You cannot access this task",
+            code: "task_access_denied",
           })
         }
 
@@ -559,13 +557,13 @@ export default async function chatController(app: FastifyInstance) {
         if (!resolverParticipant?.id) {
           return reply.status(403).send({
             error: "You are not an active participant in this conversation",
-            code: "interaction_resolver_not_participant",
+            code: "task_resolver_not_participant",
           })
         }
 
         try {
           const resolveParamsBase = {
-            interactionId: interaction.id,
+            taskId: task.id,
             resolverWorkspaceMemberId: workspaceMemberId,
             resolverParticipantId: resolverParticipant.id,
             commandId: body.commandId,
@@ -578,7 +576,7 @@ export default async function chatController(app: FastifyInstance) {
                   answers: body.answers,
                   note: body.note,
                 }
-              : body.decision === INTERACTION_DECISIONS[1]
+              : body.decision === TASK_DECISIONS[1]
                 ? {
                     ...resolveParamsBase,
                     decision: body.decision,
@@ -598,32 +596,29 @@ export default async function chatController(app: FastifyInstance) {
                       note: body.note,
                     }
 
-          const result = await resolveInteractionRequest(resolveParams)
-          const interactionForViewer = await enrichInteractionForUser(
-            result.interaction,
+          const result = await resolveTaskRequest(resolveParams)
+          const taskForViewer = await enrichTaskForUser(
+            result.task,
             getRequestUserId(request)
           )
           if (result.outcome === "conflict") {
             return reply.status(409).send({
-              error:
-                "Interaction state changed before this submission was applied",
-              code: "interaction_conflict",
+              error: "Task state changed before this submission was applied",
+              code: "task_conflict",
               outcome: result.outcome,
-              interaction: interactionForViewer,
+              task: taskForViewer,
             })
           }
           return reply.send({
             outcome: result.outcome,
-            interaction: interactionForViewer,
+            task: taskForViewer,
           })
         } catch (error) {
           const message =
-            error instanceof Error
-              ? error.message
-              : "Failed to resolve interaction"
+            error instanceof Error ? error.message : "Failed to resolve task"
           return reply.status(400).send({
             error: message,
-            code: "interaction_resolution_failed",
+            code: "task_resolution_failed",
           })
         }
       } catch (error) {

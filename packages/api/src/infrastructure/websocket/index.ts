@@ -16,7 +16,7 @@ import {
 } from "../../modules/auth/service.js"
 import { getConversationParticipant } from "../../modules/chat/service.js"
 import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js"
-import { enrichInteractionForUser } from "../../modules/interactions/service.js"
+import { enrichTaskForUser } from "../../modules/tasks/service.js"
 import {
   initAuthSessionRegistry,
   registerAuthenticatedSocket,
@@ -127,13 +127,13 @@ async function enrichChatSyncSocketEventForViewer(
     >
     const itemPayload =
       eventItem.eventPayload as ConversationFeedEventPayloadMap["task_requested"]
-    const interaction =
+    const task =
       itemPayload && typeof itemPayload === "object" && "task" in itemPayload
         ? (itemPayload as ConversationFeedEventPayloadMap["task_requested"])
             .task
         : undefined
 
-    if (!interaction) {
+    if (!task) {
       return payload
     }
 
@@ -145,7 +145,7 @@ async function enrichChatSyncSocketEventForViewer(
           ...eventItem,
           eventPayload: {
             ...itemPayload,
-            task: await enrichInteractionForUser(interaction, viewerUserId),
+            task: await enrichTaskForUser(task, viewerUserId),
           },
         },
       },
@@ -160,7 +160,7 @@ async function enrichChatSyncSocketEventForViewer(
     ...payload,
     payload: {
       ...(payload.payload as ChatSyncEventPayloadMap["task.updated"]),
-      task: await enrichInteractionForUser(
+      task: await enrichTaskForUser(
         (payload.payload as ChatSyncEventPayloadMap["task.updated"]).task,
         viewerUserId
       ),

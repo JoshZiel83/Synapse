@@ -4,7 +4,7 @@ import { sql } from "kysely"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { insertToolCallTaskDeduped } from "./service.js"
-import { writeRuntimeAuthorizationTaskDetailInTx } from "../interactions/service.js"
+import { writeRuntimeAuthorizationTaskDetailInTx } from "../tasks/service.js"
 
 /**
  * Regression coverage for the unified-task create path — the gap that let the

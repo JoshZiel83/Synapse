@@ -692,7 +692,7 @@ async function updateToolCallTaskRecord(
   // Terminal guard as a SQL predicate: only mutate a task that is NOT already
   // terminal. Zero rows back = idempotent no-op (concurrent resolve / cancel /
   // TTL sweep already finished it). This is what makes terminalization safe to
-  // retry now that the interaction and the task are the same row.
+  // retry after the task has already reached a terminal lifecycle.
   let update = db
     .updateTable("tool_call_tasks")
     .set({
@@ -879,7 +879,7 @@ async function emitTaskNotice(
  * Delivery-only core (no status flip): emits the agent-facing notice + wakeup
  * (session_wakeup) or the machine-WS push (remote_agent_channel). Used both by
  * emitTaskNotice (after its in-function flip) and by deliverResolvedToolCallTask
- * (where the interactions resolve tx already flipped the lifecycle in-tx).
+ * (where the task resolve tx already flipped the lifecycle in-tx).
  */
 async function deliverTaskNotice(
   record: ToolCallTaskRecord,
@@ -1048,7 +1048,7 @@ async function deliverTaskNotice(
 
 /**
  * Deliver a task whose terminal lifecycle/outcome were ALREADY set in the
- * caller's transaction (the interactions resolve flow flips in-tx so its
+ * caller's transaction (the task resolve flow flips in-tx so its
  * broadcast/HTTP view is correct). Optionally writes a post-commit result
  * payload (e.g. runtime-auth auto-retry output) via an unguarded update, then
  * fires the notice + wakeup/push. Idempotent-safe: if the task is somehow no

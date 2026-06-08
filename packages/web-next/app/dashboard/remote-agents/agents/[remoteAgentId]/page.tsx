@@ -15,7 +15,7 @@ import { ArrowLeft, Bot, RefreshCcw, Shield, Trash2 } from "lucide-react"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import type {
   RelationshipProfileView,
-  RemoteAgentGroupInteractionGrantView,
+  RemoteAgentGroupTaskGrantView,
   RemoteAgentMachineView,
   RemoteAgentRuntimeSummaryView,
   RemoteAgentView,
@@ -162,7 +162,7 @@ export default function RemoteAgentDetailPage() {
   const [machines, setMachines] = useState<RemoteAgentMachineView[]>([])
   const [profile, setProfile] = useState<RelationshipProfileView | null>(null)
   const [groupGrants, setGroupGrants] = useState<
-    RemoteAgentGroupInteractionGrantView[]
+    RemoteAgentGroupTaskGrantView[]
   >([])
   const [workspaceMembers, setWorkspaceMembers] = useState<
     WorkspaceMemberDirectoryEntry[]
@@ -232,7 +232,7 @@ export default function RemoteAgentDetailPage() {
         api.getRemoteAgent(workspaceId, remoteAgentId),
         api.getRemoteAgentMachines(workspaceId),
         api.getRemoteAgentRelationshipProfile(workspaceId, remoteAgentId),
-        api.getRemoteAgentGroupInteractionGrants(workspaceId, remoteAgentId),
+        api.getRemoteAgentGroupTaskGrants(workspaceId, remoteAgentId),
         api.getWorkspaceMembers(workspaceId),
       ])
       setAgent(agentResponse.remoteAgent)
@@ -493,7 +493,7 @@ export default function RemoteAgentDetailPage() {
     if (!workspaceId || !remoteAgentId) return
     setSavingGrants(true)
     try {
-      const result = await api.updateRemoteAgentGroupInteractionGrants(
+      const result = await api.updateRemoteAgentGroupTaskGrants(
         workspaceId,
         remoteAgentId,
         {
@@ -502,7 +502,7 @@ export default function RemoteAgentDetailPage() {
       )
       setGroupGrants(result.grants)
       setSelectedGrantIds(result.grants.map((grant) => grant.workspaceMemberId))
-      toast.success("Group interaction access updated")
+      toast.success("Group task access updated")
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to update group access"
@@ -907,7 +907,7 @@ export default function RemoteAgentDetailPage() {
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <CardTitle>Group interaction access</CardTitle>
+              <CardTitle>Group task access</CardTitle>
               <CardDescription>
                 Question and plan approval cards stay visible to the full group,
                 but only selected workspace members can resolve them.

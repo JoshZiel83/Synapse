@@ -13,8 +13,8 @@
  * an external interaction event (e.g. a QQ INTERACTION_CREATE button
  * click). The derivation is
  *   `uuidv5(<transport-event-id>:<action-token>:<clicker-external-id>, this)`
- * so a replayed click → same commandId → resolveInteractionRequest's
- * (interaction_id, command_id) idempotence cell short-circuits the
+ * so a replayed click → same commandId → resolveTaskRequest's
+ * (task_id, command_id) idempotence cell short-circuits the
  * second attempt to the cached result.
  */
 export const SYNAPSE_INTERACTION_NAMESPACE =

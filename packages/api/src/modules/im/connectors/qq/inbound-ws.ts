@@ -452,7 +452,7 @@ async function routeBusinessDispatch(
       }
       // Stage 8: durable resolve then ACK. handleQqInteractionCreate
       // owns the full flow (button parse → token lookup → workspace
-      // member resolution → resolveInteractionRequest → PUT ACK).
+      // member resolution → resolveTaskRequest → PUT ACK).
       await handleQqInteractionCreate({
         account: opts.account,
         data: d,

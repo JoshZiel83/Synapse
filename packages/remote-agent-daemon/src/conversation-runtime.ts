@@ -253,7 +253,7 @@ export class ConversationRuntime {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         // A callback throw is a real failure for the current turn — the
-        // server / interaction endpoint refused our event, the IM tool path
+        // server / task endpoint refused our event, the IM tool path
         // blew up, etc. Mark the turn as errored so the trailing
         // turn_completed doesn't classify it as clean and clear last_error.
         this.errorInCurrentTurn = true
