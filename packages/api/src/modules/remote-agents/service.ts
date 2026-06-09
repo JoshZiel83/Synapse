@@ -1939,25 +1939,7 @@ export async function deleteRemoteAgent(params: {
   userId: string
 }) {
   await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
-  // Soft delete (design §7.4): flip deleted_at instead of hard-deleting. The
-  // remote agent's access_subjects row stays (immutable registry, §5). Hard
-  // delete is forbidden by the sd_reject_delete trigger.
-  await db
-    .updateTable("remote_agents")
-    .set({ deleted_at: new Date() })
-    .where("id", "=", params.remoteAgentId)
-    .where("deleted_at", "is", null)
-    .where((eb) =>
-      eb.exists(
-        db
-          .selectFrom("workspace_apps as app")
-          .select("app.id")
-          .where("app.id", "=", params.remoteAgentId)
-          .where("app.workspace_id", "=", params.workspaceId)
-          .where("app.deleted_at", "is", null)
-      )
-    )
-    .execute()
+  // Root lifecycle lives on workspace_apps. The detail row stays until purge.
   await updateWorkspaceAppRoot(db, {
     id: params.remoteAgentId,
     status: "archived",

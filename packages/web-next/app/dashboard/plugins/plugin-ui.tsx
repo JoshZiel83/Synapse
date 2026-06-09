@@ -52,18 +52,9 @@ export const transportLabels: Record<string, string> = {
 }
 
 type PluginInstallationSummaryShape = {
-  attachment_scope?: {
-    type?: string | null
-  } | null
+  ownerWorkspaceMemberId?: string | null
   lifecycle_scope?: string | null
   is_enabled?: boolean | null
-}
-
-const ownershipSummaryByAttachmentScopeType: Record<string, string> = {
-  workspace: "Owned by this workspace",
-  conversation: "Owned by one conversation",
-  actor: "Owned by one actor",
-  workspace_member: "Owned by one workspace user",
 }
 
 const lifecycleSummaryByScope: Record<string, string> = {
@@ -75,31 +66,17 @@ const lifecycleSummaryByScope: Record<string, string> = {
 }
 
 export function getPluginInstallationTitle(
-  installation: PluginInstallationSummaryShape
+  _installation: PluginInstallationSummaryShape
 ) {
-  const attachmentScopeType = installation.attachment_scope?.type
-  if (attachmentScopeType === "workspace") {
-    return "Workspace configuration"
-  }
-  if (attachmentScopeType === "conversation") {
-    return "Conversation configuration"
-  }
-  if (attachmentScopeType === "actor") {
-    return "Actor configuration"
-  }
-  if (attachmentScopeType === "workspace_member") {
-    return "Workspace user configuration"
-  }
-  return `${attachmentScopeLabels[attachmentScopeType || ""] || attachmentScopeType || "Plugin"} configuration`
+  return "Plugin configuration"
 }
 
 export function getPluginInstallationDetails(
   installation: PluginInstallationSummaryShape
 ) {
-  const attachmentScopeType = installation.attachment_scope?.type || ""
-  const ownershipSummary =
-    ownershipSummaryByAttachmentScopeType[attachmentScopeType] ||
-    `Owned by ${attachmentScopeLabels[attachmentScopeType] || attachmentScopeType || "this scope"}`
+  const ownershipSummary = installation.ownerWorkspaceMemberId
+    ? "Owned by one workspace member"
+    : "Owned by the workspace"
   const lifecycleSummary =
     lifecycleSummaryByScope[installation.lifecycle_scope || ""] ||
     `reuse: ${installation.lifecycle_scope || "turn"}`

@@ -19,7 +19,6 @@ import {
   workspaceRef,
 } from "@synapse/shared"
 import type {
-  PluginAttachmentScope,
   PluginAttachmentScopeType,
   CapabilityAccessTarget,
   WorkspaceAppGrant,
@@ -76,54 +75,6 @@ import {
   revokeWorkspaceAppGrantsForApp,
 } from "../workspace-apps/grant-storage.js"
 import {} from "../access/binding-storage.js"
-import {
-  upsertAccessSubject,
-  upsertAccessSubjectOn,
-} from "../access/subject-registry.js"
-import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
-
-/**
- * P1b: translate a plugin attachment target (workspace / conversation / actor
- * / workspace_member) into a SubjectRef. Used by INSERT/UPDATE on
- * plugin_installations to populate `attachment_scope_subject_id`.
- */
-function buildPluginAttachmentSubjectRef(input: {
-  workspaceId: string
-  scope: "workspace" | "conversation" | "actor" | "workspace_member"
-  conversationId?: string | null
-  actorId?: string | null
-  workspaceMemberId?: string | null
-}): SubjectRef {
-  switch (input.scope) {
-    case "workspace":
-      return { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspaceId }
-    case "conversation":
-      if (!input.conversationId) {
-        throw new Error(
-          "conversationId required for conversation attachment scope"
-        )
-      }
-      return {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: input.conversationId,
-      }
-    case "actor":
-      if (!input.actorId) {
-        throw new Error("actorId required for actor attachment scope")
-      }
-      return { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId }
-    case "workspace_member":
-      if (!input.workspaceMemberId) {
-        throw new Error(
-          "workspaceMemberId required for workspace_member attachment scope"
-        )
-      }
-      return {
-        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: input.workspaceMemberId,
-      }
-  }
-}
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
@@ -847,64 +798,6 @@ function mergeConfigForUpdate(
   return merged
 }
 
-function normalizePluginAttachmentScope(input: {
-  attachmentScope: PluginAttachmentScope
-}) {
-  switch (input.attachmentScope.type) {
-    case "workspace":
-      return {
-        attachmentScope: "workspace" as const,
-        actorId: null,
-        conversationId: null,
-        workspaceMemberId: null,
-      }
-    case "conversation":
-      if (!input.attachmentScope.conversationId) {
-        throw new McpPluginError(
-          400,
-          "conversationId is required for conversation attachment"
-        )
-      }
-      return {
-        attachmentScope: "conversation" as const,
-        actorId: null,
-        conversationId: input.attachmentScope.conversationId,
-        workspaceMemberId: null,
-      }
-    case "actor":
-      if (!input.attachmentScope.actorId) {
-        throw new McpPluginError(
-          400,
-          "actorId is required for actor attachment"
-        )
-      }
-      return {
-        attachmentScope: "actor" as const,
-        actorId: input.attachmentScope.actorId,
-        conversationId: null,
-        workspaceMemberId: null,
-      }
-    case "workspace_member":
-      if (!input.attachmentScope.workspaceMemberId) {
-        throw new McpPluginError(
-          400,
-          "workspaceMemberId is required for workspace_member attachment"
-        )
-      }
-      return {
-        attachmentScope: "workspace_member" as const,
-        actorId: null,
-        conversationId: null,
-        workspaceMemberId: input.attachmentScope.workspaceMemberId,
-      }
-    default:
-      throw new McpPluginError(
-        400,
-        `Unsupported attachment type: ${String(input.attachmentScope.type)}`
-      )
-  }
-}
-
 /**
  * D3: collapse a stored InstallationAccessRow back into the canonical
  * ScopedSubjectTarget shape, for handing off to policy / write helpers.
@@ -1073,9 +966,9 @@ async function loadInstallationRows(
         installation.catalog_item_id,
         installation.catalog_version_id,
         app.display_name AS root_display_name,
-        -- P1b: derive the legacy attachment_scope_type + subject_*_id fields
-        -- from the joined access_subjects row. attachment_scope_type maps
-        -- subject_kind: workspace/conversation/actor/workspace_member 1:1.
+        -- Optional legacy placement hint. New installs no longer require
+        -- attachment scope, but older/admin records may still project one from
+        -- attachment_scope_subject_id when present.
         attachment_subj.kind AS attachment_scope_type,
         attachment_subj.conversation_id AS attachment_conversation_id,
         attachment_subj.actor_id AS attachment_actor_id,
@@ -1097,7 +990,7 @@ async function loadInstallationRows(
       FROM plugin_installations installation
       INNER JOIN workspace_apps app
         ON app.id = installation.id
-      INNER JOIN access_subjects attachment_subj
+      LEFT JOIN access_subjects attachment_subj
         ON attachment_subj.id = installation.attachment_scope_subject_id
       LEFT JOIN plugin_source_refs source_ref
         ON source_ref.installation_id = installation.id
@@ -1108,9 +1001,9 @@ async function loadInstallationRows(
   )
 
   return result.rows.filter((row) => {
-    const attachmentScopeType = publicAttachmentScope(
-      row.attachment_scope_type || "workspace"
-    )
+    const attachmentScopeType = row.attachment_scope_type
+      ? publicAttachmentScope(row.attachment_scope_type)
+      : null
     if (
       filters?.attachmentScopeType &&
       attachmentScopeType !== filters.attachmentScopeType
@@ -1188,8 +1081,6 @@ function buildPluginGrantPlan(input: {
     requiredPermissions: string[]
     reason?: string
   }
-  attachmentScope: PluginAttachmentScope
-  workspaceId: string
 }) {
   const requiredPermissions = input.authorization.requiredPermissions || []
   if (requiredPermissions.length === 0) {
@@ -1222,28 +1113,6 @@ function suggestedAccessTargetType(
     return "remote_agent_conversation"
   }
   return subjectScopeLabel(target) as RuntimeBindingScope
-}
-
-function defaultAccessTargetForAttachment(
-  attachmentScope: PluginAttachmentScope,
-  workspaceId: string
-): CapabilityAccessTarget {
-  switch (attachmentScope.type) {
-    case "workspace":
-      return { subject: workspaceRef(workspaceId) }
-    case "conversation":
-      if (!attachmentScope.conversationId) {
-        return { subject: workspaceRef(workspaceId) }
-      }
-      return { subject: conversationRef(attachmentScope.conversationId) }
-    case "actor":
-      if (!attachmentScope.actorId) {
-        return { subject: workspaceRef(workspaceId) }
-      }
-      return { subject: actorRef(attachmentScope.actorId) }
-    case "workspace_member":
-      return { subject: workspaceRef(workspaceId) }
-  }
 }
 
 function mapAccessRowToGrant(
@@ -1303,23 +1172,10 @@ function buildInstallationPayload(
     plugin.auth_bindings || []
   )
 
-  const attachmentScope: PluginAttachmentScope = {
-    type: publicAttachmentScope(row.attachment_scope_type),
-    actorId: row.attachment_actor_id || undefined,
-    conversationId: row.attachment_conversation_id || undefined,
-    workspaceMemberId: row.attachment_workspace_member_id || undefined,
-  }
-  const accessTarget = defaultAccessTargetForAttachment(
-    attachmentScope,
-    row.root_workspace_id
-  )
-
   return {
     id: row.installation_id,
     workspace_id: row.root_workspace_id,
     plugin_id: row.catalog_item_id,
-    attachment_scope: attachmentScope,
-    access_target: accessTarget,
     lifecycle_scope: publicReuseScope(row.reuse_scope),
     default_reuse_scope: plugin.default_reuse_scope,
     source_default_conversation_type_mask: sourceDefaultConversationTypeMask,
@@ -1919,7 +1775,6 @@ export function validateSupportedLifecycleScope(
 export async function installPluginUnified(data: {
   workspaceId: string
   pluginId: string
-  attachmentScope: PluginAttachmentScope
   lifecycleScope?: ReuseScope
   configData?: Record<string, unknown>
   authSessionIds?: Record<string, string>
@@ -1933,9 +1788,6 @@ export async function installPluginUnified(data: {
   const lifecycleScope =
     data.lifecycleScope || plugin.default_reuse_scope || "conversation"
   assertSupportedReuseScope(supportedReuseScopes, lifecycleScope, plugin.slug)
-  const target = normalizePluginAttachmentScope({
-    attachmentScope: data.attachmentScope,
-  })
   const approvedRuntimePermissions =
     plugin.authorization?.requiredPermissions || []
 
@@ -2006,16 +1858,6 @@ export async function installPluginUnified(data: {
       )
     }
 
-    const attachmentSubjectId = await upsertAccessSubjectOn(
-      client,
-      buildPluginAttachmentSubjectRef({
-        workspaceId: data.workspaceId,
-        scope: target.attachmentScope,
-        actorId: target.actorId,
-        conversationId: target.conversationId,
-        workspaceMemberId: target.workspaceMemberId,
-      })
-    )
     const installationId = crypto.randomUUID()
     await insertWorkspaceAppRoot(client, {
       id: installationId,
@@ -2035,7 +1877,7 @@ export async function installPluginUnified(data: {
           id: installationId,
           catalog_item_id: plugin.id,
           catalog_version_id: catalogVersionId,
-          attachment_scope_subject_id: attachmentSubjectId,
+          attachment_scope_subject_id: null,
           config_data: {} as TableInsert<"plugin_installations">["config_data"],
           approved_runtime_permissions: approvedRuntimePermissions,
           reuse_scope: internalReuseScope(lifecycleScope),
@@ -2051,7 +1893,7 @@ export async function installPluginUnified(data: {
     const resolvedConfig = await attachAuthConnectionsToConfig({
       installationId,
       workspaceId: data.workspaceId,
-      workspaceMemberId: data.attachmentScope.workspaceMemberId || "",
+      workspaceMemberId: data.installedByWorkspaceMemberId || "",
       configFields: plugin.config_fields || [],
       authBindings: plugin.auth_bindings || [],
       configData: resolvedConfigBase,
@@ -2076,21 +1918,6 @@ export async function installPluginUnified(data: {
         .where("id", "=", installationId)
     )
 
-    const initialAccessTarget = await resolveAccessGrantTarget({
-      workspaceId: data.workspaceId,
-      target: defaultAccessTargetForAttachment(
-        data.attachmentScope,
-        data.workspaceId
-      ),
-    })
-    await insertWorkspaceAppGrant(client as any, {
-      workspaceId: data.workspaceId,
-      workspaceAppId: insertedInstallationId,
-      target: initialAccessTarget,
-      permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
-      createdByWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
-      reason: plugin.authorization?.reason || null,
-    })
     await runBuilder(
       client,
       db.insertInto("plugin_source_refs").values({
@@ -2164,16 +1991,7 @@ export async function tearDownPluginInstallationOn(
     deletedAt: new Date(),
   })
 
-  // Soft delete (design §7.4): flip deleted_at instead of hard delete (which
-  // sd_reject_delete forbids). Bindings are revoked above.
-  await runBuilder(
-    client,
-    db
-      .updateTable("plugin_installations")
-      .set({ deleted_at: sql`NOW()` })
-      .where("id", "=", installId)
-      .where("deleted_at", "is", null)
-  )
+  // Root lifecycle lives on workspace_apps. The detail row stays until purge.
 }
 
 export async function uninstallPluginUnified(installId: string) {
@@ -2245,7 +2063,6 @@ export async function updateInstallation(
     configData?: Record<string, unknown>
     authSessionIds?: Record<string, string>
     lifecycleScope?: ReuseScope
-    attachmentScope?: PluginAttachmentScope
     conversationTypeMaskOverride?: number | null
     updatedByWorkspaceMemberId?: string
   }
@@ -2266,9 +2083,6 @@ export async function updateInstallation(
   const { row, plugin, workspaceConversationTypeMask } =
     await getInstallationPayload(workspaceId, installId)
 
-  const nextAttachmentScopeType =
-    data.attachmentScope?.type ||
-    publicAttachmentScope(row.attachment_scope_type)
   const nextLifecycleScope =
     data.lifecycleScope || publicReuseScope(row.reuse_scope)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
@@ -2280,15 +2094,6 @@ export async function updateInstallation(
     nextLifecycleScope,
     plugin.slug
   )
-
-  const target = normalizePluginAttachmentScope({
-    attachmentScope: data.attachmentScope || {
-      type: nextAttachmentScopeType,
-      actorId: row.attachment_actor_id || undefined,
-      conversationId: row.attachment_conversation_id || undefined,
-      workspaceMemberId: row.attachment_workspace_member_id || undefined,
-    },
-  })
 
   const mergedConfig = data.configData
     ? mergeConfigForUpdate(
@@ -2384,8 +2189,8 @@ export async function updateInstallation(
             installationId: installId,
             workspaceId,
             workspaceMemberId:
-              data.attachmentScope?.workspaceMemberId ||
-              row.attachment_workspace_member_id ||
+              data.updatedByWorkspaceMemberId ||
+              row.root_owner_workspace_member_id ||
               "",
             configFields: plugin.config_fields || [],
             authBindings: plugin.auth_bindings || [],
@@ -2423,27 +2228,6 @@ export async function updateInstallation(
         .updateTable("plugin_installations")
         .set({
           reuse_scope: internalReuseScope(nextLifecycleScope),
-          updated_at: sql`NOW()`,
-        })
-        .where("id", "=", installId)
-        .execute()
-    }
-
-    if (data.attachmentScope) {
-      const newSubjectId = await upsertAccessSubjectOn(
-        client,
-        buildPluginAttachmentSubjectRef({
-          workspaceId,
-          scope: target.attachmentScope,
-          actorId: target.actorId,
-          conversationId: target.conversationId,
-          workspaceMemberId: target.workspaceMemberId,
-        })
-      )
-      await client
-        .updateTable("plugin_installations")
-        .set({
-          attachment_scope_subject_id: newSubjectId,
           updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
@@ -2509,9 +2293,7 @@ export async function getPluginInstallationGrantState(
     grants,
     summary: {
       requiredPermissions: plugin.authorization?.requiredPermissions || [],
-      suggestedAccessTargetType: suggestedAccessTargetType(
-        installation.access_target
-      ),
+      suggestedAccessTargetType: "workspace",
       sourceDefaultConversationTypeMask:
         installation.source_default_conversation_type_mask ||
         DEFAULT_CONVERSATION_TYPE_MASK,
@@ -2544,7 +2326,9 @@ export async function createPluginInstallationGrant(input: {
     await getInstallationPayload(input.workspaceId, input.installationId)
   const accessRows = await listAccessRows(input.installationId)
 
-  const resolvedAccessTarget = input.accessTarget || installation.access_target
+  const resolvedAccessTarget = input.accessTarget || {
+    subject: workspaceRef(input.workspaceId),
+  }
   const accessTarget = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: resolvedAccessTarget,
@@ -2756,24 +2540,15 @@ export async function revokePluginInstallationGrant(input: {
 export async function createPluginInstallPlan(input: {
   workspaceId: string
   pluginId: string
-  attachmentScope: PluginAttachmentScope
 }) {
   const plugin = await getPlugin(input.pluginId)
-  const defaultAccessTarget = defaultAccessTargetForAttachment(
-    input.attachmentScope,
-    input.workspaceId
-  )
   return {
     packageId: plugin.id,
     revisionId: (await getPluginCatalogRowByItemId(plugin.id))!.version_id,
     workspaceId: input.workspaceId,
-    attachmentScope: input.attachmentScope,
-    defaultAccessTarget,
     checks: [],
     grantPlan: buildPluginGrantPlan({
       authorization: plugin.authorization,
-      attachmentScope: input.attachmentScope,
-      workspaceId: input.workspaceId,
     }),
   }
 }

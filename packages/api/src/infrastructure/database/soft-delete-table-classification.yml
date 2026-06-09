@@ -34,9 +34,9 @@ tables:
     softDelete: none
     workspaceScope: none
   actors:
-    class: root
-    softDelete: deleted_at
-    workspaceScope: workspace_id
+    class: child
+    softDelete: none
+    workspaceScope: none
   audit_logs:
     class: append-only
     softDelete: none
@@ -392,9 +392,9 @@ tables:
     softDelete: deleted_at
     workspaceScope: workspace_id
   installed_skills:
-    class: root
-    softDelete: deleted_at
-    workspaceScope: workspace_id
+    class: child
+    softDelete: none
+    workspaceScope: none
   memory_access_grants:
     class: junction
     softDelete: status
@@ -508,13 +508,9 @@ tables:
     liveValues:
       - active
   plugin_installations:
-    class: root
-    softDelete: deleted_at
-    workspaceScope: workspace_id
-    liveValues:
-      - active
-      - disabled
-      - error
+    class: child
+    softDelete: none
+    workspaceScope: none
   plugin_package_version_specs:
     class: reference
     softDelete: none
@@ -594,9 +590,9 @@ tables:
     softDelete: none
     workspaceScope: none
   remote_agents:
-    class: root
-    softDelete: deleted_at
-    workspaceScope: workspace_id
+    class: child
+    softDelete: none
+    workspaceScope: none
   resource_access_bindings:
     class: junction
     softDelete: status

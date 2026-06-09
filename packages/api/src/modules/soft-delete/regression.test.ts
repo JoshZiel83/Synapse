@@ -624,16 +624,12 @@ test(
         .executeTakeFirstOrThrow()
       assert.ok(after.deleted_at, "workspace soft-deleted")
       const actorLive = await db
-        .selectFrom("actors")
+        .selectFrom("workspace_apps")
         .select("id")
         .where("id", "=", actorId)
         .where("deleted_at", "is", null)
         .executeTakeFirst()
-      assert.equal(
-        actorLive,
-        undefined,
-        "workspace-scoped actor soft-deleted too"
-      )
+      assert.equal(actorLive, undefined, "workspace app root soft-deleted too")
       // deleteWorkspace is exported and importable (wired to the route)
       assert.equal(typeof deleteWorkspace, "function")
     })

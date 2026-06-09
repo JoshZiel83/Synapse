@@ -1,16 +1,6 @@
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
-import {
-  PLUGIN_ATTACHMENT_SCOPE_TYPES,
-  REUSE_SCOPES,
-} from "@synapse/shared/constants"
-import {
-  actorRef,
-  conversationRef,
-  workspaceMemberRef,
-  workspaceRef,
-  type CapabilityAccessTarget,
-} from "@synapse/shared"
+import { REUSE_SCOPES } from "@synapse/shared/constants"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
@@ -21,16 +11,12 @@ import {
   getInstallations,
   getOrganization,
   getPlugin,
-  getPluginInstallationGrantState,
-  createPluginInstallationGrant,
   installPluginUnified,
   listOrganizations,
   listPluginCategories,
   listPlugins,
   McpPluginError,
-  revokePluginInstallationGrant,
   uninstallPluginUnified,
-  updatePluginInstallationGrant,
   updateInstallation,
   validateConfig,
 } from "./service.js"
@@ -43,31 +29,11 @@ import {
 } from "./plugin-auth-connections.js"
 import { getEventLogs, getToolCallLogs } from "./audit.js"
 
-const attachmentScopeTypeSchema = z.enum(PLUGIN_ATTACHMENT_SCOPE_TYPES)
-const accessTargetTypeSchema = z.enum([
-  "workspace",
-  "workspace_member",
-  "conversation",
-  "actor",
-])
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const attachmentScopeSchema = z.object({
-  type: attachmentScopeTypeSchema,
-  actorId: z.uuid().optional(),
-  conversationId: z.uuid().optional(),
-  workspaceMemberId: z.uuid().optional(),
-})
-const accessTargetSchema = z.object({
-  type: accessTargetTypeSchema,
-  actorId: z.uuid().optional(),
-  conversationId: z.uuid().optional(),
-  workspaceMemberId: z.uuid().optional(),
-})
 
 const installSchema = z.object({
   pluginId: z.uuid(),
-  attachmentScope: attachmentScopeSchema,
   lifecycleScope: lifecycleScopeSchema.optional(),
   configData: z.record(z.string(), z.unknown()).optional(),
   authSessionIds: z.record(z.string(), z.uuid()).optional(),
@@ -77,74 +43,18 @@ const updateInstallSchema = z.object({
   isEnabled: z.boolean().optional(),
   configData: z.record(z.string(), z.unknown()).optional(),
   lifecycleScope: lifecycleScopeSchema.optional(),
-  attachmentScope: attachmentScopeSchema.optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema
     .nullable()
     .optional(),
   authSessionIds: z.record(z.string(), z.uuid()).optional(),
 })
 
-const installPlanSchema = z.object({
-  attachmentScope: attachmentScopeSchema,
-})
+const installPlanSchema = z.object({})
 
 const startAuthSchema = z.object({
   installationId: z.uuid().optional(),
   draftConfig: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-})
-
-const accessGrantSchema = z.object({
-  accessTarget: accessTargetSchema.optional(),
-  conversationTypeMaskOverride: conversationTypeMaskSchema
-    .nullable()
-    .optional(),
-  reason: z.string().trim().min(1).optional(),
-})
-
-function inputToCapabilityAccessTarget(
-  workspaceId: string,
-  input: z.infer<typeof accessTargetSchema>
-): CapabilityAccessTarget {
-  switch (input.type) {
-    case "workspace":
-      return { subject: workspaceRef(workspaceId) }
-    case "workspace_member":
-      if (!input.workspaceMemberId) {
-        throw new McpPluginError(
-          400,
-          "workspaceMemberId is required for workspace_member access target"
-        )
-      }
-      return { subject: workspaceMemberRef(input.workspaceMemberId) }
-    case "actor":
-      if (!input.actorId) {
-        throw new McpPluginError(
-          400,
-          "actorId is required for actor access target"
-        )
-      }
-      return {
-        subject: actorRef(input.actorId),
-        ...(input.conversationId
-          ? { scope: conversationRef(input.conversationId) }
-          : {}),
-      }
-    case "conversation":
-      if (!input.conversationId) {
-        throw new McpPluginError(
-          400,
-          "conversationId is required for conversation access target"
-        )
-      }
-      return { subject: conversationRef(input.conversationId) }
-  }
-}
-
-const accessGrantUpdateSchema = z.object({
-  conversationTypeMaskOverride: conversationTypeMaskSchema
-    .nullable()
-    .optional(),
 })
 
 const log = createLogger("mcp.controller")
@@ -271,11 +181,10 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           workspaceId: string
           pluginId: string
         }
-        const body = installPlanSchema.parse(request.body)
+        installPlanSchema.parse(request.body || {})
         const plan = await createPluginInstallPlan({
           workspaceId,
           pluginId,
-          attachmentScope: body.attachmentScope,
         })
         reply.send({ plan })
       } catch (error) {
@@ -430,29 +339,13 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         if (!allowed) return
 
         const { workspaceId } = request.params as { workspaceId: string }
-        const {
-          attachmentScopeType,
-          conversationId,
-          actorId,
-          workspaceMemberId,
-          pluginId,
-        } = request.query as {
-          attachmentScopeType?:
-            | "workspace"
-            | "conversation"
-            | "actor"
-            | "workspace_member"
-          conversationId?: string
-          actorId?: string
-          workspaceMemberId?: string
-          pluginId?: string
-        }
+        const { pluginId } = z
+          .object({
+            pluginId: z.uuid().optional(),
+          })
+          .parse(request.query || {})
         reply.send(
           await getInstallations(workspaceId, {
-            attachmentScopeType,
-            conversationId,
-            actorId,
-            workspaceMemberId,
             pluginId,
           })
         )
@@ -521,7 +414,6 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         const installation = await installPluginUnified({
           workspaceId,
           pluginId: body.pluginId,
-          attachmentScope: body.attachmentScope,
           lifecycleScope: body.lifecycleScope,
           configData: body.configData,
           authSessionIds: body.authSessionIds,
@@ -594,133 +486,6 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
         const { installId } = request.params as { installId: string }
         await uninstallPluginUnified(installId)
-        reply.send({ success: true })
-      } catch (error) {
-        handleError(reply, error)
-      }
-    }
-  )
-
-  app.get(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/grants",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const allowed = await requireWorkspacePermission(
-          request,
-          reply,
-          "workspace.manage_plugins",
-          "Not allowed to manage plugin access in this workspace"
-        )
-        if (!allowed) return
-
-        const { workspaceId, installId } = request.params as {
-          workspaceId: string
-          installId: string
-        }
-        reply.send(
-          await getPluginInstallationGrantState(workspaceId, installId)
-        )
-      } catch (error) {
-        handleError(reply, error)
-      }
-    }
-  )
-
-  app.post(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/grants",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const allowed = await requireWorkspacePermission(
-          request,
-          reply,
-          "workspace.manage_plugins",
-          "Not allowed to manage plugin access in this workspace"
-        )
-        if (!allowed) return
-
-        const { workspaceId, installId } = request.params as {
-          workspaceId: string
-          installId: string
-        }
-        const body = accessGrantSchema.parse(request.body)
-
-        const grant = await createPluginInstallationGrant({
-          workspaceId,
-          installationId: installId,
-          accessTarget: body.accessTarget
-            ? inputToCapabilityAccessTarget(workspaceId, body.accessTarget)
-            : undefined,
-          conversationTypeMaskOverride: body.conversationTypeMaskOverride,
-          reason: body.reason,
-          grantedByWorkspaceMemberId: (request as any).workspaceMember!.id,
-        })
-
-        reply.status(201).send({ grant })
-      } catch (error) {
-        handleError(reply, error)
-      }
-    }
-  )
-
-  app.put(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/grants/:grantId",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const allowed = await requireWorkspacePermission(
-          request,
-          reply,
-          "workspace.manage_plugins",
-          "Not allowed to manage plugin access in this workspace"
-        )
-        if (!allowed) return
-
-        const { workspaceId, installId, grantId } = request.params as {
-          workspaceId: string
-          installId: string
-          grantId: string
-        }
-        const body = accessGrantUpdateSchema.parse(request.body)
-
-        const grant = await updatePluginInstallationGrant({
-          workspaceId,
-          installationId: installId,
-          grantId,
-          conversationTypeMaskOverride: body.conversationTypeMaskOverride,
-        })
-
-        reply.send({ grant })
-      } catch (error) {
-        handleError(reply, error)
-      }
-    }
-  )
-
-  app.delete(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/grants/:grantId",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const allowed = await requireWorkspacePermission(
-          request,
-          reply,
-          "workspace.manage_plugins",
-          "Not allowed to manage plugin access in this workspace"
-        )
-        if (!allowed) return
-
-        const { workspaceId, installId, grantId } = request.params as {
-          workspaceId: string
-          installId: string
-          grantId: string
-        }
-        await revokePluginInstallationGrant({
-          workspaceId,
-          installationId: installId,
-          grantId,
-        })
         reply.send({ success: true })
       } catch (error) {
         handleError(reply, error)

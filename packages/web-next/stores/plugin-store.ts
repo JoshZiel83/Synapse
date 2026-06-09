@@ -1,6 +1,6 @@
 "use client"
 import { create } from "zustand"
-import type { PluginAttachmentScope, ReuseScope } from "@synapse/shared"
+import type { ReuseScope } from "@synapse/shared"
 import { api } from "@/lib/api"
 
 interface PluginState {
@@ -19,7 +19,6 @@ interface PluginState {
     wsId: string,
     data: {
       pluginId: string
-      attachmentScope: PluginAttachmentScope
       lifecycleScope?: ReuseScope
       configData?: Record<string, unknown>
       authSessionIds?: Record<string, string>

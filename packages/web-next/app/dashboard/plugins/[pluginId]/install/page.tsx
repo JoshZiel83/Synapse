@@ -111,7 +111,7 @@ export default function PluginInstallPage() {
             pageChrome="tab"
             includePlacementSteps={!isBuiltinInitialInstall}
             includeAccessStep={false}
-            defaultAttachmentScopeType={
+            lifecyclePreviewScopeType={
               isBuiltinInitialInstall ? "workspace_member" : undefined
             }
             createDefaultWorkspaceAccess={isBuiltinInitialInstall}

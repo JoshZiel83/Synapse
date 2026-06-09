@@ -3118,13 +3118,11 @@ CREATE TABLE plugin_installations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
   catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE RESTRICT,
-  -- P1b: polymorphic attachment (attachment_scope_type + 3 nullable FKs)
-  -- collapsed into a single attachment_scope_subject_id FK into access_subjects.
-  -- Mapping: workspace → SUBJECT_KIND.WORKSPACE; conversation → CONVERSATION;
-  -- actor → ACTOR; workspace_member → WORKSPACE_MEMBER. The FK is added by
-  -- a deferred ALTER TABLE after access_subjects exists (search
-  -- "ALTER TABLE plugin_installations").
-  attachment_scope_subject_id UUID NOT NULL,
+  -- Legacy optional attachment hint. New installs no longer require an
+  -- attachment scope; visibility/use now live in workspace_app_grants. When
+  -- present, this still points at an access_subjects row for older/admin
+  -- records that want an explicit placement hint.
+  attachment_scope_subject_id UUID,
   config_data JSONB NOT NULL DEFAULT '{}',
   approved_runtime_permissions TEXT[] DEFAULT '{}',
   reuse_scope plugin_installations_reuse_scope NOT NULL DEFAULT 'conversation',
@@ -3279,8 +3277,8 @@ CREATE UNIQUE INDEX uq_workspace_app_grants_active
   ON workspace_app_grants(
     workspace_app_id,
     subject_id,
-    COALESCE(scope_subject_id, '00000000-0000-0000-0000-000000000000'::uuid)
-  )
+    scope_subject_id
+  ) NULLS NOT DISTINCT
   WHERE status = 'active';
 CREATE INDEX idx_workspace_app_grants_workspace
   ON workspace_app_grants(workspace_id, created_at DESC);
@@ -3310,8 +3308,8 @@ CREATE UNIQUE INDEX uq_workspace_app_grant_requests_pending
     workspace_app_id,
     requester_workspace_member_id,
     grantee_subject_id,
-    COALESCE(grantee_scope_subject_id, '00000000-0000-0000-0000-000000000000'::uuid)
-  )
+    grantee_scope_subject_id
+  ) NULLS NOT DISTINCT
   WHERE status = 'pending';
 CREATE INDEX idx_workspace_app_grant_requests_workspace
   ON workspace_app_grant_requests(workspace_id, status, created_at DESC);
@@ -5706,7 +5704,6 @@ CREATE INDEX idx_file_mounts_space ON file_mounts(file_space_id);
 
 -- 1) deleted_at on the 24 soft-delete ROOT entities (NULL = live).
 ALTER TABLE account                          ADD COLUMN deleted_at TIMESTAMPTZ;
-ALTER TABLE actors                           ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE automation_event_sources         ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE automation_integration_bindings  ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE automation_rules                 ADD COLUMN deleted_at TIMESTAMPTZ;
@@ -5716,16 +5713,13 @@ ALTER TABLE conversations                    ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE devices                          ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE file_assets                      ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE file_spaces                      ADD COLUMN deleted_at TIMESTAMPTZ;
-ALTER TABLE installed_skills                 ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE memory_items                     ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE memory_spaces                    ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE model_groups                     ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE model_bindings                   ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE plugin_connections               ADD COLUMN deleted_at TIMESTAMPTZ;
-ALTER TABLE plugin_installations             ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE publishers                       ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE remote_agent_machines            ADD COLUMN deleted_at TIMESTAMPTZ;
-ALTER TABLE remote_agents                    ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE transport_accounts               ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE users                            ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE workspaces                       ADD COLUMN deleted_at TIMESTAMPTZ;
@@ -6406,7 +6400,7 @@ CREATE TRIGGER sd_fk_live_memory_recall_run_results_memory_item_id BEFORE INSERT
 CREATE TRIGGER sd_fk_live_context_archive_points_conversation_id BEFORE INSERT OR UPDATE OF conversation_id ON context_archive_points FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_skill_versions_skill_id BEFORE INSERT OR UPDATE OF skill_id ON skill_versions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('installed_skills', 'skill_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_skill_source_refs_skill_id BEFORE INSERT OR UPDATE OF skill_id ON skill_source_refs FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('installed_skills', 'skill_id', 'id', 'false', '');
-CREATE TRIGGER sd_fk_live_plugin_installations_catalog_item_id BEFORE INSERT OR UPDATE OF catalog_item_id, deleted_at ON plugin_installations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('catalog_items', 'catalog_item_id', 'id', 'true', '');
+CREATE TRIGGER sd_fk_live_plugin_installations_catalog_item_id BEFORE INSERT OR UPDATE OF catalog_item_id ON plugin_installations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('catalog_items', 'catalog_item_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_automation_integration_bindings_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON automation_integration_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_automation_integration_bindings_installation_id BEFORE INSERT OR UPDATE OF installation_id, deleted_at ON automation_integration_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('plugin_installations', 'installation_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_automation_integration_bindings_webhook_endpoint_id BEFORE INSERT OR UPDATE OF webhook_endpoint_id, deleted_at ON automation_integration_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_webhook_endpoints', 'webhook_endpoint_id', 'id', 'true', '');
@@ -7104,10 +7098,10 @@ DECLARE
   v_n bigint;
 BEGIN
   -- 1. child rows whose owning soft-delete root is an expired tombstone (leaf→root)
-  DELETE FROM actor_model_group_assignments t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.actor_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actor_source_refs t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.actor_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actor_model_group_assignments t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.actor_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actor_source_refs t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.actor_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM actor_template_version_specs t0 WHERE EXISTS (SELECT 1 FROM file_assets r1 WHERE r1.id = t0.avatar_file_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actor_version_docs t0 WHERE EXISTS (SELECT 1 FROM actor_versions r1 WHERE r1.id = t0.actor_version_id AND (EXISTS (SELECT 1 FROM actors r2 WHERE r2.id = r1.actor_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actor_version_docs t0 WHERE EXISTS (SELECT 1 FROM actor_versions r1 WHERE r1.id = t0.actor_version_id AND (EXISTS (SELECT 1 FROM actors r2 WHERE r2.id = r1.actor_id AND (EXISTS (SELECT 1 FROM workspace_apps r3 WHERE r3.id = r2.id AND (r3.deleted_at IS NOT NULL AND r3.deleted_at < p_before)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_deliveries t0 WHERE EXISTS (SELECT 1 FROM automation_rules r1 WHERE r1.id = t0.rule_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_delivery_targets t0 WHERE EXISTS (SELECT 1 FROM automation_rules r1 WHERE r1.id = t0.rule_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_execution_targets t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7149,15 +7143,15 @@ BEGIN
   DELETE FROM platform_access_bindings t0 WHERE EXISTS (SELECT 1 FROM users r1 WHERE r1.id = t0.user_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM plugin_auth_sessions t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM plugin_package_version_specs t0 WHERE EXISTS (SELECT 1 FROM catalog_versions r1 WHERE r1.id = t0.catalog_version_id AND (EXISTS (SELECT 1 FROM catalog_items r2 WHERE r2.id = r1.catalog_item_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM plugin_source_refs t0 WHERE EXISTS (SELECT 1 FROM plugin_installations r1 WHERE r1.id = t0.installation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM plugin_source_refs t0 WHERE EXISTS (SELECT 1 FROM plugin_installations r1 WHERE r1.id = t0.installation_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM plugin_version_runtime_permissions t0 WHERE EXISTS (SELECT 1 FROM catalog_versions r1 WHERE r1.id = t0.catalog_version_id AND (EXISTS (SELECT 1 FROM catalog_items r2 WHERE r2.id = r1.catalog_item_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM realtime_event_outbox t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_bindings t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_conversation_contexts t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_conversation_views t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_group_interaction_grants t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_bindings t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_conversation_contexts t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_conversation_views t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_group_interaction_grants t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machine_sessions t0 WHERE EXISTS (SELECT 1 FROM remote_agent_machines r1 WHERE r1.id = t0.machine_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_message_deliveries t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_message_deliveries t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_runtime_catalog t0 WHERE EXISTS (SELECT 1 FROM remote_agent_machines r1 WHERE r1.id = t0.machine_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM resource_access_bindings t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM runtime_authorization_grants t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7169,11 +7163,11 @@ BEGIN
   DELETE FROM session_interrupts t0 WHERE EXISTS (SELECT 1 FROM sessions r1 WHERE r1.id = t0.target_session_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM session_wakeups t0 WHERE EXISTS (SELECT 1 FROM sessions r1 WHERE r1.id = t0.session_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM skill_package_version_specs t0 WHERE EXISTS (SELECT 1 FROM catalog_versions r1 WHERE r1.id = t0.catalog_version_id AND (EXISTS (SELECT 1 FROM catalog_items r2 WHERE r2.id = r1.catalog_item_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM skill_source_refs t0 WHERE EXISTS (SELECT 1 FROM installed_skills r1 WHERE r1.id = t0.skill_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM skill_versions t0 WHERE EXISTS (SELECT 1 FROM installed_skills r1 WHERE r1.id = t0.skill_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM skill_source_refs t0 WHERE EXISTS (SELECT 1 FROM installed_skills r1 WHERE r1.id = t0.skill_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM skill_versions t0 WHERE EXISTS (SELECT 1 FROM installed_skills r1 WHERE r1.id = t0.skill_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_action_tokens t0 WHERE EXISTS (SELECT 1 FROM tool_call_tasks r1 WHERE r1.id = t0.task_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_device_tool t0 WHERE EXISTS (SELECT 1 FROM devices r1 WHERE r1.id = t0.device_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_call_task_external_mcp t0 WHERE EXISTS (SELECT 1 FROM plugin_installations r1 WHERE r1.id = t0.plugin_installation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_external_mcp t0 WHERE EXISTS (SELECT 1 FROM plugin_installations r1 WHERE r1.id = t0.plugin_installation_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_output_chunks t0 WHERE EXISTS (SELECT 1 FROM tool_call_tasks r1 WHERE r1.id = t0.task_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_response_commands t0 WHERE EXISTS (SELECT 1 FROM tool_call_tasks r1 WHERE r1.id = t0.task_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_runtime_authorization t0 WHERE EXISTS (SELECT 1 FROM devices r1 WHERE r1.id = t0.device_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7187,10 +7181,10 @@ BEGIN
   DELETE FROM workspace_friend_requests t0 WHERE EXISTS (SELECT 1 FROM workspace_members r1 WHERE r1.id = t0.requester_workspace_member_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_invites t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_member_conversation_views t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM workspace_member_preferences t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.chief_actor_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM workspace_member_preferences t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.chief_actor_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_member_sync_events t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_relationship_profiles t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actor_versions t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.actor_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actor_versions t0 WHERE EXISTS (SELECT 1 FROM actors r1 WHERE r1.id = t0.actor_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_executions t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM catalog_categories t0 WHERE EXISTS (SELECT 1 FROM file_assets r1 WHERE r1.id = t0.icon_file_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM chat_client_instances t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7208,7 +7202,7 @@ BEGIN
   DELETE FROM context_archive_points t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_capabilities t0 WHERE EXISTS (SELECT 1 FROM workspace_apps r1 WHERE r1.id = t0.id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_tool_revisions t0 WHERE EXISTS (SELECT 1 FROM device_tools r1 WHERE r1.id = t0.tool_id AND (EXISTS (SELECT 1 FROM device_exposures r2 WHERE r2.id = r1.exposure_id AND (EXISTS (SELECT 1 FROM devices r3 WHERE r3.id = r2.device_id AND (r3.deleted_at IS NOT NULL AND r3.deleted_at < p_before)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_runs t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_runs t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_calls t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_participants t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_catalog_revisions t0 WHERE EXISTS (SELECT 1 FROM device_exposures r1 WHERE r1.id = t0.exposure_id AND (EXISTS (SELECT 1 FROM devices r2 WHERE r2.id = r1.device_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7225,7 +7219,8 @@ BEGIN
   DELETE FROM plugin_connections WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_event_sources WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_spaces WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM installed_skills WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actors WHERE EXISTS (SELECT 1 FROM workspace_apps r1 WHERE r1.id = actors.id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM installed_skills WHERE EXISTS (SELECT 1 FROM workspace_apps r1 WHERE r1.id = installed_skills.id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_items WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_integration_bindings WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_rules WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7233,12 +7228,12 @@ BEGIN
   DELETE FROM memory_spaces WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_webhook_endpoints WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM model_groups WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM plugin_installations WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM plugin_installations WHERE EXISTS (SELECT 1 FROM workspace_apps r1 WHERE r1.id = plugin_installations.id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM catalog_items WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM devices WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM publishers WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machines WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agents WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agents WHERE EXISTS (SELECT 1 FROM workspace_apps r1 WHERE r1.id = remote_agents.id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_apps WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
   VALUES (NULL, 'soft_delete.retention_purge', 'system', NULL,

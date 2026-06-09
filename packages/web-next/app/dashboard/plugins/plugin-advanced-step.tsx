@@ -1,18 +1,12 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import type { PluginAttachmentScopeType, ReuseScope } from "@synapse/shared"
+import type { ReuseScope } from "@synapse/shared"
 import { REUSE_SCOPES } from "@synapse/shared"
 import { Layers3, Save } from "lucide-react"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
-import {
-  AccessAttachmentScopeStep,
-  AccessReuseScopeStep,
-  type AccessVisualActor,
-  type AccessVisualConversation,
-  getConversationDisplayName,
-} from "@/app/dashboard/access/attachment-visuals"
+import { AccessReuseScopeStep } from "@/app/dashboard/access/attachment-visuals"
 import {
   Card,
   CardContent,
@@ -25,31 +19,6 @@ import { api } from "@/lib/api"
 import { toast } from "sonner"
 
 type PluginReuseScope = ReuseScope
-
-const allowedAttachmentScopes: PluginAttachmentScopeType[] = [
-  "workspace",
-  "conversation",
-  "actor",
-  "workspace_member",
-]
-
-function normalizeActorOption(actor: any): AccessVisualActor {
-  const definition = actor?.definition || actor
-  return {
-    id: actor.id,
-    displayName:
-      actor.displayName || definition.title || actor.title || "Untitled actor",
-  }
-}
-
-function normalizeConversationOption(group: any): AccessVisualConversation {
-  return {
-    id: group.id,
-    name: getConversationDisplayName(group),
-    title: group.title,
-    participants: group.participants,
-  }
-}
 
 function normalizeSupportedReuseScopes(value: unknown): PluginReuseScope[] {
   const supported = Array.isArray(value)
@@ -71,63 +40,15 @@ export default function PluginAdvancedStep({
 }) {
   const { workspaceId } = useWorkspace()
 
-  const [actors, setActors] = useState<AccessVisualActor[]>([])
-  const [conversations, setConversations] = useState<
-    AccessVisualConversation[]
-  >([])
-  const [selectedAttachmentScopeType, setSelectedAttachmentScopeType] =
-    useState<PluginAttachmentScopeType>("workspace")
-  const [selectedActorId, setSelectedActorId] = useState("")
-  const [selectedConversationId, setSelectedConversationId] = useState("")
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>("turn")
   const [saving, setSaving] = useState(false)
-  const [scopeError, setScopeError] = useState("")
-
-  useEffect(() => {
-    if (!workspaceId) return
-
-    let cancelled = false
-
-    const load = async () => {
-      try {
-        const [actorData, conversationData] = await Promise.all([
-          api.getActors(workspaceId),
-          api.loadConversationCatalog(workspaceId),
-        ])
-
-        if (cancelled) return
-        setActors(
-          (Array.isArray(actorData) ? actorData : []).map(normalizeActorOption)
-        )
-        setConversations(conversationData.map(normalizeConversationOption))
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to load advanced plugin options:", error)
-        }
-      }
-    }
-
-    void load()
-    return () => {
-      cancelled = true
-    }
-  }, [workspaceId])
 
   useEffect(() => {
     if (!installation) return
 
-    setSelectedAttachmentScopeType(
-      (installation.attachment_scope?.type ||
-        "workspace") as PluginAttachmentScopeType
-    )
-    setSelectedActorId(installation.attachment_scope?.actorId || "")
-    setSelectedConversationId(
-      installation.attachment_scope?.conversationId || ""
-    )
     setLifecycleScope(
       (installation.lifecycle_scope || "turn") as PluginReuseScope
     )
-    setScopeError("")
   }, [installation])
 
   const allowedReuseScopes = useMemo(
@@ -149,38 +70,12 @@ export default function PluginAdvancedStep({
 
   async function saveAdvancedSettings() {
     if (!workspaceId || !installation?.id) return
-
-    if (selectedAttachmentScopeType === "actor" && !selectedActorId) {
-      setScopeError("Please select an actor.")
-      return
-    }
-
-    if (
-      selectedAttachmentScopeType === "conversation" &&
-      !selectedConversationId
-    ) {
-      setScopeError("Please select a conversation.")
-      return
-    }
-
-    setScopeError("")
     setSaving(true)
     try {
       const result = await api.updateInstallation(
         workspaceId,
         installation.id,
         {
-          attachmentScope: {
-            type: selectedAttachmentScopeType,
-            actorId:
-              selectedAttachmentScopeType === "actor"
-                ? selectedActorId
-                : undefined,
-            conversationId:
-              selectedAttachmentScopeType === "conversation"
-                ? selectedConversationId
-                : undefined,
-          },
           lifecycleScope,
         }
       )
@@ -218,35 +113,20 @@ export default function PluginAdvancedStep({
           <CardTitle>Advanced</CardTitle>
         </div>
         <CardDescription>
-          Move where this installation belongs and change how its runtime is
-          reused. Access stays in the Access tab.
+          Change how this installation runtime is reused. Access stays in the
+          Access tab.
         </CardDescription>
       </CardHeader>
 
       <CardContent className="flex flex-col gap-6 pb-6">
-        <AccessAttachmentScopeStep
-          value={selectedAttachmentScopeType}
-          onChange={(value) =>
-            setSelectedAttachmentScopeType(value as PluginAttachmentScopeType)
-          }
-          allowedScopes={allowedAttachmentScopes}
-          actors={actors}
-          conversations={conversations}
-          selectedActorId={selectedActorId}
-          onActorChange={setSelectedActorId}
-          selectedConversationId={selectedConversationId}
-          onConversationChange={setSelectedConversationId}
-          error={scopeError || undefined}
-        />
-
         <AccessReuseScopeStep
-          attachmentScopeType={selectedAttachmentScopeType}
+          attachmentScopeType="workspace"
           value={lifecycleScope}
           onChange={(value) => setLifecycleScope(value as PluginReuseScope)}
-          actors={actors}
-          conversations={conversations}
-          selectedActorId={selectedActorId}
-          selectedConversationId={selectedConversationId}
+          actors={[]}
+          conversations={[]}
+          selectedActorId=""
+          selectedConversationId=""
           allowedReuseScopes={allowedReuseScopes}
         />
 

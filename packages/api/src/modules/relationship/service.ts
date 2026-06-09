@@ -12,6 +12,7 @@ import {
   RELATIONSHIP_APPROVAL_MODE,
   RELATIONSHIP_PROFILE_SUBJECT_TYPE,
   RELATIONSHIP_SCAN_OUTCOME,
+  WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
   type ActorAccessRequestListResponse,
   type ContactHubDetailResponse,
@@ -3398,7 +3399,7 @@ export async function resolveActorAccessRequest(params: {
   if (
     !request ||
     request.workspace_id !== params.workspaceId ||
-    request.target_kind !== "actor" ||
+    request.target_kind !== WORKSPACE_APP_KIND.ACTOR ||
     !request.actor_id
   ) {
     throw new Error("Actor access request not found")
@@ -3420,6 +3421,8 @@ export async function resolveActorAccessRequest(params: {
   }
 
   return resolveWorkspaceAppGrantRequest({
+    workspaceId: params.workspaceId,
+    workspaceAppId: request.actor_id,
     requestId: request.id,
     approverWorkspaceMemberId: approverWorkspaceMember.workspaceMemberId,
     decision: params.decision,
@@ -3462,7 +3465,7 @@ export async function resolveRemoteAgentAccessRequest(params: {
   if (
     !request ||
     request.workspace_id !== params.workspaceId ||
-    request.target_kind !== "remote_agent" ||
+    request.target_kind !== WORKSPACE_APP_KIND.REMOTE_AGENT ||
     !request.remote_agent_id
   ) {
     throw new Error("Remote agent access request not found")
@@ -3485,6 +3488,8 @@ export async function resolveRemoteAgentAccessRequest(params: {
   }
 
   return resolveWorkspaceAppGrantRequest({
+    workspaceId: params.workspaceId,
+    workspaceAppId: request.remote_agent_id,
     requestId: request.id,
     approverWorkspaceMemberId: approverWorkspaceMember.workspaceMemberId,
     decision: params.decision,

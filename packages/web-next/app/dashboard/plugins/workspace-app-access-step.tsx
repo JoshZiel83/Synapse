@@ -19,6 +19,7 @@ import {
   MODEL_GROUP_GRANT_SCOPE,
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_MASK_PRESETS,
+  WORKSPACE_APP_GRANT_PERMISSION,
   maskAllowsConversationType,
   conversationTypeKeysToMask,
   conversationTypeMaskToKeys,
@@ -180,26 +181,16 @@ type WorkspaceAppGrantAdapter = {
     workspaceId: string,
     resourceId: string
   ) => Promise<WorkspaceAppGrantState>
-  createGrant: (
+  replaceGrants: (
     workspaceId: string,
     resourceId: string,
     payload: {
-      accessTarget?: AccessTargetInput
-      conversationTypeMaskOverride?: number | null
-      permissions?: string[]
-    }
-  ) => Promise<unknown>
-  revokeGrant: (
-    workspaceId: string,
-    resourceId: string,
-    grantId: string
-  ) => Promise<unknown>
-  updateGrant?: (
-    workspaceId: string,
-    resourceId: string,
-    grantId: string,
-    payload: {
-      conversationTypeMaskOverride?: number | null
+      grants: Array<{
+        target: AccessTargetInput
+        permissions: string[]
+        conversationTypeMaskOverride?: number | null
+        reason?: string
+      }>
     }
   ) => Promise<unknown>
   updatePolicy?: (
@@ -220,6 +211,7 @@ type WorkspaceAppGrantSummary = {
   parentConversationTypeMask?: number
   requiredPermissions?: string[]
   suggestedAccessTargetType?: PluginGrantScope
+  reason?: string
 }
 
 type WorkspaceAppGrantState = {
@@ -240,20 +232,62 @@ type WorkspaceAppAccessOwner = {
   id?: string | null
 }
 
+function readOwnerNumber(input: unknown): number | null {
+  return typeof input === "number" ? input : null
+}
+
+function buildWorkspaceAppGrantSummary(
+  installation: WorkspaceAppAccessOwner | null,
+  resourceLabel: string
+): WorkspaceAppGrantSummary | null {
+  if (!installation) return null
+  const sourceDefaultConversationTypeMask = readOwnerNumber(
+    (installation as any).sourceDefaultConversationTypeMask ??
+      (installation as any).source_default_conversation_type_mask
+  )
+  const workspaceConversationTypeMask = readOwnerNumber(
+    (installation as any).workspaceConversationTypeMask ??
+      (installation as any).workspace_conversation_type_mask
+  )
+  const conversationTypeMaskOverride =
+    readOwnerNumber(
+      (installation as any).conversationTypeMaskOverride ??
+        (installation as any).conversation_type_mask_override
+    ) ?? null
+  const effectiveConversationTypeMask = readOwnerNumber(
+    (installation as any).effectiveConversationTypeMask ??
+      (installation as any).effective_conversation_type_mask
+  )
+
+  if (
+    workspaceConversationTypeMask === null &&
+    effectiveConversationTypeMask === null
+  ) {
+    return null
+  }
+
+  return {
+    requiredPermissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+    suggestedAccessTargetType: MODEL_GROUP_GRANT_SCOPE.WORKSPACE,
+    sourceDefaultConversationTypeMask:
+      sourceDefaultConversationTypeMask ?? undefined,
+    workspaceConversationTypeMask: workspaceConversationTypeMask ?? undefined,
+    conversationTypeMaskOverride,
+    effectiveConversationTypeMask:
+      effectiveConversationTypeMask ??
+      workspaceConversationTypeMask ??
+      undefined,
+    parentPolicyLabel: "workspace",
+    parentConversationTypeMask: workspaceConversationTypeMask ?? undefined,
+    reason: `Choose who can use this ${resourceLabel}.`,
+  }
+}
+
 const pluginInstallationGrantAdapter: WorkspaceAppGrantAdapter = {
   loadGrants: (workspaceId, resourceId) =>
-    api.getPluginInstallationGrants(workspaceId, resourceId),
-  createGrant: (workspaceId, resourceId, payload) =>
-    api.createPluginInstallationGrant(workspaceId, resourceId, payload),
-  revokeGrant: (workspaceId, resourceId, grantId) =>
-    api.revokePluginInstallationGrant(workspaceId, resourceId, grantId),
-  updateGrant: (workspaceId, resourceId, grantId, payload) =>
-    api.updatePluginInstallationGrant(
-      workspaceId,
-      resourceId,
-      grantId,
-      payload
-    ),
+    api.getWorkspaceAppGrants(workspaceId, resourceId),
+  replaceGrants: (workspaceId, resourceId, payload) =>
+    api.replaceWorkspaceAppGrants(workspaceId, resourceId, payload),
   updatePolicy: (workspaceId, resourceId, payload) =>
     api.updateInstallation(workspaceId, resourceId, payload),
 }
@@ -903,7 +937,7 @@ export default function WorkspaceAppAccessStep({
   const hasConversationTypeChanges =
     canManageConversationTypes &&
     currentConversationTypeMask !== effectiveConversationTypeMask
-  const canManageGrantConversationTypes = Boolean(grantAdapter.updateGrant)
+  const canManageGrantConversationTypes = Boolean(grantAdapter.replaceGrants)
   const currentGrantBaseMask = useMemo(
     () =>
       normalizeConversationTypeMask(
@@ -1310,18 +1344,28 @@ export default function WorkspaceAppAccessStep({
       resolvedResourceId
     )
     setGrants(grantState.grants || [])
-    setSummary(grantState.summary || null)
+    const nextSummary =
+      grantState.summary ||
+      buildWorkspaceAppGrantSummary(installation, resourceLabelLower)
+    setSummary(nextSummary || null)
     setPolicyError(null)
     setGrantPolicyError(null)
-    const suggestedGrantScope = grantState.summary
-      ?.suggestedAccessTargetType as PluginGrantScope | undefined
+    const suggestedGrantScope = nextSummary?.suggestedAccessTargetType as
+      | PluginGrantScope
+      | undefined
     if (
       suggestedGrantScope &&
       allowedGrantScopes.includes(suggestedGrantScope)
     ) {
       setGrantScope(suggestedGrantScope)
     }
-  }, [grantAdapter, resolvedResourceId, workspaceId])
+  }, [
+    grantAdapter,
+    installation,
+    resolvedResourceId,
+    resourceLabelLower,
+    workspaceId,
+  ])
 
   const ensureActorsLoaded = useCallback(async () => {
     if (!workspaceId) {
@@ -1722,21 +1766,19 @@ export default function WorkspaceAppAccessStep({
             }
         }
       })()
-      const payload: {
-        accessTarget?: AccessTargetInput
-        conversationTypeMaskOverride?: number | null
-        permissions?: string[]
-      } = {
-        accessTarget,
-        permissions: summary?.requiredPermissions?.length
-          ? summary.requiredPermissions
-          : ["use"],
+      const nextGrant = {
+        target: accessTarget,
+        permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE] as string[],
+        ...(canGrantConversationTypesForScope
+          ? {
+              conversationTypeMaskOverride:
+                nextNewGrantConversationTypeMaskOverride,
+            }
+          : {}),
       }
-      if (canGrantConversationTypesForScope) {
-        payload.conversationTypeMaskOverride =
-          nextNewGrantConversationTypeMaskOverride
-      }
-      await grantAdapter.createGrant(workspaceId, resolvedResourceId, payload)
+      await grantAdapter.replaceGrants(workspaceId, resolvedResourceId, {
+        grants: [...grants, nextGrant],
+      })
       await loadGrantState()
       setDialogOpen(false)
       resetDialogState()
@@ -1753,7 +1795,17 @@ export default function WorkspaceAppAccessStep({
 
   const revokeGrant = async (grantId: string) => {
     if (!workspaceId || !resolvedResourceId) return
-    await grantAdapter.revokeGrant(workspaceId, resolvedResourceId, grantId)
+    await grantAdapter.replaceGrants(workspaceId, resolvedResourceId, {
+      grants: grants
+        .filter((grant) => grant.id !== grantId)
+        .map((grant) => ({
+          target: grant.target,
+          permissions: grant.permissions,
+          conversationTypeMaskOverride:
+            grant.conversationTypeMaskOverride ?? null,
+          reason: grant.reason,
+        })),
+    })
     await loadGrantState()
   }
 
@@ -1892,7 +1944,6 @@ export default function WorkspaceAppAccessStep({
       !workspaceId ||
       !resolvedResourceId ||
       !editingGrant?.id ||
-      !grantAdapter.updateGrant ||
       !hasGrantConversationTypeChanges
     ) {
       return
@@ -1901,14 +1952,17 @@ export default function WorkspaceAppAccessStep({
     setSavingGrantPolicy(true)
     setGrantPolicyError(null)
     try {
-      await grantAdapter.updateGrant(
-        workspaceId,
-        resolvedResourceId,
-        editingGrant.id,
-        {
-          conversationTypeMaskOverride: nextGrantConversationTypeMaskOverride,
-        }
-      )
+      await grantAdapter.replaceGrants(workspaceId, resolvedResourceId, {
+        grants: grants.map((grant) => ({
+          target: grant.target,
+          permissions: grant.permissions,
+          conversationTypeMaskOverride:
+            grant.id === editingGrant.id
+              ? nextGrantConversationTypeMaskOverride
+              : (grant.conversationTypeMaskOverride ?? null),
+          reason: grant.reason,
+        })),
+      })
       await loadGrantState()
       setGrantPolicyDialogOpen(false)
       setEditingGrant(null)

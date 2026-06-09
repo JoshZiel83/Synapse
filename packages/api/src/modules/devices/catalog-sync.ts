@@ -288,6 +288,8 @@ async function ensureCapability(
       id: existing.id as string,
       displayName:
         (capabilityOwner?.display_name as string | null) || "Device capability",
+      ownerWorkspaceMemberId:
+        (capabilityOwner?.owner_workspace_member_id as string | null) ?? null,
     })
     return
   }

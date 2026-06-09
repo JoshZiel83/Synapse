@@ -95,11 +95,7 @@ test("readAutomationEventSourceAccessBindingResourceId returns the automation ev
   assert.equal(
     readAutomationEventSourceAccessBindingResourceId({
       resource_type: "automation_event_source",
-      installed_skill_id: null,
-      plugin_installation_id: null,
       automation_event_source_id: "a-1",
-      actor_id: null,
-      remote_agent_id: null,
     }),
     "a-1"
   )
@@ -109,11 +105,7 @@ test("readAutomationEventSourceAccessBindingResourceId throws when the matching 
   assert.throws(() =>
     readAutomationEventSourceAccessBindingResourceId({
       resource_type: "automation_event_source",
-      installed_skill_id: null,
-      plugin_installation_id: null,
       automation_event_source_id: null,
-      actor_id: null,
-      remote_agent_id: null,
     })
   )
 })

@@ -1,6 +1,7 @@
 import { sql } from "kysely"
 import {
   SUBJECT_KIND,
+  WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
   WORKSPACE_APP_GRANT_REQUEST_STATUS,
   WORKSPACE_APP_GRANT_SOURCE,
@@ -217,7 +218,8 @@ export async function insertWorkspaceAppGrantRequest(
     throw new Error("workspace app not found")
   }
   const ownerImplicitContactVisible =
-    app.kind === "actor" || app.kind === "remote_agent"
+    app.kind === WORKSPACE_APP_KIND.ACTOR ||
+    app.kind === WORKSPACE_APP_KIND.REMOTE_AGENT
       ? await (async () => {
           if (!app.owner_workspace_member_id) return false
           const ownerSubjectId = await upsertAccessSubject(run, {
@@ -290,8 +292,12 @@ export async function insertWorkspaceAppGrantRequest(
 
 export async function cancelWorkspaceAppGrantRequest(
   run: KyselyDb,
-  requestId: string,
-  requesterWorkspaceMemberId: string
+  params: {
+    workspaceId: string
+    workspaceAppId: string
+    requestId: string
+    requesterWorkspaceMemberId: string
+  }
 ): Promise<boolean> {
   const updated = await run
     .updateTable("workspace_app_grant_requests")
@@ -299,8 +305,14 @@ export async function cancelWorkspaceAppGrantRequest(
       status: WORKSPACE_APP_GRANT_REQUEST_STATUS.CANCELLED,
       updated_at: sql`NOW()`,
     } as any)
-    .where("id", "=", requestId)
-    .where("requester_workspace_member_id", "=", requesterWorkspaceMemberId)
+    .where("id", "=", params.requestId)
+    .where("workspace_id", "=", params.workspaceId)
+    .where("workspace_app_id", "=", params.workspaceAppId)
+    .where(
+      "requester_workspace_member_id",
+      "=",
+      params.requesterWorkspaceMemberId
+    )
     .where("status", "=", WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING)
     .returning("id")
     .execute()
@@ -332,11 +344,14 @@ export async function listWorkspaceAppGrantRequests(
 }
 
 export async function resolveWorkspaceAppGrantRequest(params: {
+  workspaceId: string
+  workspaceAppId: string
   requestId: string
   approverWorkspaceMemberId: string
   decision: "approve" | "reject"
+  executor?: Executor
 }): Promise<WorkspaceAppGrantRequestRow> {
-  return db.transaction().execute(async (trx) => {
+  const executeResolution = async (trx: Executor) => {
     const request = await trx
       .selectFrom("workspace_app_grant_requests")
       .selectAll()
@@ -346,6 +361,12 @@ export async function resolveWorkspaceAppGrantRequest(params: {
 
     if (!request) {
       throw new Error("workspace app grant request not found")
+    }
+    if (
+      request.workspace_id !== params.workspaceId ||
+      request.workspace_app_id !== params.workspaceAppId
+    ) {
+      throw new Error("workspace app grant request does not belong to this app")
     }
     if (request.status !== WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING) {
       throw new Error("workspace app grant request is no longer pending")
@@ -358,7 +379,8 @@ export async function resolveWorkspaceAppGrantRequest(params: {
       }
 
       const ownerImplicitContactVisible =
-        app.kind === "actor" || app.kind === "remote_agent"
+        app.kind === WORKSPACE_APP_KIND.ACTOR ||
+        app.kind === WORKSPACE_APP_KIND.REMOTE_AGENT
           ? await (async () => {
               if (!app.owner_workspace_member_id) return false
               const ownerSubjectId = await upsertAccessSubjectOn(trx, {
@@ -372,7 +394,7 @@ export async function resolveWorkspaceAppGrantRequest(params: {
       if (!ownerImplicitContactVisible) {
         const existingGrant = await trx
           .selectFrom("workspace_app_grants")
-          .select("id")
+          .select(["id", "permissions"])
           .where("workspace_app_id", "=", request.workspace_app_id)
           .where("subject_id", "=", request.grantee_subject_id)
           .where((eb) =>
@@ -401,6 +423,19 @@ export async function resolveWorkspaceAppGrantRequest(params: {
               reason: request.reason ?? null,
             } as any)
             .execute()
+        } else if (
+          !existingGrant.permissions.includes(
+            WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE
+          )
+        ) {
+          await sql`
+            UPDATE workspace_app_grants
+            SET permissions = array_append(
+              permissions,
+              ${WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE}::workspace_app_grant_permission
+            )
+            WHERE id = ${existingGrant.id}
+          `.execute(trx)
         }
       }
     }
@@ -423,5 +458,10 @@ export async function resolveWorkspaceAppGrantRequest(params: {
       .executeTakeFirstOrThrow()
 
     return updated as unknown as WorkspaceAppGrantRequestRow
-  })
+  }
+
+  if (params.executor) {
+    return executeResolution(params.executor)
+  }
+  return db.transaction().execute(async (trx) => executeResolution(trx))
 }

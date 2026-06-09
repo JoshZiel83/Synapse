@@ -1,6 +1,7 @@
 import { sql } from "kysely"
 import {
   SUBJECT_KIND,
+  WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
   WORKSPACE_APP_GRANT_STATUS,
   type CapabilityAccessTarget,
@@ -49,15 +50,15 @@ type WorkspaceAppRow = {
 
 function workspaceAppKindAdminKey(kind: WorkspaceAppKind): string {
   switch (kind) {
-    case "plugin_installation":
+    case WORKSPACE_APP_KIND.PLUGIN_INSTALLATION:
       return "plugin_admin"
-    case "installed_skill":
+    case WORKSPACE_APP_KIND.INSTALLED_SKILL:
       return "skill_admin"
-    case "actor":
+    case WORKSPACE_APP_KIND.ACTOR:
       return "actor_admin"
-    case "remote_agent":
+    case WORKSPACE_APP_KIND.REMOTE_AGENT:
       return "remote_agent_admin"
-    case "device_capability":
+    case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
       return "device_admin"
   }
   throw new Error(`Unsupported workspace app kind: ${kind}`)
@@ -471,6 +472,7 @@ export async function listWorkspaceAppGrantsView(params: {
       "scope.conversation_id as scope_conversation_id_via_join",
     ])
     .where("app_grant.workspace_app_id", "=", params.appId)
+    .where("app_grant.status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
     .orderBy("app_grant.created_at", "desc")
     .execute()
   return rows.map((row) => mapGrantRow(row))
@@ -628,6 +630,8 @@ export async function approveWorkspaceAppGrantRequest(params: {
     params.userId
   )
   const row = await resolveWorkspaceAppGrantRequest({
+    workspaceId: params.workspaceId,
+    workspaceAppId: params.appId,
     requestId: params.requestId,
     approverWorkspaceMemberId: access.workspaceMemberId,
     decision: "approve",
@@ -654,6 +658,8 @@ export async function rejectWorkspaceAppGrantRequest(params: {
     params.userId
   )
   const row = await resolveWorkspaceAppGrantRequest({
+    workspaceId: params.workspaceId,
+    workspaceAppId: params.appId,
     requestId: params.requestId,
     approverWorkspaceMemberId: access.workspaceMemberId,
     decision: "reject",
@@ -670,6 +676,7 @@ export async function rejectWorkspaceAppGrantRequest(params: {
 
 export async function cancelWorkspaceAppGrantRequestByRequester(params: {
   workspaceId: string
+  appId: string
   requestId: string
   userId: string
 }): Promise<boolean> {
@@ -677,9 +684,10 @@ export async function cancelWorkspaceAppGrantRequestByRequester(params: {
     params.workspaceId,
     params.userId
   )
-  return cancelWorkspaceAppGrantRequest(
-    db,
-    params.requestId,
-    identity.workspaceMemberId
-  )
+  return cancelWorkspaceAppGrantRequest(db, {
+    workspaceId: params.workspaceId,
+    workspaceAppId: params.appId,
+    requestId: params.requestId,
+    requesterWorkspaceMemberId: identity.workspaceMemberId,
+  })
 }

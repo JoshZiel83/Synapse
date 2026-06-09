@@ -31,7 +31,7 @@ test("buildMemoryRecallQuery preserves surrogate pairs when truncating long text
   const latestMessage = `${"a".repeat(236)}🧠xyzz`
 
   const query = buildMemoryRecallQuery({
-    actorName: "Mia",
+    actorDisplayName: "Mia",
     contextItems: [
       {
         kind: "message",

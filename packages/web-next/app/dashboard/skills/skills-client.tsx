@@ -134,26 +134,19 @@ type SkillImportSourceType = "github" | "clawhub"
 
 const skillGrantAdapter = {
   loadGrants: (workspaceId: string, resourceId: string) =>
-    api.getInstalledSkillGrants(workspaceId, resourceId),
-  createGrant: (
+    api.getWorkspaceAppGrants(workspaceId, resourceId),
+  replaceGrants: (
     workspaceId: string,
     resourceId: string,
     payload: {
-      accessTarget?: AccessTargetInput
-      conversationTypeMaskOverride?: number | null
-      permissions?: string[]
+      grants: Array<{
+        target: AccessTargetInput
+        permissions: string[]
+        conversationTypeMaskOverride?: number | null
+        reason?: string
+      }>
     }
-  ) => api.createInstalledSkillGrant(workspaceId, resourceId, payload),
-  revokeGrant: (workspaceId: string, resourceId: string, grantId: string) =>
-    api.revokeInstalledSkillGrant(workspaceId, resourceId, grantId),
-  updateGrant: (
-    workspaceId: string,
-    resourceId: string,
-    grantId: string,
-    payload: {
-      conversationTypeMaskOverride?: number | null
-    }
-  ) => api.updateInstalledSkillGrant(workspaceId, resourceId, grantId, payload),
+  ) => api.replaceWorkspaceAppGrants(workspaceId, resourceId, payload),
   updatePolicy: (
     workspaceId: string,
     resourceId: string,

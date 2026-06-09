@@ -12,7 +12,7 @@ import type {
   ReuseScope,
   LocalizedText,
 } from "@synapse/shared"
-import { REUSE_SCOPES } from "@synapse/shared"
+import { REUSE_SCOPES, WORKSPACE_APP_GRANT_PERMISSION } from "@synapse/shared"
 import { AppCard } from "@/components/app-card"
 import {
   Dialog,
@@ -45,7 +45,6 @@ import {
 import WorkspaceAppAccessStep from "./workspace-app-access-step"
 import { PluginIcon } from "./plugin-ui"
 import {
-  AccessAttachmentScopeStep,
   AccessReuseScopeStep,
   type AccessVisualActor,
   type AccessVisualConversation,
@@ -71,7 +70,7 @@ interface Props {
   pageChrome?: "card" | "plain" | "tab"
   includePlacementSteps?: boolean
   includeAccessStep?: boolean
-  defaultAttachmentScopeType?: PluginAttachmentScopeType
+  lifecyclePreviewScopeType?: PluginAttachmentScopeType
   defaultLifecycleScope?: PluginReuseScope
   createDefaultWorkspaceAccess?: boolean
   closeLabel?: string
@@ -337,9 +336,10 @@ function deriveInstallFlow(
   const baseSteps =
     Array.isArray(plugin.install_flow?.steps) &&
     plugin.install_flow.steps.length > 0
-      ? plugin.install_flow.steps.filter(
-          (step: PluginInstallStep) => step.kind !== "confirm"
-        )
+      ? plugin.install_flow.steps.filter((step: PluginInstallStep) => {
+          const kind = step.kind as string
+          return kind !== "confirm" && kind !== "attachment_scope"
+        })
       : [
           {
             id: "configure",
@@ -359,16 +359,6 @@ function deriveInstallFlow(
 
   return [
     ...baseSteps,
-    {
-      id: "attachment-scope",
-      kind: "attachment_scope",
-      titleI18n: { [locale]: "Choose placement" },
-      descriptionI18n: {
-        [locale]: "Choose where this installation lives. Access is set later.",
-      },
-      scope: "plugin",
-      fields: [],
-    },
     {
       id: "reuse-scope",
       kind: "reuse_scope",
@@ -581,14 +571,13 @@ export default function InstallDialog({
   pageChrome = "card",
   includePlacementSteps = true,
   includeAccessStep,
-  defaultAttachmentScopeType,
+  lifecyclePreviewScopeType,
   defaultLifecycleScope,
   createDefaultWorkspaceAccess = false,
   closeLabel = "Cancel",
 }: Props) {
-  const { workspaceId, currentWorkspaceMemberId } = useWorkspace()
+  const { workspaceId } = useWorkspace()
   const { installPlugin, updateInstallation } = usePluginStore()
-  const effectiveCurrentWorkspaceMemberId = currentWorkspaceMemberId || ""
 
   const locale = useMemo(
     () => getLocale(plugin.default_locale),
@@ -621,26 +610,15 @@ export default function InstallDialog({
     () => new Map(authBindings.map((binding) => [binding.key, binding])),
     [authBindings]
   )
-  const allowedAttachmentScopes = useMemo<PluginAttachmentScopeType[]>(
-    () => ["workspace", "conversation", "actor", "workspace_member"],
-    []
+  const reusePreviewScopeType = useMemo<PluginAttachmentScopeType>(
+    () =>
+      lifecyclePreviewScopeType ||
+      ((defaultActorId
+        ? "actor"
+        : plugin.default_attachment_scope ||
+          "workspace") as PluginAttachmentScopeType),
+    [defaultActorId, lifecyclePreviewScopeType, plugin.default_attachment_scope]
   )
-  const initialAttachmentScopeType = initialInstallation?.attachment_scope
-    ?.type as PluginAttachmentScopeType | undefined
-  const initialAttachmentActorId =
-    initialInstallation?.attachment_scope?.actorId || ""
-  const initialAttachmentConversationId =
-    initialInstallation?.attachment_scope?.conversationId || ""
-
-  const [selectedAttachmentScopeType, setSelectedAttachmentScopeType] =
-    useState<PluginAttachmentScopeType>(
-      initialAttachmentScopeType ||
-        defaultAttachmentScopeType ||
-        ((defaultActorId
-          ? "actor"
-          : plugin.default_attachment_scope ||
-            "workspace") as PluginAttachmentScopeType)
-    )
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>(
     ((initialInstallation?.lifecycle_scope as PluginReuseScope | undefined) ||
       defaultLifecycleScope ||
@@ -648,12 +626,8 @@ export default function InstallDialog({
       plugin.default_reuse_scope ||
       "conversation") as PluginReuseScope
   )
-  const [selectedActorId, setSelectedActorId] = useState(
-    initialAttachmentActorId || defaultActorId || ""
-  )
-  const [selectedConversationId, setSelectedConversationId] = useState(
-    initialAttachmentConversationId || ""
-  )
+  const [selectedActorId, setSelectedActorId] = useState(defaultActorId || "")
+  const [selectedConversationId, setSelectedConversationId] = useState("")
   const [actors, setActors] = useState<AccessVisualActor[]>([])
   const [conversations, setConversations] = useState<any[]>([])
   const [configData, setConfigData] = useState<Record<string, unknown>>(() => ({
@@ -778,7 +752,7 @@ export default function InstallDialog({
   const autoStartedAuthStepRef = useRef("")
 
   useEffect(() => {
-    if (selectedAttachmentScopeType === "actor" && workspaceId) {
+    if (reusePreviewScopeType === "actor" && workspaceId) {
       api
         .getActors(workspaceId)
         .then((result) => {
@@ -789,7 +763,7 @@ export default function InstallDialog({
         })
         .catch(() => {})
     }
-    if (selectedAttachmentScopeType === "conversation" && workspaceId) {
+    if (reusePreviewScopeType === "conversation" && workspaceId) {
       api
         .loadConversationCatalog(workspaceId)
         .then((res) =>
@@ -802,7 +776,7 @@ export default function InstallDialog({
         )
         .catch(() => {})
     }
-  }, [selectedAttachmentScopeType, workspaceId])
+  }, [reusePreviewScopeType, workspaceId])
 
   useEffect(() => {
     const valid = installLifecycleOptions
@@ -1096,22 +1070,6 @@ export default function InstallDialog({
       fieldKeys
     )
 
-    if (selectedAttachmentScopeType === "actor" && !selectedActorId) {
-      errors.__scope = "Please select an actor."
-    }
-    if (
-      selectedAttachmentScopeType === "conversation" &&
-      !selectedConversationId
-    ) {
-      errors.__scope = "Please select a conversation."
-    }
-    if (
-      selectedAttachmentScopeType === "workspace_member" &&
-      !effectiveCurrentWorkspaceMemberId
-    ) {
-      errors.__scope =
-        "Current workspace member is unavailable. Please refresh and try again."
-    }
     return errors
   }
 
@@ -1158,21 +1116,6 @@ export default function InstallDialog({
 
       if (installationId) {
         installation = await updateInstallation(workspaceId, installationId, {
-          attachmentScope: {
-            type: selectedAttachmentScopeType,
-            actorId:
-              selectedAttachmentScopeType === "actor"
-                ? selectedActorId
-                : undefined,
-            conversationId:
-              selectedAttachmentScopeType === "conversation"
-                ? selectedConversationId
-                : undefined,
-            workspaceMemberId:
-              selectedAttachmentScopeType === "workspace_member"
-                ? effectiveCurrentWorkspaceMemberId
-                : undefined,
-          },
           lifecycleScope,
           configData,
           authSessionIds:
@@ -1181,40 +1124,22 @@ export default function InstallDialog({
       } else {
         installation = await installPlugin(workspaceId, {
           pluginId: plugin.id,
-          attachmentScope: {
-            type: selectedAttachmentScopeType,
-            actorId:
-              selectedAttachmentScopeType === "actor"
-                ? selectedActorId
-                : undefined,
-            conversationId:
-              selectedAttachmentScopeType === "conversation"
-                ? selectedConversationId
-                : undefined,
-            workspaceMemberId:
-              selectedAttachmentScopeType === "workspace_member"
-                ? effectiveCurrentWorkspaceMemberId
-                : undefined,
-          },
           lifecycleScope,
           configData,
           authSessionIds:
             Object.keys(authSessionIds).length > 0 ? authSessionIds : undefined,
         })
         if (createDefaultWorkspaceAccess) {
-          await api.createPluginInstallationGrant(
-            workspaceId,
-            installation.id,
-            {
-              accessTarget: {
-                subject: { kind: "workspace", workspaceId },
+          await api.replaceWorkspaceAppGrants(workspaceId, installation.id, {
+            grants: [
+              {
+                target: {
+                  subject: { kind: "workspace", workspaceId },
+                },
+                permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
               },
-              permissions: installation.authorization?.requiredPermissions ||
-                installation.revision?.authorization?.requiredPermissions || [
-                  "use",
-                ],
-            }
-          )
+            ],
+          })
         }
       }
       setCurrentInstallation(installation)
@@ -1959,28 +1884,9 @@ export default function InstallDialog({
         </div>
       )}
 
-      {currentStep?.kind === "attachment_scope" && (
-        <div className="space-y-4">
-          <AccessAttachmentScopeStep
-            value={selectedAttachmentScopeType}
-            onChange={(value) =>
-              setSelectedAttachmentScopeType(value as PluginAttachmentScopeType)
-            }
-            allowedScopes={allowedAttachmentScopes}
-            actors={actors}
-            conversations={conversations}
-            selectedActorId={selectedActorId}
-            onActorChange={setSelectedActorId}
-            selectedConversationId={selectedConversationId}
-            onConversationChange={setSelectedConversationId}
-            error={fieldErrors.__scope}
-          />
-        </div>
-      )}
-
       {currentStep?.kind === "reuse_scope" && (
         <AccessReuseScopeStep
-          attachmentScopeType={selectedAttachmentScopeType}
+          attachmentScopeType={reusePreviewScopeType}
           value={lifecycleScope}
           onChange={(value) => setLifecycleScope(value as PluginReuseScope)}
           actors={actors}

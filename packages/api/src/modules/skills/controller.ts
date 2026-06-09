@@ -3,7 +3,9 @@ import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import {
   actorRef,
+  CAPABILITY_ACCESS_TARGET_TYPES,
   conversationRef,
+  SUBJECT_KIND,
   workspaceMemberRef,
   workspaceRef,
   type CapabilityAccessTarget,
@@ -21,29 +23,25 @@ import {
 import {
   createWorkspaceSkill,
   SkillError,
-  getInstalledSkillGrantState,
   getInstalledSkill,
   getMarketplaceSkill,
-  createInstalledSkillGrant,
   importMarketplaceMirrorSkill,
   refreshMarketplaceSkill,
   installMarketplaceSkill,
   listInstalledSkills,
   listMarketplaceSkills,
   publishMarketplaceSkill,
-  revokeInstalledSkillGrant,
   uninstallInstalledSkill,
-  updateInstalledSkillGrant,
   updateInstalledSkill,
   upgradeInstalledSkill,
 } from "./service.js"
 
 const accessTargetTypeSchema = z.enum([
-  "workspace",
-  "workspace_member",
-  "conversation",
-  "actor",
-]) satisfies z.ZodType<SkillAccessTargetType>
+  CAPABILITY_ACCESS_TARGET_TYPES[0],
+  CAPABILITY_ACCESS_TARGET_TYPES[1],
+  CAPABILITY_ACCESS_TARGET_TYPES[2],
+  CAPABILITY_ACCESS_TARGET_TYPES[3],
+] as const satisfies readonly SkillAccessTargetType[])
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
@@ -57,9 +55,9 @@ function inputToCapabilityAccessTarget(
   input: z.infer<typeof accessTargetSchema>
 ): CapabilityAccessTarget {
   switch (input.type) {
-    case "workspace":
+    case SUBJECT_KIND.WORKSPACE:
       return { subject: workspaceRef(workspaceId) }
-    case "workspace_member":
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
       if (!input.workspaceMemberId) {
         throw new SkillError(
           400,
@@ -67,7 +65,7 @@ function inputToCapabilityAccessTarget(
         )
       }
       return { subject: workspaceMemberRef(input.workspaceMemberId) }
-    case "actor":
+    case SUBJECT_KIND.ACTOR:
       if (!input.actorId) {
         throw new SkillError(400, "actorId is required for actor access target")
       }
@@ -77,7 +75,7 @@ function inputToCapabilityAccessTarget(
           ? { scope: conversationRef(input.conversationId) }
           : {}),
       }
-    case "conversation":
+    case SUBJECT_KIND.CONVERSATION:
       if (!input.conversationId) {
         throw new SkillError(
           400,
@@ -148,20 +146,6 @@ const updateInstalledSkillSchema = z.object({
     .nullable()
     .optional(),
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
-})
-
-const skillGrantSchema = z.object({
-  accessTarget: accessTargetSchema.optional(),
-  conversationTypeMaskOverride: conversationTypeMaskSchema
-    .nullable()
-    .optional(),
-  reason: z.string().trim().min(1).optional(),
-})
-
-const skillGrantUpdateSchema = z.object({
-  conversationTypeMaskOverride: conversationTypeMaskSchema
-    .nullable()
-    .optional(),
 })
 
 const listInstalledSkillsQuerySchema = z.object({
@@ -576,136 +560,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
 
         await uninstallInstalledSkill(workspaceId, installedSkillId)
         return reply.status(204).send()
-      } catch (error) {
-        return handleError(reply, error)
-      }
-    }
-  )
-
-  app.get(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/grants",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId, installedSkillId } = request.params as {
-          workspaceId: string
-          installedSkillId: string
-        }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to manage skill access in this workspace"
-        )
-        if (!allowed) return
-
-        const state = await getInstalledSkillGrantState(
-          workspaceId,
-          installedSkillId
-        )
-        return reply.status(200).send(state)
-      } catch (error) {
-        return handleError(reply, error)
-      }
-    }
-  )
-
-  app.post(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/grants",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId, installedSkillId } = request.params as {
-          workspaceId: string
-          installedSkillId: string
-        }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to manage skill access in this workspace"
-        )
-        if (!allowed) return
-
-        const body = skillGrantSchema.parse(request.body)
-        const workspaceMemberId = (request as any).workspaceMember?.id as string
-        const grant = await createInstalledSkillGrant({
-          workspaceId,
-          installedSkillId,
-          accessTarget: body.accessTarget
-            ? inputToCapabilityAccessTarget(workspaceId, body.accessTarget)
-            : undefined,
-          conversationTypeMaskOverride: body.conversationTypeMaskOverride,
-          reason: body.reason,
-          grantedByWorkspaceMemberId: workspaceMemberId,
-        })
-        return reply.status(201).send({ grant })
-      } catch (error) {
-        return handleError(reply, error)
-      }
-    }
-  )
-
-  app.put(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/grants/:grantId",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId, installedSkillId, grantId } = request.params as {
-          workspaceId: string
-          installedSkillId: string
-          grantId: string
-        }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to manage skill access in this workspace"
-        )
-        if (!allowed) return
-
-        const body = skillGrantUpdateSchema.parse(request.body)
-        const grant = await updateInstalledSkillGrant({
-          workspaceId,
-          installedSkillId,
-          grantId,
-          conversationTypeMaskOverride: body.conversationTypeMaskOverride,
-        })
-        return reply.status(200).send({ grant })
-      } catch (error) {
-        return handleError(reply, error)
-      }
-    }
-  )
-
-  app.delete(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/grants/:grantId",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId, installedSkillId, grantId } = request.params as {
-          workspaceId: string
-          installedSkillId: string
-          grantId: string
-        }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to manage skill access in this workspace"
-        )
-        if (!allowed) return
-
-        await revokeInstalledSkillGrant({
-          workspaceId,
-          installedSkillId,
-          grantId,
-        })
-        return reply.status(200).send({ success: true })
       } catch (error) {
         return handleError(reply, error)
       }

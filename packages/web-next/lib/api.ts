@@ -13,7 +13,6 @@ import type {
   ActorPackageInstallResult,
   ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
-  PluginAttachmentScope,
   AuthResponse,
   ActorPackageRecord,
   AutomationEventSource,
@@ -75,6 +74,7 @@ import type {
   DingtalkDeviceFlowStartResponse,
   DingtalkDeviceFlowPollResponse,
   WorkspaceChiefActorPreference,
+  WorkspaceAppGrant,
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
 } from "@synapse/shared"
@@ -630,51 +630,28 @@ class ApiClient {
       method: "DELETE",
     })
   }
-  getInstalledSkillGrants(wsId: string, installedSkillId: string) {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/grants`)
-  }
-  createInstalledSkillGrant(
+  getWorkspaceAppGrants(
     wsId: string,
-    installedSkillId: string,
+    appId: string
+  ): Promise<{ grants: WorkspaceAppGrant[] }> {
+    return this.fetch(`/workspaces/${wsId}/workspace-apps/${appId}/grants`)
+  }
+  replaceWorkspaceAppGrants(
+    wsId: string,
+    appId: string,
     data: {
-      accessTarget?: CapabilityAccessTarget
-      conversationTypeMaskOverride?: number | null
-      permissions?: string[]
-      reason?: string
+      grants: Array<{
+        target: CapabilityAccessTarget
+        permissions: string[]
+        conversationTypeMaskOverride?: number | null
+        reason?: string
+      }>
     }
   ) {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/grants`, {
-      method: "POST",
+    return this.fetch(`/workspaces/${wsId}/workspace-apps/${appId}/grants`, {
+      method: "PUT",
       body: JSON.stringify(data),
     })
-  }
-  updateInstalledSkillGrant(
-    wsId: string,
-    installedSkillId: string,
-    grantId: string,
-    data: {
-      conversationTypeMaskOverride?: number | null
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/skills/${installedSkillId}/grants/${grantId}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  revokeInstalledSkillGrant(
-    wsId: string,
-    installedSkillId: string,
-    grantId: string
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/skills/${installedSkillId}/grants/${grantId}`,
-      {
-        method: "DELETE",
-      }
-    )
   }
 
   // Workspace Invites
@@ -1853,7 +1830,6 @@ class ApiClient {
     wsId: string,
     data: {
       pluginId: string
-      attachmentScope: PluginAttachmentScope
       lifecycleScope?:
         | "turn"
         | "session"
@@ -1904,57 +1880,6 @@ class ApiClient {
       {
         method: "POST",
         body: "{}",
-      }
-    )
-  }
-  getPluginInstallationGrants(wsId: string, installId: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/installations/${installId}/grants`
-    )
-  }
-  createPluginInstallationGrant(
-    wsId: string,
-    installId: string,
-    data: {
-      accessTarget?: CapabilityAccessTarget
-      conversationTypeMaskOverride?: number | null
-      permissions?: string[]
-      reason?: string
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/installations/${installId}/grants`,
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  updatePluginInstallationGrant(
-    wsId: string,
-    installId: string,
-    grantId: string,
-    data: {
-      conversationTypeMaskOverride?: number | null
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/installations/${installId}/grants/${grantId}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  revokePluginInstallationGrant(
-    wsId: string,
-    installId: string,
-    grantId: string
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/installations/${installId}/grants/${grantId}`,
-      {
-        method: "DELETE",
       }
     )
   }

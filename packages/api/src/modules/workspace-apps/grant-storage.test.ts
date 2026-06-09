@@ -13,6 +13,10 @@ import {
   SUBJECT_KIND,
 } from "@synapse/shared"
 import { upsertAccessSubject } from "../access/subject-registry.js"
+import {
+  cancelWorkspaceAppGrantRequest,
+  resolveWorkspaceAppGrantRequest,
+} from "./grant-storage.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -131,21 +135,13 @@ async function insertWorkspaceAppDetail(
         } as any)
         .returning("id")
         .executeTakeFirstOrThrow()
-      const attachmentSubject = await db
-        .insertInto("access_subjects")
-        .values({
-          kind: "workspace",
-          workspace_id: input.workspaceId,
-        } as any)
-        .returning("id")
-        .executeTakeFirstOrThrow()
       await db
         .insertInto("plugin_installations")
         .values({
           id: input.appId,
           catalog_item_id: item.id,
           catalog_version_id: version.id,
-          attachment_scope_subject_id: attachmentSubject.id,
+          attachment_scope_subject_id: null,
         } as any)
         .execute()
       return
@@ -370,6 +366,254 @@ test(
             .execute(),
         /requester must request on behalf of their own workspace_member subject/i
       )
+    })
+  }
+)
+
+test(
+  "resolveWorkspaceAppGrantRequest rejects a request id routed through another workspace app",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const owner = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, owner)
+      const approverMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        owner
+      )
+      const requesterUser = await insertUser(db)
+      const requesterMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        requesterUser
+      )
+      const appA = crypto.randomUUID()
+      const appB = crypto.randomUUID()
+
+      for (const appId of [appA, appB]) {
+        await db
+          .insertInto("workspace_apps")
+          .values({
+            id: appId,
+            workspace_id: workspaceId,
+            kind: WORKSPACE_APP_KIND.ACTOR,
+            display_name: `actor-${appId.slice(0, 6)}`,
+            owner_workspace_member_id: approverMemberId,
+            status: WORKSPACE_APP_STATUS.ACTIVE,
+          } as any)
+          .execute()
+        await insertWorkspaceAppDetail(db, {
+          appId,
+          workspaceId,
+          kind: WORKSPACE_APP_KIND.ACTOR,
+        })
+      }
+
+      const requesterSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: requesterMemberId,
+      })
+      const request = await db
+        .insertInto("workspace_app_grant_requests")
+        .values({
+          workspace_id: workspaceId,
+          workspace_app_id: appB,
+          grantee_subject_id: requesterSubjectId,
+          requested_permissions: [
+            WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
+          ],
+          requester_workspace_member_id: requesterMemberId,
+          status: WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await assert.rejects(
+        () =>
+          resolveWorkspaceAppGrantRequest({
+            workspaceId,
+            workspaceAppId: appA,
+            requestId: request.id as string,
+            approverWorkspaceMemberId: approverMemberId,
+            decision: "approve",
+            executor: db as any,
+          }),
+        /does not belong to this app/i
+      )
+    })
+  }
+)
+
+test(
+  "resolveWorkspaceAppGrantRequest merges contact_visible into an existing active grant",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const owner = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, owner)
+      const approverMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        owner
+      )
+      const requesterUser = await insertUser(db)
+      const requesterMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        requesterUser
+      )
+      const appId = crypto.randomUUID()
+      await db
+        .insertInto("workspace_apps")
+        .values({
+          id: appId,
+          workspace_id: workspaceId,
+          kind: WORKSPACE_APP_KIND.ACTOR,
+          display_name: "actor app",
+          owner_workspace_member_id: approverMemberId,
+          status: WORKSPACE_APP_STATUS.ACTIVE,
+        } as any)
+        .execute()
+      await insertWorkspaceAppDetail(db, {
+        appId,
+        workspaceId,
+        kind: WORKSPACE_APP_KIND.ACTOR,
+      })
+
+      const requesterSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: requesterMemberId,
+      })
+
+      await db
+        .insertInto("workspace_app_grants")
+        .values({
+          workspace_id: workspaceId,
+          workspace_app_id: appId,
+          subject_id: requesterSubjectId,
+          permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
+          status: WORKSPACE_APP_GRANT_STATUS.ACTIVE,
+          source: WORKSPACE_APP_GRANT_SOURCE.MANUAL,
+          created_by_workspace_member_id: approverMemberId,
+        } as any)
+        .execute()
+
+      const request = await db
+        .insertInto("workspace_app_grant_requests")
+        .values({
+          workspace_id: workspaceId,
+          workspace_app_id: appId,
+          grantee_subject_id: requesterSubjectId,
+          requested_permissions: [
+            WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
+          ],
+          requester_workspace_member_id: requesterMemberId,
+          status: WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      await resolveWorkspaceAppGrantRequest({
+        workspaceId,
+        workspaceAppId: appId,
+        requestId: request.id as string,
+        approverWorkspaceMemberId: approverMemberId,
+        decision: "approve",
+        executor: db as any,
+      })
+
+      const grants = await db
+        .selectFrom("workspace_app_grants")
+        .select(["id", "permissions"])
+        .where("workspace_app_id", "=", appId)
+        .where("subject_id", "=", requesterSubjectId)
+        .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
+        .execute()
+
+      assert.equal(grants.length, 1)
+      const permissions = Array.isArray(grants[0]?.permissions)
+        ? grants[0]!.permissions
+        : String(grants[0]?.permissions || "")
+            .replace(/^\{|\}$/g, "")
+            .split(",")
+            .filter(Boolean)
+      assert.deepEqual(permissions, [
+        WORKSPACE_APP_GRANT_PERMISSION.MANAGE,
+        WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
+      ])
+    })
+  }
+)
+
+test(
+  "cancelWorkspaceAppGrantRequest scopes the request id to the same workspace app",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const owner = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, owner)
+      const requesterMemberId = await insertWorkspaceMember(
+        db,
+        workspaceId,
+        owner
+      )
+      const appA = crypto.randomUUID()
+      const appB = crypto.randomUUID()
+
+      for (const appId of [appA, appB]) {
+        await db
+          .insertInto("workspace_apps")
+          .values({
+            id: appId,
+            workspace_id: workspaceId,
+            kind: WORKSPACE_APP_KIND.ACTOR,
+            display_name: `actor-${appId.slice(0, 6)}`,
+            owner_workspace_member_id: requesterMemberId,
+            status: WORKSPACE_APP_STATUS.ACTIVE,
+          } as any)
+          .execute()
+        await insertWorkspaceAppDetail(db, {
+          appId,
+          workspaceId,
+          kind: WORKSPACE_APP_KIND.ACTOR,
+        })
+      }
+
+      const requesterSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: requesterMemberId,
+      })
+      const request = await db
+        .insertInto("workspace_app_grant_requests")
+        .values({
+          workspace_id: workspaceId,
+          workspace_app_id: appB,
+          grantee_subject_id: requesterSubjectId,
+          requested_permissions: [
+            WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
+          ],
+          requester_workspace_member_id: requesterMemberId,
+          status: WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      const cancelled = await cancelWorkspaceAppGrantRequest(db as any, {
+        workspaceId,
+        workspaceAppId: appA,
+        requestId: request.id as string,
+        requesterWorkspaceMemberId: requesterMemberId,
+      })
+
+      assert.equal(cancelled, false)
+
+      const row = await db
+        .selectFrom("workspace_app_grant_requests")
+        .select("status")
+        .where("id", "=", request.id as string)
+        .executeTakeFirstOrThrow()
+      assert.equal(row.status, WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING)
     })
   }
 )

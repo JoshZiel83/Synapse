@@ -429,7 +429,6 @@ export interface Actors {
   config: Generated<Json | null>;
   created_at: Generated<Timestamp | null>;
   current_version: Generated<number>;
-  deleted_at: Timestamp | null;
   id: Generated<string>;
   is_public_shared: Generated<boolean>;
   parent_id: string | null;
@@ -446,7 +445,6 @@ export interface ActorsLive {
   config: Json | null;
   created_at: Timestamp | null;
   current_version: number | null;
-  deleted_at: Timestamp | null;
   id: string | null;
   is_public_shared: boolean | null;
   parent_id: string | null;
@@ -1650,7 +1648,6 @@ export interface InstalledSkills {
   created_at: Generated<Timestamp | null>;
   current_snapshot_id: string;
   current_version: Generated<number>;
-  deleted_at: Timestamp | null;
   icon_file_id: string | null;
   id: Generated<string>;
   tags: Generated<string[] | null>;
@@ -1661,7 +1658,6 @@ export interface InstalledSkillsLive {
   created_at: Timestamp | null;
   current_snapshot_id: string | null;
   current_version: number | null;
-  deleted_at: Timestamp | null;
   icon_file_id: string | null;
   id: string | null;
   tags: string[] | null;
@@ -2051,12 +2047,11 @@ export interface PluginConnectionsLive {
 
 export interface PluginInstallations {
   approved_runtime_permissions: Generated<string[] | null>;
-  attachment_scope_subject_id: string;
+  attachment_scope_subject_id: string | null;
   catalog_item_id: string;
   catalog_version_id: string;
   config_data: Generated<Json>;
   created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
   id: Generated<string>;
   reuse_scope: Generated<PluginInstallationsReuseScope>;
   updated_at: Generated<Timestamp | null>;
@@ -2069,7 +2064,6 @@ export interface PluginInstallationsLive {
   catalog_version_id: string | null;
   config_data: Json | null;
   created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
   id: string | null;
   reuse_scope: PluginInstallationsReuseScope | null;
   updated_at: Timestamp | null;
@@ -2330,7 +2324,6 @@ export interface RemoteAgents {
   avatar_emoji: string | null;
   avatar_file_id: string | null;
   created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
   description: string | null;
   id: Generated<string>;
   is_public_shared: Generated<boolean>;
@@ -2344,7 +2337,6 @@ export interface RemoteAgentsLive {
   avatar_emoji: string | null;
   avatar_file_id: string | null;
   created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
   description: string | null;
   id: string | null;
   is_public_shared: boolean | null;

@@ -2,8 +2,10 @@ import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
 import {
   actorRef,
+  CAPABILITY_ACCESS_TARGET_TYPES,
   conversationRef,
   remoteAgentRef,
+  SUBJECT_KIND,
   workspaceMemberRef,
   workspaceRef,
   WORKSPACE_APP_GRANT_PERMISSIONS,
@@ -36,13 +38,7 @@ const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 
 const targetSchema = z.object({
   subject: z.object({
-    kind: z.enum([
-      "workspace",
-      "workspace_member",
-      "conversation",
-      "actor",
-      "remote_agent",
-    ]),
+    kind: z.enum(CAPABILITY_ACCESS_TARGET_TYPES),
     workspaceId: z.uuid().optional(),
     memberId: z.uuid().optional(),
     conversationId: z.uuid().optional(),
@@ -81,13 +77,13 @@ function toCapabilityAccessTarget(
   input: z.infer<typeof targetSchema>
 ): CapabilityAccessTarget {
   const subject =
-    input.subject.kind === "workspace"
+    input.subject.kind === SUBJECT_KIND.WORKSPACE
       ? workspaceRef(input.subject.workspaceId || "")
-      : input.subject.kind === "workspace_member"
+      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
         ? workspaceMemberRef(input.subject.memberId || "")
-        : input.subject.kind === "conversation"
+        : input.subject.kind === SUBJECT_KIND.CONVERSATION
           ? conversationRef(input.subject.conversationId || "")
-          : input.subject.kind === "actor"
+          : input.subject.kind === SUBJECT_KIND.ACTOR
             ? actorRef(input.subject.actorId || "")
             : remoteAgentRef(input.subject.remoteAgentId || "")
 
@@ -106,7 +102,7 @@ function handleError(reply: FastifyReply, error: unknown) {
   }
   const message =
     error instanceof Error ? error.message : "Internal server error"
-  if (/not found/i.test(message)) {
+  if (/not found|does not belong to this app/i.test(message)) {
     return reply.status(404).send({ error: message })
   }
   if (/not allowed|permission|forbidden/i.test(message)) {
@@ -408,7 +404,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/workspace-apps/:appId/grant-requests/:requestId/cancel",
     workspaceHook,
     async (request, reply) => {
-      const { workspaceId, requestId } = request.params as {
+      const { workspaceId, appId, requestId } = request.params as {
         workspaceId: string
         appId: string
         requestId: string
@@ -424,6 +420,7 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
       try {
         const cancelled = await cancelWorkspaceAppGrantRequestByRequester({
           workspaceId,
+          appId,
           requestId,
           userId: (request as any).user.userId,
         })

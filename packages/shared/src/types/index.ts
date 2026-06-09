@@ -2462,7 +2462,6 @@ export type PluginInstallStepKind =
   | "auth"
   | "check"
   | "confirm"
-  | "attachment_scope"
   | "reuse_scope"
   | "integration_events"
 export type PluginInstallActionKind = "auth_start" | "external_link" | "noop"
@@ -2724,8 +2723,6 @@ export interface PluginInstallationView {
   workspaceId: string
   packageId: string
   revisionId: string
-  attachmentScope: PluginAttachmentScope
-  accessTarget: CapabilityAccessTarget
   installMode: PluginInstallationMode
   reuseScope: ReuseScope
   idleTtlMs?: number
@@ -2886,8 +2883,6 @@ export interface PluginInstallPlan {
   packageId: string
   revisionId: string
   workspaceId: string
-  attachmentScope: PluginAttachmentScope
-  defaultAccessTarget: CapabilityAccessTarget
   checks: MarketplaceRequirementCheck[]
   grantPlan?: {
     requiresGrant: boolean
