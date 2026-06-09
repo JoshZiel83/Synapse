@@ -25,6 +25,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import {
   createEmptyStoredChatQueueState,
   mergeQueueStateForSave,
@@ -32,6 +33,8 @@ import {
   type ChatQueueStateLike,
   type StoredChatQueueState,
 } from "@synapse/shared"
+
+const iso = (value: string) => assertIsoInstant(value)
 
 function baseState(
   workspaceId: string,
@@ -52,7 +55,7 @@ test("merge: workspace change resets state to a fresh snapshot", () => {
         clientMessageId: "cm-1",
         conversationId: "conv-1",
         contentBlocks: [],
-        createdAt: "2026-05-22T00:00:00.000Z",
+        createdAt: iso("2026-05-22T00:00:00.000Z"),
         optimisticSequence: 1,
         status: "sending",
         attemptCount: 1,
@@ -77,7 +80,7 @@ test("merge: workspace-member change in same workspace resets state", () => {
         clientMessageId: "cm-1",
         conversationId: "conv-1",
         contentBlocks: [],
-        createdAt: "2026-05-22T00:00:00.000Z",
+        createdAt: iso("2026-05-22T00:00:00.000Z"),
         optimisticSequence: 1,
         status: "sending",
         attemptCount: 1,
@@ -97,7 +100,7 @@ test("merge: worker-dropped outbox entries get cleared from current", () => {
         clientMessageId: "cm-1",
         conversationId: "conv-1",
         contentBlocks: [],
-        createdAt: "2026-05-22T00:00:00.000Z",
+        createdAt: iso("2026-05-22T00:00:00.000Z"),
         optimisticSequence: 1,
         status: "sending",
         attemptCount: 1,
@@ -120,7 +123,7 @@ test("merge: pendingRead with higher local readUpTo survives a worker drop", () 
         conversationId: "conv-1",
         readUpToSequence: 10,
         lastVisibleSequence: 10,
-        updatedAt: "2026-05-22T00:00:00.000Z",
+        updatedAt: iso("2026-05-22T00:00:00.000Z"),
       },
     },
   })
@@ -132,7 +135,7 @@ test("merge: pendingRead with higher local readUpTo survives a worker drop", () 
         conversationId: "conv-1",
         readUpToSequence: 20,
         lastVisibleSequence: 20,
-        updatedAt: "2026-05-22T00:01:00.000Z",
+        updatedAt: iso("2026-05-22T00:01:00.000Z"),
       },
     },
   })

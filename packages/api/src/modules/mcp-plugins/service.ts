@@ -8,7 +8,6 @@ import {
   actorRef,
   conversationRef,
   normalizeConversationTypeMask,
-  nowISO,
   REUSE_SCOPES,
   remoteAgentRef,
   resolveEffectiveConversationTypeMask,
@@ -19,6 +18,7 @@ import {
   workspaceRef,
   type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
+import { assertIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   CapabilityAccessTarget,
   WorkspaceAppGrant,
@@ -50,6 +50,7 @@ import {
   type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
+import { serializeInstant } from "../../infrastructure/datetime.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
 import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
@@ -113,15 +114,15 @@ type PluginCatalogRow = {
   item_download_count: number
   item_icon_file_id: string | null
   item_metadata: unknown
-  item_created_at: string
-  item_updated_at: string
+  item_created_at: Date
+  item_updated_at: Date
   version_id: string | null
   version_value: string | null
   version_status: "draft" | "active" | "deprecated" | "archived" | null
   version_changelog: string | null
   version_metadata: unknown
   version_created_by_user_id: string | null
-  version_created_at: string | null
+  version_created_at: Date | null
   spec_transport: PluginSpecTransport | null
   spec_entry_point: string | null
   spec_tool_manifest: unknown
@@ -166,8 +167,8 @@ type PublisherRow = {
   workspace_id: string | null
   is_builtin: boolean
   is_verified: boolean
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
   plugin_count?: string | number | null
 }
 
@@ -183,8 +184,8 @@ type InstallationRow = {
   root_conversation_type_mask_override: number | null
   root_status: "active" | "disabled" | "error" | "archived"
   root_owner_workspace_member_id: string | null
-  root_created_at: string
-  root_updated_at: string
+  installation_created_at: Date
+  installation_updated_at: Date
   source_catalog_item_id: string | null
   source_catalog_version_id: string | null
   source_sync_mode:
@@ -591,8 +592,8 @@ function mapPluginView(row: PluginCatalogRow) {
     is_active: row.item_is_active,
     is_builtin: row.item_source_kind === "builtin" || row.publisher_is_builtin,
     download_count: row.item_download_count || 0,
-    created_at: row.item_created_at,
-    updated_at: row.item_updated_at,
+    created_at: serializeInstant(row.item_created_at),
+    updated_at: serializeInstant(row.item_updated_at),
     org_slug: row.publisher_slug,
     org_display_name: row.publisher_display_name,
     publisher: {
@@ -622,8 +623,8 @@ function mapPublisherView(row: PublisherRow) {
       typeof row.plugin_count === "number"
         ? row.plugin_count
         : Number(row.plugin_count || 0),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    created_at: serializeInstant(row.created_at),
+    updated_at: serializeInstant(row.updated_at),
   }
 }
 
@@ -639,7 +640,7 @@ function isSecretConfigField(
 }
 
 function sanitizeInstallationConfig(
-  installation: { config_data: unknown; updated_at: string },
+  installation: { config_data: unknown; updated_at: Date },
   configSchema: Record<string, unknown>,
   configFields: PluginConfigFieldDefinition[],
   authBindings: PluginAuthBindingDefinition[]
@@ -674,8 +675,8 @@ function sanitizeInstallationConfig(
             : undefined,
         updatedAt:
           typeof ref.updatedAt === "string"
-            ? ref.updatedAt
-            : installation.updated_at,
+            ? assertIsoInstant(ref.updatedAt)
+            : serializeInstant(installation.updated_at),
       })
       sanitizedConfig[key] = {
         bindingKey:
@@ -705,7 +706,7 @@ function sanitizeInstallationConfig(
         key,
         isConfigured: value !== undefined && value !== null && value !== "",
         maskedValue: masked,
-        updatedAt: installation.updated_at,
+        updatedAt: serializeInstant(installation.updated_at),
       })
       continue
     }
@@ -714,7 +715,7 @@ function sanitizeInstallationConfig(
       configState.push({
         key,
         isConfigured: value !== undefined && value !== null && value !== "",
-        updatedAt: installation.updated_at,
+        updatedAt: serializeInstant(installation.updated_at),
       })
       continue
     }
@@ -1108,7 +1109,7 @@ function buildInstallationPayload(
   const { sanitizedConfig, configState } = sanitizeInstallationConfig(
     {
       config_data: row.config_data,
-      updated_at: row.root_updated_at,
+      updated_at: row.installation_updated_at,
     },
     plugin.config_schema || {},
     plugin.config_fields || [],
@@ -1133,8 +1134,8 @@ function buildInstallationPayload(
     config_state: configState,
     approved_runtime_permissions: row.approved_runtime_permissions || [],
     ownerWorkspaceMemberId: row.root_owner_workspace_member_id,
-    created_at: row.root_created_at,
-    updated_at: row.root_updated_at,
+    created_at: serializeInstant(row.installation_created_at),
+    updated_at: serializeInstant(row.installation_updated_at),
     source_catalog_item_id: row.source_catalog_item_id,
     source_catalog_version_id: row.source_catalog_version_id,
     source_sync_mode: row.source_sync_mode,
@@ -1270,7 +1271,6 @@ async function ensureCatalogItem(
         is_active: true,
         icon_file_id: input.iconFileId || null,
         metadata: sql`${JSON.stringify(metadata)}::jsonb`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId)
       .execute()
@@ -1429,7 +1429,6 @@ async function upsertPluginVersion(
     .updateTable("catalog_items")
     .set({
       latest_version_id: versionId,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", itemId)
     .execute()
@@ -1503,7 +1502,6 @@ export async function createOrganization(data: {
           owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
           is_builtin: data.isBuiltin === true,
           is_verified: data.isVerified === true,
-          updated_at: sql`NOW()`,
         })
     )
     .returningAll()
@@ -1865,7 +1863,6 @@ export async function installPluginUnified(data: {
         .set({
           config_data:
             encryptedConfig as TableInsert<"plugin_installations">["config_data"],
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installationId)
     )
@@ -1886,7 +1883,6 @@ export async function installPluginUnified(data: {
         .updateTable("catalog_items")
         .set({
           download_count: sql`download_count + 1`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", plugin.id)
     )
@@ -1948,7 +1944,6 @@ export async function tearDownPluginInstallationOn(
       .set({
         deleted_at: sql`NOW()`,
         status: "revoked",
-        updated_at: sql`NOW()`,
       })
       .where("installation_id", "=", installId)
       .where("deleted_at", "is", null)
@@ -2191,7 +2186,6 @@ export async function updateInstallation(
         .updateTable("plugin_installations")
         .set({
           config_data: sql`${JSON.stringify(encryptedConfig)}::jsonb`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
         .execute()
@@ -2206,7 +2200,6 @@ export async function updateInstallation(
         .updateTable("plugin_installations")
         .set({
           reuse_scope: internalReuseScope(nextLifecycleScope),
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
         .execute()
@@ -2243,7 +2236,7 @@ export async function updateInstallation(
       type: "mcp.config.changed",
       workspaceId,
       payload: { pluginId: row.catalog_item_id, workspaceId },
-      timestamp: nowISO(),
+      timestamp: nowIsoInstant(),
     })
   }
 
@@ -2693,7 +2686,6 @@ export async function seedBuiltinPluginCategories() {
             },
             defaultLocale: category.defaultLocale || "en",
           } as TableInsert<"catalog_categories">["metadata"],
-          updated_at: sql`NOW()`,
         })
       )
       .execute()

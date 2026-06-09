@@ -30,7 +30,6 @@ import {
   type SessionTrigger,
   isGroupConversationKind,
   isThreadConversationKind,
-  nowISO,
 } from "@synapse/shared"
 import { sql } from "kysely"
 import { SUBJECT_KIND } from "@synapse/shared"
@@ -86,8 +85,7 @@ function normalizeSessionRow(row: any) {
     isImConversation: Boolean(row.conversation_is_im),
     conversationTitle: row.conversation_title,
     collaborationMode: row.collaboration_mode || "default",
-    activePlanApprovalInteractionId:
-      row.active_plan_approval_interaction_id || undefined,
+    activePlanApprovalTaskId: row.active_plan_approval_task_id || undefined,
     collaborationState: parseSessionCollaborationState(
       parseJsonObject(row.collaboration_state)
     ),
@@ -313,7 +311,6 @@ export async function updateSessionStatus(
     .updateTable("sessions")
     .set({
       status,
-      updated_at: sql`NOW()`,
       completed_at: status === "closed" ? sql`NOW()` : null,
       ...(extra?.errorMessage !== undefined
         ? { error_message: extra.errorMessage }
@@ -328,13 +325,11 @@ export async function updateSessionCollaboration(
     sessionId: UUID
     collaborationMode?: SessionCollaborationMode
     collaborationState?: SessionCollaborationState
-    activePlanApprovalInteractionId?: UUID | null
+    activePlanApprovalTaskId?: UUID | null
   },
   queryable: Executor = db
 ): Promise<void> {
-  const values: Record<string, unknown> = {
-    updated_at: sql`NOW()`,
-  }
+  const values: Record<string, unknown> = {}
 
   if (params.collaborationMode) {
     values.collaboration_mode = params.collaborationMode
@@ -344,9 +339,9 @@ export async function updateSessionCollaboration(
       params.collaborationState
     ) as Record<string, unknown>
   }
-  if ("activePlanApprovalInteractionId" in params) {
-    values.active_plan_approval_interaction_id =
-      params.activePlanApprovalInteractionId ?? null
+  if ("activePlanApprovalTaskId" in params) {
+    values.active_plan_approval_task_id =
+      params.activePlanApprovalTaskId ?? null
   }
 
   await runBuilder(

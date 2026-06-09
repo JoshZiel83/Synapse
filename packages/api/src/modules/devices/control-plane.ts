@@ -1,3 +1,4 @@
+import { nowIsoInstant } from "@synapse/shared/datetime"
 // Device Control Plane WSS handler (§7.1).
 //
 // Authentication flow:
@@ -357,7 +358,6 @@ async function insertControlPlaneSession(args: {
     .set({
       current_session_id: sessionId,
       last_seen_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     } as never)
     .where("id", "=", args.serviceId)
     .execute()
@@ -375,7 +375,7 @@ async function ensureTunnelPathToken(serviceId: string): Promise<string> {
   const fresh = randomBytes(32).toString("hex")
   await db
     .updateTable("device_services")
-    .set({ tunnel_path_token: fresh, updated_at: sql`NOW()` } as never)
+    .set({ tunnel_path_token: fresh } as never)
     .where("id", "=", serviceId)
     .where("tunnel_path_token", "is", null)
     .execute()
@@ -409,7 +409,6 @@ async function closeControlPlaneSession(
         status: "closed",
         ended_at: sql`NOW()`,
         close_reason: reason,
-        updated_at: sql`NOW()`,
       } as never)
       .where("id", "=", sessionId)
       .execute()
@@ -417,7 +416,6 @@ async function closeControlPlaneSession(
       .updateTable("device_services")
       .set({
         current_session_id: null,
-        updated_at: sql`NOW()`,
       } as never)
       .where("current_session_id", "=", sessionId)
       .execute()
@@ -591,7 +589,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 }
                 writeResult(socket, req.id ?? null, {
                   accepted: true,
-                  server_time: new Date().toISOString(),
+                  server_time: nowIsoInstant(),
                   service_key_id: result.serviceKeyId,
                   pubkey_fingerprint: result.pubkeyFingerprint,
                   control_plane_session_id: state.sessionId,

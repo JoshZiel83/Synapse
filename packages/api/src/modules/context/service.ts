@@ -45,7 +45,6 @@ async function ensureConversationContextState(conversationId: string) {
     .insertInto("conversation_context_states")
     .values({
       conversation_id: conversationId,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) => oc.columns(["conversation_id"]).doNothing())
     .execute()
@@ -56,7 +55,6 @@ async function ensureSessionContextState(sessionId: string) {
     .insertInto("session_context_states")
     .values({
       session_id: sessionId,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) => oc.columns(["session_id"]).doNothing())
     .execute()
@@ -483,8 +481,7 @@ async function maybeCompactChain(params: {
 
     await sql`
       UPDATE ${sql.table(stateTable)}
-      SET ${sql.ref(archiveIdColumn)} = ${archivePointId},
-          updated_at = NOW()
+      SET ${sql.ref(archiveIdColumn)} = ${archivePointId}
       WHERE ${sql.ref(stateIdColumn)} = ${stateIdValue}`.execute(trx)
   })
 }

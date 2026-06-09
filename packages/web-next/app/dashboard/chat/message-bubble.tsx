@@ -13,11 +13,16 @@ import type {
   ConversationReplyRef,
   TaskSummary,
   RemoteAgentRuntimeState,
+  Timestamp,
 } from "@synapse/shared"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
-  INTERACTION_REQUEST_KIND,
+  TASK_REQUEST_KIND,
 } from "@synapse/shared"
+import {
+  assertIsoInstant,
+  type IsoInstantString,
+} from "@synapse/shared/datetime"
 import type {
   RuntimeAuthorizationGrantSpec,
   RuntimeAuthorizationPreset,
@@ -70,10 +75,7 @@ import {
 } from "@/stores/chat-store"
 import type { ServerToolCall } from "@synapse/shared"
 import type { ConversationMember } from "@/stores/chat-store"
-import type {
-  ChatInteractionResolveInput,
-  ChatInteractionResolvePayload,
-} from "@/lib/api"
+import type { ChatTaskResolveInput, ChatTaskResolvePayload } from "@/lib/api"
 import { cn, resolveContentUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
 import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
@@ -92,7 +94,7 @@ import {
   type TablePreviewContent,
 } from "./table-preview-overlay"
 
-type InteractionResolutionDraftPayload = ChatInteractionResolvePayload
+type TaskResolutionDraftPayload = ChatTaskResolvePayload
 
 interface MessageBubbleProps {
   kind?: "message" | "event"
@@ -107,7 +109,7 @@ interface MessageBubbleProps {
   actorRole?: string
   actorRuntime?: ActorRuntimeState
   remoteAgentRuntime?: RemoteAgentRuntimeState
-  timestamp?: string
+  timestamp?: Timestamp
   isUser: boolean
   status?: "sending" | "retrying" | "sent"
   toolsUsed?: string[]
@@ -127,7 +129,7 @@ interface MessageBubbleProps {
   }>
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
-  interaction?: TaskSummary
+  task?: TaskSummary
   enableTablePreview?: boolean
   viewerWorkspaceMemberId?: string
   contactBasePath?: string
@@ -135,9 +137,9 @@ interface MessageBubbleProps {
   onParticipantClick?: (member: ConversationMember) => void
   onQuoteMessage?: (replyTo: ConversationReplyRef) => void
   onRetryModelError?: (itemId: string) => Promise<void> | void
-  onResolveInteraction?: (
-    interactionId: string,
-    payload: ChatInteractionResolveInput
+  onResolveTask?: (
+    taskId: string,
+    payload: ChatTaskResolveInput
   ) => Promise<TaskSummary | void> | TaskSummary | void
 }
 
@@ -398,7 +400,7 @@ function buildMessageReplyRef(input: {
   author?: ConversationEntityRef
   content: string
   contentBlocks: CanonicalContentBlock[]
-  createdAt?: string
+  createdAt?: IsoInstantString
 }) {
   return {
     itemId: input.messageId,
@@ -455,8 +457,38 @@ function MessageReplyPreview({
   )
 }
 
-function getInteractionStatusLabel(status: TaskSummary["status"]) {
-  switch (status) {
+type TaskDisplayState =
+  | "pending"
+  | "answered"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "cancelled"
+  | "failed"
+
+function isTaskOpen(task: TaskSummary) {
+  return (
+    task.lifecycleStatus === "submitted" ||
+    task.lifecycleStatus === "working" ||
+    task.lifecycleStatus === "input_required" ||
+    task.lifecycleStatus === "auth_required"
+  )
+}
+
+function getTaskDisplayState(task: TaskSummary): TaskDisplayState {
+  if (isTaskOpen(task)) return "pending"
+  if (task.lifecycleStatus === "cancelled") return "cancelled"
+  if (task.lifecycleStatus === "expired") return "expired"
+  if (task.lifecycleStatus === "failed") return "failed"
+  if (task.kind === TASK_REQUEST_KIND.USER_INPUT) return "answered"
+  if (task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
+    return task.outcome === "approved" ? "approved" : "rejected"
+  }
+  return task.outcome === "granted" ? "approved" : "rejected"
+}
+
+function getTaskStateLabel(state: TaskDisplayState) {
+  switch (state) {
     case "pending":
       return "Pending"
     case "answered":
@@ -467,21 +499,24 @@ function getInteractionStatusLabel(status: TaskSummary["status"]) {
       return "Rejected"
     case "expired":
       return "Expired"
-    case "superseded":
-      return "Superseded"
+    case "cancelled":
+      return "Cancelled"
+    case "failed":
+      return "Failed"
     default:
-      return status
+      return state
   }
 }
 
-function getInteractionStatusBadgeClassName(status: TaskSummary["status"]) {
-  switch (status) {
+function getTaskStateBadgeClassName(state: TaskDisplayState) {
+  switch (state) {
     case "answered":
     case "approved":
       return "border-emerald-500/25 bg-emerald-500/10 text-emerald-700"
     case "rejected":
     case "expired":
-    case "superseded":
+    case "cancelled":
+    case "failed":
       return "border-destructive/25 bg-destructive/10 text-destructive"
     default:
       return "border-amber-500/25 bg-amber-500/10 text-amber-700"
@@ -657,17 +692,14 @@ type DraftQuestionAnswer = {
 }
 
 function buildDraftQuestionAnswers(
-  interaction: TaskSummary
+  task: TaskSummary
 ): Record<string, DraftQuestionAnswer> {
-  if (
-    interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
-    !interaction.userInput
-  ) {
+  if (task.kind !== TASK_REQUEST_KIND.USER_INPUT || !task.userInput) {
     return {}
   }
 
   return Object.fromEntries(
-    interaction.userInput.questions.map((question) => [
+    task.userInput.questions.map((question) => [
       question.id,
       {
         selectedOptionIds: [...(question.answer?.selectedOptionIds || [])],
@@ -694,17 +726,18 @@ function summarizeQuestionFieldAnswer(
   return parts.join(" | ")
 }
 
-function InteractionStatusNote({
-  interaction,
+function TaskStatusNote({
+  task,
   viewerCanResolve,
 }: {
-  interaction: TaskSummary
+  task: TaskSummary
   viewerCanResolve: boolean
 }) {
-  const targetName = interaction.target?.name || "the selected user"
+  const targetName = task.target?.name || "the selected user"
+  const taskState = getTaskDisplayState(task)
 
-  if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    if (interaction.status === "pending") {
+  if (task.kind === TASK_REQUEST_KIND.USER_INPUT) {
+    if (taskState === "pending") {
       return (
         <p className="text-xs text-muted-foreground">
           {viewerCanResolve
@@ -713,10 +746,10 @@ function InteractionStatusNote({
         </p>
       )
     }
-    if (interaction.status === "answered") {
-      const questionCount = interaction.userInput?.questions.length || 0
+    if (taskState === "answered") {
+      const questionCount = task.userInput?.questions.length || 0
       const answerSummary =
-        interaction.userInput?.questions
+        task.userInput?.questions
           .map((question) => {
             const summary = summarizeQuestionFieldAnswer(question)
             if (!summary) return ""
@@ -728,15 +761,15 @@ function InteractionStatusNote({
           .join(" | ") || "a response"
       return (
         <p className="text-xs text-muted-foreground">
-          {`${interaction.resolvedBy?.name || targetName} answered: ${answerSummary}.`}
+          {`${task.resolvedBy?.name || targetName} answered: ${answerSummary}.`}
         </p>
       )
     }
     return null
   }
 
-  if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-    if (interaction.status === "pending") {
+  if (task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
+    if (taskState === "pending") {
       return (
         <p className="text-xs text-muted-foreground">
           {viewerCanResolve
@@ -745,24 +778,24 @@ function InteractionStatusNote({
         </p>
       )
     }
-    if (interaction.status === "approved") {
+    if (taskState === "approved") {
       return (
         <p className="text-xs text-muted-foreground">
-          {`${interaction.resolvedBy?.name || targetName} approved the plan.`}
+          {`${task.resolvedBy?.name || targetName} approved the plan.`}
         </p>
       )
     }
-    if (interaction.status === "rejected") {
+    if (taskState === "rejected") {
       return (
         <p className="text-xs text-muted-foreground">
-          {`${interaction.resolvedBy?.name || targetName} requested revisions.`}
+          {`${task.resolvedBy?.name || targetName} requested revisions.`}
         </p>
       )
     }
     return null
   }
 
-  if (interaction.status === "pending") {
+  if (taskState === "pending") {
     return (
       <p className="text-xs text-muted-foreground">
         {viewerCanResolve
@@ -771,71 +804,65 @@ function InteractionStatusNote({
       </p>
     )
   }
-  if (interaction.status === "approved") {
+  if (taskState === "approved") {
     return (
       <p className="text-xs text-muted-foreground">
         The runtime authorization is active and the blocked action can continue.
       </p>
     )
   }
-  if (interaction.status === "rejected") {
+  if (taskState === "rejected") {
     return (
       <p className="text-xs text-muted-foreground">
         The authorization request was rejected.
       </p>
     )
   }
-  if (interaction.status === "expired") {
+  if (taskState === "expired") {
     return (
       <p className="text-xs text-muted-foreground">
         This authorization request expired before it was resolved.
       </p>
     )
   }
-  if (interaction.status === "superseded") {
-    return (
-      <p className="text-xs text-muted-foreground">
-        A newer user message superseded this authorization request.
-      </p>
-    )
-  }
   return null
 }
 
-function InteractionCard({
-  interaction,
-  onResolveInteraction,
+function TaskCard({
+  task,
+  onResolveTask,
 }: {
-  interaction: TaskSummary
-  onResolveInteraction?: MessageBubbleProps["onResolveInteraction"]
+  task: TaskSummary
+  onResolveTask?: MessageBubbleProps["onResolveTask"]
 }) {
   const [submittingAction, setSubmittingAction] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [resolutionNoteDraft, setResolutionNoteDraft] = useState("")
   const [draftAnswers, setDraftAnswers] = useState<
     Record<string, DraftQuestionAnswer>
-  >(() => buildDraftQuestionAnswers(interaction))
+  >(() => buildDraftQuestionAnswers(task))
   const [selectedRuntimeGrantOptionId, setSelectedRuntimeGrantOptionId] =
     useState<string | null>(
-      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
+      task.runtimeAuthorization?.grantOptions[0]?.id || null
     )
 
-  const viewerCanResolve = interaction.viewerCanResolve === true
+  const viewerCanResolve = task.viewerCanResolve === true
+  const taskIsOpen = isTaskOpen(task)
   const canResolveUserInput =
-    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
-    Boolean(onResolveInteraction) &&
+    task.kind === TASK_REQUEST_KIND.USER_INPUT &&
+    Boolean(onResolveTask) &&
     viewerCanResolve &&
-    interaction.status === "pending"
+    taskIsOpen
   const canResolvePlanApproval =
-    interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL &&
-    Boolean(onResolveInteraction) &&
+    task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL &&
+    Boolean(onResolveTask) &&
     viewerCanResolve &&
-    interaction.status === "pending"
+    taskIsOpen
   const canResolveRuntimeAuthorization =
-    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    Boolean(onResolveInteraction) &&
+    task.kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    Boolean(onResolveTask) &&
     viewerCanResolve &&
-    interaction.status === "pending"
+    taskIsOpen
   const canResolve =
     canResolveUserInput ||
     canResolvePlanApproval ||
@@ -845,30 +872,30 @@ function InteractionCard({
     setSubmittingAction(null)
     setSubmitError(null)
     setResolutionNoteDraft("")
-    setDraftAnswers(buildDraftQuestionAnswers(interaction))
+    setDraftAnswers(buildDraftQuestionAnswers(task))
     setSelectedRuntimeGrantOptionId(
-      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
+      task.runtimeAuthorization?.grantOptions[0]?.id || null
     )
-  }, [interaction.id, interaction.revision, interaction.status])
+  }, [task.id, task.revision, task.lifecycleStatus, task.outcome])
 
   async function submitResolution(
     actionKey: string,
-    payload: InteractionResolutionDraftPayload
+    payload: TaskResolutionDraftPayload
   ) {
-    if (!onResolveInteraction || !canResolve) return
+    if (!onResolveTask || !canResolve) return
     setSubmittingAction(actionKey)
     setSubmitError(null)
     try {
       const commandId =
         typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
-          : `interaction-${Date.now().toString(36)}-${Math.random()
+          : `task-${Date.now().toString(36)}-${Math.random()
               .toString(16)
               .slice(2)}`
-      await onResolveInteraction(interaction.id, {
+      await onResolveTask(task.id, {
         ...payload,
         commandId,
-        baseRevision: interaction.revision,
+        baseRevision: task.revision,
       })
     } catch (error) {
       setSubmitError(
@@ -897,14 +924,11 @@ function InteractionCard({
   }
 
   function buildUserInputAnswerPayload() {
-    if (
-      interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
-      !interaction.userInput
-    ) {
+    if (task.kind !== TASK_REQUEST_KIND.USER_INPUT || !task.userInput) {
       return []
     }
 
-    return interaction.userInput.questions.map((question) => {
+    return task.userInput.questions.map((question) => {
       const draft = draftAnswers[question.id] || {
         selectedOptionIds: [],
         otherText: "",
@@ -922,11 +946,8 @@ function InteractionCard({
     })
   }
 
-  if (
-    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
-    interaction.userInput
-  ) {
-    const userInput = interaction.userInput
+  if (task.kind === TASK_REQUEST_KIND.USER_INPUT && task.userInput) {
+    const userInput = task.userInput
     const questions = userInput.questions
     const isSimpleSingleSelect =
       canResolveUserInput &&
@@ -948,10 +969,10 @@ function InteractionCard({
             variant="outline"
             className={cn(
               "rounded-full",
-              getInteractionStatusBadgeClassName(interaction.status)
+              getTaskStateBadgeClassName(getTaskDisplayState(task))
             )}
           >
-            {getInteractionStatusLabel(interaction.status)}
+            {getTaskStateLabel(getTaskDisplayState(task))}
           </Badge>
         </div>
 
@@ -1256,13 +1277,10 @@ function InteractionCard({
           </div>
         ) : null}
 
-        <InteractionStatusNote
-          interaction={interaction}
-          viewerCanResolve={viewerCanResolve}
-        />
-        {interaction.resolutionNote ? (
+        <TaskStatusNote task={task} viewerCanResolve={viewerCanResolve} />
+        {task.resolutionNote ? (
           <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-            {interaction.resolutionNote}
+            {task.resolutionNote}
           </div>
         ) : null}
         {submitError ? (
@@ -1274,11 +1292,8 @@ function InteractionCard({
     )
   }
 
-  if (
-    interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL &&
-    interaction.planApproval
-  ) {
-    const planApproval = interaction.planApproval
+  if (task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL && task.planApproval) {
+    const planApproval = task.planApproval
 
     return (
       <div className="space-y-3">
@@ -1294,10 +1309,10 @@ function InteractionCard({
             variant="outline"
             className={cn(
               "rounded-full",
-              getInteractionStatusBadgeClassName(interaction.status)
+              getTaskStateBadgeClassName(getTaskDisplayState(task))
             )}
           >
-            {getInteractionStatusLabel(interaction.status)}
+            {getTaskStateLabel(getTaskDisplayState(task))}
           </Badge>
         </div>
 
@@ -1390,13 +1405,10 @@ function InteractionCard({
           </div>
         ) : null}
 
-        <InteractionStatusNote
-          interaction={interaction}
-          viewerCanResolve={viewerCanResolve}
-        />
-        {interaction.resolutionNote ? (
+        <TaskStatusNote task={task} viewerCanResolve={viewerCanResolve} />
+        {task.resolutionNote ? (
           <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-            {interaction.resolutionNote}
+            {task.resolutionNote}
           </div>
         ) : null}
         {submitError ? (
@@ -1409,10 +1421,10 @@ function InteractionCard({
   }
 
   if (
-    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    interaction.runtimeAuthorization
+    task.kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    task.runtimeAuthorization
   ) {
-    const runtimeAuthorization = interaction.runtimeAuthorization
+    const runtimeAuthorization = task.runtimeAuthorization
     if (!runtimeAuthorization) {
       return null
     }
@@ -1431,10 +1443,10 @@ function InteractionCard({
             variant="outline"
             className={cn(
               "rounded-full",
-              getInteractionStatusBadgeClassName(interaction.status)
+              getTaskStateBadgeClassName(getTaskDisplayState(task))
             )}
           >
-            {getInteractionStatusLabel(interaction.status)}
+            {getTaskStateLabel(getTaskDisplayState(task))}
           </Badge>
         </div>
 
@@ -1661,13 +1673,10 @@ function InteractionCard({
           </div>
         ) : null}
 
-        <InteractionStatusNote
-          interaction={interaction}
-          viewerCanResolve={viewerCanResolve}
-        />
-        {interaction.resolutionNote ? (
+        <TaskStatusNote task={task} viewerCanResolve={viewerCanResolve} />
+        {task.resolutionNote ? (
           <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-            {interaction.resolutionNote}
+            {task.resolutionNote}
           </div>
         ) : null}
         {submitError ? (
@@ -2528,7 +2537,7 @@ export default function MessageBubble({
   workspaceActors,
   transport,
   transportDeliveries,
-  interaction,
+  task,
   enableTablePreview = false,
   viewerWorkspaceMemberId,
   contactBasePath = "/dashboard/contacts",
@@ -2536,7 +2545,7 @@ export default function MessageBubble({
   onParticipantClick,
   onQuoteMessage,
   onRetryModelError,
-  onResolveInteraction,
+  onResolveTask,
 }: MessageBubbleProps) {
   const router = useRouter()
   const isMobile = useIsMobile()
@@ -2690,10 +2699,10 @@ export default function MessageBubble({
     y: number
     selectedText?: string
   } | null>(null)
-  const canCopyMessage = kind === "message" && !interaction
+  const canCopyMessage = kind === "message" && !task
   const canQuoteMessage =
     kind === "message" &&
-    !interaction &&
+    !task &&
     !messageId.startsWith("local:") &&
     Boolean(onQuoteMessage)
   const canOpenMessageMenu = canCopyMessage || canQuoteMessage
@@ -2781,7 +2790,7 @@ export default function MessageBubble({
         author,
         content: textContent,
         contentBlocks,
-        createdAt: timestamp,
+        createdAt: timestamp ? assertIsoInstant(timestamp) : undefined,
       })
     )
 
@@ -2816,7 +2825,7 @@ export default function MessageBubble({
         author,
         content: textContent,
         contentBlocks,
-        createdAt: timestamp,
+        createdAt: timestamp ? assertIsoInstant(timestamp) : undefined,
       })
     )
     setContextMenu(null)
@@ -2896,7 +2905,7 @@ export default function MessageBubble({
     )
   }
 
-  if (isSystem && !interaction) {
+  if (isSystem && !task) {
     return (
       <div className="my-2 flex w-full max-w-full min-w-0 justify-center">
         <TwemojiScope className="max-w-[80%] text-center text-xs text-muted-foreground/75">
@@ -2919,7 +2928,7 @@ export default function MessageBubble({
     restrictedAudienceParticipantIds?.includes(viewerParticipantId) &&
     onRetryModelError
   )
-  const shouldRenderCompact = !interaction && !isUser && coordination
+  const shouldRenderCompact = !task && !isUser && coordination
 
   // Coordination traffic stays compact so the main thread focuses on the main exchange.
   if (shouldRenderCompact) {
@@ -3200,11 +3209,8 @@ export default function MessageBubble({
               } `}
               onContextMenu={canOpenMessageMenu ? openContextMenu : undefined}
             >
-              {interaction ? (
-                <InteractionCard
-                  interaction={interaction}
-                  onResolveInteraction={onResolveInteraction}
-                />
+              {task ? (
+                <TaskCard task={task} onResolveTask={onResolveTask} />
               ) : (
                 <>
                   {replyTo ? (
@@ -3222,12 +3228,10 @@ export default function MessageBubble({
               )}
 
               {/* Citation sources footer */}
-              {!interaction && hasCitations && (
-                <CitationFooter sources={sources} />
-              )}
+              {!task && hasCitations && <CitationFooter sources={sources} />}
 
               {/* Server tool calls (web_search / web_fetch) — inside the bubble */}
-              {!interaction && hasServerToolCalls && (
+              {!task && hasServerToolCalls && (
                 <ServerToolCallDisplay calls={serverToolCalls} />
               )}
             </div>

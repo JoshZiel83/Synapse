@@ -10,6 +10,10 @@ import {
   type ScopedSubjectTarget,
   type SubjectRef,
 } from "@synapse/shared"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 
 export type AutomationEventSourceBindingResourceType = "automation_event_source"
 
@@ -39,8 +43,8 @@ export type AutomationEventSourceBindingRow =
     source: "manual" | "default_open" | "approval" | "system"
     created_by_workspace_member_id: string | null
     reason: string | null
-    created_at: string
-    revoked_at: string | null
+    created_at: Date
+    revoked_at: Date | null
   }
 
 export function readAutomationEventSourceAccessBindingResourceId(
@@ -461,8 +465,8 @@ export function mapAutomationEventSourceAccessBindingToGrant(
     reason: row.reason || fallbackReason,
     conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask: options?.effectiveConversationTypeMask,
-    createdAt: row.created_at,
-    revokedAt: row.revoked_at || undefined,
+    createdAt: serializeInstant(row.created_at),
+    revokedAt: serializeOptionalInstant(row.revoked_at),
   }
 }
 

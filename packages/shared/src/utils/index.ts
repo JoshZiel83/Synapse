@@ -38,10 +38,6 @@ export function paginate(page: number, pageSize: number, maxPageSize = 100) {
   return { offset: (p - 1) * ps, limit: ps, page: p, pageSize: ps }
 }
 
-export function nowISO(): string {
-  return new Date().toISOString()
-}
-
 /**
  * Human-readable byte size with binary (1024) units: "512 B", "1.5 KB",
  * "2.0 MB". Consolidates the byte-for-byte-identical formatBytes copied across

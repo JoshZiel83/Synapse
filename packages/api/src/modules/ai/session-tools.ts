@@ -1,13 +1,18 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { z } from "zod"
 import {
+  assertIsoInstant,
+  dateToIsoInstant,
+  nowIsoInstant,
+} from "@synapse/shared/datetime"
+import {
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_MASK_PRESETS,
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
   describeTransportKind,
-  INTERACTION_INPUT_QUESTION_TYPES,
+  TASK_INPUT_QUESTION_TYPES,
   isGroupConversationKind,
   isThreadConversationKind,
   isTransportKind,
@@ -27,9 +32,9 @@ import type {
   CapabilityInvocationContext,
   ConversationParticipantEntry,
   ConversationEntityRef,
-  InteractionInputOption,
-  InteractionInputQuestionDefinition,
-  InteractionInputQuestionType,
+  TaskInputOption,
+  TaskInputQuestionDefinition,
+  TaskInputQuestionType,
   PlanChecklistStep,
 } from "@synapse/shared/types"
 import { rethrowToolExecutionError, throwToolError } from "./tool-errors.js"
@@ -48,10 +53,10 @@ import {
   canUpdatePlan,
 } from "./session-plan-mode.js"
 import {
-  buildUserInteractionCandidatesFromEntries,
-  buildUserInteractionCandidatesFromRows,
-  type UserInteractionCandidate,
-} from "./session-tool-user-interactions.js"
+  buildUserTaskTargetCandidatesFromEntries,
+  buildUserTaskTargetCandidatesFromRows,
+  type UserTaskTargetCandidate,
+} from "./session-tool-user-task-targets.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { sql } from "kysely"
@@ -91,11 +96,11 @@ import {
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js"
 import {
-  cancelInteractionRequestByTaskId,
-  createPlanApprovalInteractionRequest,
-  createUserInputInteractionRequest,
+  cancelTaskRequestByTaskId,
+  createPlanApprovalTaskRequest,
+  createUserInputTaskRequest,
   getTaskSummaryByTaskId,
-} from "../interactions/service.js"
+} from "../tasks/service.js"
 
 type InviteableActor = {
   id: string
@@ -142,14 +147,12 @@ type ToolUserInputQuestionInput = {
 }
 
 const sendToIntentSchema = z.enum(SEND_TO_INTENTS)
-const userInputQuestionTypeOptions = [...INTERACTION_INPUT_QUESTION_TYPES]
+const userInputQuestionTypeOptions = [...TASK_INPUT_QUESTION_TYPES]
 const selectableQuestionFieldTypeOptions = userInputQuestionTypeOptions.filter(
   (
     value
-  ): value is Exclude<
-    (typeof INTERACTION_INPUT_QUESTION_TYPES)[number],
-    "text"
-  > => value !== "text"
+  ): value is Exclude<(typeof TASK_INPUT_QUESTION_TYPES)[number], "text"> =>
+    value !== "text"
 )
 const sendToInputSchema = z.strictObject({
   message: z.string().trim().min(1).max(12000),
@@ -201,7 +204,7 @@ function normalizeRawSendToInput(input: Record<string, unknown>) {
 }
 
 function formatUtcTimestamp(date: Date) {
-  return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`
+  return `${dateToIsoInstant(date).slice(0, 19).replace("T", " ")} UTC`
 }
 
 async function requireCurrentAutomationParticipant(params: {
@@ -498,15 +501,15 @@ function buildSendToCandidates(
   return candidates
 }
 
-function buildUserInteractionDirectory(candidates: UserInteractionCandidate[]) {
+function buildUserTaskTargetDirectory(candidates: UserTaskTargetCandidate[]) {
   return candidates
     .map((candidate) => `\`${candidate.participantId}\`: ${candidate.label}`)
     .join(", ")
 }
 
-function resolveUserInteractionCandidate(
+function resolveUserTaskTargetCandidate(
   requestedParticipantId: string,
-  candidates: UserInteractionCandidate[]
+  candidates: UserTaskTargetCandidate[]
 ) {
   const candidate =
     candidates.find(
@@ -522,10 +525,10 @@ function resolveUserInteractionCandidate(
   }
 }
 
-function resolveHumanInteractionTarget(params: {
+function resolveHumanTaskTarget(params: {
   requestedParticipantId?: string
   conversationKind?: string
-  candidates: UserInteractionCandidate[]
+  candidates: UserTaskTargetCandidate[]
 }) {
   const requestedParticipantId = params.requestedParticipantId?.trim() || ""
   const isDirectConversation =
@@ -558,7 +561,7 @@ function resolveHumanInteractionTarget(params: {
     }
   }
 
-  return resolveUserInteractionCandidate(
+  return resolveUserTaskTargetCandidate(
     requestedParticipantId,
     params.candidates
   )
@@ -618,7 +621,7 @@ async function createGovernedToolCallTask(params: {
   executorKind: "user_input" | "plan_approval" | "runtime_authorization"
   requestPayload: Record<string, unknown>
   summary: string
-  expiresAt?: string
+  expiresAt?: import("@synapse/shared").Timestamp
   supportsCancel?: boolean
 }) {
   const { context } = params
@@ -714,15 +717,12 @@ async function loadSessionTaskOrThrow(sessionId: string, taskId: string) {
   return task
 }
 
-async function cancelHumanInteractionTask(
-  task: ToolCallTaskRecord,
-  reason?: string
-) {
+async function cancelHumanTask(task: ToolCallTaskRecord, reason?: string) {
   const note = reason?.trim()
-  // cancelInteractionRequestByTaskId flips lifecycle=cancelled in-tx; here we
+  // cancelTaskRequestByTaskId flips lifecycle=cancelled in-tx; here we
   // just persist the cancellation payload (the agent is the canceller, so no
   // self-wakeup is needed → notifyActor:false).
-  const interaction = await cancelInteractionRequestByTaskId(task.id, note)
+  const cancelledTask = await cancelTaskRequestByTaskId(task.id, note)
   const summary =
     note ||
     `Cancelled ${task.sourceToolName.replace(/_/g, " ")} before it completed.`
@@ -736,11 +736,11 @@ async function cancelHumanInteractionTask(
     finalErrorPayload: {
       code: "operation_cancelled",
       message: summary,
-      interactionId: interaction?.id,
+      taskId: cancelledTask?.id,
     },
-    metadata: interaction?.id
+    metadata: cancelledTask?.id
       ? {
-          interactionId: interaction.id,
+          taskId: cancelledTask.id,
         }
       : undefined,
     notifyActor: false,
@@ -753,7 +753,7 @@ async function cancelHumanInteractionTask(
 
 function normalizeUserInputQuestionType(
   value: unknown
-): InteractionInputQuestionType | null {
+): TaskInputQuestionType | null {
   if (typeof value !== "string") return null
   switch (value.trim().toLowerCase()) {
     case "single_select":
@@ -776,8 +776,8 @@ function normalizeUserInputQuestionType(
 function buildUserInputOptionDefinitions(
   questionId: string,
   rawOptions: ToolUserInputQuestionInput["options"]
-): InteractionInputOption[] {
-  const options: InteractionInputOption[] = []
+): TaskInputOption[] {
+  const options: TaskInputOption[] = []
   const usedIds = new Set<string>()
 
   for (const [index, rawOption] of (rawOptions || []).entries()) {
@@ -818,7 +818,7 @@ function buildUserInputOptionDefinitions(
 function buildUserInputQuestionDefinition(
   rawQuestion: ToolUserInputQuestionInput,
   fallbackIndex: number
-): { question: InteractionInputQuestionDefinition | null; error?: string } {
+): { question: TaskInputQuestionDefinition | null; error?: string } {
   const prompt = String(rawQuestion.prompt || "").trim()
   if (!prompt) {
     return {
@@ -834,7 +834,7 @@ function buildUserInputQuestionDefinition(
   const id =
     String(rawQuestion.id || `question_${fallbackIndex + 1}`).trim() ||
     `question_${fallbackIndex + 1}`
-  const question: InteractionInputQuestionDefinition = {
+  const question: TaskInputQuestionDefinition = {
     id,
     header:
       typeof rawQuestion.header === "string"
@@ -909,7 +909,7 @@ const taskOutputStreamValues = [
 ] as const
 
 function buildUserInputQuestionDefinitions(rawQuestions: unknown): {
-  questions: InteractionInputQuestionDefinition[]
+  questions: TaskInputQuestionDefinition[]
   error?: string
 } {
   if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
@@ -925,7 +925,7 @@ function buildUserInputQuestionDefinitions(rawQuestions: unknown): {
     }
   }
 
-  const questions: InteractionInputQuestionDefinition[] = []
+  const questions: TaskInputQuestionDefinition[] = []
   const usedIds = new Set<string>()
 
   for (const [index, rawQuestion] of rawQuestions.entries()) {
@@ -1246,7 +1246,7 @@ export function registerCallableToolPlugins(): void {
         const weekday = formatWeekdayInZone(now, resolvedTimeZone)
         return textResult(
           JSON.stringify({
-            nowIso: now.toISOString(),
+            nowIso: dateToIsoInstant(now),
             utc: formatUtcTimestamp(now),
             unixMs: now.getTime(),
             timeZone: resolvedTimeZone,
@@ -1479,7 +1479,7 @@ export function registerCallableToolPlugins(): void {
       ) {
         return { active: false, definition: null as any }
       }
-      const candidates = buildUserInteractionCandidatesFromEntries(
+      const candidates = buildUserTaskTargetCandidatesFromEntries(
         conversationParticipants
       )
       if (candidates.length === 0) {
@@ -1488,7 +1488,7 @@ export function registerCallableToolPlugins(): void {
       const isDirectConversation =
         getToolContextConversationKind(ctx) === "direct" &&
         candidates.length === 1
-      const candidateDirectory = buildUserInteractionDirectory(candidates)
+      const candidateDirectory = buildUserTaskTargetDirectory(candidates)
       return {
         active: true,
         definition: {
@@ -1598,14 +1598,14 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
-      const candidates = buildUserInteractionCandidatesFromRows(allMembers)
+      const candidates = buildUserTaskTargetCandidatesFromRows(allMembers)
       if (candidates.length === 0) {
         throwToolError(
           "There are no active user participants in this conversation"
         )
       }
 
-      const resolution = resolveHumanInteractionTarget({
+      const resolution = resolveHumanTaskTarget({
         requestedParticipantId:
           typeof (input as any).targetParticipantId === "string"
             ? String((input as any).targetParticipantId)
@@ -1647,9 +1647,8 @@ export function registerCallableToolPlugins(): void {
         summary: `Waiting for ${resolution.candidate.name} to complete "${title}".`,
       })
 
-      let interaction
       try {
-        interaction = await createUserInputInteractionRequest({
+        await createUserInputTaskRequest({
           workspaceId: context.workspaceId,
           conversationId,
           taskId: task.id,
@@ -1674,7 +1673,6 @@ export function registerCallableToolPlugins(): void {
         JSON.stringify({
           success: true,
           taskId: task.id,
-          interactionId: interaction.id,
           targetMember: resolution.candidate.name,
           message: `Input request sent to ${resolution.candidate.name}. Only that participant can answer it.`,
         })
@@ -1752,10 +1750,10 @@ export function registerCallableToolPlugins(): void {
           planDraft: buildSessionPlanDraftState({
             summary,
             checklist: [],
-            enteredAt: new Date().toISOString(),
+            enteredAt: nowIsoInstant(),
           }),
         },
-        activePlanApprovalInteractionId: null,
+        activePlanApprovalTaskId: null,
       })
 
       return textResult(
@@ -1941,7 +1939,7 @@ export function registerCallableToolPlugins(): void {
       ) {
         return { active: false, definition: null as any }
       }
-      const candidates = buildUserInteractionCandidatesFromEntries(
+      const candidates = buildUserTaskTargetCandidatesFromEntries(
         conversationParticipants
       )
       if (candidates.length === 0) {
@@ -1950,7 +1948,7 @@ export function registerCallableToolPlugins(): void {
       const isDirectConversation =
         getToolContextConversationKind(ctx) === "direct" &&
         candidates.length === 1
-      const candidateDirectory = buildUserInteractionDirectory(candidates)
+      const candidateDirectory = buildUserTaskTargetDirectory(candidates)
       return {
         active: true,
         definition: {
@@ -2044,14 +2042,14 @@ export function registerCallableToolPlugins(): void {
         )
       }
 
-      const candidates = buildUserInteractionCandidatesFromRows(allMembers)
+      const candidates = buildUserTaskTargetCandidatesFromRows(allMembers)
       if (candidates.length === 0) {
         throwToolError(
           "There are no active user participants in this conversation"
         )
       }
 
-      const resolution = resolveHumanInteractionTarget({
+      const resolution = resolveHumanTaskTarget({
         requestedParticipantId:
           typeof (input as any).targetParticipantId === "string"
             ? String((input as any).targetParticipantId)
@@ -2102,9 +2100,8 @@ export function registerCallableToolPlugins(): void {
         summary: `Waiting for ${resolution.candidate.name} to review "${title}".`,
       })
 
-      let interaction
       try {
-        interaction = await createPlanApprovalInteractionRequest({
+        await createPlanApprovalTaskRequest({
           workspaceId: context.workspaceId,
           conversationId,
           sessionId: context.sessionId,
@@ -2139,7 +2136,6 @@ export function registerCallableToolPlugins(): void {
         JSON.stringify({
           success: true,
           taskId: task.id,
-          interactionId: interaction.id,
           collaborationMode: "plan_awaiting_approval",
           targetMember: resolution.candidate.name,
           message: `Plan submitted to ${resolution.candidate.name} for approval.`,
@@ -2241,7 +2237,7 @@ export function registerCallableToolPlugins(): void {
       }
 
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
-      const interaction =
+      const requestTask =
         task.executorKind === "user_input" ||
         task.executorKind === "plan_approval" ||
         task.executorKind === "runtime_authorization"
@@ -2252,7 +2248,7 @@ export function registerCallableToolPlugins(): void {
         JSON.stringify({
           success: true,
           task: serializeTaskDetails(task),
-          interaction,
+          requestTask,
         })
       )
     },
@@ -2263,7 +2259,7 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "cancel_task",
       description:
-        "Request cancellation for a task in this session. Human-interaction tasks cancel immediately; device command tasks cancel best-effort.",
+        "Request cancellation for a task in this session. Human-facing request tasks cancel immediately; device command tasks cancel best-effort.",
       parameters: {
         type: "object",
         properties: {
@@ -2316,13 +2312,12 @@ export function registerCallableToolPlugins(): void {
         throwToolError(`Task "${task.id}" does not support cancellation.`)
       }
 
-      // Only human-interaction tasks (runtime_authorization, interaction_user_input,
-      // plan_approval) are created with supportsCancel: true, so past the guard above
-      // the task is necessarily one of those. device_mcp tasks never set supportsCancel
-      // and are rejected by the guard before reaching here.
-      const updated = await cancelHumanInteractionTask(task, reason)
+      // Only human-facing request tasks (runtime_authorization, user_input,
+      // plan_approval) are created with supportsCancel: true. device_mcp tasks
+      // never set supportsCancel and are rejected by the guard before this point.
+      const updated = await cancelHumanTask(task, reason)
       const current = await loadSessionTaskOrThrow(context.sessionId, task.id)
-      const interaction =
+      const requestTask =
         current.executorKind === "user_input" ||
         current.executorKind === "plan_approval" ||
         current.executorKind === "runtime_authorization"
@@ -2337,7 +2332,7 @@ export function registerCallableToolPlugins(): void {
               ? `Task ${task.id} was cancelled.`
               : `Cancellation requested for task ${task.id}.`,
           task: serializeTaskDetails(current),
-          interaction,
+          requestTask,
         })
       )
     },
@@ -2966,10 +2961,14 @@ export function registerCallableToolPlugins(): void {
               scheduleTimezone: timezone || undefined,
               intervalSeconds,
               startsAt:
-                scheduleKind === "at" ? scheduleExpr || undefined : undefined,
+                scheduleKind === "at" && scheduleExpr
+                  ? assertIsoInstant(scheduleExpr)
+                  : undefined,
             },
             policy: {
-              activeUntil: activeUntil || undefined,
+              activeUntil: activeUntil
+                ? assertIsoInstant(activeUntil)
+                : undefined,
               maxTriggerCount:
                 Number.isInteger(maxTriggerCount) && (maxTriggerCount || 0) > 0
                   ? maxTriggerCount
@@ -3273,7 +3272,9 @@ export function registerCallableToolPlugins(): void {
               matcher,
             },
             policy: {
-              activeUntil: activeUntil || undefined,
+              activeUntil: activeUntil
+                ? assertIsoInstant(activeUntil)
+                : undefined,
               maxTriggerCount: once
                 ? 1
                 : Number.isInteger(maxTriggerCount) &&

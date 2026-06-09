@@ -28,6 +28,14 @@
       "types": "./dist/browser-tools.d.ts",
       "default": "./dist/browser-tools.js"
     },
+    "./instant": {
+      "types": "./dist/instant.d.ts",
+      "default": "./dist/instant.js"
+    },
+    "./instant/schema": {
+      "types": "./dist/instant.schema.d.ts",
+      "default": "./dist/instant.schema.js"
+    },
     "./tool-presentation": {
       "types": "./dist/tool-presentation.d.ts",
       "default": "./dist/tool-presentation.js"

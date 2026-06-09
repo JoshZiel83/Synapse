@@ -116,8 +116,8 @@ type VisibleAccessBindingRow = {
   created_by_workspace_member_id: string | null
   reason: string | null
   metadata: unknown
-  created_at: string | Date | null
-  revoked_at: string | Date | null
+  created_at: Date | null
+  revoked_at: Date | null
   actor_id: string | null
   remote_agent_id: string | null
   conversation_id: string | null
@@ -362,8 +362,8 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
       created_by_workspace_member_id: row.created_by_workspace_member_id,
       reason: row.reason,
       metadata: {},
-      created_at: row.created_at,
-      revoked_at: row.revoked_at,
+      created_at: row.created_at ? new Date(row.created_at) : null,
+      revoked_at: row.revoked_at ? new Date(row.revoked_at) : null,
       actor_id: subjectActorId,
       remote_agent_id: subjectRemoteAgentId,
       conversation_id: subjectConversationId,

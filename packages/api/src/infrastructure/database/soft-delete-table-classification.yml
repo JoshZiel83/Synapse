@@ -554,7 +554,7 @@ tables:
     class: child
     softDelete: none
     workspaceScope: none
-  remote_agent_group_interaction_grants:
+  remote_agent_group_task_grants:
     class: ephemeral
     softDelete: none
     derived: true
@@ -1301,23 +1301,23 @@ foreignKeys:
     _child: remote_agent_conversation_contexts(conversation_id)
     _parent: conversations(id)
     _was: CASCADE
-  digest:75fddcf7b4f28ba2:
+  digest:f1ba006367706388:
     targetAction: RESTRICT
-    _child: remote_agent_group_interaction_grants(remote_agent_id)
+    _child: remote_agent_group_task_grants(remote_agent_id)
     _parent: remote_agents(id)
     _was: CASCADE
-  digest:4e4a7aae95be2697:
+  digest:b6cafb364dbc6511:
     targetAction: RESTRICT
-    _child: remote_agent_group_interaction_grants(workspace_member_id)
+    _child: remote_agent_group_task_grants(workspace_member_id)
     _parent: workspace_members(id)
     _was: CASCADE
-  digest:d13937c8bc1bc590:
+  digest:28ff69af6ec97756:
     targetAction: SET NULL
     setNull:
       canLose: false
       needsSnapshot: true
       snapshotColumn: granted_by_workspace_member_id_snapshot
-    _child: remote_agent_group_interaction_grants(granted_by_workspace_member_id)
+    _child: remote_agent_group_task_grants(granted_by_workspace_member_id)
     _parent: workspace_members(id)
     _was: SET NULL
   digest:0fae820b0d5d3fd9:
@@ -3593,37 +3593,37 @@ foreignKeys:
     _child: automation_event_sources(integration_binding_id)
     _parent: automation_integration_bindings(id)
     _was: CASCADE
-  constraint:fk_sessions_active_plan_approval_interaction:
+  constraint:fk_sessions_active_plan_approval_task:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: sessions(active_plan_approval_interaction_id)
-    _parent: interaction_requests(id)
+    _child: sessions(active_plan_approval_task_id)
+    _parent: tool_call_tasks(id)
     _was: SET NULL
-  constraint:fk_remote_agent_conversation_contexts_active_interaction:
+  constraint:fk_remote_agent_conversation_contexts_active_task:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: remote_agent_conversation_contexts(active_interaction_id)
-    _parent: interaction_requests(id)
+    _child: remote_agent_conversation_contexts(active_task_id)
+    _parent: tool_call_tasks(id)
     _was: SET NULL
-  constraint:fk_remote_agent_conversation_contexts_active_plan_approval_interaction:
+  constraint:fk_remote_agent_conversation_contexts_active_plan_approval_task:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: remote_agent_conversation_contexts(active_plan_approval_interaction_id)
-    _parent: interaction_requests(id)
+    _child: remote_agent_conversation_contexts(active_plan_approval_task_id)
+    _parent: tool_call_tasks(id)
     _was: SET NULL
-  constraint:fk_remote_agent_runs_interaction:
+  constraint:fk_remote_agent_runs_task:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: remote_agent_runs(interaction_id)
-    _parent: interaction_requests(id)
+    _child: remote_agent_runs(task_id)
+    _parent: tool_call_tasks(id)
     _was: SET NULL
   constraint:fk_runtime_authorization_grants_subject:
     targetAction: RESTRICT
@@ -3755,19 +3755,19 @@ foreignKeys:
       needsSnapshot: false
     _child: runtime_authorization_grants(source_task_id)
     _parent: tool_call_tasks(id)
-  digest:20c47282040c3007:
+  digest:5eda4d2383b6b7f3:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: memory_access_grants(source_interaction_id)
+    _child: memory_access_grants(source_task_id)
     _parent: tool_call_tasks(id)
-  digest:2c657cbf82977c82:
+  digest:f897ce1bf6b608f2:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: file_access_grants(source_interaction_id)
+    _child: file_access_grants(source_task_id)
     _parent: tool_call_tasks(id)
   constraint:fk_tool_call_task_runtime_authorization_principal_subject:
     targetAction: RESTRICT

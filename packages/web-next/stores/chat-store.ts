@@ -1,6 +1,7 @@
 "use client"
 
 import { create } from "zustand"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import { api } from "@/lib/api"
 import {
   createEmptyStoredChatQueueState,
@@ -11,6 +12,7 @@ import {
   type PendingConversationRead,
   type StoredChatQueueState,
 } from "@/lib/chat-persistence"
+import type { Timestamp } from "@synapse/shared"
 import {
   isChatServiceWorkerActive,
   requestChatServiceWorkerSync,
@@ -88,10 +90,10 @@ export interface ConversationSummary {
     content: string
     role: string
     actorName?: string
-    createdAt: string
+    createdAt: Timestamp
   }
   unreadCount: number
-  createdAt: string
+  createdAt: Timestamp
   title?: string
   name?: string
   avatarUrl?: string
@@ -117,7 +119,7 @@ export interface FeedMessage {
   actorName?: string
   actorRole?: string
   actorEmoji?: string
-  createdAt: string
+  createdAt: Timestamp
   clientMessageId?: string
   deliveryStatus?: "sending" | "retrying" | "sent"
   metadata?: Record<string, unknown>
@@ -132,7 +134,7 @@ export interface FeedMessage {
   transportDeliveries?: ConversationMessageTransportDelivery[]
   eventType?: ConversationFeedEventType
   eventPayload?: ConversationFeedEventPayloadMap[ConversationFeedEventType]
-  interaction?: TaskSummary
+  task?: TaskSummary
 }
 
 export type ThinkingPhase = "thinking" | "tool" | "responding" | "error"
@@ -230,13 +232,13 @@ interface ChatState {
     conversationId: string
     fromWorkspaceMemberId: string
     state: "started" | "stopped"
-    occurredAt: string
+    occurredAt: Timestamp
   }) => void
   sendTypingState: (
     conversationId: string,
     state: "started" | "stopped"
   ) => Promise<void>
-  handleInteractionUpdated: (payload: {
+  handleTaskUpdated: (payload: {
     conversationId: string
     taskId: string
     itemId?: string
@@ -312,9 +314,9 @@ function mergeStoredQueueIntoSnapshot(
 }
 
 function latestIsoTimestamp(
-  currentValue?: string,
-  nextValue?: string
-): string | undefined {
+  currentValue?: import("@synapse/shared").Timestamp,
+  nextValue?: import("@synapse/shared").Timestamp
+): import("@synapse/shared").Timestamp | undefined {
   if (!currentValue) {
     return nextValue
   }
@@ -499,7 +501,7 @@ function mergeRawItems(
   })
 }
 
-function patchInteractionInRawItem(
+function patchTaskInRawItem(
   item: ChatConversationItem,
   payload: ChatSyncEvent<"task.updated">["payload"]
 ) {
@@ -512,12 +514,12 @@ function patchInteractionInRawItem(
     return item
   }
 
-  const currentInteraction =
+  const currentTask =
     "task" in item.eventPayload
       ? (item.eventPayload.task as TaskSummary | undefined)
       : undefined
 
-  if (item.id !== payload.itemId && currentInteraction?.id !== payload.taskId) {
+  if (item.id !== payload.itemId && currentTask?.id !== payload.taskId) {
     return item
   }
 
@@ -530,17 +532,17 @@ function patchInteractionInRawItem(
   }
 }
 
-function patchInteractionInRawItems(
+function patchTaskInRawItems(
   items: ChatConversationItem[],
   payload: ChatSyncEvent<"task.updated">["payload"]
 ) {
   return mergeRawItems(
     [],
-    items.map((item) => patchInteractionInRawItem(item, payload))
+    items.map((item) => patchTaskInRawItem(item, payload))
   )
 }
 
-function applyInteractionUpdatedToSnapshot(
+function applyTaskUpdatedToSnapshot(
   snapshot: ChatWorkspaceSnapshot,
   payload: ChatSyncEvent<"task.updated">["payload"]
 ) {
@@ -853,7 +855,7 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
       typeof item.content === "string" && item.content.length > 0
         ? item.content
         : summarizeConversationEvent(item.subtype, item.eventPayload)
-    const interaction =
+    const task =
       item.subtype === "task_requested" &&
       item.eventPayload &&
       typeof item.eventPayload === "object" &&
@@ -882,7 +884,7 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
       deliveryStatus: "sent",
       eventType: item.subtype,
       eventPayload: item.eventPayload,
-      interaction,
+      task,
     }
   }
 
@@ -1367,7 +1369,7 @@ function applySyncEventToSnapshot(
     }
     case "task.updated": {
       const payload = event.payload as ChatSyncEvent<"task.updated">["payload"]
-      nextSnapshot = applyInteractionUpdatedToSnapshot(nextSnapshot, payload)
+      nextSnapshot = applyTaskUpdatedToSnapshot(nextSnapshot, payload)
       break
     }
   }
@@ -1452,7 +1454,7 @@ async function bootstrapWorkspaceSnapshot(
     workspaceMemberId: bootstrap.workspaceMemberId,
     clientInstanceId,
     inboxCursor: nextInboxCursor,
-    lastBootstrappedAt: new Date().toISOString(),
+    lastBootstrappedAt: nowIsoInstant(),
     conversations: bootstrap.conversations.reduce(
       upsertRawConversation,
       prunedBase.conversations
@@ -1540,7 +1542,7 @@ async function flushOutboxInternal(
           ...nextSnapshot.outbox[entry.clientMessageId]!,
           attemptCount:
             nextSnapshot.outbox[entry.clientMessageId]!.attemptCount + 1,
-          lastAttemptAt: new Date().toISOString(),
+          lastAttemptAt: nowIsoInstant(),
         },
       },
     }
@@ -1609,8 +1611,7 @@ async function flushOutboxInternal(
           [entry.clientMessageId]: {
             ...currentEntry,
             status: "retrying",
-            firstFailedAt:
-              currentEntry.firstFailedAt || new Date().toISOString(),
+            firstFailedAt: currentEntry.firstFailedAt || nowIsoInstant(),
             lastErrorMessage:
               error instanceof Error ? error.message : "Failed to send message",
           },
@@ -1946,7 +1947,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       contentBlocks: input.contentBlocks,
       replyToItemId: input.replyToItemId,
       replyTo: input.replyTo,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIsoInstant(),
       optimisticSequence,
       status: "sending",
       attemptCount: 0,
@@ -2103,7 +2104,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               (event.payload as ChatSyncEvent<"task.updated">["payload"])
                 .conversationId === state.selectedConversationId
             ) {
-              nextLoadedItems = patchInteractionInRawItems(
+              nextLoadedItems = patchTaskInRawItems(
                 nextLoadedItems,
                 event.payload as ChatSyncEvent<"task.updated">["payload"]
               )
@@ -2271,7 +2272,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             normalizedLastVisibleSequence,
             snapshot.pendingReads[conversationId]?.lastVisibleSequence || 0
           ),
-          updatedAt: new Date().toISOString(),
+          updatedAt: nowIsoInstant(),
         },
       },
       conversations: snapshot.conversations.map((conversation) =>
@@ -2388,7 +2389,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const payload =
           event.payload as ChatSyncEvent<"task.updated">["payload"]
         if (payload.conversationId === state.selectedConversationId) {
-          nextLoadedItems = patchInteractionInRawItems(
+          nextLoadedItems = patchTaskInRawItems(
             state.loadedMessageItems,
             payload
           )
@@ -2484,19 +2485,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  handleInteractionUpdated: (payload) => {
+  handleTaskUpdated: (payload) => {
     set((state) => {
       if (!state.snapshot) {
         return state
       }
 
-      const nextSnapshot = applyInteractionUpdatedToSnapshot(
-        state.snapshot,
-        payload
-      )
+      const nextSnapshot = applyTaskUpdatedToSnapshot(state.snapshot, payload)
       const nextLoadedItems =
         payload.conversationId === state.selectedConversationId
-          ? patchInteractionInRawItems(state.loadedMessageItems, payload)
+          ? patchTaskInRawItems(state.loadedMessageItems, payload)
           : state.loadedMessageItems
 
       return createStateFromSnapshot(state, nextSnapshot, {

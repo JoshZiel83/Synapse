@@ -118,7 +118,7 @@ test("decodes file_ref video block to video part", () => {
 test("interaction_prompt roundtrips through serialize+parse", () => {
   const part: CanonicalPart = {
     type: "interaction_prompt",
-    interactionRequestId: "ir-1",
+    taskId: "ir-1",
     title: "Approve command?",
     fallbackText: "Please approve in dashboard",
     options: [
@@ -137,7 +137,7 @@ test("interaction_prompt roundtrips through serialize+parse", () => {
   assert.match(round.plainText, /Please approve/)
 })
 
-test("interaction_prompt missing interactionRequestId degrades to system_marker", () => {
+test("interaction_prompt missing taskId degrades to system_marker", () => {
   const round = parseCanonicalMessage({
     schemaVersion: 1,
     parts: [
@@ -159,7 +159,7 @@ test("interaction_prompt fallbackText default + length cap", () => {
     parts: [
       {
         type: "interaction_prompt",
-        interactionRequestId: "ir-1",
+        taskId: "ir-1",
         fallbackText: long,
         options: [],
       },
@@ -178,7 +178,7 @@ test("interaction_prompt missing fallbackText gets sensible default", () => {
     parts: [
       {
         type: "interaction_prompt",
-        interactionRequestId: "ir-1",
+        taskId: "ir-1",
         options: [],
       },
     ],
@@ -196,7 +196,7 @@ test("interaction_prompt options sanitize: drop invalid entries", () => {
     parts: [
       {
         type: "interaction_prompt",
-        interactionRequestId: "ir-1",
+        taskId: "ir-1",
         fallbackText: "x",
         options: [
           { id: "a", label: "A", actionToken: "t1" }, // ok
@@ -222,7 +222,7 @@ test("interaction_prompt is preserved only in transportMetadata.canonicalParts",
   const msg = buildCanonicalMessage([
     {
       type: "interaction_prompt",
-      interactionRequestId: "ir-1",
+      taskId: "ir-1",
       fallbackText: "approve",
       options: [],
     },
@@ -293,7 +293,7 @@ test("degrade: interaction_prompt without supportsInteractionPrompt → text fal
   const msg = buildCanonicalMessage([
     {
       type: "interaction_prompt",
-      interactionRequestId: "ir-1",
+      taskId: "ir-1",
       title: "Approve?",
       fallbackText: "Please go to dashboard",
       options: [],
@@ -311,7 +311,7 @@ test("degrade: interaction_prompt with supportsInteractionPrompt → kept", () =
   const msg = buildCanonicalMessage([
     {
       type: "interaction_prompt",
-      interactionRequestId: "ir-1",
+      taskId: "ir-1",
       fallbackText: "approve",
       options: [],
     },

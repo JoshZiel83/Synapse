@@ -23,6 +23,13 @@ await build({
   banner: {
     js: "/* eslint-disable */",
   },
+  alias: {
+    "@shared": "../shared/dist/index.js",
+    "@shared/chat-queue": "../shared/dist/chat-queue/index.js",
+    "@shared/chat-state": "../shared/dist/chat-state/index.js",
+    "@shared/datetime": "../shared/dist/datetime/index.js",
+    "@shared/uuid": "../shared/dist/uuid/index.js",
+  },
 })
 
 // Normalize esbuild's module path comments so the committed bundle is

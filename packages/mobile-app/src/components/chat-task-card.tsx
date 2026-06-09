@@ -16,20 +16,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { ChatMarkdown } from "@/components/chat-markdown"
 import { Button } from "@/components/ui"
-import type {
-  ChatInteractionResolveInput,
-  ChatInteractionResolvePayload,
-} from "@/lib/api"
+import type { ChatTaskResolveInput, ChatTaskResolvePayload } from "@/lib/api"
 import { theme } from "@/theme/tokens"
 import {
-  INTERACTION_REQUEST_KIND,
-  type InteractionInputQuestionSummary,
+  TASK_REQUEST_KIND,
+  type TaskInputQuestionSummary,
   type TaskSummary,
   type RuntimeAuthorizationGrantSpec,
   type RuntimeAuthorizationRequestedAction,
 } from "@shared"
 
-type InteractionResolutionDraftPayload = ChatInteractionResolvePayload
+type TaskResolutionDraftPayload = ChatTaskResolvePayload
 
 type DraftQuestionAnswer = {
   selectedOptionIds: string[]
@@ -44,17 +41,14 @@ const EMPTY_DRAFT: DraftQuestionAnswer = {
 }
 
 function buildDraftQuestionAnswers(
-  interaction: TaskSummary
+  task: TaskSummary
 ): Record<string, DraftQuestionAnswer> {
-  if (
-    interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
-    !interaction.userInput
-  ) {
+  if (task.kind !== TASK_REQUEST_KIND.USER_INPUT || !task.userInput) {
     return {}
   }
 
   return Object.fromEntries(
-    interaction.userInput.questions.map((question) => [
+    task.userInput.questions.map((question) => [
       question.id,
       {
         selectedOptionIds: [...(question.answer?.selectedOptionIds || [])],
@@ -65,9 +59,7 @@ function buildDraftQuestionAnswers(
   )
 }
 
-function summarizeQuestionFieldAnswer(
-  question: InteractionInputQuestionSummary
-) {
+function summarizeQuestionFieldAnswer(question: TaskInputQuestionSummary) {
   const parts: string[] = []
 
   if (question.answer?.selectedOptionLabels?.length) {
@@ -85,16 +77,13 @@ function summarizeQuestionFieldAnswer(
   return parts.join(" | ")
 }
 
-function summarizeInteractionAnswers(interaction: TaskSummary) {
-  if (
-    interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
-    !interaction.userInput
-  ) {
+function summarizeTaskAnswers(task: TaskSummary) {
+  if (task.kind !== TASK_REQUEST_KIND.USER_INPUT || !task.userInput) {
     return ""
   }
 
-  const questionCount = interaction.userInput.questions.length
-  return interaction.userInput.questions
+  const questionCount = task.userInput.questions.length
+  return task.userInput.questions
     .map((question) => {
       const summary = summarizeQuestionFieldAnswer(question)
       if (!summary) {
@@ -107,8 +96,38 @@ function summarizeInteractionAnswers(interaction: TaskSummary) {
     .join(" | ")
 }
 
-function getStatusMeta(status: TaskSummary["status"]) {
-  switch (status) {
+type TaskDisplayState =
+  | "pending"
+  | "answered"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  | "expired"
+  | "failed"
+
+function isTaskOpen(task: TaskSummary) {
+  return (
+    task.lifecycleStatus === "submitted" ||
+    task.lifecycleStatus === "working" ||
+    task.lifecycleStatus === "input_required" ||
+    task.lifecycleStatus === "auth_required"
+  )
+}
+
+function getTaskDisplayState(task: TaskSummary): TaskDisplayState {
+  if (isTaskOpen(task)) return "pending"
+  if (task.lifecycleStatus === "cancelled") return "cancelled"
+  if (task.lifecycleStatus === "expired") return "expired"
+  if (task.lifecycleStatus === "failed") return "failed"
+  if (task.kind === TASK_REQUEST_KIND.USER_INPUT) return "answered"
+  if (task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
+    return task.outcome === "approved" ? "approved" : "rejected"
+  }
+  return task.outcome === "granted" ? "approved" : "rejected"
+}
+
+function getStatusMeta(displayState: TaskDisplayState) {
+  switch (displayState) {
     case "pending":
       return {
         label: "待回答",
@@ -157,84 +176,74 @@ function getStatusMeta(status: TaskSummary["status"]) {
         borderColor: "rgba(220, 38, 38, 0.18)",
         color: theme.colors.danger,
       }
-    case "superseded":
+    case "failed":
       return {
-        label: "已失效",
-        icon: "corner-up-right" as const,
-        backgroundColor: "rgba(115, 115, 115, 0.10)",
-        borderColor: "rgba(115, 115, 115, 0.18)",
-        color: theme.colors.textMuted,
-      }
-    default:
-      return {
-        label: status,
-        icon: "file-text" as const,
-        backgroundColor: "rgba(115, 115, 115, 0.10)",
-        borderColor: "rgba(115, 115, 115, 0.18)",
-        color: theme.colors.textMuted,
+        label: "失败",
+        icon: "alert-triangle" as const,
+        backgroundColor: "rgba(220, 38, 38, 0.10)",
+        borderColor: "rgba(220, 38, 38, 0.18)",
+        color: theme.colors.danger,
       }
   }
 }
 
 function getStatusNote(
-  interaction: TaskSummary,
+  task: TaskSummary,
   viewerCanResolve: boolean,
   canResolve: boolean
 ) {
-  const targetName = interaction.target?.name?.trim() || "指定用户"
+  const targetName = task.target?.name?.trim() || "指定用户"
+  const displayState = getTaskDisplayState(task)
 
-  if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    if (interaction.status === "pending") {
+  if (task.kind === TASK_REQUEST_KIND.USER_INPUT) {
+    if (displayState === "pending") {
       return canResolve || viewerCanResolve
         ? "点击开始逐题作答"
         : `等待 ${targetName} 回答`
     }
-    if (interaction.status === "answered") {
+    if (displayState === "answered") {
       return "点击查看答题结果"
     }
-    if (interaction.status === "expired") {
+    if (displayState === "expired") {
       return "此问答已过期"
     }
-    if (interaction.status === "cancelled") {
+    if (displayState === "cancelled") {
       return "此问答已被取消"
     }
-    if (interaction.status === "superseded") {
-      return "此问答已被后续操作覆盖"
+    if (displayState === "failed") {
+      return "此问答处理失败"
     }
     return "点击查看详情"
   }
 
-  if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-    if (interaction.status === "pending") {
+  if (task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
+    if (displayState === "pending") {
       return canResolve || viewerCanResolve
         ? "点击审批或要求修改"
         : `等待 ${targetName} 审批`
     }
-    if (interaction.status === "approved") {
+    if (displayState === "approved") {
       return "计划已批准"
     }
-    if (interaction.status === "rejected") {
+    if (displayState === "rejected") {
       return "计划需要修改"
     }
-    if (interaction.status === "cancelled") {
+    if (displayState === "cancelled") {
       return "该审批已被取消"
     }
     return "点击查看计划详情"
   }
 
-  if (interaction.status === "pending") {
+  if (displayState === "pending") {
     return canResolve ? "点击选择授权范围" : "等待有权限的成员处理"
   }
-  if (interaction.status === "approved") {
+  if (displayState === "approved") {
     return "授权已批准"
   }
-  if (interaction.status === "rejected") {
+  if (displayState === "rejected") {
     return "授权已拒绝"
   }
-  if (interaction.status === "superseded") {
-    return "授权请求已被更新的请求覆盖"
-  }
-  if (interaction.status === "cancelled") {
+  if (displayState === "cancelled") {
     return "授权请求已取消"
   }
   return "点击查看详情"
@@ -361,7 +370,7 @@ function describeRuntimeAuthorizationRequestedAction(
 }
 
 function isFieldComplete(
-  question: InteractionInputQuestionSummary,
+  question: TaskInputQuestionSummary,
   draft: DraftQuestionAnswer
 ) {
   const textValue = draft.text.trim()
@@ -397,9 +406,9 @@ function isFieldComplete(
 }
 
 function buildAnswersPayload(
-  questions: InteractionInputQuestionSummary[],
+  questions: TaskInputQuestionSummary[],
   draftAnswers: Record<string, DraftQuestionAnswer>
-): InteractionResolutionDraftPayload {
+): TaskResolutionDraftPayload {
   return {
     answers: questions.map((question) => {
       const draft = draftAnswers[question.id] || EMPTY_DRAFT
@@ -416,19 +425,19 @@ function buildAnswersPayload(
   }
 }
 
-function withInteractionCommandMetadata(
-  interaction: TaskSummary,
-  payload: InteractionResolutionDraftPayload
-): ChatInteractionResolveInput {
+function withTaskCommandMetadata(
+  task: TaskSummary,
+  payload: TaskResolutionDraftPayload
+): ChatTaskResolveInput {
   return {
     ...payload,
     commandId:
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
-        : `interaction-${Date.now().toString(36)}-${Math.random()
+        : `task-${Date.now().toString(36)}-${Math.random()
             .toString(16)
             .slice(2)}`,
-    baseRevision: interaction.revision,
+    baseRevision: task.revision,
   }
 }
 
@@ -482,7 +491,7 @@ function ReadOnlyUserInputQuestion({
   question,
   index,
 }: {
-  question: InteractionInputQuestionSummary
+  question: TaskInputQuestionSummary
   index: number
 }) {
   const answer = question.answer
@@ -580,14 +589,14 @@ function DeviceGrantSpecSection({
   )
 }
 
-export function ChatQuestionInteractionCard({
-  interaction,
-  onResolveInteraction,
+export function ChatTaskCard({
+  task,
+  onResolveTask,
 }: {
-  interaction: TaskSummary
-  onResolveInteraction?: (
-    interactionId: string,
-    input: ChatInteractionResolveInput
+  task: TaskSummary
+  onResolveTask?: (
+    taskId: string,
+    input: ChatTaskResolveInput
   ) => Promise<TaskSummary>
 }) {
   const insets = useSafeAreaInsets()
@@ -595,42 +604,43 @@ export function ChatQuestionInteractionCard({
   const [currentIndex, setCurrentIndex] = useState(0)
   const [draftAnswers, setDraftAnswers] = useState<
     Record<string, DraftQuestionAnswer>
-  >(() => buildDraftQuestionAnswers(interaction))
+  >(() => buildDraftQuestionAnswers(task))
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [resolutionNoteDraft, setResolutionNoteDraft] = useState("")
   const [selectedRuntimeGrantOptionId, setSelectedRuntimeGrantOptionId] =
     useState<string | null>(
-      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
+      task.runtimeAuthorization?.grantOptions[0]?.id || null
     )
   const draftAnswersRef = useRef(draftAnswers)
   const questionCardOffset = useRef(new Animated.Value(0)).current
-  const userInput = interaction.userInput
+  const userInput = task.userInput
 
-  const viewerCanResolve = interaction.viewerCanResolve === true
+  const viewerCanResolve = task.viewerCanResolve === true
+  const taskIsOpen = isTaskOpen(task)
   const canResolveUserInput =
-    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
-    Boolean(onResolveInteraction) &&
+    task.kind === TASK_REQUEST_KIND.USER_INPUT &&
+    Boolean(onResolveTask) &&
     viewerCanResolve &&
-    interaction.status === "pending"
+    taskIsOpen
   const canResolvePlanApproval =
-    interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL &&
-    Boolean(onResolveInteraction) &&
+    task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL &&
+    Boolean(onResolveTask) &&
     viewerCanResolve &&
-    interaction.status === "pending"
+    taskIsOpen
   const canResolveRuntimeAuthorization =
-    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    Boolean(onResolveInteraction) &&
+    task.kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    Boolean(onResolveTask) &&
     viewerCanResolve &&
-    interaction.status === "pending"
+    taskIsOpen
   const canResolve =
     canResolveUserInput ||
     canResolvePlanApproval ||
     canResolveRuntimeAuthorization
-  const statusMeta = getStatusMeta(interaction.status)
+  const statusMeta = getStatusMeta(getTaskDisplayState(task))
 
   useEffect(() => {
-    const nextDraftAnswers = buildDraftQuestionAnswers(interaction)
+    const nextDraftAnswers = buildDraftQuestionAnswers(task)
     draftAnswersRef.current = nextDraftAnswers
     setDraftAnswers(nextDraftAnswers)
     setCurrentIndex(0)
@@ -638,9 +648,9 @@ export function ChatQuestionInteractionCard({
     setSubmitError(null)
     setResolutionNoteDraft("")
     setSelectedRuntimeGrantOptionId(
-      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
+      task.runtimeAuthorization?.grantOptions[0]?.id || null
     )
-  }, [interaction.id, interaction.revision, interaction.status])
+  }, [task.id, task.revision, task.lifecycleStatus, task.outcome])
 
   useEffect(() => {
     if (!open || !canResolve) {
@@ -657,10 +667,7 @@ export function ChatQuestionInteractionCard({
     }).start()
   }, [canResolve, currentIndex, open, questionCardOffset])
 
-  const answerSummary = useMemo(
-    () => summarizeInteractionAnswers(interaction),
-    [interaction]
-  )
+  const answerSummary = useMemo(() => summarizeTaskAnswers(task), [task])
 
   const currentField = userInput?.questions[currentIndex] ?? null
   const currentDraft = currentField
@@ -688,17 +695,17 @@ export function ChatQuestionInteractionCard({
   async function submitAnswers(
     answers: Record<string, DraftQuestionAnswer> = draftAnswersRef.current
   ) {
-    if (!userInput || !onResolveInteraction || !canResolveUserInput) {
+    if (!userInput || !onResolveTask || !canResolveUserInput) {
       return
     }
 
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await onResolveInteraction(
-        interaction.id,
-        withInteractionCommandMetadata(
-          interaction,
+      await onResolveTask(
+        task.id,
+        withTaskCommandMetadata(
+          task,
           buildAnswersPayload(userInput.questions, answers)
         )
       )
@@ -712,21 +719,18 @@ export function ChatQuestionInteractionCard({
     }
   }
 
-  async function submitInteractionResolution(
-    payload: InteractionResolutionDraftPayload,
+  async function submitTaskResolution(
+    payload: TaskResolutionDraftPayload,
     fallbackErrorMessage: string
   ) {
-    if (!onResolveInteraction) {
+    if (!onResolveTask) {
       return
     }
 
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await onResolveInteraction(
-        interaction.id,
-        withInteractionCommandMetadata(interaction, payload)
-      )
+      await onResolveTask(task.id, withTaskCommandMetadata(task, payload))
       setOpen(false)
     } catch (error) {
       setSubmitError(
@@ -761,7 +765,7 @@ export function ChatQuestionInteractionCard({
   }
 
   function handleSelectOption(
-    field: InteractionInputQuestionSummary,
+    field: TaskInputQuestionSummary,
     optionId: string
   ) {
     if (!canResolveUserInput || submitting) {
@@ -806,12 +810,12 @@ export function ChatQuestionInteractionCard({
   }
 
   const kindMeta =
-    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
+    task.kind === TASK_REQUEST_KIND.USER_INPUT
       ? {
           label: "表单",
           icon: "help-circle" as const,
         }
-      : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
+      : task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL
         ? {
             label: "计划审批",
             icon: "git-branch" as const,
@@ -822,29 +826,29 @@ export function ChatQuestionInteractionCard({
           }
 
   const cardTitle =
-    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
-      ? interaction.userInput?.title || "表单"
-      : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
-        ? interaction.planApproval?.title || "计划审批"
-        : interaction.runtimeAuthorization
-          ? `授权 ${interaction.runtimeAuthorization.deviceToolStableKey}`
+    task.kind === TASK_REQUEST_KIND.USER_INPUT
+      ? task.userInput?.title || "表单"
+      : task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL
+        ? task.planApproval?.title || "计划审批"
+        : task.runtimeAuthorization
+          ? `授权 ${task.runtimeAuthorization.deviceToolStableKey}`
           : "授权请求"
 
   const cardDescription =
-    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
-      ? interaction.userInput?.instructions
-      : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
-        ? interaction.planApproval?.summary
-        : interaction.runtimeAuthorization?.reason
+    task.kind === TASK_REQUEST_KIND.USER_INPUT
+      ? task.userInput?.instructions
+      : task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL
+        ? task.planApproval?.summary
+        : task.runtimeAuthorization?.reason
 
   const cardSummary =
-    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
+    task.kind === TASK_REQUEST_KIND.USER_INPUT
       ? answerSummary
-      : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
-        ? interaction.resolutionNote
-        : interaction.runtimeAuthorization?.approvedGrant
+      : task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL
+        ? task.resolutionNote
+        : task.runtimeAuthorization?.approvedGrant
           ? "已生成授权范围"
-          : interaction.runtimeAuthorization?.exposureDisplayName
+          : task.runtimeAuthorization?.exposureDisplayName
 
   return (
     <View style={styles.eventWrap}>
@@ -894,7 +898,7 @@ export function ChatQuestionInteractionCard({
 
         <View style={styles.cardFooter}>
           <Text style={styles.cardFooterText}>
-            {getStatusNote(interaction, viewerCanResolve, canResolve)}
+            {getStatusNote(task, viewerCanResolve, canResolve)}
           </Text>
           <Feather
             name="chevron-up"
@@ -1086,7 +1090,7 @@ export function ChatQuestionInteractionCard({
                   style={styles.sheetScroll}
                   contentContainerStyle={styles.sheetScrollContent}
                 >
-                  {interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT ? (
+                  {task.kind === TASK_REQUEST_KIND.USER_INPUT ? (
                     (userInput?.questions || []).map((question, index) => {
                       return (
                         <ReadOnlyUserInputQuestion
@@ -1096,15 +1100,14 @@ export function ChatQuestionInteractionCard({
                         />
                       )
                     })
-                  ) : interaction.kind ===
-                    INTERACTION_REQUEST_KIND.PLAN_APPROVAL ? (
+                  ) : task.kind === TASK_REQUEST_KIND.PLAN_APPROVAL ? (
                     <>
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>计划内容</Text>
-                        {interaction.planApproval?.planMarkdown ? (
+                        {task.planApproval?.planMarkdown ? (
                           <View style={styles.summaryMarkdownWrap}>
                             <ChatMarkdown
-                              markdown={interaction.planApproval.planMarkdown}
+                              markdown={task.planApproval.planMarkdown}
                               mine={false}
                             />
                           </View>
@@ -1112,7 +1115,7 @@ export function ChatQuestionInteractionCard({
                           <Text style={styles.summaryAnswer}>暂无计划内容</Text>
                         )}
                       </View>
-                      {(interaction.planApproval?.checklist || []).map(
+                      {(task.planApproval?.checklist || []).map(
                         (step, index) => (
                           <View
                             key={`${step.step}-${index}`}
@@ -1128,11 +1131,11 @@ export function ChatQuestionInteractionCard({
                           </View>
                         )
                       )}
-                      {interaction.resolutionNote ? (
+                      {task.resolutionNote ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>备注</Text>
                           <Text style={styles.summaryAnswer}>
-                            {interaction.resolutionNote}
+                            {task.resolutionNote}
                           </Text>
                         </View>
                       ) : null}
@@ -1156,62 +1159,59 @@ export function ChatQuestionInteractionCard({
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>设备</Text>
                         <Text style={styles.summaryTitle}>
-                          {interaction.runtimeAuthorization
-                            ?.deviceDisplayName || "Device"}
+                          {task.runtimeAuthorization?.deviceDisplayName ||
+                            "Device"}
                         </Text>
                         <Text style={styles.summaryDescription}>
-                          {interaction.runtimeAuthorization?.reason ||
-                            "等待授权"}
+                          {task.runtimeAuthorization?.reason || "等待授权"}
                         </Text>
                       </View>
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>暴露能力</Text>
                         <Text style={styles.summaryAnswer}>
-                          {interaction.runtimeAuthorization
-                            ?.exposureDisplayName || "未提供"}
+                          {task.runtimeAuthorization?.exposureDisplayName ||
+                            "未提供"}
                         </Text>
                       </View>
-                      {interaction.runtimeAuthorization?.requestedAction ? (
+                      {task.runtimeAuthorization?.requestedAction ? (
                         <DeviceGrantSpecSection
                           eyebrow="请求操作"
                           summary={
                             describeRuntimeAuthorizationRequestedAction(
-                              interaction.runtimeAuthorization.requestedAction
+                              task.runtimeAuthorization.requestedAction
                             ).summary
                           }
                           detailLines={
                             describeRuntimeAuthorizationRequestedAction(
-                              interaction.runtimeAuthorization.requestedAction
+                              task.runtimeAuthorization.requestedAction
                             ).detailLines
                           }
                         />
                       ) : null}
-                      {(
-                        interaction.runtimeAuthorization?.grantOptions || []
-                      ).map((option) => (
-                        <FieldOptionButton
-                          key={option.id}
-                          selected={selectedRuntimeGrantOptionId === option.id}
-                          label={option.summary}
-                          description={option.detail}
-                          disabled={
-                            !canResolveRuntimeAuthorization || submitting
-                          }
-                          onPress={() =>
-                            setSelectedRuntimeGrantOptionId(option.id)
-                          }
-                        />
-                      ))}
-                      {(
-                        interaction.runtimeAuthorization?.availablePresets || []
-                      ).length ? (
+                      {(task.runtimeAuthorization?.grantOptions || []).map(
+                        (option) => (
+                          <FieldOptionButton
+                            key={option.id}
+                            selected={
+                              selectedRuntimeGrantOptionId === option.id
+                            }
+                            label={option.summary}
+                            description={option.detail}
+                            disabled={
+                              !canResolveRuntimeAuthorization || submitting
+                            }
+                            onPress={() =>
+                              setSelectedRuntimeGrantOptionId(option.id)
+                            }
+                          />
+                        )
+                      )}
+                      {(task.runtimeAuthorization?.availablePresets || [])
+                        .length ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>授权范围</Text>
                           <Text style={styles.summaryAnswer}>
-                            {(
-                              interaction.runtimeAuthorization
-                                ?.availablePresets || []
-                            )
+                            {(task.runtimeAuthorization?.availablePresets || [])
                               .map((preset) =>
                                 formatRuntimeAuthorizationPresetLabel(preset)
                               )
@@ -1219,40 +1219,40 @@ export function ChatQuestionInteractionCard({
                           </Text>
                         </View>
                       ) : null}
-                      {interaction.runtimeAuthorization?.approvedPreset ? (
+                      {task.runtimeAuthorization?.approvedPreset ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>已批准范围</Text>
                           <Text style={styles.summaryAnswer}>
                             {formatRuntimeAuthorizationPresetLabel(
-                              interaction.runtimeAuthorization.approvedPreset
+                              task.runtimeAuthorization.approvedPreset
                             )}
                           </Text>
                         </View>
                       ) : null}
-                      {interaction.runtimeAuthorization?.approvedGrant ? (
+                      {task.runtimeAuthorization?.approvedGrant ? (
                         <>
                           <DeviceGrantSpecSection
                             eyebrow="已批准授权"
                             summary={
                               describeRuntimeAuthorizationSpec(
-                                interaction.runtimeAuthorization.approvedGrant
+                                task.runtimeAuthorization.approvedGrant
                               ).summary
                             }
                             detailLines={[
                               ...describeRuntimeAuthorizationSpec(
-                                interaction.runtimeAuthorization.approvedGrant
+                                task.runtimeAuthorization.approvedGrant
                               ).detailLines,
-                              `scope: ${interaction.runtimeAuthorization.approvedGrant.scope}`,
-                              `retention: ${interaction.runtimeAuthorization.approvedGrant.retention}`,
+                              `scope: ${task.runtimeAuthorization.approvedGrant.scope}`,
+                              `retention: ${task.runtimeAuthorization.approvedGrant.retention}`,
                             ]}
                           />
                         </>
                       ) : null}
-                      {interaction.resolutionNote ? (
+                      {task.resolutionNote ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>备注</Text>
                           <Text style={styles.summaryAnswer}>
-                            {interaction.resolutionNote}
+                            {task.resolutionNote}
                           </Text>
                         </View>
                       ) : null}
@@ -1286,7 +1286,7 @@ export function ChatQuestionInteractionCard({
                         label={submitting ? "处理中..." : "要求修改"}
                         variant="secondary"
                         onPress={() =>
-                          void submitInteractionResolution(
+                          void submitTaskResolution(
                             {
                               decision: "revise",
                               note: resolutionNoteDraft.trim() || undefined,
@@ -1300,7 +1300,7 @@ export function ChatQuestionInteractionCard({
                       <Button
                         label={submitting ? "处理中..." : "批准计划"}
                         onPress={() =>
-                          void submitInteractionResolution(
+                          void submitTaskResolution(
                             {
                               decision: "approve",
                               note: resolutionNoteDraft.trim() || undefined,
@@ -1314,40 +1314,42 @@ export function ChatQuestionInteractionCard({
                     </>
                   ) : canResolveRuntimeAuthorization ? (
                     <View style={styles.multiActionWrap}>
-                      {(
-                        interaction.runtimeAuthorization?.availablePresets || []
-                      ).map((preset) => (
-                        <Button
-                          key={preset}
-                          label={
-                            submitting
-                              ? "处理中..."
-                              : formatRuntimeAuthorizationPresetLabel(preset)
-                          }
-                          onPress={() =>
-                            selectedRuntimeGrantOptionId
-                              ? void submitInteractionResolution(
-                                  {
-                                    decision: "approve",
-                                    preset,
-                                    selectedGrantOptionId:
-                                      selectedRuntimeGrantOptionId,
-                                    note:
-                                      resolutionNoteDraft.trim() || undefined,
-                                  },
-                                  "提交授权结果失败。"
-                                )
-                              : undefined
-                          }
-                          style={styles.singleActionButton}
-                          disabled={submitting || !selectedRuntimeGrantOptionId}
-                        />
-                      ))}
+                      {(task.runtimeAuthorization?.availablePresets || []).map(
+                        (preset) => (
+                          <Button
+                            key={preset}
+                            label={
+                              submitting
+                                ? "处理中..."
+                                : formatRuntimeAuthorizationPresetLabel(preset)
+                            }
+                            onPress={() =>
+                              selectedRuntimeGrantOptionId
+                                ? void submitTaskResolution(
+                                    {
+                                      decision: "approve",
+                                      preset,
+                                      selectedGrantOptionId:
+                                        selectedRuntimeGrantOptionId,
+                                      note:
+                                        resolutionNoteDraft.trim() || undefined,
+                                    },
+                                    "提交授权结果失败。"
+                                  )
+                                : undefined
+                            }
+                            style={styles.singleActionButton}
+                            disabled={
+                              submitting || !selectedRuntimeGrantOptionId
+                            }
+                          />
+                        )
+                      )}
                       <Button
                         label={submitting ? "处理中..." : "拒绝"}
                         variant="secondary"
                         onPress={() =>
-                          void submitInteractionResolution(
+                          void submitTaskResolution(
                             {
                               decision: "reject",
                               note: resolutionNoteDraft.trim() || undefined,

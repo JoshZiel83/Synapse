@@ -1,10 +1,10 @@
 /**
- * Interaction-projection worker (G5 / Stage 8).
+ * Task-projection worker (G5 / Stage 8).
  *
  * Consumes `tool_call_task_transport_projections(status='pending')` rows
- * (inserted by `createRuntimeAuthorizationInteractionRequest`) and
+ * (inserted by `createRuntimeAuthorizationTaskRequest`) and
  * materializes them into transport_message_links so a supporting
- * connector can render the interaction as an IM message + keyboard.
+ * connector can render the task as an IM message + keyboard.
  *
  * v1: QQ only (long_connection → keyboard; webhook+confirmed →
  * fallback text). Feishu / Weixin / Wecom bindings get
@@ -31,7 +31,7 @@
 
 import { CompiledQuery, sql } from "kysely"
 import {
-  INTERACTION_REQUEST_KIND,
+  TASK_REQUEST_KIND,
   type RuntimeAuthorizationPreset,
 } from "@synapse/shared"
 import {
@@ -39,12 +39,13 @@ import {
   withDbTransaction,
   type Executor,
 } from "../infrastructure/database/kysely.js"
+import { parseInstantString } from "../infrastructure/datetime.js"
 import {
   mintActionToken,
   sweepExpiredActionTokens,
   type ActionTokenPayload,
-} from "../modules/interactions/action-tokens.js"
-import { getTaskSummary } from "../modules/interactions/service.js"
+} from "../modules/tasks/action-tokens.js"
+import { getTaskSummary } from "../modules/tasks/service.js"
 import {
   createConversationItem,
   type ConversationItemPartInput,
@@ -63,7 +64,7 @@ import {
 } from "../modules/im/messaging/canonical-message.js"
 import { createLogger } from "../infrastructure/logger/index.js"
 
-const log = createLogger("interaction-projection")
+const log = createLogger("task-projection")
 
 const TICK_INTERVAL_MS = 5_000
 const BATCH_SIZE = 10
@@ -88,8 +89,8 @@ async function runOn<T = any>(
  * other layer (canonical-encoding, render, outbound) is generic. The
  * eligibility decision now goes through two polymorphic checks
  * (`messageCapabilities.supportsInteractionPrompt` + connector's
- * optional `getInteractionProjectionReadiness?()` hook), so adding a
- * new connector with interaction-prompt support requires zero edits
+ * optional `getTaskProjectionReadiness?()` hook), so adding a
+ * new connector with task-prompt support requires zero edits
  * here.
  */
 
@@ -124,7 +125,7 @@ let tickCounter = 0
  * multiple times — the second call is a no-op (the first stop()
  * removes the handle).
  */
-export function startInteractionProjectionWorker(): WorkerHandle {
+export function startTaskProjectionWorker(): WorkerHandle {
   if (active) return active
   let stopped = false
   let timer: NodeJS.Timeout | null = null
@@ -168,7 +169,7 @@ export function startInteractionProjectionWorker(): WorkerHandle {
   return handle
 }
 
-export async function stopInteractionProjectionWorker(): Promise<void> {
+export async function stopTaskProjectionWorker(): Promise<void> {
   if (!active) return
   await active.stop()
   active = null
@@ -264,11 +265,11 @@ async function processOne(
     return "projected"
   }
 
-  // Verify the interaction is still pending + not expired.
-  const lockedInteraction = await runOn<{
+  // Verify the task is still pending + not expired.
+  const lockedTask = await runOn<{
     id: string
     status: string
-    expires_at: string | Date | null
+    expires_at: Date | null
   }>(
     client,
     `
@@ -279,9 +280,9 @@ async function processOne(
     `,
     [row.task_id]
   )
-  const lock = lockedInteraction.rows[0]
+  const lock = lockedTask.rows[0]
   if (!lock) {
-    await skipRow(client, row.id, "interaction_missing")
+    await skipRow(client, row.id, "task_missing")
     return "skipped"
   }
   if (
@@ -290,16 +291,12 @@ async function processOne(
     lock.status !== "auth_required" &&
     lock.status !== "submitted"
   ) {
-    await skipRow(client, row.id, "interaction_already_resolved_or_expired")
+    await skipRow(client, row.id, "task_already_resolved_or_expired")
     return "skipped"
   }
   if (lock.expires_at) {
-    const expiresAt =
-      lock.expires_at instanceof Date
-        ? lock.expires_at
-        : new Date(lock.expires_at)
-    if (expiresAt.getTime() < Date.now()) {
-      await skipRow(client, row.id, "interaction_already_resolved_or_expired")
+    if (lock.expires_at.getTime() < Date.now()) {
+      await skipRow(client, row.id, "task_already_resolved_or_expired")
       return "skipped"
     }
   }
@@ -327,7 +324,7 @@ async function processOne(
   }
   // Eligibility goes through capability + per-account readiness hook:
   //   (a) Generic capability: connector must declare it can render
-  //       interaction prompts at all.
+  //       task prompts at all.
   //   (b) Per-account precondition (e.g. QQ webhook requires the
   //       operator's OQ2 confirmation). Failure stamps `error` so
   //       `service/recovery.ts` recovery code can re-arm when the
@@ -339,7 +336,7 @@ async function processOne(
   }
 
   const account = binding.account
-  const readiness = connector.getInteractionProjectionReadiness?.(account) ?? {
+  const readiness = connector.getTaskProjectionReadiness?.(account) ?? {
     ok: true,
   }
   if (!readiness.ok) {
@@ -352,14 +349,11 @@ async function processOne(
     return "skipped"
   }
 
-  // Load the full interaction summary so we know what grant options /
+  // Load the full task summary so we know what grant options /
   // presets to mint tokens for.
-  const interaction = await getTaskSummary(row.task_id, client)
-  if (
-    !interaction ||
-    interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
-  ) {
-    await skipRow(client, row.id, "interaction_unsupported_kind")
+  const task = await getTaskSummary(row.task_id, client)
+  if (!task || task.kind !== TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
+    await skipRow(client, row.id, "task_unsupported_kind")
     return "skipped"
   }
 
@@ -380,22 +374,22 @@ async function processOne(
   try {
     await runOn(client, "SAVEPOINT projection_business", [])
     const mintedOptions = await mintOptionsAndTokens(client, {
-      interactionRequestId: interaction.id,
-      interactionExpiresAt: interaction.expiresAt,
+      taskId: task.id,
+      taskExpiresAt: task.expiresAt ? parseInstantString(task.expiresAt) : null,
       presets:
-        interaction.runtimeAuthorization?.availablePresets ??
+        task.runtimeAuthorization?.availablePresets ??
         (["once"] as RuntimeAuthorizationPreset[]),
-      grantOptions: interaction.runtimeAuthorization?.grantOptions ?? [],
+      grantOptions: task.runtimeAuthorization?.grantOptions ?? [],
     })
     const fallbackText = buildFallbackText({
-      interaction,
+      task,
     })
     const message: CanonicalMessage = useFallbackText
       ? buildFallbackCanonical(fallbackText)
       : buildKeyboardCanonical({
-          interactionRequestId: interaction.id,
-          title: interaction.runtimeAuthorization?.deviceDisplayName
-            ? `${interaction.runtimeAuthorization.deviceDisplayName} 请求授权`
+          taskId: task.id,
+          title: task.runtimeAuthorization?.deviceDisplayName
+            ? `${task.runtimeAuthorization.deviceDisplayName} 请求授权`
             : "需要审批",
           fallbackText,
           options: mintedOptions,
@@ -460,8 +454,7 @@ async function markRowProjected(
       UPDATE tool_call_task_transport_projections
       SET status = 'projected',
           transport_message_link_id = $2,
-          error = NULL,
-          updated_at = NOW()
+          error = NULL
       WHERE id = $1
     `,
     [rowId, linkId]
@@ -478,8 +471,7 @@ async function skipRow(
     `
       UPDATE tool_call_task_transport_projections
       SET status = 'skipped',
-          error = $2,
-          updated_at = NOW()
+          error = $2
       WHERE id = $1
     `,
     [rowId, error]
@@ -499,8 +491,7 @@ async function bumpAttemptsOnRow(
         UPDATE tool_call_task_transport_projections
         SET status = 'failed',
             attempts = $2,
-            error = $3,
-            updated_at = NOW()
+            error = $3
         WHERE id = $1
       `,
       [row.id, nextAttempts, error]
@@ -515,8 +506,7 @@ async function bumpAttemptsOnRow(
       UPDATE tool_call_task_transport_projections
       SET attempts = $2,
           next_attempt_at = NOW() + ($3 || ' seconds')::interval,
-          error = $4,
-          updated_at = NOW()
+          error = $4
       WHERE id = $1
     `,
     [row.id, nextAttempts, String(backoffSeconds), error]
@@ -542,8 +532,8 @@ interface MintedOption {
 async function mintOptionsAndTokens(
   client: Executor,
   params: {
-    interactionRequestId: string
-    interactionExpiresAt?: string | Date | null
+    taskId: string
+    taskExpiresAt?: Date | null
     presets: readonly RuntimeAuthorizationPreset[]
     grantOptions: ReadonlyArray<{ id: string; summary: string }>
   }
@@ -565,8 +555,8 @@ async function mintOptionsAndTokens(
     if (minted.length >= 4) break // leave room for the deny button
     const decisionLabel = presetLabels[preset] ?? preset
     const token = await mintActionToken(client, {
-      interactionRequestId: params.interactionRequestId,
-      interactionExpiresAt: params.interactionExpiresAt,
+      taskId: params.taskId,
+      taskExpiresAt: params.taskExpiresAt,
       payload: {
         decision: "approve",
         preset,
@@ -584,8 +574,8 @@ async function mintOptionsAndTokens(
     })
   }
   const denyToken = await mintActionToken(client, {
-    interactionRequestId: params.interactionRequestId,
-    interactionExpiresAt: params.interactionExpiresAt,
+    taskId: params.taskId,
+    taskExpiresAt: params.taskExpiresAt,
     payload: { decision: "reject" } as ActionTokenPayload,
   })
   minted.push({
@@ -599,14 +589,14 @@ async function mintOptionsAndTokens(
 }
 
 function buildKeyboardCanonical(params: {
-  interactionRequestId: string
+  taskId: string
   title: string
   fallbackText: string
   options: MintedOption[]
 }): CanonicalMessage {
   const part: CanonicalPart = {
     type: "interaction_prompt",
-    interactionRequestId: params.interactionRequestId,
+    taskId: params.taskId,
     title: params.title,
     fallbackText: params.fallbackText,
     options: params.options.map((o) => ({
@@ -650,9 +640,9 @@ function buildItemParts(msg: CanonicalMessage): ConversationItemPartInput[] {
 }
 
 function buildFallbackText(params: {
-  interaction: { runtimeAuthorization?: { deviceDisplayName?: string } }
+  task: { runtimeAuthorization?: { deviceDisplayName?: string } }
 }): string {
-  const device = params.interaction.runtimeAuthorization?.deviceDisplayName
+  const device = params.task.runtimeAuthorization?.deviceDisplayName
   if (device) {
     return `${device} 请求授权 — ${FALLBACK_TEXT_DEFAULT}`
   }

@@ -20,6 +20,7 @@ import {
   type RemoteAgentRuntimeState,
   type RemoteAgentView,
   type WorkspaceAppGrantPermission,
+  type Timestamp,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { buildDaemonCommand as buildDaemonCommandImpl } from "./daemon-command.js"
@@ -34,6 +35,11 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
+import {
+  requireInstantDate,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import {
   authorizeAction,
   listAuthorizedResourceIds,
@@ -106,7 +112,7 @@ type RuntimeStatusMessage = {
   state: RemoteAgentRuntimeStateType
   statusText?: string
   conversationId?: string | null
-  interactionId?: string | null
+  taskId?: string | null
   sessionId?: string | null
   lastError?: string | null
   runKey?: string | null
@@ -119,19 +125,13 @@ type DeliveryRow = {
   conversation_id: string
   item_id: string
   status: string
-  created_at: string | Date
+  created_at: Date
   sequence: string | number
 }
 
 const machineConnections = new Map<string, MachineConnection>()
 const deliveryInFlightByMachine = new Map<string, Map<string, number>>()
 const DELIVERY_IN_FLIGHT_TTL_MS = 5_000
-
-function toIso(value: string | Date | null | undefined) {
-  if (typeof value === "string") return value
-  if (value instanceof Date) return value.toISOString()
-  return undefined
-}
 
 function hashMachineApiKey(apiKey: string) {
   return createHash("sha256").update(apiKey).digest("hex")
@@ -278,12 +278,10 @@ async function getOrInitConversationContext(
         conversation_id: conversationId,
         runtime_kind: runtimeKind,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc.columns(["remote_agent_id", "conversation_id"]).doUpdateSet({
           runtime_kind: sql`COALESCE(remote_agent_conversation_contexts.runtime_kind, EXCLUDED.runtime_kind)`,
-          updated_at: sql`NOW()`,
         })
       )
       .returning([
@@ -291,7 +289,7 @@ async function getOrInitConversationContext(
         "runtime_session_id",
         "runtime_state",
         "status_text",
-        "active_interaction_id",
+        "active_task_id",
       ])
   )
   return result.rows[0] ?? null
@@ -305,7 +303,7 @@ async function updateConversationRuntimeStatus(
     state: RemoteAgentRuntimeStateType
     statusText?: string | null
     sessionId?: string | null
-    interactionId?: string | null
+    taskId?: string | null
     lastError?: string | null
   },
   queryable: Executor = db
@@ -320,7 +318,7 @@ async function updateConversationRuntimeStatus(
         runtime_session_id,
         runtime_state,
         status_text,
-        active_interaction_id,
+        active_task_id,
         last_run_started_at,
         last_run_finished_at,
         last_activity_at,
@@ -362,7 +360,7 @@ async function updateConversationRuntimeStatus(
           runtime_session_id = COALESCE(EXCLUDED.runtime_session_id, remote_agent_conversation_contexts.runtime_session_id),
           runtime_state = EXCLUDED.runtime_state,
           status_text = EXCLUDED.status_text,
-          active_interaction_id = EXCLUDED.active_interaction_id,
+          active_task_id = EXCLUDED.active_task_id,
           last_run_started_at = CASE
             WHEN EXCLUDED.runtime_state IN (
               'running', 'waiting_user_input', 'plan_drafting', 'waiting_plan_approval'
@@ -392,8 +390,7 @@ async function updateConversationRuntimeStatus(
             WHEN EXCLUDED.last_error IS NULL THEN remote_agent_conversation_contexts.last_error
             WHEN EXCLUDED.last_error = '' THEN NULL
             ELSE EXCLUDED.last_error
-          END,
-          updated_at = NOW()
+          END
     `,
     [
       params.remoteAgentId,
@@ -402,7 +399,7 @@ async function updateConversationRuntimeStatus(
       params.sessionId ?? null,
       params.state,
       params.statusText ?? null,
-      params.interactionId ?? null,
+      params.taskId ?? null,
       params.lastError ?? null,
     ]
   )
@@ -462,7 +459,6 @@ async function setMachineLifecycleState(
     .set({
       lifecycle_state: state,
       last_seen_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", machineId)
     .execute()
@@ -486,7 +482,6 @@ async function upsertRuntimeCatalog(
         last_seen_at: sql`NOW()`,
         last_error: entry.lastError ?? null,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc.columns(["machine_id", "runtime_kind"]).doUpdateSet({
@@ -496,7 +491,6 @@ async function upsertRuntimeCatalog(
           metadata: sql`EXCLUDED.metadata`,
           last_seen_at: sql`NOW()`,
           last_error: sql`EXCLUDED.last_error`,
-          updated_at: sql`NOW()`,
         })
       )
       .execute()
@@ -539,13 +533,13 @@ async function startBoundRemoteAgents(machineId: string) {
     machineId,
     remoteAgentIds: bindings.map((binding) => binding.remote_agent_id),
   })
-  await replayResolvedRemoteAgentInteractions({
+  await replayResolvedRemoteAgentTasks({
     machineId,
     remoteAgentIds: bindings.map((binding) => binding.remote_agent_id),
   })
 }
 
-async function replayResolvedRemoteAgentInteractions(params: {
+async function replayResolvedRemoteAgentTasks(params: {
   machineId: string
   remoteAgentIds: string[]
 }) {
@@ -559,22 +553,22 @@ async function replayResolvedRemoteAgentInteractions(params: {
 
   const rows = await runOnDb<{
     remote_agent_id: string
-    active_interaction_id: string
+    active_task_id: string
     lifecycle_status: string
   }>(
     `
       SELECT
         ctx.remote_agent_id,
-        ctx.active_interaction_id,
+        ctx.active_task_id,
         task.lifecycle_status
       FROM remote_agent_conversation_contexts ctx
       INNER JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = ctx.remote_agent_id
       INNER JOIN tool_call_tasks task
-        ON task.id = ctx.active_interaction_id
+        ON task.id = ctx.active_task_id
       WHERE binding.machine_id = $1
         AND ctx.remote_agent_id = ANY($2::uuid[])
-        AND ctx.active_interaction_id IS NOT NULL
+        AND ctx.active_task_id IS NOT NULL
         AND task.lifecycle_status IN ('completed', 'failed', 'cancelled', 'expired')
     `,
     [params.machineId, params.remoteAgentIds]
@@ -584,17 +578,17 @@ async function replayResolvedRemoteAgentInteractions(params: {
     return
   }
 
-  const { getTaskSummary } = await import("../interactions/service.js")
+  const { getTaskSummary } = await import("../tasks/service.js")
   for (const row of rows.rows) {
-    const interaction = await getTaskSummary(row.active_interaction_id)
-    if (!interaction) {
+    const task = await getTaskSummary(row.active_task_id)
+    if (!task) {
       continue
     }
     safeSend(connection, {
-      type: "agent:interaction:resolved",
+      type: "agent:task:resolved",
       remoteAgentId: row.remote_agent_id,
-      interactionId: row.active_interaction_id,
-      interaction,
+      taskId: row.active_task_id,
+      task,
     })
   }
 }
@@ -643,7 +637,7 @@ async function updateRemoteAgentRuntimeStatus(
         state: message.state,
         statusText: message.statusText,
         sessionId: message.sessionId ?? null,
-        interactionId: message.interactionId ?? null,
+        taskId: message.taskId ?? null,
         lastError: message.lastError ?? null,
       },
       queryable
@@ -667,7 +661,6 @@ async function updateRemoteAgentRuntimeStatus(
         status_text: message.statusText ?? null,
         last_activity_at: sql`NOW()`,
         last_run_finished_at: sql`COALESCE(last_run_finished_at, NOW())`,
-        updated_at: sql`NOW()`,
       })
       .where("remote_agent_id", "=", message.remoteAgentId)
       .where("runtime_state", "!=", "offline")
@@ -737,8 +730,7 @@ async function updateRemoteAgentRuntimeStatus(
           capabilities = CASE
             WHEN $3::jsonb IS NULL THEN binding.capabilities
             ELSE COALESCE(binding.capabilities, '{}'::jsonb) || $3::jsonb
-          END,
-          updated_at = NOW()
+          END
       WHERE binding.remote_agent_id = $1
         AND binding.machine_id = $2
     `,
@@ -749,12 +741,11 @@ async function updateRemoteAgentRuntimeStatus(
     ]
   )
 
-  if (runId && message.interactionId) {
+  if (runId && message.taskId) {
     await queryable
       .updateTable("remote_agent_runs")
       .set({
-        interaction_id: message.interactionId,
-        updated_at: sql`NOW()`,
+        task_id: message.taskId,
       })
       .where("id", "=", runId)
       .execute()
@@ -972,7 +963,6 @@ async function scheduleDeliveryRetry(
       .set({
         attempts: sql`attempts + 1`,
         last_failure_reason: reason,
-        updated_at: sql`NOW()`,
       })
       .where("id", "in", deliveryIds)
       .where("status", "=", "pending")
@@ -986,7 +976,6 @@ async function scheduleDeliveryRetry(
         .set({
           status: "failed",
           next_attempt_at: null,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", row.id)
         .execute()
@@ -996,8 +985,7 @@ async function scheduleDeliveryRetry(
     await queryable
       .updateTable("remote_agent_message_deliveries")
       .set({
-        next_attempt_at: scheduled.toISOString(),
-        updated_at: sql`NOW()`,
+        next_attempt_at: scheduled,
       })
       .where("id", "=", row.id)
       .execute()
@@ -1172,10 +1160,10 @@ function mapRuntimeSummaryFromRow(row: {
   status_text?: string | null
   latest_runtime_session_id?: string | null
   latest_active_conversation_id?: string | null
-  latest_active_interaction_id?: string | null
-  last_activity_at?: string | Date | null
-  latest_last_run_started_at?: string | Date | null
-  latest_last_run_finished_at?: string | Date | null
+  latest_active_task_id?: string | null
+  last_activity_at?: Date | null
+  latest_last_run_started_at?: Date | null
+  latest_last_run_finished_at?: Date | null
   last_error?: string | null
   capabilities?: unknown
   pending_conversation_count?: string | number | null
@@ -1187,12 +1175,14 @@ function mapRuntimeSummaryFromRow(row: {
     statusText: row.status_text ?? undefined,
     sessionId: row.latest_runtime_session_id ?? undefined,
     activeConversationId: row.latest_active_conversation_id ?? undefined,
-    activeInteractionId: row.latest_active_interaction_id ?? undefined,
+    activeTaskId: row.latest_active_task_id ?? undefined,
     pendingConversationCount: Number(row.pending_conversation_count ?? 0),
     unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
-    lastActivityAt: toIso(row.last_activity_at),
-    lastRunStartedAt: toIso(row.latest_last_run_started_at),
-    lastRunFinishedAt: toIso(row.latest_last_run_finished_at),
+    lastActivityAt: serializeOptionalInstant(row.last_activity_at),
+    lastRunStartedAt: serializeOptionalInstant(row.latest_last_run_started_at),
+    lastRunFinishedAt: serializeOptionalInstant(
+      row.latest_last_run_finished_at
+    ),
     lastError: row.last_error ?? undefined,
     capabilities:
       row.capabilities && typeof row.capabilities === "object"
@@ -1206,7 +1196,7 @@ const LATEST_CONVERSATION_CONTEXT_LATERAL = `
     SELECT
       ctx.conversation_id AS latest_active_conversation_id,
       ctx.runtime_session_id AS latest_runtime_session_id,
-      ctx.active_interaction_id AS latest_active_interaction_id,
+      ctx.active_task_id AS latest_active_task_id,
       ctx.last_run_started_at AS latest_last_run_started_at,
       ctx.last_run_finished_at AS latest_last_run_finished_at
     FROM remote_agent_conversation_contexts ctx
@@ -1269,8 +1259,7 @@ async function ensureRemoteAgentRun(params: {
             ended_at = CASE
               WHEN $3::text IN ('completed', 'failed', 'cancelled') THEN NOW()
               ELSE NULL
-            END,
-            updated_at = NOW()
+            END
         WHERE id = $1
       `,
       [
@@ -1336,7 +1325,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
   options: {
     /**
      * When provided, the returned snapshot is scoped to this conversation:
-     * runtime_state / status_text / last_error / session_id / interaction
+     * runtime_state / status_text / last_error / session_id / active task
      * come from the (remote_agent_id, conversation_id) context row, not
      * the binding row or the "most representative context" LATERAL pick.
      *
@@ -1365,7 +1354,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
         ctx.runtime_state AS ctx_runtime_state,
         ctx.status_text AS ctx_status_text,
         ctx.last_error AS ctx_last_error,
-        ctx.active_interaction_id AS latest_active_interaction_id,
+        ctx.active_task_id AS latest_active_task_id,
         ctx.last_run_started_at AS latest_last_run_started_at,
         ctx.last_run_finished_at AS latest_last_run_finished_at,
         ctx.last_activity_at AS ctx_last_activity_at
@@ -1393,20 +1382,20 @@ export async function loadRemoteAgentRuntimeSnapshot(
     runtime_state: RemoteAgentRuntimeStateType
     status_text: string | null
     latest_active_conversation_id: string | null
-    latest_active_interaction_id: string | null
+    latest_active_task_id: string | null
     latest_runtime_session_id: string | null
-    last_activity_at: string | Date | null
-    latest_last_run_started_at: string | Date | null
-    latest_last_run_finished_at: string | Date | null
+    last_activity_at: Date | null
+    latest_last_run_started_at: Date | null
+    latest_last_run_finished_at: Date | null
     last_error: string | null
-    updated_at: string | Date
+    updated_at: Date
     pending_conversation_count: string | number
     unread_delivery_count: string | number
     capabilities: unknown
     ctx_runtime_state: RemoteAgentRuntimeStateType | null
     ctx_status_text: string | null
     ctx_last_error: string | null
-    ctx_last_activity_at: string | Date | null
+    ctx_last_activity_at: Date | null
   }>(
     queryable,
     `
@@ -1416,7 +1405,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
         binding.runtime_state,
         binding.status_text,
         latest_ctx.latest_active_conversation_id,
-        latest_ctx.latest_active_interaction_id,
+        latest_ctx.latest_active_task_id,
         latest_ctx.latest_runtime_session_id,
         binding.last_activity_at,
         latest_ctx.latest_last_run_started_at,
@@ -1484,21 +1473,35 @@ export async function loadRemoteAgentRuntimeSnapshot(
     ? row.ctx_last_activity_at
     : row.last_activity_at
   const lastErrorActivityAt = lastActivityAt
-  const updatedAt = toIso(row.updated_at) ?? new Date().toISOString()
-  const lastErrorAt = toIso(lastErrorActivityAt) || toIso(row.updated_at)
+  const updatedAt = serializeInstant(
+    requireInstantDate(
+      row.updated_at,
+      `Remote agent ${row.remote_agent_id} updated_at`
+    )
+  )
+  const lastErrorAt =
+    serializeOptionalInstant(lastErrorActivityAt) ||
+    serializeInstant(
+      requireInstantDate(
+        row.updated_at,
+        `Remote agent ${row.remote_agent_id} updated_at`
+      )
+    )
   return {
     remoteAgentId: row.remote_agent_id,
     runtimeKind: row.runtime_kind,
     state: runtimeState,
     statusText: statusText ?? undefined,
     activeConversationId: row.latest_active_conversation_id ?? undefined,
-    activeInteractionId: row.latest_active_interaction_id ?? undefined,
+    activeTaskId: row.latest_active_task_id ?? undefined,
     sessionId: row.latest_runtime_session_id ?? undefined,
     pendingConversationCount: Number(row.pending_conversation_count ?? 0),
     unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
-    lastActivityAt: toIso(lastActivityAt),
-    lastRunStartedAt: toIso(row.latest_last_run_started_at),
-    lastRunFinishedAt: toIso(row.latest_last_run_finished_at),
+    lastActivityAt: serializeOptionalInstant(lastActivityAt),
+    lastRunStartedAt: serializeOptionalInstant(row.latest_last_run_started_at),
+    lastRunFinishedAt: serializeOptionalInstant(
+      row.latest_last_run_finished_at
+    ),
     lastError:
       lastErrorMessage && lastErrorAt
         ? {
@@ -1573,8 +1576,8 @@ async function mapRemoteAgentRow(row: {
   is_public_shared: boolean
   metadata: unknown
   owner_workspace_member_id: string | null
-  created_at: string | Date
-  updated_at: string | Date
+  created_at: Date
+  updated_at: Date
   machine_id?: string | null
   machine_title?: string | null
   binding_status?: string | null
@@ -1585,10 +1588,10 @@ async function mapRemoteAgentRow(row: {
   status_text?: string | null
   latest_runtime_session_id?: string | null
   latest_active_conversation_id?: string | null
-  latest_active_interaction_id?: string | null
-  last_activity_at?: string | Date | null
-  latest_last_run_started_at?: string | Date | null
-  latest_last_run_finished_at?: string | Date | null
+  latest_active_task_id?: string | null
+  last_activity_at?: Date | null
+  latest_last_run_started_at?: Date | null
+  latest_last_run_finished_at?: Date | null
   last_error?: string | null
   capabilities?: unknown
   pending_conversation_count?: string | number | null
@@ -1620,8 +1623,12 @@ async function mapRemoteAgentRow(row: {
         ? (row.metadata as Record<string, unknown>)
         : {},
     ownerWorkspaceMemberId: row.owner_workspace_member_id ?? undefined,
-    createdAt: toIso(row.created_at),
-    updatedAt: toIso(row.updated_at),
+    createdAt: serializeInstant(
+      requireInstantDate(row.created_at, `Remote agent ${row.id} created_at`)
+    ),
+    updatedAt: serializeInstant(
+      requireInstantDate(row.updated_at, `Remote agent ${row.id} updated_at`)
+    ),
     runtimeSummary,
     binding: row.machine_id
       ? {
@@ -1673,7 +1680,7 @@ export async function listRemoteAgents(params: {
         binding.status_text,
         latest_ctx.latest_runtime_session_id,
         latest_ctx.latest_active_conversation_id,
-        latest_ctx.latest_active_interaction_id,
+        latest_ctx.latest_active_task_id,
         binding.last_activity_at,
         latest_ctx.latest_last_run_started_at,
         latest_ctx.latest_last_run_finished_at,
@@ -1749,7 +1756,7 @@ export async function getRemoteAgent(params: {
         binding.status_text,
         latest_ctx.latest_runtime_session_id,
         latest_ctx.latest_active_conversation_id,
-        latest_ctx.latest_active_interaction_id,
+        latest_ctx.latest_active_task_id,
         binding.last_activity_at,
         latest_ctx.latest_last_run_started_at,
         latest_ctx.latest_last_run_finished_at,
@@ -1993,7 +2000,6 @@ export async function createRemoteAgentMachinePairingSession(params: {
         trust_status: "active",
         created_by_workspace_member_id: identity.workspaceMemberId,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .returningAll()
   )
@@ -2006,9 +2012,9 @@ export async function createRemoteAgentMachinePairingSession(params: {
       description: result.rows[0]!.description ?? undefined,
       trustStatus: result.rows[0]!.trust_status,
       lifecycleState: result.rows[0]!.lifecycle_state ?? undefined,
-      lastSeenAt: toIso(result.rows[0]!.last_seen_at),
-      createdAt: toIso(result.rows[0]!.created_at),
-      updatedAt: toIso(result.rows[0]!.updated_at),
+      lastSeenAt: serializeOptionalInstant(result.rows[0]!.last_seen_at),
+      createdAt: serializeOptionalInstant(result.rows[0]!.created_at),
+      updatedAt: serializeOptionalInstant(result.rows[0]!.updated_at),
     },
     apiKey,
     daemonCommand: buildDaemonCommand(apiKey),
@@ -2046,9 +2052,9 @@ export async function listRemoteAgentMachines(params: {
       trustStatus: row.trust_status,
       lifecycleState: row.lifecycle_state ?? undefined,
       bindingCount: Number(row.binding_count ?? 0),
-      lastSeenAt: toIso(row.last_seen_at),
-      createdAt: toIso(row.created_at),
-      updatedAt: toIso(row.updated_at),
+      lastSeenAt: serializeOptionalInstant(row.last_seen_at),
+      createdAt: serializeOptionalInstant(row.created_at),
+      updatedAt: serializeOptionalInstant(row.updated_at),
     })),
   }
 }
@@ -2089,7 +2095,7 @@ export async function getRemoteAgentMachine(params: {
           binding.status_text,
           latest_ctx.latest_runtime_session_id,
           latest_ctx.latest_active_conversation_id,
-          latest_ctx.latest_active_interaction_id,
+          latest_ctx.latest_active_task_id,
           binding.last_activity_at,
           latest_ctx.latest_last_run_started_at,
           latest_ctx.latest_last_run_finished_at,
@@ -2132,9 +2138,9 @@ export async function getRemoteAgentMachine(params: {
       description: machine.description ?? undefined,
       trustStatus: machine.trust_status,
       lifecycleState: machine.lifecycle_state ?? undefined,
-      lastSeenAt: toIso(machine.last_seen_at),
-      createdAt: toIso(machine.created_at),
-      updatedAt: toIso(machine.updated_at),
+      lastSeenAt: serializeOptionalInstant(machine.last_seen_at),
+      createdAt: serializeOptionalInstant(machine.created_at),
+      updatedAt: serializeOptionalInstant(machine.updated_at),
     },
     runtimeCatalog: catalogResult.rows.map((row) => ({
       runtimeKind: row.runtime_kind,
@@ -2146,7 +2152,7 @@ export async function getRemoteAgentMachine(params: {
           ? (row.metadata as Record<string, unknown>)
           : {},
       lastError: row.last_error ?? undefined,
-      lastSeenAt: toIso(row.last_seen_at),
+      lastSeenAt: serializeOptionalInstant(row.last_seen_at),
     })),
     bindings: bindingResult.rows.map((row) => ({
       remoteAgentId: row.remote_agent_id,
@@ -2233,7 +2239,6 @@ export async function bindRemoteAgent(params: {
       local_root_path: params.localRootPath ?? null,
       status: "active",
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.column("remote_agent_id").doUpdateSet({
@@ -2242,7 +2247,6 @@ export async function bindRemoteAgent(params: {
         runtime_path: sql`EXCLUDED.runtime_path`,
         local_root_path: sql`EXCLUDED.local_root_path`,
         status: "active",
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -2255,7 +2259,7 @@ export async function bindRemoteAgent(params: {
   })
 }
 
-export async function listRemoteAgentGroupInteractionGrants(params: {
+export async function listRemoteAgentGroupTaskGrants(params: {
   workspaceId: string
   remoteAgentId: string
   userId: string
@@ -2269,8 +2273,8 @@ export async function listRemoteAgentGroupInteractionGrants(params: {
   const result = await runOnDb<{
     workspace_member_id: string
     granted_by_workspace_member_id: string | null
-    created_at: string | Date
-    updated_at: string | Date
+    created_at: Date
+    updated_at: Date
     user_id: string
     user_name: string | null
     user_avatar_file_id: string | null
@@ -2284,7 +2288,7 @@ export async function listRemoteAgentGroupInteractionGrants(params: {
         wm.user_id,
         u.name AS user_name,
         u.avatar_file_id AS user_avatar_file_id
-      FROM remote_agent_group_interaction_grants grant_row
+      FROM remote_agent_group_task_grants grant_row
       INNER JOIN workspace_members wm ON wm.id = grant_row.workspace_member_id
       INNER JOIN users u ON u.id = wm.user_id
       WHERE grant_row.remote_agent_id = $1
@@ -2297,8 +2301,18 @@ export async function listRemoteAgentGroupInteractionGrants(params: {
       workspaceMemberId: row.workspace_member_id,
       grantedByWorkspaceMemberId:
         row.granted_by_workspace_member_id ?? undefined,
-      createdAt: toIso(row.created_at),
-      updatedAt: toIso(row.updated_at),
+      createdAt: serializeInstant(
+        requireInstantDate(
+          row.created_at,
+          "remote_agent_group_task_grants.created_at"
+        )
+      ),
+      updatedAt: serializeInstant(
+        requireInstantDate(
+          row.updated_at,
+          "remote_agent_group_task_grants.updated_at"
+        )
+      ),
       userId: row.user_id,
       name: row.user_name ?? "Unknown user",
       avatarUrl: row.user_avatar_file_id
@@ -2308,7 +2322,7 @@ export async function listRemoteAgentGroupInteractionGrants(params: {
   }
 }
 
-export async function updateRemoteAgentGroupInteractionGrants(params: {
+export async function updateRemoteAgentGroupTaskGrants(params: {
   workspaceId: string
   remoteAgentId: string
   userId: string
@@ -2345,22 +2359,21 @@ export async function updateRemoteAgentGroupInteractionGrants(params: {
     )
     for (const workspaceMemberId of nextIds) {
       await client
-        .insertInto("remote_agent_group_interaction_grants")
+        .insertInto("remote_agent_group_task_grants")
         .values({
           remote_agent_id: params.remoteAgentId,
           workspace_member_id: workspaceMemberId,
           granted_by_workspace_member_id: identity.workspaceMemberId,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .execute()
     }
   })
 
-  return listRemoteAgentGroupInteractionGrants(params)
+  return listRemoteAgentGroupTaskGrants(params)
 }
 
-export async function createRemoteAgentUserInputInteraction(params: {
+export async function createRemoteAgentUserInputTask(params: {
   remoteAgentId: string
   machineKey: string
   conversationId: string
@@ -2368,7 +2381,7 @@ export async function createRemoteAgentUserInputInteraction(params: {
   title: string
   instructions?: string
   questions: Array<Record<string, unknown>>
-  expiresAt?: string
+  expiresAt?: Timestamp
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
   const conversationAccess = await requireRemoteAgentConversationAccess(
@@ -2383,9 +2396,9 @@ export async function createRemoteAgentUserInputInteraction(params: {
     status: "running",
     statusText: "Waiting for user input",
   })
-  const { createRemoteAgentUserInputInteractionRequest } =
-    await import("../interactions/service.js")
-  const interaction = await createRemoteAgentUserInputInteractionRequest({
+  const { createRemoteAgentUserInputTaskRequest } =
+    await import("../tasks/service.js")
+  const task = await createRemoteAgentUserInputTaskRequest({
     workspaceId: access.workspaceId,
     conversationId: params.conversationId,
     remoteAgentRunId: runId,
@@ -2401,13 +2414,13 @@ export async function createRemoteAgentUserInputInteraction(params: {
     state: REMOTE_AGENT_RUNTIME_STATE.WAITING_USER_INPUT,
     statusText: params.title,
     conversationId: params.conversationId,
-    interactionId: interaction.id,
+    taskId: task.id,
     runKey: params.runKey,
   })
-  return { interaction }
+  return { task }
 }
 
-export async function createRemoteAgentPlanApprovalInteraction(params: {
+export async function createRemoteAgentPlanApprovalTask(params: {
   remoteAgentId: string
   machineKey: string
   conversationId: string
@@ -2418,7 +2431,7 @@ export async function createRemoteAgentPlanApprovalInteraction(params: {
   checklist?: Array<Record<string, unknown>>
   collaborationMode?: string
   collaborationState?: Record<string, unknown>
-  expiresAt?: string
+  expiresAt?: Timestamp
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
   const conversationAccess = await requireRemoteAgentConversationAccess(
@@ -2433,9 +2446,9 @@ export async function createRemoteAgentPlanApprovalInteraction(params: {
     status: "running",
     statusText: "Waiting for plan approval",
   })
-  const { createRemoteAgentPlanApprovalInteractionRequest } =
-    await import("../interactions/service.js")
-  const interaction = await createRemoteAgentPlanApprovalInteractionRequest({
+  const { createRemoteAgentPlanApprovalTaskRequest } =
+    await import("../tasks/service.js")
+  const task = await createRemoteAgentPlanApprovalTaskRequest({
     workspaceId: access.workspaceId,
     conversationId: params.conversationId,
     remoteAgentRunId: runId,
@@ -2454,10 +2467,10 @@ export async function createRemoteAgentPlanApprovalInteraction(params: {
     state: REMOTE_AGENT_RUNTIME_STATE.WAITING_PLAN_APPROVAL,
     statusText: params.title,
     conversationId: params.conversationId,
-    interactionId: interaction.id,
+    taskId: task.id,
     runKey: params.runKey,
   })
-  return { interaction }
+  return { task }
 }
 
 export async function createRemoteAgentDeliveriesForItem(params: {
@@ -2523,7 +2536,6 @@ export async function createRemoteAgentDeliveriesForItem(params: {
           status: "pending",
           attempts: 0,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc.columns(["remote_agent_id", "item_id"]).doNothing()
@@ -2540,14 +2552,12 @@ export async function createRemoteAgentDeliveriesForItem(params: {
           last_delivery_item_id: params.itemId,
           last_delivery_at: sql`NOW()`,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc.columns(["remote_agent_id", "conversation_id"]).doUpdateSet({
             unread_count: sql`remote_agent_conversation_views.unread_count + 1`,
             last_delivery_item_id: sql`EXCLUDED.last_delivery_item_id`,
             last_delivery_at: sql`NOW()`,
-            updated_at: sql`NOW()`,
           })
         )
         .execute()
@@ -2599,7 +2609,7 @@ export async function listRemoteAgentConversations(params: {
       isIm: Boolean(row.is_im),
       title: row.title ?? undefined,
       unreadCount: Number(row.unread_count ?? 0),
-      updatedAt: toIso(row.updated_at),
+      updatedAt: serializeOptionalInstant(row.updated_at),
     })),
   }
 }
@@ -2647,7 +2657,12 @@ export async function checkRemoteAgentMessages(params: {
       conversationId: row.conversation_id,
       itemId: row.item_id,
       sequence: Number(row.sequence),
-      createdAt: toIso(row.created_at),
+      createdAt: serializeInstant(
+        requireInstantDate(
+          row.created_at,
+          "remote_agent_message_deliveries.created_at"
+        )
+      ),
       status: row.status,
     })),
   }
@@ -2689,7 +2704,6 @@ export async function completeRemoteAgentDeliveries(params: {
     .set({
       status: "completed",
       last_acked_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("remote_agent_id", "=", params.remoteAgentId)
     .where("id", "in", uniqueIds)
@@ -2738,8 +2752,7 @@ export async function completeRemoteAgentDeliveries(params: {
                   AND pending.conversation_id = $2
                   AND pending.status = 'pending'
               )
-            ),
-            updated_at = NOW()
+            )
       `,
       [params.remoteAgentId, conversationId, state.itemId, state.sequence]
     )
@@ -2878,15 +2891,13 @@ export async function searchRemoteAgentMessages(params: {
   }
 }
 
-export async function notifyRemoteAgentInteractionResolved(
-  interactionId: string
-) {
-  const { getTaskSummary } = await import("../interactions/service.js")
-  const interaction = await getTaskSummary(interactionId)
+export async function notifyRemoteAgentTaskResolved(taskId: string) {
+  const { getTaskSummary } = await import("../tasks/service.js")
+  const task = await getTaskSummary(taskId)
   if (
-    !interaction ||
-    interaction.requester?.participantType !== "remote_agent" ||
-    !interaction.requester.remoteAgentId
+    !task ||
+    task.requester?.participantType !== "remote_agent" ||
+    !task.requester.remoteAgentId
   ) {
     return false
   }
@@ -2896,7 +2907,7 @@ export async function notifyRemoteAgentInteractionResolved(
     db
       .selectFrom("remote_agent_bindings")
       .select("machine_id")
-      .where("remote_agent_id", "=", interaction.requester.remoteAgentId)
+      .where("remote_agent_id", "=", task.requester.remoteAgentId)
       .where("status", "=", "active")
       .limit(1)
   )
@@ -2909,23 +2920,11 @@ export async function notifyRemoteAgentInteractionResolved(
     return false
   }
   return safeSend(connection, {
-    // Wire string kept as-is (the daemon listens for it); the task-vocabulary
-    // rename is deferred to the Step-3 surface migration.
-    type: "agent:interaction:resolved",
-    remoteAgentId: interaction.requester.remoteAgentId,
-    interactionId,
-    interaction,
+    type: "agent:task:resolved",
+    remoteAgentId: task.requester.remoteAgentId,
+    taskId,
+    task,
   })
-}
-
-/**
- * Task unification: the delivery-registry adapter for delivery_kind=
- * remote_agent_channel. Pushes a best-effort `agent:task:resolved` nudge over
- * the machine WS (the task IS the interaction, so taskId == the interaction id).
- * Resume is grant-gated / re-poll on the agent side — this only affects latency.
- */
-export async function notifyRemoteAgentTaskResolved(taskId: string) {
-  return notifyRemoteAgentInteractionResolved(taskId)
 }
 
 function closeMachineConnection(
@@ -2958,7 +2957,6 @@ async function finalizeMachineSession(
       status: "closed",
       close_reason: sql`COALESCE(${closeReason ?? null}, close_reason)`,
       ended_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", connection.sessionId)
     .where("status", "!=", "closed")
@@ -2977,7 +2975,6 @@ async function finalizeMachineSession(
       .set({
         runtime_state: "offline",
         status_text: closeReason ?? "Daemon disconnected",
-        updated_at: sql`NOW()`,
       })
       .where("remote_agent_id", "=", binding.remote_agent_id)
       .execute()
@@ -2987,7 +2984,6 @@ async function finalizeMachineSession(
         runtime_state: "offline",
         status_text: closeReason ?? "Daemon disconnected",
         last_run_finished_at: sql`COALESCE(last_run_finished_at, NOW())`,
-        updated_at: sql`NOW()`,
       })
       .where("remote_agent_id", "=", binding.remote_agent_id)
       .where("runtime_state", "in", [
@@ -3047,7 +3043,6 @@ export async function handleRemoteAgentDaemonConnection(
         status: "closed",
         close_reason: "superseded by newer connection",
         ended_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", existing.sessionId)
       .where("status", "!=", "closed")
@@ -3060,7 +3055,6 @@ export async function handleRemoteAgentDaemonConnection(
       status: "closed",
       close_reason: sql`COALESCE(close_reason, 'superseded by newer connection')`,
       ended_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("machine_id", "=", machine.id)
     .where("status", "in", ["connecting", "active"])
@@ -3078,7 +3072,6 @@ export async function handleRemoteAgentDaemonConnection(
         last_heartbeat_at: sql`NOW()`,
         started_at: sql`NOW()`,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .returning(["id", "fencing_token"])
   )
@@ -3134,7 +3127,6 @@ export async function handleRemoteAgentDaemonConnection(
         .updateTable("remote_agent_machine_sessions")
         .set({
           last_heartbeat_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", sessionId)
         .execute()
@@ -3151,7 +3143,6 @@ export async function handleRemoteAgentDaemonConnection(
         .set({
           status: "active",
           last_heartbeat_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", sessionId)
         .execute()

@@ -16,6 +16,7 @@
 import { randomUUID, createHash } from "node:crypto"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import { db } from "../../infrastructure/database/kysely.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
@@ -124,7 +125,7 @@ async function resolveAutoRetryTarget(args: {
  * Re-dispatch the original tool call with the freshly approved grant +
  * retry_nonce baked into the envelope. The caller hands us the EXACT args
  * the user originally tried (sourceRequestArgs persisted on the
- * interaction_runtime_authorization_requests row) — we do not let the
+ * tool_call_task_runtime_authorization row) — we do not let the
  * model re-author them.
  */
 export async function autoDispatchRuntimeAuthorizationRetry(args: {
@@ -263,8 +264,8 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
             retry_nonce: args.sourceRetryNonce,
           },
           ...(cuaFocusScopeId ? { cua_focus_scope_id: cuaFocusScopeId } : {}),
-          issued_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 60_000).toISOString(),
+          issued_at: nowIsoInstant(),
+          expires_at: dateToIsoInstant(new Date(Date.now() + 60_000)),
         })
         return {
           ok: true,

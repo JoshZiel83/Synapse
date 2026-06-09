@@ -4,7 +4,7 @@
  * `planAccountRecoveryActions?()` may return actions in any order,
  * but the generic executor MUST run them in
  *   1) all `reEnableAutoDisabledBindings`
- *   2) all `recoverSkippedInteractionProjections`
+ *   2) all `recoverSkippedTaskProjections`
  *   3) future types, preserving connector-returned relative order
  *
  * Why: projection recovery would otherwise immediately re-skip on
@@ -25,7 +25,7 @@ import { orderAccountRecoveryActions } from "./account-recovery-planner.js"
 test("re-enable actions run before projection-recovery actions", () => {
   const actions: AccountRecoveryAction[] = [
     {
-      type: "recoverSkippedInteractionProjections",
+      type: "recoverSkippedTaskProjections",
       eventKind: "account_status_activated",
     },
     {
@@ -33,7 +33,7 @@ test("re-enable actions run before projection-recovery actions", () => {
       reason: "webhook_inbound_unavailable",
     },
     {
-      type: "recoverSkippedInteractionProjections",
+      type: "recoverSkippedTaskProjections",
       eventKind: "config_webhook_confirmed",
     },
     {
@@ -48,7 +48,7 @@ test("re-enable actions run before projection-recovery actions", () => {
     (a) => a.type === "reEnableAutoDisabledBindings"
   )
   const firstRecoverIdx = ordered.findIndex(
-    (a) => a.type === "recoverSkippedInteractionProjections"
+    (a) => a.type === "recoverSkippedTaskProjections"
   )
   assert.ok(
     lastReEnableIdx >= 0 && firstRecoverIdx >= 0,
@@ -56,7 +56,7 @@ test("re-enable actions run before projection-recovery actions", () => {
   )
   assert.ok(
     lastReEnableIdx < firstRecoverIdx,
-    `expected all reEnableAutoDisabledBindings before any recoverSkippedInteractionProjections (got ${JSON.stringify(
+    `expected all reEnableAutoDisabledBindings before any recoverSkippedTaskProjections (got ${JSON.stringify(
       ordered.map((a) => a.type)
     )})`
   )
@@ -67,11 +67,11 @@ test("orderAccountRecoveryActions preserves intra-group relative order", () => {
     { type: "reEnableAutoDisabledBindings", reason: "r1" },
     { type: "reEnableAutoDisabledBindings", reason: "r2" },
     {
-      type: "recoverSkippedInteractionProjections",
+      type: "recoverSkippedTaskProjections",
       eventKind: "account_status_activated",
     },
     {
-      type: "recoverSkippedInteractionProjections",
+      type: "recoverSkippedTaskProjections",
       eventKind: "config_webhook_confirmed",
     },
   ]
@@ -99,7 +99,7 @@ test("orderAccountRecoveryActions is a no-op when only one group is present", ()
   assert.deepEqual(orderAccountRecoveryActions(onlyReEnable), onlyReEnable)
   const onlyRecover: AccountRecoveryAction[] = [
     {
-      type: "recoverSkippedInteractionProjections",
+      type: "recoverSkippedTaskProjections",
       eventKind: "account_status_activated",
     },
   ]

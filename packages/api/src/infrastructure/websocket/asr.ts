@@ -5,6 +5,7 @@ import {
   type RealtimeAsrClientMessage,
   type RealtimeAsrSocketEvent,
 } from "@synapse/shared"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import {
   authenticateSessionFromHeaders,
   authenticateSessionToken,
@@ -250,7 +251,7 @@ export function setupAsrWebSocket(app: FastifyInstance) {
           if (socket.readyState === 1) {
             safeSendAsrEvent(clientId, {
               type: "ping",
-              payload: { at: new Date().toISOString() },
+              payload: { at: nowIsoInstant() },
             })
             client.pongTimer = setTimeout(() => {
               try {

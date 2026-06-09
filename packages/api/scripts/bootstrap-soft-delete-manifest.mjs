@@ -159,7 +159,7 @@ const DERIVED = new Set([
   "actor_model_group_assignments",
   "plugin_version_runtime_permissions",
   "catalog_item_categories",
-  "remote_agent_group_interaction_grants",
+  "remote_agent_group_task_grants",
   "model_group_profiles",
   "memory_item_chunks", // index rebuild churn
 ])

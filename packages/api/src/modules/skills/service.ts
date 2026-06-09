@@ -33,6 +33,10 @@ import {
   type SkillMarketplaceVersion,
   textBlock,
 } from "@synapse/shared"
+import {
+  dateToIsoInstant,
+  type IsoInstantString,
+} from "@synapse/shared/datetime"
 import { lookupResources } from "../access/evaluator.js"
 import { ACCESS_ACTIONS } from "../access/actions.js"
 import {
@@ -52,6 +56,10 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import {
   getWorkspaceCapabilityConversationTypeMask,
   getWorkspaceCapabilityConversationTypePolicyMap,
@@ -275,7 +283,7 @@ type SkillSnapshotJoinRow = {
   snapshot_content_hash: string | null
   snapshot_source_warnings: string[] | null
   snapshot_resolved_revision: string | null
-  snapshot_created_at: string | null
+  snapshot_created_at: Date | null
   mirror_source_id: string | null
   mirror_source_type: "github" | "clawhub" | null
   mirror_locator_key: string | null
@@ -286,9 +294,9 @@ type SkillSnapshotJoinRow = {
   mirror_last_sync_status: "pending" | "synced" | "error" | null
   mirror_source_warnings: string[] | null
   mirror_last_error: string | null
-  mirror_last_synced_at: string | null
-  mirror_created_at: string | null
-  mirror_updated_at: string | null
+  mirror_last_synced_at: Date | null
+  mirror_created_at: Date | null
+  mirror_updated_at: Date | null
 }
 
 type SkillPackageRow = {
@@ -302,13 +310,13 @@ type SkillPackageRow = {
   item_download_count: number
   item_icon_file_id: string | null
   item_metadata: unknown
-  item_created_at: string
-  item_updated_at: string
+  item_created_at: Date
+  item_updated_at: Date
   latest_version_id: string | null
   latest_version_value: string | null
   latest_version_changelog: string | null
   latest_version_created_by_user_id: string | null
-  latest_version_created_at: string | null
+  latest_version_created_at: Date | null
   spec_default_conversation_type_mask: number | null
   publisher_id: string
   publisher_slug: string
@@ -326,8 +334,8 @@ type InstalledSkillRow = {
   skill_status: "active" | "disabled" | "archived"
   conversation_type_mask_override: number | null
   owner_workspace_member_id: string | null
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
   current_snapshot_id: string
   current_skill_version_id: string
   current_skill_snapshot_id: string
@@ -354,8 +362,8 @@ type SkillSnapshotFileRow = {
   path: string
   media_type: string | null
   content_blocks: unknown
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
 }
 
 export type SkillAccessRow = {
@@ -375,8 +383,8 @@ export type SkillAccessRow = {
   source: "manual" | "approval" | "system"
   created_by_workspace_member_id: string | null
   reason: string | null
-  created_at: string
-  revoked_at: string | null
+  created_at: Date
+  revoked_at: Date | null
 }
 
 type VisibleSkillRow = {
@@ -395,7 +403,7 @@ type VisibleSkillRow = {
   source_slug: string | null
   source_version_value: string | null
   conversation_type_mask_override: number | null
-  access_created_at: string
+  access_created_at: Date
 }
 
 type InstallationSummary = {
@@ -788,8 +796,8 @@ function buildSkillAttachmentFromCatalogFile(
     path: row.path,
     mediaType: row.media_type || undefined,
     contentBlocks: normalizeStoredBlocks(row.content_blocks),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -853,21 +861,21 @@ function buildMirrorSourceSummary(row: SkillSnapshotJoinRow) {
     lastSyncStatus: row.mirror_last_sync_status || "pending",
     sourceWarnings: row.mirror_source_warnings || [],
     lastError: row.mirror_last_error || undefined,
-    lastSyncedAt: row.mirror_last_synced_at || undefined,
+    lastSyncedAt: serializeOptionalInstant(row.mirror_last_synced_at),
     createdAt:
-      row.mirror_created_at ||
-      row.snapshot_created_at ||
-      new Date(0).toISOString(),
+      serializeOptionalInstant(row.mirror_created_at) ||
+      serializeOptionalInstant(row.snapshot_created_at) ||
+      dateToIsoInstant(new Date(0)),
     updatedAt:
-      row.mirror_updated_at ||
-      row.snapshot_created_at ||
-      new Date(0).toISOString(),
+      serializeOptionalInstant(row.mirror_updated_at) ||
+      serializeOptionalInstant(row.snapshot_created_at) ||
+      dateToIsoInstant(new Date(0)),
   }
 }
 
 function buildSyntheticEntryAttachment(
   row: SkillSnapshotJoinRow,
-  timestamp: string
+  timestamp: IsoInstantString
 ): SkillAttachmentFile {
   const synthetic = buildSyntheticEntryFile({
     frontmatter: frontmatterFromSnapshotRow(row),
@@ -886,7 +894,7 @@ function buildSyntheticEntryAttachment(
 
 function buildSnapshotAttachmentFiles(
   row: SkillSnapshotJoinRow,
-  timestamp: string,
+  timestamp: IsoInstantString,
   files?: SkillAttachmentFile[]
 ) {
   return [buildSyntheticEntryAttachment(row, timestamp), ...(files || [])]
@@ -933,9 +941,7 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
   if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
     return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope]
   }
-  return (
-    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
-  )
+  return right.created_at.getTime() - left.created_at.getTime()
 }
 
 function compareVisibleBindingPriority(
@@ -960,16 +966,13 @@ function compareVisibleBindingPriority(
   if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
     return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope]
   }
-  return (
-    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
-  )
+  return right.created_at.getTime() - left.created_at.getTime()
 }
 
 function selectInitialSkillGrant(accessRows: SkillAccessRow[]) {
   const activeRows = accessRows.filter((row) => row.status === "active")
   return [...activeRows].sort(
-    (left, right) =>
-      new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
+    (left, right) => left.created_at.getTime() - right.created_at.getTime()
   )[0]
 }
 
@@ -1019,15 +1022,19 @@ function mapMarketplaceVersion(
     defaultConversationTypeMask:
       row.spec_default_conversation_type_mask || DEFAULT_CONVERSATION_TYPE_MASK,
     createdByUserId: row.latest_version_created_by_user_id || undefined,
-    createdAt: row.latest_version_created_at || row.item_updated_at,
+    createdAt:
+      serializeOptionalInstant(row.latest_version_created_at) ||
+      serializeInstant(row.item_updated_at),
     files: buildSnapshotAttachmentFiles(
       row,
-      row.latest_version_created_at || row.item_updated_at,
+      serializeOptionalInstant(row.latest_version_created_at) ||
+        serializeInstant(row.item_updated_at),
       files
     ),
     attachmentFiles: buildSnapshotAttachmentFiles(
       row,
-      row.latest_version_created_at || row.item_updated_at,
+      serializeOptionalInstant(row.latest_version_created_at) ||
+        serializeInstant(row.item_updated_at),
       files
     ),
   }
@@ -1080,8 +1087,8 @@ function mapMarketplaceEntry(
     authorUserId: row.publisher_owner_user_id || undefined,
     authorName: row.publisher_display_name || undefined,
     isActive: Boolean(row.item_is_active),
-    createdAt: row.item_created_at,
-    updatedAt: row.item_updated_at,
+    createdAt: serializeInstant(row.item_created_at),
+    updatedAt: serializeInstant(row.item_updated_at),
     defaultConversationTypeMask,
     latestVersionId: row.latest_version_id || undefined,
     latestVersion: mapMarketplaceVersion(row, files),
@@ -1131,8 +1138,8 @@ function buildInstalledSkillPayload(
       row.source_catalog_item_id && row.source_is_customized
     ),
     ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
     sourceSkillId: row.source_catalog_item_id || undefined,
     sourcePackageSlug: row.source_slug || undefined,
     sourceVersionId: row.source_catalog_version_id || undefined,
@@ -1143,8 +1150,16 @@ function buildInstalledSkillPayload(
       Boolean(row.source_latest_version_id) &&
       row.source_catalog_version_id !== row.source_latest_version_id,
     latestSourceVersion: row.latest_source_version || undefined,
-    files: buildSnapshotAttachmentFiles(row, row.updated_at, files),
-    attachmentFiles: buildSnapshotAttachmentFiles(row, row.updated_at, files),
+    files: buildSnapshotAttachmentFiles(
+      row,
+      serializeInstant(row.updated_at),
+      files
+    ),
+    attachmentFiles: buildSnapshotAttachmentFiles(
+      row,
+      serializeInstant(row.updated_at),
+      files
+    ),
     mirrorSource: buildMirrorSourceSummary(row),
   }
 }
@@ -1265,7 +1280,6 @@ async function ensureMarketplacePublisher(
             description: sql`excluded.description`,
             owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
             is_verified: true,
-            updated_at: sql`NOW()`,
           })
       )
       .returning("id")
@@ -1425,7 +1439,6 @@ async function upsertSkillMirrorSource(
           source_warnings: sql`excluded.source_warnings`,
           last_error: null,
           last_synced_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
       )
       .returning("id")
@@ -1841,14 +1854,8 @@ function mapSkillAccessRowToGrant(
     reason: row.reason || undefined,
     conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask,
-    createdAt:
-      (row.created_at as unknown) instanceof Date
-        ? (row.created_at as unknown as Date).toISOString()
-        : row.created_at,
-    revokedAt:
-      (row.revoked_at as unknown) instanceof Date
-        ? (row.revoked_at as unknown as Date).toISOString()
-        : row.revoked_at || undefined,
+    createdAt: serializeInstant(row.created_at),
+    revokedAt: serializeOptionalInstant(row.revoked_at),
   }
 }
 
@@ -2217,7 +2224,6 @@ async function upsertImportedMarketplaceSkill(
           long_description: imported.frontmatter.description,
           tags: imported.tags,
           metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.item_id)
         .execute()
@@ -2247,7 +2253,6 @@ async function upsertImportedMarketplaceSkill(
           tags: imported.tags,
           is_active: true,
           metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.item_id)
         .execute()
@@ -2343,7 +2348,6 @@ async function upsertImportedMarketplaceSkill(
       .updateTable("catalog_items")
       .set({
         latest_version_id: versionId,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId!)
       .execute()
@@ -2517,7 +2521,6 @@ export async function publishMarketplaceSkill(input: {
           is_active: input.isActive ?? true,
           icon_file_id: nextIconFileId,
           metadata: sql`${JSON.stringify(itemMetadata)}::jsonb`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.item_id)
         .execute()
@@ -2614,7 +2617,6 @@ export async function publishMarketplaceSkill(input: {
       .updateTable("catalog_items")
       .set({
         latest_version_id: versionId,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId!)
       .execute()
@@ -3248,7 +3250,6 @@ export async function installMarketplaceSkill(input: {
       .updateTable("catalog_items")
       .set({
         download_count: sql`${sql.ref("download_count")} + 1`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", marketplaceSkill.item_id)
       .execute()
@@ -3412,7 +3413,6 @@ export async function updateInstalledSkill(input: {
           .updateTable("skill_source_refs")
           .set({
             is_customized: true,
-            updated_at: sql`NOW()`,
           })
           .where("skill_id", "=", existing.skill_id)
           .execute()
@@ -3519,7 +3519,6 @@ export async function upgradeInstalledSkill(input: {
         tags: marketplaceSkill.item_tags || [],
         current_version: existing.current_version + 1,
         current_snapshot_id: marketplaceSkill.snapshot_id!,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", existing.skill_id)
       .execute()
@@ -3535,7 +3534,6 @@ export async function upgradeInstalledSkill(input: {
       .set({
         source_catalog_version_id: marketplaceSkill.latest_version_id,
         is_customized: false,
-        updated_at: sql`NOW()`,
       })
       .where("skill_id", "=", existing.skill_id)
       .execute()

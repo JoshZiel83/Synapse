@@ -48,9 +48,9 @@
     "users": 5
   },
   "modules/devices/access-bindings.ts": {
-    "actors": 2,
+    "actors": 1,
     "conversations": 3,
-    "remote_agents": 2
+    "remote_agents": 1
   },
   "modules/devices/catalog-sync.ts": {
     "devices": 1
@@ -84,13 +84,6 @@
   },
   "modules/im/service/weixin-binding.ts": {
     "transport_accounts": 1
-  },
-  "modules/interactions/service.ts": {
-    "actors": 6,
-    "conversations": 1,
-    "devices": 2,
-    "remote_agents": 6,
-    "users": 6
   },
   "modules/mcp-plugins/config-resolver.ts": {
     "plugin_installations": 1
@@ -162,6 +155,13 @@
     "catalog_items": 3,
     "installed_skills": 6,
     "publishers": 1
+  },
+  "modules/tasks/service.ts": {
+    "actors": 6,
+    "conversations": 1,
+    "devices": 2,
+    "remote_agents": 6,
+    "users": 6
   },
   "modules/workspace/invite-service.ts": {
     "workspaces": 1

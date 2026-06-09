@@ -12,9 +12,9 @@
  *   - Re-arm `tool_call_task_transport_projections` rows that were skipped
  *     for a now-resolvable reason (account/connection-mode/config
  *     transitions + binding-level events). The QQ merge-prep brought
- *     in the interaction projection table and these helpers; they're
+ *     in the task projection table and these helpers; they're
  *     transport-neutral by row design — any connector that opts into
- *     interaction projection participates without further code here.
+ *     task projection participates without further code here.
  *   - `canDeliverNow` + `recoverSkippedDisabledLink` for the outbox
  *     sweeper's gate-then-flip-then-enqueue dance.
  *   - `recoverProjectionForBindingChangedLink` for the delivery worker
@@ -68,7 +68,6 @@ export async function markLinkSkipped(params: {
       // right tool here.
       metadata:
         sql`metadata || ${JSON.stringify({ skippedReason: params.reason })}::jsonb` as unknown as TableUpdate<"transport_message_links">["metadata"],
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", params.linkId)
     .execute()
@@ -88,7 +87,6 @@ export async function markLinkSkipped(params: {
  * SQL contract (asserted by `accounts.re-enable-bindings.test.ts`):
  *  - `outbound_enabled = TRUE`
  *  - `metadata = metadata - 'autoDisabledReason'`
- *  - `updated_at = NOW()`
  *  - filter: workspace_id = $1 AND metadata->>'autoDisabledReason' = $2
  */
 export async function reEnableAutoDisabledBindings(params: {
@@ -127,7 +125,6 @@ export function buildReEnableAutoDisabledBindingsSql(params: {
       outbound_enabled: true,
       metadata:
         sql`metadata - 'autoDisabledReason'` as unknown as TableUpdate<"conversation_transport_bindings">["metadata"],
-      updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", params.workspaceId)
     .where(
@@ -193,7 +190,6 @@ export async function recoverSkippedDisabledLink(
       .updateTable("transport_message_links")
       .set({
         delivery_status: "pending",
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", linkId)
       .where("delivery_status", "=", "skipped")
@@ -221,8 +217,7 @@ export async function recoverProjectionForBindingChangedLink(
           transport_message_link_id = NULL,
           error = NULL,
           next_attempt_at = NOW(),
-          attempts = 0,
-          updated_at = NOW()
+          attempts = 0
       WHERE transport_message_link_id = ${linkId}
         AND status = 'projected'
     `.execute(tx)
@@ -232,8 +227,7 @@ export async function recoverProjectionForBindingChangedLink(
           metadata = metadata || ${JSON.stringify({
             skippedReason: "binding_changed",
             replacedByProjectionRecovery: true,
-          })}::jsonb,
-          updated_at = NOW()
+          })}::jsonb
       WHERE id = ${linkId}
     `.execute(tx)
   }
@@ -247,7 +241,7 @@ export async function recoverProjectionForBindingChangedLink(
  * re-arm `not_supported_in_v1` from anything other than
  * `binding_created_or_replaced` (the new binding may satisfy
  * supportsInteractionPrompt where the old one didn't), and never
- * re-arm `interaction_already_resolved_or_expired` (that's terminal).
+ * re-arm `task_already_resolved_or_expired` (that's terminal).
  */
 export type SkippedRecoveryEvent =
   | { kind: "config_webhook_confirmed"; transportAccountId: string }
@@ -291,8 +285,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
             next_attempt_at = NOW(),
             attempts = 0,
             error = NULL,
-            transport_message_link_id = NULL,
-            updated_at = NOW()
+            transport_message_link_id = NULL
         FROM conversation_transport_bindings ctb
         WHERE ctb.conversation_id = p.conversation_id
           AND ctb.transport_account_id = ${event.transportAccountId}
@@ -309,8 +302,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
             next_attempt_at = NOW(),
             attempts = 0,
             error = NULL,
-            transport_message_link_id = NULL,
-            updated_at = NOW()
+            transport_message_link_id = NULL
         FROM conversation_transport_bindings ctb
         WHERE ctb.conversation_id = p.conversation_id
           AND ctb.transport_account_id = ${event.transportAccountId}
@@ -328,8 +320,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
             next_attempt_at = NOW(),
             attempts = 0,
             error = NULL,
-            transport_message_link_id = NULL,
-            updated_at = NOW()
+            transport_message_link_id = NULL
         WHERE p.conversation_id = ${event.conversationId}
           AND p.status = 'skipped'
           AND p.error = ANY (${reasons}::text[])

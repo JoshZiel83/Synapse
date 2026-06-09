@@ -1,4 +1,5 @@
 import type { RemoteAgentRuntimeStateType } from "@synapse/shared"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 
 export type RemoteAgentConversationContextRecord = {
   remoteAgentId: string
@@ -7,7 +8,7 @@ export type RemoteAgentConversationContextRecord = {
   runtimeSessionId: string | null
   runtimeState: RemoteAgentRuntimeStateType
   statusText: string | null
-  activeInteractionId: string | null
+  activeTaskId: string | null
   lastRunStartedAt: string | null
   lastRunFinishedAt: string | null
   lastActivityAt: string | null
@@ -30,8 +31,11 @@ function statePriority(state: RemoteAgentRuntimeStateType) {
 
 function lastActivityMs(value: string | null) {
   if (!value) return Number.NEGATIVE_INFINITY
-  const ms = Date.parse(value)
-  return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY
+  try {
+    return parseInstantString(value).getTime()
+  } catch {
+    return Number.NEGATIVE_INFINITY
+  }
 }
 
 /**

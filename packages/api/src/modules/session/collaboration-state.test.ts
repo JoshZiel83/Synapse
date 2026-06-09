@@ -10,9 +10,9 @@ test("parseSessionCollaborationState only accepts planDraft payloads", () => {
   assert.throws(
     () =>
       parseSessionCollaborationState({
-        pendingPlanApprovalInteractionId: "interaction-1",
+        activePlanApprovalTaskId: "task-1",
       }),
-    /collaborationState\.pendingPlanApprovalInteractionId is not allowed/i
+    /collaborationState\.activePlanApprovalTaskId is not allowed/i
   )
 })
 

@@ -1,4 +1,9 @@
-import type { EventType, SystemEvent } from "@synapse/shared"
+import type { EventType, SystemEvent, Timestamp } from "@synapse/shared"
+import {
+  parseInstantString,
+  requireInstantDate,
+  serializeInstant,
+} from "../datetime.js"
 import { sql } from "kysely"
 import { REDIS_CHANNELS, parseJsonObject } from "@synapse/shared"
 import { config } from "../../config/index.js"
@@ -55,14 +60,13 @@ function isTransactionalRealtimeEventType(
   )
 }
 
-function eventTimestampToIso(value: string | Date) {
-  if (value instanceof Date) {
-    return value.toISOString()
+function eventTimestampToIso(value: unknown) {
+  if (typeof value === "string") {
+    return serializeInstant(parseInstantString(value))
   }
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime())
-    ? new Date().toISOString()
-    : parsed.toISOString()
+  return serializeInstant(
+    requireInstantDate(value as Date | null, "event timestamp")
+  )
 }
 
 async function wait(ms: number) {
@@ -88,8 +92,7 @@ async function claimPendingRealtimeOutboxEntries(limit: number) {
       SET status = 'processing',
           attempts = attempts + 1,
           last_error = NULL,
-          processing_started_at = NOW(),
-          updated_at = NOW()
+          processing_started_at = NOW()
       FROM claimed
       WHERE reo.id = claimed.id
       RETURNING reo.id,
@@ -111,7 +114,6 @@ async function markRealtimeOutboxEntryDispatched(id: string) {
       status: "dispatched",
       last_error: null,
       dispatched_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
     .execute()
@@ -125,7 +127,6 @@ async function markRealtimeOutboxEntryFailed(id: string, error: unknown) {
       status: "failed",
       last_error: message,
       available_at: sql`NOW() + (LEAST(attempts, 6) * INTERVAL '5 seconds')`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
     .execute()
@@ -180,7 +181,7 @@ export async function enqueueTransactionalEventDeliveries(
   event: {
     type: TransactionalRealtimeEventType
     payload: Record<string, unknown>
-    timestamp: string
+    timestamp: Timestamp
     recipients: TransactionalRealtimeRecipient[]
   }
 ) {
@@ -202,7 +203,7 @@ export async function enqueueTransactionalEventDeliveries(
     db.insertInto("realtime_event_outbox").values(
       recipients.map((recipient) => ({
         available_at: new Date(),
-        event_timestamp: event.timestamp,
+        event_timestamp: parseInstantString(event.timestamp),
         event_type: event.type,
         payload: (event.payload ||
           {}) as TableInsert<"realtime_event_outbox">["payload"],
@@ -322,7 +323,6 @@ export async function recoverStuckProcessingRealtimeOutboxEntries(
       status: "failed",
       last_error: "recovered: stuck in processing past timeout",
       available_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("status", "=", "processing")
     .where(

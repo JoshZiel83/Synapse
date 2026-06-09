@@ -1,4 +1,11 @@
 import { redis } from "../../infrastructure/redis/index.js"
+import { nowIsoInstant } from "@synapse/shared/datetime"
+import {
+  parseInstantString,
+  requireInstantDate,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import {
   db,
   type Executor,
@@ -10,7 +17,6 @@ import { createLogger } from "../../infrastructure/logger/index.js"
 import { sessionThinkingQueue } from "../../workers/queues.js"
 import {
   isThreadConversationKind,
-  nowISO,
   THREAD_CONVERSATION_KINDS,
   textBlock,
   type ActorRuntimeActivityState,
@@ -93,8 +99,8 @@ function mapWakeupRow(row: any): ActorRuntimeWakeup {
         : undefined,
     delivery:
       typeof metadata.delivery === "string" ? metadata.delivery : undefined,
-    createdAt: row.created_at,
-    attachedAt: row.attached_at || undefined,
+    createdAt: serializeInstant(row.created_at),
+    attachedAt: serializeOptionalInstant(row.attached_at),
   }
 }
 
@@ -131,13 +137,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-function toIsoString(value: unknown): string | undefined {
-  if (!value) return undefined
-  if (typeof value === "string") return value
-  if (value instanceof Date) return value.toISOString()
-  return undefined
-}
-
 function prettyJson(value: unknown) {
   try {
     return JSON.stringify(parseJsonValue(value) ?? {}, null, 2)
@@ -155,11 +154,16 @@ function buildTextBlocksFromLines(...parts: Array<string | null | undefined>) {
   return text ? [textBlock(text)] : []
 }
 
-function pickLatestTimestamp(...values: Array<string | undefined>) {
+function pickLatestTimestamp(
+  ...values: Array<import("@synapse/shared").Timestamp | undefined>
+) {
   return values
-    .filter((value): value is string => Boolean(value))
+    .filter((value): value is import("@synapse/shared").Timestamp =>
+      Boolean(value)
+    )
     .sort(
-      (left, right) => new Date(right).getTime() - new Date(left).getTime()
+      (left, right) =>
+        parseInstantString(right).getTime() - parseInstantString(left).getTime()
     )[0]
 }
 
@@ -285,8 +289,10 @@ async function loadProcessingTargetsForTurn(
     participantId: row.source_participant_id || undefined,
     name: row.source_name || row.summary,
     summary: row.summary || undefined,
-    createdAt: toIsoString(row.created_at) || nowISO(),
-    attachedAt: toIsoString(row.attached_at),
+    createdAt: serializeInstant(
+      requireInstantDate(row.created_at, "session_wakeups.created_at")
+    ),
+    attachedAt: serializeOptionalInstant(row.attached_at),
   }))
 }
 
@@ -370,6 +376,7 @@ async function buildToolActivityDetail(turnId: string) {
       "turns.session_id",
       "turns.conversation_id",
       "turns.actor_id",
+      "created_at",
       "turns.started_at",
       "turns.updated_at",
       "turns.completed_at",
@@ -563,31 +570,33 @@ async function buildToolActivityDetail(turnId: string) {
       requestBlocks: rendered.requestBlocks,
       resultBlocks: rendered.resultBlocks,
       taskStatus: task?.status || undefined,
-      startedAt: toIsoString(toolCall.created_at) || nowISO(),
-      updatedAt:
-        pickLatestTimestamp(
-          toIsoString(task?.updated_at),
-          toIsoString(latestResult?.created_at),
-          toIsoString(toolCall.completed_at),
-          toIsoString(toolCall.created_at)
-        ) || nowISO(),
+      startedAt: serializeInstant(
+        requireInstantDate(toolCall.created_at, "tool_calls.created_at")
+      ),
+      updatedAt: pickLatestTimestamp(
+        serializeOptionalInstant(task?.updated_at),
+        serializeOptionalInstant(latestResult?.created_at),
+        serializeOptionalInstant(toolCall.completed_at),
+        serializeInstant(
+          requireInstantDate(toolCall.created_at, "tool_calls.created_at")
+        )
+      )!,
       completedAt:
-        toIsoString(toolCall.completed_at) ||
-        toIsoString(task?.completed_at) ||
+        serializeOptionalInstant(toolCall.completed_at) ||
+        serializeOptionalInstant(task?.completed_at) ||
         undefined,
     })
   }
 
-  const updatedAt =
-    pickLatestTimestamp(
-      ...processingTargets.map(
-        (target) => target.attachedAt || target.createdAt
-      ),
-      ...items.map((item) => item.updatedAt),
-      toIsoString(turnRow.completed_at),
-      toIsoString(turnRow.updated_at),
-      toIsoString(turnRow.started_at)
-    ) || nowISO()
+  const updatedAt = pickLatestTimestamp(
+    ...processingTargets.map((target) => target.attachedAt || target.createdAt),
+    ...items.map((item) => item.updatedAt),
+    serializeOptionalInstant(turnRow.completed_at),
+    serializeInstant(
+      requireInstantDate(turnRow.updated_at, "turns.updated_at")
+    ),
+    serializeOptionalInstant(turnRow.started_at)
+  )!
 
   return {
     conversationId: turnRow.conversation_id,
@@ -595,7 +604,11 @@ async function buildToolActivityDetail(turnId: string) {
     actorDisplayName: turnRow.actor_display_name || "Unknown",
     turnId: turnRow.id,
     sessionId: turnRow.session_id,
-    startedAt: toIsoString(turnRow.started_at) || nowISO(),
+    startedAt:
+      serializeOptionalInstant(turnRow.started_at) ||
+      serializeInstant(
+        requireInstantDate(turnRow.created_at, "turns.created_at")
+      ),
     updatedAt,
     processingTargets,
     items,
@@ -802,7 +815,9 @@ export async function buildSessionRuntimeSnapshot(
         (session.error_message
           ? {
               message: session.error_message as string,
-              at: session.updated_at || nowISO(),
+              at: serializeInstant(
+                requireInstantDate(session.updated_at, "sessions.updated_at")
+              ),
             }
           : undefined)
 
@@ -851,7 +866,7 @@ export async function buildSessionRuntimeSnapshot(
     currentTurnPreview,
     latestWakeupAt,
     lastError,
-    updatedAt: nowISO(),
+    updatedAt: nowIsoInstant(),
   }
 }
 
@@ -923,7 +938,7 @@ export async function publishSessionRuntime(
       runtimeSeq,
       snapshot,
     },
-    timestamp: nowISO(),
+    timestamp: nowIsoInstant(),
   })
 
   return snapshot

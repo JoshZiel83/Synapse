@@ -174,7 +174,6 @@ export async function persistCatalogSync(
         .updateTable("device_exposures")
         .set({
           runtime_status: "offline",
-          updated_at: sql`NOW()`,
         } as never)
         .where("id", "in", staleExposureIds)
         .where("runtime_status", "!=", "offline")
@@ -195,7 +194,6 @@ export async function persistCatalogSync(
         .updateTable("device_tools")
         .set({
           status: "removed",
-          updated_at: sql`NOW()`,
         } as never)
         .where("id", "in", stale)
         .where("status", "!=", "removed")
@@ -242,7 +240,6 @@ async function upsertExposure(
         last_seen_at: sql`NOW()`,
         last_healthy_at: sql`NOW()`,
         metadata,
-        updated_at: sql`NOW()`,
       } as never)
       .where("id", "=", existing.id as string)
       .execute()
@@ -337,7 +334,6 @@ async function ensureCatalogRevision(
       .set({
         status: "superseded",
         invalidated_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       } as never)
       .where("id", "=", latest.id as string)
       .execute()
@@ -398,7 +394,6 @@ async function upsertTools(
           current_name: tool.name,
           status: "active",
           last_seen_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         } as never)
         .where("id", "=", toolId)
         .execute()

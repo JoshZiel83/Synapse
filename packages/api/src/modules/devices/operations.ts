@@ -12,6 +12,7 @@ import {
   type DatabaseTransaction,
   type KyselyDb,
 } from "../../infrastructure/database/kysely.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import type { RuntimePrincipalContext } from "../access/subject-resolution.js"
 import { SUBJECT_KIND } from "@synapse/shared"
 
@@ -187,7 +188,7 @@ export async function beginDeviceOperationOn(
         input.envelope.runtime_authorization ?? {}
       )}::jsonb`,
       input_hash: input.envelope.input_hash,
-      expires_at: input.envelope.expires_at,
+      expires_at: parseInstantString(input.envelope.expires_at),
     })
     .execute()
 
@@ -261,7 +262,6 @@ export async function completeDeviceOperation(
         status: input.ok ? "acknowledged" : "failed",
         response_at: sql`NOW()`,
         acknowledged_at: input.ok ? sql`NOW()` : null,
-        updated_at: sql`NOW()`,
         metadata: input.error
           ? sql`${JSON.stringify({ error: input.error })}::jsonb`
           : sql`'{}'::jsonb`,
@@ -278,7 +278,6 @@ export async function completeDeviceOperation(
         error_code: input.error?.code ?? null,
         error_message: input.error?.message ?? null,
         completed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", input.operationId)
       .execute()

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto"
+import { dateToIsoInstant } from "@synapse/shared/datetime"
 import {
   CookieJar,
   MijiaTimeoutError,
@@ -306,7 +307,7 @@ export async function startMijiaQrLoginSession(input: {
     "Mijia QR login did not return a polling URL."
   )
 
-  const expiresAt = new Date(Date.now() + DEFAULT_QR_TTL_MS).toISOString()
+  const expiresAt = dateToIsoInstant(new Date(Date.now() + DEFAULT_QR_TTL_MS))
 
   return {
     challengePayload: {

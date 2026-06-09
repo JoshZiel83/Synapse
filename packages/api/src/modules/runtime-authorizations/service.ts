@@ -15,6 +15,7 @@ import {
   actorRef,
   remoteAgentRef,
   conversationRef,
+  type Timestamp,
   type SubjectRef,
 } from "@synapse/shared"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
@@ -44,6 +45,11 @@ import {
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import {
+  requireInstantDate,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
+import {
   BrowserGrantPolicyError,
   normalizeBrowserGrantPolicy,
 } from "@synapse/shared/access/policies"
@@ -56,14 +62,10 @@ import {
 } from "../devices/operations.js"
 import type { RuntimePrincipalContext } from "../access/subject-resolution.js"
 
-function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return undefined
-  return value instanceof Date ? value.toISOString() : value
-}
-
 function normalizePathPrefix(value: unknown) {
   return sharedNormalizePathPrefix(value)
 }
+
 function normalizeCommandText(value: unknown) {
   return sharedNormalizeCommandText(value)
 }
@@ -108,11 +110,11 @@ export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizat
   sourceRequestArgs: Record<string, unknown>
   retention: RuntimeAuthorizationGrantRetention
   status: RuntimeAuthorizationGrantStatus
-  createdAt: string
-  updatedAt: string
-  consumedAt?: string
-  revokedAt?: string
-  supersededAt?: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  consumedAt?: Timestamp
+  revokedAt?: Timestamp
+  supersededAt?: Timestamp
 }
 
 /**
@@ -409,11 +411,21 @@ export function mapRuntimeAuthorizationGrantCandidate(
     retention: row.retention,
     status: row.status,
     ...(parsedPolicy as SharedRuntimeAuthorizationGrantSpec),
-    createdAt: toIsoString(row.created_at) || new Date().toISOString(),
-    updatedAt: toIsoString(row.updated_at) || new Date().toISOString(),
-    consumedAt: toIsoString(row.consumed_at),
-    revokedAt: toIsoString(row.revoked_at),
-    supersededAt: toIsoString(row.superseded_at),
+    createdAt: serializeInstant(
+      requireInstantDate(
+        row.created_at,
+        `runtime_authorization_grants.${row.id}.created_at`
+      )
+    ),
+    updatedAt: serializeInstant(
+      requireInstantDate(
+        row.updated_at,
+        `runtime_authorization_grants.${row.id}.updated_at`
+      )
+    ),
+    consumedAt: serializeOptionalInstant(row.consumed_at),
+    revokedAt: serializeOptionalInstant(row.revoked_at),
+    supersededAt: serializeOptionalInstant(row.superseded_at),
   }
 }
 
@@ -563,7 +575,7 @@ export async function createRuntimeAuthorizationGrant(
   // normalizeBrowserGrantPolicy unconditionally. This is the final defence
   // before the policy lands in JSONB — manual endpoint + approval path both
   // rely on this so neither can write a scope-less / dead grant. Throws
-  // BrowserGrantPolicyError; callers map to HTTP 400 / interaction reject.
+  // BrowserGrantPolicyError; callers map to HTTP 400 / task rejection.
   const parsedPolicy = GrantPolicySchema.parse(
     params.policy
   ) as SharedRuntimeAuthorizationGrantSpec
@@ -573,8 +585,8 @@ export async function createRuntimeAuthorizationGrant(
   const grantSpec = normalizeGrantSpecForInsert(parsedPolicy)
 
   if (executor) {
-    // Every production caller threads a Kysely executor (interactions approval
-    // runs inside withDbTransaction → Transaction<Database>; the manual
+    // Every production caller threads a Kysely executor (task approval runs
+    // inside withDbTransaction → Transaction<Database>; the manual
     // endpoint passes none).
     return createGrantInKyselyTx(executor, params, grantSpec)
   }
@@ -689,7 +701,6 @@ export async function revokeRuntimeAuthorizationGrant(
     .set({
       status: "revoked",
       revoked_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
     .where("status", "=", "active")
@@ -709,7 +720,6 @@ export async function supersedeRuntimeAuthorizationGrant(
     .set({
       status: "superseded",
       superseded_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
     .where("status", "=", "active")
@@ -736,7 +746,7 @@ export async function consumeRuntimeAuthorizationGrant(
   // expose a clean way to nest a FOR UPDATE SKIP LOCKED sub-select.
   const statement = sql<{ id: string }>`
     UPDATE runtime_authorization_grants
-    SET status = 'consumed', consumed_at = NOW(), updated_at = NOW()
+    SET status = 'consumed', consumed_at = NOW()
     WHERE id = (
       SELECT id FROM runtime_authorization_grants
       WHERE id = ${id} AND status = 'active'

@@ -14,9 +14,9 @@ import {
   REDIS_CHANNELS,
   DEFAULT_MAX_CONCURRENT_SESSIONS,
   isThreadConversationKind,
-  nowISO,
   textBlocks,
 } from "@synapse/shared"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import { isPlanCollaborationMode } from "@synapse/shared/utils"
 import type {
   ConversationParticipantEntry,
@@ -413,7 +413,7 @@ export function startSessionThinkingWorker() {
           type: "actor.thinking",
           workspaceId,
           payload: { actorId, sessionId, conversationId },
-          timestamp: nowISO(),
+          timestamp: nowIsoInstant(),
         })
 
         const emitThinkingStatus = async (status: string) => {
@@ -1424,7 +1424,7 @@ export function startSessionThinkingWorker() {
             actions: result.actions,
             turnId: turn.id,
           },
-          timestamp: nowISO(),
+          timestamp: nowIsoInstant(),
         })
 
         turn = null
@@ -1608,7 +1608,7 @@ export function startSessionThinkingWorker() {
               activeTurnId: turn?.id,
               lastError: {
                 message: errorMessage,
-                at: nowISO(),
+                at: nowIsoInstant(),
               },
             })
         )

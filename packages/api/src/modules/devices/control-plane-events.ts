@@ -57,7 +57,6 @@ export async function persistRuntimeSessionOpened(
           oc.column("id").doUpdateSet({
             status: "open",
             opened_at: sql`NOW()`,
-            updated_at: sql`NOW()`,
           })
         )
         .execute()
@@ -111,7 +110,6 @@ export async function persistRuntimeSessionClosed(
         .set({
           status: "closed",
           closed_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", parsed.data.runtime_session_id)
         .where("device_id", "=", deviceId)
@@ -388,14 +386,14 @@ export async function persistTaskReceived(
   if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
-    .set({ status: "received", updated_at: sql`NOW()` })
+    .set({ status: "received" })
     .where("id", "=", parsed.data.operation_id)
     .where("device_id", "=", deviceId)
     .execute()
   if (parsed.data.attempt_id) {
     await db
       .updateTable("device_operation_attempts")
-      .set({ status: "sent", updated_at: sql`NOW()` })
+      .set({ status: "sent" })
       .where("id", "=", parsed.data.attempt_id)
       .where("device_service_id", "=", serviceId)
       .execute()
@@ -422,7 +420,7 @@ export async function persistTaskStarted(
   if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
-    .set({ status: "started", updated_at: sql`NOW()` })
+    .set({ status: "started" })
     .where("id", "=", parsed.data.operation_id)
     .where("device_id", "=", deviceId)
     .execute()
@@ -448,7 +446,7 @@ export async function persistTaskOutput(
   if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
-    .set({ status: "output_streaming", updated_at: sql`NOW()` })
+    .set({ status: "output_streaming" })
     .where("id", "=", parsed.data.operation_id)
     .where("device_id", "=", deviceId)
     .where("status", "in", ["started", "output_streaming"])
@@ -490,7 +488,6 @@ export async function persistTaskResult(
         error_code: parsed.data.error_code ?? null,
         error_message: parsed.data.error_message ?? null,
         completed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", parsed.data.operation_id)
       .where("device_id", "=", deviceId)
@@ -502,7 +499,6 @@ export async function persistTaskResult(
           status: parsed.data.ok ? "acknowledged" : "failed",
           response_at: sql`NOW()`,
           acknowledged_at: parsed.data.ok ? sql`NOW()` : null,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", parsed.data.attempt_id)
         .where("device_service_id", "=", serviceId)
@@ -578,7 +574,6 @@ export async function persistVfsExposureUpsert(
       metadata: sql`COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('vfs', ${JSON.stringify(
         parsed.data.vfs
       )}::jsonb)`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", parsed.data.exposure_id)
     .where("device_id", "=", deviceId)

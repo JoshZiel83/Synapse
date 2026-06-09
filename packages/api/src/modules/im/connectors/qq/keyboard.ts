@@ -28,7 +28,7 @@
  * group_id (mutex group) sits at the button top level (NOT inside
  * action). All buttons in our keyboard share the same group_id so QQ's
  * native UI greys out the others once one is clicked. The fallback
- * still relies on our server-side resolveInteractionRequest dedup.
+ * still relies on our server-side resolveTaskRequest dedup.
  *
  * The action_token is opaque (uuidv4) — the connector's INTERACTION_CREATE
  * handler will reverse it via lookupActionToken to recover the original
@@ -88,11 +88,11 @@ export interface QqKeyboardButton {
  * options array at 5 (one row max) — anything larger throws. Multi-row
  * keyboards land when we have a real use case for them.
  *
- * `interactionRequestId` seeds the mutex group_id so QQ's native UI
+ * `taskId` seeds the mutex group_id so QQ's native UI
  * greys-out non-selected buttons once any one is clicked.
  */
 export function buildQqInteractionKeyboard(params: {
-  interactionRequestId: string
+  taskId: string
   title?: string
   fallbackText: string
   options: QqKeyboardOption[]
@@ -112,7 +112,7 @@ export function buildQqInteractionKeyboard(params: {
       )
     }
   }
-  const groupId = `${MUTEX_GROUP_PREFIX}${params.interactionRequestId}`
+  const groupId = `${MUTEX_GROUP_PREFIX}${params.taskId}`
   const buttons: QqKeyboardButton[] = params.options.map((opt) => ({
     id: opt.id,
     group_id: groupId,

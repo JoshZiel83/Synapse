@@ -1,6 +1,7 @@
 import { createHash } from "crypto"
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type { PayloadBlobsRetentionClass } from "../../infrastructure/database/generated/db.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
@@ -159,7 +160,6 @@ export async function createTurn(params: {
       status: "running",
       metadata: (params.metadata || {}) as TableInsert<"turns">["metadata"],
       started_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .returningAll()
     .executeTakeFirst()
@@ -176,7 +176,6 @@ export async function updateTurnStatus(
     .updateTable("turns")
     .set({
       status,
-      updated_at: sql`NOW()`,
       completed_at: sql`NOW()`,
       ...(extra?.metadata
         ? {
@@ -661,7 +660,7 @@ export async function recoverInterruptedExecutions(params?: {
         activeTurnId: sessionInfo.turnId,
         lastError: {
           message: errorMessage,
-          at: new Date().toISOString(),
+          at: nowIsoInstant(),
         },
       }).catch(() => {})
     }

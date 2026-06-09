@@ -1,0 +1,31 @@
+{
+  "generatedAt": "2026-06-09T02:30:50.982Z",
+  "scriptVersion": 1,
+  "scanRoots": [
+    "packages/api/src",
+    "packages/shared/src",
+    "packages/device-protocol/src",
+    "packages/device-runtime/src",
+    "packages/web-next",
+    "packages/mobile-app/src"
+  ],
+  "allowlist": {
+    "camel_time_string": ["packages/shared/src/automation/rule-contract.ts"],
+    "direct_to_iso_string": [
+      "packages/device-protocol/src/instant.ts",
+      "packages/shared/src/datetime/instant.ts"
+    ]
+  },
+  "countsByRule": {
+    "mixed_date_string": 0,
+    "unknown_as_date": 0,
+    "instanceof_date": 0,
+    "legacy_helper": 0,
+    "pseudo_row_string": 0,
+    "camel_time_string": 0,
+    "direct_to_iso_string": 0,
+    "fallback_now_iso": 0
+  },
+  "totalViolations": 0,
+  "violations": []
+}

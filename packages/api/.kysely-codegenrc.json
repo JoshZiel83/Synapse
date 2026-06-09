@@ -1,8 +1,13 @@
 {
   "defaultSchemas": ["public"],
+  "dateParser": "timestamp",
   "dialect": "postgres",
   "includePattern": "public.*",
   "logLevel": "warn",
   "outFile": "./src/infrastructure/database/generated/db.ts",
+  "typeMapping": {
+    "timestamp": "Date",
+    "timestamptz": "Date"
+  },
   "url": "env(DATABASE_URL)"
 }

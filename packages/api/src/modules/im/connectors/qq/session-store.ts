@@ -17,6 +17,7 @@
  * don't silently try to RESUME against a stale token.
  */
 
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type { Redis } from "ioredis"
 
 export interface QqWsSessionState {
@@ -69,7 +70,7 @@ export async function saveQqWsSession(
   lastSaveAt.set(accountId, now)
   const value: QqWsSessionState = {
     ...state,
-    savedAt: new Date().toISOString(),
+    savedAt: nowIsoInstant(),
   }
   await redis.set(key(accountId), JSON.stringify(value), "PX", TTL_MS)
 }

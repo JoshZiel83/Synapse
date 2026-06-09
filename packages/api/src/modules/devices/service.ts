@@ -19,6 +19,10 @@ import {
   type DeviceType,
   type HostKind,
 } from "@synapse/device-protocol"
+import {
+  dateToIsoInstant,
+  type IsoInstantString,
+} from "@synapse/shared/datetime"
 import type { OneClickInstallCommands } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import { config } from "../../config/index.js"
@@ -56,9 +60,9 @@ export class DeviceModuleError extends Error {
   }
 }
 
-function toIso(value: Date | string | null | undefined): string | null {
+function toIsoInstant(value: Date | null | undefined): IsoInstantString | null {
   if (!value) return null
-  return value instanceof Date ? value.toISOString() : value
+  return dateToIsoInstant(value)
 }
 
 function serializeDeviceSummary(row: {
@@ -70,8 +74,8 @@ function serializeDeviceSummary(row: {
   device_type: DeviceType
   platform: string | null
   trust_status: "pending" | "trusted" | "revoked"
-  last_seen_at: Date | string | null
-  last_connected_at: Date | string | null
+  last_seen_at: Date | null
+  last_connected_at: Date | null
 }): DeviceSummary {
   return {
     id: row.id,
@@ -82,8 +86,8 @@ function serializeDeviceSummary(row: {
     device_type: row.device_type,
     platform: row.platform,
     trust_status: row.trust_status,
-    last_seen_at: toIso(row.last_seen_at),
-    last_connected_at: toIso(row.last_connected_at),
+    last_seen_at: toIsoInstant(row.last_seen_at),
+    last_connected_at: toIsoInstant(row.last_connected_at),
   }
 }
 
@@ -107,8 +111,8 @@ export async function listDevices(
       device_type: row.device_type as DeviceType,
       platform: row.platform as string | null,
       trust_status: row.trust_status as "pending" | "trusted" | "revoked",
-      last_seen_at: row.last_seen_at as Date | string | null,
-      last_connected_at: row.last_connected_at as Date | string | null,
+      last_seen_at: row.last_seen_at as Date | null,
+      last_connected_at: row.last_connected_at as Date | null,
     })
   )
 }
@@ -144,7 +148,7 @@ export async function getDevice(
     service_kind: row.service_kind as DeviceServiceKind,
     version: (row.version as string | null) ?? null,
     status: row.status as "starting" | "online" | "degraded" | "offline",
-    last_seen_at: toIso(row.last_seen_at as Date | string | null),
+    last_seen_at: toIsoInstant(row.last_seen_at as Date | null),
     remote_agent_machine_id:
       (row.remote_agent_machine_id as string | null) ?? null,
   }))
@@ -192,8 +196,8 @@ export async function getDevice(
       device_type: deviceRow.device_type as DeviceType,
       platform: deviceRow.platform as string | null,
       trust_status: deviceRow.trust_status as "pending" | "trusted" | "revoked",
-      last_seen_at: deviceRow.last_seen_at as Date | string | null,
-      last_connected_at: deviceRow.last_connected_at as Date | string | null,
+      last_seen_at: deviceRow.last_seen_at as Date | null,
+      last_connected_at: deviceRow.last_connected_at as Date | null,
     }),
     description: (deviceRow.description as string | null) ?? null,
     owner_workspace_member_id:
@@ -254,7 +258,7 @@ export interface StartPairingResult {
    * relay it to the sandbox in the same request.
    */
   bootstrap_token: string | null
-  expires_at: string
+  expires_at: IsoInstantString
   verification_uri: string | null
   verification_uri_complete: string | null
   status: (typeof DEVICE_PAIRING_STATUSES)[number]
@@ -305,9 +309,7 @@ export async function startPairing(
     })
   }
 
-  const expiresAt = new Date(
-    Date.now() + PAIRING_TTL_MINUTES * 60 * 1000
-  ).toISOString()
+  const expiresAt = new Date(Date.now() + PAIRING_TTL_MINUTES * 60 * 1000)
 
   let pairingCode: string | null = null
   let bootstrapToken: string | null = null
@@ -349,7 +351,7 @@ export async function startPairing(
     mode: input.mode,
     pairing_code: pairingCode,
     bootstrap_token: bootstrapToken,
-    expires_at: expiresAt,
+    expires_at: dateToIsoInstant(expiresAt),
     verification_uri: null,
     verification_uri_complete: null,
     status: "pending",
@@ -432,7 +434,6 @@ export async function consumePairing(
         status: "consumed",
         confirmed_at: sql`NOW()`,
         consumed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       } as never)
       .where("pairing_code", "=", input.pairingCode)
       .where("status", "=", "pending")
@@ -649,7 +650,7 @@ export async function claimRemoteAgentDaemon(
       service_kind: row.service_kind as DeviceServiceKind,
       version: (row.version as string | null) ?? null,
       status: row.status as "starting" | "online" | "degraded" | "offline",
-      last_seen_at: toIso(row.last_seen_at as Date | string | null),
+      last_seen_at: toIsoInstant(row.last_seen_at as Date | null),
       remote_agent_machine_id:
         (row.remote_agent_machine_id as string | null) ?? null,
     }

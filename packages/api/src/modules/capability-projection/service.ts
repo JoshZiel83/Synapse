@@ -10,6 +10,7 @@
 // device_operation_attempts row pair (see devices/operations.ts).
 
 import { randomUUID } from "node:crypto"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   ToolDefinition,
   NormalizedMcpToolResult,
@@ -663,8 +664,8 @@ function unionWithDevice(
               ...(cuaFocusScopeId
                 ? { cua_focus_scope_id: cuaFocusScopeId }
                 : {}),
-              issued_at: new Date().toISOString(),
-              expires_at: new Date(Date.now() + 60_000).toISOString(),
+              issued_at: nowIsoInstant(),
+              expires_at: serializeGrantEnvelopeExpiresAt(),
             })
             return {
               ok: true,
@@ -863,6 +864,10 @@ function unionWithDevice(
   }
 }
 
+function serializeGrantEnvelopeExpiresAt() {
+  return dateToIsoInstant(new Date(Date.now() + 60_000))
+}
+
 function mcpErrorBlock(
   message: string,
   synapseError?: SynapseError,
@@ -872,7 +877,7 @@ function mcpErrorBlock(
     content: [textBlock(message) as CanonicalContentBlock],
     isError: true,
     origin,
-    // Forward the full SynapseError (code / message / details / interaction_id /
+    // Forward the full SynapseError (code / message / details / task_id /
     // retry_nonce / authorization_task_id) when available so the dashboard and
     // downstream observers see the same shape the runtime exposes via
     // _meta.synapse_error. Keeping the bare-message overload preserves
@@ -1040,8 +1045,9 @@ export function buildRuntimeAuthorizationRequestParams(args: {
       // path can stamp the same cua_focus_scope_id this dispatch would have
       // used (session:<sessionId>). Without it the device cua builtin
       // fail-closes on the retry envelope and the user-approved tool call
-      // silently fails. Backs interaction_runtime_authorization_requests.
-      // source_runtime_session_id (TEXT) — the chat-runtime session.id.
+      // silently fails. Backs
+      // tool_call_task_runtime_authorization.source_runtime_session_id (TEXT)
+      // — the chat-runtime session.id.
       runtimeSessionId: projectInput.sessionId ?? "",
       deviceDisplayName: row.device_name,
     },
@@ -1147,7 +1153,7 @@ async function requestAuthorizationOrDeny(args: {
     return {
       content: [
         textBlock(
-          `runtime_authorization_requested: created interaction ${result.interaction.id}. Approve the request to retry with retry_nonce=${result.retryNonce}.`
+          `runtime_authorization_requested: created task ${result.task.id}. Approve the request to retry with retry_nonce=${result.retryNonce}.`
         ) as CanonicalContentBlock,
       ],
       isError: true,
@@ -1156,7 +1162,7 @@ async function requestAuthorizationOrDeny(args: {
         synapse_error: {
           code: "runtime_authorization_requested",
           message: "user approval required",
-          authorization_task_id: result.task.id,
+          authorization_task_id: result.taskRecord.id,
           retry_nonce: result.retryNonce,
         },
       },

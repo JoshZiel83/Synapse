@@ -3,6 +3,7 @@ import {
   parseJsonObject,
   textBlocks,
   type CanonicalContentBlock,
+  type Timestamp,
   type TaskNoticeStatus,
 } from "@synapse/shared"
 import type {
@@ -19,6 +20,12 @@ import {
   type TableInsert,
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
+import {
+  requireInstantDate,
+  serializeInstant,
+  serializeNowInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import { sql } from "kysely"
 import {
   createConversationEvent,
@@ -77,7 +84,7 @@ export interface ToolCallTaskRecord {
   requesterParticipantId?: string
   targetParticipantId?: string
   resolvedByParticipantId?: string
-  resolvedAt?: string
+  resolvedAt?: Timestamp
   requestPayload: Record<string, unknown>
   immediateResultPayload: Record<string, unknown>
   finalResultPayload: Record<string, unknown>
@@ -85,17 +92,17 @@ export interface ToolCallTaskRecord {
   metadata: Record<string, unknown>
   conversationItemId?: string
   completionItemId?: string
-  deadlineAt?: string
-  expiresAt?: string
+  deadlineAt?: Timestamp
+  expiresAt?: Timestamp
   retentionTtlMs?: number
-  retainUntil?: string
-  cancelRequestedAt?: string
+  retainUntil?: Timestamp
+  cancelRequestedAt?: Timestamp
   cancelReason?: string
   lastOutputSeq: number
-  lastOutputAt?: string
-  completedAt?: string
-  createdAt: string
-  updatedAt: string
+  lastOutputAt?: Timestamp
+  completedAt?: Timestamp
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface CreateToolCallTaskParams {
@@ -120,10 +127,10 @@ export interface CreateToolCallTaskParams {
   requestPayload?: Record<string, unknown>
   immediateResultPayload?: Record<string, unknown>
   metadata?: Record<string, unknown>
-  deadlineAt?: string
-  expiresAt?: string
+  deadlineAt?: Timestamp
+  expiresAt?: Timestamp
   retentionTtlMs?: number
-  retainUntil?: string
+  retainUntil?: Timestamp
 }
 
 interface ToolCallTaskTerminalNoticeParams {
@@ -141,7 +148,7 @@ export interface ToolCallTaskOutputChunk {
   seq: number
   stream: "stdout" | "stderr" | "system"
   text: string
-  createdAt: string
+  createdAt: Timestamp
   metadata: Record<string, unknown>
 }
 
@@ -164,14 +171,6 @@ function noticeStatusToLifecycle(
   status: TaskNoticeStatus
 ): ToolCallTaskLifecycleStatus {
   return status
-}
-
-function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return undefined
-  if (value instanceof Date) {
-    return value.toISOString()
-  }
-  return value
 }
 
 function toDate(value: string | null | undefined) {
@@ -212,7 +211,7 @@ function mapToolCallTaskRow(
     requesterParticipantId: row.requester_participant_id || undefined,
     targetParticipantId: row.target_participant_id || undefined,
     resolvedByParticipantId: row.resolved_by_participant_id || undefined,
-    resolvedAt: toIsoString(row.resolved_at),
+    resolvedAt: serializeOptionalInstant(row.resolved_at),
     requestPayload: parseJsonObject(row.request_payload),
     immediateResultPayload: parseJsonObject(row.immediate_result_payload),
     finalResultPayload: parseJsonObject(row.final_result_payload),
@@ -220,23 +219,27 @@ function mapToolCallTaskRow(
     metadata: parseJsonObject(row.metadata),
     conversationItemId: row.conversation_item_id || undefined,
     completionItemId: row.completion_item_id || undefined,
-    deadlineAt: toIsoString(row.deadline_at),
-    expiresAt: toIsoString(row.expires_at),
+    deadlineAt: serializeOptionalInstant(row.deadline_at),
+    expiresAt: serializeOptionalInstant(row.expires_at),
     retentionTtlMs:
       typeof row.retention_ttl_ms === "number"
         ? row.retention_ttl_ms
         : undefined,
-    retainUntil: toIsoString(row.retain_until),
-    cancelRequestedAt: toIsoString(row.cancel_requested_at),
+    retainUntil: serializeOptionalInstant(row.retain_until),
+    cancelRequestedAt: serializeOptionalInstant(row.cancel_requested_at),
     cancelReason: row.cancel_reason || undefined,
     lastOutputSeq:
       typeof row.last_output_seq === "number"
         ? row.last_output_seq
         : Number(row.last_output_seq || 0),
-    lastOutputAt: toIsoString(row.last_output_at),
-    completedAt: toIsoString(row.completed_at),
-    createdAt: toIsoString(row.created_at) || new Date().toISOString(),
-    updatedAt: toIsoString(row.updated_at) || new Date().toISOString(),
+    lastOutputAt: serializeOptionalInstant(row.last_output_at),
+    completedAt: serializeOptionalInstant(row.completed_at),
+    createdAt: serializeInstant(
+      requireInstantDate(row.created_at, `Tool-call task ${row.id} created_at`)
+    ),
+    updatedAt: serializeInstant(
+      requireInstantDate(row.updated_at, `Tool-call task ${row.id} updated_at`)
+    ),
   } satisfies ToolCallTaskRecord
 }
 
@@ -473,7 +476,7 @@ export async function appendToolCallTaskOutput(
     seq?: number
     stream: "stdout" | "stderr" | "system"
     text: string
-    createdAt?: string
+    createdAt?: Timestamp
     metadata?: Record<string, unknown>
   }
 ) {
@@ -491,7 +494,7 @@ export async function appendToolCallTaskOutput(
       text_value: text,
       metadata: (chunk.metadata ||
         {}) as TableInsert<"tool_call_task_output_chunks">["metadata"],
-      created_at: toDate(chunk.createdAt),
+      created_at: toDate(chunk.createdAt) ?? undefined,
     }
     await db
       .insertInto("tool_call_task_output_chunks")
@@ -539,7 +542,7 @@ export async function appendToolCallTaskOutput(
 
   return updateToolCallTaskRecord(taskId, {
     lastOutputSeq: appendedSeq,
-    lastOutputAt: chunk.createdAt || new Date().toISOString(),
+    lastOutputAt: chunk.createdAt,
   })
 }
 
@@ -555,7 +558,7 @@ export async function requestToolCallTaskCancel(
     return existing
   }
   return updateToolCallTaskRecord(taskId, {
-    cancelRequestedAt: new Date().toISOString(),
+    cancelRequestedAt: serializeNowInstant(),
     cancelReason: reason?.trim() || existing.cancelReason || null,
     statusMessage:
       reason?.trim() || existing.statusMessage || "Cancellation requested.",
@@ -636,7 +639,12 @@ export async function getToolCallTaskOutput(params: {
     seq: typeof row.seq === "number" ? row.seq : Number(row.seq || 0),
     stream: row.stream as ToolCallTaskOutputChunk["stream"],
     text: row.text_value,
-    createdAt: toIsoString(row.created_at) || new Date().toISOString(),
+    createdAt: serializeInstant(
+      requireInstantDate(
+        row.created_at,
+        "Tool-call task output chunk created_at"
+      )
+    ),
     metadata: parseJsonObject(row.metadata),
   })) satisfies ToolCallTaskOutputChunk[]
 }
@@ -656,15 +664,15 @@ async function updateToolCallTaskRecord(
     conversationItemId?: string
     completionItemId?: string
     resolvedByParticipantId?: string
-    resolvedAt?: string
-    deadlineAt?: string
-    expiresAt?: string
+    resolvedAt?: Timestamp
+    deadlineAt?: Timestamp
+    expiresAt?: Timestamp
     retentionTtlMs?: number
-    retainUntil?: string
+    retainUntil?: Timestamp
     cancelRequestedAt?: string | null
     cancelReason?: string | null
     lastOutputSeq?: number
-    lastOutputAt?: string | null
+    lastOutputAt?: Timestamp | null
   }
 ) {
   const existing = await getToolCallTask(taskId)
@@ -692,7 +700,7 @@ async function updateToolCallTaskRecord(
   // Terminal guard as a SQL predicate: only mutate a task that is NOT already
   // terminal. Zero rows back = idempotent no-op (concurrent resolve / cancel /
   // TTL sweep already finished it). This is what makes terminalization safe to
-  // retry now that the interaction and the task are the same row.
+  // retry after the task has already reached a terminal lifecycle.
   let update = db
     .updateTable("tool_call_tasks")
     .set({
@@ -879,7 +887,7 @@ async function emitTaskNotice(
  * Delivery-only core (no status flip): emits the agent-facing notice + wakeup
  * (session_wakeup) or the machine-WS push (remote_agent_channel). Used both by
  * emitTaskNotice (after its in-function flip) and by deliverResolvedToolCallTask
- * (where the interactions resolve tx already flipped the lifecycle in-tx).
+ * (where the task resolve tx already flipped the lifecycle in-tx).
  */
 async function deliverTaskNotice(
   record: ToolCallTaskRecord,
@@ -999,7 +1007,6 @@ async function deliverTaskNotice(
                 .updateTable("tool_call_tasks")
                 .set({
                   completion_item_id: completionItemId,
-                  updated_at: sql`NOW()`,
                 })
                 .where("id", "=", record.id)
                 .returningAll()
@@ -1048,7 +1055,7 @@ async function deliverTaskNotice(
 
 /**
  * Deliver a task whose terminal lifecycle/outcome were ALREADY set in the
- * caller's transaction (the interactions resolve flow flips in-tx so its
+ * caller's transaction (the task resolve flow flips in-tx so its
  * broadcast/HTTP view is correct). Optionally writes a post-commit result
  * payload (e.g. runtime-auth auto-retry output) via an unguarded update, then
  * fires the notice + wakeup/push. Idempotent-safe: if the task is somehow no

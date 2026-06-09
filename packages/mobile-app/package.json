@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "build:chat-worker": "node ./scripts/build-chat-worker.mjs",
-    "sync:shared": "npx tsc -p ../shared/tsconfig.json",
+    "sync:shared": "npm --prefix ../.. run build -w @synapse/device-protocol && npx tsc -p ../shared/tsconfig.json",
     "prestart": "npm run sync:shared",
     "prestart:clear": "npm run sync:shared",
     "preandroid": "npm run sync:shared",
@@ -16,7 +16,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "web:export": "npm run build:chat-worker && expo export --platform web",
+    "web:export": "npm run sync:shared && npm run build:chat-worker && expo export --platform web",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

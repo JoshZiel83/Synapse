@@ -21,13 +21,13 @@ export interface MijiaQrLoginStartResult {
   challengePayload: {
     kind: "qr_code"
     qrUrl: string
-    expiresAt: string
+    expiresAt: import("@synapse/shared").Timestamp
     metadata: Record<string, unknown>
   }
   transientPayload: {
     mijia: JsonObject
   }
-  expiresAt: string
+  expiresAt: import("@synapse/shared").Timestamp
 }
 
 export type MijiaQrLoginProgress =

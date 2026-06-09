@@ -403,35 +403,45 @@ export const CONVERSATION_GRANT_PERMISSIONS = [
   "manage_members",
   "attach_resources",
 ] as const
-export const INTERACTION_REQUEST_KIND = {
+export const TASK_REQUEST_KIND = {
   USER_INPUT: "user_input",
   PLAN_APPROVAL: "plan_approval",
   RUNTIME_AUTHORIZATION: "runtime_authorization",
 } as const
-export const INTERACTION_REQUEST_KINDS = [
-  INTERACTION_REQUEST_KIND.USER_INPUT,
-  INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
-  INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+export const TASK_REQUEST_KINDS = [
+  TASK_REQUEST_KIND.USER_INPUT,
+  TASK_REQUEST_KIND.PLAN_APPROVAL,
+  TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION,
 ] as const
-export const TARGETED_INTERACTION_REQUEST_KINDS = [
-  INTERACTION_REQUEST_KIND.USER_INPUT,
-  INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+export const TARGETED_TASK_REQUEST_KINDS = [
+  TASK_REQUEST_KIND.USER_INPUT,
+  TASK_REQUEST_KIND.PLAN_APPROVAL,
 ] as const
-export const INTERACTION_REQUEST_STATUSES = [
-  "pending",
-  "answered",
-  "approved",
-  "rejected",
+export const TASK_LIFECYCLE_STATUSES = [
+  "submitted",
+  "working",
+  "input_required",
+  "auth_required",
+  "completed",
+  "failed",
   "cancelled",
   "expired",
-  "superseded",
 ] as const
-export const INTERACTION_INPUT_QUESTION_TYPES = [
+export const TASK_OUTCOMES = [
+  "answered",
+  "approved",
+  "revision_requested",
+  "granted",
+  "denied",
+  "ok",
+  "tool_error",
+] as const
+export const TASK_INPUT_QUESTION_TYPES = [
   "single_select",
   "multi_select",
   "text",
 ] as const
-export const INTERACTION_DECISIONS = ["approve", "reject"] as const
+export const TASK_DECISIONS = ["approve", "reject"] as const
 export const PLAN_APPROVAL_DECISIONS = ["approve", "revise"] as const
 export const MODEL_GROUP_ROUTING_STRATEGY = {
   WEIGHTED_RANDOM: "weighted_random",

@@ -5,6 +5,7 @@ import {
   type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
+import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
 import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js"
 import { getFileUrlById } from "../files/service.js"
 import {
@@ -95,12 +96,6 @@ function generateSlug(name: string): string {
   const base = slugify(name)
   const suffix = crypto.randomBytes(4).toString("hex")
   return `${base}-${suffix}`
-}
-
-function toIsoString(value: string | Date | null | undefined) {
-  if (typeof value === "string") return value
-  if (value instanceof Date) return value.toISOString()
-  return undefined
 }
 
 const OFFICIAL_ACTOR_PUBLISHER_SLUG = "synapse-official"
@@ -195,12 +190,10 @@ export async function assignOfficialChiefActorPreference(
       workspace_member_id: workspaceMemberId,
       chief_actor_id: chiefActorId,
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.column("workspace_member_id").doUpdateSet({
         chief_actor_id: chiefActorId,
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -471,8 +464,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     try {
       await sql`
         UPDATE catalog_items
-           SET download_count = download_count + 1,
-               updated_at = NOW()
+           SET download_count = download_count + 1
          WHERE id = ${templateId}`.execute(db)
     } catch (err) {
       log.warn(
@@ -608,12 +600,10 @@ export async function updateWorkspaceChiefActorPreference(
       workspace_member_id: member.id,
       chief_actor_id: chiefActorId,
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.column("workspace_member_id").doUpdateSet({
         chief_actor_id: chiefActorId,
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -636,7 +626,6 @@ export async function updateWorkspace(
       ...(updates.description !== undefined
         ? { description: updates.description }
         : {}),
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", workspaceId)
     .returningAll()
@@ -861,7 +850,6 @@ export async function grantWorkspaceAccess(input: {
         status: "active",
         revoked_at: null,
         assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
-        updated_at: sql`NOW()`,
       })
     )
     .returningAll()
@@ -922,8 +910,8 @@ function mapWorkspaceRow(row: any) {
     description: row.description ?? null,
     ownerId: row.owner_id,
     isTrusted: Boolean(row.is_trusted),
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
+    createdAt: serializeOptionalInstant(row.created_at),
+    updatedAt: serializeOptionalInstant(row.updated_at),
   }
 }
 
@@ -949,8 +937,8 @@ function mapActorRow(row: any, docs: ActorDoc[]) {
     currentVersion: Number(row.current_version || 1),
     isActive: row.is_active,
     isPublicShared: Boolean(row.is_public_shared),
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
+    createdAt: serializeOptionalInstant(row.created_at),
+    updatedAt: serializeOptionalInstant(row.updated_at),
   }
 }
 
@@ -961,7 +949,7 @@ function mapMemberRow(row: any) {
     userId: row.user_id,
     trustLevel: deriveWorkspaceTrustLevel(row),
     accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
-    joinedAt: toIsoString(row.joined_at),
+    joinedAt: serializeOptionalInstant(row.joined_at),
   }
 }
 
@@ -989,7 +977,7 @@ function mapWorkspaceChiefActorPreferenceRow(
               : undefined,
           }
         : undefined,
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
+    createdAt: serializeOptionalInstant(row.created_at),
+    updatedAt: serializeOptionalInstant(row.updated_at),
   }
 }

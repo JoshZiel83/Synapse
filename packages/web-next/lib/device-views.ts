@@ -1,6 +1,7 @@
 // Device dashboard view types — minimal shape used by /dashboard/devices
 // pages. Mirrors the device-protocol DTOs but kept local so packages/web-next
 // can avoid a hard dep on @synapse/device-protocol in the v3.0 skeleton.
+import type { Timestamp } from "@synapse/shared/types"
 
 export interface DeviceSummaryView {
   id: string
@@ -11,8 +12,8 @@ export interface DeviceSummaryView {
   device_type: string
   platform: string | null
   trust_status: "pending" | "trusted" | "revoked"
-  last_seen_at: string | null
-  last_connected_at: string | null
+  last_seen_at: Timestamp | null
+  last_connected_at: Timestamp | null
 }
 
 export interface DeviceServiceSummaryView {
@@ -21,7 +22,7 @@ export interface DeviceServiceSummaryView {
   service_kind: "device_runtime" | "remote_agent_daemon"
   version: string | null
   status: "starting" | "online" | "degraded" | "offline"
-  last_seen_at: string | null
+  last_seen_at: Timestamp | null
   remote_agent_machine_id: string | null
 }
 
@@ -65,7 +66,7 @@ export interface DevicePairingTicketView {
   mode: "local_qr" | "cloud_bootstrap" | "service_join"
   pairing_code: string | null
   bootstrap_token?: string | null
-  expires_at: string
+  expires_at: Timestamp
   verification_uri: string | null
   verification_uri_complete: string | null
   status:

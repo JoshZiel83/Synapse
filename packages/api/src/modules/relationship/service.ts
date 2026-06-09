@@ -1,5 +1,6 @@
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
+import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
 import {
   CONTACT_DIRECT_STATE,
   CONTACT_HUB_KIND,
@@ -154,12 +155,6 @@ function isUniqueViolation(error: unknown) {
     "code" in error &&
     (error as { code?: unknown }).code === "23505"
   )
-}
-
-function toIsoString(value: string | Date | null | undefined) {
-  if (typeof value === "string") return value
-  if (value instanceof Date) return value.toISOString()
-  return new Date(0).toISOString()
 }
 
 function normalizeIdentityId(value: string) {
@@ -2474,7 +2469,6 @@ export async function updateMemberRelationshipProfile(params: {
           typeof params.identitySearchEnabled === "boolean"
             ? params.identitySearchEnabled
             : profile.identity_search_enabled,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", profile.id)
       .returningAll()
@@ -2604,7 +2598,6 @@ export async function updateActorRelationshipProfile(params: {
           typeof params.identitySearchEnabled === "boolean"
             ? params.identitySearchEnabled
             : profile.identity_search_enabled,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", profile.id)
       .returningAll()
@@ -2627,7 +2620,6 @@ export async function updateActorRelationshipProfile(params: {
       .updateTable("actors")
       .set({
         is_public_shared: params.isPublicShared,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", params.actorId)
       .where((eb) =>
@@ -2697,7 +2689,6 @@ export async function updateRemoteAgentRelationshipProfile(params: {
           typeof params.identitySearchEnabled === "boolean"
             ? params.identitySearchEnabled
             : profile.identity_search_enabled,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", profile.id)
       .returningAll()
@@ -2926,7 +2917,7 @@ export async function listFriendRequests(params: {
     incoming.push({
       id: row.id,
       status: row.status,
-      createdAt: toIsoString(row.created_at),
+      createdAt: serializeOptionalInstant(row.created_at),
       requester,
       targetType: subjectKindToRelationshipPeerType(row.target_kind),
       targetMember,
@@ -2952,7 +2943,7 @@ export async function listFriendRequests(params: {
     outgoing.push({
       id: row.id,
       status: row.status,
-      createdAt: toIsoString(row.created_at),
+      createdAt: serializeOptionalInstant(row.created_at),
       targetType: subjectKindToRelationshipPeerType(row.target_kind),
       targetMember,
       targetActor,
@@ -3076,7 +3067,6 @@ export async function resolveFriendRequest(params: {
       status: params.decision === "approve" ? "approved" : "rejected",
       resolved_by_workspace_member_id: viewerWorkspaceMember.workspaceMemberId,
       resolved_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", request.id)
     .returningAll()
@@ -3168,7 +3158,7 @@ export async function listActorAccessRequests(params: {
     incoming.push({
       id: row.id,
       status: row.status,
-      createdAt: toIsoString(row.created_at),
+      createdAt: serializeOptionalInstant(row.created_at),
       requester: await getWorkspaceMemberSummaryById(
         row.requester_workspace_member_id
       ),
@@ -3182,7 +3172,7 @@ export async function listActorAccessRequests(params: {
     outgoing.push({
       id: row.id,
       status: row.status,
-      createdAt: toIsoString(row.created_at),
+      createdAt: serializeOptionalInstant(row.created_at),
       actor: await getActorSummary(row.actor_id),
     })
   }
@@ -3251,7 +3241,7 @@ export async function listRemoteAgentAccessRequests(params: {
     incoming.push({
       id: row.id,
       status: row.status,
-      createdAt: toIsoString(row.created_at),
+      createdAt: serializeOptionalInstant(row.created_at),
       requester: await getWorkspaceMemberSummaryById(
         row.requester_workspace_member_id
       ),
@@ -3265,7 +3255,7 @@ export async function listRemoteAgentAccessRequests(params: {
     outgoing.push({
       id: row.id,
       status: row.status,
-      createdAt: toIsoString(row.created_at),
+      createdAt: serializeOptionalInstant(row.created_at),
       remoteAgent: await getRemoteAgentSummary(row.remote_agent_id),
     })
   }

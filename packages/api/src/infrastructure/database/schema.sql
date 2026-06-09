@@ -180,7 +180,7 @@ CREATE TYPE plugin_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'fol
 -- Runtime authorization enums (renamed from relay_* in PR #20). These back the
 -- runtime_authorization_grants + tool_call_task_runtime_authorization (detail)
 -- tables and the matching shared enum re-exports.
--- (interaction_requests_kind / interaction_requests_status removed in the task
+-- (tool_call_tasks_kind / tool_call_tasks_status removed in the task
 -- unification: kind → tool_call_tasks_executor_kind; status → lifecycle_status
 -- ⟂ outcome.)
 CREATE TYPE runtime_authorization_request_mode AS ENUM ('background', 'blocking');
@@ -346,8 +346,8 @@ CREATE TABLE workspaces (
   description TEXT,
   owner_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   is_trusted BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_workspaces_owner ON workspaces(owner_id);
@@ -358,8 +358,8 @@ CREATE TABLE platform_access_bindings (
   access_key platform_access_bindings_access_key NOT NULL,
   source platform_access_bindings_source NOT NULL DEFAULT 'manual',
   assigned_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, access_key)
 );
 
@@ -398,8 +398,8 @@ CREATE TABLE workspace_access_bindings (
   workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE RESTRICT,
   access_key workspace_access_bindings_access_key NOT NULL,
   assigned_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (workspace_member_id, access_key)
 );
 
@@ -413,8 +413,8 @@ CREATE TABLE workspace_capability_conversation_type_policies (
     CHECK (resource_family IN ('plugin_installation', 'installed_skill', 'device_capability')),
   default_conversation_type_mask INT NOT NULL
     CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 15),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (subject_id, resource_family)
 );
 
@@ -428,8 +428,8 @@ CREATE TABLE workspace_invites (
   use_count INT NOT NULL DEFAULT 0,
   expires_at TIMESTAMPTZ,
   is_revoked BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============ Conversations ============
@@ -440,8 +440,8 @@ CREATE TABLE conversations (
   title VARCHAR(500),
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   -- IM-ness is derived from the presence of a conversation_transport_bindings
   -- row (see hasConversationTransportBinding); there is no stored boundary axis.
   -- Every conversation is workspace-scoped (workspace_id NOT NULL). The
@@ -465,7 +465,7 @@ CREATE TABLE audit_logs (
   resource_id UUID,
   details JSONB DEFAULT '{}',
   ip_address VARCHAR(120),
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_audit_logs_workspace ON audit_logs(workspace_id, created_at DESC);
@@ -537,7 +537,7 @@ CREATE TABLE file_parse_runs (
   error_code VARCHAR(100),
   error_message TEXT,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   started_at TIMESTAMPTZ,
   finished_at TIMESTAMPTZ
 );
@@ -551,7 +551,7 @@ CREATE TABLE file_parse_outputs (
   structured_json JSONB NOT NULL DEFAULT '{}',
   derived_asset_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   is_primary BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_file_assets_workspace ON file_assets(workspace_id, created_at DESC);
@@ -580,8 +580,8 @@ CREATE TABLE realtime_event_outbox (
   last_error TEXT,
   processing_started_at TIMESTAMPTZ,
   dispatched_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_realtime_event_outbox_status
@@ -604,8 +604,8 @@ CREATE TABLE skill_mirror_sources (
   source_warnings TEXT[] NOT NULL DEFAULT '{}',
   last_error TEXT,
   last_synced_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(source_type, locator_key)
 );
 
@@ -633,7 +633,7 @@ CREATE TABLE skill_snapshots (
   content_hash VARCHAR(64) NOT NULL,
   source_warnings TEXT[] NOT NULL DEFAULT '{}',
   resolved_revision VARCHAR(255),
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_skill_snapshots_mirror_source
@@ -649,8 +649,8 @@ CREATE TABLE skill_snapshot_files (
   content_blocks JSONB NOT NULL DEFAULT '[]',
   sha256 VARCHAR(64) NOT NULL,
   size_bytes INT NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(skill_snapshot_id, path)
 );
 
@@ -668,8 +668,8 @@ CREATE TABLE publishers (
   workspace_id UUID REFERENCES workspaces(id) ON DELETE RESTRICT,
   is_builtin BOOLEAN DEFAULT FALSE,
   is_verified BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE catalog_categories (
@@ -681,8 +681,8 @@ CREATE TABLE catalog_categories (
   icon_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   sort_order INT NOT NULL DEFAULT 0,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(item_kind, slug)
 );
 
@@ -704,8 +704,8 @@ CREATE TABLE catalog_items (
   is_active BOOLEAN DEFAULT TRUE,
   download_count INT NOT NULL DEFAULT 0,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX uq_catalog_items_global_slug
@@ -724,7 +724,7 @@ CREATE INDEX idx_catalog_items_tags ON catalog_items USING GIN(tags);
 CREATE TABLE catalog_item_categories (
   catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
   category_id UUID NOT NULL REFERENCES catalog_categories(id) ON DELETE RESTRICT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (catalog_item_id, category_id)
 );
 
@@ -736,7 +736,7 @@ CREATE TABLE catalog_versions (
   changelog TEXT DEFAULT '',
   metadata JSONB DEFAULT '{}',
   created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(catalog_item_id, version)
 );
 
@@ -757,7 +757,7 @@ CREATE TABLE catalog_version_files (
   sha256 VARCHAR(64) NOT NULL,
   size_bytes INT NOT NULL DEFAULT 0,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(catalog_version_id, path)
 );
 
@@ -776,7 +776,7 @@ CREATE TABLE actor_template_version_specs (
   specialties TEXT[] DEFAULT '{}',
   config JSONB DEFAULT '{}',
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (avatar_file_id IS NULL OR avatar_emoji IS NULL)
 );
 
@@ -785,7 +785,7 @@ CREATE TABLE skill_package_version_specs (
   skill_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
   default_conversation_type_mask INT NOT NULL DEFAULT 15
     CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 15),
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE plugin_package_version_specs (
@@ -804,7 +804,7 @@ CREATE TABLE plugin_package_version_specs (
     DEFAULT ARRAY['turn', 'session', 'workspace', 'conversation', 'actor']::plugin_package_version_specs_default_reuse_scope[],
   requires_handshake BOOLEAN NOT NULL DEFAULT FALSE,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE OR REPLACE FUNCTION validate_catalog_version_spec_consistency_for_version(
@@ -967,7 +967,7 @@ CREATE TABLE plugin_version_runtime_permissions (
   permission_key VARCHAR(120) NOT NULL,
   is_required BOOLEAN NOT NULL DEFAULT TRUE,
   rationale TEXT DEFAULT '',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(catalog_version_id, permission_key)
 );
 
@@ -988,8 +988,8 @@ CREATE TABLE actors (
   config JSONB DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   is_public_shared BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (avatar_file_id IS NULL OR avatar_emoji IS NULL)
 );
 
@@ -1005,8 +1005,8 @@ CREATE TABLE remote_agents (
   -- P2: see actor authorization comment above.
   is_public_shared BOOLEAN NOT NULL DEFAULT FALSE,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (avatar_file_id IS NULL OR avatar_emoji IS NULL)
 );
 
@@ -1022,8 +1022,8 @@ CREATE TABLE remote_agent_machines (
   lifecycle_state remote_agent_machines_lifecycle_state,
   last_seen_at TIMESTAMPTZ,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_remote_agent_machines_workspace
@@ -1040,8 +1040,8 @@ CREATE TABLE remote_agent_machine_sessions (
   close_reason TEXT,
   started_at TIMESTAMPTZ DEFAULT NOW(),
   ended_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_remote_agent_machine_sessions_machine
@@ -1061,8 +1061,8 @@ CREATE TABLE remote_agent_runtime_catalog (
   metadata JSONB NOT NULL DEFAULT '{}',
   last_seen_at TIMESTAMPTZ,
   last_error TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(machine_id, runtime_kind)
 );
 
@@ -1079,8 +1079,8 @@ CREATE TABLE remote_agent_bindings (
   capabilities JSONB NOT NULL DEFAULT '{}',
   last_activity_at TIMESTAMPTZ,
   last_error TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_remote_agent_bindings_machine
@@ -1093,12 +1093,12 @@ CREATE TABLE remote_agent_runs (
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
   status remote_agent_runs_status NOT NULL DEFAULT 'queued',
   status_text TEXT,
-  interaction_id UUID,
+  task_id UUID,
   last_error TEXT,
   started_at TIMESTAMPTZ,
   ended_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_remote_agent_runs_remote_agent
@@ -1111,16 +1111,16 @@ CREATE TABLE remote_agent_conversation_contexts (
   runtime_session_id VARCHAR(255),
   runtime_state remote_agent_bindings_runtime_state NOT NULL DEFAULT 'offline',
   status_text TEXT,
-  active_interaction_id UUID,
+  active_task_id UUID,
   collaboration_mode TEXT NOT NULL DEFAULT 'default',
   collaboration_state JSONB NOT NULL DEFAULT '{}',
-  active_plan_approval_interaction_id UUID,
+  active_plan_approval_task_id UUID,
   last_run_started_at TIMESTAMPTZ,
   last_run_finished_at TIMESTAMPTZ,
   last_activity_at TIMESTAMPTZ,
   last_error TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (remote_agent_id, conversation_id)
 );
 
@@ -1140,17 +1140,17 @@ CREATE INDEX idx_remote_agent_conversation_contexts_active_state
     'running', 'waiting_user_input', 'plan_drafting', 'waiting_plan_approval'
   );
 
-CREATE TABLE remote_agent_group_interaction_grants (
+CREATE TABLE remote_agent_group_task_grants (
   remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE RESTRICT,
   workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE RESTRICT,
   granted_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (remote_agent_id, workspace_member_id)
 );
 
-CREATE INDEX idx_remote_agent_group_interaction_grants_workspace_member
-  ON remote_agent_group_interaction_grants(workspace_member_id, created_at DESC);
+CREATE INDEX idx_remote_agent_group_task_grants_workspace_member
+  ON remote_agent_group_task_grants(workspace_member_id, created_at DESC);
 
 CREATE TABLE workspace_relationship_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1164,8 +1164,8 @@ CREATE TABLE workspace_relationship_profiles (
   approval_mode relationship_approval_mode NOT NULL DEFAULT 'manual',
   qr_token VARCHAR(128) NOT NULL UNIQUE,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX uq_workspace_relationship_profiles_subject
@@ -1186,8 +1186,8 @@ CREATE TABLE workspace_friend_requests (
   status relationship_request_status NOT NULL DEFAULT 'pending',
   resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   resolved_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_target
@@ -1208,8 +1208,8 @@ CREATE TABLE workspace_friend_entries (
   -- Deferred FK applied below in the post-access_subjects ALTER section.
   peer_subject_id UUID NOT NULL,
   source_request_id UUID REFERENCES workspace_friend_requests(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX uq_workspace_friend_entries_peer
@@ -1218,7 +1218,6 @@ CREATE INDEX idx_workspace_friend_entries_owner
   ON workspace_friend_entries(workspace_id, owner_workspace_member_id, created_at DESC);
 CREATE INDEX idx_workspace_friend_entries_peer_subject
   ON workspace_friend_entries(peer_subject_id);
-
 CREATE TABLE direct_conversation_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE RESTRICT,
@@ -1226,7 +1225,7 @@ CREATE TABLE direct_conversation_bindings (
   -- single subject_id FK per participant (deferred ALTER below).
   participant_one_subject_id UUID NOT NULL,
   participant_two_subject_id UUID NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX uq_direct_conversation_bindings_pair
@@ -1239,8 +1238,8 @@ CREATE INDEX idx_direct_conversation_bindings_participant_two
 CREATE TABLE workspace_member_preferences (
   workspace_member_id UUID PRIMARY KEY REFERENCES workspace_members(id) ON DELETE RESTRICT,
   chief_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_workspace_member_preferences_actor ON workspace_member_preferences(chief_actor_id);
@@ -1266,7 +1265,7 @@ CREATE TABLE actor_versions (
   source_turn_id UUID,
   source_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
   source_reason TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(actor_id, version)
 );
 
@@ -1278,8 +1277,8 @@ CREATE TABLE actor_version_docs (
   visibility actor_version_docs_visibility NOT NULL DEFAULT 'always',
   priority INT NOT NULL DEFAULT 0,
   content_blocks JSONB NOT NULL DEFAULT '[]',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_actor_version_docs_version ON actor_version_docs(actor_version_id, priority DESC, created_at);
@@ -1290,8 +1289,8 @@ CREATE TABLE actor_source_refs (
   source_catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
   sync_mode actor_source_refs_sync_mode NOT NULL DEFAULT 'notify',
   baseline_actor_version INT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============ Model Routing ============
@@ -1307,8 +1306,8 @@ CREATE TABLE model_groups (
   is_default BOOLEAN DEFAULT FALSE,
   is_enabled BOOLEAN DEFAULT TRUE,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (
     (owner_type = 'platform' AND owner_workspace_id IS NULL AND owner_workspace_member_id IS NULL) OR
     (owner_type = 'workspace' AND owner_workspace_id IS NOT NULL AND owner_workspace_member_id IS NULL) OR
@@ -1338,8 +1337,8 @@ CREATE TABLE model_bindings (
   is_enabled BOOLEAN DEFAULT TRUE,
   current_version_id UUID,
   installed_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_model_bindings_group ON model_bindings(group_id, priority, created_at DESC);
@@ -1364,7 +1363,7 @@ CREATE TABLE model_binding_versions (
   provider_options JSONB NOT NULL DEFAULT '{}',
   request_timeout_ms INT,
   max_retries INT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(binding_id, version)
 );
 
@@ -1412,7 +1411,7 @@ CREATE TABLE model_group_grants (
   status model_group_grants_status NOT NULL DEFAULT 'active',
   granted_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at TIMESTAMPTZ
 );
 
@@ -1429,7 +1428,7 @@ CREATE TABLE actor_model_group_assignments (
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE RESTRICT,
   group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE RESTRICT,
   priority INT NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (actor_id, group_id)
 );
 
@@ -1444,23 +1443,23 @@ CREATE TABLE sessions (
   trigger VARCHAR(50) NOT NULL DEFAULT 'user_message',
   status sessions_status NOT NULL DEFAULT 'idle',
   collaboration_mode sessions_collaboration_mode NOT NULL DEFAULT 'default',
-  -- FK is added later because sessions and interaction_requests participate
+  -- FK is added later because sessions and tool_call_tasks participate
   -- in a schema dependency cycle via conversation_items.
-  active_plan_approval_interaction_id UUID,
+  active_plan_approval_task_id UUID,
   collaboration_state JSONB NOT NULL DEFAULT '{}',
   memory_bootstrap_completed BOOLEAN NOT NULL DEFAULT FALSE,
   error_message TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   completed_at TIMESTAMPTZ,
   CONSTRAINT sessions_active_plan_approval_pointer_mode_chk CHECK (
     (
       collaboration_mode = 'plan_awaiting_approval'
-      AND active_plan_approval_interaction_id IS NOT NULL
+      AND active_plan_approval_task_id IS NOT NULL
     )
     OR (
       collaboration_mode <> 'plan_awaiting_approval'
-      AND active_plan_approval_interaction_id IS NULL
+      AND active_plan_approval_task_id IS NULL
     )
   )
 );
@@ -1471,9 +1470,9 @@ CREATE INDEX idx_sessions_actor_status ON sessions(actor_id, status);
 CREATE INDEX idx_sessions_conversation ON sessions(conversation_id);
 CREATE UNIQUE INDEX uq_sessions_conversation_actor
   ON sessions(conversation_id, actor_id);
-CREATE UNIQUE INDEX uq_sessions_active_plan_approval_interaction
-  ON sessions(active_plan_approval_interaction_id)
-  WHERE active_plan_approval_interaction_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_sessions_active_plan_approval_task
+  ON sessions(active_plan_approval_task_id)
+  WHERE active_plan_approval_task_id IS NOT NULL;
 
 -- ============ access_subjects: unified polymorphic subject registry ============
 -- Replaces the historical pattern of "kind + N nullable FK columns + CHECK" that
@@ -1774,7 +1773,7 @@ CREATE TABLE conversation_items (
   event_context_policy conversation_items_event_context_policy,
   sequence BIGINT GENERATED ALWAYS AS IDENTITY,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX idx_conversation_items_sequence_unique
@@ -2090,7 +2089,7 @@ CREATE TABLE turns (
   status turns_status NOT NULL DEFAULT 'running',
   metadata JSONB DEFAULT '{}',
   started_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   completed_at TIMESTAMPTZ
 );
 
@@ -2109,7 +2108,7 @@ CREATE TABLE payload_blobs (
   text_body TEXT,
   byte_size INT NOT NULL DEFAULT 0,
   retention_class payload_blobs_retention_class NOT NULL DEFAULT 'audit',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (
     (content_type = 'json' AND json_body IS NOT NULL) OR
     (content_type = 'text' AND text_body IS NOT NULL)
@@ -2137,7 +2136,7 @@ CREATE TABLE provider_steps (
   latency_ms INT DEFAULT 0,
   status provider_steps_status NOT NULL DEFAULT 'success',
   error_message TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(turn_id, step_index)
 );
 
@@ -2176,7 +2175,7 @@ CREATE TABLE tool_calls (
   device_tool_id UUID,
   normalized_input JSONB NOT NULL DEFAULT '{}',
   status tool_calls_status NOT NULL DEFAULT 'pending',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   completed_at TIMESTAMPTZ,
   -- source_kind must agree with the snapshot's discriminator.
   CONSTRAINT tool_calls_source_kind_matches_snapshot_ck CHECK (
@@ -2199,7 +2198,7 @@ CREATE INDEX idx_tool_calls_provider_step ON tool_calls(provider_step_id);
 
 -- ── tool_call_tasks — the unified Task (docs/task-unification-design.md) ─────
 -- Single source of truth for "everything a principal waits on". Absorbs the old
--- interaction_requests lifecycle (revision / request_key / resolved_* / the
+-- tool_call_tasks lifecycle (revision / request_key / resolved_* / the
 -- conversation feed item) so there is no second hand-synced row. Kind-specific
 -- payload lives in request_payload (human_input / plan_approval) or in a 1:1
 -- detail table (runtime_authorization / device_tool / external_mcp; CTI).
@@ -2235,13 +2234,13 @@ CREATE TABLE tool_call_tasks (
   status_message TEXT,
   supports_cancel BOOLEAN NOT NULL DEFAULT FALSE,
   supports_output_tail BOOLEAN NOT NULL DEFAULT FALSE,
-  -- Optimistic-concurrency token for human resolution (was interaction.revision).
+  -- Optimistic-concurrency token for human task resolution.
   revision BIGINT NOT NULL DEFAULT 1,
   -- Dedupe key (content-derived for runtime_authorization, task-derived for
-  -- human_input/plan_approval). Partial-unique while non-terminal (below) so a
+  -- user_input/plan_approval). Partial-unique while non-terminal (below) so a
   -- losing concurrent dispatch never materializes a second task.
   request_key TEXT NOT NULL,
-  -- Human resolution provenance (was interaction.resolved_*).
+  -- Human resolution provenance.
   requester_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   target_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   resolved_by_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
@@ -2251,8 +2250,8 @@ CREATE TABLE tool_call_tasks (
   final_result_payload JSONB NOT NULL DEFAULT '{}',
   final_error_payload JSONB NOT NULL DEFAULT '{}',
   metadata JSONB NOT NULL DEFAULT '{}',
-  -- The task_requested feed item (needs_response tasks) — was
-  -- interaction.conversation_item_id; also the completion notice anchor.
+  -- The task_requested feed item (needs_response tasks); also the completion
+  -- notice anchor.
   conversation_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
   completion_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
   deadline_at TIMESTAMPTZ,
@@ -2264,8 +2263,8 @@ CREATE TABLE tool_call_tasks (
   last_output_seq BIGINT NOT NULL DEFAULT 0,
   last_output_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   -- outcome is set only on a completed lifecycle.
   CONSTRAINT tool_call_tasks_outcome_requires_completed_chk CHECK (
     outcome IS NULL OR lifecycle_status = 'completed'
@@ -2302,7 +2301,7 @@ CREATE TABLE tool_call_task_output_chunks (
   stream tool_call_task_output_chunks_stream NOT NULL,
   text_value TEXT NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(task_id, seq)
 );
 
@@ -2324,7 +2323,7 @@ CREATE TABLE tool_execution_attempts (
   is_error BOOLEAN DEFAULT FALSE,
   error_message TEXT,
   duration_ms INT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(tool_call_id, attempt_no)
 );
 
@@ -2339,7 +2338,7 @@ CREATE TABLE tool_results (
   is_error BOOLEAN DEFAULT FALSE,
   error_message TEXT,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(tool_call_id, result_index)
 );
 
@@ -2383,7 +2382,7 @@ CREATE TABLE session_wakeups (
   reason_text TEXT,
   status session_wakeups_status NOT NULL DEFAULT 'pending',
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   attached_at TIMESTAMPTZ,
   processed_at TIMESTAMPTZ
 );
@@ -2413,8 +2412,8 @@ CREATE TABLE automation_rules (
   last_error_at TIMESTAMPTZ,
   last_error_message TEXT,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_automation_rules_workspace
@@ -2437,8 +2436,8 @@ CREATE TABLE automation_policies (
   completion_status automation_policies_completion_status NOT NULL DEFAULT 'completed',
   completed_at TIMESTAMPTZ,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (
     active_from IS NULL OR active_until IS NULL OR active_until >= active_from
   )
@@ -2468,8 +2467,8 @@ CREATE TABLE automation_event_sources (
   created_by_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   last_triggered_at TIMESTAMPTZ,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (
     (
       provider_kind = 'integration' AND
@@ -2536,8 +2535,8 @@ CREATE TABLE automation_triggers (
   next_fire_at TIMESTAMPTZ,
   last_fired_at TIMESTAMPTZ,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (
     (trigger_kind = 'schedule' AND source_kind = 'clock' AND event_source_id IS NULL) OR
     (trigger_kind = 'event' AND source_kind IN ('device', 'webhook', 'internal', 'integration') AND event_source_id IS NOT NULL)
@@ -2565,15 +2564,15 @@ CREATE TABLE automation_deliveries (
   message_blocks JSONB NOT NULL DEFAULT '[]',
   target_policy automation_deliveries_target_policy NOT NULL DEFAULT 'all_members',
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE automation_delivery_targets (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   rule_id UUID NOT NULL REFERENCES automation_rules(id) ON DELETE RESTRICT,
   target_participant_id UUID NOT NULL REFERENCES conversation_participants(id) ON DELETE RESTRICT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(rule_id, target_participant_id)
 );
 
@@ -2671,8 +2670,8 @@ CREATE TABLE automation_webhook_endpoints (
   metadata JSONB NOT NULL DEFAULT '{}',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   last_received_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_automation_webhook_endpoints_workspace
@@ -2695,7 +2694,7 @@ CREATE TABLE automation_occurrences (
   source_snapshot JSONB NOT NULL DEFAULT '{}',
   payload JSONB NOT NULL DEFAULT '{}',
   occurred_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX uq_automation_occurrences_event_source_dedupe
@@ -2722,8 +2721,8 @@ CREATE TABLE automation_executions (
   error_message TEXT,
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(rule_id, occurrence_id)
 );
 
@@ -2745,8 +2744,8 @@ CREATE TABLE automation_execution_targets (
   wakeup_id UUID REFERENCES session_wakeups(id) ON DELETE SET NULL,
   status automation_execution_targets_status NOT NULL DEFAULT 'pending',
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_automation_execution_targets_execution
@@ -2819,8 +2818,8 @@ CREATE TABLE memory_items (
   source_turn_id UUID,
   supersedes_item_id UUID REFERENCES memory_items(id) ON DELETE SET NULL,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_memory_items_workspace ON memory_items(workspace_id, created_at DESC);
@@ -2862,8 +2861,8 @@ CREATE TABLE memory_item_chunks (
   embedding VECTOR(384),
   token_count INT DEFAULT 0,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(memory_item_id, index_version, chunk_index)
 );
 
@@ -2879,8 +2878,8 @@ CREATE TABLE memory_embedding_cache (
   content_hash TEXT NOT NULL,
   embedding VECTOR(384) NOT NULL,
   embedding_dim INT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (model_id, input_type, content_hash),
   CHECK (input_type = 'passage')
 );
@@ -2898,7 +2897,7 @@ CREATE TABLE memory_recall_runs (
   query_text TEXT NOT NULL DEFAULT '',
   query_blocks JSONB DEFAULT '[]',
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_memory_recall_runs_workspace ON memory_recall_runs(workspace_id, created_at DESC);
@@ -2919,7 +2918,7 @@ CREATE TABLE memory_recall_run_results (
   matched_terms TEXT[] DEFAULT '{}',
   recall_reason TEXT,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_memory_recall_run_results_run ON memory_recall_run_results(run_id, rank);
@@ -2934,7 +2933,7 @@ CREATE TABLE context_archive_points (
   parent_archive_point_id UUID REFERENCES context_archive_points(id) ON DELETE SET NULL,
   covers_until_sequence BIGINT NOT NULL DEFAULT 0,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (
     (chain_scope = 'shared' AND session_id IS NULL) OR
     (chain_scope = 'private' AND session_id IS NOT NULL)
@@ -3033,13 +3032,13 @@ CREATE INDEX idx_context_compaction_run_inputs_run
 CREATE TABLE conversation_context_states (
   conversation_id UUID PRIMARY KEY REFERENCES conversations(id) ON DELETE RESTRICT,
   active_shared_archive_point_id UUID REFERENCES context_archive_points(id) ON DELETE SET NULL,
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE session_context_states (
   session_id UUID PRIMARY KEY REFERENCES sessions(id) ON DELETE RESTRICT,
   active_private_archive_point_id UUID REFERENCES context_archive_points(id) ON DELETE SET NULL,
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE session_interrupts (
@@ -3049,7 +3048,7 @@ CREATE TABLE session_interrupts (
   content TEXT NOT NULL,
   from_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   is_consumed BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_session_interrupts_target
@@ -3071,7 +3070,7 @@ CREATE TABLE runtime_events (
   level runtime_events_level NOT NULL DEFAULT 'info',
   event_type VARCHAR(50) NOT NULL,
   payload JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_runtime_events_workspace_time ON runtime_events(workspace_id, created_at DESC);
@@ -3085,8 +3084,8 @@ CREATE TABLE installed_skills (
   tags TEXT[] DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   current_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE skill_versions (
@@ -3096,7 +3095,7 @@ CREATE TABLE skill_versions (
   skill_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
   metadata JSONB DEFAULT '{}',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(skill_id, version)
 );
 
@@ -3107,8 +3106,8 @@ CREATE TABLE skill_source_refs (
   sync_mode skill_source_refs_sync_mode NOT NULL DEFAULT 'manual_merge',
   is_customized BOOLEAN NOT NULL DEFAULT FALSE,
   metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============ Plugin Runtime ============
@@ -3119,8 +3118,8 @@ CREATE TABLE plugin_installations (
   config_data JSONB NOT NULL DEFAULT '{}',
   approved_runtime_permissions TEXT[] DEFAULT '{}',
   reuse_scope plugin_installations_reuse_scope NOT NULL DEFAULT 'conversation',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_plugin_installations_item ON plugin_installations(catalog_item_id, created_at DESC);
@@ -3137,8 +3136,8 @@ CREATE TABLE automation_integration_bindings (
   webhook_endpoint_id UUID REFERENCES automation_webhook_endpoints(id) ON DELETE RESTRICT,
   external_subscription_id VARCHAR(255),
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (
     (
       ingress_kind = 'webhook' AND
@@ -3191,8 +3190,8 @@ CREATE TABLE plugin_auth_sessions (
   result_payload JSONB DEFAULT '{}',
   metadata JSONB DEFAULT '{}',
   expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_plugin_auth_sessions_workspace ON plugin_auth_sessions(workspace_id, created_at DESC);
@@ -3218,8 +3217,8 @@ CREATE TABLE plugin_connections (
   expires_at TIMESTAMPTZ,
   public_payload JSONB DEFAULT '{}',
   secret_payload JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_plugin_connections_installation ON plugin_connections(installation_id, created_at DESC);
@@ -3236,8 +3235,8 @@ CREATE TABLE plugin_source_refs (
   source_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
   source_catalog_version_id UUID REFERENCES catalog_versions(id) ON DELETE SET NULL,
   sync_mode plugin_source_refs_sync_mode NOT NULL DEFAULT 'manual_merge',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============ Workspace App Grants ============
@@ -3329,7 +3328,7 @@ CREATE TABLE resource_access_bindings (
   source resource_access_bindings_source NOT NULL DEFAULT 'manual',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_resource_access_bindings_resource CHECK (
     resource_type = 'automation_event_source' AND automation_event_source_id IS NOT NULL
@@ -3360,14 +3359,12 @@ CREATE INDEX idx_resource_access_bindings_scope_subject_id
   WHERE scope_subject_id IS NOT NULL;
 
 -- ── tool_call_task_runtime_authorization (CTI detail) ───────────────────────
--- 1:1 detail for executor_kind='runtime_authorization' (was
--- interaction_runtime_authorization_requests). Kept as a typed detail table
--- (not folded into request_payload JSONB) precisely because these are real FK
--- columns with ON DELETE RESTRICT + dispatch indexes — a device delete must not
+-- 1:1 detail for executor_kind='runtime_authorization'. Kept as a typed detail
+-- table (not folded into request_payload JSONB) because these are real FK
+-- columns with ON DELETE RESTRICT + dispatch indexes: a device delete must not
 -- silently orphan a pending authorization, and the scope-drift gate compares
 -- the frozen principal_scope_subject_id. The 1:1 binding to tool_call_tasks is
--- enforced by tg_tool_call_tasks_detail_consistency (retargeted from the old
--- interaction subtype-consistency trigger).
+-- enforced by tg_tool_call_tasks_detail_consistency.
 CREATE TABLE tool_call_task_runtime_authorization (
   task_id UUID PRIMARY KEY REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
   device_id UUID NOT NULL,                         -- FK added at bottom
@@ -3426,8 +3423,8 @@ CREATE TABLE tool_call_task_external_mcp (
   ttl_ms INT
 );
 
--- ── tool_call_task_action_tokens (was interaction_action_tokens) ────────────
--- Short, opaque tokens minted by `interactions/action-tokens.ts` when a
+-- ── tool_call_task_action_tokens ────────────────────────────────────────────
+-- Short, opaque tokens minted by `tasks/action-tokens.ts` when a
 -- needs_response task is projected onto an IM transport that supports
 -- interaction_prompt (e.g. QQ Inline Keyboard). The token lives in the button's
 -- `action.data`; on click the connector redeems it to recover the full respond
@@ -3446,7 +3443,7 @@ CREATE INDEX idx_tool_call_task_action_tokens_expires
   ON tool_call_task_action_tokens(expires_at);
 
 -- ────────────────────────────────────────────────────────────────────
--- tool_call_task_transport_projections (was interaction_transport_projections)
+-- tool_call_task_transport_projections
 --
 -- Durable "this needs_response task must be (re)projected onto an IM
 -- transport" state. Inserted from the core task-creation tx so projection
@@ -3487,7 +3484,7 @@ CREATE INDEX idx_tool_call_task_transport_projections_link
 CREATE INDEX idx_conversation_transport_bindings_account
   ON conversation_transport_bindings(transport_account_id, conversation_id);
 
--- Idempotency ledger for task resolution (was interaction_response_commands).
+-- Idempotency ledger for task resolution commands.
 CREATE TABLE tool_call_task_response_commands (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   task_id UUID NOT NULL REFERENCES tool_call_tasks(id) ON DELETE RESTRICT,
@@ -3626,28 +3623,26 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION validate_tool_call_task_detail_consistency();
 
--- The active_*_interaction_id columns now reference tool_call_tasks(id) (the
--- task IS the interaction after the unification). Column names kept for now
--- (cosmetic rename deferred per the design's sequencing). These FKs cannot be
--- inline because tool_call_tasks depends on conversation_items which depends on
--- sessions.
-ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_interaction
-  FOREIGN KEY (active_plan_approval_interaction_id)
+-- The active_*_task_id columns reference tool_call_tasks(id). These FKs cannot
+-- be inline because tool_call_tasks depends on conversation_items which depends
+-- on sessions.
+ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_task
+  FOREIGN KEY (active_plan_approval_task_id)
   REFERENCES tool_call_tasks(id)
   ON DELETE SET NULL;
 
-ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_interaction
-  FOREIGN KEY (active_interaction_id)
+ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_task
+  FOREIGN KEY (active_task_id)
   REFERENCES tool_call_tasks(id)
   ON DELETE SET NULL;
 
-ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_plan_approval_interaction
-  FOREIGN KEY (active_plan_approval_interaction_id)
+ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_plan_approval_task
+  FOREIGN KEY (active_plan_approval_task_id)
   REFERENCES tool_call_tasks(id)
   ON DELETE SET NULL;
 
-ALTER TABLE remote_agent_runs ADD CONSTRAINT fk_remote_agent_runs_interaction
-  FOREIGN KEY (interaction_id)
+ALTER TABLE remote_agent_runs ADD CONSTRAINT fk_remote_agent_runs_task
+  FOREIGN KEY (task_id)
   REFERENCES tool_call_tasks(id)
   ON DELETE SET NULL;
 
@@ -3675,8 +3670,7 @@ CREATE TABLE runtime_authorization_grants (
   -- synchronously; callers must upsert subject + scope BEFORE inserting.
   scope_subject_id UUID,                           -- FK added at bottom
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  -- (task unification dropped the old source_interaction_id pointer; the task
-  -- is the interaction, and source_task_id below is the single backref.)
+  -- Optional backref to the task that produced this grant.
   source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
   retention runtime_authorization_grants_retention NOT NULL,
   status runtime_authorization_grants_status NOT NULL DEFAULT 'active',
@@ -3687,8 +3681,8 @@ CREATE TABLE runtime_authorization_grants (
   consumed_at TIMESTAMPTZ,
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_tool_call_task_runtime_authorization_device
@@ -3811,8 +3805,8 @@ CREATE TABLE devices (
   automation_lifecycle_state devices_automation_lifecycle_state,
   automation_lifecycle_grace_until TIMESTAMPTZ,
   automation_lifecycle_event_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_devices_workspace ON devices(workspace_id, created_at DESC);
 CREATE INDEX idx_devices_automation_lifecycle_due
@@ -3841,8 +3835,8 @@ CREATE TABLE device_pairing_sessions (
   consumed_at TIMESTAMPTZ,
   status device_pairing_sessions_status NOT NULL DEFAULT 'pending',
   context JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT chk_device_pairing_sessions_mode_payload CHECK (
     (mode IN ('local_qr', 'service_join') AND pairing_code IS NOT NULL AND bootstrap_token_hash IS NULL)
     OR
@@ -3876,8 +3870,8 @@ CREATE TABLE device_services (
   -- device's route. Set at first device.hello (random 32-byte hex);
   -- persisted so the device can re-use it across reconnects.
   tunnel_path_token VARCHAR(64),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(device_id, service_kind),
   CONSTRAINT chk_device_services_kind_payload CHECK (
     (service_kind = 'remote_agent_daemon'
@@ -3899,7 +3893,7 @@ CREATE TABLE device_service_keys (
   service_id UUID NOT NULL REFERENCES device_services(id) ON DELETE RESTRICT,
   pubkey TEXT NOT NULL,
   pubkey_fingerprint VARCHAR(128) NOT NULL UNIQUE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at TIMESTAMPTZ
 );
 -- Exactly one active key per service at any time. The CP handshake MUST
@@ -3922,8 +3916,8 @@ CREATE TABLE device_control_plane_sessions (
   close_reason TEXT,
   started_at TIMESTAMPTZ DEFAULT NOW(),
   ended_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_device_control_plane_sessions_device
   ON device_control_plane_sessions(device_id, status, started_at DESC);
@@ -3940,8 +3934,8 @@ CREATE TABLE device_sync_sources (
   status device_sync_sources_status NOT NULL DEFAULT 'unknown',
   last_synced_at TIMESTAMPTZ,
   last_error TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(device_id, source_key)
 );
 
@@ -3960,8 +3954,8 @@ CREATE TABLE device_exposures (
   last_healthy_at TIMESTAMPTZ,
   last_error TEXT,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(device_id, stable_key),
   CONSTRAINT chk_device_exposures_builtin_kind CHECK (
     (transport = 'builtin' AND builtin_kind IS NOT NULL)
@@ -3977,8 +3971,8 @@ CREATE INDEX idx_device_exposures_service
 CREATE TABLE device_capabilities (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   exposure_id UUID NOT NULL UNIQUE REFERENCES device_exposures(id) ON DELETE RESTRICT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE actors
@@ -4024,8 +4018,8 @@ CREATE TABLE device_catalog_revisions (
   status device_catalog_revisions_status NOT NULL DEFAULT 'active',
   activated_at TIMESTAMPTZ DEFAULT NOW(),
   invalidated_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(exposure_id, revision_seq)
 );
 
@@ -4039,8 +4033,8 @@ CREATE TABLE device_tools (
   first_seen_at TIMESTAMPTZ DEFAULT NOW(),
   last_seen_at TIMESTAMPTZ DEFAULT NOW(),
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(exposure_id, stable_key)
 );
 
@@ -4053,7 +4047,7 @@ CREATE TABLE device_tool_revisions (
   input_schema JSONB NOT NULL DEFAULT '{}',
   annotations JSONB NOT NULL DEFAULT '{}',
   definition_hash VARCHAR(128) NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(tool_id, catalog_revision_id)
 );
 
@@ -4068,8 +4062,8 @@ CREATE TABLE device_runtime_sessions (
   status device_runtime_sessions_status NOT NULL DEFAULT 'open',
   opened_at TIMESTAMPTZ DEFAULT NOW(),
   closed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_device_runtime_sessions_device
   ON device_runtime_sessions(device_id, status, opened_at DESC);
@@ -4124,8 +4118,8 @@ CREATE TABLE device_operations (
   error_message TEXT,
   requires_replan BOOLEAN NOT NULL DEFAULT FALSE,
   completed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   -- subject-scope-refactor: principal_subject_id is REQUIRED for all 4 allowed
   -- principal_kinds (no workspace_member exception). principal_kind ↔
   -- access_subjects.kind consistency + workspace consistency is an app-only
@@ -4170,8 +4164,8 @@ CREATE TABLE device_operation_attempts (
   started_at TIMESTAMPTZ,
   response_at TIMESTAMPTZ,
   acknowledged_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(operation_id, attempt_seq)
 );
 CREATE INDEX idx_device_operation_attempts_service
@@ -4183,8 +4177,8 @@ CREATE TABLE device_operation_results (
   output_payload JSONB NOT NULL DEFAULT '{}',
   output_preview TEXT,
   result_hash VARCHAR(128),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Forward-reference FKs deferred because their target tables (devices,
@@ -5321,9 +5315,8 @@ CREATE TABLE memory_access_grants (
   status memory_access_grants_status NOT NULL DEFAULT 'active',
   source TEXT,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  -- task unification: repointed from interaction_requests → tool_call_tasks
-  -- (the task is the interaction). Column name kept (cosmetic rename deferred).
-  source_interaction_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
+  -- Optional backref to the task that produced this grant.
+  source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -5533,8 +5526,8 @@ CREATE TABLE file_access_grants (
   status file_access_grants_status NOT NULL DEFAULT 'active',
   source TEXT,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  -- task unification: repointed from interaction_requests → tool_call_tasks.
-  source_interaction_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
+  -- task unification: repointed from tool_call_tasks → tool_call_tasks.
+  source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -5747,6 +5740,47 @@ ALTER TABLE tool_calls
   FOREIGN KEY (device_tool_id) REFERENCES device_tools(id) ON DELETE SET NULL;
 CREATE INDEX idx_tool_calls_plugin_installation ON tool_calls(plugin_installation_id);
 CREATE INDEX idx_tool_calls_device_tool ON tool_calls(device_tool_id);
+
+-- 7) `updated_at` is database-owned. Application code may still set it
+--    redundantly, but correctness must not depend on every write path
+--    remembering to do so. Install one generic trigger on every public base
+--    table that exposes an `updated_at` column.
+CREATE OR REPLACE FUNCTION touch_updated_at_column()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at := NOW();
+  RETURN NEW;
+END;
+$$;
+
+DO $touch_updated_at$
+DECLARE
+  row_record RECORD;
+BEGIN
+  FOR row_record IN
+    SELECT columns.table_name
+    FROM information_schema.columns AS columns
+    JOIN information_schema.tables AS tables
+      ON tables.table_schema = columns.table_schema
+     AND tables.table_name = columns.table_name
+    WHERE columns.table_schema = 'public'
+      AND tables.table_type = 'BASE TABLE'
+      AND columns.column_name = 'updated_at'
+    ORDER BY columns.table_name
+  LOOP
+    EXECUTE format(
+      'DROP TRIGGER IF EXISTS trg_touch_updated_at__%1$I ON %1$I',
+      row_record.table_name
+    );
+    EXECUTE format(
+      'CREATE TRIGGER trg_touch_updated_at__%1$I BEFORE UPDATE ON %1$I FOR EACH ROW EXECUTE FUNCTION touch_updated_at_column()',
+      row_record.table_name
+    );
+  END LOOP;
+END;
+$touch_updated_at$;
 
 -- >>> SOFT-DELETE CUTOVER (generated by cutover-emit-ddl.mjs) >>>
 -- Source of truth: soft-delete-table-classification.yml. Regenerate with
@@ -6558,7 +6592,7 @@ REVOKE EXECUTE ON FUNCTION sd_replace_catalog_item_categories(uuid) FROM PUBLIC;
 CREATE OR REPLACE FUNCTION sd_replace_remote_agent_group_grants(p_remote_agent_id uuid)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
-  DELETE FROM remote_agent_group_interaction_grants WHERE remote_agent_id = p_remote_agent_id;
+  DELETE FROM remote_agent_group_task_grants WHERE remote_agent_id = p_remote_agent_id;
 END;
 $$;
 ALTER FUNCTION sd_replace_remote_agent_group_grants(uuid) OWNER TO synapse_purge_fn_owner;
@@ -6615,7 +6649,7 @@ BEGIN
   END IF;
 END
 $sd_exec_grants$;
-GRANT SELECT, DELETE ON memory_item_parts, conversation_participant_addresses, device_services, workspace_member_preferences, actor_model_group_assignments, plugin_version_runtime_permissions, catalog_item_categories, remote_agent_group_interaction_grants, memory_item_chunks, tool_call_task_action_tokens, realtime_event_outbox, chat_push_tokens TO synapse_purge_fn_owner;
+GRANT SELECT, DELETE ON memory_item_parts, conversation_participant_addresses, device_services, workspace_member_preferences, actor_model_group_assignments, plugin_version_runtime_permissions, catalog_item_categories, remote_agent_group_task_grants, memory_item_chunks, tool_call_task_action_tokens, realtime_event_outbox, chat_push_tokens TO synapse_purge_fn_owner;
 
 -- 5. Live views: canonical read surface that hides soft-deleted rows.
 -- Single-table views over a base table are auto-updatable; WITH CASCADED
@@ -6788,8 +6822,8 @@ BEGIN
   UPDATE actors t0 SET avatar_file_id = NULL WHERE avatar_file_id IS NOT NULL AND EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id);
   UPDATE remote_agents t0 SET avatar_file_id = NULL WHERE avatar_file_id IS NOT NULL AND EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id);
   UPDATE remote_agent_machines t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE remote_agent_runs t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
-  UPDATE remote_agent_group_interaction_grants t0 SET granted_by_workspace_member_id = NULL WHERE granted_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE remote_agent_runs t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.task_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE remote_agent_group_task_grants t0 SET granted_by_workspace_member_id = NULL WHERE granted_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE workspace_relationship_profiles t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE workspace_friend_requests t0 SET requested_via_profile_id = NULL WHERE requested_via_profile_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.requester_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_relationship_profiles t1_1 WHERE t1_1.id = t0.requested_via_profile_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.resolved_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_3 WHERE t1_3.id = t0.target_subject_id AND t1_3.workspace_id = p_workspace_id));
   UPDATE workspace_friend_requests t0 SET resolved_by_workspace_member_id = NULL WHERE resolved_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.requester_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_relationship_profiles t1_1 WHERE t1_1.id = t0.requested_via_profile_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.resolved_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_3 WHERE t1_3.id = t0.target_subject_id AND t1_3.workspace_id = p_workspace_id));
@@ -6887,10 +6921,10 @@ BEGIN
   UPDATE device_operations t0 SET runtime_session_id = NULL WHERE runtime_session_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_operation_attempts t0 SET device_control_plane_session_id = NULL WHERE device_control_plane_session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM device_operations t1_0 WHERE t1_0.id = t0.operation_id AND t1_0.workspace_id = p_workspace_id));
   UPDATE memory_access_grants t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE memory_access_grants t0 SET source_interaction_id = NULL WHERE source_interaction_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE memory_access_grants t0 SET source_task_id = NULL WHERE source_task_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_snapshots t0 SET created_by_session_id = NULL WHERE created_by_session_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_access_grants t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE file_access_grants t0 SET source_interaction_id = NULL WHERE source_interaction_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE file_access_grants t0 SET source_task_id = NULL WHERE source_task_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_mounts t0 SET device_id = NULL WHERE device_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_mounts t0 SET pairing_session_id = NULL WHERE pairing_session_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE file_mounts t0 SET base_snapshot_id = NULL WHERE base_snapshot_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
@@ -6904,10 +6938,10 @@ BEGIN
   UPDATE model_bindings t0 SET current_version_id = NULL WHERE current_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.installed_by_workspace_member_id AND t1_0.workspace_id = p_workspace_id));
   UPDATE conversation_items t0 SET author_participant_id = NULL WHERE author_participant_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE conversation_items t0 SET turn_id = NULL WHERE turn_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE sessions t0 SET active_plan_approval_interaction_id = NULL WHERE active_plan_approval_interaction_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE remote_agent_conversation_contexts t0 SET active_interaction_id = NULL WHERE active_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE remote_agent_conversation_contexts t0 SET active_plan_approval_interaction_id = NULL WHERE active_plan_approval_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE remote_agent_runs t0 SET interaction_id = NULL WHERE interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE sessions t0 SET active_plan_approval_task_id = NULL WHERE active_plan_approval_task_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE remote_agent_conversation_contexts t0 SET active_task_id = NULL WHERE active_task_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_task_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_task_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE remote_agent_conversation_contexts t0 SET active_plan_approval_task_id = NULL WHERE active_plan_approval_task_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_task_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_task_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE remote_agent_runs t0 SET task_id = NULL WHERE task_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.task_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE device_tools t0 SET latest_revision_id = NULL WHERE latest_revision_id IS NOT NULL AND (EXISTS (SELECT 1 FROM device_exposures t1_0 WHERE t1_0.id = t0.exposure_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_0.device_id AND t2_0.workspace_id = p_workspace_id))));
   UPDATE device_services t0 SET current_session_id = NULL WHERE current_session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t1_1 WHERE t1_1.id = t0.remote_agent_machine_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE tool_call_task_device_tool t0 SET device_operation_id = NULL WHERE device_operation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_1 WHERE t1_1.id = t0.device_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.device_capability_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_operations t1_3 WHERE t1_3.id = t0.device_operation_id AND t1_3.workspace_id = p_workspace_id));
@@ -6970,9 +7004,9 @@ BEGIN
   DELETE FROM provider_steps t0 WHERE (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM realtime_event_outbox t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_bindings t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t1_1 WHERE t1_1.id = t0.machine_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_conversation_contexts t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_conversation_contexts t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_task_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_task_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_conversation_views t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_group_interaction_grants t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_group_task_grants t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machine_sessions t0 WHERE (EXISTS (SELECT 1 FROM remote_agent_machines t1_0 WHERE t1_0.id = t0.machine_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_message_deliveries t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_runtime_catalog t0 WHERE (EXISTS (SELECT 1 FROM remote_agent_machines t1_0 WHERE t1_0.id = t0.machine_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7035,7 +7069,7 @@ BEGIN
   DELETE FROM file_assets t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_spaces t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM model_bindings t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.installed_by_workspace_member_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_runs t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_runs t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.task_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_calls t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_webhook_endpoints t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_participants t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.subject_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7134,7 +7168,7 @@ BEGIN
   DELETE FROM remote_agent_bindings t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_conversation_contexts t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_conversation_views t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_group_interaction_grants t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_group_task_grants t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machine_sessions t0 WHERE EXISTS (SELECT 1 FROM remote_agent_machines r1 WHERE r1.id = t0.machine_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_message_deliveries t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (EXISTS (SELECT 1 FROM workspace_apps r2 WHERE r2.id = r1.id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_runtime_catalog t0 WHERE EXISTS (SELECT 1 FROM remote_agent_machines r1 WHERE r1.id = t0.machine_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -7229,7 +7263,7 @@ $$;
 ALTER FUNCTION sd_purge_expired_soft_deleted(timestamptz) OWNER TO synapse_purge_fn_owner;
 REVOKE EXECUTE ON FUNCTION sd_purge_expired_soft_deleted(timestamptz) FROM PUBLIC;
 
-GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_interaction_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, resource_access_bindings, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_action_tokens, tool_call_task_device_tool, tool_call_task_external_mcp, tool_call_task_output_chunks, tool_call_task_response_commands, tool_call_task_runtime_authorization, tool_call_task_transport_projections, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_app_grant_requests, workspace_app_grants, workspace_apps, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspaces TO synapse_purge_fn_owner;
+GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_task_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, resource_access_bindings, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_action_tokens, tool_call_task_device_tool, tool_call_task_external_mcp, tool_call_task_output_chunks, tool_call_task_response_commands, tool_call_task_runtime_authorization, tool_call_task_transport_projections, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_app_grant_requests, workspace_app_grants, workspace_apps, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspaces TO synapse_purge_fn_owner;
 GRANT SELECT ON access_subjects, transport_addresses TO synapse_purge_fn_owner;
 GRANT INSERT ON audit_logs TO synapse_purge_fn_owner;
 

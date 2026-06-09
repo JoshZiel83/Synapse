@@ -29,7 +29,7 @@
  */
 
 import type { Redis } from "ioredis"
-import type { TransportEndpointType } from "@synapse/shared/types"
+import type { Timestamp, TransportEndpointType } from "@synapse/shared/types"
 
 export type QqAnchorKind = "msg_id" | "event_id"
 
@@ -44,7 +44,7 @@ export interface QqLatestInboundAnchor {
    *  diagnostics — connector code doesn't need it. */
   eventType: string
   /** ISO-8601. */
-  receivedAt: string
+  receivedAt: Timestamp
 }
 
 const C2C_TTL_SECONDS = 60 * 60

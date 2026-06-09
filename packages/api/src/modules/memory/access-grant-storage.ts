@@ -34,7 +34,7 @@ export type MemoryAccessGrantRow = {
   status: MemoryAccessGrantStatus
   source: string | null
   created_by_workspace_member_id: string | null
-  source_interaction_id: string | null
+  source_task_id: string | null
   revoked_at: Date | null
   superseded_at: Date | null
   created_at: Date
@@ -52,7 +52,7 @@ export type InsertMemoryAccessGrantInput = {
   permissions: readonly MemoryPermission[]
   source?: string | null
   createdByWorkspaceMemberId?: string | null
-  sourceInteractionId?: string | null
+  sourceTaskId?: string | null
 }
 
 export async function insertMemoryAccessGrant(
@@ -84,7 +84,7 @@ export async function insertMemoryAccessGrant(
       status: MEMORY_ACCESS_GRANT_STATUS.ACTIVE,
       source: input.source ?? null,
       created_by_workspace_member_id: input.createdByWorkspaceMemberId ?? null,
-      source_interaction_id: input.sourceInteractionId ?? null,
+      source_task_id: input.sourceTaskId ?? null,
     } as any)
     .returningAll()
     .executeTakeFirstOrThrow()
@@ -103,7 +103,6 @@ export async function revokeMemoryAccessGrant(
     .set({
       status: MEMORY_ACCESS_GRANT_STATUS.REVOKED,
       revoked_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     } as any)
     .where("id", "=", grantId)
     .where("status", "=", MEMORY_ACCESS_GRANT_STATUS.ACTIVE)

@@ -25,8 +25,8 @@ type GroupRow = {
   attempt_policy: Record<string, unknown> | null
   is_default: boolean
   is_enabled: boolean
-  created_at: string | Date
-  updated_at: string | Date
+  created_at: Date
+  updated_at: Date
 }
 
 type GroupItemRow = {
@@ -283,7 +283,7 @@ async function listCandidateGroups(
     const bOwnerRank = ownerRank(b, current)
     if (aOwnerRank !== bOwnerRank) return aOwnerRank - bOwnerRank
 
-    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    return b.updated_at.getTime() - a.updated_at.getTime()
   })
 }
 

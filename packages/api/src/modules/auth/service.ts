@@ -4,6 +4,10 @@ import { fromNodeHeaders } from "better-auth/node"
 import type { User } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import {
+  requireInstantDate,
+  serializeInstant,
+} from "../../infrastructure/datetime.js"
+import {
   canUserAccessFileWorkspace,
   getFileAccessInfo,
   getFileUrlById,
@@ -44,8 +48,8 @@ type UserRow = {
   email: string
   name: string
   avatar_file_id: string | null
-  created_at: string | Date | null
-  updated_at: string | Date | null
+  created_at: Date | null
+  updated_at: Date | null
 }
 
 const userSelection = [
@@ -57,12 +61,6 @@ const userSelection = [
   "updated_at",
 ] as const
 
-function toIsoString(value: string | Date | null | undefined): string {
-  if (typeof value === "string") return value
-  if (value instanceof Date) return value.toISOString()
-  return new Date(0).toISOString()
-}
-
 function mapUserRow(row: UserRow): User {
   return {
     id: row.id,
@@ -71,8 +69,12 @@ function mapUserRow(row: UserRow): User {
     avatarUrl: row.avatar_file_id
       ? getFileUrlById(row.avatar_file_id)
       : undefined,
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
+    createdAt: serializeInstant(
+      requireInstantDate(row.created_at, "user.created_at")
+    ),
+    updatedAt: serializeInstant(
+      requireInstantDate(row.updated_at, "user.updated_at")
+    ),
   }
 }
 
@@ -131,7 +133,6 @@ export async function updateProfile(
     .set({
       name: nextName,
       avatar_file_id: nextAvatarFileId ?? null,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", userId)
     .returning(userSelection)

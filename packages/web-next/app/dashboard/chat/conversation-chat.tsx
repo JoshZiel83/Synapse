@@ -27,7 +27,7 @@ import type {
   ConversationSummary,
   FeedMessage,
 } from "@/stores/chat-store"
-import { api, type ChatInteractionResolveInput } from "@/lib/api"
+import { api, type ChatTaskResolveInput } from "@/lib/api"
 import ChatAvatar from "./chat-avatar"
 import ChatMemberStrip from "./chat-member-strip"
 import ChatParticipantDetailDialog from "./chat-participant-detail-dialog"
@@ -247,9 +247,7 @@ export default function ConversationChat({
   contactBasePath = "/dashboard/contacts",
 }: ConversationChatProps) {
   const { currentWorkspaceMemberId } = useWorkspace()
-  const handleInteractionUpdated = useChatStore(
-    (state) => state.handleInteractionUpdated
-  )
+  const handleTaskUpdated = useChatStore((state) => state.handleTaskUpdated)
   const loadOlderMessages = useChatStore((state) => state.loadOlderMessages)
   const currentViewerWorkspaceMemberId = currentWorkspaceMemberId || ""
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -617,29 +615,27 @@ export default function ConversationChat({
     conversation.participants.map((participant) => participant.name).join(", ")
   const memberSummary = summarizeMemberCounts(conversation)
 
-  async function handleResolveInteraction(
-    interactionId: string,
-    data: ChatInteractionResolveInput
+  async function handleResolveTask(
+    taskId: string,
+    data: ChatTaskResolveInput
   ): Promise<TaskSummary> {
     if (!workspaceId) {
-      throw new Error(
-        "Workspace context is required to respond to interactions."
-      )
+      throw new Error("Workspace context is required to respond to tasks.")
     }
 
-    const result = await api.resolveChatInteraction(
+    const result = await api.resolveChatTask(
       workspaceId,
       conversation.id,
-      interactionId,
+      taskId,
       data
     )
-    handleInteractionUpdated({
+    handleTaskUpdated({
       conversationId: conversation.id,
-      taskId: result.interaction.id,
-      itemId: result.interaction.itemId,
-      task: result.interaction,
+      taskId: result.task.id,
+      itemId: result.task.itemId,
+      task: result.task,
     })
-    return result.interaction
+    return result.task
   }
 
   async function handleComposerSubmit(payload: ChatComposerSubmitPayload) {
@@ -881,14 +877,14 @@ export default function ConversationChat({
                     workspaceActors={workspaceActorDirectory}
                     transport={msg.transport}
                     transportDeliveries={msg.transportDeliveries}
-                    interaction={msg.interaction}
+                    task={msg.task}
                     enableTablePreview={viewportLocked}
                     viewerWorkspaceMemberId={
                       currentViewerWorkspaceMemberId || undefined
                     }
                     contactBasePath={contactBasePath}
                     onParticipantClick={participantInteractionHandler}
-                    onResolveInteraction={handleResolveInteraction}
+                    onResolveTask={handleResolveTask}
                     retryPending={retryingMessageIds.includes(msg.id)}
                     onRetryModelError={handleRetryModelError}
                     onQuoteMessage={setReplyTo}

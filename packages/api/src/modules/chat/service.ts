@@ -33,12 +33,14 @@ import {
   type ChatSyncEventPayloadMap,
   type ChatSyncEventType,
   type ChatSyncResponse,
+  type Timestamp,
   type ConversationMessageSubtype,
   type ConversationParticipantType,
   type ConversationReplyRef,
   type SessionWakeupSourceParticipantType,
   isTransportKind,
 } from "@synapse/shared"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import type {
   ConversationEntityRef,
   ConversationEventContextPolicy,
@@ -77,6 +79,13 @@ import {
   itemPartsToCanonicalContentBlocks,
 } from "./message-content.js"
 import {
+  parseInstantString,
+  requireInstantDate,
+  serializeInstant,
+  serializeNowInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
+import {
   getConversationEventSpec,
   isConversationEventType,
   renderConversationEventTimelineBlocks,
@@ -89,7 +98,7 @@ import {
   requireWorkspaceMemberIdentity,
   type WorkspaceMemberIdentity,
 } from "./workspace-identity.js"
-import { enrichInteractionForUser } from "../interactions/service.js"
+import { enrichTaskForUser } from "../tasks/service.js"
 import {
   getConversationRuntimeMap,
   getSessionRuntimeTurnActivityDetail,
@@ -125,15 +134,15 @@ type ConversationBaseRow = {
   kind: ConversationKind
   is_im: boolean
   title: string | null
-  created_at: string | Date
-  updated_at: string | Date
+  created_at: Date
+  updated_at: Date
   unread_count: number | string
   muted: boolean
   archived: boolean
-  pinned_sort_key: string | Date | null
+  pinned_sort_key: Date | null
   last_visible_item_id: string | null
   last_visible_sequence: number | string
-  last_visible_at: string | Date | null
+  last_visible_at: Date | null
 }
 
 type ParticipantRow = {
@@ -148,8 +157,8 @@ type ParticipantRow = {
   role_key: string
   state: "active" | "left" | "removed"
   metadata: unknown
-  joined_at: string | Date
-  left_at: string | Date | null
+  joined_at: Date
+  left_at: Date | null
   user_id: string | null
   user_name: string | null
   participant_name: string | null
@@ -193,7 +202,7 @@ type ItemRow = {
   event_context_policy?: string | null
   metadata: unknown
   sequence: string | number
-  created_at: string | Date
+  created_at: Date
 }
 
 type ItemPartRow = {
@@ -232,7 +241,7 @@ interface ConversationItemDetailBase {
   replyToItemId?: string
   replyTo?: ConversationReplyRef
   causedByItemId?: string
-  createdAt: string
+  createdAt: Timestamp
   clientMessageId?: string
 }
 
@@ -272,7 +281,7 @@ type HydratedConversationItemRecord = {
   contentBlocks: CanonicalContentBlock[]
   metadata: Record<string, unknown>
   restrictedAudienceParticipantIds: string[]
-  createdAt: string
+  createdAt: Timestamp
 }
 
 type RegisterClientInstanceInput = {
@@ -335,19 +344,6 @@ function toNumber(value: unknown): number {
     }
   }
   return 0
-}
-
-function toIso(value: unknown): string {
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = new Date(value)
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toISOString()
-    }
-  }
-  if (value instanceof Date) {
-    return value.toISOString()
-  }
-  return new Date().toISOString()
 }
 
 function asJsonRecord(value: unknown): Record<string, unknown> {
@@ -416,12 +412,12 @@ async function enrichChatConversationItemForViewer(
   }
 
   const payload = item.eventPayload
-  const interaction =
+  const task =
     payload && typeof payload === "object" && "task" in payload
       ? (payload as ConversationFeedEventPayloadMap["task_requested"]).task
       : undefined
 
-  if (!interaction) {
+  if (!task) {
     return item
   }
 
@@ -429,7 +425,7 @@ async function enrichChatConversationItemForViewer(
     ...item,
     eventPayload: {
       ...payload,
-      task: await enrichInteractionForUser(interaction as TaskSummary, userId),
+      task: await enrichTaskForUser(task as TaskSummary, userId),
     },
   } as ChatConversationItem
 }
@@ -465,7 +461,7 @@ async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
     const eventPayload = payload as ChatSyncEventPayloadMap["task.updated"]
     return {
       ...eventPayload,
-      task: await enrichInteractionForUser(eventPayload.task, userId),
+      task: await enrichTaskForUser(eventPayload.task, userId),
     } as ChatSyncEventPayloadMap[T]
   }
 
@@ -741,7 +737,6 @@ async function createClientInstance(
       metadata: jsonbValue(input.metadata ?? {}),
       last_seen_at: sql`NOW()`,
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .execute()
 
@@ -764,7 +759,6 @@ async function touchClientInstance(
       )}`,
       status: "active",
       last_seen_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", input.clientInstanceId)
     .execute()
@@ -1208,7 +1202,7 @@ async function hydrateConversationItems(
       metadata: asJsonRecord(row.metadata),
       restrictedAudienceParticipantIds:
         restrictedAudienceByItem.get(row.id) ?? [],
-      createdAt: toIso(row.created_at),
+      createdAt: serializeInstant(row.created_at),
     })
   }
 
@@ -1308,10 +1302,10 @@ async function loadConversationViews(
       muted: Boolean(row.muted),
       archived: Boolean(row.archived),
       pinnedSortKey: row.pinned_sort_key
-        ? toIso(row.pinned_sort_key)
+        ? serializeInstant(row.pinned_sort_key)
         : undefined,
-      updatedAt: toIso(row.updated_at),
-      createdAt: toIso(row.created_at),
+      updatedAt: serializeInstant(row.updated_at),
+      createdAt: serializeInstant(row.created_at),
       participants: mappedParticipants,
       presentation,
       permissions: {
@@ -1501,11 +1495,12 @@ async function upsertConversationView(
       conversation_id: params.conversationId,
       last_visible_item_id: params.lastVisibleItemId ?? null,
       last_visible_sequence: params.lastVisibleSequence ?? 0,
-      last_visible_at: params.lastVisibleAt ?? null,
+      last_visible_at: params.lastVisibleAt
+        ? parseInstantString(params.lastVisibleAt)
+        : null,
       unread_count: params.unreadCount,
       summary: jsonbValue(params.summary ?? {}),
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.columns(["workspace_member_id", "conversation_id"]).doUpdateSet({
@@ -1514,7 +1509,6 @@ async function upsertConversationView(
         last_visible_at: sql`COALESCE(EXCLUDED.last_visible_at, workspace_member_conversation_views.last_visible_at)`,
         unread_count: sql`EXCLUDED.unread_count`,
         summary: sql`COALESCE(workspace_member_conversation_views.summary, '{}'::jsonb) || EXCLUDED.summary`,
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -1542,7 +1536,7 @@ function isDatabaseTransaction(
  * order equals the `member_seq` order with no holes — which is exactly what the
  * client cursor (`getChatSync` paging by `member_seq > cursor`) relies on.
  *
- * Exported because external producers (interactions, remote-agents) append from
+ * Exported because external producers (tasks, remote-agents) append from
  * inside their OWN business transaction and must keep the domain write + sync +
  * outbox atomic; they call this directly with their `trx`. Bare-`db` callers go
  * through the `appendWorkspaceMemberSyncEvent` wrapper, which opens a tx.
@@ -1602,7 +1596,12 @@ export async function appendWorkspaceMemberSyncEventInTransaction<
     itemId: params.itemId,
     eventType: params.eventType,
     payload: params.payload,
-    occurredAt: toIso(row?.occurred_at),
+    occurredAt: serializeInstant(
+      requireInstantDate(
+        row?.occurred_at ?? null,
+        "workspace_member_sync_events.occurred_at"
+      )
+    ),
   }
 
   await enqueueTransactionalEvent(trx, {
@@ -2528,7 +2527,6 @@ async function insertParticipant(
       participant_id: participantId,
       read_watermark_sequence: 0,
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.columns(["conversation_id", "participant_id"]).doNothing()
@@ -2544,7 +2542,6 @@ async function insertParticipant(
         is_primary: true,
         metadata: jsonbValue({}),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc
@@ -2986,14 +2983,12 @@ export async function ensureConversationParticipant(params: {
           is_primary: true,
           metadata: jsonbValue({}),
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc
             .columns(["conversation_participant_id", "transport_address_id"])
             .doUpdateSet({
               is_primary: sql`EXCLUDED.is_primary`,
-              updated_at: sql`NOW()`,
             })
         )
         .execute()
@@ -3450,6 +3445,8 @@ export async function createConversationItem(params: {
 
     await queryable
       .updateTable("conversations")
+      // Conversation items are appended in child tables; touching the parent
+      // conversation preserves "last activity" semantics for list ordering.
       .set({ updated_at: sql`NOW()` })
       .where("id", "=", params.conversationId)
       .execute()
@@ -3750,7 +3747,7 @@ async function buildConversationItemDetails(
         : undefined,
       previewText: replyItem.content.trim(),
       previewBlocks: replyItem.contentBlocks,
-      createdAt: toIso(replyRow.created_at),
+      createdAt: serializeInstant(replyRow.created_at),
     })
   }
 
@@ -3799,7 +3796,7 @@ async function buildConversationItemDetails(
           })
         : undefined,
       causedByItemId: row.caused_by_item_id ?? undefined,
-      createdAt: toIso(row.created_at),
+      createdAt: serializeInstant(row.created_at),
       clientMessageId: row.client_message_id ?? undefined,
     } satisfies ConversationItemDetailBase
 
@@ -3895,8 +3892,8 @@ function participantRowToChatParticipantSummary(
     roleKey: participant.role_key,
     state: participant.state,
     metadata: asJsonRecord(participant.metadata),
-    joinedAt: toIso(participant.joined_at),
-    leftAt: participant.left_at ? toIso(participant.left_at) : undefined,
+    joinedAt: serializeInstant(participant.joined_at),
+    leftAt: serializeOptionalInstant(participant.left_at),
     sessionId: participant.session_id ?? undefined,
     sessionStatus: participant.session_status ?? undefined,
   } satisfies ChatParticipantSummary
@@ -3939,7 +3936,7 @@ function conversationItemDetailToChatItem(
         : undefined,
     restrictedAudience:
       restrictedAudience.length > 0 ? restrictedAudience : undefined,
-    createdAt: item.createdAt,
+    createdAt: assertIsoInstant(item.createdAt),
   }
 
   if (item.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
@@ -4005,7 +4002,7 @@ function conversationEventDetailToFeedItem<T extends ConversationFeedEventType>(
     causedByItemId: item.causedByItemId,
     eventType: item.subtype,
     payload: item.eventPayload,
-    createdAt: item.createdAt,
+    createdAt: assertIsoInstant(item.createdAt),
   } as ConversationFeedEventItem<T>
 }
 
@@ -4072,7 +4069,7 @@ async function loadTransportDeliveriesForItems(
     delivery_status: "pending" | "sent" | "failed" | "skipped"
     external_message_id: string | null
     metadata: unknown
-    delivered_at: string | Date | null
+    delivered_at: Date | null
     endpoint_type: "direct" | "group"
     endpoint_external_id: string | null
     endpoint_display_name: string | null
@@ -4111,7 +4108,7 @@ async function loadTransportDeliveriesForItems(
       endpointExternalId: row.endpoint_external_id ?? undefined,
       endpointDisplayName: row.endpoint_display_name ?? undefined,
       externalMessageId: row.external_message_id ?? undefined,
-      deliveredAt: row.delivered_at ? toIso(row.delivered_at) : undefined,
+      deliveredAt: serializeOptionalInstant(row.delivered_at),
       metadata: asJsonRecord(row.metadata),
     })
     byItem.set(row.item_id, current)
@@ -4157,7 +4154,7 @@ export function conversationItemDetailToFeedItem(
     metadata: item.metadata,
     transport: mapTransportContext(item.metadata),
     transportDeliveries,
-    createdAt: item.createdAt,
+    createdAt: assertIsoInstant(item.createdAt),
     clientMessageId: item.clientMessageId,
   } satisfies ConversationFeedMessageItem
 }
@@ -4548,7 +4545,6 @@ export async function createChatConversation(params: {
         created_by_workspace_member_id: creator.workspaceMemberId,
         metadata: jsonbValue(params.metadata ?? {}),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -4691,7 +4687,7 @@ export async function getChatSync(params: {
     item_id: string | null
     event_type: ChatSyncEventType
     payload: unknown
-    occurred_at: string | Date
+    occurred_at: Date
   }>(
     db,
     `
@@ -4740,7 +4736,7 @@ export async function getChatSync(params: {
         itemId: row.item_id ?? undefined,
         eventType,
         payload: enrichedPayload,
-        occurredAt: toIso(row.occurred_at),
+        occurredAt: serializeInstant(row.occurred_at),
       }
     })
   )
@@ -4988,7 +4984,7 @@ export async function getChatConversationMessages(params: {
     conversation_id: string
     last_visible_sequence: string | number
     last_inbox_seq: string | number
-    last_opened_at: string | Date | null
+    last_opened_at: Date | null
     draft_payload: unknown
   }>(
     db,
@@ -5014,9 +5010,7 @@ export async function getChatConversationMessages(params: {
         conversationId: row.conversation_id,
         lastVisibleSequence: toNumber(row.last_visible_sequence),
         lastInboxSeq: toNumber(row.last_inbox_seq),
-        lastOpenedAt: row.last_opened_at
-          ? toIso(row.last_opened_at)
-          : undefined,
+        lastOpenedAt: serializeOptionalInstant(row.last_opened_at),
         draftPayload: asJsonRecord(row.draft_payload),
       }
     : {
@@ -5371,7 +5365,7 @@ export async function updateChatConversationReadWatermark(
 
     const existingState = await runOn<{
       read_watermark_sequence: string | number
-      last_read_at: Date | string | null
+      last_read_at: Date | null
     }>(
       client,
       `
@@ -5418,14 +5412,12 @@ export async function updateChatConversationReadWatermark(
         last_read_item_id: lastReadItemId,
         last_read_at: sql`NOW()`,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc.columns(["conversation_id", "participant_id"]).doUpdateSet({
           read_watermark_sequence: sql`GREATEST(conversation_participant_states.read_watermark_sequence, EXCLUDED.read_watermark_sequence)`,
           last_read_item_id: sql`EXCLUDED.last_read_item_id`,
           last_read_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
       )
       .execute()
@@ -5445,13 +5437,11 @@ export async function updateChatConversationReadWatermark(
           last_inbox_seq: 0,
           draft_payload: jsonbValue({}),
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc.columns(["conversation_id", "client_instance_id"]).doUpdateSet({
             last_visible_sequence: sql`GREATEST(conversation_device_states.last_visible_sequence, EXCLUDED.last_visible_sequence)`,
             last_opened_at: sql`NOW()`,
-            updated_at: sql`NOW()`,
           })
         )
         .execute()
@@ -5469,7 +5459,7 @@ export async function updateChatConversationReadWatermark(
       unreadCount,
     })
 
-    const lastReadAt = new Date().toISOString()
+    const lastReadAt = serializeNowInstant()
     await appendWorkspaceMemberSyncEvent(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: params.workspaceMemberId,
@@ -5589,7 +5579,9 @@ export async function patchChatConversation(params: {
       setFragments.push(`metadata = $${position++}::jsonb`)
       values.push(JSON.stringify(params.metadata))
     }
-    setFragments.push("updated_at = NOW()")
+    if (setFragments.length === 0) {
+      return
+    }
     values.push(params.conversationId)
 
     await runOn(
@@ -5904,8 +5896,8 @@ export interface ChatPushTokenRow {
   platform: "ios" | "android" | "web"
   token: string
   deviceLabel: string | null
-  createdAt: string
-  lastSeenAt: string
+  createdAt: Timestamp
+  lastSeenAt: Timestamp
 }
 
 function mapPushTokenRow(row: Record<string, unknown>): ChatPushTokenRow {
@@ -5915,8 +5907,8 @@ function mapPushTokenRow(row: Record<string, unknown>): ChatPushTokenRow {
     platform: row.platform as "ios" | "android" | "web",
     token: String(row.token),
     deviceLabel: (row.device_label as string | null) ?? null,
-    createdAt: toIso(row.created_at as string),
-    lastSeenAt: toIso(row.last_seen_at as string),
+    createdAt: serializeInstant(row.created_at as Date),
+    lastSeenAt: serializeInstant(row.last_seen_at as Date),
   }
 }
 
@@ -6024,9 +6016,9 @@ export async function broadcastTypingState(params: {
       conversationId: params.conversationId,
       fromWorkspaceMemberId: identity.workspaceMemberId,
       state: params.state,
-      occurredAt: new Date().toISOString(),
+      occurredAt: serializeNowInstant(),
     },
-    timestamp: new Date().toISOString(),
+    timestamp: serializeNowInstant(),
   })
   return { broadcast: true }
 }

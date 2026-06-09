@@ -3,6 +3,10 @@
 // API doesn't take a hard dep on @e2b/sdk in the skeleton.
 
 import { createHash, randomUUID } from "node:crypto"
+import {
+  dateToIsoInstant,
+  type IsoInstantString,
+} from "@synapse/shared/datetime"
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import { DeviceModuleError } from "./service.js"
@@ -19,7 +23,7 @@ export interface CreateCloudDeviceResult {
   pending_device_id: string
   bootstrap_token: string
   pairing_session_id: string
-  expires_at: string
+  expires_at: IsoInstantString
 }
 
 /**
@@ -40,7 +44,7 @@ export async function createCloudDevicePairing(
     .update(bootstrapToken)
     .digest()
   const sessionId = randomUUID()
-  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString()
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
 
   await db
     .insertInto("device_pairing_sessions")
@@ -69,7 +73,7 @@ export async function createCloudDevicePairing(
     pending_device_id: pendingDeviceId,
     bootstrap_token: bootstrapToken,
     pairing_session_id: sessionId,
-    expires_at: expiresAt,
+    expires_at: dateToIsoInstant(expiresAt),
   }
 }
 
@@ -111,7 +115,6 @@ export async function consumeCloudBootstrap(
         status: "consumed",
         confirmed_at: sql`NOW()`,
         consumed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       } as never)
       .where("bootstrap_token_hash", "=", tokenHash)
       .where("status", "=", "pending")

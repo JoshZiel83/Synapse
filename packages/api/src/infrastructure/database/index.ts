@@ -160,7 +160,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
       "supports_cancel",
       "supports_output_tail",
     ],
-    reason: "unified task governance (interaction lifecycle absorbed)",
+    reason: "unified task governance and lifecycle persistence",
   },
   {
     table: "tool_call_task_output_chunks",

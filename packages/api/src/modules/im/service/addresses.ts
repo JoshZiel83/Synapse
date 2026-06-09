@@ -39,7 +39,6 @@ export async function ensureTransportAddress(params: {
       metadata: (params.metadata ||
         {}) as TableInsert<"transport_addresses">["metadata"],
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc
@@ -48,7 +47,6 @@ export async function ensureTransportAddress(params: {
           display_name: sql`COALESCE(excluded.display_name, transport_addresses.display_name)`,
           workspace_member_id: sql`COALESCE(excluded.workspace_member_id, transport_addresses.workspace_member_id)`,
           metadata: sql`transport_addresses.metadata || excluded.metadata`,
-          updated_at: sql`NOW()`,
         })
     )
     .returningAll()
@@ -455,7 +453,6 @@ export async function setTransportAddressLinkedUser(params: {
     .updateTable("transport_addresses")
     .set({
       workspace_member_id: nextWorkspaceMemberId,
-      updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", params.workspaceId)
     .where("id", "=", params.transportAddressId)
@@ -485,7 +482,6 @@ export async function ensureConversationParticipantTransportAddress(params: {
       .updateTable("conversation_participant_addresses")
       .set({
         is_primary: false,
-        updated_at: sql`NOW()`,
       })
       .where(
         "conversation_participant_id",
@@ -504,7 +500,6 @@ export async function ensureConversationParticipantTransportAddress(params: {
       metadata: (params.metadata ||
         {}) as TableInsert<"conversation_participant_addresses">["metadata"],
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc
@@ -515,7 +510,6 @@ export async function ensureConversationParticipantTransportAddress(params: {
             ELSE conversation_participant_addresses.is_primary
           END`,
           metadata: sql`conversation_participant_addresses.metadata || excluded.metadata`,
-          updated_at: sql`NOW()`,
         })
     )
     .returningAll()
@@ -530,7 +524,6 @@ export async function updateTransportAddressMetadata(params: {
     .updateTable("transport_addresses")
     .set({
       metadata: sql`transport_addresses.metadata || ${JSON.stringify(params.metadata || {})}::jsonb`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", params.transportAddressId)
     .returningAll()
@@ -545,7 +538,6 @@ export async function updateTransportEndpointMetadata(params: {
     .updateTable("transport_endpoints")
     .set({
       metadata: sql`transport_endpoints.metadata || ${JSON.stringify(params.metadata || {})}::jsonb`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", params.endpointId)
     .returningAll()

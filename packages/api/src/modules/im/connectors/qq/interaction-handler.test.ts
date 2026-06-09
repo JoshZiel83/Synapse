@@ -63,12 +63,12 @@ function makeDeps(
       acks.push({ eventId: p.eventId, code: p.code })
     },
     lookupActionToken: overrides.lookupActionToken ?? real.lookupActionToken,
-    resolveInteractionRequest: overrides.resolveInteractionRequest
+    resolveTaskRequest: overrides.resolveTaskRequest
       ? async (p) => {
           resolves += 1
-          return overrides.resolveInteractionRequest!(p)
+          return overrides.resolveTaskRequest!(p)
         }
-      : real.resolveInteractionRequest,
+      : real.resolveTaskRequest,
     getTaskSummary: overrides.getTaskSummary ?? real.getTaskSummary,
     getTransportAddressByExternalId:
       overrides.getTransportAddressByExternalId ??
@@ -140,7 +140,7 @@ test("handleQqInteractionCreate: unbound clicker → ack only, no resolve", asyn
   const deps = makeDeps({
     lookupActionToken: async () => ({
       token: "tok-x",
-      interactionRequestId: "ir-1",
+      taskId: "ir-1",
       payload: { decision: "approve", preset: "once" },
       expiresAt: new Date(Date.now() + 60_000),
     }),
@@ -167,7 +167,7 @@ test("handleQqInteractionCreate: happy approve path → resolve + ack", async ()
   const deps = makeDeps({
     lookupActionToken: async () => ({
       token: "tok-x",
-      interactionRequestId: "ir-42",
+      taskId: "ir-42",
       payload: {
         decision: "approve",
         preset: "once",
@@ -195,7 +195,7 @@ test("handleQqInteractionCreate: happy approve path → resolve + ack", async ()
         workspaceId: "ws-1",
         conversationId: "conv-1",
         kind: "runtime_authorization",
-        status: "pending",
+        lifecycleStatus: "auth_required",
         revision: 1,
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
@@ -203,7 +203,7 @@ test("handleQqInteractionCreate: happy approve path → resolve + ack", async ()
       }) as any,
     syncTransportAddressConversationParticipant: async () =>
       ({ id: "participant-1" }) as any,
-    resolveInteractionRequest: async (p) => {
+    resolveTaskRequest: async (p) => {
       calls.push({
         decision: (p as any).decision,
         preset: (p as any).preset,
@@ -211,7 +211,7 @@ test("handleQqInteractionCreate: happy approve path → resolve + ack", async ()
       })
       return {
         outcome: "applied",
-        interaction: { id: "ir-42" } as any,
+        task: { id: "ir-42" } as any,
         createdGrant: undefined,
       }
     },
@@ -243,7 +243,7 @@ test("handleQqInteractionCreate: same event replayed → same commandId (determi
     return makeDeps({
       lookupActionToken: async () => ({
         token: "tok-y",
-        interactionRequestId: "ir-99",
+        taskId: "ir-99",
         payload: { decision: "approve", preset: "once" },
         expiresAt: new Date(Date.now() + 60_000),
       }),
@@ -258,16 +258,16 @@ test("handleQqInteractionCreate: same event replayed → same commandId (determi
           workspaceId: "ws-1",
           conversationId: "conv-1",
           kind: "runtime_authorization",
-          status: "pending",
+          lifecycleStatus: "auth_required",
           revision: 1,
         }) as any,
       syncTransportAddressConversationParticipant: async () =>
         ({ id: "p" }) as any,
-      resolveInteractionRequest: async (p) => {
+      resolveTaskRequest: async (p) => {
         allCommandIds.push(p.commandId)
         return {
           outcome: "applied",
-          interaction: { id: "ir-99" } as any,
+          task: { id: "ir-99" } as any,
         }
       },
     })
@@ -294,7 +294,7 @@ test("handleQqInteractionCreate: group event composes gm: clicker id", async () 
   const deps = makeDeps({
     lookupActionToken: async () => ({
       token: "tok-g",
-      interactionRequestId: "ir-g",
+      taskId: "ir-g",
       payload: { decision: "reject" },
       expiresAt: new Date(Date.now() + 60_000),
     }),
@@ -322,7 +322,7 @@ test("handleQqInteractionCreate: transient resolve error → do NOT ack (user re
   const deps = makeDeps({
     lookupActionToken: async () => ({
       token: "tok-z",
-      interactionRequestId: "ir-z",
+      taskId: "ir-z",
       payload: { decision: "approve", preset: "once" },
       expiresAt: new Date(Date.now() + 60_000),
     }),
@@ -334,12 +334,12 @@ test("handleQqInteractionCreate: transient resolve error → do NOT ack (user re
         workspaceId: "ws-1",
         conversationId: "conv-z",
         kind: "runtime_authorization",
-        status: "pending",
+        lifecycleStatus: "auth_required",
         revision: 1,
       }) as any,
     syncTransportAddressConversationParticipant: async () =>
       ({ id: "p" }) as any,
-    resolveInteractionRequest: async () => {
+    resolveTaskRequest: async () => {
       throw new Error("connection pool exhausted")
     },
   })
@@ -361,7 +361,7 @@ test("handleQqInteractionCreate: permanent resolve error → ack + drop", async 
   const deps = makeDeps({
     lookupActionToken: async () => ({
       token: "tok-p",
-      interactionRequestId: "ir-p",
+      taskId: "ir-p",
       payload: { decision: "approve", preset: "once" },
       expiresAt: new Date(Date.now() + 60_000),
     }),
@@ -373,13 +373,13 @@ test("handleQqInteractionCreate: permanent resolve error → ack + drop", async 
         workspaceId: "ws-1",
         conversationId: "conv-p",
         kind: "runtime_authorization",
-        status: "pending",
+        lifecycleStatus: "auth_required",
         revision: 1,
       }) as any,
     syncTransportAddressConversationParticipant: async () =>
       ({ id: "p" }) as any,
-    resolveInteractionRequest: async () => {
-      throw new Error("Interaction request not found")
+    resolveTaskRequest: async () => {
+      throw new Error("Task request not found")
     },
   })
   const logger = makeLogger()

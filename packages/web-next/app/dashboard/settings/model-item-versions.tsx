@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, History, Clock } from "lucide-react"
-import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared"
+import { MODEL_GROUP_GRANT_SCOPE, type Timestamp } from "@synapse/shared"
 
 interface ConfigVersion {
   id: string
@@ -19,7 +19,7 @@ interface ConfigVersion {
   model_name: string
   max_output_tokens: number
   capability_tags: string[]
-  created_at: string
+  created_at: Timestamp
 }
 
 export default function ModelItemVersions({

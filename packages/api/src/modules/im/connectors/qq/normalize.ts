@@ -16,6 +16,8 @@
 
 import { redis } from "../../../../infrastructure/redis/index.js"
 import { createLogger } from "../../../../infrastructure/logger/index.js"
+import { nowIsoInstant } from "@synapse/shared/datetime"
+import type { Timestamp } from "@synapse/shared/types"
 import {
   buildCanonicalMessage,
   textOnlyMessage,
@@ -52,7 +54,7 @@ export interface QqC2cMessageEventData {
   content?: string
   message_scene?: QqMessageScene
   message_type?: number
-  timestamp?: string
+  timestamp?: Timestamp
   attachments?: unknown[]
 }
 
@@ -64,7 +66,7 @@ export interface QqGroupAtMessageEventData {
   mentions?: unknown[]
   message_scene?: QqMessageScene
   message_type?: number
-  timestamp?: string
+  timestamp?: Timestamp
   attachments?: unknown[]
 }
 
@@ -112,7 +114,7 @@ export async function normalizeQqC2cMessage(
     ext: data.message_scene?.ext,
     content: textFromContent(data.content ?? ""),
     senderExternalId,
-    timestamp: data.timestamp ?? new Date().toISOString(),
+    timestamp: data.timestamp ?? nowIsoInstant(),
   })
 
   return {
@@ -126,7 +128,7 @@ export async function normalizeQqC2cMessage(
         unionOpenid: trimmed(data.author?.union_openid),
       },
     },
-    receivedAt: data.timestamp ?? new Date().toISOString(),
+    receivedAt: data.timestamp ?? nowIsoInstant(),
     message,
     raw: {
       messageType: data.message_type,
@@ -173,7 +175,7 @@ export async function normalizeQqGroupAtMessage(
     ext: data.message_scene?.ext,
     content: textFromContent(cleanedText),
     senderExternalId,
-    timestamp: data.timestamp ?? new Date().toISOString(),
+    timestamp: data.timestamp ?? nowIsoInstant(),
   })
 
   return {
@@ -188,7 +190,7 @@ export async function normalizeQqGroupAtMessage(
         unionOpenid: trimmed(data.author?.union_openid),
       },
     },
-    receivedAt: data.timestamp ?? new Date().toISOString(),
+    receivedAt: data.timestamp ?? nowIsoInstant(),
     message,
     endpointMetadata: { groupOpenid },
     raw: {
@@ -250,7 +252,7 @@ async function recordSelfRefIndex(params: {
   ext: unknown
   content: string
   senderExternalId: string
-  timestamp: string
+  timestamp: Timestamp
 }): Promise<void> {
   if (!params.accountId) return
   const { msgIdx } = parseRefIndices({ ext: params.ext })

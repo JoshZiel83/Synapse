@@ -8,6 +8,10 @@ import type {
   ModelGroupsRoutingStrategy,
 } from "../../infrastructure/database/generated/db.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
 import type { ModelGroupGrantScope } from "@synapse/shared/types"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
@@ -85,8 +89,8 @@ type ModelGroupRow = {
   is_default: boolean
   is_enabled: boolean
   created_by_workspace_member_id: string | null
-  created_at: string | Date
-  updated_at: string | Date
+  created_at: Date
+  updated_at: Date
 }
 
 type ModelGroupGrantRow = {
@@ -100,8 +104,8 @@ type ModelGroupGrantRow = {
   status: "active" | "revoked"
   granted_by_workspace_member_id?: string | null
   reason?: string | null
-  created_at?: string | Date
-  revoked_at?: string | Date | null
+  created_at?: Date
+  revoked_at?: Date | null
 }
 
 type ModelGroupGrantDbRow = {
@@ -154,11 +158,6 @@ function asObject(value: unknown): JsonMap {
   return value as JsonMap
 }
 
-function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return null
-  return value instanceof Date ? value.toISOString() : value
-}
-
 function assertValidModelVersionInput(input: {
   vendor: string
   modelName: string
@@ -193,8 +192,8 @@ function mapGroupRow(row: ModelGroupRow) {
     is_default: Boolean(row.is_default),
     is_active: Boolean(row.is_enabled),
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || null,
-    created_at: toIsoString(row.created_at),
-    updated_at: toIsoString(row.updated_at),
+    created_at: serializeInstant(row.created_at),
+    updated_at: serializeInstant(row.updated_at),
   }
 }
 
@@ -241,8 +240,8 @@ function mapGrantRow(
     status: row.status,
     grantedByWorkspaceMemberId: row.granted_by_workspace_member_id || null,
     reason: row.reason || null,
-    created_at: toIsoString(row.created_at),
-    revoked_at: toIsoString(row.revoked_at),
+    created_at: serializeOptionalInstant(row.created_at),
+    revoked_at: serializeOptionalInstant(row.revoked_at),
   }
 }
 
@@ -819,9 +818,7 @@ export async function updateModelGroup(
     )
   }
 
-  const updateData: Record<string, unknown> = {
-    updated_at: sql`NOW()`,
-  }
+  const updateData: Record<string, unknown> = {}
 
   if (data.name !== undefined) {
     updateData.name = data.name
@@ -870,7 +867,6 @@ export async function deleteModelGroup(groupId: string) {
       is_enabled: false,
       is_default: false,
       deleted_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", groupId)
     .execute()
@@ -879,7 +875,6 @@ export async function deleteModelGroup(groupId: string) {
     .set({
       is_enabled: false,
       deleted_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("group_id", "=", groupId)
     .execute()
@@ -946,7 +941,6 @@ export async function addModelItem(
     .updateTable("model_bindings")
     .set({
       current_version_id: version.id,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", binding.id)
     .execute()
@@ -1044,7 +1038,6 @@ export async function updateModelItem(
       .updateTable("model_bindings")
       .set({
         ...(bindingUpdate as any),
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId)
       .execute()
@@ -1097,7 +1090,6 @@ export async function updateModelItem(
       .updateTable("model_bindings")
       .set({
         current_version_id: version.id,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId)
       .execute()
@@ -1155,7 +1147,6 @@ export async function deleteModelItem(groupId: string, itemId: string) {
     .set({
       is_enabled: false,
       deleted_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", itemId)
     .where("group_id", "=", groupId)

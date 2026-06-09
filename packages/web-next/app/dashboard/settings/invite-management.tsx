@@ -1,5 +1,7 @@
 "use client"
 
+import { dateToIsoInstant } from "@synapse/shared/datetime"
+import type { Timestamp } from "@synapse/shared"
 import { useEffect, useState, useCallback } from "react"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -23,8 +25,8 @@ interface Invite {
   trustLevel: string
   maxUses: number | null
   useCount: number
-  expiresAt: string | null
-  createdAt: string
+  expiresAt: Timestamp | null
+  createdAt: Timestamp
 }
 
 export default function InviteManagement() {
@@ -65,7 +67,9 @@ export default function InviteManagement() {
       if (expiresIn) {
         const hours = parseInt(expiresIn, 10)
         if (hours > 0) {
-          data.expiresAt = new Date(Date.now() + hours * 3600000).toISOString()
+          data.expiresAt = dateToIsoInstant(
+            new Date(Date.now() + hours * 3600000)
+          )
         }
       }
       await api.createInvite(workspaceId, data)

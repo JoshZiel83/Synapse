@@ -1,6 +1,7 @@
 import Feather from "@expo/vector-icons/Feather"
 
 import { isUuid } from "@/lib/ids"
+import { isIsoInstant } from "@shared/datetime"
 import {
   mergeChatItems,
   sortChatConversations,
@@ -24,6 +25,7 @@ import {
   type ChatParticipantSummary,
   type PendingConversationRead,
   type PendingOutboxMessage,
+  type Timestamp,
 } from "@shared"
 
 // Re-exported under the historical names used across the mobile codebase; the
@@ -52,7 +54,7 @@ export interface ChatConversationMeta {
   hasMoreBefore: boolean
   hasLoadedLatest: boolean
   loadingLatest: boolean
-  lastFetchedAt?: string
+  lastFetchedAt?: Timestamp
   latestLoadError?: string
 }
 
@@ -62,7 +64,7 @@ export interface ChatWorkspaceSnapshot {
   workspaceMemberId?: string
   clientInstanceId?: string
   inboxCursor: number
-  lastBootstrappedAt?: string
+  lastBootstrappedAt?: Timestamp
   conversations: ChatConversationView[]
   itemsByConversationId: Record<string, ChatConversationItem[]>
   metaByConversationId: Record<string, ChatConversationMeta>
@@ -88,7 +90,7 @@ export interface ChatWorkspaceQueueState {
   workspaceMemberId?: string
   clientInstanceId?: string
   inboxCursor: number
-  lastBootstrappedAt?: string
+  lastBootstrappedAt?: Timestamp
   pendingReads: Record<string, PendingChatRead>
   outbox: Record<string, PendingChatOutboxMessage>
   tombstones: Record<string, ConversationTombstone>
@@ -127,6 +129,10 @@ export function createEmptyChatWorkspaceQueueState(
     outbox: {},
     tombstones: {},
   }
+}
+
+function readTimestamp(value: unknown): Timestamp | undefined {
+  return typeof value === "string" && isIsoInstant(value) ? value : undefined
 }
 
 function normalizeTombstones(
@@ -283,10 +289,7 @@ export function normalizeChatWorkspaceSnapshot(
       Number.isFinite(snapshot.inboxCursor)
         ? snapshot.inboxCursor
         : 0,
-    lastBootstrappedAt:
-      typeof snapshot.lastBootstrappedAt === "string"
-        ? snapshot.lastBootstrappedAt
-        : undefined,
+    lastBootstrappedAt: readTimestamp(snapshot.lastBootstrappedAt),
     conversations,
     itemsByConversationId:
       snapshot.itemsByConversationId &&
@@ -325,10 +328,7 @@ export function normalizeChatWorkspaceSnapshot(
                   hasMoreBefore: Boolean(meta?.hasMoreBefore),
                   hasLoadedLatest: Boolean(meta?.hasLoadedLatest),
                   loadingLatest: false,
-                  lastFetchedAt:
-                    typeof meta?.lastFetchedAt === "string"
-                      ? meta.lastFetchedAt
-                      : undefined,
+                  lastFetchedAt: readTimestamp(meta?.lastFetchedAt),
                 } satisfies ChatConversationMeta,
               ])
           )
@@ -381,10 +381,7 @@ export function normalizeChatWorkspaceQueueState(
       Number.isFinite(queueState.inboxCursor)
         ? queueState.inboxCursor
         : 0,
-    lastBootstrappedAt:
-      typeof queueState.lastBootstrappedAt === "string"
-        ? queueState.lastBootstrappedAt
-        : undefined,
+    lastBootstrappedAt: readTimestamp(queueState.lastBootstrappedAt),
     pendingReads: normalizePendingReads(queueState.pendingReads),
     outbox: normalizeOutbox(queueState.outbox),
     tombstones: isV2 ? normalizeTombstones(queueState.tombstones) : {},

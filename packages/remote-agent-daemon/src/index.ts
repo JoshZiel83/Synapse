@@ -21,6 +21,7 @@ import {
   readBridgeState,
   type ConversationRuntimeCallbacks,
 } from "./conversation-runtime.js"
+import { buildResolvedPlanTaskFallbackPrompt } from "./resolved-task-fallback.js"
 
 registerDriver(new ClaudeDriver())
 registerDriver(new CodexDriver())
@@ -57,11 +58,11 @@ type DeliveryMessage = {
   deliveries: Delivery[]
 }
 
-type InteractionResolvedMessage = {
-  type: "agent:interaction:resolved"
+type TaskResolvedMessage = {
+  type: "agent:task:resolved"
   remoteAgentId: string
-  interactionId: string
-  interaction: Record<string, unknown>
+  taskId: string
+  task: Record<string, unknown>
 }
 
 type ConnectedMessage = {
@@ -189,7 +190,7 @@ function toWsUrl(serverUrl: string) {
 function buildWakePrompt() {
   return [
     "You have unread Synapse messages.",
-    "The runtime's built-in request_user_input tool is wired to Synapse and will render an interaction card for the user when you call it.",
+    "The runtime's built-in request_user_input tool is wired to Synapse and will render a task card for the user when you call it.",
     "If the user explicitly asks you to use require user input, or asks for a multiple-choice clarification, use that built-in tool instead of replying that you cannot show a prompt.",
     "Call mcp__synapse__check_messages first.",
     "Then use mcp__synapse__read_history for the relevant conversation(s), reply with mcp__synapse__send_message when action is needed, and stop when finished.",
@@ -197,33 +198,13 @@ function buildWakePrompt() {
   ].join(" ")
 }
 
-function buildPlanApprovedPrompt(note?: string) {
-  return [
-    "The user approved your plan in Synapse.",
-    note ? `Note from the user: ${note}` : "",
-    "Continue with the approved work. Check messages first if needed, then proceed.",
-  ]
-    .filter(Boolean)
-    .join(" ")
-}
-
-function buildPlanRevisionPrompt(note?: string) {
-  return [
-    "The user asked you to revise your plan in Synapse.",
-    note ? `Feedback: ${note}` : "",
-    "Review the conversation history, update your plan, and request approval again when ready.",
-  ]
-    .filter(Boolean)
-    .join(" ")
-}
-
-function buildResolvedUserInputPrompt(interaction: Record<string, any>) {
+function buildResolvedUserInputPrompt(task: Record<string, any>) {
   const title =
-    typeof interaction.userInput?.title === "string"
-      ? interaction.userInput.title.trim()
+    typeof task.userInput?.title === "string"
+      ? task.userInput.title.trim()
       : "User input"
-  const questions = Array.isArray(interaction.userInput?.questions)
-    ? interaction.userInput.questions
+  const questions = Array.isArray(task.userInput?.questions)
+    ? task.userInput.questions
     : []
   const answerLines = questions
     .map((question: Record<string, any>) => {
@@ -341,8 +322,8 @@ type LatestPlanDraft = {
   checklist?: Array<{ id?: string; text: string; done?: boolean }>
 }
 
-type PendingInteractionRecord = {
-  interactionId: string
+type PendingTaskRecord = {
+  taskId: string
   kind: "user_input" | "plan_approval"
   remoteAgentId: string
   conversationId: string
@@ -521,10 +502,10 @@ class DaemonSupervisor {
           return
         }
 
-        if (message?.type === "agent:interaction:resolved") {
-          const resolved = message as InteractionResolvedMessage
+        if (message?.type === "agent:task:resolved") {
+          const resolved = message as TaskResolvedMessage
           const agent = this.agents.get(resolved.remoteAgentId)
-          if (agent) await agent.resolveInteraction(resolved)
+          if (agent) await agent.resolveTask(resolved)
           return
         }
       })
@@ -561,10 +542,7 @@ class ManagedRemoteAgent {
   private localRootPath?: string
   private stateDirectory = ""
   private readonly runtimes = new Map<string, ConversationRuntime>()
-  private readonly pendingInteractions = new Map<
-    string,
-    PendingInteractionRecord
-  >()
+  private readonly pendingTasks = new Map<string, PendingTaskRecord>()
   private readonly latestPlanByConversation = new Map<string, LatestPlanDraft>()
   // Deliveries we've routed into a conversation runtime but haven't yet been
   // observed completing (via the reverse-MCP complete-deliveries tool) or
@@ -765,33 +743,33 @@ class ManagedRemoteAgent {
     }
   }
 
-  async resolveInteraction(message: InteractionResolvedMessage) {
-    const interaction = message.interaction || {}
-    const pending = this.pendingInteractions.get(message.interactionId)
+  async resolveTask(message: TaskResolvedMessage) {
+    const task = message.task || {}
+    const pending = this.pendingTasks.get(message.taskId)
     if (!pending) {
       log(
         "warn",
         `remote-agent:${this.params.remoteAgentId}`,
-        "Resolved interaction has no matching pending request; falling back to synthetic prompt",
-        { interactionId: message.interactionId }
+        "Resolved task has no matching pending request; falling back to synthetic prompt",
+        { taskId: message.taskId }
       )
       const conversationId =
-        typeof (interaction as any).conversationId === "string"
-          ? (interaction as any).conversationId
+        typeof (task as any).conversationId === "string"
+          ? (task as any).conversationId
           : undefined
       if (!conversationId) return
-      await this.applyResolvedInteractionFallback(
+      await this.applyResolvedTaskFallback(
         conversationId,
-        interaction as Record<string, any>
+        task as Record<string, any>
       )
       return
     }
-    this.pendingInteractions.delete(message.interactionId)
+    this.pendingTasks.delete(message.taskId)
     const runtime = this.runtimes.get(pending.conversationId)
     if (!runtime) {
-      await this.applyResolvedInteractionFallback(
+      await this.applyResolvedTaskFallback(
         pending.conversationId,
-        interaction as Record<string, any>
+        task as Record<string, any>
       )
       return
     }
@@ -801,7 +779,7 @@ class ManagedRemoteAgent {
         behavior: "allow",
         updatedInput: {
           ...(pending.originalInput ?? {}),
-          answers: buildAnswerMap(interaction as Record<string, any>),
+          answers: buildAnswerMap(task as Record<string, any>),
         },
       }
       try {
@@ -812,25 +790,23 @@ class ManagedRemoteAgent {
           statusText: "Continuing after user input",
         })
       } catch (error) {
-        await this.applyResolvedInteractionFallback(
+        await this.applyResolvedTaskFallback(
           pending.conversationId,
-          interaction as Record<string, any>
+          task as Record<string, any>
         )
       }
       return
     }
 
     // plan_approval
-    const status =
-      typeof (interaction as any).status === "string"
-        ? (interaction as any).status
-        : null
+    const outcome =
+      typeof (task as any).outcome === "string" ? (task as any).outcome : null
     const note =
-      typeof (interaction as any).resolutionNote === "string"
-        ? (interaction as any).resolutionNote
+      typeof (task as any).resolutionNote === "string"
+        ? (task as any).resolutionNote
         : undefined
     const decision: PermissionDecision =
-      status === "approved"
+      outcome === "approved"
         ? { behavior: "allow", updatedInput: pending.originalInput ?? {} }
         : {
             behavior: "deny",
@@ -846,44 +822,34 @@ class ManagedRemoteAgent {
       })
     } catch (error) {
       this.latestPlanByConversation.delete(pending.conversationId)
-      await this.applyResolvedInteractionFallback(
+      await this.applyResolvedTaskFallback(
         pending.conversationId,
-        interaction as Record<string, any>
+        task as Record<string, any>
       )
     }
   }
 
-  private async applyResolvedInteractionFallback(
+  private async applyResolvedTaskFallback(
     conversationId: string,
-    interaction: Record<string, any>
+    task: Record<string, any>
   ) {
-    const kind = typeof interaction.kind === "string" ? interaction.kind : null
-    const status =
-      typeof interaction.status === "string" ? interaction.status : null
-    const note =
-      typeof interaction.resolutionNote === "string"
-        ? interaction.resolutionNote
-        : undefined
-    if (kind === "user_input" && status === "answered") {
+    const kind = typeof task.kind === "string" ? task.kind : null
+    const lifecycleStatus =
+      typeof task.lifecycleStatus === "string" ? task.lifecycleStatus : null
+    if (kind === "user_input" && lifecycleStatus === "completed") {
       await this.ensureRuntimeForConversation({
         conversationId,
         wake: true,
-        syntheticPrompt: buildResolvedUserInputPrompt(interaction),
+        syntheticPrompt: buildResolvedUserInputPrompt(task),
       })
       return
     }
-    if (
-      kind === "plan_approval" &&
-      (status === "approved" || status === "rejected")
-    ) {
-      const prompt =
-        status === "approved"
-          ? buildPlanApprovedPrompt(note)
-          : buildPlanRevisionPrompt(note)
+    const planPrompt = buildResolvedPlanTaskFallbackPrompt(task)
+    if (planPrompt) {
       await this.ensureRuntimeForConversation({
         conversationId,
         wake: true,
-        syntheticPrompt: prompt,
+        syntheticPrompt: planPrompt,
       })
     }
   }
@@ -964,11 +930,11 @@ class ManagedRemoteAgent {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`
           const result = await requestJson<{
-            interaction: { id: string }
+            task: { id: string }
           }>(
             this.params.config.serverUrl,
             this.params.config.apiKey,
-            `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/interactions/user-input`,
+            `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/user-input`,
             {
               method: "POST",
               body: JSON.stringify({
@@ -979,8 +945,8 @@ class ManagedRemoteAgent {
               }),
             }
           )
-          this.pendingInteractions.set(result.interaction.id, {
-            interactionId: result.interaction.id,
+          this.pendingTasks.set(result.task.id, {
+            taskId: result.task.id,
             kind: "user_input",
             remoteAgentId: this.params.remoteAgentId,
             conversationId,
@@ -992,7 +958,7 @@ class ManagedRemoteAgent {
             conversationId,
             state: "waiting_user_input",
             statusText: "Waiting for user input",
-            interactionId: result.interaction.id,
+            taskId: result.task.id,
             runKey,
           })
         } catch (error) {
@@ -1008,11 +974,11 @@ class ManagedRemoteAgent {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`
           const result = await requestJson<{
-            interaction: { id: string }
+            task: { id: string }
           }>(
             this.params.config.serverUrl,
             this.params.config.apiKey,
-            `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/interactions/plan-approval`,
+            `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/plan-approval`,
             {
               method: "POST",
               body: JSON.stringify({
@@ -1025,8 +991,8 @@ class ManagedRemoteAgent {
               }),
             }
           )
-          this.pendingInteractions.set(result.interaction.id, {
-            interactionId: result.interaction.id,
+          this.pendingTasks.set(result.task.id, {
+            taskId: result.task.id,
             kind: "plan_approval",
             remoteAgentId: this.params.remoteAgentId,
             conversationId,
@@ -1038,7 +1004,7 @@ class ManagedRemoteAgent {
             conversationId,
             state: "waiting_plan_approval",
             statusText: "Waiting for plan approval",
-            interactionId: result.interaction.id,
+            taskId: result.task.id,
             runKey,
           })
         } catch (error) {
@@ -1090,7 +1056,7 @@ class ManagedRemoteAgent {
       | "error"
     statusText?: string
     sessionId?: string
-    interactionId?: string
+    taskId?: string
     runKey?: string
     /**
      * Server interprets:
@@ -1117,7 +1083,7 @@ class ManagedRemoteAgent {
       state: params.state,
       statusText: params.statusText,
       conversationId: conversationId ?? bridgeLast ?? null,
-      interactionId: params.interactionId ?? null,
+      taskId: params.taskId ?? null,
       sessionId: params.sessionId ?? null,
       lastError: params.lastError ?? null,
       runKey: params.runKey ?? null,
@@ -1143,10 +1109,10 @@ class ManagedRemoteAgent {
   }
 }
 
-function buildAnswerMap(interaction: Record<string, any>) {
+function buildAnswerMap(task: Record<string, any>) {
   const answers: Record<string, string> = {}
-  const questions = Array.isArray(interaction.userInput?.questions)
-    ? interaction.userInput.questions
+  const questions = Array.isArray(task.userInput?.questions)
+    ? task.userInput.questions
     : []
   for (const question of questions) {
     const prompt =

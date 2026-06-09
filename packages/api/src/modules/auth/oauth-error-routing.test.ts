@@ -24,15 +24,14 @@ function signedStateCookie(state: string): string {
   return `${state}.${sig}`
 }
 
-function futureExpiry(): string {
-  // 10 min out; Timestamp column accepts an ISO string.
-  return new Date(Date.now() + 10 * 60_000).toISOString()
+function futureExpiry(): Date {
+  return new Date(Date.now() + 10 * 60_000)
 }
 
 function stateRow(
   state: string,
   payload: Record<string, unknown>
-): { identifier: string; value: string; expires_at: string } {
+): { identifier: string; value: string; expires_at: Date } {
   return {
     identifier: state,
     // A valid state carries oauthState + a finite future expiresAt (Better

@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { assertIsoInstant } from "../datetime/instant.js"
 
 import {
   clearDeliveredOutbox,
@@ -16,6 +17,9 @@ import type {
   ChatConversationView,
 } from "../types/index.js"
 import type { PendingOutboxMessage } from "../chat-queue/index.js"
+import type { Timestamp } from "../types/index.js"
+
+const iso = (value: string): Timestamp => assertIsoInstant(value)
 
 // --- minimal builders (only the fields the pure helpers read) --------------
 
@@ -26,7 +30,7 @@ function item(partial: {
   itemType?: string
   scope?: string
   surface?: string
-  createdAt?: string
+  createdAt?: Timestamp
   content?: string
   clientMessageId?: string
   authorParticipantId?: string
@@ -43,7 +47,7 @@ function item(partial: {
     content: partial.content ?? "",
     contentBlocks: [],
     metadata: {},
-    createdAt: partial.createdAt ?? "2026-01-01T00:00:00.000Z",
+    createdAt: partial.createdAt ?? iso("2026-01-01T00:00:00.000Z"),
     clientMessageId: partial.clientMessageId,
     authorParticipantId: partial.authorParticipantId,
   } as unknown as ChatConversationItem
@@ -63,8 +67,8 @@ function view(
     muted: false,
     archived: false,
     pinnedSortKey: partial.pinnedSortKey,
-    updatedAt: partial.updatedAt ?? "2026-01-01T00:00:00.000Z",
-    createdAt: partial.createdAt ?? "2026-01-01T00:00:00.000Z",
+    updatedAt: partial.updatedAt ?? iso("2026-01-01T00:00:00.000Z"),
+    createdAt: partial.createdAt ?? iso("2026-01-01T00:00:00.000Z"),
     participants: [],
     presentation: { chatType: "group", avatarParticipantIds: [] },
     permissions: {
@@ -82,7 +86,7 @@ function outboxEntry(clientMessageId: string): PendingOutboxMessage {
     clientMessageId,
     conversationId: "c1",
     contentBlocks: [],
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: iso("2026-01-01T00:00:00.000Z"),
     optimisticSequence: 1,
     status: "sending",
     attemptCount: 0,
@@ -125,8 +129,16 @@ test("mergeChatItems dedupes by id with incoming winning, and is idempotent", ()
 
 test("sortChatItems ties broken by createdAt", () => {
   const sorted = sortChatItems([
-    item({ id: "late", sequence: 5, createdAt: "2026-01-02T00:00:00.000Z" }),
-    item({ id: "early", sequence: 5, createdAt: "2026-01-01T00:00:00.000Z" }),
+    item({
+      id: "late",
+      sequence: 5,
+      createdAt: iso("2026-01-02T00:00:00.000Z"),
+    }),
+    item({
+      id: "early",
+      sequence: 5,
+      createdAt: iso("2026-01-01T00:00:00.000Z"),
+    }),
   ])
   assert.deepEqual(
     sorted.map((i) => i.id),
@@ -138,12 +150,12 @@ test("sortChatItems ties broken by createdAt", () => {
 
 test("sortChatConversations puts pinned first then by recency", () => {
   const sorted = sortChatConversations([
-    view({ conversationId: "old", updatedAt: "2026-01-01T00:00:00.000Z" }),
-    view({ conversationId: "new", updatedAt: "2026-01-03T00:00:00.000Z" }),
+    view({ conversationId: "old", updatedAt: iso("2026-01-01T00:00:00.000Z") }),
+    view({ conversationId: "new", updatedAt: iso("2026-01-03T00:00:00.000Z") }),
     view({
       conversationId: "pinned",
-      updatedAt: "2026-01-02T00:00:00.000Z",
-      pinnedSortKey: "2026-01-02T00:00:00.000Z",
+      updatedAt: iso("2026-01-02T00:00:00.000Z"),
+      pinnedSortKey: iso("2026-01-02T00:00:00.000Z"),
     }),
   ])
   assert.deepEqual(
@@ -154,14 +166,14 @@ test("sortChatConversations puts pinned first then by recency", () => {
 
 test("upsertChatConversation replaces by id and re-sorts", () => {
   const initial = [
-    view({ conversationId: "a", updatedAt: "2026-01-01T00:00:00.000Z" }),
+    view({ conversationId: "a", updatedAt: iso("2026-01-01T00:00:00.000Z") }),
   ]
   const next = upsertChatConversation(
     initial,
-    view({ conversationId: "a", updatedAt: "2026-01-05T00:00:00.000Z" })
+    view({ conversationId: "a", updatedAt: iso("2026-01-05T00:00:00.000Z") })
   )
   assert.equal(next.length, 1)
-  assert.equal(next[0]!.updatedAt, "2026-01-05T00:00:00.000Z")
+  assert.equal(next[0]!.updatedAt, iso("2026-01-05T00:00:00.000Z"))
 })
 
 // --- clearDeliveredOutbox --------------------------------------------------
@@ -255,7 +267,7 @@ function stateWithOutbox(clientMessageId: string, conversationId = "c1") {
       clientMessageId,
       conversationId,
       contentBlocks: [],
-      createdAt: "2026-01-01T00:00:00.000Z",
+      createdAt: iso("2026-01-01T00:00:00.000Z"),
       optimisticSequence: 1,
       status: "sending",
       attemptCount: 0,
@@ -266,9 +278,13 @@ function stateWithOutbox(clientMessageId: string, conversationId = "c1") {
 
 test("markOutboxAttemptStarted bumps attemptCount + lastAttemptAt deterministically", () => {
   const s = stateWithOutbox("m1")
-  const next = markOutboxAttemptStarted(s, "m1", "2026-02-02T00:00:00.000Z")
+  const next = markOutboxAttemptStarted(
+    s,
+    "m1",
+    iso("2026-02-02T00:00:00.000Z")
+  )
   assert.equal(next.outbox.m1!.attemptCount, 1)
-  assert.equal(next.outbox.m1!.lastAttemptAt, "2026-02-02T00:00:00.000Z")
+  assert.equal(next.outbox.m1!.lastAttemptAt, iso("2026-02-02T00:00:00.000Z"))
   // unknown id -> same reference
   assert.equal(markOutboxAttemptStarted(s, "nope", "x"), s)
 })
@@ -293,17 +309,22 @@ test("markOutboxDelivered removes the entry, merges the item, updates lastItem",
 
 test("markOutboxFailed sets retrying + firstFailedAt (sticky) + error", () => {
   const s = stateWithOutbox("m1")
-  const failed = markOutboxFailed(s, "m1", "2026-03-03T00:00:00.000Z", "boom")
+  const failed = markOutboxFailed(
+    s,
+    "m1",
+    iso("2026-03-03T00:00:00.000Z"),
+    "boom"
+  )
   assert.equal(failed.outbox.m1!.status, "retrying")
-  assert.equal(failed.outbox.m1!.firstFailedAt, "2026-03-03T00:00:00.000Z")
+  assert.equal(failed.outbox.m1!.firstFailedAt, iso("2026-03-03T00:00:00.000Z"))
   assert.equal(failed.outbox.m1!.lastErrorMessage, "boom")
   // firstFailedAt is sticky across subsequent failures
   const again = markOutboxFailed(
     failed,
     "m1",
-    "2026-03-04T00:00:00.000Z",
+    iso("2026-03-04T00:00:00.000Z"),
     "boom2"
   )
-  assert.equal(again.outbox.m1!.firstFailedAt, "2026-03-03T00:00:00.000Z")
+  assert.equal(again.outbox.m1!.firstFailedAt, iso("2026-03-03T00:00:00.000Z"))
   assert.equal(again.outbox.m1!.lastErrorMessage, "boom2")
 })

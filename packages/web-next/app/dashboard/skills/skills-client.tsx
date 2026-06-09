@@ -221,7 +221,7 @@ type SkillListRow = {
   installedSkillId?: string
   marketplaceSkillId?: string
   version?: string
-  updatedAt: string
+  updatedAt: import("@synapse/shared").Timestamp
 }
 
 type FileTreeEntry =

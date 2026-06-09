@@ -211,7 +211,7 @@ export async function updateFileMount(
     closedAt: boolean // when true, set closed_at = NOW()
   }>
 ): Promise<void> {
-  const sets = [sql`updated_at = NOW()`]
+  const sets = []
   const add = (col: string, val: unknown) => {
     sets.push(sql`${sql.ref(col)} = ${val}`)
   }
@@ -232,6 +232,9 @@ export async function updateFileMount(
     add("materialized_dir", patch.materializedDir)
   if (patch.errorMessage !== undefined) add("error_message", patch.errorMessage)
   if (patch.closedAt) sets.push(sql`closed_at = NOW()`)
+  if (sets.length === 0) {
+    return
+  }
   await sql`UPDATE file_mounts SET ${sql.join(sets, sql`, `)} WHERE id = ${mountId}`.execute(
     client
   )
@@ -339,7 +342,7 @@ export async function appendSnapshot(
   if (!row) throw new SandboxSpaceError("Failed to insert file_snapshot", 500)
 
   await sql`
-    UPDATE file_spaces SET current_snapshot_id = ${snapId}, updated_at = NOW() WHERE id = ${input.fileSpaceId}`.execute(
+    UPDATE file_spaces SET current_snapshot_id = ${snapId} WHERE id = ${input.fileSpaceId}`.execute(
     client
   )
   return row

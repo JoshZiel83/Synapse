@@ -59,7 +59,7 @@ test("qq.planAccountRecoveryActions: status disabled→active emits projection r
   })
   assert.deepEqual(
     actions.map((a) => a.type),
-    ["recoverSkippedInteractionProjections"]
+    ["recoverSkippedTaskProjections"]
   )
   const recover = actions[0] as { eventKind: string }
   assert.equal(recover.eventKind, "account_status_activated")
@@ -76,7 +76,7 @@ test("qq.planAccountRecoveryActions: webhook→long_connection re-enables bindin
   // projection doesn't immediately re-skip on outbound_disabled.
   assert.deepEqual(
     actions.map((a) => a.type),
-    ["reEnableAutoDisabledBindings", "recoverSkippedInteractionProjections"]
+    ["reEnableAutoDisabledBindings", "recoverSkippedTaskProjections"]
   )
   const reEnable = actions[0] as { reason: string }
   const recover = actions[1] as { eventKind: string }
@@ -107,25 +107,25 @@ test("qq.planAccountRecoveryActions: config_webhook_confirmed only fires when in
   })
   assert.deepEqual(
     actions.map((a) => a.type),
-    ["reEnableAutoDisabledBindings", "recoverSkippedInteractionProjections"]
+    ["reEnableAutoDisabledBindings", "recoverSkippedTaskProjections"]
   )
   const recover = actions[1] as { eventKind: string }
   assert.equal(recover.eventKind, "config_webhook_confirmed")
 })
 
-test("qq.getInteractionProjectionReadiness: long_connection always ready", () => {
+test("qq.getTaskProjectionReadiness: long_connection always ready", () => {
   const qq = tryGetConnector("qq")!
   assert.deepEqual(
-    qq.getInteractionProjectionReadiness!(
+    qq.getTaskProjectionReadiness!(
       summary({ connectionMode: "long_connection" })
     ),
     { ok: true }
   )
 })
 
-test("qq.getInteractionProjectionReadiness: webhook + unconfirmed blocks with stable reason", () => {
+test("qq.getTaskProjectionReadiness: webhook + unconfirmed blocks with stable reason", () => {
   const qq = tryGetConnector("qq")!
-  const res = qq.getInteractionProjectionReadiness!(
+  const res = qq.getTaskProjectionReadiness!(
     summary({ connectionMode: "webhook", config: {} })
   )
   assert.deepEqual(res, {
@@ -134,9 +134,9 @@ test("qq.getInteractionProjectionReadiness: webhook + unconfirmed blocks with st
   })
 })
 
-test("qq.getInteractionProjectionReadiness: webhook + confirmed is ready", () => {
+test("qq.getTaskProjectionReadiness: webhook + confirmed is ready", () => {
   const qq = tryGetConnector("qq")!
-  const res = qq.getInteractionProjectionReadiness!(
+  const res = qq.getTaskProjectionReadiness!(
     summary({
       connectionMode: "webhook",
       config: { webhookInboundConfirmed: true },

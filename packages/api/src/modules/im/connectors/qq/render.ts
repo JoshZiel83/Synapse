@@ -122,7 +122,7 @@ export function planQqSends(
         kind: "keyboard",
         msgType: QQ_MSG_TYPE.MARKDOWN,
         payload: buildQqInteractionKeyboard({
-          interactionRequestId: part.interactionRequestId,
+          taskId: part.taskId,
           title: part.title,
           fallbackText: part.fallbackText,
           options: part.options.map((opt) => ({

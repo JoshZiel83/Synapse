@@ -43,7 +43,7 @@ test("URL-verification + business-event sign/verify roundtrip with same seed", (
   const ok = verifyEd25519BusinessEvent({
     secret: SECRET,
     signatureHex: sigHex,
-    timestamp: ts,
+    signatureTimestamp: ts,
     rawBody: body,
   })
   assert.equal(ok, true)
@@ -60,7 +60,7 @@ test("verify fails when raw body is tampered", () => {
   const ok = verifyEd25519BusinessEvent({
     secret: SECRET,
     signatureHex: sigHex,
-    timestamp: ts,
+    signatureTimestamp: ts,
     rawBody: '{"op":0,"d":{"a":2}}',
   })
   assert.equal(ok, false)
@@ -71,7 +71,7 @@ test("verify fails on bad signature hex / wrong length", () => {
     const ok = verifyEd25519BusinessEvent({
       secret: SECRET,
       signatureHex: bad,
-      timestamp: "1",
+      signatureTimestamp: "1",
       rawBody: "x",
     })
     assert.equal(ok, false, `unexpected accept for ${bad}`)
@@ -95,17 +95,17 @@ test("extractSignatureHeaders handles lowercase + canonical + array forms", () =
       "x-signature-ed25519": "abc",
       "x-signature-timestamp": "1",
     }),
-    { signatureHex: "abc", timestamp: "1" }
+    { signatureHex: "abc", signatureTimestamp: "1" }
   )
   assert.deepEqual(
     extractSignatureHeaders({
       "X-Signature-Ed25519": ["abc", "other"],
       "X-Signature-Timestamp": "1",
     }),
-    { signatureHex: "abc", timestamp: "1" }
+    { signatureHex: "abc", signatureTimestamp: "1" }
   )
   assert.deepEqual(extractSignatureHeaders({}), {
     signatureHex: undefined,
-    timestamp: undefined,
+    signatureTimestamp: undefined,
   })
 })

@@ -1,6 +1,16 @@
 import crypto from "node:crypto"
 import cronParser from "cron-parser"
 import { v4 as uuidv4 } from "uuid"
+import {
+  assertIsoInstant,
+  dateToIsoInstant,
+  nowIsoInstant,
+} from "@synapse/shared/datetime"
+import {
+  parseInstantString,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import type {
   AutomationEventSourceAccessGrant,
   CapabilityAccessTarget,
@@ -28,13 +38,13 @@ import type {
   AutomationWebhookEndpoint,
   AutomationWebhookEndpointCreateResult,
   CanonicalContentBlock,
+  Timestamp,
 } from "@synapse/shared"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   extractText,
   maskAllowsConversationType,
   normalizeCanonicalContentBlocks,
-  nowISO,
   parseJsonObject,
   resolveAutomationOccurrenceDisplay,
   resolveNarrowedConversationTypeMask,
@@ -99,12 +109,12 @@ type AutomationRuleRow = {
   description: string
   created_by_participant_id: string
   created_by_session_id: string | null
-  last_triggered_at: string | null
-  last_error_at: string | null
+  last_triggered_at: Date | null
+  last_error_at: Date | null
   last_error_message: string | null
   metadata: Record<string, unknown> | string | null
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
 }
 
 type AutomationTriggerRow = {
@@ -134,20 +144,20 @@ type AutomationTriggerRow = {
   schedule_expr: string | null
   schedule_timezone: string | null
   interval_seconds: number | null
-  starts_at: string | null
-  next_fire_at: string | null
-  last_fired_at: string | null
+  starts_at: Date | null
+  next_fire_at: Date | null
+  last_fired_at: Date | null
   metadata: Record<string, unknown> | string | null
 }
 
 type AutomationPolicyRow = {
   rule_id: string
-  active_from: string | null
-  active_until: string | null
+  active_from: Date | null
+  active_until: Date | null
   max_trigger_count: number | null
   trigger_count: number
   completion_status: AutomationCompletionStatus
-  completed_at: string | null
+  completed_at: Date | null
   metadata: Record<string, unknown> | string | null
 }
 
@@ -186,10 +196,10 @@ type AutomationEventSourceRow = {
   created_by_workspace_member_id: string | null
   created_by_actor_id: string | null
   created_by_session_id: string | null
-  last_triggered_at: string | null
+  last_triggered_at: Date | null
   metadata: Record<string, unknown> | string | null
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
 }
 
 type AutomationOccurrenceRow = {
@@ -215,8 +225,8 @@ type AutomationOccurrenceRow = {
   dedupe_key: string | null
   source_snapshot: Record<string, unknown> | string | null
   payload: Record<string, unknown> | string | null
-  occurred_at: string
-  created_at: string
+  occurred_at: Date
+  created_at: Date
 }
 
 type AutomationExecutionRow = {
@@ -225,7 +235,7 @@ type AutomationExecutionRow = {
   rule_id: string
   execution_rule_name?: string | null
   occurrence_id: string
-  occurrence_occurred_at?: string | null
+  occurrence_occurred_at?: Date | null
   occurrence_source_kind?: AutomationSourceKind | null
   occurrence_event_source_name?: string | null
   occurrence_display_title?: string | null
@@ -234,10 +244,10 @@ type AutomationExecutionRow = {
   status: AutomationExecutionStatus
   attempt_count: number
   error_message: string | null
-  started_at: string | null
-  completed_at: string | null
-  created_at: string
-  updated_at: string
+  started_at: Date | null
+  completed_at: Date | null
+  created_at: Date
+  updated_at: Date
 }
 
 type AutomationTargetRow = {
@@ -251,8 +261,8 @@ type AutomationTargetRow = {
   wakeup_id: string | null
   status: AutomationExecutionStatus
   metadata: Record<string, unknown> | string | null
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
 }
 
 type TargetParticipantRow = {
@@ -277,9 +287,9 @@ type AutomationWebhookEndpointRow = {
   secret_hint: string
   metadata: Record<string, unknown> | string | null
   created_by_workspace_member_id: string | null
-  last_received_at: string | null
-  created_at: string
-  updated_at: string
+  last_received_at: Date | null
+  created_at: Date
+  updated_at: Date
 }
 
 type AutomationIntegrationBindingRow = {
@@ -294,8 +304,8 @@ type AutomationIntegrationBindingRow = {
   webhook_endpoint_id: string | null
   external_subscription_id: string | null
   metadata: Record<string, unknown> | string | null
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
 }
 
 type AutomationValidationError = Error & {
@@ -375,12 +385,12 @@ export interface AutomationTriggerInput {
   scheduleExpr?: string
   scheduleTimezone?: string
   intervalSeconds?: number
-  startsAt?: string
+  startsAt?: Timestamp
 }
 
 export interface AutomationPolicyInput {
-  activeFrom?: string
-  activeUntil?: string
+  activeFrom?: Timestamp
+  activeUntil?: Timestamp
   maxTriggerCount?: number
   completionStatus?: AutomationCompletionStatus
 }
@@ -416,7 +426,7 @@ export interface AutomationEventEnvelope {
   eventSourceId: string
   payload?: Record<string, unknown>
   sourceSnapshot?: Record<string, unknown>
-  occurredAt?: string
+  occurredAt?: Timestamp
   dedupeKey?: string
 }
 
@@ -528,12 +538,12 @@ function mapRuleRow(
     trigger,
     policy,
     delivery,
-    lastTriggeredAt: row.last_triggered_at || undefined,
-    lastErrorAt: row.last_error_at || undefined,
+    lastTriggeredAt: serializeOptionalInstant(row.last_triggered_at),
+    lastErrorAt: serializeOptionalInstant(row.last_error_at),
     lastErrorMessage: row.last_error_message || undefined,
     metadata: parseJsonObject(row.metadata),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -584,9 +594,9 @@ function mapTriggerRow(row: AutomationTriggerRow): AutomationTrigger {
     scheduleExpr: row.schedule_expr || undefined,
     scheduleTimezone: row.schedule_timezone || undefined,
     intervalSeconds: row.interval_seconds || undefined,
-    startsAt: row.starts_at || undefined,
-    nextFireAt: row.next_fire_at || undefined,
-    lastFiredAt: row.last_fired_at || undefined,
+    startsAt: serializeOptionalInstant(row.starts_at),
+    nextFireAt: serializeOptionalInstant(row.next_fire_at),
+    lastFiredAt: serializeOptionalInstant(row.last_fired_at),
     metadata: parseJsonObject(row.metadata),
   }
 }
@@ -594,12 +604,12 @@ function mapTriggerRow(row: AutomationTriggerRow): AutomationTrigger {
 function mapPolicyRow(row: AutomationPolicyRow): AutomationPolicy {
   return {
     ruleId: row.rule_id,
-    activeFrom: row.active_from || undefined,
-    activeUntil: row.active_until || undefined,
+    activeFrom: serializeOptionalInstant(row.active_from),
+    activeUntil: serializeOptionalInstant(row.active_until),
     maxTriggerCount: row.max_trigger_count || undefined,
     triggerCount: row.trigger_count,
     completionStatus: row.completion_status,
-    completedAt: row.completed_at || undefined,
+    completedAt: serializeOptionalInstant(row.completed_at),
     metadata: parseJsonObject(row.metadata),
   }
 }
@@ -639,10 +649,10 @@ function mapEventSourceRow(
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     createdByActorId: row.created_by_actor_id || undefined,
     createdBySessionId: row.created_by_session_id || undefined,
-    lastTriggeredAt: row.last_triggered_at || undefined,
+    lastTriggeredAt: serializeOptionalInstant(row.last_triggered_at),
     metadata: parseJsonObject(row.metadata),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -722,8 +732,8 @@ function mapOccurrenceRow(row: AutomationOccurrenceRow): AutomationOccurrence {
       dedupeKey: row.dedupe_key || undefined,
       sourceSnapshot: parseJsonObject(row.source_snapshot),
       payload: parseJsonObject(row.payload),
-      occurredAt: row.occurred_at,
-      createdAt: row.created_at,
+      occurredAt: serializeInstant(row.occurred_at),
+      createdAt: serializeInstant(row.created_at),
     },
     {
       eventProviderRef:
@@ -742,7 +752,7 @@ function mapExecutionRow(row: AutomationExecutionRow): AutomationExecution {
     workspaceId: row.workspace_id,
     ruleId: row.rule_id,
     occurrenceId: row.occurrence_id,
-    occurrenceOccurredAt: row.occurrence_occurred_at || undefined,
+    occurrenceOccurredAt: serializeOptionalInstant(row.occurrence_occurred_at),
     occurrenceSourceKind: row.occurrence_source_kind || undefined,
     occurrenceEventSourceName: row.occurrence_event_source_name || undefined,
     occurrenceTitle: row.occurrence_display_title || undefined,
@@ -750,10 +760,10 @@ function mapExecutionRow(row: AutomationExecutionRow): AutomationExecution {
     occurrenceDescription: row.occurrence_display_description || undefined,
     status: row.status,
     errorMessage: row.error_message || undefined,
-    startedAt: row.started_at || undefined,
-    completedAt: row.completed_at || undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    startedAt: serializeOptionalInstant(row.started_at),
+    completedAt: serializeOptionalInstant(row.completed_at),
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -769,9 +779,9 @@ function mapWebhookEndpointRow(
     secretHint: row.secret_hint,
     metadata: parseJsonObject(row.metadata),
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
-    lastReceivedAt: row.last_received_at || undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    lastReceivedAt: serializeOptionalInstant(row.last_received_at),
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -883,8 +893,12 @@ function normalizePolicyInput(
   input?: AutomationPolicyInput
 ): Omit<AutomationPolicyRow, "rule_id"> {
   return {
-    active_from: input?.activeFrom || null,
-    active_until: input?.activeUntil || null,
+    active_from: input?.activeFrom
+      ? parseInstantString(input.activeFrom)
+      : null,
+    active_until: input?.activeUntil
+      ? parseInstantString(input.activeUntil)
+      : null,
     max_trigger_count: input?.maxTriggerCount || null,
     trigger_count: 0,
     completion_status: input?.completionStatus || "completed",
@@ -898,12 +912,12 @@ function computeNextFireAt(input: {
   scheduleExpr?: string
   scheduleTimezone?: string
   intervalSeconds?: number
-  startsAt?: string | null
-  activeFrom?: string | null
-  activeUntil?: string | null
+  startsAt?: Timestamp | null
+  activeFrom?: Timestamp | null
+  activeUntil?: Timestamp | null
   baseTime?: Date
-  lastFiredAt?: string | null
-}): string | null {
+  lastFiredAt?: Timestamp | null
+}): Timestamp | null {
   const baseTime = input.baseTime || new Date()
   const startsAt = input.startsAt ? new Date(input.startsAt) : null
   const activeFrom = input.activeFrom ? new Date(input.activeFrom) : null
@@ -920,7 +934,7 @@ function computeNextFireAt(input: {
     if (candidate.getTime() <= baseTime.getTime()) return null
     if (activeFrom && candidate.getTime() < activeFrom.getTime()) return null
     if (activeUntil && candidate.getTime() > activeUntil.getTime()) return null
-    return candidate.toISOString()
+    return dateToIsoInstant(candidate)
   }
 
   if (input.scheduleKind === "interval") {
@@ -938,7 +952,7 @@ function computeNextFireAt(input: {
       ? new Date(anchor.getTime() + intervalSeconds * 1000)
       : anchor
     if (activeUntil && next.getTime() > activeUntil.getTime()) return null
-    return next.toISOString()
+    return dateToIsoInstant(next)
   }
 
   if (!input.scheduleExpr) {
@@ -951,7 +965,7 @@ function computeNextFireAt(input: {
   })
   const next = parsed.next().toDate()
   if (activeUntil && next.getTime() > activeUntil.getTime()) return null
-  return next.toISOString()
+  return dateToIsoInstant(next)
 }
 
 async function normalizeTriggerInput(params: {
@@ -987,8 +1001,8 @@ async function normalizeTriggerInput(params: {
       schedule_timezone: input.scheduleTimezone || "UTC",
       interval_seconds:
         scheduleKind === "interval" ? input.intervalSeconds || null : null,
-      starts_at: input.startsAt || null,
-      next_fire_at: nextFireAt,
+      starts_at: input.startsAt ? parseInstantString(input.startsAt) : null,
+      next_fire_at: nextFireAt ? parseInstantString(nextFireAt) : null,
       last_fired_at: null,
       metadata: {},
     }
@@ -1273,8 +1287,7 @@ async function pauseAutomationRulesForEventSource(
     `UPDATE automation_rules ar
      SET status = 'paused',
          last_error_at = NOW(),
-         last_error_message = $2,
-         updated_at = NOW()
+         last_error_message = $2
      FROM automation_triggers at
      WHERE at.rule_id = ar.id
        AND at.event_source_id = $1
@@ -1690,7 +1703,6 @@ async function pauseAutomationRule(params: {
         status: "paused",
         last_error_at: sql`NOW()`,
         last_error_message: params.reason,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", params.ruleId)
       .where("status", "=", "active")
@@ -1894,7 +1906,6 @@ async function updateWebhookEndpointStatus(
     .updateTable("automation_webhook_endpoints")
     .set({
       status,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", endpointId)
     .execute()
@@ -1976,7 +1987,6 @@ async function ensureAutomationIntegrationBinding(params: {
         .updateTable("automation_integration_bindings")
         .set({
           target_label: targetLabel,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.id)
         .execute()
@@ -2016,7 +2026,6 @@ async function ensureAutomationIntegrationBinding(params: {
           created_by_workspace_member_id:
             params.creator.workspaceMemberId || null,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .execute()
     }
@@ -2039,7 +2048,6 @@ async function ensureAutomationIntegrationBinding(params: {
           integrationTargetKind: params.integration.targetKind,
         }),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
   })
@@ -2097,7 +2105,6 @@ async function reconcileIntegrationBindingWebhook(
       .updateTable("automation_integration_bindings")
       .set({
         external_subscription_id: null,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", binding.id)
       .execute()
@@ -2162,7 +2169,6 @@ async function reconcileIntegrationBindingWebhook(
     .updateTable("automation_integration_bindings")
     .set({
       external_subscription_id: externalSubscriptionId,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", binding.id)
     .execute()
@@ -2249,7 +2255,6 @@ async function createIntegrationAutomationEventSource(
           ...(template.metadata || {}),
           ...(input.metadata || {}),
         }),
-        updated_at: sql`NOW()`,
       })
       .where("workspace_id", "=", workspaceId)
       .where("id", "=", existing.id)
@@ -2332,7 +2337,6 @@ async function createIntegrationAutomationEventSource(
           ...(input.metadata || {}),
         }),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -2449,7 +2453,6 @@ export async function createAutomationEventSource(
         example_payload: JSON.stringify(input.examplePayload || {}),
         status: input.status || "active",
         metadata: JSON.stringify(input.metadata || existing.metadata || {}),
-        updated_at: sql`NOW()`,
       })
       .where("workspace_id", "=", workspaceId)
       .where("id", "=", existing.id)
@@ -2507,7 +2510,6 @@ export async function createAutomationEventSource(
       created_by_session_id: creator.sessionId || null,
       metadata: JSON.stringify(input.metadata || {}),
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .execute()
 
@@ -2603,7 +2605,6 @@ export async function updateAutomationEventSource(
       metadata: JSON.stringify(
         input.metadata !== undefined ? input.metadata : existing.metadata
       ),
-      updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", workspaceId)
     .where("id", "=", eventSourceId)
@@ -2679,7 +2680,6 @@ export async function archiveAutomationEventSource(
     .updateTable("automation_event_sources")
     .set({
       status: "archived",
-      updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", workspaceId)
     .where("id", "=", eventSourceId)
@@ -2799,9 +2799,8 @@ async function updateRuleError(ruleId: string, errorMessage: string | null) {
   await db
     .updateTable("automation_rules")
     .set({
-      last_error_at: errorMessage ? nowISO() : null,
+      last_error_at: errorMessage ? new Date() : null,
       last_error_message: errorMessage,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", ruleId)
     .execute()
@@ -2813,11 +2812,10 @@ async function expireAutomationRules(params: {
   client?: Executor
 }) {
   const runner = resolveQueryRunner(params.client)
-  const referenceTime = params.referenceTime || nowISO()
+  const referenceTime = params.referenceTime || nowIsoInstant()
   const result = await runner.run<{ id: string; workspace_id: string }>(
     `UPDATE automation_rules ar
-     SET status = 'expired',
-         updated_at = NOW()
+     SET status = 'expired'
      FROM automation_policies ap
      WHERE ap.rule_id = ar.id
        AND ar.status = 'active'
@@ -2833,8 +2831,7 @@ async function expireAutomationRules(params: {
     result.rows.map((row) =>
       runner.run(
         `UPDATE automation_policies
-         SET completed_at = COALESCE(completed_at, $2),
-             updated_at = NOW()
+         SET completed_at = COALESCE(completed_at, $2)
          WHERE rule_id = $1`,
         [row.id, referenceTime]
       )
@@ -2867,8 +2864,7 @@ async function pauseAutomationRulesForInactiveCreators(params: {
     `UPDATE automation_rules ar
      SET status = 'paused',
          last_error_at = NOW(),
-         last_error_message = 'Creator participant is no longer active',
-         updated_at = NOW()
+         last_error_message = 'Creator participant is no longer active'
      FROM conversation_participants cp
      WHERE cp.id = ar.created_by_participant_id
        AND ar.status = 'active'
@@ -2924,7 +2920,6 @@ async function applyAutomationPolicyAfterTrigger(params: {
       .updateTable("automation_policies")
       .set({
         trigger_count: sql`${sql.ref("trigger_count")} + 1`,
-        updated_at: sql`NOW()`,
       })
       .where("rule_id", "=", params.ruleId)
       .returningAll()
@@ -2946,7 +2941,6 @@ async function applyAutomationPolicyAfterTrigger(params: {
     .updateTable("automation_rules")
     .set({
       status: policy.completion_status,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", params.ruleId)
     .execute()
@@ -2954,7 +2948,6 @@ async function applyAutomationPolicyAfterTrigger(params: {
     .updateTable("automation_policies")
     .set({
       completed_at: sql`COALESCE(${sql.ref("completed_at")}, NOW())`,
-      updated_at: sql`NOW()`,
     })
     .where("rule_id", "=", params.ruleId)
     .execute()
@@ -2984,7 +2977,6 @@ async function touchWebhookReceived(endpointId: string) {
     .updateTable("automation_webhook_endpoints")
     .set({
       last_received_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", endpointId)
     .execute()
@@ -2995,7 +2987,6 @@ async function touchAutomationEventSourceTriggered(eventSourceId: string) {
     .updateTable("automation_event_sources")
     .set({
       last_triggered_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", eventSourceId)
     .execute()
@@ -3005,7 +2996,7 @@ async function resolveAutomationRulesForEvent(params: {
   workspaceId: string
   eventSourceId: string
   payload: Record<string, unknown>
-  occurredAt: string
+  occurredAt: Timestamp
 }) {
   const result = await runQuery<AutomationRuleRow & AutomationTriggerRow>(
     `SELECT ar.*, at.rule_id, at.trigger_kind, at.source_kind, at.event_source_id, at.source_locator, at.match_key, at.matcher,
@@ -3044,11 +3035,11 @@ async function createAutomationOccurrence(params: {
   dedupeKey?: string
   sourceSnapshot?: Record<string, unknown>
   payload?: Record<string, unknown>
-  occurredAt?: string
+  occurredAt?: Timestamp
   client?: Executor
 }) {
   const runner = resolveQueryRunner(params.client)
-  const occurredAt = params.occurredAt || nowISO()
+  const occurredAt = params.occurredAt || nowIsoInstant()
   const dedupeKey = params.dedupeKey?.trim() || null
 
   if (dedupeKey) {
@@ -3148,7 +3139,6 @@ async function recordExecutionTarget(params: {
       status: params.status,
       metadata: JSON.stringify(params.metadata || {}),
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .execute()
 }
@@ -3480,7 +3470,6 @@ export async function createAutomationRule(
         created_by_session_id: creator.sessionId || null,
         metadata: JSON.stringify(input.metadata || {}),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -3496,7 +3485,6 @@ export async function createAutomationRule(
         completed_at: normalizedPolicy.completed_at,
         metadata: JSON.stringify(normalizedPolicy.metadata),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -3534,7 +3522,6 @@ export async function createAutomationRule(
         target_policy: normalizedDelivery.target_policy,
         metadata: JSON.stringify(normalizedDelivery.metadata),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -3691,7 +3678,6 @@ export async function updateAutomationRule(
         name: mergedInput.name.trim(),
         description: (mergedInput.description || "").trim(),
         metadata: JSON.stringify(mergedInput.metadata || {}),
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", ruleId)
       .execute()
@@ -3706,9 +3692,10 @@ export async function updateAutomationRule(
         completed_at:
           mergedInput.status === "active"
             ? null
-            : existing.policy.completedAt || null,
+            : existing.policy.completedAt
+              ? parseInstantString(existing.policy.completedAt)
+              : null,
         metadata: JSON.stringify(normalizedPolicy.metadata),
-        updated_at: sql`NOW()`,
       })
       .where("rule_id", "=", ruleId)
       .execute()
@@ -3727,8 +3714,7 @@ export async function updateAutomationRule(
            interval_seconds = $11,
            starts_at = $12,
            next_fire_at = $13,
-           metadata = $14,
-           updated_at = NOW()
+           metadata = $14
        WHERE rule_id = $1`,
       [
         ruleId,
@@ -3756,7 +3742,6 @@ export async function updateAutomationRule(
         message_blocks: JSON.stringify(normalizedDelivery.message_blocks),
         target_policy: normalizedDelivery.target_policy,
         metadata: JSON.stringify(normalizedDelivery.metadata),
-        updated_at: sql`NOW()`,
       })
       .where("rule_id", "=", ruleId)
       .execute()
@@ -3925,7 +3910,7 @@ export async function ingestAutomationProviderEvent(params: {
   payload?: Record<string, unknown>
   sourceSnapshot?: Record<string, unknown>
   dedupeKey?: string
-  occurredAt?: string
+  occurredAt?: Timestamp
 }) {
   const result = await runBuilder(
     db,
@@ -4070,7 +4055,7 @@ export async function ingestAutomationWebhookEvent(params: {
   payload?: Record<string, unknown>
   sourceSnapshot?: Record<string, unknown>
   dedupeKey?: string
-  occurredAt?: string
+  occurredAt?: Timestamp
 }) {
   const sourceRow = await getAutomationEventSourceByWebhookPathToken(
     params.pathToken,
@@ -4179,7 +4164,9 @@ export async function ingestIntegrationAutomationWebhookEvent(params: {
       payload: normalized.payload,
       sourceSnapshot: sharedSourceSnapshot,
       dedupeKey: normalized.dedupeKey,
-      occurredAt: normalized.occurredAt,
+      occurredAt: normalized.occurredAt
+        ? assertIsoInstant(normalized.occurredAt)
+        : undefined,
     })
     occurrences.push(result.occurrence)
     executions.push(...result.executions)
@@ -4209,11 +4196,11 @@ export async function scheduleDueAutomationExecutions(
       schedule_expr: string | null
       schedule_timezone: string | null
       interval_seconds: number | null
-      starts_at: string | null
-      active_from: string | null
-      active_until: string | null
-      next_fire_at: string
-      last_fired_at: string | null
+      starts_at: Date | null
+      active_from: Date | null
+      active_until: Date | null
+      next_fire_at: Date
+      last_fired_at: Date | null
     }>(
       `SELECT at.rule_id, ar.name AS rule_name, ar.workspace_id, at.schedule_kind, at.schedule_expr, at.schedule_timezone,
               at.interval_seconds, at.starts_at, ap.active_from, ap.active_until, at.next_fire_at, at.last_fired_at
@@ -4247,13 +4234,13 @@ export async function scheduleDueAutomationExecutions(
           scheduleExpr: row.schedule_expr,
           scheduleTimezone: row.schedule_timezone,
           intervalSeconds: row.interval_seconds,
-          startsAt: row.starts_at,
-          activeFrom: row.active_from,
-          activeUntil: row.active_until,
-          scheduledAt: row.next_fire_at,
+          startsAt: serializeOptionalInstant(row.starts_at),
+          activeFrom: serializeOptionalInstant(row.active_from),
+          activeUntil: serializeOptionalInstant(row.active_until),
+          scheduledAt: serializeInstant(row.next_fire_at),
         },
         payload: {},
-        occurredAt: row.next_fire_at,
+        occurredAt: serializeInstant(row.next_fire_at),
         client: trx,
       })
 
@@ -4269,19 +4256,18 @@ export async function scheduleDueAutomationExecutions(
         scheduleExpr: row.schedule_expr || undefined,
         scheduleTimezone: row.schedule_timezone || undefined,
         intervalSeconds: row.interval_seconds || undefined,
-        startsAt: row.starts_at,
-        activeFrom: row.active_from,
-        activeUntil: row.active_until,
-        baseTime: new Date(row.next_fire_at),
-        lastFiredAt: row.next_fire_at,
+        startsAt: serializeOptionalInstant(row.starts_at) ?? null,
+        activeFrom: serializeOptionalInstant(row.active_from) ?? null,
+        activeUntil: serializeOptionalInstant(row.active_until) ?? null,
+        baseTime: row.next_fire_at,
+        lastFiredAt: serializeInstant(row.next_fire_at),
       })
 
       await trx
         .updateTable("automation_triggers")
         .set({
           last_fired_at: row.next_fire_at,
-          next_fire_at: nextFireAt,
-          updated_at: sql`NOW()`,
+          next_fire_at: nextFireAt ? parseInstantString(nextFireAt) : null,
         })
         .where("rule_id", "=", row.rule_id)
         .execute()
@@ -4301,8 +4287,7 @@ export async function processAutomationExecution(
     `UPDATE automation_executions
      SET status = 'running',
          attempt_count = attempt_count + 1,
-         started_at = COALESCE(started_at, NOW()),
-         updated_at = NOW()
+         started_at = COALESCE(started_at, NOW())
      WHERE id = $1
        AND status = 'pending'
      RETURNING *`,
@@ -4361,7 +4346,6 @@ export async function processAutomationExecution(
           status: "skipped",
           error_message: `Automation rule is ${rule.status}`,
           completed_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", executionId)
         .execute()
@@ -4382,7 +4366,6 @@ export async function processAutomationExecution(
           error_message:
             "No active target participants matched this automation",
           completed_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", executionId)
         .execute()
@@ -4391,7 +4374,6 @@ export async function processAutomationExecution(
         .set({
           last_error_at: null,
           last_error_message: null,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", rule.id)
         .execute()
@@ -4422,7 +4404,6 @@ export async function processAutomationExecution(
         status: "completed",
         error_message: null,
         completed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", executionId)
       .execute()
@@ -4432,7 +4413,6 @@ export async function processAutomationExecution(
         last_triggered_at: sql`NOW()`,
         last_error_at: null,
         last_error_message: null,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", rule.id)
       .execute()
@@ -4480,7 +4460,6 @@ export async function processAutomationExecution(
         status: "failed",
         error_message: message,
         completed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", executionId)
       .execute()
@@ -4574,7 +4553,7 @@ export async function listAutomationExecutions(
       created_at:
         (
           row as AutomationExecutionRow & {
-            occurrence_created_at?: string | null
+            occurrence_created_at?: Date | null
           }
         ).occurrence_created_at || row.occurrence_occurred_at,
     })

@@ -70,9 +70,10 @@
     }
   },
   "scripts": {
-    "prebuild": "rm -rf dist tsconfig.build.tsbuildinfo",
+    "prebuild": "npm run build -w @synapse/device-protocol && rm -rf dist tsconfig.build.tsbuildinfo",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc --watch",
+    "pretest": "npm run build -w @synapse/device-protocol",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "prepublishOnly": "node ../../scripts/prepublish-guard.mjs"
   },

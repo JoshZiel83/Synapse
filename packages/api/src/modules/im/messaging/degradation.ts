@@ -49,8 +49,8 @@ export interface MessageCapabilities {
    * Keyboard + INTERACTION_CREATE. Connectors that opt in receive
    * `interaction_prompt` canonical parts; others see them degrade
    * away (rewritten to the part's `fallbackText`). The
-   * `interaction-projection` worker uses this flag plus the optional
-   * `getInteractionProjectionReadiness?()` hook as the dispatch gate
+   * `task-projection` worker uses this flag plus the optional
+   * `getTaskProjectionReadiness?()` hook as the dispatch gate
    * (replaces the per-kind worker hard-code).
    */
   supportsInteractionPrompt: boolean

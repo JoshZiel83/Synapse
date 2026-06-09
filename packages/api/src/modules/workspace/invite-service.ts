@@ -1,6 +1,8 @@
 import crypto from "node:crypto"
+import type { Timestamp } from "@synapse/shared"
 import type { WorkspaceInvitesTrustLevel } from "../../infrastructure/database/generated/db.js"
 import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import { sql } from "kysely"
 import { assignOfficialChiefActorPreference } from "./service.js"
 
@@ -36,7 +38,7 @@ export async function createInvite(input: {
   createdByWorkspaceMemberId: string
   trustLevel?: WorkspaceInvitesTrustLevel
   maxUses?: number
-  expiresAt?: string
+  expiresAt?: Timestamp
 }) {
   const token = generateInviteToken()
   const row = await db
@@ -47,7 +49,7 @@ export async function createInvite(input: {
       created_by_workspace_member_id: input.createdByWorkspaceMemberId,
       trust_level: input.trustLevel || "member",
       max_uses: input.maxUses ?? null,
-      expires_at: input.expiresAt ?? null,
+      expires_at: input.expiresAt ? parseInstantString(input.expiresAt) : null,
     })
     .returningAll()
     .executeTakeFirst()
@@ -164,7 +166,6 @@ export async function revokeInvite(inviteId: string, workspaceId: string) {
     .updateTable("workspace_invites")
     .set({
       is_revoked: true,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", inviteId)
     .where("workspace_id", "=", workspaceId)

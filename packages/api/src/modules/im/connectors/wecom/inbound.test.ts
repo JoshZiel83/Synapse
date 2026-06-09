@@ -11,6 +11,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import type { AccountStartContext } from "../types.js"
 import { makeStartWecomAccount, type WecomLifecycleDeps } from "./inbound.js"
@@ -42,8 +43,8 @@ function makeAccount(): TransportAccountSummary {
     credentials: { botId: "bot-1", secret: "s" },
     config: {},
     metadata: {},
-    createdAt: "2026-01-01T00:00:00Z",
-    updatedAt: "2026-01-01T00:00:00Z",
+    createdAt: assertIsoInstant("2026-01-01T00:00:00.000Z"),
+    updatedAt: assertIsoInstant("2026-01-01T00:00:00.000Z"),
   }
 }
 

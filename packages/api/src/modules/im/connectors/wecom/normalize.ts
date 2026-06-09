@@ -22,6 +22,7 @@ import type {
   VoiceMessage,
   WsFrame,
 } from "@wecom/aibot-node-sdk"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import {
   buildCanonicalMessage,
   type CanonicalPart,
@@ -111,8 +112,8 @@ export function normalizeWecomFrame(
 
   const { parts } = partsFromMessage(body)
   const receivedAt = body.create_time
-    ? new Date(body.create_time * 1000).toISOString()
-    : new Date().toISOString()
+    ? dateToIsoInstant(new Date(body.create_time * 1000))
+    : nowIsoInstant()
 
   return {
     endpointType,

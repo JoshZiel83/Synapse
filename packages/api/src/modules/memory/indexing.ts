@@ -269,13 +269,11 @@ async function upsertCachedPassageEmbeddings(
           embedding: sql`${formatEmbeddingVector(entry.embedding)}::vector`,
           embedding_dim: entry.embedding.length,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc.columns(["model_id", "input_type", "content_hash"]).doUpdateSet({
             embedding: sql`${formatEmbeddingVector(entry.embedding)}::vector`,
             embedding_dim: entry.embedding.length,
-            updated_at: sql`NOW()`,
           })
         )
         .execute()
@@ -419,7 +417,6 @@ export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
             state: source.item.state,
           } as TableInsert<"memory_item_chunks">["metadata"],
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .execute()
     }
@@ -435,7 +432,6 @@ export async function rebuildMemoryItemLexicalIndex(memoryItemId: string) {
         embedding_dim: null,
         indexed_at: null,
         index_error: null,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", memoryItemId)
       .execute()
@@ -518,7 +514,6 @@ export async function reindexMemoryItemEmbeddings(
           embedding_dim: MEMORY_VECTOR_DIMENSIONS,
           indexed_at: sql`NOW()`,
           index_error: null,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", memoryItemId)
         .execute()
@@ -552,7 +547,6 @@ export async function reindexMemoryItemEmbeddings(
               embedding && embedding.length > 0
                 ? sql`${formatEmbeddingVector(embedding)}::vector`
                 : null,
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", chunk.id)
           .where("index_version", "=", targetIndexVersion)
@@ -571,7 +565,6 @@ export async function reindexMemoryItemEmbeddings(
           embedding_dim: MEMORY_VECTOR_DIMENSIONS,
           indexed_at: sql`NOW()`,
           index_error: null,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", memoryItemId)
         .execute()
@@ -600,7 +593,6 @@ export async function reindexMemoryItemEmbeddings(
         embedding_model: config.memory.modelId,
         embedding_dim: MEMORY_VECTOR_DIMENSIONS,
         index_error: message,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", memoryItemId)
       .execute()

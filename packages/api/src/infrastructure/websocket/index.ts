@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify"
 import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from "@synapse/shared"
+import { assertIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   ChatSocketEvent,
   ConversationFeedEventPayloadMap,
@@ -16,7 +17,7 @@ import {
 } from "../../modules/auth/service.js"
 import { getConversationParticipant } from "../../modules/chat/service.js"
 import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js"
-import { enrichInteractionForUser } from "../../modules/interactions/service.js"
+import { enrichTaskForUser } from "../../modules/tasks/service.js"
 import {
   initAuthSessionRegistry,
   registerAuthenticatedSocket,
@@ -85,7 +86,7 @@ function mapInternalEventToSocketEvent(
         conversationId?: string
         fromWorkspaceMemberId?: string
         state?: "started" | "stopped"
-        occurredAt?: string
+        occurredAt?: import("@synapse/shared").Timestamp
       }
       if (
         !typingPayload.conversationId ||
@@ -100,7 +101,9 @@ function mapInternalEventToSocketEvent(
           conversationId: typingPayload.conversationId,
           fromWorkspaceMemberId: typingPayload.fromWorkspaceMemberId,
           state: typingPayload.state,
-          occurredAt: typingPayload.occurredAt ?? new Date().toISOString(),
+          occurredAt: typingPayload.occurredAt
+            ? assertIsoInstant(typingPayload.occurredAt)
+            : nowIsoInstant(),
         },
       }
     }
@@ -127,13 +130,13 @@ async function enrichChatSyncSocketEventForViewer(
     >
     const itemPayload =
       eventItem.eventPayload as ConversationFeedEventPayloadMap["task_requested"]
-    const interaction =
+    const task =
       itemPayload && typeof itemPayload === "object" && "task" in itemPayload
         ? (itemPayload as ConversationFeedEventPayloadMap["task_requested"])
             .task
         : undefined
 
-    if (!interaction) {
+    if (!task) {
       return payload
     }
 
@@ -145,7 +148,7 @@ async function enrichChatSyncSocketEventForViewer(
           ...eventItem,
           eventPayload: {
             ...itemPayload,
-            task: await enrichInteractionForUser(interaction, viewerUserId),
+            task: await enrichTaskForUser(task, viewerUserId),
           },
         },
       },
@@ -160,7 +163,7 @@ async function enrichChatSyncSocketEventForViewer(
     ...payload,
     payload: {
       ...(payload.payload as ChatSyncEventPayloadMap["task.updated"]),
-      task: await enrichInteractionForUser(
+      task: await enrichTaskForUser(
         (payload.payload as ChatSyncEventPayloadMap["task.updated"]).task,
         viewerUserId
       ),
@@ -466,7 +469,7 @@ export function setupWebSocket(app: FastifyInstance) {
             if (socket.readyState === 1) {
               safeSendSocketEvent(clientId, {
                 type: "ping",
-                payload: { at: new Date().toISOString() },
+                payload: { at: nowIsoInstant() },
               })
               client.pongTimer = setTimeout(() => {
                 try {

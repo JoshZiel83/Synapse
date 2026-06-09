@@ -303,6 +303,42 @@
     return typeof value === "string" && UUID_PATTERN.test(value);
   }
 
+  // ../device-protocol/dist/instant.js
+  var ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  function isIsoInstantString(value) {
+    if (typeof value !== "string" || !ISO_INSTANT_PATTERN.test(value)) {
+      return false;
+    }
+    const parsedMs = Date.parse(value);
+    if (!Number.isFinite(parsedMs)) {
+      return false;
+    }
+    return new Date(parsedMs).toISOString() === value;
+  }
+  function assertIsoInstantString(value) {
+    if (!isIsoInstantString(value)) {
+      throw new Error("Expected a canonical UTC ISO-8601 instant string with millisecond precision");
+    }
+    return value;
+  }
+
+  // ../shared/dist/datetime/instant.js
+  function isValidDateInstance(value) {
+    return Object.prototype.toString.call(value) === "[object Date]" && !Number.isNaN(value.getTime());
+  }
+  function dateToIsoInstant(value) {
+    if (!isValidDateInstance(value)) {
+      throw new Error("Expected a valid Date when converting to IsoInstantString");
+    }
+    return assertIsoInstantString(value.toISOString());
+  }
+  function nowIsoInstant() {
+    return dateToIsoInstant(/* @__PURE__ */ new Date());
+  }
+  function isIsoInstant(value) {
+    return isIsoInstantString(value);
+  }
+
   // ../device-protocol/dist/enums.js
   var DEVICE_MCP_ERROR_CODES = [
     "tool_definition_changed",
@@ -848,19 +884,19 @@
     NATIVE_GROUP_ONLY: CONVERSATION_TYPE_MASK_BITS.group
   };
   var DEFAULT_CONVERSATION_TYPE_MASK = CONVERSATION_TYPE_MASK_PRESETS.ALL;
-  var INTERACTION_REQUEST_KIND = {
+  var TASK_REQUEST_KIND = {
     USER_INPUT: "user_input",
     PLAN_APPROVAL: "plan_approval",
     RUNTIME_AUTHORIZATION: "runtime_authorization"
   };
-  var INTERACTION_REQUEST_KINDS = [
-    INTERACTION_REQUEST_KIND.USER_INPUT,
-    INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
-    INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+  var TASK_REQUEST_KINDS = [
+    TASK_REQUEST_KIND.USER_INPUT,
+    TASK_REQUEST_KIND.PLAN_APPROVAL,
+    TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION
   ];
-  var TARGETED_INTERACTION_REQUEST_KINDS = [
-    INTERACTION_REQUEST_KIND.USER_INPUT,
-    INTERACTION_REQUEST_KIND.PLAN_APPROVAL
+  var TARGETED_TASK_REQUEST_KINDS = [
+    TASK_REQUEST_KIND.USER_INPUT,
+    TASK_REQUEST_KIND.PLAN_APPROVAL
   ];
   var MODEL_GROUP_ROUTING_STRATEGY = {
     WEIGHTED_RANDOM: "weighted_random",
@@ -2064,6 +2100,9 @@
       tombstones: {}
     };
   }
+  function readTimestamp(value) {
+    return typeof value === "string" && isIsoInstant(value) ? value : void 0;
+  }
   function normalizeTombstones(value) {
     if (!value || typeof value !== "object") {
       return {};
@@ -2121,7 +2160,7 @@
       workspaceMemberId: typeof queueState.workspaceMemberId === "string" ? queueState.workspaceMemberId : void 0,
       clientInstanceId: typeof queueState.clientInstanceId === "string" && isUuid(queueState.clientInstanceId) ? queueState.clientInstanceId : void 0,
       inboxCursor: isV2 && typeof queueState.inboxCursor === "number" && Number.isFinite(queueState.inboxCursor) ? queueState.inboxCursor : 0,
-      lastBootstrappedAt: typeof queueState.lastBootstrappedAt === "string" ? queueState.lastBootstrappedAt : void 0,
+      lastBootstrappedAt: readTimestamp(queueState.lastBootstrappedAt),
       pendingReads: normalizePendingReads(queueState.pendingReads),
       outbox: normalizeOutbox(queueState.outbox),
       tombstones: isV2 ? normalizeTombstones(queueState.tombstones) : {}
@@ -2197,7 +2236,7 @@
         queueState.workspaceId,
         queueState
       ),
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      updatedAt: nowIsoInstant()
     });
   }
   async function loadStoredChatWorkerAuthContext() {
@@ -2210,7 +2249,7 @@
     await database.put(CHAT_WEB_WORKER_AUTH_CONTEXT_STORE, {
       key: "active",
       payload,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      updatedAt: nowIsoInstant()
     });
   }
   async function clearStoredChatWorkerAuthContext() {
@@ -2322,7 +2361,7 @@
   }
   async function flushOutbox(auth, queueState) {
     return flushOutboxQueue(queueState, {
-      now: () => (/* @__PURE__ */ new Date()).toISOString(),
+      now: () => nowIsoInstant(),
       failureMessage: "发送失败",
       send: async (entry) => {
         await fetchJson(

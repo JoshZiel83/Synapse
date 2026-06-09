@@ -1,4 +1,5 @@
 import { emitEvent } from "../../infrastructure/events/index.js"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   ActorAction,
   ConversationFeedEventPayloadMap,
@@ -172,7 +173,7 @@ async function handleRespond(
     type: "actor.action",
     workspaceId,
     payload: { actorId, sessionId, actions: [action] },
-    timestamp: new Date().toISOString(),
+    timestamp: nowIsoInstant(),
   })
 }
 

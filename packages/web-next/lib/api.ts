@@ -35,8 +35,8 @@ import type {
   ChatConversationReadWatermarkResponse,
   ChatConversationSendMessageInput,
   ChatConversationSendMessageResponse,
-  ChatInteractionResolveInput,
-  ChatInteractionResolveResponse,
+  ChatTaskResolveInput,
+  ChatTaskResolveResponse,
   ChatSyncResponse,
   CurrentUserWeixinBindingSummary,
   InstalledSkill,
@@ -53,7 +53,7 @@ import type {
   RelationshipScanResponse,
   RemoteAgentAccessRequestListResponse,
   RemoteAgentBindingView,
-  RemoteAgentGroupInteractionGrantView,
+  RemoteAgentGroupTaskGrantView,
   RemoteAgentLifecycleState,
   RemoteAgentMachineDetailView,
   RemoteAgentMachinePairingSessionView,
@@ -84,8 +84,8 @@ import {
   type ConversationCatalogEntry,
 } from "@synapse/shared"
 import {
-  isChatInteractionResolveConflictResponse,
-  type ChatInteractionResolvePayload,
+  isChatTaskResolveConflictResponse,
+  type ChatTaskResolvePayload,
   type FileRecordView,
 } from "@synapse/shared/types"
 
@@ -93,9 +93,9 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 
 export type {
   ActorAccessRequestListResponse,
-  ChatInteractionResolveInput,
-  ChatInteractionResolvePayload,
-  ChatInteractionResolveResponse,
+  ChatTaskResolveInput,
+  ChatTaskResolvePayload,
+  ChatTaskResolveResponse,
   ContactHubDetailResponse,
   ContactHubEntryView,
   ContactHubResponse,
@@ -108,7 +108,7 @@ export type {
   RelationshipScanResponse,
   RemoteAgentAccessRequestListResponse,
   RemoteAgentBindingView,
-  RemoteAgentGroupInteractionGrantView,
+  RemoteAgentGroupTaskGrantView,
   RemoteAgentLifecycleState,
   RemoteAgentMachineDetailView,
   RemoteAgentMachinePairingSessionView,
@@ -718,7 +718,11 @@ class ApiClient {
   }
   createInvite(
     wsId: string,
-    data: { trustLevel?: string; maxUses?: number; expiresAt?: string }
+    data: {
+      trustLevel?: string
+      maxUses?: number
+      expiresAt?: import("@synapse/shared").Timestamp
+    }
   ) {
     return this.fetch(`/workspaces/${wsId}/invites`, {
       method: "POST",
@@ -1429,23 +1433,23 @@ class ApiClient {
   ): Promise<RemoteAgentMachineDetailView> {
     return this.fetch(`/workspaces/${wsId}/remote-agent-machines/${machineId}`)
   }
-  getRemoteAgentGroupInteractionGrants(
+  getRemoteAgentGroupTaskGrants(
     wsId: string,
     remoteAgentId: string
-  ): Promise<{ grants: RemoteAgentGroupInteractionGrantView[] }> {
+  ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
     return this.fetch(
-      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-interaction-grants`
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`
     )
   }
-  updateRemoteAgentGroupInteractionGrants(
+  updateRemoteAgentGroupTaskGrants(
     wsId: string,
     remoteAgentId: string,
     input: {
       workspaceMemberIds: string[]
     }
-  ): Promise<{ grants: RemoteAgentGroupInteractionGrantView[] }> {
+  ): Promise<{ grants: RemoteAgentGroupTaskGrantView[] }> {
     return this.fetch(
-      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-interaction-grants`,
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-task-grants`,
       {
         method: "PUT",
         body: JSON.stringify(input),
@@ -1655,14 +1659,14 @@ class ApiClient {
     )
   }
 
-  resolveChatInteraction(
+  resolveChatTask(
     workspaceId: string,
     threadId: string,
-    interactionId: string,
-    data: ChatInteractionResolveInput
-  ): Promise<ChatInteractionResolveResponse> {
+    taskId: string,
+    data: ChatTaskResolveInput
+  ): Promise<ChatTaskResolveResponse> {
     return this.fetch(
-      `/workspaces/${workspaceId}/chat/conversations/${threadId}/tasks/${interactionId}/respond`,
+      `/workspaces/${workspaceId}/chat/conversations/${threadId}/tasks/${taskId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),
@@ -1671,7 +1675,7 @@ class ApiClient {
       if (
         error instanceof ApiError &&
         error.status === 409 &&
-        isChatInteractionResolveConflictResponse(error.details)
+        isChatTaskResolveConflictResponse(error.details)
       ) {
         return error.details
       }

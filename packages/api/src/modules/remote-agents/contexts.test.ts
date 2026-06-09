@@ -18,10 +18,10 @@ test("pickRepresentativeContext prefers active runtime states over idle/error/of
       runtimeSessionId: null,
       runtimeState: "offline" as const,
       statusText: null,
-      activeInteractionId: null,
+      activeTaskId: null,
       lastRunStartedAt: null,
       lastRunFinishedAt: null,
-      lastActivityAt: "2026-05-22T11:59:00Z",
+      lastActivityAt: "2026-05-22T11:59:00.000Z",
       lastError: null,
     },
     {
@@ -31,10 +31,10 @@ test("pickRepresentativeContext prefers active runtime states over idle/error/of
       runtimeSessionId: "sess-1",
       runtimeState: "idle" as const,
       statusText: null,
-      activeInteractionId: null,
+      activeTaskId: null,
       lastRunStartedAt: null,
       lastRunFinishedAt: null,
-      lastActivityAt: "2026-05-22T12:01:00Z",
+      lastActivityAt: "2026-05-22T12:01:00.000Z",
       lastError: null,
     },
     {
@@ -44,10 +44,10 @@ test("pickRepresentativeContext prefers active runtime states over idle/error/of
       runtimeSessionId: "sess-2",
       runtimeState: "running" as const,
       statusText: "Processing",
-      activeInteractionId: null,
-      lastRunStartedAt: "2026-05-22T12:00:30Z",
+      activeTaskId: null,
+      lastRunStartedAt: "2026-05-22T12:00:30.000Z",
       lastRunFinishedAt: null,
-      lastActivityAt: "2026-05-22T12:00:30Z",
+      lastActivityAt: "2026-05-22T12:00:30.000Z",
       lastError: null,
     },
   ]
@@ -63,16 +63,16 @@ test("pickRepresentativeContext tie-breaks by lastActivityAt within the same pri
     runtimeSessionId: "sess-1",
     runtimeState: "running" as const,
     statusText: null,
-    activeInteractionId: null,
+    activeTaskId: null,
     lastRunStartedAt: null,
     lastRunFinishedAt: null,
-    lastActivityAt: "2026-05-22T10:00:00Z",
+    lastActivityAt: "2026-05-22T10:00:00.000Z",
     lastError: null,
   }
   const newer = {
     ...older,
     conversationId: "c-newer",
-    lastActivityAt: "2026-05-22T13:00:00Z",
+    lastActivityAt: "2026-05-22T13:00:00.000Z",
   }
   const pick = pickRepresentativeContext([older, newer])
   assert.equal(pick?.conversationId, "c-newer")
@@ -86,10 +86,10 @@ test("pickRepresentativeContext handles missing lastActivityAt as least recent",
     runtimeSessionId: null,
     runtimeState: "idle" as const,
     statusText: null,
-    activeInteractionId: null,
+    activeTaskId: null,
     lastRunStartedAt: null,
     lastRunFinishedAt: null,
-    lastActivityAt: "2026-05-22T11:00:00Z",
+    lastActivityAt: "2026-05-22T11:00:00.000Z",
     lastError: null,
   }
   const withoutActivity = {
