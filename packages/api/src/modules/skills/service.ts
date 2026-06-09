@@ -2769,6 +2769,7 @@ export async function createWorkspaceSkill(input: {
 export async function listInstalledSkills(
   workspaceId: string,
   filters?: {
+    skillIds?: string[]
     accessTargetType?: SkillUseScope
     actorId?: string
     // Round 12 review (P3): workspace_member filter requires the id so
@@ -2795,7 +2796,7 @@ export async function listInstalledSkills(
 
   const rows = await loadInstalledSkillRows({
     workspaceId,
-    skillIds: filteredSkillIds || undefined,
+    skillIds: filters?.skillIds || filteredSkillIds || undefined,
     sourceSkillId: filters?.sourceSkillId,
   })
   if (rows.length === 0) return []

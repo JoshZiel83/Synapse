@@ -915,6 +915,7 @@ async function getPluginCatalogRowByItemId(itemId: string) {
 async function loadInstallationRows(
   workspaceId: string,
   filters?: {
+    installationIds?: string[]
     pluginId?: string
     installationId?: string
   }
@@ -929,6 +930,11 @@ async function loadInstallationRows(
 
   if (filters?.installationId) {
     conditions.push(sql`installation.id = ${filters.installationId}`)
+  }
+  if (filters?.installationIds?.length) {
+    conditions.push(
+      sql`installation.id = ANY(${filters.installationIds}::uuid[])`
+    )
   }
 
   const result = await db.executeQuery(
@@ -1836,6 +1842,16 @@ export async function installPluginUnified(data: {
       authSessionIds: data.authSessionIds,
       run: runnerFn(client),
     })
+    const validation = validateConfig(
+      resolvedConfig,
+      plugin.validation_rules || []
+    )
+    if (!validation.valid) {
+      throw new McpPluginError(
+        400,
+        validation.errors.map((item) => item.message).join("; ")
+      )
+    }
     await validateResolvedConfigForInstall(resolvedConfig, client)
     const encryptedConfig = encryptSensitiveFields(
       resolvedConfig,
@@ -1976,6 +1992,7 @@ export async function uninstallPluginUnified(installId: string) {
 export async function getInstallations(
   workspaceId: string,
   filters?: {
+    installationIds?: string[]
     pluginId?: string
   }
 ) {
@@ -2147,6 +2164,19 @@ export async function updateInstallation(
             run,
           })
         : mergedConfig
+
+    if (data.configData || data.authSessionIds) {
+      const validation = validateConfig(
+        resolvedConfig,
+        plugin.validation_rules || []
+      )
+      if (!validation.valid) {
+        throw new McpPluginError(
+          400,
+          validation.errors.map((item) => item.message).join("; ")
+        )
+      }
+    }
 
     if (data.configData || data.authSessionIds) {
       await validateResolvedConfigForUpdate(resolvedConfig, client)

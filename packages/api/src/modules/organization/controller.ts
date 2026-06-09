@@ -128,43 +128,6 @@ function toCapabilityAccessTarget(
   return scope ? { subject, scope } : { subject }
 }
 
-const createActorSchema = z
-  .object({
-    displayName: z.string().min(1).max(255),
-    role: z.enum(ACTOR_ROLES),
-    title: z.string().max(255).default(""),
-    avatarFileId: z.uuid().optional(),
-    avatarEmoji: z.string().min(1).max(32).optional(),
-    canRepresentUser: z.boolean().default(false),
-    docs: z.array(actorDocSchema).optional(),
-    parentId: z.uuid().optional(),
-    specialties: z.array(z.string()).optional(),
-    config: z.record(z.string(), z.unknown()).optional(),
-    grants: z.array(initialGrantSchema).optional(),
-  })
-  .refine((body) => !(body.avatarFileId && body.avatarEmoji), {
-    message: "avatarFileId and avatarEmoji are mutually exclusive",
-    path: ["avatarEmoji"],
-  })
-
-const updateActorSchema = z
-  .object({
-    displayName: z.string().min(1).max(255).optional(),
-    role: z.enum(ACTOR_ROLES).optional(),
-    title: z.string().max(255).optional(),
-    avatarFileId: z.uuid().nullable().optional(),
-    avatarEmoji: z.string().min(1).max(32).nullable().optional(),
-    canRepresentUser: z.boolean().optional(),
-    docs: z.array(actorDocSchema).optional(),
-    parentId: z.uuid().nullable().optional(),
-    specialties: z.array(z.string()).optional(),
-    config: z.record(z.string(), z.unknown()).optional(),
-  })
-  .refine((body) => !(body.avatarFileId && body.avatarEmoji), {
-    message: "avatarFileId and avatarEmoji are mutually exclusive",
-    path: ["avatarEmoji"],
-  })
-
 const installActorPackageSchema = z.object({
   displayName: z.string().min(1).max(255).optional(),
   title: z.string().max(255).optional(),
@@ -203,44 +166,6 @@ async function requireActorPermission(
 export async function organizationController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
   app.addHook("onRequest", workspaceMiddleware)
-
-  app.post("/", async (request, reply) => {
-    const allowed = await requireWorkspacePermission(
-      request as FastifyRequest<{ Params: WorkspaceParams }>,
-      reply,
-      "workspace.manage_actors",
-      "Not allowed to manage actors"
-    )
-    if (!allowed) return
-
-    const parsed = createActorSchema.safeParse(request.body)
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: "Validation failed",
-        details: formatValidationDetails(parsed.error),
-      })
-    }
-
-    try {
-      const actor = await service.createActor({
-        workspaceId: (request.params as WorkspaceParams).workspaceId,
-        createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
-        ...parsed.data,
-        grants: parsed.data.grants?.map((grant) => ({
-          target: toCapabilityAccessTarget(grant.target),
-          permissions: grant.permissions as WorkspaceAppGrantPermission[],
-          conversationTypeMaskOverride:
-            grant.conversationTypeMaskOverride ?? null,
-          reason: grant.reason,
-        })),
-      })
-      return reply.status(201).send(actor)
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to create actor"
-      return reply.status(400).send({ error: message })
-    }
-  })
 
   app.get("/", async (request, reply) => {
     const { workspaceId } = request.params as WorkspaceParams
@@ -366,69 +291,5 @@ export async function organizationController(app: FastifyInstance) {
     }
 
     return reply.send(actor)
-  })
-
-  app.put("/:actorId", async (request, reply) => {
-    const { workspaceId, actorId } = request.params as WorkspaceParams & {
-      actorId: string
-    }
-    const allowed = await requireActorPermission(
-      request,
-      reply,
-      actorId,
-      "actor.edit",
-      "Not allowed to edit this actor"
-    )
-    if (!allowed) return
-
-    const parsed = updateActorSchema.safeParse(request.body)
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: "Validation failed",
-        details: formatValidationDetails(parsed.error),
-      })
-    }
-
-    try {
-      const actor = await service.updateActor(
-        actorId,
-        workspaceId,
-        parsed.data,
-        {
-          type: "workspace_member",
-          workspaceMemberId: (request as any).workspaceMember!.id,
-          reason: "user_edit",
-        }
-      )
-      if (!actor) {
-        return reply.status(404).send({ error: "Actor not found" })
-      }
-      return reply.send(actor)
-    } catch (error) {
-      return reply.status(400).send({
-        error:
-          error instanceof Error ? error.message : "Failed to update actor",
-      })
-    }
-  })
-
-  app.delete("/:actorId", async (request, reply) => {
-    const { workspaceId, actorId } = request.params as WorkspaceParams & {
-      actorId: string
-    }
-    const allowed = await requireActorPermission(
-      request,
-      reply,
-      actorId,
-      "actor.delete",
-      "Not allowed to delete this actor"
-    )
-    if (!allowed) return
-
-    const deleted = await service.deleteActor(actorId, workspaceId)
-    if (!deleted) {
-      return reply.status(404).send({ error: "Actor not found" })
-    }
-    return reply.status(204).send()
   })
 }

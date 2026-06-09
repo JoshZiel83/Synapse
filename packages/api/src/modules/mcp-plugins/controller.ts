@@ -1,24 +1,25 @@
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { REUSE_SCOPES } from "@synapse/shared/constants"
+import { db } from "../../infrastructure/database/kysely.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { requireRequestAction } from "../access/guards.js"
+import {
+  getRequestAccessSubject,
+  listAuthorizedResourceIds,
+} from "../access/service.js"
 import {
   createPluginInstallPlan,
   getInstallation,
   getInstallations,
   getOrganization,
   getPlugin,
-  installPluginUnified,
   listOrganizations,
   listPluginCategories,
   listPlugins,
   McpPluginError,
-  uninstallPluginUnified,
-  updateInstallation,
-  validateConfig,
 } from "./service.js"
 import {
   getPluginAuthSession,
@@ -31,23 +32,6 @@ import { getEventLogs, getToolCallLogs } from "./audit.js"
 
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-
-const installSchema = z.object({
-  pluginId: z.uuid(),
-  lifecycleScope: lifecycleScopeSchema.optional(),
-  configData: z.record(z.string(), z.unknown()).optional(),
-  authSessionIds: z.record(z.string(), z.uuid()).optional(),
-})
-
-const updateInstallSchema = z.object({
-  isEnabled: z.boolean().optional(),
-  configData: z.record(z.string(), z.unknown()).optional(),
-  lifecycleScope: lifecycleScopeSchema.optional(),
-  conversationTypeMaskOverride: conversationTypeMaskSchema
-    .nullable()
-    .optional(),
-  authSessionIds: z.record(z.string(), z.uuid()).optional(),
-})
 
 const installPlanSchema = z.object({})
 
@@ -339,6 +323,13 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         if (!allowed) return
 
         const { workspaceId } = request.params as { workspaceId: string }
+        const installationIds = await listAuthorizedResourceIds(db, {
+          subject: getRequestAccessSubject(request),
+          action: "plugin_installation.edit",
+        })
+        if (installationIds.length === 0) {
+          return reply.send([])
+        }
         const { pluginId } = z
           .object({
             pluginId: z.uuid().optional(),
@@ -346,6 +337,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           .parse(request.query || {})
         reply.send(
           await getInstallations(workspaceId, {
+            installationIds,
             pluginId,
           })
         )
@@ -360,135 +352,22 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     workspaceHook,
     async (request, reply) => {
       try {
-        const allowed = await requireWorkspacePermission(
-          request,
-          reply,
-          "workspace.manage_plugins",
-          "Not allowed to view plugin installations in this workspace"
-        )
-        if (!allowed) return
-
-        const { workspaceId, installId } = request.params as {
-          workspaceId: string
-          installId: string
-        }
-        reply.send({
-          installation: await getInstallation(workspaceId, installId),
-        })
-      } catch (error) {
-        handleError(reply, error)
-      }
-    }
-  )
-
-  app.post(
-    "/api/v1/workspaces/:workspaceId/mcp/installations",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const allowed = await requireWorkspacePermission(
-          request,
-          reply,
-          "workspace.manage_plugins",
-          "Not allowed to manage plugin installations in this workspace"
-        )
-        if (!allowed) return
-
-        const { workspaceId } = request.params as { workspaceId: string }
-        const body = installSchema.parse(request.body)
-
-        if (body.configData) {
-          const plugin = await getPlugin(body.pluginId)
-          const validation = validateConfig(
-            body.configData,
-            plugin.validation_rules || []
-          )
-          if (!validation.valid) {
-            return reply.status(400).send({
-              error: "Validation failed",
-              details: validation.errors,
-            })
-          }
-        }
-
-        const installation = await installPluginUnified({
-          workspaceId,
-          pluginId: body.pluginId,
-          lifecycleScope: body.lifecycleScope,
-          configData: body.configData,
-          authSessionIds: body.authSessionIds,
-          installedByWorkspaceMemberId: (request as any).workspaceMember!.id,
-        })
-        reply.status(201).send(installation)
-      } catch (error) {
-        handleError(reply, error)
-      }
-    }
-  )
-
-  app.put(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId, installId } = request.params as {
-          workspaceId: string
-          installId: string
-        }
+        const { installId } = request.params as { installId: string }
         const allowed = await requireRequestAction(
           request,
           reply,
           "plugin_installation.edit",
           installId,
-          "Not allowed to edit this plugin installation"
+          "Not allowed to view this plugin installation"
         )
         if (!allowed) return
 
-        const body = updateInstallSchema.parse(request.body)
-
-        if (body.configData) {
-          const existing = await getInstallation(workspaceId, installId)
-          const plugin = await getPlugin(existing.plugin_id)
-          const validation = validateConfig(
-            body.configData,
-            plugin.validation_rules || []
-          )
-          if (!validation.valid) {
-            return reply.status(400).send({
-              error: "Validation failed",
-              details: validation.errors,
-            })
-          }
+        const { workspaceId } = request.params as {
+          workspaceId: string
         }
-
-        const installation = await updateInstallation(installId, {
-          ...body,
-          updatedByWorkspaceMemberId: (request as any).workspaceMember!.id,
+        reply.send({
+          installation: await getInstallation(workspaceId, installId),
         })
-        reply.send(installation)
-      } catch (error) {
-        handleError(reply, error)
-      }
-    }
-  )
-
-  app.delete(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { installId } = request.params as { installId: string }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "plugin_installation.delete",
-          installId,
-          "Not allowed to delete this plugin installation"
-        )
-        if (!allowed) return
-
-        await uninstallPluginUnified(installId)
-        reply.send({ success: true })
       } catch (error) {
         handleError(reply, error)
       }

@@ -103,7 +103,7 @@ const requestDirectionSchema = z
 const createGrantRequestSchema = z.object({
   reason: z.string().trim().min(1).optional(),
 })
-const createWorkspaceAppSchema = z.discriminatedUnion("kind", [
+const createWorkspaceAppSchema = z.union([
   z.object({
     kind: z.literal(WORKSPACE_APP_KIND.ACTOR),
     displayName: z.string().trim().min(1).max(255),
@@ -246,6 +246,13 @@ const updateWorkspaceAppSchema = z.discriminatedUnion("kind", [
       .nullable()
       .optional(),
     attachmentFiles: z.array(z.any()).optional(),
+  }),
+  z.object({
+    kind: z.literal(WORKSPACE_APP_KIND.DEVICE_CAPABILITY),
+    displayName: z.string().trim().min(1).max(255).optional(),
+    conversationTypeMaskOverride: conversationTypeMaskSchema
+      .nullable()
+      .optional(),
   }),
   z.object({
     kind: z.literal(WORKSPACE_APP_KIND.PLUGIN_INSTALLATION),

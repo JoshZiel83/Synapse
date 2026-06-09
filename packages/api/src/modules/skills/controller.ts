@@ -18,7 +18,9 @@ import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
   authorizeAction,
+  getRequestAccessSubject,
   getRequestUserId,
+  listAuthorizedResourceIds,
   resolveWorkspaceAccessSubject,
 } from "../access/service.js"
 import {
@@ -45,92 +47,6 @@ const accessTargetTypeSchema = z.enum([
   CAPABILITY_ACCESS_TARGET_TYPES[4],
 ] as const satisfies readonly SkillAccessTargetType[])
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const accessTargetSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal(SUBJECT_KIND.WORKSPACE),
-  }),
-  z.object({
-    type: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    workspaceMemberId: z.uuid(),
-  }),
-  z.object({
-    type: z.literal(SUBJECT_KIND.CONVERSATION),
-    conversationId: z.uuid(),
-  }),
-  z.object({
-    type: z.literal(SUBJECT_KIND.ACTOR),
-    actorId: z.uuid(),
-    conversationId: z.uuid().optional(),
-  }),
-  z.object({
-    type: z.literal(SUBJECT_KIND.REMOTE_AGENT),
-    remoteAgentId: z.uuid(),
-    conversationId: z.uuid().optional(),
-  }),
-]) satisfies z.ZodType<
-  | { type: typeof SUBJECT_KIND.WORKSPACE }
-  | { type: typeof SUBJECT_KIND.WORKSPACE_MEMBER; workspaceMemberId: string }
-  | { type: typeof SUBJECT_KIND.CONVERSATION; conversationId: string }
-  | {
-      type: typeof SUBJECT_KIND.ACTOR
-      actorId: string
-      conversationId?: string
-    }
-  | {
-      type: typeof SUBJECT_KIND.REMOTE_AGENT
-      remoteAgentId: string
-      conversationId?: string
-    }
->
-
-function inputToCapabilityAccessTarget(
-  workspaceId: string,
-  input: z.infer<typeof accessTargetSchema>
-): CapabilityAccessTarget {
-  switch (input.type) {
-    case SUBJECT_KIND.WORKSPACE:
-      return { subject: workspaceRef(workspaceId) }
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      if (!input.workspaceMemberId) {
-        throw new SkillError(
-          400,
-          "workspaceMemberId is required for workspace_member access target"
-        )
-      }
-      return { subject: workspaceMemberRef(input.workspaceMemberId) }
-    case SUBJECT_KIND.ACTOR:
-      if (!input.actorId) {
-        throw new SkillError(400, "actorId is required for actor access target")
-      }
-      return {
-        subject: actorRef(input.actorId),
-        ...(input.conversationId
-          ? { scope: conversationRef(input.conversationId) }
-          : {}),
-      }
-    case SUBJECT_KIND.REMOTE_AGENT:
-      if (!input.remoteAgentId) {
-        throw new SkillError(
-          400,
-          "remoteAgentId is required for remote_agent access target"
-        )
-      }
-      return {
-        subject: remoteAgentRef(input.remoteAgentId),
-        ...(input.conversationId
-          ? { scope: conversationRef(input.conversationId) }
-          : {}),
-      }
-    case SUBJECT_KIND.CONVERSATION:
-      if (!input.conversationId) {
-        throw new SkillError(
-          400,
-          "conversationId is required for conversation access target"
-        )
-      }
-      return { subject: conversationRef(input.conversationId) }
-  }
-}
 
 const skillAttachmentSchema = z.object({
   path: z.string().min(1),
@@ -153,20 +69,6 @@ const publishSkillSchema = z.object({
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
 })
 
-const createWorkspaceSkillSchema = z.object({
-  name: z.string().min(1),
-  description: z.any().optional(),
-  iconFileId: z.uuid().optional(),
-  tags: z.array(z.string()).optional(),
-  attachmentFiles: z.array(skillAttachmentSchema).optional(),
-  accessTarget: accessTargetSchema,
-})
-
-const installSkillSchema = z.object({
-  marketSkillId: z.uuid(),
-  accessTarget: accessTargetSchema,
-})
-
 const importMarketplaceSkillSchema = z.discriminatedUnion("sourceType", [
   z.object({
     sourceType: z.literal("github"),
@@ -181,18 +83,6 @@ const importMarketplaceSkillSchema = z.discriminatedUnion("sourceType", [
     version: z.string().trim().min(1).optional(),
   }),
 ])
-
-const updateInstalledSkillSchema = z.object({
-  name: z.string().min(1).optional(),
-  description: z.any().optional(),
-  iconFileId: z.uuid().nullable().optional(),
-  tags: z.array(z.string()).optional(),
-  isEnabled: z.boolean().optional(),
-  conversationTypeMaskOverride: conversationTypeMaskSchema
-    .nullable()
-    .optional(),
-  attachmentFiles: z.array(skillAttachmentSchema).optional(),
-})
 
 const listInstalledSkillsQuerySchema = z.object({
   accessTargetType: accessTargetTypeSchema.optional(),
@@ -406,6 +296,13 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
+        const authorizedSkillIds = await listAuthorizedResourceIds(db, {
+          subject: getRequestAccessSubject(request),
+          action: "installed_skill.edit",
+        })
+        if (authorizedSkillIds.length === 0) {
+          return reply.status(200).send({ skills: [] })
+        }
         const {
           accessTargetType,
           actorId,
@@ -417,6 +314,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
         ) as z.infer<typeof listInstalledSkillsQuerySchema>
 
         const skills = await listInstalledSkills(workspaceId, {
+          skillIds: authorizedSkillIds,
           accessTargetType,
           actorId,
           workspaceMemberId,
@@ -424,76 +322,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
           sourceSkillId,
         })
         return reply.status(200).send({ skills })
-      } catch (error) {
-        return handleError(reply, error)
-      }
-    }
-  )
-
-  app.post(
-    "/api/v1/workspaces/:workspaceId/skills",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId } = request.params as { workspaceId: string }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to install skills in this workspace"
-        )
-        if (!allowed) return
-
-        const body = installSkillSchema.parse(request.body)
-        const workspaceMemberId = (request as any).workspaceMember?.id as string
-        const skill = await installMarketplaceSkill({
-          workspaceId,
-          marketSkillId: body.marketSkillId,
-          accessTarget: inputToCapabilityAccessTarget(
-            workspaceId,
-            body.accessTarget
-          ),
-          installedByWorkspaceMemberId: workspaceMemberId,
-        })
-        return reply.status(201).send({ skill })
-      } catch (error) {
-        return handleError(reply, error)
-      }
-    }
-  )
-
-  app.post(
-    "/api/v1/workspaces/:workspaceId/skills/custom",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId } = request.params as { workspaceId: string }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to create skills in this workspace"
-        )
-        if (!allowed) return
-
-        const body = createWorkspaceSkillSchema.parse(request.body)
-        const workspaceMemberId = (request as any).workspaceMember?.id as string
-        const skill = await createWorkspaceSkill({
-          workspaceId,
-          name: body.name,
-          description: body.description,
-          iconFileId: body.iconFileId,
-          tags: body.tags,
-          attachmentFiles: body.attachmentFiles,
-          accessTarget: inputToCapabilityAccessTarget(
-            workspaceId,
-            body.accessTarget
-          ),
-          installedByWorkspaceMemberId: workspaceMemberId,
-        })
-        return reply.status(201).send({ skill })
       } catch (error) {
         return handleError(reply, error)
       }
@@ -512,44 +340,13 @@ export function registerSkillRoutes(app: FastifyInstance) {
         const allowed = await requireRequestAction(
           request,
           reply,
-          "workspace.view",
-          workspaceId,
-          "Not allowed to view installed skill details in this workspace"
+          "installed_skill.edit",
+          installedSkillId,
+          "Not allowed to view this installed skill"
         )
         if (!allowed) return
 
         const skill = await getInstalledSkill(workspaceId, installedSkillId)
-        return reply.status(200).send({ skill })
-      } catch (error) {
-        return handleError(reply, error)
-      }
-    }
-  )
-
-  app.put(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId, installedSkillId } = request.params as {
-          workspaceId: string
-          installedSkillId: string
-        }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "installed_skill.edit",
-          installedSkillId,
-          "Not allowed to edit this installed skill"
-        )
-        if (!allowed) return
-
-        const body = updateInstalledSkillSchema.parse(request.body)
-        const skill = await updateInstalledSkill({
-          workspaceId,
-          installedSkillId,
-          ...body,
-        })
         return reply.status(200).send({ skill })
       } catch (error) {
         return handleError(reply, error)
@@ -580,32 +377,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
           installedSkillId,
         })
         return reply.status(200).send({ skill })
-      } catch (error) {
-        return handleError(reply, error)
-      }
-    }
-  )
-
-  app.delete(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId",
-    workspaceHook,
-    async (request, reply) => {
-      try {
-        const { workspaceId, installedSkillId } = request.params as {
-          workspaceId: string
-          installedSkillId: string
-        }
-        const allowed = await requireRequestAction(
-          request,
-          reply,
-          "installed_skill.delete",
-          installedSkillId,
-          "Not allowed to delete this installed skill"
-        )
-        if (!allowed) return
-
-        await uninstallInstalledSkill(workspaceId, installedSkillId)
-        return reply.status(204).send()
       } catch (error) {
         return handleError(reply, error)
       }

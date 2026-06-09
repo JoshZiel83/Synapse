@@ -1,18 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
-import {
-  CAPABILITY_ACCESS_TARGET_TYPES,
-  REMOTE_AGENT_RUNTIME_KINDS,
-  SUBJECT_KIND,
-  WORKSPACE_APP_GRANT_PERMISSIONS,
-  actorRef,
-  conversationRef,
-  remoteAgentRef,
-  workspaceMemberRef,
-  workspaceRef,
-  type CapabilityAccessTarget,
-  type WorkspaceAppGrantPermission,
-} from "@synapse/shared"
+import { REMOTE_AGENT_RUNTIME_KINDS } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -20,11 +8,9 @@ import {
   bindRemoteAgent,
   checkRemoteAgentMessages,
   completeRemoteAgentDeliveries,
-  createRemoteAgent,
   createRemoteAgentPlanApprovalInteraction,
   createRemoteAgentMachinePairingSession,
   createRemoteAgentUserInputInteraction,
-  deleteRemoteAgent,
   failRemoteAgentDeliveries,
   getMachineKeyFromHeaders,
   getRemoteAgent,
@@ -37,99 +23,10 @@ import {
   searchRemoteAgentMessages,
   sendRemoteAgentConversationMessage,
   updateRemoteAgentGroupInteractionGrants,
-  updateRemoteAgent,
 } from "./service.js"
 import { handleRemoteAgentMcpRequest } from "./mcp-endpoint.js"
 
 const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
-const workspaceAppGrantPermissionSchema = z.enum(
-  WORKSPACE_APP_GRANT_PERMISSIONS
-)
-const initialGrantSubjectSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal(SUBJECT_KIND.WORKSPACE),
-    workspaceId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
-    memberId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.CONVERSATION),
-    conversationId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.ACTOR),
-    actorId: z.uuid(),
-  }),
-  z.object({
-    kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
-    remoteAgentId: z.uuid(),
-  }),
-])
-const initialGrantTargetSchema = z.object({
-  subject: initialGrantSubjectSchema,
-  scope: z
-    .object({
-      kind: z.literal(SUBJECT_KIND.CONVERSATION),
-      conversationId: z.uuid(),
-    })
-    .optional(),
-})
-const initialGrantSchema = z.object({
-  target: initialGrantTargetSchema,
-  permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
-  conversationTypeMaskOverride: z
-    .number()
-    .int()
-    .min(1)
-    .max(15)
-    .nullable()
-    .optional(),
-  reason: z.string().trim().min(1).optional(),
-})
-const createRemoteAgentSchema = z.object({
-  displayName: z.string().trim().min(1).max(255),
-  title: z.string().trim().min(1).max(255),
-  description: z.string().trim().max(5000).optional(),
-  runtimeKind: runtimeKindSchema,
-  avatarFileId: z.uuid().optional(),
-  avatarEmoji: z.string().trim().max(32).optional(),
-  isPublicShared: z.boolean().optional(),
-  metadata: z.record(z.string(), z.any()).optional(),
-  grants: z.array(initialGrantSchema).optional(),
-})
-
-const updateRemoteAgentSchema = z.object({
-  displayName: z.string().trim().min(1).max(255).optional(),
-  title: z.string().trim().min(1).max(255).optional(),
-  description: z.string().trim().max(5000).nullable().optional(),
-  avatarFileId: z.uuid().nullable().optional(),
-  avatarEmoji: z.string().trim().max(32).nullable().optional(),
-  isPublicShared: z.boolean().optional(),
-  metadata: z.record(z.string(), z.any()).optional(),
-  isActive: z.boolean().optional(),
-})
-
-function toCapabilityAccessTarget(
-  input: z.infer<typeof initialGrantTargetSchema>
-): CapabilityAccessTarget {
-  const subject =
-    input.subject.kind === SUBJECT_KIND.WORKSPACE
-      ? workspaceRef(input.subject.workspaceId)
-      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? workspaceMemberRef(input.subject.memberId)
-        : input.subject.kind === SUBJECT_KIND.CONVERSATION
-          ? conversationRef(input.subject.conversationId)
-          : input.subject.kind === SUBJECT_KIND.ACTOR
-            ? actorRef(input.subject.actorId)
-            : remoteAgentRef(input.subject.remoteAgentId)
-  const scope = input.scope
-    ? conversationRef(input.scope.conversationId)
-    : undefined
-  return scope ? { subject, scope } : { subject }
-}
-
 const createMachineSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().max(2000).optional(),
@@ -258,43 +155,6 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     }
   )
 
-  app.post<{
-    Params: { workspaceId: string }
-    Body: unknown
-  }>(
-    "/api/v1/workspaces/:workspaceId/remote-agents",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
-      if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
-      try {
-        const body = createRemoteAgentSchema.parse(request.body)
-        return reply.status(201).send(
-          await createRemoteAgent({
-            workspaceId: request.params.workspaceId,
-            userId: getRequestUserId(request),
-            displayName: body.displayName,
-            title: body.title,
-            description: body.description,
-            runtimeKind: body.runtimeKind,
-            avatarFileId: body.avatarFileId,
-            avatarEmoji: body.avatarEmoji,
-            isPublicShared: body.isPublicShared,
-            metadata: body.metadata,
-            grants: body.grants?.map((grant) => ({
-              target: toCapabilityAccessTarget(grant.target),
-              permissions: grant.permissions as WorkspaceAppGrantPermission[],
-              conversationTypeMaskOverride:
-                grant.conversationTypeMaskOverride ?? null,
-              reason: grant.reason,
-            })),
-          })
-        )
-      } catch (error) {
-        return sendServiceError(reply, error)
-      }
-    }
-  )
-
   app.get<{
     Params: { workspaceId: string; remoteAgentId: string }
   }>(
@@ -304,72 +164,6 @@ export default async function remoteAgentsController(app: FastifyInstance) {
       try {
         return reply.send(
           await getRemoteAgent({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-          })
-        )
-      } catch (error) {
-        return sendServiceError(reply, error)
-      }
-    }
-  )
-
-  app.patch<{
-    Params: { workspaceId: string; remoteAgentId: string }
-    Body: unknown
-  }>(
-    "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
-      const allowed = await requireRequestAction(
-        request,
-        reply,
-        "remote_agent.edit",
-        request.params.remoteAgentId,
-        "Not allowed to edit this remote agent"
-      )
-      if (!allowed) return
-      try {
-        const body = updateRemoteAgentSchema.parse(request.body)
-        return reply.send(
-          await updateRemoteAgent({
-            workspaceId: request.params.workspaceId,
-            remoteAgentId: request.params.remoteAgentId,
-            userId: getRequestUserId(request),
-            displayName: body.displayName,
-            title: body.title,
-            description: body.description,
-            avatarFileId: body.avatarFileId,
-            avatarEmoji: body.avatarEmoji,
-            isPublicShared: body.isPublicShared,
-            isActive: body.isActive,
-            metadata: body.metadata,
-          })
-        )
-      } catch (error) {
-        return sendServiceError(reply, error)
-      }
-    }
-  )
-
-  app.delete<{
-    Params: { workspaceId: string; remoteAgentId: string }
-  }>(
-    "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId",
-    { preHandler: workspacePreHandler },
-    async (request, reply) => {
-      const allowed = await requireRequestAction(
-        request,
-        reply,
-        "remote_agent.delete",
-        request.params.remoteAgentId,
-        "Not allowed to delete this remote agent"
-      )
-      if (!allowed) return
-      try {
-        return reply.send(
-          await deleteRemoteAgent({
             workspaceId: request.params.workspaceId,
             remoteAgentId: request.params.remoteAgentId,
             userId: getRequestUserId(request),

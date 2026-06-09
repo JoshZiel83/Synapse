@@ -43,10 +43,12 @@ import {
   listWorkspaceAppGrantRequests,
   resolveWorkspaceAppGrantRequest,
   revokeWorkspaceAppGrant,
+  revokeWorkspaceAppGrantsForApp,
   type WorkspaceAppGrantRequestRow,
   type WorkspaceAppGrantRow,
 } from "./grant-storage.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
+import { updateWorkspaceAppRoot } from "./root-storage.js"
 
 type WorkspaceMemberAccess = {
   workspaceMemberId: string
@@ -971,6 +973,11 @@ export async function updateWorkspaceApp(params: {
         }>
       }
     | {
+        kind: typeof WORKSPACE_APP_KIND.DEVICE_CAPABILITY
+        displayName?: string
+        conversationTypeMaskOverride?: number | null
+      }
+    | {
         kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
         isEnabled?: boolean
         configData?: Record<string, unknown>
@@ -1041,6 +1048,13 @@ export async function updateWorkspaceApp(params: {
         updatedByWorkspaceMemberId: access.workspaceMemberId,
       })
       break
+    case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
+      await updateWorkspaceAppRoot(db, {
+        id: params.appId,
+        displayName: params.input.displayName,
+        conversationTypeMaskOverride: params.input.conversationTypeMaskOverride,
+      })
+      break
     default:
       throw new Error("Workspace app update is not supported for this kind")
   }
@@ -1077,6 +1091,14 @@ export async function deleteWorkspaceApp(params: {
       return uninstallInstalledSkill(params.workspaceId, params.appId)
     case WORKSPACE_APP_KIND.PLUGIN_INSTALLATION:
       await uninstallPluginUnified(params.appId)
+      return true
+    case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
+      await updateWorkspaceAppRoot(db, {
+        id: params.appId,
+        status: "archived",
+        deletedAt: new Date(),
+      })
+      await revokeWorkspaceAppGrantsForApp(db, params.appId)
       return true
     default:
       throw new Error("Workspace app deletion is not supported for this kind")
