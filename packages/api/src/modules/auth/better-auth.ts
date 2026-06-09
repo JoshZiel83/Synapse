@@ -408,15 +408,20 @@ export const auth = betterAuth({
           // user. Covers ALL session-creation paths (sign-in, OAuth callback, and
           // crucially the device-authorization flow, which resolves the user via
           // findUserById — which does NOT filter deleted_at — then createSession).
+          //
+          // Important: Better Auth runs this hook inside its own transaction. On a
+          // fresh sign-up, the just-inserted user row may not yet be visible on an
+          // unrelated pool connection, so "row missing" must NOT be treated the
+          // same as "row exists but is soft-deleted". If the user truly does not
+          // exist, the downstream FK / adapter write will fail anyway.
           const userId = session.userId as string | undefined
           if (!userId) return undefined
-          const live = await db
+          const userRow = await db
             .selectFrom("users")
-            .select("id")
+            .select(["id", "deleted_at"])
             .where("id", "=", userId)
-            .where("deleted_at", "is", null)
             .executeTakeFirst()
-          if (!live) {
+          if (userRow && userRow.deleted_at !== null) {
             throw new Error("Cannot create a session for a deleted user")
           }
           return undefined

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import type { AttachmentTargetType, ReuseScope } from "@synapse/shared"
+import type { PluginAttachmentScopeType, ReuseScope } from "@synapse/shared"
 
 export type AccessTargetType =
   | "workspace"
@@ -42,7 +42,7 @@ import { cn } from "@/lib/utils"
 
 export type AccessVisualActor = {
   id: string
-  name: string
+  displayName: string
   role?: string
 }
 
@@ -108,7 +108,7 @@ type FakeLifecycleNode = FakeLifecycleCall & {
   instance: { key: string; label: string } | null
 }
 
-export const attachmentTypeOptionDefs: ScopeOptionDef<AttachmentTargetType>[] =
+export const attachmentScopeOptionDefs: ScopeOptionDef<PluginAttachmentScopeType>[] =
   [
     {
       value: "workspace",
@@ -235,15 +235,19 @@ const reuseOptionDefs: ReuseOptionDef[] = [
   },
 ]
 
-const lifecycleOptionMap: Record<AttachmentTargetType, ReuseScope[]> = {
+const lifecycleOptionMap: Record<PluginAttachmentScopeType, ReuseScope[]> = {
   workspace: ["turn", "session", "conversation", "actor", "workspace"],
   conversation: ["turn", "session", "conversation", "actor", "workspace"],
   actor: ["turn", "session", "conversation", "actor", "workspace"],
   workspace_member: ["turn", "session", "conversation", "actor", "workspace"],
 }
 
-export function getAllowedReuseScopes(attachmentType: AttachmentTargetType) {
-  const allowedScopes = new Set(lifecycleOptionMap[attachmentType] || ["turn"])
+export function getAllowedReuseScopes(
+  attachmentScopeType: PluginAttachmentScopeType
+) {
+  const allowedScopes = new Set(
+    lifecycleOptionMap[attachmentScopeType] || ["turn"]
+  )
   return reuseOptionDefs
     .map((option) => option.value)
     .filter((scope) => allowedScopes.has(scope))
@@ -262,10 +266,10 @@ export function getConversationDisplayName(
   return "Untitled conversation"
 }
 
-function getScopeOption(scope: AttachmentTargetType) {
+function getScopeOption(scope: PluginAttachmentScopeType) {
   return (
-    attachmentTypeOptionDefs.find((option) => option.value === scope) ||
-    attachmentTypeOptionDefs[0]
+    attachmentScopeOptionDefs.find((option) => option.value === scope) ||
+    attachmentScopeOptionDefs[0]
   )
 }
 
@@ -282,8 +286,8 @@ function pickAlternativeActorName(
   fallbackName: string
 ) {
   const candidate = actors.find(
-    (actor) => actor.name && actor.name !== primaryActorName
-  )?.name
+    (actor) => actor.displayName && actor.displayName !== primaryActorName
+  )?.displayName
   if (candidate) return candidate
   return fallbackName === primaryActorName ? `${fallbackName} 2` : fallbackName
 }
@@ -411,9 +415,9 @@ function pickSelectedActorName(
 ) {
   if (selectedActorId) {
     const selected = actors.find((actor) => actor.id === selectedActorId)
-    if (selected?.name) return selected.name
+    if (selected?.displayName) return selected.displayName
   }
-  if (actors[0]?.name) return actors[0].name
+  if (actors[0]?.displayName) return actors[0].displayName
   return "Secretary"
 }
 
@@ -721,7 +725,7 @@ function ScopeConversationCard({
   )
 }
 
-export function AccessAttachmentTypeStep({
+export function AccessAttachmentScopeStep({
   value,
   onChange,
   allowedScopes,
@@ -733,9 +737,9 @@ export function AccessAttachmentTypeStep({
   onConversationChange,
   error,
 }: {
-  value: AttachmentTargetType
-  onChange: (value: AttachmentTargetType) => void
-  allowedScopes?: AttachmentTargetType[]
+  value: PluginAttachmentScopeType
+  onChange: (value: PluginAttachmentScopeType) => void
+  allowedScopes?: PluginAttachmentScopeType[]
   actors: AccessVisualActor[]
   conversations: AccessVisualConversation[]
   selectedActorId?: string
@@ -745,7 +749,7 @@ export function AccessAttachmentTypeStep({
   error?: string
 }) {
   const allowedScopeSet = allowedScopes ? new Set(allowedScopes) : null
-  const availableOptions = attachmentTypeOptionDefs.filter(
+  const availableOptions = attachmentScopeOptionDefs.filter(
     (option) => !allowedScopeSet || allowedScopeSet.has(option.value)
   )
   const activeScope =
@@ -753,7 +757,7 @@ export function AccessAttachmentTypeStep({
     availableOptions[0]
   const conversationChoices = pickConversationChoices(conversations)
   const selectedActorName =
-    actors.find((actor) => actor.id === selectedActorId)?.name ||
+    actors.find((actor) => actor.id === selectedActorId)?.displayName ||
     "No actor selected"
   const selectedConversationName =
     conversationChoices.find(
@@ -823,7 +827,7 @@ export function AccessAttachmentTypeStep({
                   <SelectGroup>
                     {actors.map((actor) => (
                       <SelectItem key={actor.id} value={actor.id}>
-                        {actor.name}
+                        {actor.displayName}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -851,7 +855,7 @@ export function AccessAttachmentTypeStep({
         <RadioGroup
           value={value}
           onValueChange={(nextValue) =>
-            onChange(nextValue as AttachmentTargetType)
+            onChange(nextValue as PluginAttachmentScopeType)
           }
           className="w-full"
         >
@@ -902,7 +906,7 @@ export function AccessAttachmentTypeStep({
   )
 }
 
-export function AccessGrantScopeStep({
+export function WorkspaceAppGrantScopeStep({
   value,
   onChange,
   allowedScopes,
@@ -1018,7 +1022,7 @@ export function AccessGrantScopeStep({
                   className="rounded-full"
                   onClick={() => onActorChange?.(actor.id)}
                 >
-                  {actor.name}
+                  {actor.displayName}
                 </Button>
               ))
             ) : (
@@ -1118,14 +1122,14 @@ export function AccessGrantScopeStep({
 }
 
 export function AccessReuseScopeStep({
-  attachmentType,
+  attachmentScopeType,
   value,
   onChange,
   actors,
   selectedActorId,
   allowedReuseScopes,
 }: {
-  attachmentType: AttachmentTargetType
+  attachmentScopeType: PluginAttachmentScopeType
   value: ReuseScope
   onChange: (value: ReuseScope) => void
   actors: AccessVisualActor[]
@@ -1135,7 +1139,7 @@ export function AccessReuseScopeStep({
   allowedReuseScopes?: ReuseScope[]
 }) {
   const allowedOptions = (
-    allowedReuseScopes || getAllowedReuseScopes(attachmentType)
+    allowedReuseScopes || getAllowedReuseScopes(attachmentScopeType)
   ).map(getReuseOption)
   const primaryActorName = pickSelectedActorName(actors, selectedActorId)
   const secondaryActorName = pickSecondaryActorName(actors, selectedActorId)
@@ -1180,7 +1184,7 @@ export function AccessReuseScopeStep({
           instance: available ? instanceForCall(call) : null,
         } satisfies FakeLifecycleNode
       }),
-    [calls, value, attachmentType, primaryActorName]
+    [calls, value, attachmentScopeType, primaryActorName]
   )
 
   const conversationCards = useMemo(() => {
@@ -1228,7 +1232,7 @@ export function AccessReuseScopeStep({
 
   useEffect(() => {
     setSelectedCallId(callNodes.find((call) => call.available)?.id || null)
-  }, [value, primaryActorName, secondaryActorName, attachmentType])
+  }, [value, primaryActorName, secondaryActorName, attachmentScopeType])
 
   const selectedInstanceKey =
     callNodes.find((call) => call.id === selectedCallId)?.instance?.key ||

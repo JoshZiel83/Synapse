@@ -1,12 +1,10 @@
 import crypto, { createHash, randomBytes } from "node:crypto"
 import type { FastifyInstance } from "fastify"
 import {
-  RELATIONSHIP_ACCESS_POLICY,
   REMOTE_AGENT_MACHINE_LIFECYCLE_STATE,
   REMOTE_AGENT_MACHINE_TRUST_STATUS,
   REMOTE_AGENT_RUNTIME_CATALOG_STATUS,
   REMOTE_AGENT_RUNTIME_STATE,
-  type RemoteAgentAccessPolicy,
   type RemoteAgentLifecycleState,
   type RemoteAgentMachineDetailView,
   type RemoteAgentMachinePairingSessionView,
@@ -36,9 +34,13 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import { authorizeAction } from "../access/service.js"
 import {
-  deriveAccessPolicy,
-  setAccessPolicy,
-} from "../access/default-access-policy.js"
+  deriveRequiresContactApproval,
+  setRequiresContactApproval,
+} from "../access/contact-approval.js"
+import {
+  insertWorkspaceAppRoot,
+  updateWorkspaceAppRoot,
+} from "../workspace-apps/root-storage.js"
 import {
   getConversationParticipant,
   listVisibleConversationItemsForParticipant,
@@ -245,9 +247,12 @@ async function loadBoundRemoteAgentsForMachine(machineId: string) {
         binding.local_root_path
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
+      INNER JOIN workspace_apps app
+        ON app.id = agent.id
       WHERE binding.machine_id = $1
         AND binding.status = 'active'
-        AND agent.is_active = TRUE
+        AND app.deleted_at IS NULL
+        AND app.status = 'active'
       ORDER BY agent.created_at ASC, agent.id ASC
     `,
     [machineId]
@@ -421,6 +426,8 @@ async function loadAgentStartTargetsForMachine(machineId: string) {
         ctx.runtime_session_id
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
+      INNER JOIN workspace_apps app
+        ON app.id = agent.id
       INNER JOIN (
         SELECT DISTINCT remote_agent_id, conversation_id
         FROM remote_agent_message_deliveries
@@ -433,7 +440,8 @@ async function loadAgentStartTargetsForMachine(machineId: string) {
         AND ctx.conversation_id = delivery.conversation_id
       WHERE binding.machine_id = $1
         AND binding.status = 'active'
-        AND agent.is_active = TRUE
+        AND app.deleted_at IS NULL
+        AND app.status = 'active'
       ORDER BY ctx.last_activity_at DESC NULLS LAST, delivery.conversation_id ASC
     `,
     [machineId]
@@ -1112,14 +1120,17 @@ export async function authenticateMachineForRemoteAgent(params: {
       SELECT
         binding.remote_agent_id,
         binding.machine_id,
-        agent.workspace_id,
+        app.workspace_id,
         binding.local_root_path
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
+      INNER JOIN workspace_apps app
+        ON app.id = agent.id
       WHERE binding.remote_agent_id = $1
         AND binding.machine_id = $2
         AND binding.status = 'active'
-        AND agent.is_active = TRUE
+        AND app.deleted_at IS NULL
+        AND app.status = 'active'
       LIMIT 1
     `,
     [params.remoteAgentId, machine.id]
@@ -1549,7 +1560,7 @@ async function emitRemoteAgentRuntimeUpdated(
 async function mapRemoteAgentRow(row: {
   id: string
   workspace_id: string
-  name: string
+  display_name: string
   title: string
   description: string | null
   runtime_kind: RemoteAgentRuntimeKind
@@ -1558,7 +1569,7 @@ async function mapRemoteAgentRow(row: {
   is_active: boolean
   is_public_shared: boolean
   metadata: unknown
-  created_by_workspace_member_id: string | null
+  owner_workspace_member_id: string | null
   created_at: string | Date
   updated_at: string | Date
   machine_id?: string | null
@@ -1583,7 +1594,7 @@ async function mapRemoteAgentRow(row: {
   const runtimeSummary = row.machine_id
     ? mapRuntimeSummaryFromRow(row)
     : undefined
-  const accessPolicy = await deriveAccessPolicy(
+  const requiresContactApproval = await deriveRequiresContactApproval(
     db,
     "remote_agent",
     row.id,
@@ -1592,20 +1603,20 @@ async function mapRemoteAgentRow(row: {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    name: row.name,
+    displayName: row.display_name,
     title: row.title,
     description: row.description ?? undefined,
     runtimeKind: row.runtime_kind,
     avatarFileId: row.avatar_file_id ?? undefined,
     avatarEmoji: row.avatar_emoji ?? undefined,
-    accessPolicy,
+    requiresContactApproval,
     isActive: row.is_active,
     isPublicShared: row.is_public_shared,
     metadata:
       row.metadata && typeof row.metadata === "object"
         ? (row.metadata as Record<string, unknown>)
         : {},
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id ?? undefined,
+    ownerWorkspaceMemberId: row.owner_workspace_member_id ?? undefined,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
     runtimeSummary,
@@ -1632,6 +1643,10 @@ export async function listRemoteAgents(params: {
     `
       SELECT
         agent.*,
+        app.workspace_id AS workspace_id,
+        app.display_name AS display_name,
+        app.owner_workspace_member_id AS owner_workspace_member_id,
+        (app.status = 'active') AS is_active,
         binding.machine_id,
         machine.title AS machine_title,
         binding.status AS binding_status,
@@ -1661,12 +1676,15 @@ export async function listRemoteAgents(params: {
             AND delivery.status = 'pending'
         ) AS unread_delivery_count
       FROM remote_agents agent
+      INNER JOIN workspace_apps app
+        ON app.id = agent.id
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = agent.id
       LEFT JOIN remote_agent_machines machine
         ON machine.id = binding.machine_id
       ${LATEST_CONVERSATION_CONTEXT_LATERAL}
-      WHERE agent.workspace_id = $1
+      WHERE app.workspace_id = $1
+        AND app.deleted_at IS NULL
       ORDER BY agent.created_at DESC, agent.id DESC
     `,
     [params.workspaceId]
@@ -1686,6 +1704,10 @@ export async function getRemoteAgent(params: {
     `
       SELECT
         agent.*,
+        app.workspace_id AS workspace_id,
+        app.display_name AS display_name,
+        app.owner_workspace_member_id AS owner_workspace_member_id,
+        (app.status = 'active') AS is_active,
         binding.machine_id,
         machine.title AS machine_title,
         binding.status AS binding_status,
@@ -1715,12 +1737,15 @@ export async function getRemoteAgent(params: {
             AND delivery.status = 'pending'
         ) AS unread_delivery_count
       FROM remote_agents agent
+      INNER JOIN workspace_apps app
+        ON app.id = agent.id
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = agent.id
       LEFT JOIN remote_agent_machines machine
         ON machine.id = binding.machine_id
       ${LATEST_CONVERSATION_CONTEXT_LATERAL}
-      WHERE agent.workspace_id = $1
+      WHERE app.workspace_id = $1
+        AND app.deleted_at IS NULL
         AND agent.id = $2
       LIMIT 1
     `,
@@ -1738,13 +1763,13 @@ export async function getRemoteAgent(params: {
 export async function createRemoteAgent(params: {
   workspaceId: string
   userId: string
-  name: string
+  displayName: string
   title: string
   description?: string
   runtimeKind: RemoteAgentRuntimeKind
   avatarFileId?: string
   avatarEmoji?: string
-  accessPolicy?: RemoteAgentAccessPolicy
+  requiresContactApproval?: boolean
   isPublicShared?: boolean
   metadata?: Record<string, unknown>
 }) {
@@ -1752,16 +1777,25 @@ export async function createRemoteAgent(params: {
     params.workspaceId,
     params.userId
   )
-  // P2 atomicity: wrap the INSERT remote_agents + setAccessPolicy default-open
-  // binding in a single transaction so we never leave a remote_agent row
-  // without its expected default-open binding when the second write fails.
+  // P2 atomicity: wrap the INSERT remote_agents +
+  // setRequiresContactApproval(false) in a single transaction so we never
+  // leave a remote_agent row
+  // without its expected default-open grant when the second write fails.
   const insertedRow = await withDbTransaction(async (client) => {
+    const remoteAgentId = crypto.randomUUID()
+    await insertWorkspaceAppRoot(client, {
+      id: remoteAgentId,
+      workspaceId: params.workspaceId,
+      kind: "remote_agent",
+      displayName: params.displayName.trim(),
+      ownerWorkspaceMemberId: identity.workspaceMemberId,
+      status: "active",
+    })
     const result = await runOn<any>(
       client,
       `
         INSERT INTO remote_agents (
-          workspace_id,
-          name,
+          id,
           title,
           description,
           runtime_kind,
@@ -1769,16 +1803,14 @@ export async function createRemoteAgent(params: {
           avatar_emoji,
           is_public_shared,
           metadata,
-          created_by_workspace_member_id,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW(), NOW())
         RETURNING *
       `,
       [
-        params.workspaceId,
-        params.name.trim(),
+        remoteAgentId,
         params.title.trim(),
         params.description?.trim() || null,
         params.runtimeKind,
@@ -1786,23 +1818,28 @@ export async function createRemoteAgent(params: {
         params.avatarEmoji ?? null,
         params.isPublicShared === true,
         JSON.stringify(params.metadata ?? {}),
-        identity.workspaceMemberId,
       ]
     )
     const row = result.rows[0]!
-    // Persist access policy intent as a default_open binding row instead of
-    // a column on remote_agents. New agents default to workspace_open.
-    await setAccessPolicy(client, {
+    // Persist contact approval intent as a default_open contact_visible grant
+    // instead of a column on remote_agents. New agents default to workspace-visible.
+    await setRequiresContactApproval(client, {
       resourceType: "remote_agent",
       resourceId: row.id,
-      workspaceId: row.workspace_id,
-      policy: params.accessPolicy ?? RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
+      workspaceId: params.workspaceId,
+      requiresContactApproval: params.requiresContactApproval ?? false,
       createdByWorkspaceMemberId: identity.workspaceMemberId,
     })
     return row
   })
   return {
-    remoteAgent: await mapRemoteAgentRow(insertedRow),
+    remoteAgent: await mapRemoteAgentRow({
+      ...insertedRow,
+      workspace_id: params.workspaceId,
+      display_name: params.displayName.trim(),
+      owner_workspace_member_id: identity.workspaceMemberId,
+      is_active: true,
+    }),
   }
 }
 
@@ -1810,12 +1847,12 @@ export async function updateRemoteAgent(params: {
   workspaceId: string
   remoteAgentId: string
   userId: string
-  name?: string
+  displayName?: string
   title?: string
   description?: string | null
   avatarFileId?: string | null
   avatarEmoji?: string | null
-  accessPolicy?: RemoteAgentAccessPolicy
+  requiresContactApproval?: boolean
   isPublicShared?: boolean
   isActive?: boolean
   metadata?: Record<string, unknown>
@@ -1832,26 +1869,29 @@ export async function updateRemoteAgent(params: {
     ...(params.metadata ?? {}),
   }
 
-  const result = await runOnDb<any>(
+  await runOnDb<any>(
     `
       UPDATE remote_agents
-      SET name = $3,
-          title = $4,
-          description = $5,
-          avatar_file_id = $6,
-          avatar_emoji = $7,
-          is_public_shared = $8,
-          is_active = $9,
-          metadata = $10::jsonb,
+      SET title = $3,
+          description = $4,
+          avatar_file_id = $5,
+          avatar_emoji = $6,
+          is_public_shared = $7,
+          metadata = $8::jsonb,
           updated_at = NOW()
-      WHERE workspace_id = $1
-        AND id = $2
+      WHERE id = $2
+        AND EXISTS (
+          SELECT 1
+          FROM workspace_apps app
+          WHERE app.id = remote_agents.id
+            AND app.workspace_id = $1
+            AND app.deleted_at IS NULL
+        )
       RETURNING *
     `,
     [
       params.workspaceId,
       params.remoteAgentId,
-      params.name?.trim() || existing.remoteAgent.name,
       params.title?.trim() || existing.remoteAgent.title,
       params.description === undefined
         ? (existing.remoteAgent.description ?? null)
@@ -1863,24 +1903,34 @@ export async function updateRemoteAgent(params: {
         ? (existing.remoteAgent.avatarEmoji ?? null)
         : params.avatarEmoji,
       params.isPublicShared ?? existing.remoteAgent.isPublicShared,
-      params.isActive ?? existing.remoteAgent.isActive,
       JSON.stringify(nextMetadata),
     ]
   )
   if (
-    params.accessPolicy &&
-    params.accessPolicy !== existing.remoteAgent.accessPolicy
+    params.requiresContactApproval !== undefined &&
+    params.requiresContactApproval !==
+      existing.remoteAgent.requiresContactApproval
   ) {
-    await setAccessPolicy(db, {
+    await setRequiresContactApproval(db, {
       resourceType: "remote_agent",
       resourceId: params.remoteAgentId,
       workspaceId: params.workspaceId,
-      policy: params.accessPolicy,
+      requiresContactApproval: params.requiresContactApproval,
     })
   }
-  return {
-    remoteAgent: await mapRemoteAgentRow(result.rows[0]!),
-  }
+  await updateWorkspaceAppRoot(db, {
+    id: params.remoteAgentId,
+    displayName: params.displayName?.trim() || existing.remoteAgent.displayName,
+    status:
+      (params.isActive ?? existing.remoteAgent.isActive)
+        ? "active"
+        : "disabled",
+  })
+  return getRemoteAgent({
+    workspaceId: params.workspaceId,
+    remoteAgentId: params.remoteAgentId,
+    userId: params.userId,
+  })
 }
 
 export async function deleteRemoteAgent(params: {
@@ -1895,10 +1945,24 @@ export async function deleteRemoteAgent(params: {
   await db
     .updateTable("remote_agents")
     .set({ deleted_at: new Date() })
-    .where("workspace_id", "=", params.workspaceId)
     .where("id", "=", params.remoteAgentId)
     .where("deleted_at", "is", null)
+    .where((eb) =>
+      eb.exists(
+        db
+          .selectFrom("workspace_apps as app")
+          .select("app.id")
+          .where("app.id", "=", params.remoteAgentId)
+          .where("app.workspace_id", "=", params.workspaceId)
+          .where("app.deleted_at", "is", null)
+      )
+    )
     .execute()
+  await updateWorkspaceAppRoot(db, {
+    id: params.remoteAgentId,
+    status: "archived",
+    deletedAt: new Date(),
+  })
   return { deleted: true }
 }
 
@@ -2027,7 +2091,7 @@ export async function getRemoteAgentMachine(params: {
           latest_ctx.latest_last_run_finished_at,
           binding.last_error,
           binding.capabilities,
-          agent.name,
+          app.display_name,
           (
             SELECT COUNT(DISTINCT delivery.conversation_id)
             FROM remote_agent_message_deliveries delivery
@@ -2042,6 +2106,7 @@ export async function getRemoteAgentMachine(params: {
           ) AS unread_delivery_count
         FROM remote_agent_bindings binding
         INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
+        INNER JOIN workspace_apps app ON app.id = agent.id
         ${LATEST_CONVERSATION_CONTEXT_LATERAL}
         WHERE binding.machine_id = $1
         ORDER BY agent.created_at DESC
@@ -2081,7 +2146,7 @@ export async function getRemoteAgentMachine(params: {
     })),
     bindings: bindingResult.rows.map((row) => ({
       remoteAgentId: row.remote_agent_id,
-      name: row.name,
+      displayName: row.display_name,
       runtimeKind: row.runtime_kind,
       runtimePath: row.runtime_path ?? undefined,
       localRootPath: row.local_root_path ?? undefined,

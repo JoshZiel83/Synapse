@@ -42,7 +42,7 @@ export const feishuSeed: BuiltinOrgSeed = {
       defaultLocale: "zh-CN",
       transport: "builtin",
       entryPoint: "feishu/app",
-      defaultInstanceScope: "workspace",
+      defaultAttachmentScope: "workspace",
       defaultReuseScope: "conversation",
       requiresHandshake: false,
       iconAssetPath: "assets/icons/feishu.svg",
@@ -153,7 +153,6 @@ export const feishuSeed: BuiltinOrgSeed = {
             "通过扫码创建飞书应用，并授权所选功能包对应的权限。"
           ),
           prerequisiteFields: ["features"],
-          ownerScope: "installation",
         },
       ],
       validationRules: [

@@ -85,8 +85,6 @@ type PluginConnectionRow = {
   installation_id: string
   catalog_item_id: string
   catalog_version_id?: string | null
-  owner_scope: string
-  owner_workspace_member_id: string | null
   binding_key: string
   driver: string
   external_account_id: string | null
@@ -282,8 +280,6 @@ function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
     packageId: row.catalog_item_id,
     bindingKey: row.binding_key,
     driver: row.driver as PluginAuthConnection["driver"],
-    ownerScope: row.owner_scope as PluginAuthConnection["ownerScope"],
-    ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
     externalAccountId: row.external_account_id || undefined,
     displayName: row.display_name || undefined,
     avatarUrl: row.avatar_url || undefined,
@@ -418,13 +414,14 @@ async function getConnectionRow(connectionId: string, workspaceId?: string) {
       "installation.id",
       "connection.installation_id"
     )
+    .innerJoin("workspace_apps as app", "app.id", "installation.id")
     .selectAll("connection")
     .select(["installation.catalog_item_id", "installation.catalog_version_id"])
     .where("connection.id", "=", connectionId)
     .where("connection.deleted_at", "is", null)
     .where("connection.status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
-    .where("installation.deleted_at", "is", null)
-    .where("installation.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
 
   if (workspaceId) {
     builder = builder.where("connection.workspace_id", "=", workspaceId)
@@ -444,6 +441,7 @@ async function getInstallationConfigRow(
   const row = await db
     // Live predicate (review F16): exclude tombstoned + non-live-status installs.
     .selectFrom("plugin_installations as installation")
+    .innerJoin("workspace_apps as app", "app.id", "installation.id")
     .innerJoin(
       "plugin_package_version_specs as spec",
       "spec.catalog_version_id",
@@ -456,9 +454,9 @@ async function getInstallationConfigRow(
       "spec.default_config",
     ])
     .where("installation.id", "=", installationId)
-    .where("installation.workspace_id", "=", workspaceId)
-    .where("installation.deleted_at", "is", null)
-    .where("installation.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+    .where("app.workspace_id", "=", workspaceId)
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
 
@@ -1943,14 +1941,12 @@ export async function attachAuthConnectionsToConfig(input: {
       if (existing.rows.length > 0) {
         const updated = await run<PluginConnectionRow>(
           `UPDATE plugin_connections
-           SET owner_scope = $2,
-               owner_workspace_member_id = $3,
-               display_name = $4,
-               avatar_url = $5,
+           SET display_name = $2,
+               avatar_url = $3,
                status = 'active',
-               expires_at = $6,
-               public_payload = $7::jsonb,
-               secret_payload = $8::jsonb,
+               expires_at = $4,
+               public_payload = $5::jsonb,
+               secret_payload = $6::jsonb,
                updated_at = NOW()
            WHERE id = $1
            RETURNING *,
@@ -1961,8 +1957,6 @@ export async function attachAuthConnectionsToConfig(input: {
              ) AS catalog_item_id`,
           [
             existing.rows[0]!.id,
-            binding?.ownerScope || "installation",
-            input.workspaceMemberId || null,
             displayName,
             avatarUrl,
             asNullableString(secretPayload.expiresAt),
@@ -1976,8 +1970,6 @@ export async function attachAuthConnectionsToConfig(input: {
           `INSERT INTO plugin_connections (
              installation_id,
              workspace_id,
-             owner_scope,
-             owner_workspace_member_id,
              binding_key,
              driver,
              external_account_id,
@@ -1989,7 +1981,7 @@ export async function attachAuthConnectionsToConfig(input: {
              secret_payload
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, $11::jsonb, $12::jsonb
+             $1, $2, $3, $4, $5, $6, $7, 'active', $8, $9::jsonb, $10::jsonb
            )
            RETURNING *,
              (
@@ -2000,8 +1992,6 @@ export async function attachAuthConnectionsToConfig(input: {
           [
             input.installationId,
             input.workspaceId,
-            binding?.ownerScope || "installation",
-            input.workspaceMemberId || null,
             bindingKey,
             session.driver,
             externalAccountId,

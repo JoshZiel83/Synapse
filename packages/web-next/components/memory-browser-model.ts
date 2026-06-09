@@ -91,7 +91,7 @@ export function projectMemory(memory: SharedMemory): Memory {
 
 export type ActorOption = {
   id: string
-  name: string
+  displayName: string
   title?: string
 }
 
@@ -138,7 +138,8 @@ export function normalizeActorOption(actor: any): ActorOption {
   const definition = actor?.definition || actor
   return {
     id: actor.id,
-    name: definition?.name || actor.name || "Untitled actor",
+    displayName:
+      actor.displayName || definition?.title || actor.title || "Untitled actor",
     title: definition?.title || actor.title || undefined,
   }
 }
@@ -560,8 +561,8 @@ export function buildMemoryFolders(params: {
     }
 
     for (const actorId of Array.from(scopedActorIds).sort((left, right) => {
-      const leftName = actorMap.get(left)?.name || left
-      const rightName = actorMap.get(right)?.name || right
+      const leftName = actorMap.get(left)?.displayName || left
+      const rightName = actorMap.get(right)?.displayName || right
       return leftName.localeCompare(rightName, undefined, {
         sensitivity: "base",
       })
@@ -570,7 +571,7 @@ export function buildMemoryFolders(params: {
       addUniqueFolder(folders, {
         id: `folder:workspace:${workspaceId}:conversation:${group.id}:actor:${actorId}:participant_private`,
         parentId: conversationFolderId,
-        label: actor?.name || "Unknown actor",
+        label: actor?.displayName || "Unknown actor",
         description: "Visible only to this actor inside this conversation.",
         icon: Bot,
         directMemoryIds: selectMemoryIds(
@@ -590,12 +591,12 @@ export function buildMemoryFolders(params: {
   }
 
   for (const actor of sortByName(
-    actors.map((item) => ({ ...item, label: item.name }))
+    actors.map((item) => ({ ...item, label: item.displayName }))
   )) {
     addUniqueFolder(folders, {
       id: `folder:workspace:${workspaceId}:actor:${actor.id}:actor_private`,
       parentId: workspaceFolderId,
-      label: actor.name,
+      label: actor.displayName,
       description: "Visible to this actor across conversations.",
       icon: Bot,
       directMemoryIds: selectMemoryIds(

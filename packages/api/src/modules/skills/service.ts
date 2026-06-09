@@ -3,6 +3,7 @@ import type pg from "pg"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
+  WORKSPACE_APP_GRANT_PERMISSION,
   actorRef,
   conversationRef,
   maskAllowsConversationTypeKey,
@@ -19,6 +20,7 @@ import {
   type AvailableSkillSummary,
   type CapabilityAccessTarget,
   type InstalledSkill,
+  type WorkspaceAppGrant,
   type CanonicalContentBlock,
   type CanonicalContentBlockInput,
   normalizeCanonicalContentBlocks,
@@ -32,6 +34,16 @@ import {
 } from "@synapse/shared"
 import { lookupResources } from "../access/evaluator.js"
 import { ACCESS_ACTIONS } from "../access/actions.js"
+import {
+  insertWorkspaceAppRoot,
+  updateWorkspaceAppRoot,
+} from "../workspace-apps/root-storage.js"
+import {
+  insertWorkspaceAppGrant,
+  listActiveWorkspaceAppGrants,
+  revokeWorkspaceAppGrant,
+  revokeWorkspaceAppGrantsForApp,
+} from "../workspace-apps/grant-storage.js"
 import { CompiledQuery, sql } from "kysely"
 import {
   db,
@@ -44,32 +56,12 @@ import {
   getWorkspaceCapabilityConversationTypePolicyMap,
 } from "../capabilities/conversation-type-policies.js"
 import {
-  accessGrantTargetToSubjectRef,
-  accessGrantTargetScopeRef,
-  buildResourceAccessBindingRef,
-  mapAccessBindingToGrant,
-  normalizeAccessBindingRow,
-  readAccessBindingTarget,
-  type AccessBindingRow,
-  type AccessGrantTarget,
+  readAutomationEventSourceAccessBindingTarget,
+  type AutomationEventSourceBindingRow,
+  type AutomationEventSourceBindingTarget,
 } from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
-import {
-  findActiveBindingIdByResourceAndSubject,
-  hardDeleteBindingsForResourceOn,
-  insertAccessBindingReturningIdOn,
-  insertAccessBindingReturningRowOn,
-  listResourceIdsForWorkspaceByBindingFilter,
-  loadAccessBindingRowsForResources,
-  loadAccessBindingRowsForResourcesAndContext,
-  revokeGrant,
-  updateGrantConversationTypeMaskOverride,
-} from "../access/binding-storage.js"
-import {
-  findAccessSubjectId,
-  findAccessSubjectIdOn,
-  upsertAccessSubjectOn,
-} from "../access/subject-registry.js"
+import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
@@ -267,7 +259,7 @@ export type SkillScopeTarget = {
 type SkillSnapshotJoinRow = {
   snapshot_id: string | null
   snapshot_entry_path: string | null
-  snapshot_name: string | null
+  snapshot_display_name: string | null
   snapshot_description: string | null
   snapshot_argument_hint: string | null
   snapshot_disable_model_invocation: boolean | null
@@ -326,14 +318,13 @@ type SkillPackageRow = {
 type InstalledSkillRow = {
   skill_id: string
   workspace_id: string
-  slug: string
-  name: string
+  display_name: string
   icon_file_id: string | null
   tags: string[] | null
   current_version: number
-  is_active: boolean
+  skill_status: "active" | "disabled" | "archived"
   conversation_type_mask_override: number | null
-  created_by_workspace_member_id: string | null
+  owner_workspace_member_id: string | null
   created_at: string
   updated_at: string
   current_snapshot_id: string
@@ -366,7 +357,9 @@ type SkillSnapshotFileRow = {
   updated_at: string
 }
 
-export type SkillAccessRow = AccessBindingRow & {
+export type SkillAccessRow = {
+  id: string
+  workspace_id: string
   skill_id: string
   bind_scope: RuntimeBindingScope
   conversation_id: string | null
@@ -376,6 +369,13 @@ export type SkillAccessRow = AccessBindingRow & {
   // can also discriminate remote_agent targets.
   remote_agent_id: string | null
   workspace_member_id: string | null
+  conversation_type_mask_override: number | null
+  status: "active" | "revoked"
+  source: "manual" | "approval" | "system"
+  created_by_workspace_member_id: string | null
+  reason: string | null
+  created_at: string
+  revoked_at: string | null
 }
 
 type VisibleSkillRow = {
@@ -387,11 +387,11 @@ type VisibleSkillRow = {
   actor_id: string | null
   remote_agent_id: string | null
   workspace_member_id: string | null
-  slug: string
-  name: string
+  display_name: string
   current_version: number
   current_skill_version_id: string
   description: string
+  source_slug: string | null
   source_version_value: string | null
   conversation_type_mask_override: number | null
   access_created_at: string
@@ -413,7 +413,7 @@ const CLAWHUB_MARKETPLACE_PUBLISHER_NAME = "ClawHub Mirror"
 const SKILL_SNAPSHOT_SELECT = `
     snapshot.id AS snapshot_id,
     snapshot.entry_path AS snapshot_entry_path,
-    snapshot.name AS snapshot_name,
+    snapshot.name AS snapshot_display_name,
     snapshot.description AS snapshot_description,
     snapshot.argument_hint AS snapshot_argument_hint,
     snapshot.disable_model_invocation AS snapshot_disable_model_invocation,
@@ -487,18 +487,17 @@ ${SKILL_SNAPSHOT_SELECT},
 const INSTALLED_SKILL_SELECT = `
   SELECT
     skill.id AS skill_id,
-    skill.workspace_id,
-    skill.slug,
-    skill.name,
+    app.workspace_id,
+    app.display_name AS display_name,
     skill.icon_file_id,
     skill.tags,
     skill.current_version,
     skill.current_snapshot_id,
-    skill.is_active,
-    skill.conversation_type_mask_override,
-    skill.created_by_workspace_member_id,
-    skill.created_at,
-    skill.updated_at,
+    app.status AS skill_status,
+    app.conversation_type_mask_override,
+    app.owner_workspace_member_id,
+    app.created_at,
+    app.updated_at,
     version_row.id AS current_skill_version_id,
     version_row.skill_snapshot_id AS current_skill_snapshot_id,
     version_row.metadata AS version_metadata,
@@ -513,6 +512,8 @@ const INSTALLED_SKILL_SELECT = `
     imported_spec.default_conversation_type_mask AS source_default_conversation_type_mask,
 ${SKILL_SNAPSHOT_SELECT}
   FROM installed_skills skill
+  JOIN workspace_apps app
+    ON app.id = skill.id
   JOIN skill_versions version_row
     ON version_row.skill_id = skill.id
    AND version_row.version = skill.current_version
@@ -796,14 +797,14 @@ function frontmatterFromSnapshotRow(
 ): SkillFrontmatter {
   if (
     !row.snapshot_id ||
-    !row.snapshot_name ||
+    !row.snapshot_display_name ||
     row.snapshot_description === null
   ) {
     throw new SkillError(500, "Skill snapshot metadata is missing")
   }
 
   return {
-    name: row.snapshot_name,
+    name: row.snapshot_display_name,
     description: row.snapshot_description,
     argumentHint: row.snapshot_argument_hint || undefined,
     disableModelInvocation: Boolean(row.snapshot_disable_model_invocation),
@@ -1067,7 +1068,7 @@ function mapMarketplaceEntry(
   return {
     id: row.item_id,
     slug: row.item_slug,
-    name: row.snapshot_name || row.item_display_name,
+    name: row.snapshot_display_name || row.item_display_name,
     frontmatter: frontmatterFromSnapshotRow(row),
     bodyBlocks: bodyBlocksFromSnapshotRow(row),
     description: descriptionBlockFromSnapshotRow(row),
@@ -1109,8 +1110,7 @@ function buildInstalledSkillPayload(
   return {
     id: row.skill_id,
     workspaceId: row.workspace_id,
-    slug: row.slug,
-    name: row.name,
+    displayName: row.display_name,
     frontmatter: frontmatterFromSnapshotRow(row),
     bodyBlocks: bodyBlocksFromSnapshotRow(row),
     entryPath: row.snapshot_entry_path || SKILL_ENTRY_PATH,
@@ -1120,7 +1120,7 @@ function buildInstalledSkillPayload(
     iconUrl: row.icon_file_id ? getFileUrlById(row.icon_file_id) : undefined,
     tags: row.tags || [],
     accessTarget,
-    isEnabled: Boolean(row.is_active),
+    isEnabled: row.skill_status === "active",
     sourceDefaultConversationTypeMask,
     workspaceConversationTypeMask,
     conversationTypeMaskOverride:
@@ -1129,11 +1129,11 @@ function buildInstalledSkillPayload(
     isCustomized: Boolean(
       row.source_catalog_item_id && row.source_is_customized
     ),
-    installedByWorkspaceMemberId:
-      row.created_by_workspace_member_id || undefined,
+    ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     sourceSkillId: row.source_catalog_item_id || undefined,
+    sourcePackageSlug: row.source_slug || undefined,
     sourceVersionId: row.source_catalog_version_id || undefined,
     sourceVersion: row.source_version_value || undefined,
     upgradeAvailable:
@@ -1150,18 +1150,18 @@ function buildInstalledSkillPayload(
 
 /**
  * Collapse the label switch into a direct
- * call to readAccessBindingTarget. The old switch fell back to
+ * call to readAutomationEventSourceAccessBindingTarget. The old switch fell back to
  * `workspace` for any unrecognized `bind_scope`. The mapper feeds into
  * `validateConversationScopedAccessTarget` and
  * `assertGrantConversationTypeOverrideAllowed` from
- * updateInstalledSkill / updateInstalledSkillAccessGrant — so a
+ * updateInstalledSkill / updateInstalledSkillGrant — so a
  * remote_agent grant being updated would silently
  * decode as workspace, skipping the conversation-scoped policy check
  * and the active-participant check.
  *
  * The row at runtime carries the bindingRowSelectFor `subject_kind` +
  * `subject_*_via_join` + `scope_kind` + `scope_*_via_join` projection
- * that readAccessBindingTarget needs (loadAccessBindingsBySkillIds runs
+ * that readAutomationEventSourceAccessBindingTarget needs (loadAccessBindingsBySkillIds runs
  * the full SELECT). SkillAccessRow's type doesn't expose those fields,
  * hence the `as any` cast.
  */
@@ -1171,13 +1171,13 @@ function skillBindingToAccessTarget(
 ): CapabilityAccessTarget {
   // Round 11 review (P3): no fail-open fallback. The earlier version
   // caught decode failures and returned `{ subject: workspaceRef(...) }`
-  // — but the callers (updateInstalledSkillAccessGrant /
+  // — but the callers (updateInstalledSkillGrant /
   // updateInstalledSkill) feed the result into permission gates, so a
   // silent workspace fallback would widen access on malformed rows. If
-  // the projection is missing the via_join fields readAccessBindingTarget
+  // the projection is missing the via_join fields readAutomationEventSourceAccessBindingTarget
   // expects, that's a load-path bug; propagate it instead of laundering
   // it into a workspace grant.
-  return readAccessBindingTarget(binding as any)
+  return readAutomationEventSourceAccessBindingTarget(binding as any)
 }
 
 function buildAvailableSkillPayload(
@@ -1187,11 +1187,11 @@ function buildAvailableSkillPayload(
     instanceId: row.skill_id,
     packageId: row.skill_id,
     revisionId: row.current_skill_version_id,
-    slug: row.slug,
-    name: row.name,
+    name: row.display_name,
     description: row.description,
     version: row.source_version_value || `local-${row.current_version}`,
     accessTarget: visibleRowToAccessTarget(row),
+    sourcePackageSlug: row.source_slug || undefined,
     sourceKind: "installed",
   }
 }
@@ -1271,54 +1271,6 @@ async function ensureMarketplacePublisher(
   )
 
   return result.rows[0]!.id
-}
-
-async function assertWorkspaceSkillSlugAvailable(
-  executor: Executor,
-  workspaceId: string,
-  slug: string
-) {
-  const existing = await runBuilder(
-    executor,
-    executor
-      .selectFrom("installed_skills")
-      .select(sql<number>`1`.as("one"))
-      .where("workspace_id", "=", workspaceId)
-      .where("slug", "=", slug)
-      .limit(1)
-  )
-
-  if (existing.rows.length > 0) {
-    throw new SkillError(
-      409,
-      `Skill slug "${slug}" already exists in this workspace`
-    )
-  }
-}
-
-async function allocateInstalledSkillSlug(
-  executor: Executor,
-  workspaceId: string,
-  preferredSlug: string
-) {
-  let candidate = preferredSlug
-  let index = 2
-  while (true) {
-    const existing = await runBuilder(
-      executor,
-      executor
-        .selectFrom("installed_skills")
-        .select(sql<number>`1`.as("one"))
-        .where("workspace_id", "=", workspaceId)
-        .where("slug", "=", candidate)
-        .limit(1)
-    )
-    if (existing.rows.length === 0) {
-      return candidate
-    }
-    candidate = `${preferredSlug}-${index}`
-    index += 1
-  }
 }
 
 function descriptionTextFromInput(description?: CanonicalContentBlockInput) {
@@ -1590,9 +1542,12 @@ async function buildMarketplaceInstallationMap(workspaceId: string) {
      FROM skill_source_refs source_ref
      JOIN installed_skills skill
        ON skill.id = source_ref.skill_id
-     WHERE skill.workspace_id = $1
+     JOIN workspace_apps app
+       ON app.id = skill.id
+     WHERE app.workspace_id = $1
+       AND app.deleted_at IS NULL
        AND source_ref.source_catalog_item_id IS NOT NULL
-     ORDER BY source_ref.source_catalog_item_id, skill.updated_at DESC`,
+     ORDER BY source_ref.source_catalog_item_id, app.updated_at DESC`,
     [workspaceId]
   )
 
@@ -1661,7 +1616,7 @@ async function loadInstalledSkillRows(params: {
 
   if (params.workspaceId) {
     values.push(params.workspaceId)
-    conditions.push(`skill.workspace_id = $${values.length}`)
+    conditions.push(`app.workspace_id = $${values.length}`)
   }
 
   if (params.skillIds && params.skillIds.length > 0) {
@@ -1677,7 +1632,7 @@ async function loadInstalledSkillRows(params: {
   const result = await runQuery<InstalledSkillRow>(
     `${INSTALLED_SKILL_SELECT}
      ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
-     ORDER BY skill.updated_at DESC`,
+     ORDER BY app.updated_at DESC`,
     values
   )
 
@@ -1687,8 +1642,10 @@ async function loadInstalledSkillRows(params: {
 // D3: legacy `legacyCapabilityAccessTargetOrThrow` / `legacyAccessGrantTargetOrThrow`
 // helpers removed — all CapabilityAccessTarget values are now ScopedSubjectTarget.
 
-export function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
-  const target = readAccessBindingTarget(row as any)
+export function buildSkillAccessRow(
+  row: AutomationEventSourceBindingRow
+): SkillAccessRow {
+  const target = readAutomationEventSourceAccessBindingTarget(row as any)
   const label = subjectScopeLabel(target)
   let bindScope: RuntimeBindingScope
   switch (label) {
@@ -1721,13 +1678,21 @@ export function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
       ? (target.subject as { memberId: string }).memberId
       : null
   return {
-    ...row,
+    id: row.id,
+    workspace_id: row.workspace_id,
     skill_id: row.resource_id,
     bind_scope: bindScope,
     conversation_id: conversationId,
     actor_id: actorId,
     remote_agent_id: remoteAgentId,
     workspace_member_id: workspaceMemberId,
+    conversation_type_mask_override: row.conversation_type_mask_override,
+    status: row.status,
+    source: row.source === "default_open" ? "manual" : row.source,
+    created_by_workspace_member_id: row.created_by_workspace_member_id,
+    reason: row.reason,
+    created_at: row.created_at,
+    revoked_at: row.revoked_at,
   }
 }
 
@@ -1736,18 +1701,53 @@ async function loadAccessBindingsBySkillIds(
   includeRevoked = false
 ) {
   if (skillIds.length === 0) return new Map<string, SkillAccessRow[]>()
-  // P3: route through binding-storage so the SELECT + JOIN lives in one place.
-  // The helper returns AccessBindingRow rows with target_type + subject_*_id
-  // already reconstructed from the access_subjects JOIN.
-  const rows = await loadAccessBindingRowsForResources(db, {
-    resourceType: "installed_skill",
-    resourceIds: skillIds,
-    includeRevoked,
-  })
+  let query = db
+    .selectFrom("workspace_app_grants as app_grant")
+    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
+    .leftJoin(
+      "access_subjects as scope",
+      "scope.id",
+      "app_grant.scope_subject_id"
+    )
+    .select([
+      "app_grant.id",
+      "app_grant.workspace_id",
+      "app_grant.workspace_app_id as skill_id",
+      sql<RuntimeBindingScope>`
+        CASE subj.kind
+          WHEN 'workspace' THEN 'workspace'
+          WHEN 'workspace_member' THEN 'workspace_member'
+          WHEN 'conversation' THEN 'conversation'
+          WHEN 'actor' THEN 'actor'
+          WHEN 'remote_agent' THEN 'remote_agent'
+        END
+      `.as("bind_scope"),
+      "scope.conversation_id as conversation_id",
+      "subj.actor_id as actor_id",
+      "subj.remote_agent_id as remote_agent_id",
+      "subj.workspace_member_id as workspace_member_id",
+      "app_grant.conversation_type_mask_override",
+      "app_grant.status",
+      "app_grant.source",
+      "app_grant.created_by_workspace_member_id",
+      "app_grant.reason",
+      "app_grant.created_at",
+      "app_grant.revoked_at",
+    ])
+    .where("app_grant.workspace_app_id", "in", skillIds)
+    .where(
+      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+    )
+    .orderBy("app_grant.created_at", "desc")
+
+  if (!includeRevoked) {
+    query = query.where("app_grant.status", "=", "active")
+  }
+
+  const rows = await query.execute()
 
   const map = new Map<string, SkillAccessRow[]>()
-  for (const rawRow of rows) {
-    const row = buildSkillAccessRow(rawRow)
+  for (const row of rows as unknown as SkillAccessRow[]) {
     const existing = map.get(row.skill_id) || []
     existing.push(row)
     map.set(row.skill_id, existing)
@@ -1766,25 +1766,35 @@ async function loadAccessBindingsBySkillIdsForContext(
   }
 ) {
   if (skillIds.length === 0) return new Map<string, SkillAccessRow[]>()
-  // SQL-side filter: only return bindings whose target shape matches the
-  // runtime context. The WHERE clause inside the helper mirrors the
-  // capability-target match exactly so this is the only filter the caller needs.
-  const rows = await loadAccessBindingRowsForResourcesAndContext(db, {
-    resourceType: "installed_skill",
-    resourceIds: skillIds,
-    contextWorkspaceId: context.contextWorkspaceId,
-    workspaceMemberId: context.workspaceMemberId,
-    actorId: context.actorId,
-    remoteAgentId: context.remoteAgentId,
-    conversationId: context.conversationId,
-  })
+  const bindings = await loadAccessBindingsBySkillIds(skillIds)
 
   const map = new Map<string, SkillAccessRow[]>()
-  for (const rawRow of rows) {
-    const row = buildSkillAccessRow(rawRow)
-    const existing = map.get(row.skill_id) || []
-    existing.push(row)
-    map.set(row.skill_id, existing)
+  for (const [skillId, rows] of bindings.entries()) {
+    const filtered = rows.filter((row) => {
+      switch (row.bind_scope) {
+        case "workspace":
+          return true
+        case "workspace_member":
+          return row.workspace_member_id === (context.workspaceMemberId || null)
+        case "conversation":
+          return row.conversation_id === (context.conversationId || null)
+        case "actor":
+          return (
+            row.actor_id === (context.actorId || null) &&
+            (!row.conversation_id ||
+              row.conversation_id === (context.conversationId || null))
+          )
+        case "remote_agent":
+          return (
+            row.remote_agent_id === (context.remoteAgentId || null) &&
+            (!row.conversation_id ||
+              row.conversation_id === (context.conversationId || null))
+          )
+      }
+    })
+    if (filtered.length > 0) {
+      map.set(skillId, filtered)
+    }
   }
   return map
 }
@@ -1800,7 +1810,7 @@ function mapSkillAccessRowToGrant(
     workspaceConversationTypeMask: number
     instanceConversationTypeMaskOverride: number | null
   }
-) {
+): WorkspaceAppGrant {
   const effectiveConversationTypeMask = options
     ? resolveNarrowedConversationTypeMask(
         resolveNarrowedConversationTypeMask(
@@ -1810,9 +1820,35 @@ function mapSkillAccessRowToGrant(
         row.conversation_type_mask_override
       )
     : undefined
-  return mapAccessBindingToGrant(row, undefined, {
+  return {
+    id: row.id,
+    workspaceAppId: row.skill_id,
+    workspaceId: row.workspace_id,
+    target: visibleRowToAccessTarget({
+      skill_id: row.skill_id,
+      workspace_id: row.workspace_id,
+      access_bind_scope: row.bind_scope,
+      conversation_id: row.conversation_id,
+      actor_id: row.actor_id,
+      remote_agent_id: row.remote_agent_id,
+      workspace_member_id: row.workspace_member_id,
+    } as VisibleSkillRow),
+    permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+    status: row.status,
+    source: row.source,
+    grantedByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
+    reason: row.reason || undefined,
+    conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask,
-  })
+    createdAt:
+      (row.created_at as unknown) instanceof Date
+        ? (row.created_at as unknown as Date).toISOString()
+        : row.created_at,
+    revokedAt:
+      (row.revoked_at as unknown) instanceof Date
+        ? (row.revoked_at as unknown as Date).toISOString()
+        : row.revoked_at || undefined,
+  }
 }
 
 async function loadInstalledSkillForUpdate(
@@ -1898,74 +1934,84 @@ async function findSkillIdsByBindingFilter(params: {
       })
     : null
 
-  let subjectId: string | null | undefined = undefined
-  let scopeSubjectId: string | null | undefined = undefined
+  let query = db
+    .selectFrom("workspace_app_grants as app_grant")
+    .innerJoin("workspace_apps as app", "app.id", "app_grant.workspace_app_id")
+    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
+    .leftJoin(
+      "access_subjects as scope",
+      "scope.id",
+      "app_grant.scope_subject_id"
+    )
+    .select("app_grant.workspace_app_id as skill_id")
+    .distinct()
+    .where("app.workspace_id", "=", params.workspaceId)
+    .where("app.kind", "=", "installed_skill")
+    .where("app_grant.status", "=", "active")
+    .where(
+      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+    )
+
   if (target) {
-    // P1b contract: resolve target → SubjectRef → access_subjects.id, then
-    // filter bindings by subject_id. Returns no rows when the subject
-    // doesn't exist yet (no binding could possibly match it).
-    const ref = accessGrantTargetToSubjectRef(target)
-    subjectId = await findAccessSubjectId(db, ref)
-    if (!subjectId) {
-      return []
-    }
-    // P2 fix (post-D4 round 7 review): also resolve the scope subject so
-    // the listing reflects the exact (subject, scope) the caller asked
-    // about. Without this filter, asking for actor A in conversation C1
-    // returned bindings for actor A in any scope (including C2 or
-    // unscoped) — silently widening the listing.
-    const scopeRef = accessGrantTargetScopeRef(target)
-    if (scopeRef) {
-      const resolvedScopeId = await findAccessSubjectId(db, scopeRef)
-      if (!resolvedScopeId) {
+    switch (target.subject.kind) {
+      case "workspace":
+        query = query.where("subj.kind", "=", "workspace")
+        break
+      case "workspace_member":
+        query = query
+          .where("subj.kind", "=", "workspace_member")
+          .where("subj.workspace_member_id", "=", target.subject.memberId)
+        break
+      case "conversation":
+        query = query
+          .where("subj.kind", "=", "conversation")
+          .where("subj.conversation_id", "=", target.subject.conversationId)
+        break
+      case "actor":
+        query = query
+          .where("subj.kind", "=", "actor")
+          .where("subj.actor_id", "=", target.subject.actorId)
+        break
+      case "remote_agent":
+        query = query
+          .where("subj.kind", "=", "remote_agent")
+          .where("subj.remote_agent_id", "=", target.subject.remoteAgentId)
+        break
+      default:
         return []
-      }
-      scopeSubjectId = resolvedScopeId
+    }
+
+    if (target.scope?.kind === "conversation") {
+      query = query.where(
+        "scope.conversation_id",
+        "=",
+        target.scope.conversationId
+      )
     } else {
-      scopeSubjectId = null
+      query = query.where("app_grant.scope_subject_id", "is", null)
+    }
+  } else {
+    if (params.workspaceMemberId) {
+      query = query.where(
+        "subj.workspace_member_id",
+        "=",
+        params.workspaceMemberId
+      )
+    }
+    if (params.actorId) {
+      query = query.where("subj.actor_id", "=", params.actorId)
+    }
+    if (params.conversationId) {
+      query = query.where(
+        sql<boolean>`COALESCE(scope.conversation_id, subj.conversation_id) = ${params.conversationId}`
+      )
     }
   }
 
-  return listResourceIdsForWorkspaceByBindingFilter(db, {
-    workspaceId: params.workspaceId,
-    resourceType: "installed_skill",
-    subjectId: subjectId ?? null,
-    scopeSubjectId,
-    actorId: subjectId ? null : (params.actorId ?? null),
-    conversationId: subjectId ? null : (params.conversationId ?? null),
-    // Round 13 review (P2): without this, callers that pass
-    // workspaceMemberId alone (no accessTargetType) bypassed the subject
-    // resolution branch above AND found no matching legacy filter
-    // condition, so the storage helper returned every active binding in
-    // the workspace. Downsink the legacy id to storage so it filters on
-    // subj.workspace_member_id, matching the actorId/conversationId
-    // legacy pattern.
-    workspaceMemberId: subjectId ? null : (params.workspaceMemberId ?? null),
-  })
-}
-
-async function findInstalledSkillBySource(
-  workspaceId: string,
-  sourceCatalogItemId: string,
-  executor: Executor = db
-) {
-  const result = await runBuilder(
-    executor,
-    executor
-      .selectFrom("installed_skills as skill")
-      .innerJoin(
-        "skill_source_refs as source_ref",
-        "source_ref.skill_id",
-        "skill.id"
-      )
-      .select("skill.id")
-      .where("skill.workspace_id", "=", workspaceId)
-      .where("source_ref.source_catalog_item_id", "=", sourceCatalogItemId)
-      .orderBy("skill.updated_at", "desc")
-      .limit(1)
-  )
-
-  return result.rows[0]?.id || null
+  const rows = await query.execute()
+  return rows
+    .map((row) => row.skill_id)
+    .filter((skillId): skillId is string => Boolean(skillId))
 }
 
 async function ensureSkillBinding(
@@ -1988,54 +2034,36 @@ async function ensureSkillBinding(
       conversationId: input.target.conversationId || undefined,
     }),
   })
-  const subjectRef = accessGrantTargetToSubjectRef(grantTarget)
-  const scopeRef = accessGrantTargetScopeRef(grantTarget)
-  const subjectId = await findAccessSubjectIdOn(client, subjectRef)
-  // P2 fix (post-D4 round 7 review): two skill bindings differing only in
-  // scope (e.g. actor A + scope=conv C1 vs actor A + scope=conv C2)
-  // must be treated as distinct rows. Resolve the scope subject id too so
-  // findActiveBindingIdByResourceAndSubject matches the right pair.
-  //
-  // P2 fix (post-D4 round 8 review): use upsert (not find) for the scope
-  // subject. If we used `findAccessSubjectIdOn` here and the conversation
-  // hadn't been registered in access_subjects yet, the lookup returns
-  // null — and the dedup query downstream matches `scope_subject_id IS
-  // NOT DISTINCT FROM NULL`, i.e. UNSCOPED bindings. Net: an install of
-  // (actor A + scope=conv C) would silently collapse onto an existing
-  // (actor A, unscoped) binding instead of creating a distinct scoped
-  // row. Upserting access_subjects is benign — it's a lookup table; the
-  // row gets created either way when the binding insert reaches the
-  // trigger that requires a real scope_subject_id.
-  const scopeSubjectId = scopeRef
-    ? await upsertAccessSubjectOn(client, scopeRef)
-    : null
-
-  const existingBindingId = subjectId
-    ? await findActiveBindingIdByResourceAndSubject(client, {
-        workspaceId: input.workspaceId,
-        resourceType: "installed_skill",
-        resourceId: input.skillId,
-        subjectId,
-        scopeSubjectId,
+  const existingRows = await loadAccessBindingsBySkillIds([input.skillId])
+  const existingBinding = (existingRows.get(input.skillId) || []).find((row) =>
+    matchesScopeTarget(
+      row,
+      normalizeScopeTarget({
+        useScope: input.target.useScope,
+        actorId: input.target.actorId,
+        remoteAgentId: input.target.remoteAgentId,
+        workspaceMemberId: input.target.workspaceMemberId,
+        conversationId: input.target.conversationId,
       })
-    : null
+    )
+  )
 
-  if (existingBindingId) {
+  if (existingBinding) {
     return {
-      bindingId: existingBindingId,
+      bindingId: existingBinding.id,
     }
   }
 
-  const bindingId = await insertAccessBindingReturningIdOn(client, {
+  const inserted = await insertWorkspaceAppGrant(client as any, {
     workspaceId: input.workspaceId,
-    resourceType: "installed_skill",
-    resourceId: input.skillId,
+    workspaceAppId: input.skillId,
     target: grantTarget,
+    permissions: ["use"],
     createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
   })
 
   return {
-    bindingId,
+    bindingId: inserted.id,
   }
 }
 
@@ -2658,35 +2686,35 @@ export async function createWorkspaceSkill(input: {
 
   const result = await withDbTransaction(async (client) => {
     const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
-    const installedSlug = await allocateInstalledSkillSlug(
-      client,
-      input.workspaceId,
-      sanitizeSlug(preparedSnapshot.frontmatter.name) || "skill"
-    )
+    const skillId = crypto.randomUUID()
+    await insertWorkspaceAppRoot(client, {
+      id: skillId,
+      workspaceId: input.workspaceId,
+      kind: "installed_skill",
+      displayName: preparedSnapshot.frontmatter.name,
+      ownerWorkspaceMemberId: input.installedByWorkspaceMemberId || null,
+      status: "active",
+      conversationTypeMaskOverride: null,
+    })
     const insertedSkill = await runBuilder(
       client,
       client
         .insertInto("installed_skills")
         .values({
-          workspace_id: input.workspaceId,
-          slug: installedSlug,
-          name: preparedSnapshot.frontmatter.name,
+          id: skillId,
           icon_file_id: iconFileId,
           tags: input.tags || [],
           current_version: 1,
           current_snapshot_id: snapshotId,
-          is_active: true,
-          created_by_workspace_member_id:
-            input.installedByWorkspaceMemberId || null,
         })
         .returning("id")
     )
-    const skillId = insertedSkill.rows[0]!.id
+    const insertedSkillId = insertedSkill.rows[0]!.id
 
     await client
       .insertInto("skill_versions")
       .values({
-        skill_id: skillId,
+        skill_id: insertedSkillId,
         version: 1,
         skill_snapshot_id: snapshotId,
         metadata: sql`${JSON.stringify({})}::jsonb`,
@@ -2696,14 +2724,14 @@ export async function createWorkspaceSkill(input: {
       .execute()
 
     await ensureSkillBinding(client, {
-      skillId,
+      skillId: insertedSkillId,
       workspaceId: input.workspaceId,
       target,
       createdByWorkspaceMemberId: input.installedByWorkspaceMemberId,
     })
 
     return {
-      skillId,
+      skillId: insertedSkillId,
     }
   })
 
@@ -2777,7 +2805,7 @@ export async function getInstalledSkill(
   return getInstalledSkillResponse(workspaceId, installedSkillId)
 }
 
-export async function getInstalledSkillAccessState(
+export async function getInstalledSkillGrantState(
   workspaceId: string,
   installedSkillId: string
 ) {
@@ -2835,7 +2863,7 @@ export async function getInstalledSkillAccessState(
   }
 }
 
-export async function grantInstalledSkillAccess(input: {
+export async function createInstalledSkillGrant(input: {
   workspaceId: string
   installedSkillId: string
   accessTarget?: CapabilityAccessTarget
@@ -2936,19 +2964,55 @@ export async function grantInstalledSkillAccess(input: {
   }
 
   const result = await withDbTransaction(async (client) => {
-    const inserted = await insertAccessBindingReturningRowOn(client, {
+    const inserted = await insertWorkspaceAppGrant(client as any, {
       workspaceId: input.workspaceId,
-      resourceType: "installed_skill",
-      resourceId: input.installedSkillId,
+      workspaceAppId: input.installedSkillId,
       target: accessTarget,
+      permissions: ["use"],
       conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
       createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
       reason: input.reason || null,
     })
-
-    const accessRow = buildSkillAccessRow(normalizeAccessBindingRow(inserted))
     return {
-      accessRow,
+      accessRow: {
+        id: inserted.id,
+        workspace_id: inserted.workspace_id,
+        skill_id: inserted.workspace_app_id,
+        bind_scope: accessTarget.subject.kind as RuntimeBindingScope,
+        conversation_id:
+          accessTarget.scope?.kind === "conversation"
+            ? accessTarget.scope.conversationId
+            : accessTarget.subject.kind === "conversation"
+              ? accessTarget.subject.conversationId
+              : null,
+        actor_id:
+          accessTarget.subject.kind === "actor"
+            ? accessTarget.subject.actorId
+            : null,
+        remote_agent_id:
+          accessTarget.subject.kind === "remote_agent"
+            ? accessTarget.subject.remoteAgentId
+            : null,
+        workspace_member_id:
+          accessTarget.subject.kind === "workspace_member"
+            ? accessTarget.subject.memberId
+            : null,
+        conversation_type_mask_override:
+          inserted.conversation_type_mask_override,
+        status: inserted.status,
+        source: inserted.source,
+        created_by_workspace_member_id: inserted.created_by_workspace_member_id,
+        reason: inserted.reason,
+        created_at:
+          inserted.created_at instanceof Date
+            ? inserted.created_at.toISOString()
+            : (inserted.created_at as any),
+        revoked_at:
+          inserted.revoked_at instanceof Date
+            ? inserted.revoked_at.toISOString()
+            : (inserted.revoked_at as any),
+        relation: "use_workspace",
+      } as SkillAccessRow,
     }
   })
 
@@ -2959,7 +3023,7 @@ export async function grantInstalledSkillAccess(input: {
   })
 }
 
-export async function updateInstalledSkillAccessGrant(input: {
+export async function updateInstalledSkillGrant(input: {
   workspaceId: string
   installedSkillId: string
   grantId: string
@@ -3008,11 +3072,14 @@ export async function updateInstalledSkillAccessGrant(input: {
   })
 
   if (input.conversationTypeMaskOverride !== undefined) {
-    await updateGrantConversationTypeMaskOverride(db, {
-      bindingId: input.grantId,
-      workspaceId: input.workspaceId,
-      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
-    })
+    await db
+      .updateTable("workspace_app_grants")
+      .set({
+        conversation_type_mask_override: input.conversationTypeMaskOverride,
+      } as any)
+      .where("id", "=", input.grantId)
+      .where("workspace_id", "=", input.workspaceId)
+      .execute()
   }
 
   const updatedRows = await listSkillAccessRows(input.installedSkillId)
@@ -3028,7 +3095,7 @@ export async function updateInstalledSkillAccessGrant(input: {
   })
 }
 
-export async function revokeInstalledSkillAccess(input: {
+export async function revokeInstalledSkillGrant(input: {
   workspaceId: string
   installedSkillId: string
   grantId: string
@@ -3042,7 +3109,7 @@ export async function revokeInstalledSkillAccess(input: {
     return mapSkillAccessRowToGrant(accessRow)
   }
 
-  await revokeGrant(db, { bindingId: accessRow.id })
+  await revokeWorkspaceAppGrant(db, accessRow.id)
 
   return { success: true }
 }
@@ -3088,63 +3155,39 @@ export async function installMarketplaceSkill(input: {
   }
 
   const result = await withDbTransaction(async (client) => {
-    const existingSkillId = await findInstalledSkillBySource(
-      input.workspaceId,
-      input.marketSkillId,
-      client
-    )
-
-    if (existingSkillId) {
-      await ensureSkillBinding(client, {
-        skillId: existingSkillId,
-        workspaceId: input.workspaceId,
-        target,
-        createdByWorkspaceMemberId: input.installedByWorkspaceMemberId,
-      })
-
-      return {
-        skillId: existingSkillId,
-      }
-    }
-
-    const installedSlug = await allocateInstalledSkillSlug(
-      client,
-      input.workspaceId,
-      sanitizeSlug(
-        marketplaceSkill.snapshot_name || marketplaceSkill.item_slug
-      ) ||
-        sanitizeSlug(marketplaceSkill.item_slug) ||
-        "skill"
-    )
+    const skillId = crypto.randomUUID()
+    await insertWorkspaceAppRoot(client, {
+      id: skillId,
+      workspaceId: input.workspaceId,
+      kind: "installed_skill",
+      displayName:
+        marketplaceSkill.snapshot_display_name ||
+        marketplaceSkill.item_display_name,
+      ownerWorkspaceMemberId: input.installedByWorkspaceMemberId || null,
+      status: "active",
+      conversationTypeMaskOverride:
+        marketplaceSkill.spec_default_conversation_type_mask ?? null,
+    })
 
     const insertedSkill = await runBuilder(
       client,
       client
         .insertInto("installed_skills")
         .values({
-          workspace_id: input.workspaceId,
-          slug: installedSlug,
-          name:
-            marketplaceSkill.snapshot_name ||
-            marketplaceSkill.item_display_name,
+          id: skillId,
           icon_file_id: marketplaceSkill.item_icon_file_id,
           tags: marketplaceSkill.item_tags || [],
           current_version: 1,
           current_snapshot_id: marketplaceSkill.snapshot_id!,
-          is_active: true,
-          conversation_type_mask_override:
-            marketplaceSkill.spec_default_conversation_type_mask ?? null,
-          created_by_workspace_member_id:
-            input.installedByWorkspaceMemberId || null,
         })
         .returning("id")
     )
-    const skillId = insertedSkill.rows[0]!.id
+    const insertedSkillId = insertedSkill.rows[0]!.id
 
     await client
       .insertInto("skill_versions")
       .values({
-        skill_id: skillId,
+        skill_id: insertedSkillId,
         version: 1,
         skill_snapshot_id: marketplaceSkill.snapshot_id!,
         metadata: sql`${JSON.stringify({})}::jsonb`,
@@ -3156,7 +3199,7 @@ export async function installMarketplaceSkill(input: {
     await client
       .insertInto("skill_source_refs")
       .values({
-        skill_id: skillId,
+        skill_id: insertedSkillId,
         source_catalog_item_id: marketplaceSkill.item_id,
         source_catalog_version_id: marketplaceSkill.latest_version_id,
         sync_mode: "manual_merge",
@@ -3174,14 +3217,14 @@ export async function installMarketplaceSkill(input: {
       .execute()
 
     await ensureSkillBinding(client, {
-      skillId,
+      skillId: insertedSkillId,
       workspaceId: input.workspaceId,
       target,
       createdByWorkspaceMemberId: input.installedByWorkspaceMemberId,
     })
 
     return {
-      skillId,
+      skillId: insertedSkillId,
     }
   })
 
@@ -3242,15 +3285,15 @@ export async function updateInstalledSkill(input: {
 
   await withDbTransaction(async (client) => {
     let nextVersion = existing.current_version
-    let nextName = existing.name
+    let nextDisplayName = existing.display_name
 
     if (touchesContent) {
       nextVersion = existing.current_version + 1
-      nextName = input.name?.trim() || existing.name
+      nextDisplayName = input.name?.trim() || existing.display_name
 
       const preparedSnapshot = buildPreparedSnapshotFromInput({
-        fallbackName: existing.slug || existing.name,
-        explicitName: nextName,
+        fallbackName: existing.display_name,
+        explicitName: nextDisplayName,
         explicitDescription: input.description,
         files: input.attachmentFiles
           ? normalizeSkillAttachments(input.attachmentFiles)
@@ -3262,7 +3305,7 @@ export async function updateInstalledSkill(input: {
         },
       })
       const snapshotId = await insertSkillSnapshot(client, preparedSnapshot)
-      nextName = preparedSnapshot.frontmatter.name
+      nextDisplayName = preparedSnapshot.frontmatter.name
 
       await client
         .insertInto("skill_versions")
@@ -3272,14 +3315,13 @@ export async function updateInstalledSkill(input: {
           skill_snapshot_id: snapshotId,
           metadata: sql`${JSON.stringify(parseJsonObject(existing.version_metadata))}::jsonb`,
           created_by_workspace_member_id:
-            existing.created_by_workspace_member_id || null,
+            existing.owner_workspace_member_id || null,
         })
         .execute()
 
       await client
         .updateTable("installed_skills")
         .set({
-          name: nextName,
           icon_file_id:
             input.iconFileId === undefined
               ? existing.icon_file_id
@@ -3292,11 +3334,22 @@ export async function updateInstalledSkill(input: {
           tags: input.tags || existing.tags || [],
           current_version: nextVersion,
           current_snapshot_id: snapshotId,
-          is_active: sql`COALESCE(${input.isEnabled === undefined ? null : input.isEnabled}, is_active)`,
           updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.skill_id)
         .execute()
+      await updateWorkspaceAppRoot(client, {
+        id: existing.skill_id,
+        displayName: nextDisplayName,
+        status:
+          input.isEnabled === undefined
+            ? existing.skill_status === "active"
+              ? "active"
+              : "disabled"
+            : input.isEnabled
+              ? "active"
+              : "disabled",
+      })
 
       if (existing.source_catalog_item_id) {
         await client
@@ -3332,18 +3385,25 @@ export async function updateInstalledSkill(input: {
         .set({
           icon_file_id: nextIconFileId,
           tags: input.tags === undefined ? existing.tags || [] : input.tags,
-          is_active:
-            input.isEnabled === undefined
-              ? existing.is_active
-              : input.isEnabled,
-          conversation_type_mask_override:
-            input.conversationTypeMaskOverride === undefined
-              ? existing.conversation_type_mask_override
-              : input.conversationTypeMaskOverride,
           updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.skill_id)
         .execute()
+      await updateWorkspaceAppRoot(client, {
+        id: existing.skill_id,
+        status:
+          input.isEnabled === undefined
+            ? existing.skill_status === "active"
+              ? "active"
+              : "disabled"
+            : input.isEnabled
+              ? "active"
+              : "disabled",
+        conversationTypeMaskOverride:
+          input.conversationTypeMaskOverride === undefined
+            ? existing.conversation_type_mask_override
+            : input.conversationTypeMaskOverride,
+      })
     }
   })
 
@@ -3392,15 +3452,13 @@ export async function upgradeInstalledSkill(input: {
         skill_snapshot_id: marketplaceSkill.snapshot_id!,
         metadata: sql`${JSON.stringify(parseJsonObject(existing.version_metadata))}::jsonb`,
         created_by_workspace_member_id:
-          existing.created_by_workspace_member_id || null,
+          existing.owner_workspace_member_id || null,
       })
       .execute()
 
     await client
       .updateTable("installed_skills")
       .set({
-        name:
-          marketplaceSkill.snapshot_name || marketplaceSkill.item_display_name,
         icon_file_id: marketplaceSkill.item_icon_file_id,
         tags: marketplaceSkill.item_tags || [],
         current_version: existing.current_version + 1,
@@ -3409,6 +3467,12 @@ export async function upgradeInstalledSkill(input: {
       })
       .where("id", "=", existing.skill_id)
       .execute()
+    await updateWorkspaceAppRoot(client, {
+      id: existing.skill_id,
+      displayName:
+        marketplaceSkill.snapshot_display_name ||
+        marketplaceSkill.item_display_name,
+    })
 
     await client
       .updateTable("skill_source_refs")
@@ -3432,7 +3496,8 @@ export async function uninstallInstalledSkill(
     const existing = await runOn<InstalledSkillRow>(
       client,
       `${INSTALLED_SKILL_SELECT}
-       WHERE skill.workspace_id = $1
+       WHERE app.workspace_id = $1
+         AND app.deleted_at IS NULL
          AND skill.id = $2
        LIMIT 1`,
       [workspaceId, installedSkillId]
@@ -3450,14 +3515,15 @@ export async function uninstallInstalledSkill(
       .updateTable("installed_skills")
       .set({ deleted_at: sql`NOW()` })
       .where("id", "=", installedSkillId)
-      .where("workspace_id", "=", workspaceId)
       .where("deleted_at", "is", null)
       .execute()
-
-    await hardDeleteBindingsForResourceOn(client, {
-      resourceType: "installed_skill",
-      resourceId: installedSkillId,
+    await updateWorkspaceAppRoot(client, {
+      id: installedSkillId,
+      status: "archived",
+      deletedAt: new Date(),
     })
+
+    await revokeWorkspaceAppGrantsForApp(client, installedSkillId)
 
     return {
       deleted: true,
@@ -3487,41 +3553,9 @@ function visibleRowToAccessRow(
   row: VisibleSkillRow,
   workspaceId: string
 ): SkillAccessRow {
-  const bindScope = row.access_bind_scope
-  // Map the scope label back to a SkillAccessRow shape — workspace_member
-  // scope is treated as workspace for visibility grouping in the FE.
-  let relation: AccessBindingRow["relation"]
-  switch (bindScope) {
-    case "workspace":
-      relation = "use_workspace"
-      break
-    case "workspace_member":
-      relation = "use_workspace_member"
-      break
-    case "conversation":
-      relation = "use_conversation"
-      break
-    case "actor":
-      relation = "use_actor"
-      break
-    case "remote_agent":
-      relation = "use_remote_agent"
-      break
-    default:
-      relation = "use_scoped"
-  }
-
   return {
     id: row.access_binding_id,
     workspace_id: workspaceId,
-    ...buildResourceAccessBindingRef({
-      resourceType: "installed_skill",
-      resourceId: row.skill_id,
-    }),
-    resource_id: row.skill_id,
-    relation,
-    subject_id: null,
-    scope_subject_id: null,
     conversation_type_mask_override: null,
     status: "active",
     source: "manual",
@@ -3611,34 +3645,39 @@ export async function listVisibleSkills(input: {
             runQuery<VisibleSkillRow>(
               `SELECT
 	                 skill.id AS skill_id,
-	                 skill.workspace_id,
-	                 skill.slug,
-	                 skill.name,
+	                 app.workspace_id,
+	                 app.display_name AS display_name,
 	                 skill.current_version,
 	                 version_row.id AS current_skill_version_id,
 	                 snapshot.description,
+	                 source_item.slug AS source_slug,
 	                 imported_version.version AS source_version_value,
-	                 skill.conversation_type_mask_override,
+	                 app.conversation_type_mask_override,
 	                 skill.id AS access_binding_id,
 	                 'workspace'::varchar AS access_bind_scope,
                  NULL::uuid AS conversation_id,
                  NULL::uuid AS actor_id,
                  NULL::uuid AS remote_agent_id,
                  NULL::uuid AS workspace_member_id,
-                 skill.updated_at AS access_created_at
+                 app.updated_at AS access_created_at
                FROM installed_skills skill
+               JOIN workspace_apps app
+                 ON app.id = skill.id
                JOIN skill_versions version_row
                  ON version_row.skill_id = skill.id
                 AND version_row.version = skill.current_version
                JOIN skill_snapshots snapshot
                  ON snapshot.id = skill.current_snapshot_id
-	               LEFT JOIN skill_source_refs source_ref
-	                 ON source_ref.skill_id = skill.id
-	               LEFT JOIN catalog_versions imported_version
-	                 ON imported_version.id = source_ref.source_catalog_version_id
-	               WHERE skill.id = ANY($1::uuid[])
-	                 AND skill.is_active = TRUE
-	               ORDER BY skill.slug ASC, skill.updated_at DESC`,
+		               LEFT JOIN skill_source_refs source_ref
+		                 ON source_ref.skill_id = skill.id
+		               LEFT JOIN catalog_items source_item
+		                 ON source_item.id = source_ref.source_catalog_item_id
+		               LEFT JOIN catalog_versions imported_version
+		                 ON imported_version.id = source_ref.source_catalog_version_id
+		               WHERE skill.id = ANY($1::uuid[])
+		                 AND app.deleted_at IS NULL
+		                 AND app.status = 'active'
+		               ORDER BY app.display_name ASC, app.updated_at DESC`,
               [Array.from(visibleSkillIds)]
             ),
             loadAccessBindingsBySkillIdsForContext(
@@ -3701,9 +3740,9 @@ export async function listVisibleSkills(input: {
               access_created_at:
                 chosenBinding?.created_at || row.access_created_at,
             }
-            const existing = deduped.get(row.slug)
+            const existing = deduped.get(row.skill_id)
             if (!existing) {
-              deduped.set(row.slug, candidate)
+              deduped.set(row.skill_id, candidate)
               continue
             }
             if (
@@ -3712,7 +3751,7 @@ export async function listVisibleSkills(input: {
                 visibleRowToAccessRow(existing, input.workspaceId)
               ) < 0
             ) {
-              deduped.set(row.slug, candidate)
+              deduped.set(row.skill_id, candidate)
             }
           }
 
@@ -3721,11 +3760,11 @@ export async function listVisibleSkills(input: {
 
   const combined = new Map<string, AvailableSkillSummary>()
   for (const skill of installedSkills) {
-    combined.set(skill.slug.toLowerCase(), skill)
+    combined.set(skill.instanceId, skill)
   }
   for (const skill of autoLoadedSkills) {
-    if (!combined.has(skill.slug.toLowerCase())) {
-      combined.set(skill.slug.toLowerCase(), skill)
+    if (!combined.has(skill.instanceId)) {
+      combined.set(skill.instanceId, skill)
     }
   }
 
@@ -3740,7 +3779,7 @@ export async function readVisibleSkill(input: {
   conversationId?: string
   conversationKind?: "direct" | "group"
   isImConversation?: boolean
-  skillName: string
+  skillInstanceId: string
   assetPath?: string
 }) {
   const visibleSkills = await listVisibleSkills({
@@ -3753,20 +3792,24 @@ export async function readVisibleSkill(input: {
     isImConversation: input.isImConversation,
   })
 
-  const normalizedName = input.skillName.trim().toLowerCase()
+  const skillInstanceId = input.skillInstanceId.trim()
   const match = visibleSkills.find(
-    (skill) =>
-      skill.slug.toLowerCase() === normalizedName ||
-      skill.name.toLowerCase() === normalizedName
+    (skill) => skill.instanceId === skillInstanceId
   )
 
   if (!match) {
-    throw new SkillError(404, `Visible skill "${input.skillName}" not found`)
+    throw new SkillError(
+      404,
+      `Visible skill instance "${input.skillInstanceId}" not found`
+    )
   }
 
   const installedSkill = await loadInstalledSkillById(match.instanceId)
   if (!installedSkill) {
-    throw new SkillError(404, `Visible skill "${input.skillName}" not found`)
+    throw new SkillError(
+      404,
+      `Visible skill instance "${input.skillInstanceId}" not found`
+    )
   }
 
   if (!input.assetPath) {

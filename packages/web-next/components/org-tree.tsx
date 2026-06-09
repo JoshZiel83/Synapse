@@ -18,7 +18,7 @@ import Link from "next/link"
 
 interface Actor {
   id: string
-  name: string
+  displayName: string
   role: string
   title?: string
   type?: string
@@ -101,7 +101,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-sm font-semibold text-foreground">
-                  {actor.name}
+                  {actor.displayName}
                 </h3>
                 <Badge
                   variant="outline"

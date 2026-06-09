@@ -43,7 +43,7 @@ import {
 import { toast } from "sonner"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
-import ResourceAccessStep from "@/app/dashboard/plugins/resource-access-step"
+import WorkspaceAppAccessStep from "@/app/dashboard/plugins/workspace-app-access-step"
 import { CanonicalContentEditor } from "@/components/canonical-content-editor"
 import { CanonicalContentRenderer } from "@/components/canonical-content-renderer"
 import { Badge } from "@/components/ui/badge"
@@ -96,7 +96,7 @@ import { resolveFileUrl } from "@/lib/utils"
 
 type ActorOption = {
   id: string
-  name: string
+  displayName: string
   title?: string
 }
 
@@ -132,10 +132,10 @@ type UploadedFile = {
 
 type SkillImportSourceType = "github" | "clawhub"
 
-const skillAccessAdapter = {
-  loadAccess: (workspaceId: string, resourceId: string) =>
-    api.getInstalledSkillAccess(workspaceId, resourceId),
-  grantAccess: (
+const skillGrantAdapter = {
+  loadGrants: (workspaceId: string, resourceId: string) =>
+    api.getInstalledSkillGrants(workspaceId, resourceId),
+  createGrant: (
     workspaceId: string,
     resourceId: string,
     payload: {
@@ -143,9 +143,9 @@ const skillAccessAdapter = {
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
     }
-  ) => api.grantInstalledSkillAccess(workspaceId, resourceId, payload),
-  revokeAccess: (workspaceId: string, resourceId: string, grantId: string) =>
-    api.revokeInstalledSkillAccess(workspaceId, resourceId, grantId),
+  ) => api.createInstalledSkillGrant(workspaceId, resourceId, payload),
+  revokeGrant: (workspaceId: string, resourceId: string, grantId: string) =>
+    api.revokeInstalledSkillGrant(workspaceId, resourceId, grantId),
   updateGrant: (
     workspaceId: string,
     resourceId: string,
@@ -153,13 +153,7 @@ const skillAccessAdapter = {
     payload: {
       conversationTypeMaskOverride?: number | null
     }
-  ) =>
-    api.updateInstalledSkillAccessGrant(
-      workspaceId,
-      resourceId,
-      grantId,
-      payload
-    ),
+  ) => api.updateInstalledSkillGrant(workspaceId, resourceId, grantId, payload),
   updatePolicy: (
     workspaceId: string,
     resourceId: string,
@@ -228,7 +222,7 @@ type SkillListRow = {
   id: string
   kind: "custom" | "official-installed" | "official-available"
   name: string
-  slug: string
+  sourceSlug?: string
   descriptionText: string
   tags: string[]
   installedSkillId?: string
@@ -386,9 +380,9 @@ function normalizeActorOption(actor: unknown): ActorOption {
   const definition = objectValue(actorRecord.definition ?? actorRecord)
   return {
     id: typeof actorRecord.id === "string" ? actorRecord.id : "",
-    name:
-      typeof definition.name === "string"
-        ? definition.name
+    displayName:
+      typeof actorRecord.displayName === "string"
+        ? actorRecord.displayName
         : typeof definition.title === "string"
           ? definition.title
           : "Untitled actor",
@@ -482,12 +476,13 @@ function resolveScopeTarget(
       )
     case "actor":
       return (
-        actors.find((item) => item.id === draft.actorId)?.name ||
+        actors.find((item) => item.id === draft.actorId)?.displayName ||
         "Choose one actor"
       )
     case "actor_conversation": {
       const actorName =
-        actors.find((item) => item.id === draft.actorId)?.name || "Choose actor"
+        actors.find((item) => item.id === draft.actorId)?.displayName ||
+        "Choose actor"
       const conversationName =
         conversations.find((item) => item.id === draft.conversationId)?.title ||
         "choose conversation"
@@ -665,8 +660,8 @@ function createInstalledDraft(skill?: InstalledSkill | null): EditorDraft {
   )
 
   return {
-    slug: skill?.slug || "",
-    name: skill?.name || "",
+    slug: "",
+    name: skill?.displayName || "",
     descriptionBlocks: skill?.description
       ? [skill.description]
       : createEmptyDescriptionBlocks(),
@@ -708,7 +703,12 @@ function getSkillRowId(skill: Pick<InstalledSkill, "id" | "sourceSkillId">) {
 }
 
 function matchesSkillRowQuery(row: SkillListRow, query: string) {
-  return [row.name, row.slug, row.descriptionText, row.tags.join(" ")]
+  return [
+    row.name,
+    row.sourceSlug || "",
+    row.descriptionText,
+    row.tags.join(" "),
+  ]
     .join(" ")
     .toLowerCase()
     .includes(query)
@@ -837,7 +837,7 @@ function ScopeFields({
               <SelectGroup>
                 {actors.map((actor) => (
                   <SelectItem key={actor.id} value={actor.id}>
-                    {actor.name}
+                    {actor.displayName}
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -1805,7 +1805,9 @@ export function InstalledSkillConfigurationPage({
         <CardHeader className="border-b border-border bg-muted/20 pb-0">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <CardTitle>{skill?.name || "Skill configuration"}</CardTitle>
+              <CardTitle>
+                {skill?.displayName || "Skill configuration"}
+              </CardTitle>
               <div className="mt-2 space-y-1">
                 <CardDescription>
                   {skillDescriptionText(skill?.description) ||
@@ -2008,9 +2010,9 @@ export function InstalledSkillConfigurationPage({
                   </div>
                 </div>
 
-                <ResourceAccessStep
+                <WorkspaceAppAccessStep
                   installation={skill}
-                  accessAdapter={skillAccessAdapter}
+                  grantAdapter={skillGrantAdapter}
                   resourceLabel="skill"
                   description="Choose who can use this skill. The workspace keeps ownership of the installed skill content."
                   addAccessLabel="Add Access"
@@ -2063,8 +2065,8 @@ export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
       )
       setSkill(nextSkill)
       setDraft({
-        slug: nextSkill.slug || "",
-        name: nextSkill.name || "",
+        slug: "",
+        name: nextSkill.displayName || "",
         descriptionBlocks: nextSkill.description
           ? [nextSkill.description]
           : createEmptyDescriptionBlocks(),
@@ -2290,7 +2292,7 @@ export function InstalledSkillEditorPage({ skillId }: { skillId: string }) {
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div className="max-w-3xl">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-            {loading ? "Edit skill" : skill?.name || "Edit skill"}
+            {loading ? "Edit skill" : skill?.displayName || "Edit skill"}
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {loading
@@ -3739,8 +3741,7 @@ export default function SkillsPage() {
       .map((skill) => ({
         id: getSkillRowId(skill),
         kind: "custom",
-        name: skill.name,
-        slug: skill.slug,
+        name: skill.displayName,
         descriptionText: skillDescriptionText(skill.description),
         tags: skill.tags,
         installedSkillId: skill.id,
@@ -3759,7 +3760,7 @@ export default function SkillsPage() {
         id: `official-installed:${skill.id}`,
         kind: "official-installed",
         name: skill.name,
-        slug: skill.slug,
+        sourceSlug: skill.slug,
         descriptionText: skillDescriptionText(skill.description),
         tags: skill.tags,
         installedSkillId: skill.workspaceInstallation?.installedSkillId,
@@ -3777,8 +3778,7 @@ export default function SkillsPage() {
       .map((skill) => ({
         id: `official-installed:${skill.sourceSkillId}`,
         kind: "official-installed",
-        name: skill.name,
-        slug: skill.slug,
+        name: skill.displayName,
         descriptionText: skillDescriptionText(skill.description),
         tags: skill.tags,
         installedSkillId: skill.id,
@@ -3794,7 +3794,7 @@ export default function SkillsPage() {
         id: `official-available:${skill.id}`,
         kind: "official-available",
         name: skill.name,
-        slug: skill.slug,
+        sourceSlug: skill.slug,
         descriptionText: skillDescriptionText(skill.description),
         tags: skill.tags,
         marketplaceSkillId: skill.id,
@@ -3982,9 +3982,11 @@ export default function SkillsPage() {
                           <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                             {row.descriptionText || "No description provided."}
                           </div>
-                          <div className="mt-2 text-xs text-muted-foreground">
-                            {row.slug}
-                          </div>
+                          {row.sourceSlug ? (
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              {row.sourceSlug}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </TableCell>

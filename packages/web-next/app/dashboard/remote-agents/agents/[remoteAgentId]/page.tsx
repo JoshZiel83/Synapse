@@ -1,7 +1,6 @@
 "use client"
 
 import {
-  RELATIONSHIP_ACCESS_POLICY,
   RELATIONSHIP_APPROVAL_MODE,
   REMOTE_AGENT_RUNTIME_KIND,
   REMOTE_AGENT_RUNTIME_STATE,
@@ -67,24 +66,18 @@ function approvalModeLabel(value?: RelationshipProfileView["approvalMode"]) {
   return value || RELATIONSHIP_APPROVAL_MODE.MANUAL
 }
 
-function toggleAccessPolicy(current?: RelationshipProfileView["accessPolicy"]) {
-  return current === RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
-    ? RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED
-    : RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
+function toggleRequiresContactApproval(
+  current?: RelationshipProfileView["requiresContactApproval"]
+) {
+  return !current
 }
 
-function accessPolicyLabel(
+function contactApprovalLabel(
   value?:
-    | RelationshipProfileView["accessPolicy"]
-    | RemoteAgentView["accessPolicy"]
+    | RelationshipProfileView["requiresContactApproval"]
+    | RemoteAgentView["requiresContactApproval"]
 ) {
-  switch (value) {
-    case RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED:
-      return "approval required"
-    case RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN:
-    default:
-      return "workspace open"
-  }
+  return value ? "approval required" : "open to workspace"
 }
 
 function runtimeLabel(value: string) {
@@ -131,7 +124,7 @@ type WorkspaceMemberDirectoryEntry = {
 }
 
 type AgentDraft = {
-  name: string
+  displayName: string
   title: string
   description: string
   avatarEmoji: string
@@ -170,7 +163,7 @@ export default function RemoteAgentDetailPage() {
   const [selectedGrantIds, setSelectedGrantIds] = useState<string[]>([])
   const [qrImage, setQrImage] = useState<string | null>(null)
   const [agentDraft, setAgentDraft] = useState<AgentDraft>({
-    name: "",
+    displayName: "",
     title: "",
     description: "",
     avatarEmoji: "",
@@ -186,7 +179,7 @@ export default function RemoteAgentDetailPage() {
 
   function syncAgentDraft(nextAgent: RemoteAgentView) {
     setAgentDraft({
-      name: nextAgent.name,
+      displayName: nextAgent.displayName,
       title: nextAgent.title,
       description: nextAgent.description || "",
       avatarEmoji: nextAgent.avatarEmoji || "",
@@ -204,7 +197,7 @@ export default function RemoteAgentDetailPage() {
       current
         ? {
             ...current,
-            accessPolicy: nextProfile.accessPolicy || current.accessPolicy,
+            requiresContactApproval: nextProfile.requiresContactApproval,
             isPublicShared:
               typeof nextProfile.isPublicShared === "boolean"
                 ? nextProfile.isPublicShared
@@ -293,7 +286,7 @@ export default function RemoteAgentDetailPage() {
     setSavingAgent(true)
     try {
       const result = await api.updateRemoteAgent(workspaceId, remoteAgentId, {
-        name: agentDraft.name.trim(),
+        displayName: agentDraft.displayName.trim(),
         title: agentDraft.title.trim(),
         description: agentDraft.description.trim() || null,
         avatarEmoji: agentDraft.avatarEmoji.trim() || null,
@@ -351,7 +344,7 @@ export default function RemoteAgentDetailPage() {
           approvalMode: profile.approvalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
-          accessPolicy: profile.accessPolicy,
+          requiresContactApproval: profile.requiresContactApproval,
           isPublicShared: profile.isPublicShared,
         }
       )
@@ -383,7 +376,7 @@ export default function RemoteAgentDetailPage() {
           approvalMode: nextApprovalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
-          accessPolicy: profile.accessPolicy,
+          requiresContactApproval: profile.requiresContactApproval,
           isPublicShared: profile.isPublicShared,
         }
       )
@@ -405,11 +398,13 @@ export default function RemoteAgentDetailPage() {
     }
   }
 
-  async function handleToggleAccessPolicy() {
+  async function handleToggleContactApproval() {
     if (!workspaceId || !remoteAgentId || !profile) return
     setSavingProfile(true)
     try {
-      const nextAccessPolicy = toggleAccessPolicy(profile.accessPolicy)
+      const nextRequiresContactApproval = toggleRequiresContactApproval(
+        profile.requiresContactApproval
+      )
       const nextProfile = await api.updateRemoteAgentRelationshipProfile(
         workspaceId,
         remoteAgentId,
@@ -417,20 +412,20 @@ export default function RemoteAgentDetailPage() {
           approvalMode: profile.approvalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
-          accessPolicy: nextAccessPolicy,
+          requiresContactApproval: nextRequiresContactApproval,
           isPublicShared: profile.isPublicShared,
         }
       )
       setProfile(nextProfile)
       applyProfileToAgent(nextProfile)
       toast.success(
-        `Access policy switched to ${accessPolicyLabel(nextProfile.accessPolicy)}`
+        `Contact approval switched to ${contactApprovalLabel(nextProfile.requiresContactApproval)}`
       )
     } catch (error) {
       toast.error(
         error instanceof Error
           ? error.message
-          : "Failed to update access policy"
+          : "Failed to update contact approval"
       )
     } finally {
       setSavingProfile(false)
@@ -448,7 +443,7 @@ export default function RemoteAgentDetailPage() {
           approvalMode: profile.approvalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
-          accessPolicy: profile.accessPolicy,
+          requiresContactApproval: profile.requiresContactApproval,
           isPublicShared: !profile.isPublicShared,
         }
       )
@@ -472,7 +467,7 @@ export default function RemoteAgentDetailPage() {
 
   async function handleDeleteAgent() {
     if (!workspaceId || !remoteAgentId || !agent) return
-    if (!window.confirm(`Delete remote agent "${agent.name}"?`)) {
+    if (!window.confirm(`Delete remote agent "${agent.displayName}"?`)) {
       return
     }
     setDeletingAgent(true)
@@ -526,7 +521,7 @@ export default function RemoteAgentDetailPage() {
           <div className="flex items-center gap-2">
             <Bot className="size-5 text-muted-foreground" />
             <h1 className="text-2xl font-semibold text-foreground">
-              {agent?.name || "Remote agent"}
+              {agent?.displayName || "Remote agent"}
             </h1>
           </div>
           <p className="text-sm text-muted-foreground">
@@ -571,7 +566,7 @@ export default function RemoteAgentDetailPage() {
                     {runtimeLabel(agent.runtimeKind)}
                   </Badge>
                   <Badge variant="outline">
-                    {accessPolicyLabel(agent.accessPolicy)}
+                    {contactApprovalLabel(agent.requiresContactApproval)}
                   </Badge>
                   <Badge
                     variant={agent.isPublicShared ? "secondary" : "outline"}
@@ -682,15 +677,15 @@ export default function RemoteAgentDetailPage() {
             ) : (
               <FieldGroup>
                 <Field>
-                  <FieldLabel htmlFor="agent-name">Name</FieldLabel>
+                  <FieldLabel htmlFor="agent-name">Display name</FieldLabel>
                   <FieldContent>
                     <Input
                       id="agent-name"
-                      value={agentDraft.name}
+                      value={agentDraft.displayName}
                       onChange={(event) =>
                         setAgentDraft((current) => ({
                           ...current,
-                          name: event.target.value,
+                          displayName: event.target.value,
                         }))
                       }
                       className="rounded-2xl"
@@ -773,7 +768,7 @@ export default function RemoteAgentDetailPage() {
                   onClick={() => void handleSaveAgent()}
                   disabled={
                     savingAgent ||
-                    !agentDraft.name.trim() ||
+                    !agentDraft.displayName.trim() ||
                     !agentDraft.title.trim()
                   }
                 >
@@ -1017,7 +1012,8 @@ export default function RemoteAgentDetailPage() {
                     {profile.identitySearchEnabled ? "on" : "off"}
                   </div>
                   <div>
-                    Access policy: {accessPolicyLabel(profile.accessPolicy)}
+                    Contact approval:{" "}
+                    {contactApprovalLabel(profile.requiresContactApproval)}
                   </div>
                 </div>
               </div>
@@ -1070,12 +1066,14 @@ export default function RemoteAgentDetailPage() {
                   <Button
                     variant="outline"
                     className="rounded-full"
-                    onClick={() => void handleToggleAccessPolicy()}
+                    onClick={() => void handleToggleContactApproval()}
                     disabled={savingProfile}
                   >
-                    Policy:{" "}
-                    {accessPolicyLabel(
-                      toggleAccessPolicy(profile.accessPolicy)
+                    Contact approval:{" "}
+                    {contactApprovalLabel(
+                      toggleRequiresContactApproval(
+                        profile.requiresContactApproval
+                      )
                     )}
                   </Button>
                   <Button

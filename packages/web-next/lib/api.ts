@@ -7,10 +7,13 @@ import type {
   DeviceSummaryView,
 } from "./device-views"
 import type {
+  Actor,
+  ActorDoc,
+  ActorRole,
   ActorPackageInstallResult,
   ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
-  AttachmentTarget,
+  PluginAttachmentScope,
   AuthResponse,
   ActorPackageRecord,
   AutomationEventSource,
@@ -48,7 +51,6 @@ import type {
   IdentitySearchResponse,
   RelationshipProfileView,
   RelationshipScanResponse,
-  RemoteAgentAccessPolicy,
   RemoteAgentAccessRequestListResponse,
   RemoteAgentBindingView,
   RemoteAgentGroupInteractionGrantView,
@@ -103,7 +105,6 @@ export type {
   IdentitySearchResponse,
   RelationshipProfileView,
   RelationshipScanResponse,
-  RemoteAgentAccessPolicy,
   RemoteAgentAccessRequestListResponse,
   RemoteAgentBindingView,
   RemoteAgentGroupInteractionGrantView,
@@ -629,10 +630,10 @@ class ApiClient {
       method: "DELETE",
     })
   }
-  getInstalledSkillAccess(wsId: string, installedSkillId: string) {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/access`)
+  getInstalledSkillGrants(wsId: string, installedSkillId: string) {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/grants`)
   }
-  grantInstalledSkillAccess(
+  createInstalledSkillGrant(
     wsId: string,
     installedSkillId: string,
     data: {
@@ -642,12 +643,12 @@ class ApiClient {
       reason?: string
     }
   ) {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/access`, {
+    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}/grants`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  updateInstalledSkillAccessGrant(
+  updateInstalledSkillGrant(
     wsId: string,
     installedSkillId: string,
     grantId: string,
@@ -656,20 +657,20 @@ class ApiClient {
     }
   ) {
     return this.fetch(
-      `/workspaces/${wsId}/skills/${installedSkillId}/access/${grantId}`,
+      `/workspaces/${wsId}/skills/${installedSkillId}/grants/${grantId}`,
       {
         method: "PUT",
         body: JSON.stringify(data),
       }
     )
   }
-  revokeInstalledSkillAccess(
+  revokeInstalledSkillGrant(
     wsId: string,
     installedSkillId: string,
     grantId: string
   ) {
     return this.fetch(
-      `/workspaces/${wsId}/skills/${installedSkillId}/access/${grantId}`,
+      `/workspaces/${wsId}/skills/${installedSkillId}/grants/${grantId}`,
       {
         method: "DELETE",
       }
@@ -731,7 +732,7 @@ class ApiClient {
     wsId: string,
     packageId: string,
     data?: {
-      name?: string
+      displayName?: string
       title?: string
       parentId?: string | null
       syncMode?: "notify" | "manual_merge"
@@ -748,13 +749,42 @@ class ApiClient {
   getOrgTree(wsId: string) {
     return this.fetch(`/workspaces/${wsId}/actors/tree`)
   }
-  createActor(wsId: string, data: any) {
+  createActor(
+    wsId: string,
+    data: {
+      displayName: string
+      role: ActorRole
+      title?: string
+      avatarFileId?: string
+      avatarEmoji?: string
+      canRepresentUser?: boolean
+      docs?: ActorDoc[]
+      parentId?: string
+      specialties?: string[]
+      config?: Record<string, unknown>
+    }
+  ): Promise<Actor> {
     return this.fetch(`/workspaces/${wsId}/actors`, {
       method: "POST",
       body: JSON.stringify(data),
     })
   }
-  updateActor(wsId: string, actorId: string, data: any) {
+  updateActor(
+    wsId: string,
+    actorId: string,
+    data: {
+      displayName?: string
+      role?: ActorRole
+      title?: string
+      avatarFileId?: string | null
+      avatarEmoji?: string | null
+      canRepresentUser?: boolean
+      docs?: ActorDoc[]
+      parentId?: string | null
+      specialties?: string[]
+      config?: Record<string, unknown>
+    }
+  ): Promise<Actor> {
     return this.fetch(`/workspaces/${wsId}/actors/${actorId}`, {
       method: "PUT",
       body: JSON.stringify(data),
@@ -1067,7 +1097,7 @@ class ApiClient {
       approvalMode: "auto" | "manual"
       identityId?: string
       identitySearchEnabled?: boolean
-      accessPolicy?: "workspace_open" | "approval_required"
+      requiresContactApproval?: boolean
       isPublicShared?: boolean
     }
   ): Promise<RelationshipProfileView> {
@@ -1094,7 +1124,7 @@ class ApiClient {
       approvalMode: "auto" | "manual"
       identityId?: string
       identitySearchEnabled?: boolean
-      accessPolicy?: "workspace_open" | "approval_required"
+      requiresContactApproval?: boolean
       isPublicShared?: boolean
     }
   ): Promise<RelationshipProfileView> {
@@ -1239,13 +1269,13 @@ class ApiClient {
   createRemoteAgent(
     wsId: string,
     input: {
-      name: string
+      displayName: string
       title: string
       description?: string
       runtimeKind: RemoteAgentRuntimeKind
       avatarFileId?: string
       avatarEmoji?: string
-      accessPolicy?: RemoteAgentAccessPolicy
+      requiresContactApproval?: boolean
       isPublicShared?: boolean
       metadata?: Record<string, unknown>
     }
@@ -1259,12 +1289,12 @@ class ApiClient {
     wsId: string,
     remoteAgentId: string,
     input: {
-      name?: string
+      displayName?: string
       title?: string
       description?: string | null
       avatarFileId?: string | null
       avatarEmoji?: string | null
-      accessPolicy?: RemoteAgentAccessPolicy
+      requiresContactApproval?: boolean
       isPublicShared?: boolean
       isActive?: boolean
       metadata?: Record<string, unknown>
@@ -1823,7 +1853,7 @@ class ApiClient {
     wsId: string,
     data: {
       pluginId: string
-      attachmentTarget: AttachmentTarget
+      attachmentScope: PluginAttachmentScope
       lifecycleScope?:
         | "turn"
         | "session"
@@ -1877,12 +1907,12 @@ class ApiClient {
       }
     )
   }
-  getPluginInstallationAccess(wsId: string, installId: string) {
+  getPluginInstallationGrants(wsId: string, installId: string) {
     return this.fetch(
-      `/workspaces/${wsId}/mcp/installations/${installId}/access`
+      `/workspaces/${wsId}/mcp/installations/${installId}/grants`
     )
   }
-  grantPluginInstallationAccess(
+  createPluginInstallationGrant(
     wsId: string,
     installId: string,
     data: {
@@ -1893,14 +1923,14 @@ class ApiClient {
     }
   ) {
     return this.fetch(
-      `/workspaces/${wsId}/mcp/installations/${installId}/access`,
+      `/workspaces/${wsId}/mcp/installations/${installId}/grants`,
       {
         method: "POST",
         body: JSON.stringify(data),
       }
     )
   }
-  updatePluginInstallationAccessGrant(
+  updatePluginInstallationGrant(
     wsId: string,
     installId: string,
     grantId: string,
@@ -1909,20 +1939,20 @@ class ApiClient {
     }
   ) {
     return this.fetch(
-      `/workspaces/${wsId}/mcp/installations/${installId}/access/${grantId}`,
+      `/workspaces/${wsId}/mcp/installations/${installId}/grants/${grantId}`,
       {
         method: "PUT",
         body: JSON.stringify(data),
       }
     )
   }
-  revokePluginInstallationAccess(
+  revokePluginInstallationGrant(
     wsId: string,
     installId: string,
     grantId: string
   ) {
     return this.fetch(
-      `/workspaces/${wsId}/mcp/installations/${installId}/access/${grantId}`,
+      `/workspaces/${wsId}/mcp/installations/${installId}/grants/${grantId}`,
       {
         method: "DELETE",
       }

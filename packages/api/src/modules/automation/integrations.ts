@@ -387,6 +387,7 @@ export async function getIntegrationInstallation(
 ): Promise<ResolvedIntegrationInstallation> {
   const row = (await db
     .selectFrom("plugin_installations as installation")
+    .innerJoin("workspace_apps as app", "app.id", "installation.id")
     .innerJoin(
       "catalog_items as item",
       "item.id",
@@ -400,16 +401,16 @@ export async function getIntegrationInstallation(
     )
     .select([
       "installation.id as installation_id",
-      "installation.workspace_id",
-      "installation.status as installation_status",
+      "app.workspace_id as workspace_id",
+      "app.status as installation_status",
       "installation.config_data",
       "publisher.slug as org_slug",
       "item.slug as item_slug",
       "spec.metadata as spec_metadata",
     ])
     .where("installation.id", "=", installationId)
-    .where("installation.workspace_id", "=", workspaceId)
-    .where("installation.deleted_at", "is", null)
+    .where("app.workspace_id", "=", workspaceId)
+    .where("app.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()) as IntegrationInstallationRow | undefined
 

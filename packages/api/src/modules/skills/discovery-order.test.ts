@@ -3,24 +3,23 @@ import assert from "node:assert/strict"
 import type { AvailableSkillSummary } from "@synapse/shared"
 import { sortAvailableSkillsForDiscovery } from "./discovery-order.js"
 
-function buildSkill(slug: string): AvailableSkillSummary {
+function buildSkill(name: string): AvailableSkillSummary {
   return {
-    instanceId: slug,
-    packageId: slug,
-    revisionId: `${slug}@test`,
-    slug,
-    name: slug,
-    description: slug,
+    instanceId: name,
+    packageId: name,
+    revisionId: `${name}@test`,
+    name,
+    description: name,
     version: "test",
     sourceKind: "installed",
-    entryPoint: slug,
-    accessTarget: { subject: { kind: "workspace", workspaceId: slug } },
+    entryPoint: name,
+    accessTarget: { subject: { kind: "workspace", workspaceId: name } },
   }
 }
 
 // Device-runtime v3 (PR #20+): the `relay_auto_loaded` source kind was
 // removed alongside the relay subsystem. All installed skills now share the
-// same discovery priority, so sort order is purely alphabetical by slug.
+// same discovery priority, so sort order is purely alphabetical by name.
 test("sortAvailableSkillsForDiscovery sorts installed skills alphabetically", () => {
   const sorted = sortAvailableSkillsForDiscovery([
     buildSkill("cli-anything-adguardhome"),
@@ -30,7 +29,7 @@ test("sortAvailableSkillsForDiscovery sorts installed skills alphabetically", ()
   ])
 
   assert.deepEqual(
-    sorted.map((skill) => skill.slug),
+    sorted.map((skill) => skill.name),
     [
       "cli-anything-adguardhome",
       "custom-internal-skill",

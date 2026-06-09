@@ -26,7 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 type ActorRecord = {
   id: string
-  name: string
+  displayName: string
   role: string
   title: string
 }
@@ -60,7 +60,8 @@ function normalizeActor(actor: any): ActorRecord {
   const definition = actor?.definition || actor
   return {
     id: actor.id,
-    name: definition.name,
+    displayName:
+      actor.displayName || definition.title || actor.title || "Actor",
     role: definition.role,
     title: definition.title,
   }
@@ -321,7 +322,7 @@ export default function ActorModelAssignmentBoard() {
     if (!needle) return actors
     return actors.filter((actor) => {
       const haystack =
-        `${actor.name} ${actor.role} ${actor.title}`.toLowerCase()
+        `${actor.displayName} ${actor.role} ${actor.title}`.toLowerCase()
       return haystack.includes(needle)
     })
   }, [actors, deferredSearch])
@@ -501,7 +502,7 @@ export default function ActorModelAssignmentBoard() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-foreground">
-                        {actor.name}
+                        {actor.displayName}
                       </div>
                       <div className="truncate text-sm text-muted-foreground">
                         {actor.title || actor.role}
@@ -543,7 +544,7 @@ export default function ActorModelAssignmentBoard() {
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-xl font-semibold text-foreground">
-                      {selectedActor.name}
+                      {selectedActor.displayName}
                     </h1>
                     <Badge
                       variant="outline"

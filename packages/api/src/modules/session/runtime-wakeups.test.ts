@@ -32,7 +32,11 @@ async function seedSession(db: any): Promise<{ sessionId: string }> {
     )
   )
   await db.executeQuery(
-    sql`INSERT INTO actors (id, workspace_id, name, role, title) VALUES (${actorId}, ${workspaceId}, 'A', 'assistant', 'A')`.compile(
+    sql`INSERT INTO workspace_apps (id, workspace_id, kind, display_name, status)
+        VALUES (${actorId}, ${workspaceId}, 'actor', 'A', 'active')`.compile(db)
+  )
+  await db.executeQuery(
+    sql`INSERT INTO actors (id, role, title) VALUES (${actorId}, 'assistant', 'A')`.compile(
       db
     )
   )
@@ -59,26 +63,22 @@ async function insertPendingWakeup(db: any, sessionId: string) {
 }
 
 test("restoreTurnWakeupsToPending: attached → pending so a new owner can re-claim", async () => {
-  await withTestDb(async () => {
-    // Use the GLOBAL db for both seeding and assertions so the SUT functions
-    // (which use the global db) see the rows — same pattern as the other
-    // DB-backed tests in this package.
-    const { db } = await import("../../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const { sessionId } = await seedSession(db)
     await insertPendingWakeup(db, sessionId)
     await insertPendingWakeup(db, sessionId)
 
-    assert.equal(await getPendingWakeupCount(sessionId), 2)
+    assert.equal(await getPendingWakeupCount(sessionId, db), 2)
 
     const turnId = randomUUID()
-    const attached = await attachPendingWakeupsToTurn(sessionId, turnId)
+    const attached = await attachPendingWakeupsToTurn(sessionId, turnId, db)
     assert.equal(attached.length, 2)
-    assert.equal(await getPendingWakeupCount(sessionId), 0) // now attached
+    assert.equal(await getPendingWakeupCount(sessionId, db), 0) // now attached
 
     // Lock-loss recovery: restore instead of drop.
-    await restoreTurnWakeupsToPending(turnId)
+    await restoreTurnWakeupsToPending(turnId, db)
     assert.equal(
-      await getPendingWakeupCount(sessionId),
+      await getPendingWakeupCount(sessionId, db),
       2,
       "restored wakeups must be pending again for the new owner"
     )
@@ -86,16 +86,15 @@ test("restoreTurnWakeupsToPending: attached → pending so a new owner can re-cl
 })
 
 test("markTurnWakeupsDropped does NOT restore (contrast with restore)", async () => {
-  await withTestDb(async () => {
-    const { db } = await import("../../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const { sessionId } = await seedSession(db)
     await insertPendingWakeup(db, sessionId)
 
     const turnId = randomUUID()
-    await attachPendingWakeupsToTurn(sessionId, turnId)
-    await markTurnWakeupsDropped(turnId)
+    await attachPendingWakeupsToTurn(sessionId, turnId, db)
+    await markTurnWakeupsDropped(turnId, db)
     assert.equal(
-      await getPendingWakeupCount(sessionId),
+      await getPendingWakeupCount(sessionId, db),
       0,
       "dropped wakeups stay dropped"
     )

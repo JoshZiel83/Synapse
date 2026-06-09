@@ -151,20 +151,22 @@ export async function getDevice(
 
   const capabilityRows = await db
     .selectFrom("device_capabilities as dc")
+    .innerJoin("workspace_apps as app", "app.id", "dc.id")
     .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
     .select([
       "dc.id as id",
-      "dc.workspace_id as workspace_id",
+      "app.workspace_id as workspace_id",
       "dc.exposure_id as exposure_id",
       "dx.stable_key as exposure_stable_key",
-      "dx.display_name as display_name",
+      "app.display_name as display_name",
       "dx.transport as transport",
       "dx.builtin_kind as builtin_kind",
       "dx.runtime_status as runtime_status",
       "dx.metadata as exposure_metadata",
     ])
     .where("dx.device_id", "=", deviceId)
-    .where("dc.status", "=", "active")
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "=", "active")
     .execute()
   const capabilities: DeviceCapabilitySummary[] = capabilityRows.map((row) => ({
     id: row.id as string,

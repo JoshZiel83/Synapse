@@ -35,8 +35,8 @@ export const SYSTEM_TOOL_PRESENTATION: Record<
   ToolPresentationDescriptor
 > = {
   read_skill: withIcon(
-    title("tool.sys.read_skill.title", "读取技能 {skill}", {
-      skill: { path: "skillName", default: "" },
+    title("tool.sys.read_skill.title", "读取技能实例 {skill}", {
+      skill: { path: "skillInstanceId", default: "" },
     }),
     "book-open"
   ),

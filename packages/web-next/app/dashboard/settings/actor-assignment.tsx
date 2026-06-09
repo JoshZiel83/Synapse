@@ -18,7 +18,7 @@ import {
 
 interface Actor {
   id: string
-  name: string
+  displayName: string
   role: string
   title: string
 }
@@ -27,7 +27,8 @@ function normalizeActor(actor: any): Actor {
   const definition = actor?.definition || actor
   return {
     id: actor.id,
-    name: definition.name,
+    displayName:
+      actor.displayName || definition.title || actor.title || "Actor",
     role: definition.role,
     title: definition.title,
   }
@@ -202,7 +203,7 @@ export default function ActorAssignment() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-foreground">
-                        {actor.name}
+                        {actor.displayName}
                       </span>
                       <Badge
                         className={`${roleBadgeStyle(actor.role)} text-xs`}
@@ -231,7 +232,9 @@ export default function ActorAssignment() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="border-gray-200 bg-white ring-1 ring-gray-200 sm:max-w-lg dark:border-white/10 dark:bg-gray-900 dark:ring-white/10">
           <DialogHeader>
-            <DialogTitle>Model Groups for {selectedActor?.name}</DialogTitle>
+            <DialogTitle>
+              Model Groups for {selectedActor?.displayName}
+            </DialogTitle>
             <DialogDescription>
               Arrange groups in failover order. The system tries each group
               top-to-bottom.

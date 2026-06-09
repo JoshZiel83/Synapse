@@ -33,6 +33,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
+import crypto from "node:crypto"
 import {
   SUBJECT_KIND,
   actorRef,
@@ -83,11 +84,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 }
 
 async function newActor(db: Kysely<any>, workspaceId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: `${NS} actor`,
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: `actor-${rid()}`,
+      id: actorId,
       role: "assistant",
       title: `${NS} actor`,
       current_version: 1,

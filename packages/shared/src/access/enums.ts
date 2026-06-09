@@ -30,6 +30,102 @@ export const SUBJECT_KINDS = [
 
 export type SubjectKind = (typeof SUBJECT_KINDS)[number]
 
+export const WORKSPACE_APP_KIND = {
+  PLUGIN_INSTALLATION: "plugin_installation",
+  INSTALLED_SKILL: "installed_skill",
+  ACTOR: "actor",
+  REMOTE_AGENT: "remote_agent",
+  DEVICE_CAPABILITY: "device_capability",
+} as const
+
+export const WORKSPACE_APP_KINDS = [
+  WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+  WORKSPACE_APP_KIND.INSTALLED_SKILL,
+  WORKSPACE_APP_KIND.ACTOR,
+  WORKSPACE_APP_KIND.REMOTE_AGENT,
+  WORKSPACE_APP_KIND.DEVICE_CAPABILITY,
+] as const
+
+export type WorkspaceAppKind = (typeof WORKSPACE_APP_KINDS)[number]
+
+export const WORKSPACE_APP_STATUS = {
+  ACTIVE: "active",
+  DISABLED: "disabled",
+  ERROR: "error",
+  DEPRECATED: "deprecated",
+  ARCHIVED: "archived",
+} as const
+
+export const WORKSPACE_APP_STATUSES = [
+  WORKSPACE_APP_STATUS.ACTIVE,
+  WORKSPACE_APP_STATUS.DISABLED,
+  WORKSPACE_APP_STATUS.ERROR,
+  WORKSPACE_APP_STATUS.DEPRECATED,
+  WORKSPACE_APP_STATUS.ARCHIVED,
+] as const
+
+export type WorkspaceAppStatus = (typeof WORKSPACE_APP_STATUSES)[number]
+
+export const WORKSPACE_APP_GRANT_PERMISSION = {
+  USE: "use",
+  MANAGE: "manage",
+  CONTACT_VISIBLE: "contact_visible",
+} as const
+
+export const WORKSPACE_APP_GRANT_PERMISSIONS = [
+  WORKSPACE_APP_GRANT_PERMISSION.USE,
+  WORKSPACE_APP_GRANT_PERMISSION.MANAGE,
+  WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
+] as const
+
+export type WorkspaceAppGrantPermission =
+  (typeof WORKSPACE_APP_GRANT_PERMISSIONS)[number]
+
+export const WORKSPACE_APP_GRANT_STATUS = {
+  ACTIVE: "active",
+  REVOKED: "revoked",
+} as const
+
+export const WORKSPACE_APP_GRANT_STATUSES = [
+  WORKSPACE_APP_GRANT_STATUS.ACTIVE,
+  WORKSPACE_APP_GRANT_STATUS.REVOKED,
+] as const
+
+export type WorkspaceAppGrantStatus =
+  (typeof WORKSPACE_APP_GRANT_STATUSES)[number]
+
+export const WORKSPACE_APP_GRANT_SOURCE = {
+  MANUAL: "manual",
+  APPROVAL: "approval",
+  SYSTEM: "system",
+} as const
+
+export const WORKSPACE_APP_GRANT_SOURCES = [
+  WORKSPACE_APP_GRANT_SOURCE.MANUAL,
+  WORKSPACE_APP_GRANT_SOURCE.APPROVAL,
+  WORKSPACE_APP_GRANT_SOURCE.SYSTEM,
+] as const
+
+export type WorkspaceAppGrantSource =
+  (typeof WORKSPACE_APP_GRANT_SOURCES)[number]
+
+export const WORKSPACE_APP_GRANT_REQUEST_STATUS = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+  CANCELLED: "cancelled",
+} as const
+
+export const WORKSPACE_APP_GRANT_REQUEST_STATUSES = [
+  WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
+  WORKSPACE_APP_GRANT_REQUEST_STATUS.APPROVED,
+  WORKSPACE_APP_GRANT_REQUEST_STATUS.REJECTED,
+  WORKSPACE_APP_GRANT_REQUEST_STATUS.CANCELLED,
+] as const
+
+export type WorkspaceAppGrantRequestStatus =
+  (typeof WORKSPACE_APP_GRANT_REQUEST_STATUSES)[number]
+
 /**
  * Resource types recognized by the access evaluator. A superset of the resources
  * that can be the target of an explicit binding row (see ACCESS_BINDABLE_RESOURCE_TYPES).
@@ -75,25 +171,16 @@ export const ACCESS_RESOURCE_TYPES = [
 export type AccessResourceType = (typeof ACCESS_RESOURCE_TYPES)[number]
 
 /**
- * Resources that support explicit binding rows in `resource_access_bindings`.
- * A strict subset of ACCESS_RESOURCE_TYPES.
+ * Resources that still use the legacy `resource_access_bindings` junction.
+ * Workspace-app resources have moved to `workspace_app_grants`; the old table
+ * remains only for automation event sources.
  */
 export const ACCESS_BINDABLE_RESOURCE_TYPE = {
-  INSTALLED_SKILL: "installed_skill",
-  PLUGIN_INSTALLATION: "plugin_installation",
-  DEVICE_CAPABILITY: "device_capability",
   AUTOMATION_EVENT_SOURCE: "automation_event_source",
-  ACTOR: "actor",
-  REMOTE_AGENT: "remote_agent",
 } as const
 
 export const ACCESS_BINDABLE_RESOURCE_TYPES = [
-  ACCESS_BINDABLE_RESOURCE_TYPE.INSTALLED_SKILL,
-  ACCESS_BINDABLE_RESOURCE_TYPE.PLUGIN_INSTALLATION,
-  ACCESS_BINDABLE_RESOURCE_TYPE.DEVICE_CAPABILITY,
   ACCESS_BINDABLE_RESOURCE_TYPE.AUTOMATION_EVENT_SOURCE,
-  ACCESS_BINDABLE_RESOURCE_TYPE.ACTOR,
-  ACCESS_BINDABLE_RESOURCE_TYPE.REMOTE_AGENT,
 ] as const
 
 export type AccessBindableResourceType =

@@ -23,6 +23,7 @@ import {
   conversationTypeKeysToMask,
   conversationTypeMaskToKeys,
   normalizeConversationTypeMask,
+  type WorkspaceAppGrant,
 } from "@synapse/shared"
 import {
   Bot,
@@ -129,7 +130,7 @@ const PREVIEW_CONVERSATION = "Project Sync"
 
 type ActorOption = {
   id: string
-  name: string
+  displayName: string
 }
 
 type ConversationOption = {
@@ -174,12 +175,12 @@ type AccessPreviewScenario = {
   footer: string
 }
 
-type AccessAdapter = {
-  loadAccess: (
+type WorkspaceAppGrantAdapter = {
+  loadGrants: (
     workspaceId: string,
     resourceId: string
-  ) => Promise<ResourceAccessState>
-  grantAccess: (
+  ) => Promise<WorkspaceAppGrantState>
+  createGrant: (
     workspaceId: string,
     resourceId: string,
     payload: {
@@ -188,7 +189,7 @@ type AccessAdapter = {
       permissions?: string[]
     }
   ) => Promise<unknown>
-  revokeAccess: (
+  revokeGrant: (
     workspaceId: string,
     resourceId: string,
     grantId: string
@@ -210,7 +211,7 @@ type AccessAdapter = {
   ) => Promise<unknown>
 }
 
-type ResourceAccessSummary = {
+type WorkspaceAppGrantSummary = {
   sourceDefaultConversationTypeMask?: number
   workspaceConversationTypeMask?: number
   conversationTypeMaskOverride?: number | null
@@ -221,43 +222,33 @@ type ResourceAccessSummary = {
   suggestedAccessTargetType?: PluginGrantScope
 }
 
-type ResourceAccessGrant = {
-  id: string
-  target?: CapabilityAccessTarget
-  conversationTypeMaskOverride?: number | null
-  effectiveConversationTypeMask?: number
-  createdAt?: string
-  grantedAt?: string
-}
-
-type ResourceAccessState = {
-  summary?: ResourceAccessSummary | null
-  grants?: ResourceAccessGrant[]
+type WorkspaceAppGrantState = {
+  summary?: WorkspaceAppGrantSummary | null
+  grants?: WorkspaceAppGrant[]
 }
 
 type ActorRecord = {
   id: string
+  displayName?: string
   definition?: {
-    name?: string
     title?: string
   }
-  name?: string
   title?: string
 }
 
-type ResourceAccessOwner = {
+type WorkspaceAppAccessOwner = {
   id?: string | null
 }
 
-const pluginInstallationAccessAdapter: AccessAdapter = {
-  loadAccess: (workspaceId, resourceId) =>
-    api.getPluginInstallationAccess(workspaceId, resourceId),
-  grantAccess: (workspaceId, resourceId, payload) =>
-    api.grantPluginInstallationAccess(workspaceId, resourceId, payload),
-  revokeAccess: (workspaceId, resourceId, grantId) =>
-    api.revokePluginInstallationAccess(workspaceId, resourceId, grantId),
+const pluginInstallationGrantAdapter: WorkspaceAppGrantAdapter = {
+  loadGrants: (workspaceId, resourceId) =>
+    api.getPluginInstallationGrants(workspaceId, resourceId),
+  createGrant: (workspaceId, resourceId, payload) =>
+    api.createPluginInstallationGrant(workspaceId, resourceId, payload),
+  revokeGrant: (workspaceId, resourceId, grantId) =>
+    api.revokePluginInstallationGrant(workspaceId, resourceId, grantId),
   updateGrant: (workspaceId, resourceId, grantId, payload) =>
-    api.updatePluginInstallationAccessGrant(
+    api.updatePluginInstallationGrant(
       workspaceId,
       resourceId,
       grantId,
@@ -319,17 +310,18 @@ function formatConversationTypeKeys(keys: ConversationTypeKey[]) {
 }
 
 function normalizeActorOption(actor: ActorRecord): ActorOption {
-  const definition = actor?.definition || actor
+  const definition = actor.definition
   return {
     id: actor.id,
-    name: definition.name || definition.title || "Untitled actor",
+    displayName: actor.displayName || definition?.title || "Untitled actor",
   }
 }
 
 function normalizeRemoteAgentOption(remoteAgent: RemoteAgentView): ActorOption {
   return {
     id: remoteAgent.id,
-    name: remoteAgent.name || remoteAgent.title || "Untitled remote agent",
+    displayName:
+      remoteAgent.displayName || remoteAgent.title || "Untitled remote agent",
   }
 }
 
@@ -399,9 +391,7 @@ function getScopeLabel(scope: PluginGrantScope) {
 /**
  * Derive the local UI selection from a canonical ScopedSubjectTarget.
  */
-function targetScopeOf(
-  target: ResourceAccessGrant["target"]
-): PluginGrantScope {
+function targetScopeOf(target: WorkspaceAppGrant["target"]): PluginGrantScope {
   if (!target) return "workspace"
   if (
     target.subject.kind === "actor" &&
@@ -435,14 +425,14 @@ function targetScopeOf(
  * Pull the actorId / conversationId / workspaceMemberId from a
  * ScopedSubjectTarget for the reader paths below.
  */
-function targetActorId(target: ResourceAccessGrant["target"]): string | null {
+function targetActorId(target: WorkspaceAppGrant["target"]): string | null {
   if (!target) return null
   return target.subject.kind === "actor"
     ? (target.subject as { actorId: string }).actorId
     : null
 }
 function targetRemoteAgentId(
-  target: ResourceAccessGrant["target"]
+  target: WorkspaceAppGrant["target"]
 ): string | null {
   if (!target) return null
   return target.subject.kind === "remote_agent"
@@ -450,7 +440,7 @@ function targetRemoteAgentId(
     : null
 }
 function targetConversationId(
-  target: ResourceAccessGrant["target"]
+  target: WorkspaceAppGrant["target"]
 ): string | null {
   if (!target) return null
   if (target.scope?.kind === "conversation") {
@@ -463,7 +453,7 @@ function targetConversationId(
 }
 
 function formatGrantTarget(
-  grant: ResourceAccessGrant,
+  grant: WorkspaceAppGrant,
   actorsById: Map<string, string>,
   remoteAgentsById: Map<string, string>,
   conversationsById: Map<string, string>
@@ -681,10 +671,10 @@ function AccessPreviewCard({
   )
 }
 
-export default function ResourceAccessStep({
+export default function WorkspaceAppAccessStep({
   installation,
   resourceId,
-  accessAdapter = pluginInstallationAccessAdapter,
+  grantAdapter = pluginInstallationGrantAdapter,
   resourceLabel = "installation",
   title = "Resource Access",
   description,
@@ -694,9 +684,9 @@ export default function ResourceAccessStep({
   dialogDescription,
   noAccessMessage = "No resource access has been granted yet.",
 }: {
-  installation: ResourceAccessOwner | null
+  installation: WorkspaceAppAccessOwner | null
   resourceId?: string | null
-  accessAdapter?: AccessAdapter
+  grantAdapter?: WorkspaceAppGrantAdapter
   resourceLabel?: string
   title?: string
   description?: string
@@ -712,8 +702,8 @@ export default function ResourceAccessStep({
   const [conversations, setConversations] = useState<
     ConversationCatalogEntry[]
   >([])
-  const [summary, setSummary] = useState<ResourceAccessSummary | null>(null)
-  const [grants, setGrants] = useState<ResourceAccessGrant[]>([])
+  const [summary, setSummary] = useState<WorkspaceAppGrantSummary | null>(null)
+  const [grants, setGrants] = useState<WorkspaceAppGrant[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingActors, setLoadingActors] = useState(false)
   const [loadingRemoteAgents, setLoadingRemoteAgents] = useState(false)
@@ -723,7 +713,7 @@ export default function ResourceAccessStep({
   const [savingGrantPolicy, setSavingGrantPolicy] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [grantPolicyDialogOpen, setGrantPolicyDialogOpen] = useState(false)
-  const [editingGrant, setEditingGrant] = useState<ResourceAccessGrant | null>(
+  const [editingGrant, setEditingGrant] = useState<WorkspaceAppGrant | null>(
     null
   )
   const [grantScope, setGrantScope] = useState<PluginGrantScope>("workspace")
@@ -795,7 +785,9 @@ export default function ResourceAccessStep({
   const actorNamesById = useMemo(
     () =>
       new Map([
-        ...allActorOptions.map((actor) => [actor.id, actor.name] as const),
+        ...allActorOptions.map(
+          (actor) => [actor.id, actor.displayName] as const
+        ),
         ...allConversationOptions.flatMap((conversation) =>
           conversation.participants
             .filter(
@@ -816,7 +808,7 @@ export default function ResourceAccessStep({
     () =>
       new Map([
         ...allRemoteAgentOptions.map(
-          (remoteAgent) => [remoteAgent.id, remoteAgent.name] as const
+          (remoteAgent) => [remoteAgent.id, remoteAgent.displayName] as const
         ),
         ...allConversationOptions.flatMap((conversation) =>
           conversation.participants
@@ -898,7 +890,7 @@ export default function ResourceAccessStep({
     [parentConversationTypeMask]
   )
   const canManageConversationTypes = Boolean(
-    accessAdapter.updatePolicy &&
+    grantAdapter.updatePolicy &&
     typeof summary?.effectiveConversationTypeMask === "number"
   )
   const nextConversationTypeMaskOverride = useMemo(
@@ -911,7 +903,7 @@ export default function ResourceAccessStep({
   const hasConversationTypeChanges =
     canManageConversationTypes &&
     currentConversationTypeMask !== effectiveConversationTypeMask
-  const canManageGrantConversationTypes = Boolean(accessAdapter.updateGrant)
+  const canManageGrantConversationTypes = Boolean(grantAdapter.updateGrant)
   const currentGrantBaseMask = useMemo(
     () =>
       normalizeConversationTypeMask(
@@ -1025,7 +1017,7 @@ export default function ResourceAccessStep({
         participant.actorId
           ? {
               id: participant.actorId,
-              name: participant.name,
+              displayName: participant.name,
             }
           : null
       )
@@ -1054,7 +1046,7 @@ export default function ResourceAccessStep({
         participant.remoteAgentId
           ? {
               id: participant.remoteAgentId,
-              name: participant.name,
+              displayName: participant.name,
             }
           : null
       )
@@ -1311,17 +1303,17 @@ export default function ResourceAccessStep({
     selectedConversationAllowed,
   ])
 
-  const loadAccessState = useCallback(async () => {
+  const loadGrantState = useCallback(async () => {
     if (!workspaceId || !resolvedResourceId) return
-    const accessData = await accessAdapter.loadAccess(
+    const grantState = await grantAdapter.loadGrants(
       workspaceId,
       resolvedResourceId
     )
-    setGrants(accessData.grants || [])
-    setSummary(accessData.summary || null)
+    setGrants(grantState.grants || [])
+    setSummary(grantState.summary || null)
     setPolicyError(null)
     setGrantPolicyError(null)
-    const suggestedGrantScope = accessData.summary
+    const suggestedGrantScope = grantState.summary
       ?.suggestedAccessTargetType as PluginGrantScope | undefined
     if (
       suggestedGrantScope &&
@@ -1329,7 +1321,7 @@ export default function ResourceAccessStep({
     ) {
       setGrantScope(suggestedGrantScope)
     }
-  }, [accessAdapter, resolvedResourceId, workspaceId])
+  }, [grantAdapter, resolvedResourceId, workspaceId])
 
   const ensureActorsLoaded = useCallback(async () => {
     if (!workspaceId) {
@@ -1534,7 +1526,7 @@ export default function ResourceAccessStep({
     const load = async () => {
       try {
         setLoading(true)
-        await loadAccessState()
+        await loadGrantState()
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -1546,7 +1538,7 @@ export default function ResourceAccessStep({
     return () => {
       cancelled = true
     }
-  }, [loadAccessState, resolvedResourceId, workspaceId])
+  }, [loadGrantState, resolvedResourceId, workspaceId])
 
   const resetDialogState = () => {
     setConversationId("")
@@ -1744,8 +1736,8 @@ export default function ResourceAccessStep({
         payload.conversationTypeMaskOverride =
           nextNewGrantConversationTypeMaskOverride
       }
-      await accessAdapter.grantAccess(workspaceId, resolvedResourceId, payload)
-      await loadAccessState()
+      await grantAdapter.createGrant(workspaceId, resolvedResourceId, payload)
+      await loadGrantState()
       setDialogOpen(false)
       resetDialogState()
     } catch (error) {
@@ -1761,8 +1753,8 @@ export default function ResourceAccessStep({
 
   const revokeGrant = async (grantId: string) => {
     if (!workspaceId || !resolvedResourceId) return
-    await accessAdapter.revokeAccess(workspaceId, resolvedResourceId, grantId)
-    await loadAccessState()
+    await grantAdapter.revokeGrant(workspaceId, resolvedResourceId, grantId)
+    await loadGrantState()
   }
 
   const toggleConversationTypeKey = (key: ConversationTypeKey) => {
@@ -1794,7 +1786,7 @@ export default function ResourceAccessStep({
     if (
       !workspaceId ||
       !resolvedResourceId ||
-      !accessAdapter.updatePolicy ||
+      !grantAdapter.updatePolicy ||
       !hasConversationTypeChanges
     ) {
       return
@@ -1810,10 +1802,10 @@ export default function ResourceAccessStep({
         setPolicyError(invalidGrantError)
         return
       }
-      await accessAdapter.updatePolicy(workspaceId, resolvedResourceId, {
+      await grantAdapter.updatePolicy(workspaceId, resolvedResourceId, {
         conversationTypeMaskOverride: nextConversationTypeMaskOverride,
       })
-      await loadAccessState()
+      await loadGrantState()
     } catch (error) {
       setPolicyError(
         error instanceof Error
@@ -1850,7 +1842,7 @@ export default function ResourceAccessStep({
     )
   }
 
-  const openGrantConversationTypeDialog = (grant: ResourceAccessGrant) => {
+  const openGrantConversationTypeDialog = (grant: WorkspaceAppGrant) => {
     if (!supportsGrantConversationTypeOverride(targetScopeOf(grant.target))) {
       return
     }
@@ -1900,7 +1892,7 @@ export default function ResourceAccessStep({
       !workspaceId ||
       !resolvedResourceId ||
       !editingGrant?.id ||
-      !accessAdapter.updateGrant ||
+      !grantAdapter.updateGrant ||
       !hasGrantConversationTypeChanges
     ) {
       return
@@ -1909,7 +1901,7 @@ export default function ResourceAccessStep({
     setSavingGrantPolicy(true)
     setGrantPolicyError(null)
     try {
-      await accessAdapter.updateGrant(
+      await grantAdapter.updateGrant(
         workspaceId,
         resolvedResourceId,
         editingGrant.id,
@@ -1917,7 +1909,7 @@ export default function ResourceAccessStep({
           conversationTypeMaskOverride: nextGrantConversationTypeMaskOverride,
         }
       )
-      await loadAccessState()
+      await loadGrantState()
       setGrantPolicyDialogOpen(false)
       setEditingGrant(null)
     } catch (error) {
@@ -1979,7 +1971,7 @@ export default function ResourceAccessStep({
             placeholder="Select an actor"
             options={actorOptions.map((actor) => ({
               id: actor.id,
-              label: actor.name,
+              label: actor.displayName,
             }))}
             disabled={loadingActors}
           />
@@ -2010,7 +2002,7 @@ export default function ResourceAccessStep({
             placeholder="Select a remote agent"
             options={allRemoteAgentOptions.map((remoteAgent) => ({
               id: remoteAgent.id,
-              label: remoteAgent.name,
+              label: remoteAgent.displayName,
             }))}
             disabled={loadingRemoteAgents}
           />
@@ -2068,7 +2060,7 @@ export default function ResourceAccessStep({
               placeholder="Select an actor"
               options={actorOptions.map((actor) => ({
                 id: actor.id,
-                label: actor.name,
+                label: actor.displayName,
               }))}
               disabled={!selectedConversationAllowed || loadingConversations}
             />
@@ -2122,7 +2114,7 @@ export default function ResourceAccessStep({
               placeholder="Select a remote agent"
               options={remoteAgentInConversationOptions.map((remoteAgent) => ({
                 id: remoteAgent.id,
-                label: remoteAgent.name,
+                label: remoteAgent.displayName,
               }))}
               disabled={!selectedConversationAllowed || loadingConversations}
             />
@@ -2456,7 +2448,7 @@ export default function ResourceAccessStep({
                         )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {formatTimestamp(grant.createdAt || grant.grantedAt)}
+                        {formatTimestamp(grant.createdAt)}
                       </TableCell>
                       <TableCell className="px-6 text-right">
                         <div className="flex justify-end gap-2">

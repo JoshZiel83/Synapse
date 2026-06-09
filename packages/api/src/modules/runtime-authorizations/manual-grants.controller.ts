@@ -125,18 +125,20 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       // workspace_id / status. Verify they line up before the write.
       const row = await db
         .selectFrom("device_capabilities as dc")
+        .innerJoin("workspace_apps as app", "app.id", "dc.id")
         .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
         .innerJoin("devices as d", "d.id", "dx.device_id")
         .select([
           "d.id as device_id",
-          "d.workspace_id as workspace_id",
+          "app.workspace_id as workspace_id",
           "dx.id as exposure_id",
           "dx.stable_key as exposure_stable_key",
           "dx.builtin_kind as builtin_kind",
           "dx.runtime_status as runtime_status",
-          "dc.status as status",
+          "app.status as status",
         ])
         .where("dc.id", "=", parsed.data.device_capability_id)
+        .where("app.deleted_at", "is", null)
         .executeTakeFirst()
       if (!row) {
         reply.status(404).send({

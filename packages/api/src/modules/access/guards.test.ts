@@ -1,8 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import { withTestDb } from "../../test/helpers/db.js"
 import { createRequireRequestAction } from "./guards.js"
-import { grantApprovedAccess } from "./default-access-policy.js"
+import { grantApprovedContactVisibility } from "./contact-approval.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -49,11 +50,21 @@ async function insertWorkspaceMember(
 }
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: "test actor",
+      status: "active",
+    })
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: "test actor",
+      id: actorId,
       role: "assistant",
       title: "test",
       current_version: 1,
@@ -108,7 +119,7 @@ test(
       const guestUserId = await insertUser(db)
       const memberId = await insertWorkspaceMember(db, workspaceId, guestUserId)
       const actorId = await insertActor(db, workspaceId)
-      await grantApprovedAccess(db, {
+      await grantApprovedContactVisibility(db, {
         resourceType: "actor",
         resourceId: actorId,
         workspaceId,

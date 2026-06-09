@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import { sql } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
@@ -57,11 +58,21 @@ async function insertWorkspaceMember(
 }
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: "test actor",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: "test actor",
+      id: actorId,
       role: "assistant",
       title: "test",
       current_version: 1,

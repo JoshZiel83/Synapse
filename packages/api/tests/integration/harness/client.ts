@@ -113,6 +113,9 @@ export async function registerTestUser(
     user: { id: string; email: string; name: string }
   }>("/auth/sign-up/email", {
     method: "POST",
+    headers: {
+      "x-forwarded-for": `203.0.113.${Math.floor(Math.random() * 200) + 1}`,
+    },
     json: { email, password, name },
   })
 

@@ -28,7 +28,7 @@ export default createCollaborationRoleTemplateSeed({
   },
   featured: false,
   actor: {
-    name: "Ruby",
+    displayName: "Ruby",
     role: "archivist",
     title,
     canRepresentUser: false,

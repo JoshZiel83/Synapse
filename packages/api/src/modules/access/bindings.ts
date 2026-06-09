@@ -1,4 +1,7 @@
-import type { AccessGrant, CapabilityAccessTarget } from "@synapse/shared/types"
+import type {
+  AutomationEventSourceAccessGrant,
+  CapabilityAccessTarget,
+} from "@synapse/shared/types"
 import {
   SUBJECT_KIND,
   isScopeEligibleSubject,
@@ -7,27 +10,15 @@ import {
   type ScopedSubjectTarget,
   type SubjectRef,
 } from "@synapse/shared"
-import type { AccessResourceType } from "./evaluator.js"
 
-export type AccessBindableResourceType = Extract<
-  AccessResourceType,
-  | "installed_skill"
-  | "plugin_installation"
-  | "automation_event_source"
-  | "actor"
-  | "remote_agent"
->
+export type AutomationEventSourceBindingResourceType = "automation_event_source"
 
-export type ResourceAccessBindingStorageRow = {
-  resource_type: AccessBindableResourceType
-  installed_skill_id: string | null
-  plugin_installation_id: string | null
+export type AutomationEventSourceBindingStorageRow = {
+  resource_type: AutomationEventSourceBindingResourceType
   automation_event_source_id: string | null
-  actor_id: string | null
-  remote_agent_id: string | null
 }
 
-export type AccessBindingRelation =
+export type AutomationEventSourceBindingRelation =
   | "use_workspace"
   | "use_workspace_member"
   | "use_conversation"
@@ -35,100 +26,55 @@ export type AccessBindingRelation =
   | "use_remote_agent"
   | "use_scoped"
 
-export type AccessBindingRow = ResourceAccessBindingStorageRow & {
-  id: string
-  workspace_id: string
-  resource_id: string
-  relation: AccessBindingRelation
-  subject_id: string | null
-  scope_subject_id: string | null
-  conversation_type_mask_override: number | null
-  status: "active" | "revoked"
-  source: "manual" | "default_open" | "approval" | "system"
-  created_by_workspace_member_id: string | null
-  reason: string | null
-  created_at: string
-  revoked_at: string | null
-}
+export type AutomationEventSourceBindingRow =
+  AutomationEventSourceBindingStorageRow & {
+    id: string
+    workspace_id: string
+    resource_id: string
+    relation: AutomationEventSourceBindingRelation
+    subject_id: string | null
+    scope_subject_id: string | null
+    conversation_type_mask_override: number | null
+    status: "active" | "revoked"
+    source: "manual" | "default_open" | "approval" | "system"
+    created_by_workspace_member_id: string | null
+    reason: string | null
+    created_at: string
+    revoked_at: string | null
+  }
 
-export function readAccessBindingResourceId(
+export function readAutomationEventSourceAccessBindingResourceId(
   row: Pick<
-    ResourceAccessBindingStorageRow,
-    | "resource_type"
-    | "installed_skill_id"
-    | "plugin_installation_id"
-    | "automation_event_source_id"
-    | "actor_id"
-    | "remote_agent_id"
+    AutomationEventSourceBindingStorageRow,
+    "resource_type" | "automation_event_source_id"
   >
 ) {
-  switch (row.resource_type) {
-    case "installed_skill":
-      if (!row.installed_skill_id) {
-        throw new Error(
-          "installed_skill_id is required for installed_skill bindings"
-        )
-      }
-      return row.installed_skill_id
-    case "plugin_installation":
-      if (!row.plugin_installation_id) {
-        throw new Error(
-          "plugin_installation_id is required for plugin_installation bindings"
-        )
-      }
-      return row.plugin_installation_id
-    case "automation_event_source":
-      if (!row.automation_event_source_id) {
-        throw new Error(
-          "automation_event_source_id is required for automation_event_source bindings"
-        )
-      }
-      return row.automation_event_source_id
-    case "actor":
-      if (!row.actor_id) {
-        throw new Error("actor_id is required for actor bindings")
-      }
-      return row.actor_id
-    case "remote_agent":
-      if (!row.remote_agent_id) {
-        throw new Error("remote_agent_id is required for remote_agent bindings")
-      }
-      return row.remote_agent_id
-    default:
-      throw new Error(
-        `Unsupported access binding resource type: ${String(row.resource_type)}`
-      )
+  if (!row.automation_event_source_id) {
+    throw new Error(
+      "automation_event_source_id is required for automation event source bindings"
+    )
   }
+  return row.automation_event_source_id
 }
 
-export function buildResourceAccessBindingRef(input: {
-  resourceType: AccessBindableResourceType
+export function buildAutomationEventSourceAccessBindingRef(input: {
+  resourceType: AutomationEventSourceBindingResourceType
   resourceId: string
-}): ResourceAccessBindingStorageRow {
+}): AutomationEventSourceBindingStorageRow {
   return {
     resource_type: input.resourceType,
-    installed_skill_id:
-      input.resourceType === "installed_skill" ? input.resourceId : null,
-    plugin_installation_id:
-      input.resourceType === "plugin_installation" ? input.resourceId : null,
-    automation_event_source_id:
-      input.resourceType === "automation_event_source"
-        ? input.resourceId
-        : null,
-    actor_id: input.resourceType === "actor" ? input.resourceId : null,
-    remote_agent_id:
-      input.resourceType === "remote_agent" ? input.resourceId : null,
+    automation_event_source_id: input.resourceId,
   }
 }
 
 /**
- * D3: derive the AccessBindingRelation from a decoded ScopedSubjectTarget.
+ * D3: derive the AutomationEventSourceBindingRelation from a decoded ScopedSubjectTarget.
  * Only used for display / legacy SQL-view parity — callers that need precise
  * routing should branch on `target.subject.kind` and `target.scope?.kind`.
  */
-export function relationForAccessGrantTarget(
-  target: AccessGrantTarget
-): AccessBindingRelation {
+export function relationForAutomationEventSourceAccessBindingTarget(
+  target: AutomationEventSourceBindingTarget
+): AutomationEventSourceBindingRelation {
   switch (target.subject.kind) {
     case SUBJECT_KIND.WORKSPACE:
       return "use_workspace"
@@ -145,8 +91,8 @@ export function relationForAccessGrantTarget(
   }
 }
 
-export function normalizeAccessBindingRow<
-  T extends ResourceAccessBindingStorageRow & {
+export function normalizeAutomationEventSourceAccessBindingRow<
+  T extends AutomationEventSourceBindingStorageRow & {
     subject_id?: string | null
     scope_subject_id?: string | null
     subject_kind?: string | null
@@ -159,9 +105,11 @@ export function normalizeAccessBindingRow<
     scope_workspace_id_via_join?: string | null
     scope_conversation_id_via_join?: string | null
   },
->(row: T): T & { resource_id: string; relation: AccessBindingRelation } {
+>(
+  row: T
+): T & { resource_id: string; relation: AutomationEventSourceBindingRelation } {
   // Derive a relation string from subject kind; scope lives in scope_subject_id.
-  let relation: AccessBindingRelation
+  let relation: AutomationEventSourceBindingRelation
   switch (row.subject_kind) {
     case SUBJECT_KIND.WORKSPACE:
       relation = "use_workspace"
@@ -183,24 +131,24 @@ export function normalizeAccessBindingRow<
   }
   return {
     ...row,
-    resource_id: readAccessBindingResourceId(row),
+    resource_id: readAutomationEventSourceAccessBindingResourceId(row),
     relation,
   }
 }
 
 /**
- * D3: AccessGrantTarget is now the single `ScopedSubjectTarget` shape.
+ * D3: AutomationEventSourceBindingTarget is now the single `ScopedSubjectTarget` shape.
  * Consumers read `target.subject.kind` and `target.scope?.kind` directly;
  * there is no `targetType` / legacy `type` field any more.
  */
-export type AccessGrantTarget = ScopedSubjectTarget
+export type AutomationEventSourceBindingTarget = ScopedSubjectTarget
 
 /**
- * D3: an AccessGrantTarget IS a SubjectRef-bearing object — extracting the
+ * D3: an AutomationEventSourceBindingTarget IS a SubjectRef-bearing object — extracting the
  * principal SubjectRef is a field read.
  */
 export function accessGrantTargetToSubjectRef(
-  target: AccessGrantTarget
+  target: AutomationEventSourceBindingTarget
 ): SubjectRef {
   return target.subject
 }
@@ -211,7 +159,7 @@ export function accessGrantTargetToSubjectRef(
  * the DB trigger.
  */
 export function accessGrantTargetScopeRef(
-  target: AccessGrantTarget
+  target: AutomationEventSourceBindingTarget
 ): SubjectRef | undefined {
   if (!target.scope) return undefined
   if (!isScopeEligibleSubject(target.scope)) {
@@ -222,7 +170,7 @@ export function accessGrantTargetScopeRef(
   return target.scope
 }
 
-export function readAccessBindingTarget(row: {
+export function readAutomationEventSourceAccessBindingTarget(row: {
   subject_kind?: string | null
   subject_workspace_id_via_join?: string | null
   subject_workspace_member_id_via_join?: string | null
@@ -232,7 +180,7 @@ export function readAccessBindingTarget(row: {
   scope_kind?: string | null
   scope_workspace_id_via_join?: string | null
   scope_conversation_id_via_join?: string | null
-}): AccessGrantTarget {
+}): AutomationEventSourceBindingTarget {
   const subject = subjectRefFromRow(row)
   const scope = scopeSubjectRefFromRow(row)
   return scope ? { subject, scope } : { subject }
@@ -314,8 +262,11 @@ function scopeSubjectRefFromRow(row: {
   }
 }
 
-export function accessBindingHasTarget(
-  row: Pick<AccessBindingRow, "subject_id" | "scope_subject_id"> & {
+export function automationEventSourceAccessBindingHasTarget(
+  row: Pick<
+    AutomationEventSourceBindingRow,
+    "subject_id" | "scope_subject_id"
+  > & {
     subject_kind?: string | null
     subject_workspace_id_via_join?: string | null
     subject_workspace_member_id_via_join?: string | null
@@ -326,11 +277,11 @@ export function accessBindingHasTarget(
     scope_workspace_id_via_join?: string | null
     scope_conversation_id_via_join?: string | null
   },
-  target: AccessGrantTarget
+  target: AutomationEventSourceBindingTarget
 ) {
-  let rowTarget: AccessGrantTarget
+  let rowTarget: AutomationEventSourceBindingTarget
   try {
-    rowTarget = readAccessBindingTarget(row)
+    rowTarget = readAutomationEventSourceAccessBindingTarget(row)
   } catch {
     return false
   }
@@ -478,8 +429,8 @@ function scopeInContext(
   }
 }
 
-export function mapAccessBindingToGrant(
-  row: AccessBindingRow & {
+export function mapAutomationEventSourceAccessBindingToGrant(
+  row: AutomationEventSourceBindingRow & {
     subject_kind?: string | null
     subject_workspace_id_via_join?: string | null
     subject_workspace_member_id_via_join?: string | null
@@ -494,8 +445,8 @@ export function mapAccessBindingToGrant(
   options?: {
     effectiveConversationTypeMask?: number
   }
-): AccessGrant {
-  const target = readAccessBindingTarget(row)
+): AutomationEventSourceAccessGrant {
+  const target = readAutomationEventSourceAccessBindingTarget(row)
   const capabilityTarget: CapabilityAccessTarget = target.scope
     ? { subject: target.subject, scope: target.scope }
     : { subject: target.subject }

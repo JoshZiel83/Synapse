@@ -310,7 +310,7 @@ export function startSessionThinkingWorker() {
       }
 
       let turn: any = null
-      let thinkingActorName = "Unknown"
+      let thinkingActorDisplayName = "Unknown"
       let requeueAfterUnlock = false
       let requeueTrigger = trigger
       // Set true by the lock-refresh interval if we lose the session lock
@@ -423,7 +423,10 @@ export function startSessionThinkingWorker() {
             conversationId,
             sessionId,
             actorId,
-            actorName: thinkingActorName || session.actor_name || "Unknown",
+            actorDisplayName:
+              thinkingActorDisplayName ||
+              session.actor_display_name ||
+              "Unknown",
             status,
             phase: currentPhase,
           }
@@ -447,7 +450,7 @@ export function startSessionThinkingWorker() {
           void thinkingPayload
         }
 
-        thinkingActorName = session.actor_name || "Unknown"
+        thinkingActorDisplayName = session.actor_display_name || "Unknown"
         await emitThinkingStatus("Analyzing message...")
 
         const actor = await getActor(actorId, workspaceId)
@@ -497,14 +500,16 @@ export function startSessionThinkingWorker() {
               id: actorId,
               participantId: selfParticipant.id,
               name:
-                selfParticipant.actor_name ||
-                session.actor_name ||
+                selfParticipant.participant_name ||
+                selfParticipant.display_name ||
+                actor.displayName ||
+                session.actor_display_name ||
                 "Unknown actor",
               title:
-                selfParticipant.actor_title ||
-                selfParticipant.actor_role ||
+                selfParticipant.participant_title ||
+                selfParticipant.participant_role ||
                 "Actor",
-              role: selfParticipant.actor_role || undefined,
+              role: selfParticipant.participant_role || undefined,
             })
           }
 
@@ -518,9 +523,12 @@ export function startSessionThinkingWorker() {
                 participantType: "actor",
                 id: member.actor_id,
                 participantId: member.id,
-                name: member.actor_name,
-                title: member.actor_title,
-                role: member.actor_role || undefined,
+                name:
+                  member.participant_name ||
+                  member.display_name ||
+                  "Unknown actor",
+                title: member.participant_title,
+                role: member.participant_role || undefined,
               })
             } else if (member.user_id && member.state === "active") {
               const workspaceMemberId =
@@ -614,7 +622,7 @@ export function startSessionThinkingWorker() {
           ? "turn_recall"
           : "bootstrap"
         const recallQuery = buildMemoryRecallQuery({
-          actorName: actor.definition.name,
+          actorDisplayName: actor.displayName || actor.definition.displayName,
           conversationTitle: session.conversation_title,
           contextItems,
         })
@@ -1033,11 +1041,19 @@ export function startSessionThinkingWorker() {
             ...actor,
             currentVersion:
               selfMember.actor_current_version || actor.currentVersion,
+            displayName:
+              selfMember.participant_name ||
+              selfMember.display_name ||
+              actor.displayName,
             definition: {
               ...actor.definition,
-              name: selfMember.actor_name || actor.definition.name,
-              title: selfMember.actor_title || actor.definition.title,
-              role: selfMember.actor_role || actor.definition.role,
+              displayName:
+                selfMember.participant_name ||
+                selfMember.display_name ||
+                actor.displayName ||
+                actor.definition.displayName,
+              title: selfMember.participant_title || actor.definition.title,
+              role: selfMember.participant_role || actor.definition.role,
               docs: selfMember.actor_docs || actor.definition.docs,
               canRepresentUser:
                 typeof selfMember.actor_can_represent_user === "boolean"

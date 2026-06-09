@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import {
   SUBJECT_KIND,
   actorRef,
@@ -408,11 +409,21 @@ async function insertConversation(
 }
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: "test actor",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: "test actor",
+      id: actorId,
       role: "assistant",
       title: "test",
       current_version: 1,
@@ -426,11 +437,21 @@ async function insertRemoteAgent(
   db: AnyDb,
   workspaceId: string
 ): Promise<string> {
+  const remoteAgentId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: remoteAgentId,
+      workspace_id: workspaceId,
+      kind: "remote_agent",
+      display_name: "test remote agent",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("remote_agents")
     .values({
-      workspace_id: workspaceId,
-      name: `agent-${Math.random().toString(36).slice(2, 10)}`,
+      id: remoteAgentId,
       title: "test remote agent",
       runtime_kind: "claude_code",
     } as any)

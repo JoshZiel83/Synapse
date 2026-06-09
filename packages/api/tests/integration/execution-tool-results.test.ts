@@ -89,12 +89,24 @@ async function buildFixture(opts: {
             upstreamToolName: opts.toolName,
           }
 
-  const actorRow = await client.query<{ id: string }>(
-    `INSERT INTO actors (workspace_id, name, role, title)
-     VALUES ($1, 'ExecTR Actor', 'assistant', 'ExecTR Title') RETURNING id`,
-    [seed.workspaceId]
-  )
-  const actorId = actorRow.rows[0].id
+  const actorId = uuidv4()
+  await client.query("BEGIN")
+  try {
+    await client.query(
+      `INSERT INTO workspace_apps (id, workspace_id, kind, display_name, owner_workspace_member_id, status)
+       VALUES ($1, $2, 'actor', 'ExecTR Actor', $3, 'active')`,
+      [actorId, seed.workspaceId, seed.workspaceMemberId]
+    )
+    await client.query(
+      `INSERT INTO actors (id, role, title)
+       VALUES ($1, 'assistant', 'ExecTR Title')`,
+      [actorId]
+    )
+    await client.query("COMMIT")
+  } catch (error) {
+    await client.query("ROLLBACK")
+    throw error
+  }
 
   await client.query(
     `INSERT INTO conversations (id, kind, workspace_id, created_by_workspace_member_id)
@@ -170,7 +182,9 @@ test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult 
   assert.equal(byProviderId, byDbId, "same object instance for both keys")
 
   assert.equal(byProviderId!.toolName, "filesystem__View")
-  assert.equal(byProviderId!.toolCallId, providerCallId)
+  // Canonical toolCallId is always the internal tool_calls.id UUID; the
+  // provider-native id stays on providerCallId only.
+  assert.equal(byProviderId!.toolCallId, toolCallId)
   assert.equal(byProviderId!.providerCallId, providerCallId)
   assert.equal(byProviderId!.isError, false)
   assert.equal(byProviderId!.origin.kind, "device")

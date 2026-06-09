@@ -68,7 +68,7 @@ export async function seedOfficialActorCatalog(
     for (const actorSeed of OFFICIAL_ACTOR_TEMPLATE_SEEDS) {
       const avatarFile = await createGeneratedOfficialActorAvatarFile(client, {
         actorSlug: actorSeed.slug,
-        actorName: actorSeed.actor.name,
+        actorDisplayName: actorSeed.actor.displayName,
         actorTitle: actorSeed.actor.title,
         uploaderUserId: userId,
         theme: getOfficialActorAvatarTheme(actorSeed.slug),
@@ -157,7 +157,7 @@ export async function seedOfficialActorCatalog(
         INSERT INTO actor_template_version_specs (
           catalog_version_id,
           role,
-          name,
+          display_name,
           avatar_file_id,
           avatar_emoji,
           title,
@@ -170,7 +170,7 @@ export async function seedOfficialActorCatalog(
         VALUES (
           ${actorVersionId},
           ${actorProfile.role},
-          ${actorProfile.name},
+          ${actorProfile.displayName},
           ${actorProfile.avatarFileId || null},
           ${actorProfile.avatarEmoji || null},
           ${actorProfile.title},
@@ -182,7 +182,7 @@ export async function seedOfficialActorCatalog(
         )
         ON CONFLICT (catalog_version_id) DO UPDATE SET
           role = EXCLUDED.role,
-          name = EXCLUDED.name,
+          display_name = EXCLUDED.display_name,
           avatar_file_id = EXCLUDED.avatar_file_id,
           avatar_emoji = EXCLUDED.avatar_emoji,
           title = EXCLUDED.title,
@@ -230,10 +230,27 @@ export async function seedOfficialRuntimeActors(
 
     for (const refs of refsList) {
       const actorSeed = refs.actor
+      const actorId = crypto.randomUUID()
+      await sql`
+        INSERT INTO workspace_apps (
+          id,
+          workspace_id,
+          kind,
+          display_name,
+          owner_workspace_member_id,
+          status
+        )
+        VALUES (
+          ${actorId},
+          ${workspaceId},
+          'actor',
+          ${actorSeed.displayName},
+          ${workspaceMemberId},
+          'active'
+        )`.execute(client)
       const actor = await sql<{ id: string }>`
         INSERT INTO actors (
-          workspace_id,
-          name,
+          id,
           role,
           title,
           avatar_file_id,
@@ -241,11 +258,10 @@ export async function seedOfficialRuntimeActors(
           can_represent_user,
           specialties,
           config,
-          created_by_workspace_member_id
+          current_version
         )
         VALUES (
-          ${workspaceId},
-          ${actorSeed.name},
+          ${actorId},
           ${actorSeed.role},
           ${actorSeed.title},
           ${actorSeed.avatarFileId || null},
@@ -253,16 +269,16 @@ export async function seedOfficialRuntimeActors(
           ${actorSeed.canRepresentUser},
           ${actorSeed.specialties},
           ${JSON.stringify(actorSeed.config)}::jsonb,
-          ${workspaceMemberId}
+          1
         )
         RETURNING id`.execute(client)
-      const actorId = actor.rows[0]!.id
+      const insertedActorId = actor.rows[0]!.id
 
       const actorVersion = await sql<{ id: string }>`
         INSERT INTO actor_versions (
           actor_id,
           version,
-          name,
+          display_name,
           role,
           title,
           can_represent_user,
@@ -271,9 +287,9 @@ export async function seedOfficialRuntimeActors(
           created_by_workspace_member_id
         )
         VALUES (
-          ${actorId},
+          ${insertedActorId},
           1,
-          ${actorSeed.name},
+          ${actorSeed.displayName},
           ${actorSeed.role},
           ${actorSeed.title},
           ${actorSeed.canRepresentUser},
@@ -307,13 +323,13 @@ export async function seedOfficialRuntimeActors(
           sync_mode,
           baseline_actor_version
         )
-        VALUES (${actorId}, ${refs.actorItemId}, ${refs.actorVersionId}, 'notify', 1)`.execute(
+        VALUES (${insertedActorId}, ${refs.actorItemId}, ${refs.actorVersionId}, 'notify', 1)`.execute(
         client
       )
 
-      actorIds.push(actorId)
+      actorIds.push(insertedActorId)
       if (!chiefActorId && isChiefActorTemplate(refs)) {
-        chiefActorId = actorId
+        chiefActorId = insertedActorId
       }
     }
 

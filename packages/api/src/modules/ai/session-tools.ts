@@ -99,7 +99,7 @@ import {
 
 type InviteableActor = {
   id: string
-  name: string
+  displayName: string
   title?: string
   role?: string
   summary?: string
@@ -401,7 +401,7 @@ function summarizeInviteableActor(row: {
 
 function formatInviteableActor(actor: InviteableActor): string {
   const title = actor.title || actor.role || "Actor"
-  return `${actor.name} (${title}) [${actor.id}]${actor.summary ? ` - ${actor.summary}` : ""}`
+  return `${actor.displayName} (${title}) [${actor.id}]${actor.summary ? ` - ${actor.summary}` : ""}`
 }
 
 function normalizeRecipientAlias(value: string) {
@@ -419,14 +419,18 @@ function buildSendToCandidates(
 
     if (participant.actor_id) {
       if (participant.actor_id === currentActorId) continue
-      const name = participant.actor_name || "Unknown actor"
-      const title = participant.actor_title || participant.actor_role || "Actor"
+      const name =
+        participant.participant_name ||
+        participant.display_name ||
+        "Unknown actor"
+      const title =
+        participant.participant_title || participant.participant_role || "Actor"
       candidates.push({
         participantType: "actor",
         participantId: participant.id,
         actorId: participant.actor_id,
-        title: participant.actor_title || undefined,
-        role: participant.actor_role || undefined,
+        title: participant.participant_title || undefined,
+        role: participant.participant_role || undefined,
         name,
         label: `"${name}" (actor${title ? `, ${title}` : ""})`,
         aliases: [name],
@@ -958,6 +962,7 @@ async function listInviteableActors(params: {
 }): Promise<InviteableActor[]> {
   const result = await db
     .selectFrom("actors as a")
+    .innerJoin("workspace_apps as app", "app.id", "a.id")
     .leftJoin("actor_versions as current_version", (join) =>
       join
         .onRef("current_version.actor_id", "=", "a.id")
@@ -965,7 +970,7 @@ async function listInviteableActors(params: {
     )
     .select([
       "a.id",
-      "a.name",
+      "app.display_name",
       "a.title",
       "a.role",
       sql`COALESCE(
@@ -986,8 +991,9 @@ async function listInviteableActors(params: {
         '[]'::jsonb
       )`.as("actor_docs"),
     ])
-    .where("a.workspace_id", "=", params.workspaceId)
-    .where("a.is_active", "=", true)
+    .where("app.workspace_id", "=", params.workspaceId)
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "=", "active")
     .where("a.id", "<>", params.actorId)
     .where(
       sql<boolean>`NOT EXISTS (
@@ -999,13 +1005,13 @@ async function listInviteableActors(params: {
         AND cp.state = 'active'
     )`
     )
-    .orderBy("a.name", "asc")
+    .orderBy("app.display_name", "asc")
     .orderBy("a.id", "asc")
     .execute()
 
   return result.map((row) => ({
     id: row.id as string,
-    name: row.name as string,
+    displayName: row.display_name as string,
     title: (row.title as string | null) || undefined,
     role: (row.role as string | null) || undefined,
     summary: summarizeInviteableActor(row),
@@ -1091,9 +1097,9 @@ export function registerCallableToolPlugins(): void {
       parameters: {
         type: "object",
         properties: {
-          skillName: {
+          skillInstanceId: {
             type: "string",
-            description: "The available skill name/slug to read.",
+            description: "The available skill instance id to read.",
           },
           path: {
             type: "string",
@@ -1101,7 +1107,7 @@ export function registerCallableToolPlugins(): void {
               "Optional relative attachment path inside the skill package. Omit it to read the skill description.",
           },
         },
-        required: ["skillName"],
+        required: ["skillInstanceId"],
       },
     },
     resolve: (ctx) => {
@@ -1111,13 +1117,13 @@ export function registerCallableToolPlugins(): void {
       if (availableSkills.length === 0) {
         return { active: false, definition: null as any }
       }
-      const skillNames: string[] = Array.from(
-        new Set(availableSkills.map((skill) => skill.slug))
+      const skillInstanceIds: string[] = Array.from(
+        new Set(availableSkills.map((skill) => skill.instanceId))
       )
-      const previewSkills = skillNames
+      const previewSkills = availableSkills
         .slice(0, 12)
-        .map((skill) => `\`${skill}\``)
-      const moreCount = skillNames.length - previewSkills.length
+        .map((skill) => `\`${skill.name}\` (${skill.instanceId})`)
+      const moreCount = skillInstanceIds.length - previewSkills.length
       const availabilityHint =
         moreCount > 0
           ? `${previewSkills.join(", ")}, and ${moreCount} more listed in the Available Skills section.`
@@ -1128,15 +1134,15 @@ export function registerCallableToolPlugins(): void {
           name: "read_skill",
           description:
             `Read the contents of an available skill package. ` +
-            `Use the exact slug from the Available Skills section. ` +
+            `Use the exact instance id from the Available Skills section. ` +
             `Currently available: ${availabilityHint}`,
           parameters: {
             type: "object",
             properties: {
-              skillName: {
+              skillInstanceId: {
                 type: "string",
-                description: "The available skill name/slug to read.",
-                enum: skillNames,
+                description: "The available skill instance id to read.",
+                enum: skillInstanceIds,
               },
               path: {
                 type: "string",
@@ -1144,7 +1150,7 @@ export function registerCallableToolPlugins(): void {
                   "Optional relative attachment path inside the skill package, for example references/checklist.md. Omit it to read the skill description.",
               },
             },
-            required: ["skillName"],
+            required: ["skillInstanceId"],
           },
         },
       }
@@ -1164,13 +1170,15 @@ export function registerCallableToolPlugins(): void {
         actorId: context.actorId,
       })
 
-      const skillName = String((input as any).skillName || "").trim()
+      const skillInstanceId = String(
+        (input as any).skillInstanceId || ""
+      ).trim()
       const path =
         typeof (input as any).path === "string"
           ? String((input as any).path).trim()
           : undefined
-      if (!skillName) {
-        throwToolError("skillName is required")
+      if (!skillInstanceId) {
+        throwToolError("skillInstanceId is required")
       }
 
       try {
@@ -1181,14 +1189,14 @@ export function registerCallableToolPlugins(): void {
           conversationId: session.conversation_id,
           conversationKind: session.conversation_kind,
           isImConversation: session.isImConversation,
-          skillName,
+          skillInstanceId,
           assetPath: path || undefined,
         })
 
         return textResult(
           [
             `Skill: ${result.skill.name}`,
-            `Slug: ${result.skill.slug}`,
+            `Instance ID: ${result.skill.instanceId}`,
             `Version: ${result.skill.version}`,
             `Path: ${result.asset.path}`,
             "",
@@ -2530,7 +2538,7 @@ export function registerCallableToolPlugins(): void {
       )
       const candidatesByName = new Map<string, InviteableActor[]>()
       for (const candidate of candidates) {
-        const key = candidate.name.trim().toLowerCase()
+        const key = candidate.displayName.trim().toLowerCase()
         const matches = candidatesByName.get(key) || []
         matches.push(candidate)
         candidatesByName.set(key, matches)
@@ -2589,7 +2597,7 @@ export function registerCallableToolPlugins(): void {
           extra: {
             availableCandidates: candidates.map((candidate) => ({
               id: candidate.id,
-              name: candidate.name,
+              displayName: candidate.displayName,
               title: candidate.title || candidate.role || "Actor",
               summary: candidate.summary,
             })),
@@ -2603,7 +2611,7 @@ export function registerCallableToolPlugins(): void {
           extra: {
             availableCandidates: candidates.map((candidate) => ({
               id: candidate.id,
-              name: candidate.name,
+              displayName: candidate.displayName,
               title: candidate.title || candidate.role || "Actor",
               summary: candidate.summary,
             })),
@@ -2646,7 +2654,7 @@ export function registerCallableToolPlugins(): void {
           .filter((candidate) => !invitedActorIds.has(candidate.id))
           .map((candidate) => ({
             id: candidate.id,
-            name: candidate.name,
+            displayName: candidate.displayName,
             reason: "Actor already in conversation",
           }))
 
@@ -2675,7 +2683,7 @@ export function registerCallableToolPlugins(): void {
                   participantId: participant.id,
                   participantType: "actor",
                   actorId: candidate.id,
-                  name: candidate.name,
+                  name: candidate.displayName,
                   title: candidate.title,
                   role: candidate.role,
                 },
@@ -2693,15 +2701,15 @@ export function registerCallableToolPlugins(): void {
             success: true,
             invitedActors: invitedActors.map((candidate) => ({
               id: candidate.id,
-              name: candidate.name,
+              displayName: candidate.displayName,
               title: candidate.title || candidate.role || "Actor",
               summary: candidate.summary,
             })),
             skippedActors,
             message:
               invitedActors.length === 1
-                ? `${invitedActors[0]!.name} has been invited to the conversation and notified.`
-                : `${invitedActors.map((candidate) => candidate.name).join(", ")} have been invited to the conversation and notified.`,
+                ? `${invitedActors[0]!.displayName} has been invited to the conversation and notified.`
+                : `${invitedActors.map((candidate) => candidate.displayName).join(", ")} have been invited to the conversation and notified.`,
           })
         )
       } catch (err: any) {

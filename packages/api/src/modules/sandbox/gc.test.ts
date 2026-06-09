@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -52,11 +53,21 @@ async function seed(db: Kysely<any>) {
     .values({ owner_id: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const actorRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      id: crypto.randomUUID(),
+      workspace_id: ws.id,
+      kind: "actor",
+      display_name: `a-${rid()}`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const actor = await db
     .insertInto("actors")
     .values({
-      workspace_id: ws.id,
-      name: `a-${rid()}`,
+      id: actorRoot.id as string,
       role: "assistant",
       title: "t",
       current_version: 1,

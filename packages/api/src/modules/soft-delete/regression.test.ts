@@ -52,11 +52,21 @@ async function insertMember(
   return row.id as string
 }
 async function insertActor(db: AnyDb, ws: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: ws,
+      kind: "actor",
+      display_name: "a",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: ws,
-      name: "a",
+      id: actorId,
       role: "assistant",
       title: "t",
       current_version: 1,
@@ -117,13 +127,14 @@ test(
         db,
         () =>
           db
-            .insertInto("actors")
+            .insertInto("workspace_apps")
             .values({
+              id: crypto.randomUUID(),
               workspace_id: ws,
-              name: "x",
-              role: "assistant",
-              title: "t",
-            })
+              kind: "actor",
+              display_name: "x",
+              status: "active",
+            } as any)
             .execute(),
         /references non-live workspaces/
       )
@@ -143,9 +154,10 @@ test(
       // children — none of those UPDATEs may be blocked by the FK-liveness trigger.
       await markWorkspaceDeleted(db, ws)
       const liveActors = await db
-        .selectFrom("actors")
+        .selectFrom("workspace_apps")
         .select("id")
         .where("workspace_id", "=", ws)
+        .where("kind", "=", "actor")
         .where("deleted_at", "is", null)
         .execute()
       assert.equal(liveActors.length, 0, "all workspace actors soft-deleted")
@@ -494,7 +506,7 @@ test(
       })
       assert.equal(before, true, "live actor is viewable by admin")
       await db
-        .updateTable("actors")
+        .updateTable("workspace_apps")
         .set({ deleted_at: new Date() })
         .where("id", "=", actorId)
         .execute()
@@ -864,15 +876,24 @@ test(
         .values({ kind: "workspace", workspace_id: ws })
         .returning("id")
         .executeTakeFirstOrThrow()
+      const instId = crypto.randomUUID()
+      await db
+        .insertInto("workspace_apps")
+        .values({
+          id: instId,
+          workspace_id: ws,
+          kind: "plugin_installation",
+          display_name: "i",
+          status: "active",
+        } as any)
+        .execute()
       const inst = await db
         .insertInto("plugin_installations")
         .values({
-          workspace_id: ws,
+          id: instId,
           catalog_item_id: item.id,
           catalog_version_id: ver.id,
-          display_name: "i",
-          attachment_subject_id: wsSubject.id,
-          status: "active",
+          attachment_scope_subject_id: wsSubject.id,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -881,7 +902,6 @@ test(
         .values({
           installation_id: inst.id,
           workspace_id: ws,
-          owner_scope: "installation",
           binding_key: "default",
           driver: "oauth2",
           status: "active",
@@ -948,15 +968,24 @@ test(
         .values({ kind: "workspace", workspace_id: ws })
         .returning("id")
         .executeTakeFirstOrThrow()
+      const instId = crypto.randomUUID()
+      await db
+        .insertInto("workspace_apps")
+        .values({
+          id: instId,
+          workspace_id: ws,
+          kind: "plugin_installation",
+          display_name: "i",
+          status: "active",
+        } as any)
+        .execute()
       const inst = await db
         .insertInto("plugin_installations")
         .values({
-          workspace_id: ws,
+          id: instId,
           catalog_item_id: item.id,
           catalog_version_id: ver.id,
-          display_name: "i",
-          attachment_subject_id: wsSubject.id,
-          status: "active",
+          attachment_scope_subject_id: wsSubject.id,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -965,7 +994,6 @@ test(
         .values({
           installation_id: inst.id,
           workspace_id: ws,
-          owner_scope: "installation",
           binding_key: "default",
           driver: "oauth2",
           status: "active",
@@ -1127,15 +1155,24 @@ async function insertInstallation(
     .values({ kind: "workspace", workspace_id: ws })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const instId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: instId,
+      workspace_id: ws,
+      kind: "plugin_installation",
+      display_name: "i",
+      status: "active",
+    } as any)
+    .execute()
   const inst = await db
     .insertInto("plugin_installations")
     .values({
-      workspace_id: ws,
+      id: instId,
       catalog_item_id: item.id,
       catalog_version_id: ver.id,
-      display_name: "i",
-      attachment_subject_id: wsSubject.id,
-      status: "active",
+      attachment_scope_subject_id: wsSubject.id,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1186,12 +1223,22 @@ async function insertDeviceCapability(
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
+  const capabilityId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: capabilityId,
+      workspace_id: ws,
+      kind: "device_capability",
+      display_name: "soft-delete exposure",
+      status: "active",
+    } as any)
+    .execute()
   const capability = await db
     .insertInto("device_capabilities")
     .values({
-      workspace_id: ws,
+      id: capabilityId,
       exposure_id: exposure.id as string,
-      status: "active",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -1216,7 +1263,6 @@ test(
         .values({
           installation_id: instId,
           workspace_id: ws,
-          owner_scope: "installation",
           binding_key: "default",
           driver: "oauth2",
           status: "active",
@@ -1224,7 +1270,7 @@ test(
         .execute()
       // archive the installation WITHOUT tombstoning (status -> non-live)
       await db
-        .updateTable("plugin_installations")
+        .updateTable("workspace_apps")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1238,13 +1284,12 @@ test(
             .values({
               installation_id: instId,
               workspace_id: ws,
-              owner_scope: "installation",
               binding_key: "second",
               driver: "oauth2",
               status: "active",
             })
             .execute(),
-        /references non-live plugin_installations/
+        /references non-live workspace_apps/
       )
     })
   }
@@ -1260,7 +1305,7 @@ test(
       const { instId } = await insertInstallation(db, ws)
       // disabled is still LIVE (in liveValues) — must remain visible
       await db
-        .updateTable("plugin_installations")
+        .updateTable("workspace_apps")
         .set({ status: "disabled" })
         .where("id", "=", instId)
         .execute()
@@ -1272,7 +1317,7 @@ test(
       assert.equal(live.length, 1, "disabled install is still live")
       // archived is NOT in liveValues — must drop from the live surface
       await db
-        .updateTable("plugin_installations")
+        .updateTable("workspace_apps")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1305,7 +1350,6 @@ test(
         .values({
           installation_id: instId,
           workspace_id: ws,
-          owner_scope: "installation",
           binding_key: "default",
           driver: "oauth2",
           status: "active",
@@ -1314,7 +1358,7 @@ test(
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("plugin_installations")
+        .updateTable("workspace_apps")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1346,7 +1390,6 @@ test(
         .values({
           installation_id: instId,
           workspace_id: ws,
-          owner_scope: "installation",
           binding_key: "default",
           driver: "oauth2",
           status: "expired",
@@ -1355,7 +1398,7 @@ test(
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("plugin_installations")
+        .updateTable("workspace_apps")
         .set({ status: "archived" })
         .where("id", "=", instId)
         .execute()
@@ -1368,7 +1411,7 @@ test(
             .set({ status: "active" })
             .where("id", "=", conn.id)
             .execute(),
-        /references non-live plugin_installations/
+        /references non-live workspace_apps/
       )
     })
   }
@@ -1421,52 +1464,6 @@ test(
             })
             .execute(),
         /references non-live workspace_members/
-      )
-    })
-  }
-)
-
-test(
-  "F18: status live views fold in resource-parent liveness",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const u = await insertUser(db)
-      const ws = await insertWorkspace(db, u)
-      const { instId } = await insertInstallation(db, ws)
-      const subject = await db
-        .selectFrom("access_subjects")
-        .select("id")
-        .where("kind", "=", "workspace")
-        .where("workspace_id", "=", ws)
-        .executeTakeFirstOrThrow()
-      const binding = await db
-        .insertInto("resource_access_bindings")
-        .values({
-          workspace_id: ws,
-          resource_type: "plugin_installation",
-          plugin_installation_id: instId,
-          subject_id: subject.id,
-          status: "active",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-
-      await db
-        .updateTable("plugin_installations")
-        .set({ status: "archived" })
-        .where("id", "=", instId)
-        .execute()
-
-      const live = await db
-        .selectFrom("resource_access_bindings_live")
-        .select("id")
-        .where("id", "=", binding.id)
-        .execute()
-      assert.equal(
-        live.length,
-        0,
-        "resource binding hidden when plugin installation is archived"
       )
     })
   }
@@ -1656,24 +1653,33 @@ test(
       )
 
       const subject = await db
+        .insertInto("workspace_members")
+        .values({ workspace_id: ws, user_id: u, trust_level: "admin" })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const subjectRef = await db
         .insertInto("access_subjects")
-        .values({ kind: "workspace", workspace_id: ws })
+        .values({
+          kind: "workspace_member",
+          workspace_id: ws,
+          workspace_member_id: subject.id,
+        })
         .returning("id")
         .executeTakeFirstOrThrow()
       const binding = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("workspace_app_grants")
         .values({
           workspace_id: ws,
-          resource_type: "device_capability",
-          device_capability_id: capabilityId,
-          subject_id: subject.id,
+          workspace_app_id: capabilityId,
+          subject_id: subjectRef.id,
+          permissions: ["use"],
           status: "active",
         })
         .returning("id")
         .executeTakeFirstOrThrow()
 
       await db
-        .updateTable("device_capabilities")
+        .updateTable("workspace_apps")
         .set({ status: "archived" })
         .where("id", "=", capabilityId)
         .execute()
@@ -1689,31 +1695,16 @@ test(
         "archived device capability excluded from _live"
       )
 
-      const bindingLive = await db
-        .selectFrom("resource_access_bindings_live")
-        .select("id")
-        .where("id", "=", binding.id)
-        .execute()
+      const allowed = await checkPermission(db as never, {
+        resourceType: "device_capability",
+        resourceId: capabilityId,
+        permission: "view",
+        subject: { type: "workspace_member", id: subject.id as string },
+      })
       assert.equal(
-        bindingLive.length,
-        0,
-        "binding hidden when device capability is archived"
-      )
-
-      await db
-        .updateTable("resource_access_bindings")
-        .set({ status: "revoked" })
-        .where("id", "=", binding.id)
-        .execute()
-      await rejects(
-        db,
-        () =>
-          db
-            .updateTable("resource_access_bindings")
-            .set({ status: "active" })
-            .where("id", "=", binding.id)
-            .execute(),
-        /references non-live device_capabilities/
+        allowed,
+        false,
+        "archived device capability is not authorizable even if a grant row still exists"
       )
     })
   }

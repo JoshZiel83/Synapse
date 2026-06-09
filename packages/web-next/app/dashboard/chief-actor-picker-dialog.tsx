@@ -44,7 +44,7 @@ type ChiefActorPickerDialogProps = {
     actorId: string
     actor: {
       id: string
-      name: string
+      displayName: string
       role: string
       title: string
       avatarUrl?: string
@@ -84,7 +84,7 @@ function ChiefActorPickerDialogBody({
           .map((actor: Actor) => normalizeChiefActorOption(actor))
           .filter((actor: ActorOption) => actor.isActive)
           .sort((left: ActorOption, right: ActorOption) =>
-            left.name.localeCompare(right.name)
+            left.displayName.localeCompare(right.displayName)
           )
 
         setActors(nextActors)
@@ -113,7 +113,7 @@ function ChiefActorPickerDialogBody({
   const visibleActors = normalizedQuery
     ? actors.filter((actor) => {
         const haystack = [
-          actor.name,
+          actor.displayName,
           actor.title,
           actor.role,
           actor.summary || "",
@@ -132,7 +132,7 @@ function ChiefActorPickerDialogBody({
       actorId: selectedActorId,
       actor: {
         id: selectedActor.id,
-        name: selectedActor.name,
+        displayName: selectedActor.displayName,
         role: selectedActor.role,
         title: selectedActor.title,
         avatarUrl: selectedActor.avatarUrl,
@@ -187,7 +187,7 @@ function ChiefActorPickerDialogBody({
                   ].join(" ")}
                 >
                   <ChatAvatar
-                    name={actor.name}
+                    name={actor.displayName}
                     avatarUrl={actor.avatarUrl}
                     emoji={actor.emoji}
                     entityType="actor"
@@ -196,7 +196,7 @@ function ChiefActorPickerDialogBody({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-sm font-medium text-foreground">
-                        {actor.name}
+                        {actor.displayName}
                       </span>
                       <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
                         {actor.title || actor.role}

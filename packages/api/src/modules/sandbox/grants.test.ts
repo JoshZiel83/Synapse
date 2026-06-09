@@ -65,12 +65,21 @@ async function seedDeviceWithBuiltins(
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
+    const capabilityRoot = await db
+      .insertInto("workspace_apps")
+      .values({
+        workspace_id: ws.id,
+        kind: "device_capability",
+        display_name: kind,
+        status: "active",
+      } as any)
+      .returning("id")
+      .executeTakeFirstOrThrow()
     const capability = await db
       .insertInto("device_capabilities")
       .values({
-        workspace_id: ws.id,
+        id: capabilityRoot.id as string,
         exposure_id: exposure.id,
-        status: "active",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()

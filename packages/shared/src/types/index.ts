@@ -6,7 +6,7 @@ import {
   CONTACT_DIRECT_STATES,
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
-  ATTACHMENT_TARGET_TYPES,
+  PLUGIN_ATTACHMENT_SCOPE_TYPES,
   CANONICAL_FILE_CATEGORIES,
   CONVERSATION_ITEM_ROLES,
   CONVERSATION_ITEM_SCOPES,
@@ -52,12 +52,10 @@ import {
   MEMORY_STABILITIES,
   MEMORY_STATUSES,
   PLUGIN_AUTH_CONNECTION_STATUSES,
-  PLUGIN_AUTH_OWNER_SCOPES,
   PLUGIN_AUTH_SESSION_STATUSES,
   PLAN_APPROVAL_DECISIONS,
   TARGETED_INTERACTION_REQUEST_KINDS,
   REUSE_SCOPES,
-  RELATIONSHIP_ACCESS_POLICIES,
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_PROFILE_SUBJECT_TYPES,
   RELATIONSHIP_REQUEST_STATUSES,
@@ -112,6 +110,14 @@ import type {
   CommandlinePolicy as CommandlinePolicyBase,
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
+import type {
+  WorkspaceAppGrantPermission,
+  WorkspaceAppGrantRequestStatus,
+  WorkspaceAppGrantSource,
+  WorkspaceAppGrantStatus,
+  WorkspaceAppKind,
+  WorkspaceAppStatus,
+} from "../access/enums.js"
 import type { SubjectRef, ScopedSubjectTarget } from "../access/subject.js"
 
 // ============ Common ============
@@ -178,7 +184,7 @@ export interface WorkspaceMember {
 
 export interface WorkspaceChiefActorSummary {
   id: UUID
-  name: string
+  displayName: string
   role: ActorRole
   title: string
   avatarUrl?: string
@@ -252,7 +258,7 @@ export type ActorDocInput = Omit<ActorDoc, "id" | "content"> & {
 }
 
 export interface ActorDefinition {
-  name: string
+  displayName: string
   role: ActorRole
   title: string
   avatarFileId?: UUID
@@ -281,7 +287,7 @@ export interface ActorVersionSource {
 }
 
 export type ActorVersionChangedField =
-  | "name"
+  | "displayName"
   | "role"
   | "title"
   | "parentId"
@@ -348,6 +354,7 @@ export interface ActorVersion {
 export interface Actor {
   id: UUID
   workspaceId: UUID
+  displayName: string
   packageId?: UUID
   packageInstanceId?: UUID
   definition: ActorDefinition
@@ -995,7 +1002,7 @@ export interface ActorRuntimeTurnActivityItem {
 export interface ActorRuntimeTurnActivityDetail {
   conversationId: UUID
   actorId: UUID
-  actorName: string
+  actorDisplayName: string
   turnId: UUID
   startedAt: Timestamp
   updatedAt: Timestamp
@@ -1007,7 +1014,7 @@ export interface ActorRuntimeState {
   conversationId: UUID
   sessionId: UUID
   actorId: UUID
-  actorName: string
+  actorDisplayName: string
   laneState: SessionStatus
   health: ActorRuntimeHealth
   phase: ActorRuntimePhase
@@ -1026,8 +1033,6 @@ export type RelationshipProfileSubjectType =
   (typeof RELATIONSHIP_PROFILE_SUBJECT_TYPES)[number]
 export type RelationshipApprovalMode =
   (typeof RELATIONSHIP_APPROVAL_MODES)[number]
-export type RelationshipAccessPolicy =
-  (typeof RELATIONSHIP_ACCESS_POLICIES)[number]
 export type RelationshipRequestStatus =
   (typeof RELATIONSHIP_REQUEST_STATUSES)[number]
 export type ContactTargetType = (typeof CONTACT_TARGET_TYPES)[number]
@@ -1042,7 +1047,6 @@ export type DirectConversationOpenStatus =
   (typeof DIRECT_CONVERSATION_OPEN_STATUSES)[number]
 
 export type RemoteAgentRuntimeKind = (typeof REMOTE_AGENT_RUNTIME_KINDS)[number]
-export type RemoteAgentAccessPolicy = RelationshipAccessPolicy
 export type RemoteAgentRuntimeStateType =
   (typeof REMOTE_AGENT_RUNTIME_STATES)[number]
 export type RemoteAgentRuntimeCatalogStatus =
@@ -1085,7 +1089,7 @@ export interface RelationshipProfileView {
   qrUrl: string
   identityId: string
   identitySearchEnabled: boolean
-  accessPolicy?: RelationshipAccessPolicy
+  requiresContactApproval: boolean
   isPublicShared?: boolean
 }
 
@@ -1153,24 +1157,24 @@ export interface RelationshipMemberSummaryView {
 export interface RelationshipActorSummaryView {
   workspace: RelationshipWorkspaceSummary
   actorId: UUID
-  name: string
+  displayName: string
   title: string
   role: string
   avatarFileId?: UUID | null
   avatarEmoji?: string | null
-  accessPolicy: RelationshipAccessPolicy
+  requiresContactApproval: boolean
   isPublicShared: boolean
 }
 
 export interface RelationshipRemoteAgentSummaryView {
   workspace: RelationshipWorkspaceSummary
   remoteAgentId: UUID
-  name: string
+  displayName: string
   title: string
   runtimeKind: RemoteAgentRuntimeKind
   avatarFileId?: UUID | null
   avatarEmoji?: string | null
-  accessPolicy: RelationshipAccessPolicy
+  requiresContactApproval: boolean
   isPublicShared: boolean
 }
 
@@ -1352,17 +1356,17 @@ export interface RemoteAgentBindingView {
 export interface RemoteAgentView {
   id: UUID
   workspaceId: UUID
-  name: string
+  displayName: string
   title: string
   description?: string
   runtimeKind: RemoteAgentRuntimeKind
   avatarFileId?: UUID
   avatarEmoji?: string
-  accessPolicy: RemoteAgentAccessPolicy
+  requiresContactApproval: boolean
   isActive: boolean
   isPublicShared: boolean
   metadata: Record<string, unknown>
-  createdByWorkspaceMemberId?: UUID
+  ownerWorkspaceMemberId?: UUID
   createdAt?: Timestamp
   updatedAt?: Timestamp
   runtimeSummary?: RemoteAgentRuntimeSummaryView
@@ -1399,7 +1403,7 @@ export interface RemoteAgentMachineDetailView {
   runtimeCatalog: RemoteAgentRuntimeCatalogEntryView[]
   bindings: Array<{
     remoteAgentId: UUID
-    name: string
+    displayName: string
     runtimeKind: RemoteAgentRuntimeKind
     runtimePath?: string
     localRootPath?: string
@@ -2287,9 +2291,8 @@ export interface RuntimeActorContext {
   isImConversation?: boolean
   userId?: string
   // Carries the workspace_member acting on behalf of `userId` in this workspace.
-  // Needed so that member-scoped resource_access_bindings (written by
-  // grantApprovedAccess and by API controllers) become visible to the tool
-  // resolver — see mcp-plugins/tool-resolver.ts:buildVisibilitySubjects.
+  // Needed so that member-scoped workspace_app_grants become visible to the
+  // tool resolver and capability discovery paths.
   workspaceMemberId?: string
 }
 
@@ -2319,7 +2322,7 @@ export interface ToolSurfaceItem {
 
 export interface SkillSurfaceItem {
   id: string
-  slug: string
+  name: string
   source: "installed"
 }
 
@@ -2396,7 +2399,8 @@ export type ConversationTypeKey = (typeof CONVERSATION_TYPE_KEYS)[number]
 export type ConversationTypeMask = number
 export type CapabilityConversationTypePolicyResourceFamily =
   (typeof CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES)[number]
-export type AttachmentTargetType = (typeof ATTACHMENT_TARGET_TYPES)[number]
+export type PluginAttachmentScopeType =
+  (typeof PLUGIN_ATTACHMENT_SCOPE_TYPES)[number]
 export type AccessTargetType = (typeof ACCESS_TARGET_TYPES)[number]
 export type CapabilityAccessTargetType =
   (typeof CAPABILITY_ACCESS_TARGET_TYPES)[number]
@@ -2428,7 +2432,7 @@ export type MarketplaceVersionStatus =
   | "active"
   | "deprecated"
   | "archived"
-export type AccessGrantStatus = "active" | "revoked"
+export type AutomationEventSourceAccessGrantStatus = "active" | "revoked"
 export type MarketplaceRequirementStatus =
   | "satisfied"
   | "missing_required"
@@ -2466,7 +2470,6 @@ export type PluginAuthBindingDriverKind =
   | "oauth2_authorization_code_pkce"
   | "mijia_qr_login"
   | "feishu_cli_setup"
-export type PluginAuthOwnerScope = (typeof PLUGIN_AUTH_OWNER_SCOPES)[number]
 export type PluginAuthSessionStatus =
   (typeof PLUGIN_AUTH_SESSION_STATUSES)[number]
 export type PluginAuthConnectionStatus =
@@ -2480,8 +2483,8 @@ export type PluginAuthSessionPhase =
   | "finalizing"
 export type PluginAuthChallengeKind = "redirect" | "qr_code" | "none"
 
-export interface AttachmentTarget {
-  type: AttachmentTargetType
+export interface PluginAttachmentScope {
+  type: PluginAttachmentScopeType
   actorId?: string
   conversationId?: string
   workspaceMemberId?: string
@@ -2565,7 +2568,6 @@ export interface PluginAuthBindingDefinition {
   displayNameI18n: LocalizedText
   descriptionI18n?: LocalizedText
   prerequisiteFields?: string[]
-  ownerScope?: PluginAuthOwnerScope
   authorizeUrl?: string
   tokenUrl?: string
   userInfoUrl?: string
@@ -2701,7 +2703,7 @@ export interface MarketplaceItem {
   isBuiltin: boolean
   downloadCount: number
   latestRevisionId?: string
-  defaultInstanceScope?: AttachmentTargetType
+  defaultAttachmentScope?: PluginAttachmentScopeType
   defaultReuseScope?: ReuseScope
   defaultConversationTypeMask?: ConversationTypeMask
   supportedReuseScopes?: ReuseScope[]
@@ -2722,7 +2724,7 @@ export interface PluginInstallationView {
   workspaceId: string
   packageId: string
   revisionId: string
-  attachmentTarget: AttachmentTarget
+  attachmentScope: PluginAttachmentScope
   accessTarget: CapabilityAccessTarget
   installMode: PluginInstallationMode
   reuseScope: ReuseScope
@@ -2736,25 +2738,71 @@ export interface PluginInstallationView {
   effectiveConversationTypeMask: ConversationTypeMask
   configData: Record<string, unknown>
   configState: PluginConfigFieldState[]
-  installedByWorkspaceMemberId?: string
+  ownerWorkspaceMemberId?: string
   createdAt: string
   updatedAt: string
   package?: MarketplaceItem
   revision?: MarketplaceVersion
 }
 
-export interface AccessGrant {
+export interface AutomationEventSourceAccessGrant {
   id: string
   resourceId: string
   workspaceId: string
   target: CapabilityAccessTarget
-  status: AccessGrantStatus
+  status: AutomationEventSourceAccessGrantStatus
   grantedByWorkspaceMemberId?: string
   reason?: string
   conversationTypeMaskOverride?: ConversationTypeMask | null
   effectiveConversationTypeMask?: ConversationTypeMask
   createdAt: string
   revokedAt?: string
+}
+
+export interface WorkspaceAppView {
+  id: string
+  workspaceId: string
+  kind: WorkspaceAppKind
+  displayName: string
+  ownerWorkspaceMemberId?: string
+  status: WorkspaceAppStatus
+  sourceDefaultConversationTypeMask?: ConversationTypeMask
+  workspaceConversationTypeMask?: ConversationTypeMask
+  conversationTypeMaskOverride?: ConversationTypeMask
+  effectiveConversationTypeMask?: ConversationTypeMask
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WorkspaceAppGrant {
+  id: string
+  workspaceId: string
+  workspaceAppId: string
+  target: CapabilityAccessTarget
+  permissions: WorkspaceAppGrantPermission[]
+  status: WorkspaceAppGrantStatus
+  source: WorkspaceAppGrantSource
+  grantedByWorkspaceMemberId?: string
+  reason?: string
+  conversationTypeMaskOverride?: ConversationTypeMask | null
+  effectiveConversationTypeMask?: ConversationTypeMask
+  createdAt: string
+  revokedAt?: string
+}
+
+export interface WorkspaceAppGrantRequest {
+  id: string
+  workspaceId: string
+  workspaceAppId: string
+  grantee: CapabilityAccessTarget
+  requestedPermissions: WorkspaceAppGrantPermission[]
+  requesterWorkspaceMemberId: string
+  status: WorkspaceAppGrantRequestStatus
+  resolvedByWorkspaceMemberId?: string
+  resolvedAt?: string
+  reason?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export interface WorkspaceCapabilityConversationTypePolicy {
@@ -2796,8 +2844,6 @@ export interface PluginAuthConnection {
   packageId: string
   bindingKey: string
   driver: PluginAuthBindingDriverKind
-  ownerScope: PluginAuthOwnerScope
-  ownerWorkspaceMemberId?: string
   externalAccountId?: string
   displayName?: string
   avatarUrl?: string
@@ -2817,7 +2863,7 @@ export interface MarketplaceRequirement {
   targetPublisherSlug?: string
   targetPackageSlug?: string
   targetTag?: string
-  acceptableInstanceScopes: AttachmentTargetType[]
+  acceptableAttachmentScopes: PluginAttachmentScopeType[]
   acceptableReuseScopes: ReuseScope[]
   description: string
   configPredicate: Record<string, unknown>
@@ -2840,7 +2886,7 @@ export interface PluginInstallPlan {
   packageId: string
   revisionId: string
   workspaceId: string
-  attachmentTarget: AttachmentTarget
+  attachmentScope: PluginAttachmentScope
   defaultAccessTarget: CapabilityAccessTarget
   checks: MarketplaceRequirementCheck[]
   grantPlan?: {
@@ -2873,7 +2919,7 @@ export interface ActorPackageDependency {
   targetPackageKind: ActorPackageTargetKind
   targetPublisherSlug?: string
   targetPackageSlug: string
-  acceptableInstanceScopes: AttachmentTargetType[]
+  acceptableAttachmentScopes: PluginAttachmentScopeType[]
   acceptableReuseScopes: ReuseScope[]
   description: string
   notes: CanonicalContentBlock[]
@@ -2924,11 +2970,11 @@ export interface AvailableSkillSummary {
   instanceId: string
   packageId: string
   revisionId: string
-  slug: string
   name: string
   description: string
   version: string
   accessTarget: CapabilityAccessTarget
+  sourcePackageSlug?: string
   sourceKind?: "installed"
   entryPoint?: string
 }
@@ -3030,8 +3076,7 @@ export interface SkillMarketplaceEntry {
 export interface InstalledSkill {
   id: string
   workspaceId: string
-  slug: string
-  name: string
+  displayName: string
   frontmatter: SkillFrontmatter
   bodyBlocks: CanonicalContentBlock[]
   entryPath: string
@@ -3047,10 +3092,11 @@ export interface InstalledSkill {
   conversationTypeMaskOverride?: ConversationTypeMask
   effectiveConversationTypeMask: ConversationTypeMask
   isCustomized: boolean
-  installedByWorkspaceMemberId?: string
+  ownerWorkspaceMemberId?: string
   createdAt: string
   updatedAt: string
   sourceSkillId?: string
+  sourcePackageSlug?: string
   sourceVersionId?: string
   sourceVersion?: string
   upgradeAvailable: boolean
@@ -3063,7 +3109,7 @@ export interface InstalledSkill {
 // Catalog-spec transport set (= PluginTransport minus "filesystem").
 export type McpTransport = PluginSpecTransport
 export type McpLifecycleScope = ReuseScope
-export type McpAttachmentTargetType = AttachmentTargetType
+export type McpAttachmentScopeType = PluginAttachmentScopeType
 
 export type McpOrganization = MarketplacePublisher
 export type McpPluginTool = MarketplaceTool
@@ -5453,13 +5499,7 @@ export type PluginReuseScopeV2 =
   | "workspace"
   | "conversation"
   | "actor"
-export type ResourceAccessBindingResourceType =
-  | "installed_skill"
-  | "plugin_installation"
-  | "device_capability"
-  | "automation_event_source"
-  | "actor"
-  | "remote_agent"
+export type ResourceAccessBindingResourceType = "automation_event_source"
 
 export interface CatalogPublisherRecord {
   id: string
@@ -5560,7 +5600,7 @@ export interface PluginPackageVersionSpecRecord {
   defaultConfig: Record<string, unknown>
   installFlow: Record<string, unknown>
   authBindings: PluginAuthBindingDefinition[]
-  defaultMountScope: AttachmentTargetType
+  defaultAttachmentScope: PluginAttachmentScopeType
   defaultReuseScope: PluginReuseScopeV2
   supportedReuseScopes: PluginReuseScopeV2[]
   requiresHandshake: boolean
@@ -5571,7 +5611,6 @@ export interface PluginPackageVersionSpecRecord {
 export interface InstalledSkillRecord {
   id: string
   workspaceId: string
-  slug: string
   name: string
   iconFileId?: string
   tags: string[]
@@ -5579,7 +5618,7 @@ export interface InstalledSkillRecord {
   isActive: boolean
   currentSnapshotId: string
   conversationTypeMaskOverride?: number
-  createdByWorkspaceMemberId?: string
+  ownerWorkspaceMemberId?: string
   createdAt: string
   updatedAt: string
 }
@@ -5665,7 +5704,7 @@ export interface PluginInstallationRecord {
   configData: Record<string, unknown>
   approvedRuntimePermissions: string[]
   status: "active" | "disabled" | "error" | "archived"
-  installedByWorkspaceMemberId?: string
+  ownerWorkspaceMemberId?: string
   createdAt: string
   updatedAt: string
 }
@@ -5674,7 +5713,7 @@ export interface PluginMountRecord {
   id: string
   installationId: string
   workspaceId: string
-  mountScope: AttachmentTargetType
+  attachmentScope: PluginAttachmentScopeType
   conversationId?: string
   actorId?: string
   workspaceMemberId?: string

@@ -339,10 +339,6 @@ tables:
       - column: participant_two_subject_id
         resolvesSubject: target
         action: update
-  entity_access_requests:
-    class: child
-    softDelete: none
-    workspaceScope: workspace_id
   file_access_grants:
     class: junction
     softDelete: status
@@ -768,6 +764,48 @@ tables:
       - column: workspace_member_id
         resolvesSubject: member
         action: revoke
+  workspace_app_grant_requests:
+    class: child
+    softDelete: none
+    workspaceScope: workspace_id
+    principalColumns:
+      - column: grantee_subject_id
+        resolvesSubject: target
+        action: update
+      - column: grantee_scope_subject_id
+        resolvesSubject: scope
+        action: update
+      - column: requester_workspace_member_id
+        resolvesSubject: member
+        action: update
+  workspace_app_grants:
+    class: junction
+    softDelete: status
+    workspaceScope: workspace_id
+    liveValues:
+      - active
+    liveParents:
+      - column: workspace_id
+        parent: workspaces
+      - column: workspace_app_id
+        parent: workspace_apps
+    principalColumns:
+      - column: subject_id
+        resolvesSubject: target
+        action: revoke
+      - column: scope_subject_id
+        resolvesSubject: scope
+        action: revoke
+  workspace_apps:
+    class: root
+    softDelete: deleted_at
+    workspaceScope: workspace_id
+    liveValues:
+      - active
+      - disabled
+      - error
+      - deprecated
+      - archived
   workspace_capability_conversation_type_policies:
     class: reference
     softDelete: none
@@ -1178,12 +1216,6 @@ foreignKeys:
     _child: plugin_version_runtime_permissions(catalog_version_id)
     _parent: catalog_versions(id)
     _was: CASCADE
-  digest:4ab06a666e1db90f:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: actors(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
   digest:863421d63df3444e:
     targetAction: SET NULL
     liveIntegrity: historical
@@ -1202,22 +1234,6 @@ foreignKeys:
     _child: actors(parent_id)
     _parent: actors(id)
     _was: SET NULL
-  digest:0bfb8ce80f28c8d8:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: created_by_workspace_member_id_snapshot
-    _child: actors(created_by_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: SET NULL
-  digest:898693e9c84eb985:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: remote_agents(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
   digest:bd26c512c4e5a2fa:
     targetAction: SET NULL
     liveIntegrity: historical
@@ -1226,16 +1242,6 @@ foreignKeys:
       needsSnapshot: false
     _child: remote_agents(avatar_file_id)
     _parent: file_assets(id)
-    _was: SET NULL
-  digest:cfab6c17dd9db0f8:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: created_by_workspace_member_id_snapshot
-    _child: remote_agents(created_by_workspace_member_id)
-    _parent: workspace_members(id)
     _was: SET NULL
   digest:cc041dcd33bdd143:
     targetAction: RESTRICT
@@ -1364,6 +1370,155 @@ foreignKeys:
     _child: workspace_friend_entries(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
+  digest:ff0be817cf00049e:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: workspace_apps(workspace_id)
+    _parent: workspaces(id)
+    _was: RESTRICT
+  constraint:fk_actors_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: actors(id)
+    _parent: workspace_apps(id)
+    _was: RESTRICT
+  constraint:fk_remote_agents_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: remote_agents(id)
+    _parent: workspace_apps(id)
+    _was: RESTRICT
+  constraint:fk_installed_skills_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: installed_skills(id)
+    _parent: workspace_apps(id)
+    _was: RESTRICT
+  constraint:fk_plugin_installations_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: plugin_installations(id)
+    _parent: workspace_apps(id)
+    _was: RESTRICT
+  constraint:fk_device_capabilities_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: device_capabilities(id)
+    _parent: workspace_apps(id)
+    _was: RESTRICT
+  digest:16286c3bc69605c0:
+    targetAction: SET NULL
+    liveIntegrity: historical
+    setNull:
+      canLose: true
+      needsSnapshot: false
+    _child: workspace_apps(owner_workspace_member_id)
+    _parent: workspace_members(id)
+    _was: SET NULL
+  digest:70921f79410a733b:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: workspace_app_grants(workspace_id)
+    _parent: workspaces(id)
+    _was: RESTRICT
+  digest:34de22b2ade2778b:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: workspace_app_grants(workspace_app_id)
+    _parent: workspace_apps(id)
+    _was: RESTRICT
+  digest:896ae0a88a320baa:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: workspace_app_grants(subject_id)
+    _parent: access_subjects(id)
+    _was: RESTRICT
+  digest:a02b689def08bb9d:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: workspace_app_grants(scope_subject_id)
+    _parent: access_subjects(id)
+    _was: RESTRICT
+  digest:291e3b1872812550:
+    targetAction: SET NULL
+    liveIntegrity: historical
+    setNull:
+      canLose: false
+      needsSnapshot: true
+      snapshotColumn: created_by_workspace_member_id_snapshot
+    _child: workspace_app_grants(created_by_workspace_member_id)
+    _parent: workspace_members(id)
+    _was: SET NULL
+  digest:8317694e5ad4b12a:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: workspace_app_grant_requests(workspace_id)
+    _parent: workspaces(id)
+    _was: RESTRICT
+  constraint:fk_automation_integration_bindings_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: automation_integration_bindings(installation_id,workspace_id)
+    _parent: workspace_apps(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_plugin_auth_sessions_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: plugin_auth_sessions(installation_id,workspace_id)
+    _parent: workspace_apps(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_plugin_connections_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: plugin_connections(installation_id,workspace_id)
+    _parent: workspace_apps(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_runtime_authorization_grants_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: runtime_authorization_grants(device_capability_id,workspace_id)
+    _parent: workspace_apps(id,workspace_id)
+    _was: RESTRICT
+  constraint:fk_device_operations_workspace_app_root:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: device_operations(device_capability_id,workspace_id)
+    _parent: workspace_apps(id,workspace_id)
+    _was: RESTRICT
+  digest:d39c25269dc6987e:
+    targetAction: RESTRICT
+    liveIntegrity: enforce
+    _child: workspace_app_grant_requests(workspace_app_id)
+    _parent: workspace_apps(id)
+    _was: RESTRICT
+  digest:62f6e0b28cfdbff9:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: workspace_app_grant_requests(grantee_subject_id)
+    _parent: access_subjects(id)
+    _was: RESTRICT
+  digest:c2e8e93746eab66e:
+    targetAction: RESTRICT
+    liveIntegrity: none
+    _child: workspace_app_grant_requests(grantee_scope_subject_id)
+    _parent: access_subjects(id)
+    _was: RESTRICT
+  digest:ec46addbe840ea3f:
+    targetAction: RESTRICT
+    liveIntegrity: historical
+    _child: workspace_app_grant_requests(requester_workspace_member_id)
+    _parent: workspace_members(id)
+    _was: RESTRICT
+  digest:a98be6d58248dfea:
+    targetAction: SET NULL
+    liveIntegrity: historical
+    setNull:
+      canLose: false
+      needsSnapshot: true
+      snapshotColumn: resolved_by_workspace_member_id_snapshot
+    _child: workspace_app_grant_requests(resolved_by_workspace_member_id)
+    _parent: workspace_members(id)
+    _was: SET NULL
   digest:e7ae4d6cf57a26a8:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -1377,28 +1532,6 @@ foreignKeys:
       needsSnapshot: false
     _child: workspace_friend_entries(source_request_id)
     _parent: workspace_friend_requests(id)
-    _was: SET NULL
-  digest:4ed600e2ab05adb8:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: entity_access_requests(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
-  digest:0191a0a716aac967:
-    targetAction: RESTRICT
-    liveIntegrity: historical
-    _child: entity_access_requests(requester_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: CASCADE
-  digest:fb4a758cc6b9a6c7:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: resolved_by_workspace_member_id_snapshot
-    _child: entity_access_requests(resolved_by_workspace_member_id)
-    _parent: workspace_members(id)
     _was: SET NULL
   digest:68b1214ed7e5e3df:
     targetAction: RESTRICT
@@ -2668,12 +2801,6 @@ foreignKeys:
     _child: runtime_events(user_id)
     _parent: users(id)
     _was: SET NULL
-  digest:b4ea6b1937bc4230:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: installed_skills(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
   digest:223fa49a9dbc9d2c:
     targetAction: SET NULL
     liveIntegrity: historical
@@ -2688,16 +2815,6 @@ foreignKeys:
     _child: installed_skills(current_snapshot_id)
     _parent: skill_snapshots(id)
     _was: RESTRICT
-  digest:94f0a829171febe5:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: created_by_workspace_member_id_snapshot
-    _child: installed_skills(created_by_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: SET NULL
   digest:61118cd859f7a02e:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -2742,12 +2859,6 @@ foreignKeys:
     _child: skill_source_refs(source_catalog_version_id)
     _parent: catalog_versions(id)
     _was: SET NULL
-  digest:ae633f659cf23b31:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: plugin_installations(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
   digest:7ac73d1b58d0552a:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -2759,16 +2870,6 @@ foreignKeys:
     _child: plugin_installations(catalog_version_id)
     _parent: catalog_versions(id)
     _was: RESTRICT
-  digest:d1bd786c0b5d0eac:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: false
-      needsSnapshot: true
-      snapshotColumn: installed_by_workspace_member_id_snapshot
-    _child: plugin_installations(installed_by_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: SET NULL
   digest:3c667c1007110505:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -2827,15 +2928,6 @@ foreignKeys:
     _child: plugin_connections(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
-  digest:f56717e170b038c7:
-    targetAction: SET NULL
-    liveIntegrity: historical
-    setNull:
-      canLose: true
-      needsSnapshot: false
-    _child: plugin_connections(owner_workspace_member_id)
-    _parent: workspace_members(id)
-    _was: SET NULL
   digest:6b3620f81be0d83b:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -2865,35 +2957,11 @@ foreignKeys:
     _child: resource_access_bindings(workspace_id)
     _parent: workspaces(id)
     _was: CASCADE
-  digest:03af95417c80a6e6:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: resource_access_bindings(installed_skill_id)
-    _parent: installed_skills(id)
-    _was: CASCADE
-  digest:925cc3312d1cbb08:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: resource_access_bindings(plugin_installation_id)
-    _parent: plugin_installations(id)
-    _was: CASCADE
   digest:78a722a54ff2ccb8:
     targetAction: RESTRICT
     liveIntegrity: enforce
     _child: resource_access_bindings(automation_event_source_id)
     _parent: automation_event_sources(id)
-    _was: CASCADE
-  digest:0653b6df1a07bd65:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: resource_access_bindings(actor_id)
-    _parent: actors(id)
-    _was: CASCADE
-  digest:eb70bee400c2c1aa:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: resource_access_bindings(remote_agent_id)
-    _parent: remote_agents(id)
     _was: CASCADE
   digest:714cbbffbe0c5318:
     targetAction: RESTRICT
@@ -3021,12 +3089,6 @@ foreignKeys:
     _child: device_exposures(sync_source_id)
     _parent: device_sync_sources(id)
     _was: SET NULL
-  digest:1954df6497f404e1:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: device_capabilities(workspace_id)
-    _parent: workspaces(id)
-    _was: CASCADE
   digest:cb560237bd041326:
     targetAction: RESTRICT
     liveIntegrity: enforce
@@ -3485,11 +3547,6 @@ foreignKeys:
     _child: direct_conversation_bindings(participant_two_subject_id)
     _parent: access_subjects(id)
     _was: CASCADE
-  constraint:fk_entity_access_requests_target_subject:
-    targetAction: RESTRICT
-    _child: entity_access_requests(target_subject_id)
-    _parent: access_subjects(id)
-    _was: CASCADE
   constraint:fk_workspace_capability_conversation_type_policies_subject:
     targetAction: RESTRICT
     _child: workspace_capability_conversation_type_policies(subject_id)
@@ -3536,7 +3593,7 @@ foreignKeys:
     _was: RESTRICT
   constraint:fk_plugin_installations_attachment_subject:
     targetAction: RESTRICT
-    _child: plugin_installations(attachment_subject_id)
+    _child: plugin_installations(attachment_scope_subject_id)
     _parent: access_subjects(id)
     _was: CASCADE
   constraint:fk_automation_event_sources_integration_binding:
@@ -3603,12 +3660,6 @@ foreignKeys:
     _child: device_services(current_session_id)
     _parent: device_control_plane_sessions(id)
     _was: SET NULL
-  constraint:fk_resource_access_bindings_device_capability:
-    targetAction: RESTRICT
-    liveIntegrity: enforce
-    _child: resource_access_bindings(device_capability_id)
-    _parent: device_capabilities(id)
-    _was: CASCADE
   constraint:fk_runtime_authorization_grants_device:
     targetAction: RESTRICT
     liveIntegrity: enforce

@@ -16,7 +16,7 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import InstallDialog from "./install-dialog"
-import ResourceAccessStep from "./resource-access-step"
+import WorkspaceAppAccessStep from "./workspace-app-access-step"
 import PluginAdvancedStep from "./plugin-advanced-step"
 import {
   getPluginInstallationDetails,
@@ -345,7 +345,7 @@ export default function PluginInstallationWorkbench({
                 </TabsContent>
 
                 <TabsContent value="access" className="mt-0 min-h-0 flex-1">
-                  <ResourceAccessStep installation={selectedInstallation} />
+                  <WorkspaceAppAccessStep installation={selectedInstallation} />
                 </TabsContent>
 
                 <TabsContent value="advanced" className="mt-0 min-h-0 flex-1">

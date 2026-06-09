@@ -85,6 +85,7 @@ async function resolveAutoRetryTarget(args: {
 } | null> {
   const row = await db
     .selectFrom("device_capabilities as dc")
+    .innerJoin("workspace_apps as app", "app.id", "dc.id")
     .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
     .innerJoin("devices as d", "d.id", "dx.device_id")
     .innerJoin("device_tools as dt", "dt.exposure_id", "dx.id")
@@ -101,6 +102,8 @@ async function resolveAutoRetryTarget(args: {
       "dtr.id as device_tool_revision_id",
     ])
     .where("dc.id", "=", args.deviceCapabilityId)
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "=", "active")
     .where("dt.current_name", "=", args.visibleToolName)
     .where("dt.status", "=", "active")
     // Soft-delete (§8.6): never auto-retry against a soft-closed device's tool.

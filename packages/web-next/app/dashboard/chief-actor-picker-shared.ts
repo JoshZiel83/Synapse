@@ -2,7 +2,7 @@ import { extractText, type Actor } from "@synapse/shared"
 
 export type ChiefActorOption = {
   id: string
-  name: string
+  displayName: string
   role: string
   title: string
   summary?: string
@@ -27,7 +27,7 @@ function buildActorSummary(actor: Actor) {
 export function normalizeChiefActorOption(actor: Actor): ChiefActorOption {
   return {
     id: actor.id,
-    name: actor.definition.name,
+    displayName: actor.displayName,
     role: actor.definition.role,
     title: actor.definition.title,
     summary: buildActorSummary(actor),

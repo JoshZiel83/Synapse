@@ -1,14 +1,16 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import type { AttachmentTargetType, ReuseScope } from "@synapse/shared"
+import type { PluginAttachmentScopeType, ReuseScope } from "@synapse/shared"
 import { REUSE_SCOPES } from "@synapse/shared"
 import { Layers3, Save } from "lucide-react"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import {
-  AccessAttachmentTypeStep,
+  AccessAttachmentScopeStep,
   AccessReuseScopeStep,
+  type AccessVisualActor,
+  type AccessVisualConversation,
   getConversationDisplayName,
 } from "@/app/dashboard/access/attachment-visuals"
 import {
@@ -22,25 +24,25 @@ import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
 import { toast } from "sonner"
 
-type PluginAttachmentType = AttachmentTargetType
 type PluginReuseScope = ReuseScope
 
-const allowedAttachmentTypes: PluginAttachmentType[] = [
+const allowedAttachmentScopes: PluginAttachmentScopeType[] = [
   "workspace",
   "conversation",
   "actor",
   "workspace_member",
 ]
 
-function normalizeActorOption(actor: any) {
+function normalizeActorOption(actor: any): AccessVisualActor {
   const definition = actor?.definition || actor
   return {
     id: actor.id,
-    name: definition.name || definition.title || "Untitled actor",
+    displayName:
+      actor.displayName || definition.title || actor.title || "Untitled actor",
   }
 }
 
-function normalizeConversationOption(group: any) {
+function normalizeConversationOption(group: any): AccessVisualConversation {
   return {
     id: group.id,
     name: getConversationDisplayName(group),
@@ -69,10 +71,12 @@ export default function PluginAdvancedStep({
 }) {
   const { workspaceId } = useWorkspace()
 
-  const [actors, setActors] = useState<any[]>([])
-  const [conversations, setConversations] = useState<any[]>([])
-  const [selectedAttachmentType, setSelectedAttachmentType] =
-    useState<PluginAttachmentType>("workspace")
+  const [actors, setActors] = useState<AccessVisualActor[]>([])
+  const [conversations, setConversations] = useState<
+    AccessVisualConversation[]
+  >([])
+  const [selectedAttachmentScopeType, setSelectedAttachmentScopeType] =
+    useState<PluginAttachmentScopeType>("workspace")
   const [selectedActorId, setSelectedActorId] = useState("")
   const [selectedConversationId, setSelectedConversationId] = useState("")
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>("turn")
@@ -112,13 +116,13 @@ export default function PluginAdvancedStep({
   useEffect(() => {
     if (!installation) return
 
-    setSelectedAttachmentType(
-      (installation.attachment_target?.type ||
-        "workspace") as PluginAttachmentType
+    setSelectedAttachmentScopeType(
+      (installation.attachment_scope?.type ||
+        "workspace") as PluginAttachmentScopeType
     )
-    setSelectedActorId(installation.attachment_target?.actorId || "")
+    setSelectedActorId(installation.attachment_scope?.actorId || "")
     setSelectedConversationId(
-      installation.attachment_target?.conversationId || ""
+      installation.attachment_scope?.conversationId || ""
     )
     setLifecycleScope(
       (installation.lifecycle_scope || "turn") as PluginReuseScope
@@ -146,12 +150,15 @@ export default function PluginAdvancedStep({
   async function saveAdvancedSettings() {
     if (!workspaceId || !installation?.id) return
 
-    if (selectedAttachmentType === "actor" && !selectedActorId) {
+    if (selectedAttachmentScopeType === "actor" && !selectedActorId) {
       setScopeError("Please select an actor.")
       return
     }
 
-    if (selectedAttachmentType === "conversation" && !selectedConversationId) {
+    if (
+      selectedAttachmentScopeType === "conversation" &&
+      !selectedConversationId
+    ) {
       setScopeError("Please select a conversation.")
       return
     }
@@ -163,12 +170,14 @@ export default function PluginAdvancedStep({
         workspaceId,
         installation.id,
         {
-          attachmentTarget: {
-            type: selectedAttachmentType,
+          attachmentScope: {
+            type: selectedAttachmentScopeType,
             actorId:
-              selectedAttachmentType === "actor" ? selectedActorId : undefined,
+              selectedAttachmentScopeType === "actor"
+                ? selectedActorId
+                : undefined,
             conversationId:
-              selectedAttachmentType === "conversation"
+              selectedAttachmentScopeType === "conversation"
                 ? selectedConversationId
                 : undefined,
           },
@@ -215,12 +224,12 @@ export default function PluginAdvancedStep({
       </CardHeader>
 
       <CardContent className="flex flex-col gap-6 pb-6">
-        <AccessAttachmentTypeStep
-          value={selectedAttachmentType}
+        <AccessAttachmentScopeStep
+          value={selectedAttachmentScopeType}
           onChange={(value) =>
-            setSelectedAttachmentType(value as PluginAttachmentType)
+            setSelectedAttachmentScopeType(value as PluginAttachmentScopeType)
           }
-          allowedScopes={allowedAttachmentTypes}
+          allowedScopes={allowedAttachmentScopes}
           actors={actors}
           conversations={conversations}
           selectedActorId={selectedActorId}
@@ -231,7 +240,7 @@ export default function PluginAdvancedStep({
         />
 
         <AccessReuseScopeStep
-          attachmentType={selectedAttachmentType}
+          attachmentScopeType={selectedAttachmentScopeType}
           value={lifecycleScope}
           onChange={(value) => setLifecycleScope(value as PluginReuseScope)}
           actors={actors}

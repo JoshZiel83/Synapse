@@ -54,7 +54,7 @@ const actorDocSchema = z.object({
 
 const createActorSchema = z
   .object({
-    name: z.string().min(1).max(255),
+    displayName: z.string().min(1).max(255),
     role: z.enum(ACTOR_ROLES),
     title: z.string().max(255).default(""),
     avatarFileId: z.uuid().optional(),
@@ -72,7 +72,7 @@ const createActorSchema = z
 
 const updateActorSchema = z
   .object({
-    name: z.string().min(1).max(255).optional(),
+    displayName: z.string().min(1).max(255).optional(),
     role: z.enum(ACTOR_ROLES).optional(),
     title: z.string().max(255).optional(),
     avatarFileId: z.uuid().nullable().optional(),
@@ -89,7 +89,7 @@ const updateActorSchema = z
   })
 
 const installActorPackageSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
+  displayName: z.string().min(1).max(255).optional(),
   title: z.string().max(255).optional(),
   parentId: z.uuid().nullable().optional(),
   syncMode: z.enum(ACTOR_PACKAGE_SYNC_MODES).default("notify"),
@@ -222,7 +222,7 @@ export async function organizationController(app: FastifyInstance) {
         workspaceId,
         packageId,
         createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
-        name: parsed.data.name,
+        displayName: parsed.data.displayName,
         title: parsed.data.title,
         parentId: parsed.data.parentId,
         syncMode: parsed.data.syncMode,

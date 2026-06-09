@@ -77,13 +77,29 @@ interface ConversationCtx {
 async function makeConversationCtx(label: string): Promise<ConversationCtx> {
   const slug = label.replace(/[^a-z0-9_]/g, "_").slice(0, 50)
 
-  const actorRow = await client.query<{ id: string }>(
-    `INSERT INTO actors (workspace_id, name, role, title)
-     VALUES ($1, $2, 'assistant', 'Loader test actor')
-     RETURNING id`,
-    [seed.workspaceId, `loader-actor-${slug}`]
-  )
-  const actorId = actorRow.rows[0].id
+  const actorId = crypto.randomUUID()
+  await client.query("BEGIN")
+  try {
+    await client.query(
+      `INSERT INTO workspace_apps (id, workspace_id, kind, display_name, owner_workspace_member_id, status)
+       VALUES ($1, $2, 'actor', $3, $4, 'active')`,
+      [
+        actorId,
+        seed.workspaceId,
+        `loader-actor-${slug}`,
+        seed.workspaceMemberId,
+      ]
+    )
+    await client.query(
+      `INSERT INTO actors (id, role, title)
+       VALUES ($1, 'assistant', 'Loader test actor')`,
+      [actorId]
+    )
+    await client.query("COMMIT")
+  } catch (error) {
+    await client.query("ROLLBACK")
+    throw error
+  }
 
   const convRow = await client.query<{ id: string }>(
     `INSERT INTO conversations (kind, workspace_id, title)

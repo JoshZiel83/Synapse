@@ -82,11 +82,20 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const agentRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      workspace_id: ws.id as string,
+      kind: "remote_agent",
+      display_name: `${NS} agent`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const agent = await db
     .insertInto("remote_agents")
     .values({
-      workspace_id: ws.id as string,
-      name: `agent-${rid()}`,
+      id: agentRoot.id as string,
       title: `${NS} agent`,
       runtime_kind: "claude_code",
     })
@@ -131,10 +140,20 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
+  const capRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      workspace_id: ws.id as string,
+      kind: "device_capability",
+      display_name: `${NS} capability`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const cap = await db
     .insertInto("device_capabilities")
     .values({
-      workspace_id: ws.id as string,
+      id: capRoot.id as string,
       exposure_id: exp.id as string,
     } as any)
     .returning("id")

@@ -10,7 +10,7 @@ export const OFFICIAL_ACTOR_TEMPLATE_FAMILY = "official-role-library"
 export const OFFICIAL_ACTOR_LAUNCH_COLLECTION = "official-roles-v1"
 
 export type SeedActorProfile = {
-  name: string
+  displayName: string
   role: ActorRole
   title: string
   avatarFileId?: string
@@ -84,7 +84,7 @@ type CreateOfficialActorTemplateInput = {
   tags: string[]
   templateRevision?: string
   actor: {
-    name: string
+    displayName: string
     role: ActorRole
     title: string
     avatarEmoji?: string
@@ -108,7 +108,7 @@ export type BuiltInRoleTemplateInput = {
   featured?: boolean
   templateRevision?: string
   actor: {
-    name: string
+    displayName: string
     role: ActorRole
     title: string
     avatarEmoji?: string
@@ -142,7 +142,7 @@ export type ImportedBuiltInRoleTemplateInput = {
   templateRevision?: string
   tags: string[]
   actor: {
-    name: string
+    displayName: string
     role: ActorRole
     title?: string
     canRepresentUser?: boolean
@@ -174,7 +174,7 @@ export type CollaborationRoleTemplateInput = {
   featured?: boolean
   templateRevision?: string
   actor: {
-    name: string
+    displayName: string
     role: ActorRole
     title: string
     avatarEmoji?: string
@@ -417,7 +417,7 @@ export function createOfficialActorTemplateSeed(
     longDescription: input.longDescription,
     tags: uniqueStrings(input.tags),
     actor: {
-      name: input.actor.name,
+      displayName: input.actor.displayName,
       role: input.actor.role,
       title: input.actor.title,
       avatarEmoji: input.actor.avatarEmoji,
@@ -451,7 +451,7 @@ export function createBuiltInRoleTemplateSeed(input: BuiltInRoleTemplateInput) {
     tags: input.tags,
     templateRevision: input.templateRevision,
     actor: {
-      name: input.actor.name,
+      displayName: input.actor.displayName,
       role: input.actor.role,
       title: input.actor.title,
       avatarEmoji: input.actor.avatarEmoji,
@@ -500,7 +500,7 @@ export function createImportedBuiltInRoleTemplateSeed(
     tags: input.tags,
     templateRevision: input.templateRevision,
     actor: {
-      name: input.actor.name,
+      displayName: input.actor.displayName,
       role: input.actor.role,
       title,
       canRepresentUser: input.actor.canRepresentUser === true,
@@ -575,7 +575,7 @@ export function createCollaborationRoleTemplateSeed(
     featured: input.featured,
     templateRevision: input.templateRevision || "collaboration-v2",
     actor: {
-      name: input.actor.name,
+      displayName: input.actor.displayName,
       role: input.actor.role,
       title: input.actor.title,
       avatarEmoji: input.actor.avatarEmoji,

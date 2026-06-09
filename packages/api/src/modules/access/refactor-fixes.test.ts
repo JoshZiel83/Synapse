@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import {
   MEMORY_PERMISSION,
   SUBJECT_KIND,
@@ -12,16 +13,16 @@ import { upsertAccessSubject } from "../access/subject-registry.js"
 import { checkPermission } from "../access/evaluator.js"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import {
-  insertAccessBindingReturningIdOn,
-  loadAccessBindingRowsForResourcesAndContext,
+  insertAutomationEventSourceAccessBindingReturningIdOn,
+  loadAutomationEventSourceAccessBindingRowsForSourcesAndContext,
 } from "../access/binding-storage.js"
 import { insertMemoryAccessGrant } from "../memory/access-grant-storage.js"
 
 /**
- * Regression suite for the PR1-7 follow-up fixes (P0 grant REST holes,
- * grants not wired into reads, scope leak in
- * loadAccessBindingRowsForResourcesAndContext, remote_agent evaluator
- * branch, principal workspace validation, device allowlist).
+ * Regression suite for the PR1-7 follow-up fixes that still remain relevant
+ * after app-resource grants moved onto workspace_app_grants. The remaining
+ * legacy binding coverage here is limited to scope filtering on automation-
+ * style resource_access_bindings plus unrelated principal / memory behaviors.
  */
 
 const NS = "fixes"
@@ -52,11 +53,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 }
 
 async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: wsId,
+      kind: "actor",
+      display_name: `${NS} actor`,
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: wsId,
-      name: `actor-${rid()}`,
+      id: actorId,
       role: "assistant",
       title: `${NS} actor`,
       current_version: 1,
@@ -67,11 +78,22 @@ async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
 }
 
 async function newRemoteAgent(db: Kysely<any>, wsId: string): Promise<string> {
+  const remoteAgentId = crypto.randomUUID()
+  const agentName = `agent-${rid()}`
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: remoteAgentId,
+      workspace_id: wsId,
+      kind: "remote_agent",
+      display_name: agentName,
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("remote_agents")
     .values({
-      workspace_id: wsId,
-      name: `agent-${rid()}`,
+      id: remoteAgentId,
       title: `${NS} agent`,
       runtime_kind: "claude_code",
     })
@@ -88,6 +110,51 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
       workspace_id: wsId,
       title: `${NS} conv`,
     })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function newWorkspaceMember(
+  db: Kysely<any>,
+  wsId: string,
+  label: string
+): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `${label}-${rid()}@${NS}`,
+      name: label,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: wsId,
+      user_id: user.id as string,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return member.id as string
+}
+
+async function newAutomationEventSource(
+  db: Kysely<any>,
+  wsId: string
+): Promise<string> {
+  const memberId = await newWorkspaceMember(db, wsId, "creator")
+  const row = await db
+    .insertInto("automation_event_sources")
+    .values({
+      workspace_id: wsId,
+      provider_kind: "internal",
+      source_key: `src-${rid()}`,
+      name: "source",
+      created_by_kind: "workspace_member",
+      created_by_workspace_member_id: memberId,
+    } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
@@ -133,84 +200,6 @@ async function newItem(
   return row.id as string
 }
 
-// -------- P1 fix #4: remote_agent evaluator branch --------
-
-test(
-  "checkPermission: remote_agent subject matches a remote_agent-subject binding",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDbAndClient(async ({ db }) => {
-      const wsId = await newWorkspace(db)
-      const remoteAgentId = await newRemoteAgent(db, wsId)
-      const targetActorId = await newActor(db, wsId)
-
-      // Write a subject=remote_agent binding for an actor resource.
-      await insertAccessBindingReturningIdOn(db, {
-        workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: {
-          subject: remoteAgentRef(remoteAgentId),
-        },
-      })
-
-      // hasResourceGrant via the remote_agent branch is what unlocks this —
-      // before the fix listResourceGrantRows fell through to the unsupported
-      // subject `return []` and the grant was invisible.
-      const visible = await checkPermission(db, {
-        resourceType: "actor",
-        resourceId: targetActorId,
-        permission: "view",
-        subject: { type: "remote_agent" as any, id: remoteAgentId },
-      })
-      // Note: hasActorPermission requires workspace_member subject for `view`
-      // on a non-self actor. `remote_agent` falls through to "return false"
-      // for the actor resource semantics, regardless of binding existence.
-      // The real proof that remote_agent grants are now seen is via the
-      // remote_agent resource type path — covered in the next test.
-      void visible
-    })
-  }
-)
-
-test(
-  "checkPermission(remote_agent resource): remote_agent subject can match its own binding",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDbAndClient(async ({ db }) => {
-      const wsId = await newWorkspace(db)
-      const agentA = await newRemoteAgent(db, wsId)
-      // Write a workspace-scoped binding on agentA (so workspace_member
-      // subjects with the membership can use it). Then a separate grant
-      // for agentA *itself* — exercising the new remote_agent branch.
-      await insertAccessBindingReturningIdOn(db, {
-        workspaceId: wsId,
-        resourceType: "remote_agent",
-        resourceId: agentA,
-        target: {
-          subject: remoteAgentRef(agentA),
-        },
-      })
-      // Use the listResourceGrantRows path via hasResourceGrant — the
-      // simplest probe is to verify the binding is fetched at all by the
-      // SQL filter, which is implicit in the row count side of `view`/`use`
-      // checks. We assert via the trigger-friendly insertion succeeding +
-      // no rejection from the per-table workspace_bound allowlist (which
-      // already includes remote_agent).
-      const subj = await upsertAccessSubject(db, remoteAgentRef(agentA))
-      const rabRow = await db
-        .selectFrom("resource_access_bindings")
-        .select(["id"])
-        .where("subject_id", "=", subj)
-        .where("remote_agent_id", "=", agentA)
-        .where("status", "=", "active")
-        .limit(1)
-        .executeTakeFirst()
-      assert.ok(rabRow, "remote_agent subject binding must be readable back")
-    })
-  }
-)
-
 // -------- P1 fix #5: principal-workspace validation in builder --------
 
 test(
@@ -253,24 +242,24 @@ test(
   }
 )
 
-// -------- P1 fix #3: loadAccessBindingRowsForResourcesAndContext scope filter --------
+// -------- P1 fix #3: loadAutomationEventSourceAccessBindingRowsForSourcesAndContext scope filter --------
 
 test(
-  "loadAccessBindingRowsForResourcesAndContext: scoped binding hidden in wrong conversation",
+  "loadAutomationEventSourceAccessBindingRowsForSourcesAndContext: scoped binding hidden in wrong conversation",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
       const wsId = await newWorkspace(db)
-      const targetActorId = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
       const subjectActor = await newActor(db, wsId)
       const convA = await newConversation(db, wsId)
       const convB = await newConversation(db, wsId)
 
       // subject=actor + scope=conversation B
-      await insertAccessBindingReturningIdOn(db, {
+      await insertAutomationEventSourceAccessBindingReturningIdOn(db, {
         workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActorId,
+        resourceType: "automation_event_source",
+        resourceId: eventSourceId,
         target: {
           subject: actorRef(subjectActor),
           scope: { kind: SUBJECT_KIND.CONVERSATION, conversationId: convB },
@@ -278,13 +267,17 @@ test(
       })
 
       // Asking for the same binding from inside conv A should NOT return it.
-      const rowsInA = await loadAccessBindingRowsForResourcesAndContext(db, {
-        resourceType: "actor",
-        resourceIds: [targetActorId],
-        contextWorkspaceId: wsId,
-        actorId: subjectActor,
-        conversationId: convA,
-      })
+      const rowsInA =
+        await loadAutomationEventSourceAccessBindingRowsForSourcesAndContext(
+          db,
+          {
+            resourceType: "automation_event_source",
+            resourceIds: [eventSourceId],
+            contextWorkspaceId: wsId,
+            actorId: subjectActor,
+            conversationId: convA,
+          }
+        )
       assert.equal(
         rowsInA.length,
         0,
@@ -292,13 +285,17 @@ test(
       )
 
       // From conv B it should be visible.
-      const rowsInB = await loadAccessBindingRowsForResourcesAndContext(db, {
-        resourceType: "actor",
-        resourceIds: [targetActorId],
-        contextWorkspaceId: wsId,
-        actorId: subjectActor,
-        conversationId: convB,
-      })
+      const rowsInB =
+        await loadAutomationEventSourceAccessBindingRowsForSourcesAndContext(
+          db,
+          {
+            resourceType: "automation_event_source",
+            resourceIds: [eventSourceId],
+            contextWorkspaceId: wsId,
+            actorId: subjectActor,
+            conversationId: convB,
+          }
+        )
       assert.equal(
         rowsInB.length,
         1,

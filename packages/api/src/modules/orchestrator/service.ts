@@ -302,7 +302,7 @@ async function handleRenameSelf(
     conversationId: context.conversationId,
     reason: "rename_self",
   }
-  await updateActor(actorId, workspaceId, { name: newName }, source)
+  await updateActor(actorId, workspaceId, { displayName: newName }, source)
 }
 
 async function handleChangeAvatar(
@@ -332,7 +332,7 @@ async function handleChangeAvatar(
     const avatarFile = await createGeneratedActorPixelArtAvatarFile(db, {
       workspaceId,
       actorId,
-      actorName: actor.definition.name,
+      actorDisplayName: actor.displayName || actor.definition.displayName,
       actorTitle: actor.definition.title,
       uploaderUserId: context.userId || null,
       options: pixelArtOptions,
@@ -358,7 +358,8 @@ async function handleChangeAvatar(
           actor: {
             participantType: "actor",
             actorId,
-            name: updatedActor.definition.name,
+            name:
+              updatedActor.displayName || updatedActor.definition.displayName,
             title: updatedActor.definition.title,
             role: updatedActor.definition.role,
             avatarUrl: updatedActor.avatarUrl,
@@ -407,7 +408,7 @@ async function handleChangeAvatar(
       actor: {
         participantType: "actor",
         actorId,
-        name: updatedActor.definition.name,
+        name: updatedActor.displayName || updatedActor.definition.displayName,
         title: updatedActor.definition.title,
         role: updatedActor.definition.role,
         avatarUrl: updatedActor.avatarUrl,

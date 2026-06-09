@@ -33,7 +33,7 @@ export function truncateText(value: string, maxChars: number) {
 }
 
 export function buildMemoryRecallQuery(params: {
-  actorName?: string
+  actorDisplayName?: string
   conversationTitle?: string
   contextItems: CanonicalContextItem[]
 }) {
@@ -58,10 +58,10 @@ export function buildMemoryRecallQuery(params: {
       )
     )
   }
-  if (params.actorName) {
+  if (params.actorDisplayName) {
     snippets.push(
       truncateText(
-        normalizeWhitespace(`actor:${params.actorName}`),
+        normalizeWhitespace(`actor:${params.actorDisplayName}`),
         MEMORY_RECALL_SNIPPET_MAX_CHARS
       )
     )

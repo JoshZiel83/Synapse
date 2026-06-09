@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
@@ -395,11 +396,21 @@ async function seedPrivateMemoryRef(db: Kysely<any>) {
     memberId: member.id,
   })
   // The memory space is owned by an ACTOR (private to that actor).
+  const actorRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      id: crypto.randomUUID(),
+      workspace_id: ws.id,
+      kind: "actor",
+      display_name: `a-${rid()}`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const actor = await db
     .insertInto("actors")
     .values({
-      workspace_id: ws.id,
-      name: `a-${rid()}`,
+      id: actorRoot.id as string,
       role: "assistant",
       title: "t",
       current_version: 1,
@@ -555,11 +566,21 @@ async function seedFileSpaceRef(
     memberId: member.id,
   })
   // The space is owned by an actor (so the member isn't owner-implicit).
+  const actorRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      id: crypto.randomUUID(),
+      workspace_id: ws.id,
+      kind: "actor",
+      display_name: `a-${rid()}`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const actor = await db
     .insertInto("actors")
     .values({
-      workspace_id: ws.id,
-      name: `a-${rid()}`,
+      id: actorRoot.id as string,
       role: "assistant",
       title: "t",
       current_version: 1,
@@ -828,11 +849,21 @@ async function seedTwoConvUserWithFileSpace(db: Kysely<any>) {
   const convA = await newConvWithMember()
   const convB = await newConvWithMember()
   // An actor-owned file space + a snapshot whose manifest IS SHA_CS.
+  const actorRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      id: crypto.randomUUID(),
+      workspace_id: ws.id,
+      kind: "actor",
+      display_name: `a-${rid()}`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const actor = await db
     .insertInto("actors")
     .values({
-      workspace_id: ws.id,
-      name: `a-${rid()}`,
+      id: actorRoot.id as string,
       role: "assistant",
       title: "t",
       current_version: 1,

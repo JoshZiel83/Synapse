@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import {
   SUBJECT_KIND,
   actorRef,
@@ -10,44 +11,47 @@ import {
 import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import {
   augmentInsertedBindingRowWithTarget,
-  buildResourceAccessBindingInsertValues,
-  buildResourceAccessBindingInsertValuesOn,
-  describeAccessGrants,
-  findActiveBindingIdByResourceAndSubject,
-  getAccessBindingRowById,
-  hardDeleteBindingsForResource,
-  hardDeleteBindingsForResourceOn,
-  hasAnyBindingForResourceOn,
-  insertAccessBindingReturningIdOn,
-  insertAccessBindingReturningRowOn,
-  listGrantsForResource,
-  listResourceIdsForWorkspaceByBindingFilter,
-  loadAccessBindingRowsForResource,
-  loadAccessBindingRowsForResources,
-  revokeGrant,
-  revokeGrantsByIdsOn,
-  updateGrantConversationTypeMaskOverride,
-  updateGrantTargets,
+  buildAutomationEventSourceAccessBindingInsertValues,
+  buildAutomationEventSourceAccessBindingInsertValuesOn,
+  describeAutomationEventSourceAccessGrants,
+  findActiveAutomationEventSourceAccessBindingIdBySubject,
+  getAutomationEventSourceAccessBindingRowById,
+  revokeAutomationEventSourceAccessBindingsForSource,
+  revokeAutomationEventSourceAccessBindingsForSourceOn,
+  hasAnyAutomationEventSourceAccessBindingOn,
+  insertAutomationEventSourceAccessBindingReturningIdOn,
+  insertAutomationEventSourceAccessBindingReturningRowOn,
+  listAutomationEventSourceAccessGrants,
+  listAutomationEventSourceIdsByBindingFilter,
+  loadAutomationEventSourceAccessBindingRowsForSource,
+  loadAutomationEventSourceAccessBindingRowsForSources,
+  revokeAutomationEventSourceAccessBinding,
+  revokeAutomationEventSourceAccessBindingsByIdsOn,
+  updateAutomationEventSourceAccessGrantConversationTypeMaskOverride,
+  updateAutomationEventSourceAccessBindingTargets,
 } from "./binding-storage.js"
 import { loadAccessSubject, upsertAccessSubject } from "./subject-registry.js"
 
 test(
-  "buildResourceAccessBindingInsertValues writes only subject_id (no legacy polymorphic columns)",
+  "buildAutomationEventSourceAccessBindingInsertValues writes only subject_id (no legacy polymorphic columns)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspace(db)
 
-      const insert = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "installed_skill",
-        resourceId: "00000000-0000-0000-0000-000000000001",
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const insert = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: "00000000-0000-0000-0000-000000000111",
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
 
       assert.ok(insert.subject_id, "subject_id should be populated")
       assert.equal(insert.workspace_id, workspaceId)
-      assert.equal(insert.resource_type, "installed_skill")
+      assert.equal(insert.resource_type, "automation_event_source")
       assert.equal(insert.source, "manual")
       assert.equal(
         (insert as Record<string, unknown>).target_type,
@@ -70,25 +74,31 @@ test(
 )
 
 test(
-  "buildResourceAccessBindingInsertValues reuses the same subject_id across multiple inserts for the same workspace target",
+  "buildAutomationEventSourceAccessBindingInsertValues reuses the same subject_id across multiple inserts for the same workspace target",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspace(db)
       const target = { subject: workspaceRef(workspaceId) }
 
-      const first = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "installed_skill",
-        resourceId: "00000000-0000-0000-0000-000000000001",
-        target,
-      })
-      const second = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "plugin_installation",
-        resourceId: "00000000-0000-0000-0000-000000000002",
-        target,
-      })
+      const first = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: "00000000-0000-0000-0000-000000000111",
+          target,
+        }
+      )
+      const second = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: "00000000-0000-0000-0000-000000000222",
+          target,
+        }
+      )
       assert.equal(
         first.subject_id,
         second.subject_id,
@@ -99,18 +109,21 @@ test(
 )
 
 test(
-  "buildResourceAccessBindingInsertValues with source=default_open",
+  "buildAutomationEventSourceAccessBindingInsertValues with source=default_open",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspace(db)
-      const insert = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "installed_skill",
-        resourceId: "00000000-0000-0000-0000-000000000003",
-        target: { subject: workspaceRef(workspaceId) },
-        source: "default_open",
-      })
+      const insert = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: "00000000-0000-0000-0000-000000000333",
+          target: { subject: workspaceRef(workspaceId) },
+          source: "default_open",
+        }
+      )
       assert.equal(insert.source, "default_open")
     })
   }
@@ -132,26 +145,50 @@ async function insertWorkspace(
   return row.id as string
 }
 
+async function insertAutomationEventSource(
+  db: import("kysely").Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const userId = await insertUser(db, "source-owner@example.test")
+  const memberId = await insertWorkspaceMember(db, workspaceId, userId)
+  const row = await db
+    .insertInto("automation_event_sources")
+    .values({
+      workspace_id: workspaceId,
+      provider_kind: "internal",
+      source_key: `src-${Math.random().toString(36).slice(2, 10)}`,
+      name: "test source",
+      created_by_kind: "workspace_member",
+      created_by_workspace_member_id: memberId,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
 test(
-  "listGrantsForResource decodes the joined access_subjects row for an actor target",
+  "listAutomationEventSourceAccessGrants decodes the joined access_subjects row for an actor target on an automation event source",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const grantedActorId = await insertActor(db, workspaceId)
-      const targetActorId = await insertActor(db, workspaceId)
+      const eventSourceId = await insertAutomationEventSource(db, workspaceId)
 
-      const insert = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: { subject: actorRef(grantedActorId) },
-      })
+      const insert = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: { subject: actorRef(grantedActorId) },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(insert).execute()
 
-      const grants = await listGrantsForResource(db, {
-        resourceType: "actor",
-        resourceId: targetActorId,
+      const grants = await listAutomationEventSourceAccessGrants(db, {
+        resourceType: "automation_event_source",
+        resourceId: eventSourceId,
       })
       assert.equal(grants.length, 1)
       assert.equal(grants[0].target.subject.kind, "actor")
@@ -164,7 +201,7 @@ test(
 )
 
 test(
-  "listGrantsForResource decodes a workspace_member target",
+  "listAutomationEventSourceAccessGrants decodes a workspace_member target on an automation event source",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -185,19 +222,22 @@ test(
         workspaceId,
         memberUserId
       )
-      const targetActorId = await insertActor(db, workspaceId)
+      const eventSourceId = await insertAutomationEventSource(db, workspaceId)
 
-      const insert = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: { subject: workspaceMemberRef(memberId) },
-      })
+      const insert = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: { subject: workspaceMemberRef(memberId) },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(insert).execute()
 
-      const grants = await listGrantsForResource(db, {
-        resourceType: "actor",
-        resourceId: targetActorId,
+      const grants = await listAutomationEventSourceAccessGrants(db, {
+        resourceType: "automation_event_source",
+        resourceId: eventSourceId,
       })
       assert.equal(grants.length, 1)
       assert.equal(grants[0].target.subject.kind, "workspace_member")
@@ -210,13 +250,13 @@ test(
 )
 
 test(
-  "listGrantsForResource decodes an actor + scope=conversation target",
+  "listAutomationEventSourceAccessGrants decodes an actor + scope=conversation target on an automation event source",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const grantedActorId = await insertActor(db, workspaceId)
-      const targetActorId = await insertActor(db, workspaceId)
+      const eventSourceId = await insertAutomationEventSource(db, workspaceId)
       const conversationRow = await db
         .insertInto("conversations")
         .values({
@@ -228,20 +268,23 @@ test(
         .executeTakeFirstOrThrow()
       const conversationId = conversationRow.id as string
 
-      const insert = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: {
-          subject: actorRef(grantedActorId),
-          scope: conversationRef(conversationId),
-        },
-      })
+      const insert = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: {
+            subject: actorRef(grantedActorId),
+            scope: conversationRef(conversationId),
+          },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(insert).execute()
 
-      const grants = await listGrantsForResource(db, {
-        resourceType: "actor",
-        resourceId: targetActorId,
+      const grants = await listAutomationEventSourceAccessGrants(db, {
+        resourceType: "automation_event_source",
+        resourceId: eventSourceId,
       })
       assert.equal(grants.length, 1)
       assert.equal(grants[0].target.subject.kind, "actor")
@@ -294,17 +337,48 @@ async function insertActor(
   db: import("kysely").Kysely<any>,
   workspaceId: string
 ): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: "test actor",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: "test actor",
+      id: actorId,
       role: "assistant",
       title: "test",
       current_version: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const eventSourceUserId = await insertUser(
+    db,
+    "automation-source-owner@example.test"
+  )
+  const eventSourceMemberId = await insertWorkspaceMember(
+    db,
+    workspaceId,
+    eventSourceUserId
+  )
+  await db
+    .insertInto("automation_event_sources")
+    .values({
+      id: row.id as string,
+      workspace_id: workspaceId,
+      provider_kind: "internal",
+      source_key: `src-${Math.random().toString(36).slice(2, 10)}`,
+      name: "test source",
+      created_by_kind: "workspace_member",
+      created_by_workspace_member_id: eventSourceMemberId,
+    } as any)
+    .execute()
   return row.id as string
 }
 
@@ -339,12 +413,13 @@ test(
       const actorId = await insertActor(db, workspaceId)
 
       for (const memberId of [memberA, memberB]) {
-        const insert = await buildResourceAccessBindingInsertValues(db, {
-          workspaceId,
-          resourceType: "actor",
-          resourceId: actorId,
-          target: { subject: workspaceMemberRef(memberId) },
-        })
+        const insert =
+          await buildAutomationEventSourceAccessBindingInsertValues(db, {
+            workspaceId,
+            resourceType: "automation_event_source",
+            resourceId: actorId,
+            target: { subject: workspaceMemberRef(memberId) },
+          })
         await db.insertInto("resource_access_bindings").values(insert).execute()
       }
 
@@ -352,7 +427,7 @@ test(
         .selectFrom("resource_access_bindings as binding")
         .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
         .select(["binding.id", "subj.kind", "subj.workspace_member_id"])
-        .where("binding.actor_id", "=", actorId)
+        .where("binding.automation_event_source_id", "=", actorId)
         .where("binding.status", "=", "active")
         .execute()
 
@@ -375,27 +450,34 @@ test("augmentInsertedBindingRowWithTarget copies the subject shape onto the raw 
 })
 
 test(
-  "revokeGrant flips status to revoked and is idempotent",
+  "revokeAutomationEventSourceAccessBinding flips status to revoked and is idempotent",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       const inserted = await db
         .insertInto("resource_access_bindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
 
-      const first = await revokeGrant(db, { bindingId: inserted.id as string })
+      const first = await revokeAutomationEventSourceAccessBinding(db, {
+        bindingId: inserted.id as string,
+      })
       assert.equal(first, true)
-      const second = await revokeGrant(db, { bindingId: inserted.id as string })
+      const second = await revokeAutomationEventSourceAccessBinding(db, {
+        bindingId: inserted.id as string,
+      })
       assert.equal(second, false, "second revoke is a no-op")
       const row = await db
         .selectFrom("resource_access_bindings")
@@ -408,7 +490,7 @@ test(
 )
 
 test(
-  "updateGrantTargets repoints a binding at a new subject",
+  "updateAutomationEventSourceAccessBindingTargets repoints a binding at a new subject",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -430,19 +512,22 @@ test(
         guestUserId
       )
       const actorId = await insertActor(db, workspaceId)
-      const initial = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const initial = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       const inserted = await db
         .insertInto("resource_access_bindings")
         .values(initial)
         .returning("id")
         .executeTakeFirstOrThrow()
 
-      await updateGrantTargets(db, {
+      await updateAutomationEventSourceAccessBindingTargets(db, {
         bindingId: inserted.id as string,
         newTarget: { subject: workspaceMemberRef(guestMemberId) },
       })
@@ -462,14 +547,14 @@ test(
 )
 
 test(
-  "updateGrantTargets rewrites scope_subject_id alongside subject_id",
+  "updateAutomationEventSourceAccessBindingTargets rewrites scope_subject_id alongside subject_id",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       // P3 regression (post-D4 round 7 review): a grant moving from
       // scoped → unscoped, or from one conversation scope to another,
       // must NOT leave the prior scope_subject_id on the row. Earlier
-      // updateGrantTargets only wrote subject_id, so the stale scope
+      // updateAutomationEventSourceAccessBindingTargets only wrote subject_id, so the stale scope
       // followed the binding into its new identity — visibility looked
       // correct in tests that only exercised unscoped → unscoped (the
       // pre-fix test above) but leaked in the scoped variants.
@@ -500,15 +585,18 @@ test(
       ).id as string
 
       // Insert with scope=convA.
-      const initial = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: {
-          subject: actorRef(grantedActorId),
-          scope: conversationRef(convA),
-        },
-      })
+      const initial = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: targetActorId,
+          target: {
+            subject: actorRef(grantedActorId),
+            scope: conversationRef(convA),
+          },
+        }
+      )
       const inserted = await db
         .insertInto("resource_access_bindings")
         .values(initial)
@@ -516,7 +604,7 @@ test(
         .executeTakeFirstOrThrow()
 
       // (1) Move to scope=convB. scope_subject_id must change.
-      await updateGrantTargets(db, {
+      await updateAutomationEventSourceAccessBindingTargets(db, {
         bindingId: inserted.id as string,
         newTarget: {
           subject: actorRef(grantedActorId),
@@ -540,7 +628,7 @@ test(
       )
 
       // (2) Move to unscoped. scope_subject_id must become NULL.
-      await updateGrantTargets(db, {
+      await updateAutomationEventSourceAccessBindingTargets(db, {
         bindingId: inserted.id as string,
         newTarget: { subject: actorRef(grantedActorId) },
       })
@@ -559,21 +647,24 @@ test(
 )
 
 test(
-  "describeAccessGrants returns the active grants plus a counter",
+  "describeAutomationEventSourceAccessGrants returns the active grants plus a counter",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(values).execute()
-      const result = await describeAccessGrants(db, {
-        resourceType: "actor",
+      const result = await describeAutomationEventSourceAccessGrants(db, {
+        resourceType: "automation_event_source",
         resourceId: actorId,
       })
       assert.equal(result.activeCount, 1)
@@ -583,37 +674,46 @@ test(
 )
 
 test(
-  "loadAccessBindingRowsForResources returns [] for empty resourceIds",
+  "loadAutomationEventSourceAccessBindingRowsForSources returns [] for empty resourceIds",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const rows = await loadAccessBindingRowsForResources(db, {
-        resourceType: "actor",
-        resourceIds: [],
-      })
+      const rows = await loadAutomationEventSourceAccessBindingRowsForSources(
+        db,
+        {
+          resourceType: "automation_event_source",
+          resourceIds: [],
+        }
+      )
       assert.deepEqual(rows, [])
     })
   }
 )
 
 test(
-  "loadAccessBindingRowsForResources returns matching bindings for a single resource",
+  "loadAutomationEventSourceAccessBindingRowsForSources returns matching bindings for a single resource",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(values).execute()
-      const rows = await loadAccessBindingRowsForResources(db, {
-        resourceType: "actor",
-        resourceIds: [actorId],
-      })
+      const rows = await loadAutomationEventSourceAccessBindingRowsForSources(
+        db,
+        {
+          resourceType: "automation_event_source",
+          resourceIds: [actorId],
+        }
+      )
       assert.equal(rows.length, 1)
       assert.equal(rows[0].resource_id, actorId)
       assert.equal((rows[0] as any).subject_kind, "workspace")
@@ -622,7 +722,7 @@ test(
 )
 
 test(
-  "loadAccessBindingRowsForResources groups multi-resource bindings and honors workspaceId + includeRevoked",
+  "loadAutomationEventSourceAccessBindingRowsForSources groups multi-resource bindings and honors workspaceId + includeRevoked",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -636,35 +736,40 @@ test(
         [workspaceId, actor2],
         [otherWorkspaceId, actorOther],
       ] as const) {
-        const values = await buildResourceAccessBindingInsertValues(db, {
-          workspaceId: wsId,
-          resourceType: "actor",
-          resourceId: aId,
-          target: { subject: workspaceRef(wsId) },
-        })
+        const values =
+          await buildAutomationEventSourceAccessBindingInsertValues(db, {
+            workspaceId: wsId,
+            resourceType: "automation_event_source",
+            resourceId: aId,
+            target: { subject: workspaceRef(wsId) },
+          })
         await db.insertInto("resource_access_bindings").values(values).execute()
       }
       const inserted = await db
         .selectFrom("resource_access_bindings")
         .select("id")
-        .where("actor_id", "=", actor1)
+        .where("automation_event_source_id", "=", actor1)
         .executeTakeFirstOrThrow()
-      await revokeGrant(db, { bindingId: inserted.id as string })
-
-      const activeOnly = await loadAccessBindingRowsForResources(db, {
-        resourceType: "actor",
-        resourceIds: [actor1, actor2, actorOther],
-        workspaceId,
+      await revokeAutomationEventSourceAccessBinding(db, {
+        bindingId: inserted.id as string,
       })
+
+      const activeOnly =
+        await loadAutomationEventSourceAccessBindingRowsForSources(db, {
+          resourceType: "automation_event_source",
+          resourceIds: [actor1, actor2, actorOther],
+          workspaceId,
+        })
       assert.equal(activeOnly.length, 1)
       assert.equal(activeOnly[0].resource_id, actor2)
 
-      const includingRevoked = await loadAccessBindingRowsForResources(db, {
-        resourceType: "actor",
-        resourceIds: [actor1, actor2, actorOther],
-        workspaceId,
-        includeRevoked: true,
-      })
+      const includingRevoked =
+        await loadAutomationEventSourceAccessBindingRowsForSources(db, {
+          resourceType: "automation_event_source",
+          resourceIds: [actor1, actor2, actorOther],
+          workspaceId,
+          includeRevoked: true,
+        })
       assert.equal(includingRevoked.length, 2)
       const ids = includingRevoked.map((row) => row.resource_id).sort()
       assert.deepEqual(ids, [actor1, actor2].sort())
@@ -673,24 +778,30 @@ test(
 )
 
 test(
-  "loadAccessBindingRowsForResource is the single-id wrapper around loadAccessBindingRowsForResources",
+  "loadAutomationEventSourceAccessBindingRowsForSource is the single-id wrapper around loadAutomationEventSourceAccessBindingRowsForSources",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(values).execute()
-      const rows = await loadAccessBindingRowsForResource(db, {
-        resourceType: "actor",
-        resourceId: actorId,
-        workspaceId,
-      })
+      const rows = await loadAutomationEventSourceAccessBindingRowsForSource(
+        db,
+        {
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          workspaceId,
+        }
+      )
       assert.equal(rows.length, 1)
       assert.equal(rows[0].resource_id, actorId)
     })
@@ -698,26 +809,27 @@ test(
 )
 
 test(
-  "hasAnyBindingForResourceOn returns false when there are no bindings and true once one is written",
+  "hasAnyAutomationEventSourceAccessBindingOn returns false when there are no bindings and true once one is written",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const before = await hasAnyBindingForResourceOn(db, {
-        resourceType: "actor",
+      const before = await hasAnyAutomationEventSourceAccessBindingOn(db, {
+        resourceType: "automation_event_source",
         resourceId: actorId,
       })
       assert.equal(before, false)
-      const values = await buildResourceAccessBindingInsertValuesOn(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values =
+        await buildAutomationEventSourceAccessBindingInsertValuesOn(db, {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        })
       await db.insertInto("resource_access_bindings").values(values).execute()
-      const after = await hasAnyBindingForResourceOn(db, {
-        resourceType: "actor",
+      const after = await hasAnyAutomationEventSourceAccessBindingOn(db, {
+        resourceType: "automation_event_source",
         resourceId: actorId,
       })
       assert.equal(after, true)
@@ -726,54 +838,65 @@ test(
 )
 
 test(
-  "hasAnyBindingForResourceOn with activeOnly=true ignores revoked rows",
+  "hasAnyAutomationEventSourceAccessBindingOn with activeOnly=true ignores revoked rows",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       const inserted = await db
         .insertInto("resource_access_bindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
-      await revokeGrant(db, { bindingId: inserted.id as string })
+      await revokeAutomationEventSourceAccessBinding(db, {
+        bindingId: inserted.id as string,
+      })
 
-      const anyBinding = await hasAnyBindingForResourceOn(db, {
-        resourceType: "actor",
+      const anyBinding = await hasAnyAutomationEventSourceAccessBindingOn(db, {
+        resourceType: "automation_event_source",
         resourceId: actorId,
       })
       assert.equal(anyBinding, true)
 
-      const activeBinding = await hasAnyBindingForResourceOn(db, {
-        resourceType: "actor",
-        resourceId: actorId,
-        activeOnly: true,
-      })
+      const activeBinding = await hasAnyAutomationEventSourceAccessBindingOn(
+        db,
+        {
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          activeOnly: true,
+        }
+      )
       assert.equal(activeBinding, false)
     })
   }
 )
 
 test(
-  "findActiveBindingIdByResourceAndSubject returns the binding id when active",
+  "findActiveAutomationEventSourceAccessBindingIdBySubject returns the binding id when active",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       const inserted = await db
         .insertInto("resource_access_bindings")
         .values(values)
@@ -784,19 +907,20 @@ test(
         workspaceId,
       })
 
-      const found = await findActiveBindingIdByResourceAndSubject(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        subjectId,
-      })
+      const found =
+        await findActiveAutomationEventSourceAccessBindingIdBySubject(db, {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          subjectId,
+        })
       assert.equal(found, inserted.id)
     })
   }
 )
 
 test(
-  "findActiveBindingIdByResourceAndSubject returns null when the binding is revoked or missing",
+  "findActiveAutomationEventSourceAccessBindingIdBySubject returns null when the binding is revoked or missing",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
@@ -806,19 +930,20 @@ test(
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId,
       })
-      const nothing = await findActiveBindingIdByResourceAndSubject(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        subjectId,
-      })
+      const nothing =
+        await findActiveAutomationEventSourceAccessBindingIdBySubject(db, {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          subjectId,
+        })
       assert.equal(nothing, null)
     })
   }
 )
 
 test(
-  "findActiveBindingIdByResourceAndSubject scoped bindings don't collide with unscoped — round-8 P2 regression",
+  "findActiveAutomationEventSourceAccessBindingIdBySubject scoped bindings don't collide with unscoped — round-8 P2 regression",
   { timeout: 5 * 60_000 },
   async () => {
     // The pre-fix bug: when ensureSkillBinding for (actor + scope=conv)
@@ -847,12 +972,13 @@ test(
       ).id as string
 
       // Insert an UNSCOPED binding for actor → actor.
-      const unscopedValues = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: { subject: actorRef(grantedActorId) },
-      })
+      const unscopedValues =
+        await buildAutomationEventSourceAccessBindingInsertValues(db, {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: targetActorId,
+          target: { subject: actorRef(grantedActorId) },
+        })
       const unscoped = await db
         .insertInto("resource_access_bindings")
         .values(unscopedValues)
@@ -869,24 +995,26 @@ test(
       })
 
       // Look up the unscoped binding — should match.
-      const foundUnscoped = await findActiveBindingIdByResourceAndSubject(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        subjectId,
-        scopeSubjectId: null,
-      })
+      const foundUnscoped =
+        await findActiveAutomationEventSourceAccessBindingIdBySubject(db, {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: targetActorId,
+          subjectId,
+          scopeSubjectId: null,
+        })
       assert.equal(foundUnscoped, unscoped.id)
 
       // Look up the SCOPED binding — must NOT collapse onto the
       // unscoped one. Pre-fix this returned `unscoped.id`.
-      const foundScoped = await findActiveBindingIdByResourceAndSubject(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        subjectId,
-        scopeSubjectId,
-      })
+      const foundScoped =
+        await findActiveAutomationEventSourceAccessBindingIdBySubject(db, {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: targetActorId,
+          subjectId,
+          scopeSubjectId,
+        })
       assert.equal(
         foundScoped,
         null,
@@ -897,7 +1025,7 @@ test(
 )
 
 test(
-  "listResourceIdsForWorkspaceByBindingFilter scope filter excludes other-scope bindings — round-8 P2 regression",
+  "listAutomationEventSourceIdsByBindingFilter scope filter excludes other-scope bindings — round-8 P2 regression",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -934,15 +1062,16 @@ test(
       // conversations — one for target actor A in conv A, one for
       // target actor B in conv B.
       const insertScoped = async (resourceId: string, convId: string) => {
-        const values = await buildResourceAccessBindingInsertValues(db, {
-          workspaceId,
-          resourceType: "actor",
-          resourceId,
-          target: {
-            subject: actorRef(grantedActorId),
-            scope: conversationRef(convId),
-          },
-        })
+        const values =
+          await buildAutomationEventSourceAccessBindingInsertValues(db, {
+            workspaceId,
+            resourceType: "automation_event_source",
+            resourceId,
+            target: {
+              subject: actorRef(grantedActorId),
+              scope: conversationRef(convId),
+            },
+          })
         await db.insertInto("resource_access_bindings").values(values).execute()
       }
       await insertScoped(targetActorA, convA)
@@ -960,18 +1089,18 @@ test(
       // Asking for (granted actor in conv A) must return ONLY targetActorA
       // — the pre-fix listing also returned targetActorB (other-scope
       // bindings) because scope_subject_id wasn't part of the filter.
-      const inA = await listResourceIdsForWorkspaceByBindingFilter(db, {
+      const inA = await listAutomationEventSourceIdsByBindingFilter(db, {
         workspaceId,
-        resourceType: "actor",
+        resourceType: "automation_event_source",
         subjectId,
         scopeSubjectId: convAScopeId,
       })
       assert.deepEqual([...inA].sort(), [targetActorA].sort())
 
       // Sanity: unscoped lookup (scope filter omitted) still returns both.
-      const all = await listResourceIdsForWorkspaceByBindingFilter(db, {
+      const all = await listAutomationEventSourceIdsByBindingFilter(db, {
         workspaceId,
-        resourceType: "actor",
+        resourceType: "automation_event_source",
         subjectId,
       })
       assert.deepEqual([...all].sort(), [targetActorA, targetActorB].sort())
@@ -980,29 +1109,35 @@ test(
 )
 
 test(
-  "updateGrantConversationTypeMaskOverride writes the override and round-trips",
+  "updateAutomationEventSourceAccessGrantConversationTypeMaskOverride writes the override and round-trips",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       const inserted = await db
         .insertInto("resource_access_bindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
 
-      await updateGrantConversationTypeMaskOverride(db, {
-        bindingId: inserted.id as string,
-        workspaceId,
-        conversationTypeMaskOverride: 7,
-      })
+      await updateAutomationEventSourceAccessGrantConversationTypeMaskOverride(
+        db,
+        {
+          bindingId: inserted.id as string,
+          workspaceId,
+          conversationTypeMaskOverride: 7,
+        }
+      )
       const after = await db
         .selectFrom("resource_access_bindings")
         .select("conversation_type_mask_override")
@@ -1010,10 +1145,13 @@ test(
         .executeTakeFirstOrThrow()
       assert.equal(after.conversation_type_mask_override, 7)
 
-      await updateGrantConversationTypeMaskOverride(db, {
-        bindingId: inserted.id as string,
-        conversationTypeMaskOverride: null,
-      })
+      await updateAutomationEventSourceAccessGrantConversationTypeMaskOverride(
+        db,
+        {
+          bindingId: inserted.id as string,
+          conversationTypeMaskOverride: null,
+        }
+      )
       const cleared = await db
         .selectFrom("resource_access_bindings")
         .select("conversation_type_mask_override")
@@ -1025,7 +1163,7 @@ test(
 )
 
 test(
-  "revokeGrantsByIdsOn revokes active bindings and is a no-op for already-revoked rows",
+  "revokeAutomationEventSourceAccessBindingsByIdsOn revokes active bindings and is a no-op for already-revoked rows",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
@@ -1034,12 +1172,13 @@ test(
       const actor2 = await insertActor(db, workspaceId)
       const ids: string[] = []
       for (const a of [actor1, actor2]) {
-        const values = await buildResourceAccessBindingInsertValues(db, {
-          workspaceId,
-          resourceType: "actor",
-          resourceId: a,
-          target: { subject: workspaceRef(workspaceId) },
-        })
+        const values =
+          await buildAutomationEventSourceAccessBindingInsertValues(db, {
+            workspaceId,
+            resourceType: "automation_event_source",
+            resourceId: a,
+            target: { subject: workspaceRef(workspaceId) },
+          })
         const inserted = await db
           .insertInto("resource_access_bindings")
           .values(values)
@@ -1047,7 +1186,7 @@ test(
           .executeTakeFirstOrThrow()
         ids.push(inserted.id as string)
       }
-      await revokeGrantsByIdsOn(db, ids)
+      await revokeAutomationEventSourceAccessBindingsByIdsOn(db, ids)
       const rows = await db
         .selectFrom("resource_access_bindings")
         .select(["id", "status"])
@@ -1056,7 +1195,7 @@ test(
       assert.equal(rows.length, 2)
       for (const r of rows) assert.equal(r.status, "revoked")
 
-      await revokeGrantsByIdsOn(db, ids)
+      await revokeAutomationEventSourceAccessBindingsByIdsOn(db, ids)
       const stillRevoked = await db
         .selectFrom("resource_access_bindings")
         .select("status")
@@ -1064,49 +1203,52 @@ test(
         .execute()
       for (const r of stillRevoked) assert.equal(r.status, "revoked")
 
-      await revokeGrantsByIdsOn(db, [])
+      await revokeAutomationEventSourceAccessBindingsByIdsOn(db, [])
     })
   }
 )
 
 test(
-  "hardDeleteBindingsForResourceOn revokes every binding tied to a resource",
+  "revokeAutomationEventSourceAccessBindingsForSourceOn revokes every binding tied to a resource",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(values).execute()
       const before = await db
         .selectFrom("resource_access_bindings")
         .select("id")
-        .where("actor_id", "=", actorId)
+        .where("automation_event_source_id", "=", actorId)
         .where("status", "=", "active")
         .execute()
       assert.equal(before.length, 1)
 
-      await hardDeleteBindingsForResourceOn(db, {
-        resourceType: "actor",
+      await revokeAutomationEventSourceAccessBindingsForSourceOn(db, {
+        resourceType: "automation_event_source",
         resourceId: actorId,
       })
       // Soft-delete world (design §7.4): the binding is REVOKED, not removed.
       const active = await db
         .selectFrom("resource_access_bindings")
         .select("id")
-        .where("actor_id", "=", actorId)
+        .where("automation_event_source_id", "=", actorId)
         .where("status", "=", "active")
         .execute()
       assert.equal(active.length, 0, "no active bindings remain")
       const revoked = await db
         .selectFrom("resource_access_bindings")
         .select(["id", "status"])
-        .where("actor_id", "=", actorId)
+        .where("automation_event_source_id", "=", actorId)
         .execute()
       assert.equal(revoked.length, 1, "the row is preserved")
       assert.equal(revoked[0]!.status, "revoked")
@@ -1115,7 +1257,7 @@ test(
 )
 
 test(
-  "hardDeleteBindingsForResource (kysely flavour) revokes bindings for the resource",
+  "revokeAutomationEventSourceAccessBindingsForSource (kysely flavour) revokes bindings for the resource",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -1124,37 +1266,43 @@ test(
       await db
         .insertInto("resource_access_bindings")
         .values(
-          await buildResourceAccessBindingInsertValues(db, {
+          await buildAutomationEventSourceAccessBindingInsertValues(db, {
             workspaceId,
-            resourceType: "actor",
+            resourceType: "automation_event_source",
             resourceId: actorId,
             target: { subject: workspaceRef(workspaceId) },
           })
         )
         .execute()
-      await hardDeleteBindingsForResource(db, {
-        resourceType: "actor",
+      await revokeAutomationEventSourceAccessBindingsForSource(db, {
+        resourceType: "automation_event_source",
         resourceId: actorId,
       })
       // No ACTIVE bindings remain; the revoked row is preserved.
-      const active = await loadAccessBindingRowsForResources(db, {
-        resourceType: "actor",
-        resourceIds: [actorId],
-        includeRevoked: false,
-      })
+      const active = await loadAutomationEventSourceAccessBindingRowsForSources(
+        db,
+        {
+          resourceType: "automation_event_source",
+          resourceIds: [actorId],
+          includeRevoked: false,
+        }
+      )
       assert.equal(active.length, 0)
-      const all = await loadAccessBindingRowsForResources(db, {
-        resourceType: "actor",
-        resourceIds: [actorId],
-        includeRevoked: true,
-      })
+      const all = await loadAutomationEventSourceAccessBindingRowsForSources(
+        db,
+        {
+          resourceType: "automation_event_source",
+          resourceIds: [actorId],
+          includeRevoked: true,
+        }
+      )
       assert.equal(all.length, 1)
     })
   }
 )
 
 test(
-  "listResourceIdsForWorkspaceByBindingFilter returns matching resource ids by workspace + subject filter",
+  "listAutomationEventSourceIdsByBindingFilter returns matching resource ids by workspace + subject filter",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -1168,32 +1316,32 @@ test(
       await db
         .insertInto("resource_access_bindings")
         .values(
-          await buildResourceAccessBindingInsertValues(db, {
+          await buildAutomationEventSourceAccessBindingInsertValues(db, {
             workspaceId,
-            resourceType: "actor",
+            resourceType: "automation_event_source",
             resourceId: actorIdA,
             target: { subject: workspaceRef(workspaceId) },
           })
         )
         .execute()
-      const all = await listResourceIdsForWorkspaceByBindingFilter(db, {
+      const all = await listAutomationEventSourceIdsByBindingFilter(db, {
         workspaceId,
-        resourceType: "actor",
+        resourceType: "automation_event_source",
       })
       assert.ok(all.includes(actorIdA))
       assert.ok(!all.includes(actorIdB))
 
       const filteredBySubject =
-        await listResourceIdsForWorkspaceByBindingFilter(db, {
+        await listAutomationEventSourceIdsByBindingFilter(db, {
           workspaceId,
-          resourceType: "actor",
+          resourceType: "automation_event_source",
           subjectId,
         })
       assert.deepEqual(filteredBySubject, [actorIdA])
 
-      const noMatch = await listResourceIdsForWorkspaceByBindingFilter(db, {
+      const noMatch = await listAutomationEventSourceIdsByBindingFilter(db, {
         workspaceId,
-        resourceType: "actor",
+        resourceType: "automation_event_source",
         subjectId: "00000000-0000-0000-0000-000000000000",
       })
       assert.deepEqual(noMatch, [])
@@ -1202,28 +1350,31 @@ test(
 )
 
 test(
-  "getAccessBindingRowById returns a normalized row for the matching id, null for misses",
+  "getAutomationEventSourceAccessBindingRowById returns a normalized row for the matching id, null for misses",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const values = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const values = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       const inserted = await db
         .insertInto("resource_access_bindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
 
-      const matchAll = await getAccessBindingRowById(db, {
+      const matchAll = await getAutomationEventSourceAccessBindingRowById(db, {
         bindingId: inserted.id as string,
         workspaceId,
-        resourceType: "actor",
+        resourceType: "automation_event_source",
         resourceId: actorId,
       })
       assert.ok(matchAll)
@@ -1231,22 +1382,28 @@ test(
       assert.equal(matchAll!.resource_id, actorId)
       assert.equal((matchAll as any).subject_kind, "workspace")
 
-      const matchByType = await getAccessBindingRowById(db, {
-        bindingId: inserted.id as string,
-        resourceType: "actor",
-      })
+      const matchByType = await getAutomationEventSourceAccessBindingRowById(
+        db,
+        {
+          bindingId: inserted.id as string,
+          resourceType: "automation_event_source",
+        }
+      )
       assert.ok(matchByType)
 
-      const wrongWorkspace = await getAccessBindingRowById(db, {
-        bindingId: inserted.id as string,
-        workspaceId: "00000000-0000-0000-0000-000000000000",
-        resourceType: "actor",
-      })
+      const wrongWorkspace = await getAutomationEventSourceAccessBindingRowById(
+        db,
+        {
+          bindingId: inserted.id as string,
+          workspaceId: "00000000-0000-0000-0000-000000000000",
+          resourceType: "automation_event_source",
+        }
+      )
       assert.equal(wrongWorkspace, null)
 
-      const missing = await getAccessBindingRowById(db, {
+      const missing = await getAutomationEventSourceAccessBindingRowById(db, {
         bindingId: "00000000-0000-0000-0000-000000000000",
-        resourceType: "actor",
+        resourceType: "automation_event_source",
       })
       assert.equal(missing, null)
     })
@@ -1270,28 +1427,37 @@ async function insertWorkspaceWithOwner(
 }
 
 test(
-  "insertAccessBindingReturningIdOn writes a binding and returns its id",
+  "insertAutomationEventSourceAccessBindingReturningIdOn writes a binding and returns its id",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const id = await insertAccessBindingReturningIdOn(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-        source: "manual",
-        reason: "test",
-      })
+      const id = await insertAutomationEventSourceAccessBindingReturningIdOn(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+          source: "manual",
+          reason: "test",
+        }
+      )
       assert.ok(id, "returned id should be non-empty")
       const persisted = await db
         .selectFrom("resource_access_bindings")
-        .select(["id", "workspace_id", "actor_id", "subject_id", "source"])
+        .select([
+          "id",
+          "workspace_id",
+          "automation_event_source_id",
+          "subject_id",
+          "source",
+        ])
         .where("id", "=", id)
         .executeTakeFirstOrThrow()
       assert.equal(persisted.workspace_id, workspaceId)
-      assert.equal(persisted.actor_id, actorId)
+      assert.equal(persisted.automation_event_source_id, actorId)
       assert.equal(persisted.source, "manual")
       assert.ok(persisted.subject_id, "subject_id must be populated")
     })
@@ -1299,20 +1465,23 @@ test(
 )
 
 test(
-  "insertAccessBindingReturningRowOn returns a row with subject_kind + projections reconstructed",
+  "insertAutomationEventSourceAccessBindingReturningRowOn returns a row with subject_kind + projections reconstructed",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
-      const row = await insertAccessBindingReturningRowOn(db, {
-        workspaceId,
-        resourceType: "actor",
-        resourceId: actorId,
-        target: { subject: workspaceRef(workspaceId) },
-      })
+      const row = await insertAutomationEventSourceAccessBindingReturningRowOn(
+        db,
+        {
+          workspaceId,
+          resourceType: "automation_event_source",
+          resourceId: actorId,
+          target: { subject: workspaceRef(workspaceId) },
+        }
+      )
       assert.equal(row.workspace_id, workspaceId)
-      assert.equal(row.actor_id, actorId)
+      assert.equal(row.automation_event_source_id, actorId)
       assert.equal((row as any).subject_kind, "workspace")
       assert.equal((row as any).subject_workspace_id_via_join, workspaceId)
       assert.ok(row.subject_id, "subject_id must be populated")

@@ -364,6 +364,7 @@ async function buildToolActivityDetail(turnId: string) {
     .selectFrom("turns")
     .innerJoin("sessions as s", "s.id", "turns.session_id")
     .innerJoin("actors as a", "a.id", "turns.actor_id")
+    .innerJoin("workspace_apps as app", "app.id", "a.id")
     .select([
       "turns.id",
       "turns.session_id",
@@ -373,7 +374,7 @@ async function buildToolActivityDetail(turnId: string) {
       "turns.updated_at",
       "turns.completed_at",
       "s.workspace_id",
-      "a.name as actor_name",
+      "app.display_name as actor_display_name",
     ])
     .where("turns.id", "=", turnId)
     .limit(1)
@@ -591,7 +592,7 @@ async function buildToolActivityDetail(turnId: string) {
   return {
     conversationId: turnRow.conversation_id,
     actorId: turnRow.actor_id,
-    actorName: turnRow.actor_name || "Unknown",
+    actorDisplayName: turnRow.actor_display_name || "Unknown",
     turnId: turnRow.id,
     sessionId: turnRow.session_id,
     startedAt: toIsoString(turnRow.started_at) || nowISO(),
@@ -833,7 +834,7 @@ export async function buildSessionRuntimeSnapshot(
     conversationId: session.conversation_id,
     sessionId: session.id,
     actorId: session.actor_id,
-    actorName: session.actor_name || "Unknown",
+    actorDisplayName: session.actor_display_name || "Unknown",
     laneState,
     health,
     phase,
@@ -1141,9 +1142,10 @@ export async function enqueueSessionWakeup(params: EnqueueSessionWakeupParams) {
 
 export async function attachPendingWakeupsToTurn(
   sessionId: string,
-  turnId: string
+  turnId: string,
+  executor: Executor = db
 ) {
-  const rows = await db
+  const rows = await executor
     .updateTable("session_wakeups")
     .set({
       status: "attached",
@@ -1170,8 +1172,11 @@ export async function markTurnWakeupsProcessed(turnId: string) {
     .execute()
 }
 
-export async function markTurnWakeupsDropped(turnId: string) {
-  await db
+export async function markTurnWakeupsDropped(
+  turnId: string,
+  executor: Executor = db
+) {
+  await executor
     .updateTable("session_wakeups")
     .set({
       status: "dropped",
@@ -1188,8 +1193,11 @@ export async function markTurnWakeupsDropped(turnId: string) {
  * WITHOUT having processed its wakeups (e.g. the worker lost the session lock
  * mid-turn) — dropping them would silently lose user-triggered wakeups.
  */
-export async function restoreTurnWakeupsToPending(turnId: string) {
-  await db
+export async function restoreTurnWakeupsToPending(
+  turnId: string,
+  executor: Executor = db
+) {
+  await executor
     .updateTable("session_wakeups")
     .set({
       status: "pending",
@@ -1201,8 +1209,11 @@ export async function restoreTurnWakeupsToPending(turnId: string) {
     .execute()
 }
 
-export async function getPendingWakeupCount(sessionId: string) {
-  const row = await db
+export async function getPendingWakeupCount(
+  sessionId: string,
+  executor: Executor = db
+) {
+  const row = await executor
     .selectFrom("session_wakeups")
     .select(({ fn }) => fn.count<number>("id").as("count"))
     .where("session_id", "=", sessionId)

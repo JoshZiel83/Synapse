@@ -251,7 +251,7 @@ function buildAuthor(
       actorId: resolvedActorId,
       sessionId: row.sessionId || row.session_id || undefined,
       name:
-        authorParticipant?.actor_name ||
+        authorParticipant?.participant_name ||
         authorParticipant?.display_name ||
         row.author_name ||
         undefined,
@@ -303,7 +303,10 @@ function buildTargets(targets: any[]): CanonicalContextTarget[] | undefined {
     actorId: target.actor_id || target.actorId || undefined,
     userId: target.user_id || target.userId || undefined,
     name:
-      target.user_name || target.actor_name || target.display_name || undefined,
+      target.user_name ||
+      target.participant_name ||
+      target.display_name ||
+      undefined,
   }))
   return built.length > 0 ? built : undefined
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { AttachmentTargetType, ReuseScope } from "@synapse/shared"
+import type { PluginAttachmentScopeType, ReuseScope } from "@synapse/shared"
 import {
   Dialog,
   DialogContent,
@@ -16,8 +16,6 @@ import { Check, ChevronRight, ExternalLink, HelpCircle } from "lucide-react"
 import { usePluginStore } from "@/stores/plugin-store"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 
-type AttachmentType = AttachmentTargetType
-
 interface SetupStep {
   id: string
   title: string
@@ -31,7 +29,7 @@ interface SetupStep {
 
 interface Props {
   plugin: any
-  attachmentType?: AttachmentType
+  attachmentScopeType?: PluginAttachmentScopeType
   actorId?: string
   conversationId?: string
   workspaceMemberId?: string
@@ -42,7 +40,7 @@ interface Props {
 
 export default function SetupWizardDialog({
   plugin,
-  attachmentType = "workspace",
+  attachmentScopeType = "workspace",
   actorId,
   conversationId,
   workspaceMemberId,
@@ -119,13 +117,15 @@ export default function SetupWizardDialog({
 
         await installPlugin(workspaceId!, {
           pluginId: plugin.id,
-          attachmentTarget: {
-            type: attachmentType,
-            actorId: attachmentType === "actor" ? actorId : undefined,
+          attachmentScope: {
+            type: attachmentScopeType,
+            actorId: attachmentScopeType === "actor" ? actorId : undefined,
             conversationId:
-              attachmentType === "conversation" ? conversationId : undefined,
+              attachmentScopeType === "conversation"
+                ? conversationId
+                : undefined,
             workspaceMemberId:
-              attachmentType === "workspace_member"
+              attachmentScopeType === "workspace_member"
                 ? workspaceMemberId || effectiveCurrentWorkspaceMemberId
                 : undefined,
           },
@@ -149,13 +149,13 @@ export default function SetupWizardDialog({
       setSaving(true)
       installPlugin(workspaceId!, {
         pluginId: plugin.id,
-        attachmentTarget: {
-          type: attachmentType,
-          actorId: attachmentType === "actor" ? actorId : undefined,
+        attachmentScope: {
+          type: attachmentScopeType,
+          actorId: attachmentScopeType === "actor" ? actorId : undefined,
           conversationId:
-            attachmentType === "conversation" ? conversationId : undefined,
+            attachmentScopeType === "conversation" ? conversationId : undefined,
           workspaceMemberId:
-            attachmentType === "workspace_member"
+            attachmentScopeType === "workspace_member"
               ? workspaceMemberId || effectiveCurrentWorkspaceMemberId
               : undefined,
         },

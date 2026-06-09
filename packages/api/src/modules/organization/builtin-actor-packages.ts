@@ -1,6 +1,6 @@
 import { normalizeActorDocs, textBlocks } from "@synapse/shared"
 import type {
-  AttachmentTargetType,
+  PluginAttachmentScopeType,
   ActorDefinition,
   ActorPackageDependency,
   ReuseScope,
@@ -20,7 +20,7 @@ interface BuiltinActorPackageSeed {
     targetPackageKind: ActorPackageDependency["targetPackageKind"]
     targetPublisherSlug?: string
     targetPackageSlug: string
-    acceptableInstanceScopes?: AttachmentTargetType[]
+    acceptableAttachmentScopes?: PluginAttachmentScopeType[]
     acceptableReuseScopes?: ReuseScope[]
     description: string
     notes?: ReturnType<typeof textBlocks>
@@ -38,7 +38,7 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
       "Mira is an official Synapse research actor designed for ambiguity-heavy work. She asks sharper framing questions, gathers external evidence, separates source-backed facts from inference, and produces concise briefings that a human can trust.",
     tags: ["official", "research", "analysis", "briefing"],
     actor: {
-      name: "Mira",
+      displayName: "Mira",
       role: "specialist",
       title: "Research Scout",
       avatarFileId: undefined,
@@ -131,7 +131,7 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
         targetPackageKind: "plugin",
         targetPublisherSlug: "z_ai",
         targetPackageSlug: "toolkit",
-        acceptableInstanceScopes: ["workspace", "actor"],
+        acceptableAttachmentScopes: ["workspace", "actor"],
         acceptableReuseScopes: ["workspace", "actor", "conversation"],
         description:
           "Mira needs the official ZhipuAI Toolkit for live research and document-reading workflows.",
@@ -150,7 +150,7 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
       "Orian is an official Synapse operations actor built to keep moving parts aligned. He clarifies ownership, exposes blockers, keeps communication legible, and turns fuzzy requests into clean execution loops.",
     tags: ["official", "operations", "coordination", "execution"],
     actor: {
-      name: "Orian",
+      displayName: "Orian",
       role: "manager",
       title: "Ops Coordinator",
       avatarFileId: undefined,
@@ -252,7 +252,7 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
         targetPackageKind: "plugin",
         targetPublisherSlug: "z_ai",
         targetPackageSlug: "toolkit",
-        acceptableInstanceScopes: ["workspace", "actor"],
+        acceptableAttachmentScopes: ["workspace", "actor"],
         acceptableReuseScopes: ["workspace", "actor", "conversation"],
         description:
           "Recommended if Orian needs to inspect uploaded documents, screenshots, or external references during coordination.",

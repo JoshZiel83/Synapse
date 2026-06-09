@@ -28,7 +28,7 @@ export default createCollaborationRoleTemplateSeed({
   },
   featured: false,
   actor: {
-    name: "Clara",
+    displayName: "Clara",
     role: "reviewer",
     title,
     canRepresentUser: false,

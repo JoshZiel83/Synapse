@@ -12,15 +12,15 @@ import {
   upsertAccessSubjectOn,
 } from "./subject-registry.js"
 import type {
-  AccessBindableResourceType,
-  AccessGrantTarget,
+  AutomationEventSourceBindingResourceType,
+  AutomationEventSourceBindingTarget,
 } from "./bindings.js"
 import {
   accessGrantTargetScopeRef,
   accessGrantTargetToSubjectRef,
 } from "./bindings.js"
 
-export type AccessBindingSource =
+export type AutomationEventSourceBindingSource =
   | "manual"
   | "default_open"
   | "approval"
@@ -31,17 +31,17 @@ export type AccessBindingSource =
  * the canonical reference; `scope_subject_id` is set when the target is
  * scoped (e.g. actor + scope=conversation).
  */
-export async function buildResourceAccessBindingInsertValues(
+export async function buildAutomationEventSourceAccessBindingInsertValues(
   db: KyselyDb,
   input: {
     workspaceId: string
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
-    target: AccessGrantTarget
+    target: AutomationEventSourceBindingTarget
     conversationTypeMaskOverride?: number | null
     createdByWorkspaceMemberId?: string | null
     reason?: string | null
-    source?: AccessBindingSource
+    source?: AutomationEventSourceBindingSource
   }
 ): Promise<TableInsert<"resource_access_bindings">> {
   const ref = accessGrantTargetToSubjectRef(input.target)
@@ -53,17 +53,7 @@ export async function buildResourceAccessBindingInsertValues(
   return {
     workspace_id: input.workspaceId,
     resource_type: input.resourceType,
-    installed_skill_id:
-      input.resourceType === "installed_skill" ? input.resourceId : null,
-    plugin_installation_id:
-      input.resourceType === "plugin_installation" ? input.resourceId : null,
-    automation_event_source_id:
-      input.resourceType === "automation_event_source"
-        ? input.resourceId
-        : null,
-    actor_id: input.resourceType === "actor" ? input.resourceId : null,
-    remote_agent_id:
-      input.resourceType === "remote_agent" ? input.resourceId : null,
+    automation_event_source_id: input.resourceId,
     subject_id: subjectId,
     scope_subject_id: scopeSubjectId,
     conversation_type_mask_override: input.conversationTypeMaskOverride ?? null,
@@ -75,19 +65,19 @@ export async function buildResourceAccessBindingInsertValues(
 }
 
 /**
- * `pg.PoolClient`-compatible variant of `buildResourceAccessBindingInsertValues`.
+ * `pg.PoolClient`-compatible variant of `buildAutomationEventSourceAccessBindingInsertValues`.
  */
-export async function buildResourceAccessBindingInsertValuesOn(
+export async function buildAutomationEventSourceAccessBindingInsertValuesOn(
   client: Executor,
   input: {
     workspaceId: string
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
-    target: AccessGrantTarget
+    target: AutomationEventSourceBindingTarget
     conversationTypeMaskOverride?: number | null
     createdByWorkspaceMemberId?: string | null
     reason?: string | null
-    source?: AccessBindingSource
+    source?: AutomationEventSourceBindingSource
   }
 ): Promise<TableInsert<"resource_access_bindings">> {
   const ref = accessGrantTargetToSubjectRef(input.target)
@@ -99,17 +89,7 @@ export async function buildResourceAccessBindingInsertValuesOn(
   return {
     workspace_id: input.workspaceId,
     resource_type: input.resourceType,
-    installed_skill_id:
-      input.resourceType === "installed_skill" ? input.resourceId : null,
-    plugin_installation_id:
-      input.resourceType === "plugin_installation" ? input.resourceId : null,
-    automation_event_source_id:
-      input.resourceType === "automation_event_source"
-        ? input.resourceId
-        : null,
-    actor_id: input.resourceType === "actor" ? input.resourceId : null,
-    remote_agent_id:
-      input.resourceType === "remote_agent" ? input.resourceId : null,
+    automation_event_source_id: input.resourceId,
     subject_id: subjectId,
     scope_subject_id: scopeSubjectId,
     conversation_type_mask_override: input.conversationTypeMaskOverride ?? null,
@@ -122,13 +102,18 @@ export async function buildResourceAccessBindingInsertValuesOn(
 
 // ---------- P3 consolidation: unified read / mutate entry points ----------
 
-import type { AccessBindingRow } from "./bindings.js"
+import type { AutomationEventSourceBindingRow } from "./bindings.js"
 
-export async function insertAccessBindingReturningIdOn(
+export async function insertAutomationEventSourceAccessBindingReturningIdOn(
   client: Executor,
-  params: Parameters<typeof buildResourceAccessBindingInsertValuesOn>[1]
+  params: Parameters<
+    typeof buildAutomationEventSourceAccessBindingInsertValuesOn
+  >[1]
 ): Promise<string> {
-  const values = await buildResourceAccessBindingInsertValuesOn(client, params)
+  const values = await buildAutomationEventSourceAccessBindingInsertValuesOn(
+    client,
+    params
+  )
   const result = await runBuilder<{ id: string }>(
     client,
     defaultDb
@@ -143,12 +128,17 @@ export async function insertAccessBindingReturningIdOn(
   return inserted.id
 }
 
-export async function insertAccessBindingReturningRowOn(
+export async function insertAutomationEventSourceAccessBindingReturningRowOn(
   client: Executor,
-  params: Parameters<typeof buildResourceAccessBindingInsertValuesOn>[1]
-): Promise<AccessBindingRow> {
-  const values = await buildResourceAccessBindingInsertValuesOn(client, params)
-  const result = await runBuilder<AccessBindingRow>(
+  params: Parameters<
+    typeof buildAutomationEventSourceAccessBindingInsertValuesOn
+  >[1]
+): Promise<AutomationEventSourceBindingRow> {
+  const values = await buildAutomationEventSourceAccessBindingInsertValuesOn(
+    client,
+    params
+  )
+  const result = await runBuilder<AutomationEventSourceBindingRow>(
     client,
     defaultDb
       .insertInto("resource_access_bindings")
@@ -162,21 +152,21 @@ export async function insertAccessBindingReturningRowOn(
   return augmentInsertedBindingRowWithTarget(
     inserted,
     params.target
-  ) as AccessBindingRow
+  ) as AutomationEventSourceBindingRow
 }
 
 /**
  * D3: after an INSERT ... RETURNING * the returned row only has `subject_id`
  * and `scope_subject_id`. Augment the row with subject/scope projection
- * fields synthesized from the AccessGrantTarget so downstream readers
- * (`mapAccessBindingToGrant` / `normalizeAccessBindingRow`) decode the
+ * fields synthesized from the AutomationEventSourceBindingTarget so downstream readers
+ * (`mapAutomationEventSourceAccessBindingToGrant` / `normalizeAutomationEventSourceAccessBindingRow`) decode the
  * subject without a second lookup.
  */
 export function augmentInsertedBindingRowWithTarget<
   T extends { subject_id: string | null; scope_subject_id?: string | null },
 >(
   inserted: T,
-  target: AccessGrantTarget
+  target: AutomationEventSourceBindingTarget
 ): T & {
   scope_subject_id: string | null
   subject_kind: string
@@ -229,37 +219,28 @@ export function augmentInsertedBindingRowWithTarget<
 
 import { sql } from "kysely"
 import { CompiledQuery } from "kysely"
-import type { AccessGrant } from "@synapse/shared/types"
-import { mapAccessBindingToGrant } from "./bindings.js"
+import type { AutomationEventSourceAccessGrant } from "@synapse/shared/types"
+import { mapAutomationEventSourceAccessBindingToGrant } from "./bindings.js"
 
-function resourceIdColumnFor(resourceType: AccessBindableResourceType) {
-  switch (resourceType) {
-    case "installed_skill":
-      return "binding.installed_skill_id"
-    case "plugin_installation":
-      return "binding.plugin_installation_id"
-    case "automation_event_source":
-      return "binding.automation_event_source_id"
-    case "actor":
-      return "binding.actor_id"
-    case "remote_agent":
-      return "binding.remote_agent_id"
-  }
+function resourceIdColumnFor(
+  resourceType: AutomationEventSourceBindingResourceType
+) {
+  return "binding.automation_event_source_id"
 }
 
 /**
  * List the active access grants on a given resource. Always JOINs
- * access_subjects so the returned grants carry a decoded AccessGrantTarget,
+ * access_subjects so the returned grants carry a decoded AutomationEventSourceBindingTarget,
  * not a raw subject_id.
  */
-export async function listGrantsForResource(
+export async function listAutomationEventSourceAccessGrants(
   db: KyselyDb,
   input: {
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
     includeRevoked?: boolean
   }
-): Promise<AccessGrant[]> {
+): Promise<AutomationEventSourceAccessGrant[]> {
   const column = resourceIdColumnFor(input.resourceType)
   let query = db
     .selectFrom("resource_access_bindings as binding")
@@ -273,11 +254,7 @@ export async function listGrantsForResource(
       "binding.id",
       "binding.workspace_id",
       "binding.resource_type",
-      "binding.installed_skill_id",
-      "binding.plugin_installation_id",
       "binding.automation_event_source_id",
-      "binding.actor_id",
-      "binding.remote_agent_id",
       "binding.conversation_type_mask_override",
       "binding.status",
       "binding.source",
@@ -314,14 +291,16 @@ export async function listGrantsForResource(
     query = query.where("binding.status", "=", "active")
   }
   const rows = await query.execute()
-  return rows.map((row) => mapAccessBindingToGrant(row as any))
+  return rows.map((row) =>
+    mapAutomationEventSourceAccessBindingToGrant(row as any)
+  )
 }
 
 /**
  * Revoke a single binding by id. Idempotent — already-revoked bindings
  * become no-ops. Returns true if a row was updated.
  */
-export async function revokeGrant(
+export async function revokeAutomationEventSourceAccessBinding(
   db: KyselyDb,
   input: {
     bindingId: string
@@ -353,11 +332,11 @@ export async function revokeGrant(
  * in one statement: the new scope is the optional `scope` on the new
  * target (null when unscoped).
  */
-export async function updateGrantTargets(
+export async function updateAutomationEventSourceAccessBindingTargets(
   db: KyselyDb,
   input: {
     bindingId: string
-    newTarget: AccessGrantTarget
+    newTarget: AutomationEventSourceBindingTarget
   }
 ): Promise<void> {
   const ref = accessGrantTargetToSubjectRef(input.newTarget)
@@ -379,22 +358,25 @@ export async function updateGrantTargets(
 /**
  * Describe the access grants on a resource as a structured summary.
  */
-export async function describeAccessGrants(
+export async function describeAutomationEventSourceAccessGrants(
   db: KyselyDb,
   input: {
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
   }
-): Promise<{ grants: AccessGrant[]; activeCount: number }> {
-  const grants = await listGrantsForResource(db, input)
+): Promise<{
+  grants: AutomationEventSourceAccessGrant[]
+  activeCount: number
+}> {
+  const grants = await listAutomationEventSourceAccessGrants(db, input)
   return { grants, activeCount: grants.length }
 }
 
-import { normalizeAccessBindingRow } from "./bindings.js"
+import { normalizeAutomationEventSourceAccessBindingRow } from "./bindings.js"
 
 function bindingRowSelectFor(
   db: KyselyDb,
-  resourceType: AccessBindableResourceType
+  resourceType: AutomationEventSourceBindingResourceType
 ) {
   const column = resourceIdColumnFor(resourceType)
   return db
@@ -409,11 +391,7 @@ function bindingRowSelectFor(
       "binding.id",
       "binding.workspace_id",
       "binding.resource_type",
-      "binding.installed_skill_id",
-      "binding.plugin_installation_id",
       "binding.automation_event_source_id",
-      "binding.actor_id",
-      "binding.remote_agent_id",
       "binding.subject_id",
       "binding.scope_subject_id",
       sql<string>`${sql.ref(column)}::text`.as("resource_id"),
@@ -447,18 +425,18 @@ function bindingRowSelectFor(
 }
 
 /**
- * Load the `AccessBindingRow`-shaped rows for one or more resources of the
+ * Load the `AutomationEventSourceBindingRow`-shaped rows for one or more resources of the
  * same type.
  */
-export async function loadAccessBindingRowsForResources(
+export async function loadAutomationEventSourceAccessBindingRowsForSources(
   db: KyselyDb,
   input: {
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceIds: string[]
     workspaceId?: string
     includeRevoked?: boolean
   }
-): Promise<AccessBindingRow[]> {
+): Promise<AutomationEventSourceBindingRow[]> {
   if (input.resourceIds.length === 0) return []
   const column = resourceIdColumnFor(input.resourceType)
   let query = bindingRowSelectFor(db, input.resourceType)
@@ -475,23 +453,25 @@ export async function loadAccessBindingRowsForResources(
     .orderBy("binding.created_at")
     .execute()
   return rows.map((row) =>
-    normalizeAccessBindingRow(row as unknown as AccessBindingRow)
+    normalizeAutomationEventSourceAccessBindingRow(
+      row as unknown as AutomationEventSourceBindingRow
+    )
   )
 }
 
 /**
  * Convenience wrapper for the single-resource case.
  */
-export async function loadAccessBindingRowsForResource(
+export async function loadAutomationEventSourceAccessBindingRowsForSource(
   db: KyselyDb,
   input: {
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
     workspaceId?: string
     includeRevoked?: boolean
   }
-): Promise<AccessBindingRow[]> {
-  return loadAccessBindingRowsForResources(db, {
+): Promise<AutomationEventSourceBindingRow[]> {
+  return loadAutomationEventSourceAccessBindingRowsForSources(db, {
     resourceType: input.resourceType,
     resourceIds: [input.resourceId],
     workspaceId: input.workspaceId,
@@ -500,13 +480,13 @@ export async function loadAccessBindingRowsForResource(
 }
 
 /**
- * SQL-side variant of `loadAccessBindingRowsForResources` that pre-filters
+ * SQL-side variant of `loadAutomationEventSourceAccessBindingRowsForSources` that pre-filters
  * bindings to only those whose target shape matches the given runtime context.
  */
-export async function loadAccessBindingRowsForResourcesAndContext(
+export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndContext(
   db: KyselyDb,
   input: {
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceIds: string[]
     contextWorkspaceId: string
     actorId?: string | null
@@ -515,7 +495,7 @@ export async function loadAccessBindingRowsForResourcesAndContext(
     workspaceMemberId?: string | null
     includeRevoked?: boolean
   }
-): Promise<AccessBindingRow[]> {
+): Promise<AutomationEventSourceBindingRow[]> {
   if (input.resourceIds.length === 0) return []
   const column = resourceIdColumnFor(input.resourceType)
   let query = bindingRowSelectFor(db, input.resourceType)
@@ -588,7 +568,9 @@ export async function loadAccessBindingRowsForResourcesAndContext(
     .orderBy("binding.created_at")
     .execute()
   return rows.map((row) =>
-    normalizeAccessBindingRow(row as unknown as AccessBindingRow)
+    normalizeAutomationEventSourceAccessBindingRow(
+      row as unknown as AutomationEventSourceBindingRow
+    )
   )
 }
 
@@ -596,10 +578,10 @@ export async function loadAccessBindingRowsForResourcesAndContext(
  * True iff there is at least one binding (active or otherwise) for the given
  * resource.
  */
-export async function hasAnyBindingForResourceOn(
+export async function hasAnyAutomationEventSourceAccessBindingOn(
   client: Executor,
   input: {
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
     activeOnly?: boolean
   }
@@ -616,19 +598,10 @@ export async function hasAnyBindingForResourceOn(
   return result.rows.length > 0
 }
 
-function resourceIdColumnForRaw(resourceType: AccessBindableResourceType) {
-  switch (resourceType) {
-    case "installed_skill":
-      return "installed_skill_id"
-    case "plugin_installation":
-      return "plugin_installation_id"
-    case "automation_event_source":
-      return "automation_event_source_id"
-    case "actor":
-      return "actor_id"
-    case "remote_agent":
-      return "remote_agent_id"
-  }
+function resourceIdColumnForRaw(
+  resourceType: AutomationEventSourceBindingResourceType
+) {
+  return "automation_event_source_id"
 }
 
 /**
@@ -643,11 +616,11 @@ function resourceIdColumnForRaw(resourceType: AccessBindableResourceType) {
  * `scopeSubjectId` (null for unscoped) is matched with `IS NOT DISTINCT
  * FROM` so NULL-vs-NULL and UUID-equality both work correctly.
  */
-export async function findActiveBindingIdByResourceAndSubject(
+export async function findActiveAutomationEventSourceAccessBindingIdBySubject(
   client: Executor,
   input: {
     workspaceId: string
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
     subjectId: string
     scopeSubjectId?: string | null
@@ -677,7 +650,7 @@ export async function findActiveBindingIdByResourceAndSubject(
 /**
  * Update only the `conversation_type_mask_override` column on a binding.
  */
-export async function updateGrantConversationTypeMaskOverride(
+export async function updateAutomationEventSourceAccessGrantConversationTypeMaskOverride(
   db: KyselyDb,
   input: {
     bindingId: string
@@ -698,9 +671,9 @@ export async function updateGrantConversationTypeMaskOverride(
 }
 
 /**
- * Bulk revoke variant of `revokeGrant`.
+ * Bulk revoke variant of `revokeAutomationEventSourceAccessBinding`.
  */
-export async function revokeGrantsByIdsOn(
+export async function revokeAutomationEventSourceAccessBindingsByIdsOn(
   client: Executor,
   bindingIds: string[]
 ): Promise<void> {
@@ -722,10 +695,10 @@ export async function revokeGrantsByIdsOn(
  * resource's bindings" (plugin/skill uninstall) get the same observable effect —
  * the bindings are no longer active — while history is preserved.
  */
-export async function hardDeleteBindingsForResourceOn(
+export async function revokeAutomationEventSourceAccessBindingsForSourceOn(
   client: Executor,
   input: {
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
   }
 ): Promise<void> {
@@ -743,10 +716,10 @@ export async function hardDeleteBindingsForResourceOn(
 /**
  * Revoke bindings for a resource — Kysely flavour (see above; was hard delete).
  */
-export async function hardDeleteBindingsForResource(
+export async function revokeAutomationEventSourceAccessBindingsForSource(
   db: KyselyDb,
   input: {
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     resourceId: string
   }
 ): Promise<void> {
@@ -762,16 +735,16 @@ export async function hardDeleteBindingsForResource(
 /**
  * Read a single binding row by id (and optionally workspace).
  */
-export async function getAccessBindingRowById(
+export async function getAutomationEventSourceAccessBindingRowById(
   db: KyselyDb,
   input: {
     bindingId: string
     workspaceId?: string
-    resourceType?: AccessBindableResourceType
+    resourceType?: AutomationEventSourceBindingResourceType
     resourceId?: string
   }
-): Promise<AccessBindingRow | null> {
-  const resourceType = input.resourceType ?? "installed_skill"
+): Promise<AutomationEventSourceBindingRow | null> {
+  const resourceType = input.resourceType ?? "automation_event_source"
   let query = bindingRowSelectFor(db, resourceType).where(
     "binding.id",
     "=",
@@ -789,7 +762,9 @@ export async function getAccessBindingRowById(
   }
   const row = await query.executeTakeFirst()
   if (!row) return null
-  return normalizeAccessBindingRow(row as unknown as AccessBindingRow)
+  return normalizeAutomationEventSourceAccessBindingRow(
+    row as unknown as AutomationEventSourceBindingRow
+  )
 }
 
 /**
@@ -802,11 +777,11 @@ export async function getAccessBindingRowById(
  * actor A in any scope — including C2 or unscoped — silently widening
  * the listing. `IS NOT DISTINCT FROM` handles the NULL=NULL case.
  */
-export async function listResourceIdsForWorkspaceByBindingFilter(
+export async function listAutomationEventSourceIdsByBindingFilter(
   db: KyselyDb,
   input: {
     workspaceId: string
-    resourceType: AccessBindableResourceType
+    resourceType: AutomationEventSourceBindingResourceType
     subjectId?: string | null
     /**
      * Pass to filter by the scope_subject_id column too:

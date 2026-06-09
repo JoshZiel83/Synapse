@@ -1273,7 +1273,7 @@ async function getInteractionRowById(
             requester_subj.actor_id AS requester_actor_id,
             requester_subj.remote_agent_id AS requester_remote_agent_id,
             requester_subj.kind AS requester_participant_type,
-            COALESCE(requester_remote_agent.name, requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
+            COALESCE(requester_remote_agent_app.display_name, requester_actor_app.display_name, requester_user.name, requester.display_name) AS requester_name,
             COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
             COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
             requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
@@ -1284,7 +1284,7 @@ async function getInteractionRowById(
             target_subj.actor_id AS target_actor_id,
             target_subj.remote_agent_id AS target_remote_agent_id,
             target_subj.kind AS target_participant_type,
-            COALESCE(target_remote_agent.name, target_actor.name, target_user.name, target.display_name) AS target_name,
+            COALESCE(target_remote_agent_app.display_name, target_actor_app.display_name, target_user.name, target.display_name) AS target_name,
             COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
             COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
             target_actor.avatar_file_id AS target_actor_avatar_file_id,
@@ -1295,7 +1295,7 @@ async function getInteractionRowById(
             resolver_subj.actor_id AS resolved_by_actor_id,
             resolver_subj.remote_agent_id AS resolved_by_remote_agent_id,
             resolver_subj.kind AS resolved_by_participant_type,
-            COALESCE(resolver_remote_agent.name, resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
+            COALESCE(resolver_remote_agent_app.display_name, resolver_actor_app.display_name, resolver_user.name, resolver.display_name) AS resolved_by_name,
             COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
             COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
             resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
@@ -1316,8 +1316,12 @@ async function getInteractionRowById(
        ON requester_subj.id = requester.subject_id
      LEFT JOIN actors requester_actor
        ON requester_actor.id = requester_subj.actor_id
+     LEFT JOIN workspace_apps requester_actor_app
+       ON requester_actor_app.id = requester_actor.id
      LEFT JOIN remote_agents requester_remote_agent
        ON requester_remote_agent.id = requester_subj.remote_agent_id
+     LEFT JOIN workspace_apps requester_remote_agent_app
+       ON requester_remote_agent_app.id = requester_remote_agent.id
      LEFT JOIN workspace_members requester_wm
        ON requester_wm.id = requester_subj.workspace_member_id
      LEFT JOIN users requester_user
@@ -1328,8 +1332,12 @@ async function getInteractionRowById(
        ON target_subj.id = target.subject_id
      LEFT JOIN actors target_actor
        ON target_actor.id = target_subj.actor_id
+     LEFT JOIN workspace_apps target_actor_app
+       ON target_actor_app.id = target_actor.id
      LEFT JOIN remote_agents target_remote_agent
        ON target_remote_agent.id = target_subj.remote_agent_id
+     LEFT JOIN workspace_apps target_remote_agent_app
+       ON target_remote_agent_app.id = target_remote_agent.id
      LEFT JOIN workspace_members target_wm
        ON target_wm.id = target_subj.workspace_member_id
      LEFT JOIN users target_user
@@ -1340,8 +1348,12 @@ async function getInteractionRowById(
        ON resolver_subj.id = resolver.subject_id
      LEFT JOIN actors resolver_actor
        ON resolver_actor.id = resolver_subj.actor_id
+     LEFT JOIN workspace_apps resolver_actor_app
+       ON resolver_actor_app.id = resolver_actor.id
      LEFT JOIN remote_agents resolver_remote_agent
        ON resolver_remote_agent.id = resolver_subj.remote_agent_id
+     LEFT JOIN workspace_apps resolver_remote_agent_app
+       ON resolver_remote_agent_app.id = resolver_remote_agent.id
      LEFT JOIN workspace_members resolver_wm
        ON resolver_wm.id = resolver_subj.workspace_member_id
      LEFT JOIN users resolver_user
@@ -1441,7 +1453,7 @@ async function getInteractionRowByIdForUpdate(
             requester_subj.actor_id AS requester_actor_id,
             requester_subj.remote_agent_id AS requester_remote_agent_id,
             requester_subj.kind AS requester_participant_type,
-            COALESCE(requester_remote_agent.name, requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
+            COALESCE(requester_remote_agent_app.display_name, requester_actor_app.display_name, requester_user.name, requester.display_name) AS requester_name,
             COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
             COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
             requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
@@ -1452,7 +1464,7 @@ async function getInteractionRowByIdForUpdate(
             target_subj.actor_id AS target_actor_id,
             target_subj.remote_agent_id AS target_remote_agent_id,
             target_subj.kind AS target_participant_type,
-            COALESCE(target_remote_agent.name, target_actor.name, target_user.name, target.display_name) AS target_name,
+            COALESCE(target_remote_agent_app.display_name, target_actor_app.display_name, target_user.name, target.display_name) AS target_name,
             COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
             COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
             target_actor.avatar_file_id AS target_actor_avatar_file_id,
@@ -1463,7 +1475,7 @@ async function getInteractionRowByIdForUpdate(
             resolver_subj.actor_id AS resolved_by_actor_id,
             resolver_subj.remote_agent_id AS resolved_by_remote_agent_id,
             resolver_subj.kind AS resolved_by_participant_type,
-            COALESCE(resolver_remote_agent.name, resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
+            COALESCE(resolver_remote_agent_app.display_name, resolver_actor_app.display_name, resolver_user.name, resolver.display_name) AS resolved_by_name,
             COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
             COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
             resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
@@ -1484,8 +1496,12 @@ async function getInteractionRowByIdForUpdate(
        ON requester_subj.id = requester.subject_id
      LEFT JOIN actors requester_actor
        ON requester_actor.id = requester_subj.actor_id
+     LEFT JOIN workspace_apps requester_actor_app
+       ON requester_actor_app.id = requester_actor.id
      LEFT JOIN remote_agents requester_remote_agent
        ON requester_remote_agent.id = requester_subj.remote_agent_id
+     LEFT JOIN workspace_apps requester_remote_agent_app
+       ON requester_remote_agent_app.id = requester_remote_agent.id
      LEFT JOIN workspace_members requester_wm
        ON requester_wm.id = requester_subj.workspace_member_id
      LEFT JOIN users requester_user
@@ -1496,8 +1512,12 @@ async function getInteractionRowByIdForUpdate(
        ON target_subj.id = target.subject_id
      LEFT JOIN actors target_actor
        ON target_actor.id = target_subj.actor_id
+     LEFT JOIN workspace_apps target_actor_app
+       ON target_actor_app.id = target_actor.id
      LEFT JOIN remote_agents target_remote_agent
        ON target_remote_agent.id = target_subj.remote_agent_id
+     LEFT JOIN workspace_apps target_remote_agent_app
+       ON target_remote_agent_app.id = target_remote_agent.id
      LEFT JOIN workspace_members target_wm
        ON target_wm.id = target_subj.workspace_member_id
      LEFT JOIN users target_user
@@ -1508,8 +1528,12 @@ async function getInteractionRowByIdForUpdate(
        ON resolver_subj.id = resolver.subject_id
      LEFT JOIN actors resolver_actor
        ON resolver_actor.id = resolver_subj.actor_id
+     LEFT JOIN workspace_apps resolver_actor_app
+       ON resolver_actor_app.id = resolver_actor.id
      LEFT JOIN remote_agents resolver_remote_agent
        ON resolver_remote_agent.id = resolver_subj.remote_agent_id
+     LEFT JOIN workspace_apps resolver_remote_agent_app
+       ON resolver_remote_agent_app.id = resolver_remote_agent.id
      LEFT JOIN workspace_members resolver_wm
        ON resolver_wm.id = resolver_subj.workspace_member_id
      LEFT JOIN users resolver_user

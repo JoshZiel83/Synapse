@@ -60,9 +60,11 @@ export async function resolveDeviceBuiltinIds(
   const rows = await dbh
     .selectFrom("device_exposures as e")
     .innerJoin("device_capabilities as c", "c.exposure_id", "e.id")
+    .innerJoin("workspace_apps as app", "app.id", "c.id")
     .select(["e.id as exposure_id", "c.id as capability_id", "e.builtin_kind"])
     .where("e.device_id", "=", deviceId)
-    .where("c.status", "=", "active")
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "=", "active")
     .where("e.builtin_kind", "in", ["filesystem", "commandline"])
     .execute()
 
@@ -204,11 +206,12 @@ export async function revokeSandboxGrants(params: {
   // Layer 1: resolve THIS device's capability ids, then targeted-revoke only
   // those bindings (leaving other capabilities the actor/conversation may hold).
   const deviceCapabilityRows = await db
-    .selectFrom("device_capabilities")
-    .select("id")
-    .where("workspace_id", "=", params.workspaceId)
+    .selectFrom("device_capabilities as capability")
+    .innerJoin("workspace_apps as app", "app.id", "capability.id")
+    .select("capability.id")
+    .where("app.workspace_id", "=", params.workspaceId)
     .where(
-      "exposure_id",
+      "capability.exposure_id",
       "in",
       db
         .selectFrom("device_exposures")

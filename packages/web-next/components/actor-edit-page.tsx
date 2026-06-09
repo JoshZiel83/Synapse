@@ -141,14 +141,14 @@ function BasicSection({
         <CardContent className="flex flex-col gap-6">
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="actor-name">Name</FieldLabel>
+              <FieldLabel htmlFor="actor-name">Display name</FieldLabel>
               <Input
                 id="actor-name"
-                value={form.name}
+                value={form.displayName}
                 onChange={(event) =>
                   updateForm((current) => ({
                     ...current,
-                    name: event.target.value,
+                    displayName: event.target.value,
                   }))
                 }
                 placeholder="Alice"
@@ -220,7 +220,7 @@ function BasicSection({
                         .filter((option) => option.id !== actor.id)
                         .map((option) => (
                           <SelectItem key={option.id} value={option.id}>
-                            {option.definition.name} ·{" "}
+                            {option.displayName} ·{" "}
                             {option.definition.title ||
                               titleCase(option.definition.role)}
                           </SelectItem>
@@ -273,7 +273,7 @@ function BasicSection({
               <Avatar className="size-20 rounded-3xl">
                 <AvatarImage
                   src={resolveFileUrl(form.avatarUrl) || undefined}
-                  alt={form.name || actor.definition.name}
+                  alt={form.displayName || actor.displayName}
                 />
                 <AvatarFallback className="rounded-3xl bg-primary/10 text-primary">
                   <Bot className="size-8" />
@@ -281,7 +281,7 @@ function BasicSection({
               </Avatar>
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium text-foreground">
-                  {form.name || "Unnamed actor"}
+                  {form.displayName || "Unnamed actor"}
                 </div>
                 <div className="text-sm text-muted-foreground">
                   {form.title || titleCase(form.role)}
@@ -631,8 +631,8 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
 
   async function saveActor() {
     if (!workspaceId || !actor || !form) return
-    if (!form.name.trim()) {
-      toast.error("Name is required")
+    if (!form.displayName.trim()) {
+      toast.error("Display name is required")
       return
     }
 
@@ -640,7 +640,7 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
       .map(editableDocToActorDoc)
       .filter((doc): doc is ActorDoc => !!doc)
     const payload = {
-      name: form.name.trim(),
+      displayName: form.displayName.trim(),
       role: form.role,
       title: form.title.trim(),
       avatarFileId: form.avatarFileId,
@@ -721,7 +721,7 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
                 src={
                   resolveFileUrl(form.avatarUrl || actor.avatarUrl) || undefined
                 }
-                alt={form.name}
+                alt={form.displayName}
               />
               <AvatarFallback className="rounded-3xl bg-primary/10 text-primary">
                 <Bot className="size-6" />
@@ -730,7 +730,7 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="truncate text-base font-semibold text-foreground">
-                  {form.name}
+                  {form.displayName}
                 </div>
                 <Badge variant="secondary">{titleCase(form.role)}</Badge>
               </div>

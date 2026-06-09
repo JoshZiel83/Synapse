@@ -4,11 +4,13 @@ import type pg from "pg"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
+  WORKSPACE_APP_GRANT_PERMISSION,
   actorRef,
   conversationRef,
   normalizeConversationTypeMask,
   nowISO,
   REUSE_SCOPES,
+  remoteAgentRef,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
   slugify,
@@ -17,10 +19,10 @@ import {
   workspaceRef,
 } from "@synapse/shared"
 import type {
-  AccessGrant,
-  AttachmentTarget,
-  AttachmentTargetType,
+  PluginAttachmentScope,
+  PluginAttachmentScopeType,
   CapabilityAccessTarget,
+  WorkspaceAppGrant,
 } from "@synapse/shared/types"
 import type {
   PluginAuthBindingDefinition,
@@ -33,7 +35,6 @@ import type {
   McpValidationRule,
   PluginReuseScopeV2,
   RuntimeBindingScope,
-  ScopedSubjectTarget,
 } from "@synapse/shared"
 import { CompiledQuery, sql, type RawBuilder, type SqlBool } from "kysely"
 import {
@@ -63,21 +64,18 @@ import {
   assertFeishuScopesForFeatures,
   normalizeFeishuFeatureKeys,
 } from "./feishu/features.js"
-import {
-  mapAccessBindingToGrant,
-  normalizeAccessBindingRow,
-  readAccessBindingTarget,
-  type AccessBindingRow,
-} from "../access/bindings.js"
+import {} from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
-  hardDeleteBindingsForResourceOn,
-  insertAccessBindingReturningIdOn,
-  insertAccessBindingReturningRowOn,
-  loadAccessBindingRowsForResources,
-  revokeGrant,
-  updateGrantConversationTypeMaskOverride,
-} from "../access/binding-storage.js"
+  insertWorkspaceAppRoot,
+  updateWorkspaceAppRoot,
+} from "../workspace-apps/root-storage.js"
+import {
+  insertWorkspaceAppGrant,
+  revokeWorkspaceAppGrant,
+  revokeWorkspaceAppGrantsForApp,
+} from "../workspace-apps/grant-storage.js"
+import {} from "../access/binding-storage.js"
 import {
   upsertAccessSubject,
   upsertAccessSubjectOn,
@@ -87,7 +85,7 @@ import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 /**
  * P1b: translate a plugin attachment target (workspace / conversation / actor
  * / workspace_member) into a SubjectRef. Used by INSERT/UPDATE on
- * plugin_installations to populate `attachment_subject_id`.
+ * plugin_installations to populate `attachment_scope_subject_id`.
  */
 function buildPluginAttachmentSubjectRef(input: {
   workspaceId: string
@@ -180,7 +178,7 @@ type PluginCatalogRow = {
   spec_default_config: unknown
   spec_install_flow: unknown
   spec_auth_bindings: unknown
-  spec_default_mount_scope: AttachmentTargetType | null
+  spec_default_mount_scope: PluginAttachmentScopeType | null
   spec_default_reuse_scope: PluginReuseScopeV2 | null
   spec_default_conversation_type_mask: number | null
   spec_supported_reuse_scopes: unknown
@@ -225,22 +223,22 @@ type PublisherRow = {
 
 type InstallationRow = {
   installation_id: string
-  workspace_id: string
+  root_workspace_id: string
   catalog_item_id: string
   catalog_version_id: string
-  installation_display_name: string
-  attachment_target_type: AttachmentTargetType
+  root_display_name: string
+  attachment_scope_type: PluginAttachmentScopeType
   attachment_conversation_id: string | null
   attachment_actor_id: string | null
   attachment_workspace_member_id: string | null
   config_data: unknown
   approved_runtime_permissions: string[] | null
   reuse_scope: PluginReuseScopeV2
-  conversation_type_mask_override: number | null
-  installation_status: "active" | "disabled" | "error" | "archived"
-  installed_by_workspace_member_id: string | null
-  installation_created_at: string
-  installation_updated_at: string
+  root_conversation_type_mask_override: number | null
+  root_status: "active" | "disabled" | "error" | "archived"
+  root_owner_workspace_member_id: string | null
+  root_created_at: string
+  root_updated_at: string
   source_catalog_item_id: string | null
   source_catalog_version_id: string | null
   source_sync_mode:
@@ -251,7 +249,9 @@ type InstallationRow = {
     | null
 }
 
-type InstallationAccessRow = AccessBindingRow & {
+type InstallationAccessRow = {
+  id: string
+  workspace_id: string
   installation_id: string
   access_target_type: RuntimeBindingScope
   conversation_id: string | null
@@ -260,6 +260,13 @@ type InstallationAccessRow = AccessBindingRow & {
   // remote_agent targets from workspace/actor.
   remote_agent_id: string | null
   workspace_member_id: string | null
+  conversation_type_mask_override: number | null
+  status: "active" | "revoked"
+  source: "manual" | "approval" | "system"
+  created_by_workspace_member_id: string | null
+  reason: string | null
+  created_at: string
+  revoked_at: string | null
 }
 
 const PLUGIN_CATALOG_SELECT = `
@@ -446,14 +453,14 @@ function assertSupportedReuseScope(
 }
 
 function publicAttachmentScope(
-  scope: AttachmentTargetType | null | undefined
-): AttachmentTargetType {
+  scope: PluginAttachmentScopeType | null | undefined
+): PluginAttachmentScopeType {
   return scope || "workspace"
 }
 
 function internalAttachmentScope(
-  scope: AttachmentTargetType
-): AttachmentTargetType {
+  scope: PluginAttachmentScopeType
+): PluginAttachmentScopeType {
   return scope
 }
 
@@ -554,7 +561,7 @@ async function ensureBuiltinPluginIcon(
 
 function authorizationFromRuntimePermissions(
   runtimePermissions: unknown,
-  defaultScope: AttachmentTargetType,
+  defaultScope: PluginAttachmentScopeType,
   specMetadata: JsonObject
 ) {
   const rows = asArray<JsonObject>(runtimePermissions)
@@ -575,7 +582,7 @@ function authorizationFromRuntimePermissions(
 function mapPluginView(row: PluginCatalogRow) {
   const itemMetadata = asObject(row.item_metadata)
   const specMetadata = asObject(row.spec_metadata)
-  const defaultInstanceScope = publicAttachmentScope(
+  const defaultAttachmentScope = publicAttachmentScope(
     row.spec_default_mount_scope
   )
   const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope)
@@ -589,7 +596,7 @@ function mapPluginView(row: PluginCatalogRow) {
   )
   const authorization = authorizationFromRuntimePermissions(
     row.runtime_permissions_json,
-    defaultInstanceScope,
+    defaultAttachmentScope,
     specMetadata
   )
   const configFields = asArray<PluginConfigFieldDefinition>(
@@ -640,7 +647,7 @@ function mapPluginView(row: PluginCatalogRow) {
     default_reuse_scope: defaultReuseScope,
     default_conversation_type_mask: defaultConversationTypeMask,
     supported_reuse_scopes: supportedReuseScopes,
-    default_instance_scope: defaultInstanceScope,
+    default_attachment_scope: defaultAttachmentScope,
     config_schema: asObject(row.spec_config_schema),
     config_fields: configFields,
     default_config: asObject(row.spec_default_config),
@@ -840,60 +847,60 @@ function mergeConfigForUpdate(
   return merged
 }
 
-function normalizeAttachmentTarget(input: {
-  attachmentTarget: AttachmentTarget
+function normalizePluginAttachmentScope(input: {
+  attachmentScope: PluginAttachmentScope
 }) {
-  switch (input.attachmentTarget.type) {
+  switch (input.attachmentScope.type) {
     case "workspace":
       return {
-        mountScope: "workspace" as const,
+        attachmentScope: "workspace" as const,
         actorId: null,
         conversationId: null,
         workspaceMemberId: null,
       }
     case "conversation":
-      if (!input.attachmentTarget.conversationId) {
+      if (!input.attachmentScope.conversationId) {
         throw new McpPluginError(
           400,
           "conversationId is required for conversation attachment"
         )
       }
       return {
-        mountScope: "conversation" as const,
+        attachmentScope: "conversation" as const,
         actorId: null,
-        conversationId: input.attachmentTarget.conversationId,
+        conversationId: input.attachmentScope.conversationId,
         workspaceMemberId: null,
       }
     case "actor":
-      if (!input.attachmentTarget.actorId) {
+      if (!input.attachmentScope.actorId) {
         throw new McpPluginError(
           400,
           "actorId is required for actor attachment"
         )
       }
       return {
-        mountScope: "actor" as const,
-        actorId: input.attachmentTarget.actorId,
+        attachmentScope: "actor" as const,
+        actorId: input.attachmentScope.actorId,
         conversationId: null,
         workspaceMemberId: null,
       }
     case "workspace_member":
-      if (!input.attachmentTarget.workspaceMemberId) {
+      if (!input.attachmentScope.workspaceMemberId) {
         throw new McpPluginError(
           400,
           "workspaceMemberId is required for workspace_member attachment"
         )
       }
       return {
-        mountScope: "workspace_member" as const,
+        attachmentScope: "workspace_member" as const,
         actorId: null,
         conversationId: null,
-        workspaceMemberId: input.attachmentTarget.workspaceMemberId,
+        workspaceMemberId: input.attachmentScope.workspaceMemberId,
       }
     default:
       throw new McpPluginError(
         400,
-        `Unsupported attachment type: ${String(input.attachmentTarget.type)}`
+        `Unsupported attachment type: ${String(input.attachmentScope.type)}`
       )
   }
 }
@@ -902,38 +909,58 @@ function normalizeAttachmentTarget(input: {
  * D3: collapse a stored InstallationAccessRow back into the canonical
  * ScopedSubjectTarget shape, for handing off to policy / write helpers.
  *
- * Replaced the label switch with a direct
- * call to readAccessBindingTarget. The old switch defaulted any
- * unrecognized `access_target_type` to a workspace target. That decoded
- * remote_agent grants as workspace when callers like
- * grantPluginInstallationAccess (update path) and updatePluginInstallation
- * re-validated them — silently bypassing the conversation-scoped policy
- * check and the active-participant gate.
- *
- * The row at runtime carries the bindingRowSelectFor projection
- * (subject_kind + subject_*_via_join + scope_kind + scope_*_via_join)
- * that readAccessBindingTarget needs, via loadAccessBindingsByInstallationIds
- * → loadAccessBindingRowsForResources. InstallationAccessRow's type
- * doesn't expose those fields, hence the `as any` cast.
+ * Decode the plugin-installation grant row back into a canonical
+ * ScopedSubjectTarget-like shape for policy validation and UI mapping.
  */
 function installationAccessRowToTarget(
   row: InstallationAccessRow
 ): CapabilityAccessTarget {
-  // Round 11 review (P3): no fail-open fallback. The earlier version
-  // caught decode failures and returned `{ subject: workspaceRef(...) }`
-  // — but the callers (grantPluginInstallationAccess update path,
-  // updatePluginInstallation) feed the result into permission gates,
-  // so a silent workspace fallback would widen access on malformed
-  // rows. If the projection is missing the via_join fields
-  // readAccessBindingTarget expects, that's a load-path bug; propagate
-  // it instead of laundering it into a workspace grant.
-  return readAccessBindingTarget(row as any)
+  switch (row.access_target_type) {
+    case "workspace":
+      return { subject: workspaceRef(row.workspace_id) }
+    case "workspace_member":
+      return row.workspace_member_id
+        ? { subject: workspaceMemberRef(row.workspace_member_id) }
+        : { subject: workspaceRef(row.workspace_id) }
+    case "conversation":
+      return row.conversation_id
+        ? { subject: conversationRef(row.conversation_id) }
+        : { subject: workspaceRef(row.workspace_id) }
+    case "actor":
+      return row.actor_id
+        ? {
+            subject: actorRef(row.actor_id),
+            ...(row.conversation_id
+              ? { scope: conversationRef(row.conversation_id) }
+              : {}),
+          }
+        : { subject: workspaceRef(row.workspace_id) }
+    case "remote_agent":
+      return row.remote_agent_id
+        ? {
+            subject: remoteAgentRef(row.remote_agent_id),
+            ...(row.conversation_id
+              ? { scope: conversationRef(row.conversation_id) }
+              : {}),
+          }
+        : { subject: workspaceRef(row.workspace_id) }
+  }
 }
 
-function buildInstallationAccessRow(
-  row: AccessBindingRow
-): InstallationAccessRow {
-  const target = readAccessBindingTarget(row as any)
+function buildInstallationAccessRow(input: {
+  id: string
+  workspaceId: string
+  installationId: string
+  target: CapabilityAccessTarget
+  conversationTypeMaskOverride: number | null
+  status: "active" | "revoked"
+  source: "manual" | "approval" | "system"
+  createdByWorkspaceMemberId: string | null
+  reason: string | null
+  createdAt: string
+  revokedAt: string | null
+}): InstallationAccessRow {
+  const target = input.target
   const label = subjectScopeLabel(target)
   let accessTargetType: RuntimeBindingScope
   switch (label) {
@@ -966,13 +993,21 @@ function buildInstallationAccessRow(
       ? (target.subject as { memberId: string }).memberId
       : null
   return {
-    ...row,
-    installation_id: row.resource_id,
+    id: input.id,
+    workspace_id: input.workspaceId,
+    installation_id: input.installationId,
     access_target_type: accessTargetType,
     actor_id: actorId,
     remote_agent_id: remoteAgentId,
     conversation_id: conversationId,
     workspace_member_id: workspaceMemberId,
+    conversation_type_mask_override: input.conversationTypeMaskOverride,
+    status: input.status,
+    source: input.source,
+    created_by_workspace_member_id: input.createdByWorkspaceMemberId,
+    reason: input.reason,
+    created_at: input.createdAt,
+    revoked_at: input.revokedAt,
   }
 }
 
@@ -1011,7 +1046,7 @@ async function getPluginCatalogRowByItemId(itemId: string) {
 async function loadInstallationRows(
   workspaceId: string,
   filters?: {
-    attachmentType?: AttachmentTargetType
+    attachmentScopeType?: PluginAttachmentScopeType
     conversationId?: string
     actorId?: string
     workspaceMemberId?: string
@@ -1020,7 +1055,7 @@ async function loadInstallationRows(
   }
 ) {
   const conditions: RawBuilder<unknown>[] = [
-    sql`installation.workspace_id = ${workspaceId}`,
+    sql`app.workspace_id = ${workspaceId}`,
   ]
 
   if (filters?.pluginId) {
@@ -1034,47 +1069,51 @@ async function loadInstallationRows(
   const result = await db.executeQuery(
     sql<InstallationRow>`SELECT
         installation.id AS installation_id,
-        installation.workspace_id,
+        app.workspace_id AS root_workspace_id,
         installation.catalog_item_id,
         installation.catalog_version_id,
-        installation.display_name AS installation_display_name,
-        -- P1b: derive the legacy attachment_target_type + subject_*_id fields
-        -- from the joined access_subjects row. attachment_target_type maps
+        app.display_name AS root_display_name,
+        -- P1b: derive the legacy attachment_scope_type + subject_*_id fields
+        -- from the joined access_subjects row. attachment_scope_type maps
         -- subject_kind: workspace/conversation/actor/workspace_member 1:1.
-        attachment_subj.kind AS attachment_target_type,
+        attachment_subj.kind AS attachment_scope_type,
         attachment_subj.conversation_id AS attachment_conversation_id,
         attachment_subj.actor_id AS attachment_actor_id,
         attachment_subj.workspace_member_id AS attachment_workspace_member_id,
         installation.config_data,
         installation.approved_runtime_permissions,
         installation.reuse_scope,
-        installation.conversation_type_mask_override,
-        installation.status AS installation_status,
-        installation.installed_by_workspace_member_id,
-        installation.created_at AS installation_created_at,
-        installation.updated_at AS installation_updated_at,
+        app.conversation_type_mask_override AS root_conversation_type_mask_override,
+        app.status AS root_status,
+        app.owner_workspace_member_id AS root_owner_workspace_member_id,
+        app.created_at AS root_created_at,
+        app.updated_at AS root_updated_at,
         source_ref.source_catalog_item_id,
         source_ref.source_catalog_version_id,
         source_ref.sync_mode AS source_sync_mode
       -- Soft-delete (review F9/F16): read the live surface — excludes both
       -- tombstoned (deleted_at) AND non-live status (archived) installations,
       -- the same definition as plugin_installations manifest liveValues.
-      FROM plugin_installations_live installation
+      FROM plugin_installations installation
+      INNER JOIN workspace_apps app
+        ON app.id = installation.id
       INNER JOIN access_subjects attachment_subj
-        ON attachment_subj.id = installation.attachment_subject_id
+        ON attachment_subj.id = installation.attachment_scope_subject_id
       LEFT JOIN plugin_source_refs source_ref
         ON source_ref.installation_id = installation.id
-      WHERE ${sql.join(conditions, sql` AND `)}
+      WHERE app.deleted_at IS NULL
+        AND app.status IN ('active', 'disabled', 'error')
+        AND ${sql.join(conditions, sql` AND `)}
       ORDER BY installation.created_at DESC`.compile(db)
   )
 
   return result.rows.filter((row) => {
-    const attachmentTargetType = publicAttachmentScope(
-      row.attachment_target_type || "workspace"
+    const attachmentScopeType = publicAttachmentScope(
+      row.attachment_scope_type || "workspace"
     )
     if (
-      filters?.attachmentType &&
-      attachmentTargetType !== filters.attachmentType
+      filters?.attachmentScopeType &&
+      attachmentScopeType !== filters.attachmentScopeType
     ) {
       return false
     }
@@ -1098,15 +1137,50 @@ async function loadInstallationRows(
 }
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
-  // P3 consolidation: delegate the SELECT-with-access_subjects-JOIN to
-  // binding-storage so every plugin/skill/automation/device path goes through
-  // the same code.
-  const rows = await loadAccessBindingRowsForResources(db, {
-    resourceType: "plugin_installation",
-    resourceIds: [installationId],
-    includeRevoked,
-  })
-  return rows.map((row) => buildInstallationAccessRow(row))
+  let query = db
+    .selectFrom("workspace_app_grants as app_grant")
+    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
+    .leftJoin(
+      "access_subjects as scope",
+      "scope.id",
+      "app_grant.scope_subject_id"
+    )
+    .select([
+      "app_grant.id",
+      "app_grant.workspace_id",
+      "app_grant.workspace_app_id as installation_id",
+      sql<RuntimeBindingScope>`
+        CASE subj.kind
+          WHEN 'workspace' THEN 'workspace'
+          WHEN 'workspace_member' THEN 'workspace_member'
+          WHEN 'conversation' THEN 'conversation'
+          WHEN 'actor' THEN 'actor'
+          WHEN 'remote_agent' THEN 'remote_agent'
+        END
+      `.as("access_target_type"),
+      "subj.actor_id as actor_id",
+      "subj.remote_agent_id as remote_agent_id",
+      "subj.workspace_member_id as workspace_member_id",
+      "scope.conversation_id as conversation_id",
+      "app_grant.conversation_type_mask_override",
+      "app_grant.status",
+      "app_grant.source",
+      "app_grant.created_by_workspace_member_id",
+      "app_grant.reason",
+      sql<string>`app_grant.created_at::text`.as("created_at"),
+      sql<string | null>`app_grant.revoked_at::text`.as("revoked_at"),
+    ])
+    .where("app_grant.workspace_app_id", "=", installationId)
+    .where(
+      sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
+    )
+    .orderBy("app_grant.created_at", "desc")
+
+  if (!includeRevoked) {
+    query = query.where("app_grant.status", "=", "active")
+  }
+
+  return (await query.execute()) as unknown as InstallationAccessRow[]
 }
 
 function buildPluginGrantPlan(input: {
@@ -1114,7 +1188,7 @@ function buildPluginGrantPlan(input: {
     requiredPermissions: string[]
     reason?: string
   }
-  attachmentTarget: AttachmentTarget
+  attachmentScope: PluginAttachmentScope
   workspaceId: string
 }) {
   const requiredPermissions = input.authorization.requiredPermissions || []
@@ -1151,22 +1225,22 @@ function suggestedAccessTargetType(
 }
 
 function defaultAccessTargetForAttachment(
-  attachmentTarget: AttachmentTarget,
+  attachmentScope: PluginAttachmentScope,
   workspaceId: string
 ): CapabilityAccessTarget {
-  switch (attachmentTarget.type) {
+  switch (attachmentScope.type) {
     case "workspace":
       return { subject: workspaceRef(workspaceId) }
     case "conversation":
-      if (!attachmentTarget.conversationId) {
+      if (!attachmentScope.conversationId) {
         return { subject: workspaceRef(workspaceId) }
       }
-      return { subject: conversationRef(attachmentTarget.conversationId) }
+      return { subject: conversationRef(attachmentScope.conversationId) }
     case "actor":
-      if (!attachmentTarget.actorId) {
+      if (!attachmentScope.actorId) {
         return { subject: workspaceRef(workspaceId) }
       }
-      return { subject: actorRef(attachmentTarget.actorId) }
+      return { subject: actorRef(attachmentScope.actorId) }
     case "workspace_member":
       return { subject: workspaceRef(workspaceId) }
   }
@@ -1174,13 +1248,11 @@ function defaultAccessTargetForAttachment(
 
 function mapAccessRowToGrant(
   mount: InstallationAccessRow,
-  requiredPermissions: string[],
-  reason?: string,
   options?: {
     workspaceConversationTypeMask: number
     instanceConversationTypeMaskOverride: number | null
   }
-): AccessGrant {
+): WorkspaceAppGrant {
   const effectiveConversationTypeMask = options
     ? resolveNarrowedConversationTypeMask(
         resolveNarrowedConversationTypeMask(
@@ -1190,9 +1262,22 @@ function mapAccessRowToGrant(
         mount.conversation_type_mask_override
       )
     : undefined
-  return mapAccessBindingToGrant(mount, reason, {
+  return {
+    id: mount.id,
+    workspaceAppId: mount.installation_id,
+    workspaceId: mount.workspace_id,
+    target: installationAccessRowToTarget(mount),
+    permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
+    status: mount.status,
+    source: mount.source,
+    grantedByWorkspaceMemberId:
+      mount.created_by_workspace_member_id || undefined,
+    reason: mount.reason || undefined,
+    conversationTypeMaskOverride: mount.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask,
-  })
+    createdAt: mount.created_at,
+    revokedAt: mount.revoked_at || undefined,
+  }
 }
 
 function buildInstallationPayload(
@@ -1206,51 +1291,51 @@ function buildInstallationPayload(
   )
   const effectiveConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    row.conversation_type_mask_override
+    row.root_conversation_type_mask_override
   )
   const { sanitizedConfig, configState } = sanitizeInstallationConfig(
     {
       config_data: row.config_data,
-      updated_at: row.installation_updated_at,
+      updated_at: row.root_updated_at,
     },
     plugin.config_schema || {},
     plugin.config_fields || [],
     plugin.auth_bindings || []
   )
 
-  const attachmentTarget: AttachmentTarget = {
-    type: publicAttachmentScope(row.attachment_target_type),
+  const attachmentScope: PluginAttachmentScope = {
+    type: publicAttachmentScope(row.attachment_scope_type),
     actorId: row.attachment_actor_id || undefined,
     conversationId: row.attachment_conversation_id || undefined,
     workspaceMemberId: row.attachment_workspace_member_id || undefined,
   }
   const accessTarget = defaultAccessTargetForAttachment(
-    attachmentTarget,
-    row.workspace_id
+    attachmentScope,
+    row.root_workspace_id
   )
 
   return {
     id: row.installation_id,
-    workspace_id: row.workspace_id,
+    workspace_id: row.root_workspace_id,
     plugin_id: row.catalog_item_id,
-    attachment_target: attachmentTarget,
+    attachment_scope: attachmentScope,
     access_target: accessTarget,
     lifecycle_scope: publicReuseScope(row.reuse_scope),
     default_reuse_scope: plugin.default_reuse_scope,
     source_default_conversation_type_mask: sourceDefaultConversationTypeMask,
     workspace_conversation_type_mask: workspaceConversationTypeMask,
     conversation_type_mask_override:
-      row.conversation_type_mask_override ?? null,
+      row.root_conversation_type_mask_override ?? null,
     effective_conversation_type_mask: effectiveConversationTypeMask,
     supported_reuse_scopes: plugin.supported_reuse_scopes || [],
-    is_enabled: row.installation_status === "active",
-    status: row.installation_status,
+    is_enabled: row.root_status === "active",
+    status: row.root_status,
     config_data: sanitizedConfig,
     config_state: configState,
     approved_runtime_permissions: row.approved_runtime_permissions || [],
-    installed_by_workspace_member_id: row.installed_by_workspace_member_id,
-    created_at: row.installation_created_at,
-    updated_at: row.installation_updated_at,
+    ownerWorkspaceMemberId: row.root_owner_workspace_member_id,
+    created_at: row.root_created_at,
+    updated_at: row.root_updated_at,
     source_catalog_item_id: row.source_catalog_item_id,
     source_catalog_version_id: row.source_catalog_version_id,
     source_sync_mode: row.source_sync_mode,
@@ -1309,7 +1394,7 @@ async function getInstallationPayload(
   }
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
-      row.workspace_id,
+      row.root_workspace_id,
       "plugin_installation"
     )
 
@@ -1427,7 +1512,7 @@ async function upsertPluginVersion(
     entryPoint?: string
     lifecycleScope?: ReuseScope
     supportedReuseScopes?: ReuseScope[]
-    defaultInstanceScope?: AttachmentTargetType
+    defaultAttachmentScope?: PluginAttachmentScopeType
     defaultConversationTypeMask?: number
     requiresHandshake?: boolean
     toolsManifest?: unknown[]
@@ -1498,7 +1583,7 @@ async function upsertPluginVersion(
       )}::jsonb`,
       auth_bindings: sql`${JSON.stringify(input.authBindings || [])}::jsonb`,
       default_mount_scope: internalAttachmentScope(
-        input.defaultInstanceScope || "workspace"
+        input.defaultAttachmentScope || "workspace"
       ),
       default_reuse_scope: internalReuseScope(defaultReuseScope),
       default_conversation_type_mask: defaultConversationTypeMask,
@@ -1709,7 +1794,7 @@ export async function createPlugin(data: {
   longDescriptionI18n?: Record<string, string>
   summaryI18n?: Record<string, string>
   defaultLocale?: string
-  defaultInstanceScope?: AttachmentTargetType
+  defaultAttachmentScope?: PluginAttachmentScopeType
   supportedReuseScopes?: ReuseScope[]
   requiresHandshake?: boolean
   authorization?: {
@@ -1834,7 +1919,7 @@ export function validateSupportedLifecycleScope(
 export async function installPluginUnified(data: {
   workspaceId: string
   pluginId: string
-  attachmentTarget: AttachmentTarget
+  attachmentScope: PluginAttachmentScope
   lifecycleScope?: ReuseScope
   configData?: Record<string, unknown>
   authSessionIds?: Record<string, string>
@@ -1848,8 +1933,8 @@ export async function installPluginUnified(data: {
   const lifecycleScope =
     data.lifecycleScope || plugin.default_reuse_scope || "conversation"
   assertSupportedReuseScope(supportedReuseScopes, lifecycleScope, plugin.slug)
-  const target = normalizeAttachmentTarget({
-    attachmentTarget: data.attachmentTarget,
+  const target = normalizePluginAttachmentScope({
+    attachmentScope: data.attachmentScope,
   })
   const approvedRuntimePermissions =
     plugin.authorization?.requiredPermissions || []
@@ -1925,40 +2010,48 @@ export async function installPluginUnified(data: {
       client,
       buildPluginAttachmentSubjectRef({
         workspaceId: data.workspaceId,
-        scope: target.mountScope,
+        scope: target.attachmentScope,
         actorId: target.actorId,
         conversationId: target.conversationId,
         workspaceMemberId: target.workspaceMemberId,
       })
     )
+    const installationId = crypto.randomUUID()
+    await insertWorkspaceAppRoot(client, {
+      id: installationId,
+      workspaceId: data.workspaceId,
+      kind: "plugin_installation",
+      displayName: plugin.display_name,
+      ownerWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
+      status: "active",
+      conversationTypeMaskOverride:
+        plugin.default_conversation_type_mask ?? null,
+    })
     const insertedInstallation = await takeFirstOn<{ id: string }>(
       client,
       db
         .insertInto("plugin_installations")
         .values({
-          workspace_id: data.workspaceId,
+          id: installationId,
           catalog_item_id: plugin.id,
           catalog_version_id: catalogVersionId,
-          display_name: plugin.display_name,
-          attachment_subject_id: attachmentSubjectId,
+          attachment_scope_subject_id: attachmentSubjectId,
           config_data: {} as TableInsert<"plugin_installations">["config_data"],
           approved_runtime_permissions: approvedRuntimePermissions,
           reuse_scope: internalReuseScope(lifecycleScope),
-          conversation_type_mask_override:
-            plugin.default_conversation_type_mask ?? null,
-          status: "active",
-          installed_by_workspace_member_id:
-            data.installedByWorkspaceMemberId || null,
         })
         .returning("id")
     )
-    const installationId = insertedInstallation!.id
+    const insertedInstallationId = insertedInstallation!.id
+    if (insertedInstallationId !== installationId) {
+      throw new McpPluginError(500, "Plugin installation id mismatch")
+    }
 
     const resolvedConfigBase = data.configData || {}
     const resolvedConfig = await attachAuthConnectionsToConfig({
       installationId,
       workspaceId: data.workspaceId,
-      workspaceMemberId: data.attachmentTarget.workspaceMemberId || "",
+      workspaceMemberId: data.attachmentScope.workspaceMemberId || "",
       configFields: plugin.config_fields || [],
       authBindings: plugin.auth_bindings || [],
       configData: resolvedConfigBase,
@@ -1986,15 +2079,15 @@ export async function installPluginUnified(data: {
     const initialAccessTarget = await resolveAccessGrantTarget({
       workspaceId: data.workspaceId,
       target: defaultAccessTargetForAttachment(
-        data.attachmentTarget,
+        data.attachmentScope,
         data.workspaceId
       ),
     })
-    await insertAccessBindingReturningIdOn(client, {
+    await insertWorkspaceAppGrant(client as any, {
       workspaceId: data.workspaceId,
-      resourceType: "plugin_installation",
-      resourceId: installationId,
+      workspaceAppId: insertedInstallationId,
       target: initialAccessTarget,
+      permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
       createdByWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
       reason: plugin.authorization?.reason || null,
     })
@@ -2045,10 +2138,7 @@ export async function tearDownPluginInstallationOn(
   client: Executor,
   installId: string
 ): Promise<void> {
-  await hardDeleteBindingsForResourceOn(client, {
-    resourceType: "plugin_installation",
-    resourceId: installId,
-  })
+  await revokeWorkspaceAppGrantsForApp(client as any, installId)
 
   // Soft delete the installation's connections too (review F5): plugin_connections
   // is its own soft-delete root, so uninstalling the parent must close the child
@@ -2068,6 +2158,11 @@ export async function tearDownPluginInstallationOn(
       .where("installation_id", "=", installId)
       .where("deleted_at", "is", null)
   )
+  await updateWorkspaceAppRoot(client, {
+    id: installId,
+    status: "archived",
+    deletedAt: new Date(),
+  })
 
   // Soft delete (design §7.4): flip deleted_at instead of hard delete (which
   // sd_reject_delete forbids). Bindings are revoked above.
@@ -2083,13 +2178,14 @@ export async function tearDownPluginInstallationOn(
 
 export async function uninstallPluginUnified(installId: string) {
   const installation = await db
-    .selectFrom("plugin_installations")
+    .selectFrom("plugin_installations as installation")
+    .innerJoin("workspace_apps as app", "app.id", "installation.id")
     .select([
-      "id as installation_id",
-      "workspace_id",
-      "installed_by_workspace_member_id",
+      "installation.id as installation_id",
+      "app.workspace_id as workspace_id",
     ])
-    .where("id", "=", installId)
+    .where("installation.id", "=", installId)
+    .where("app.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!installation) {
@@ -2110,7 +2206,7 @@ export async function uninstallPluginUnified(installId: string) {
 export async function getInstallations(
   workspaceId: string,
   filters?: {
-    attachmentType?: AttachmentTargetType
+    attachmentScopeType?: PluginAttachmentScopeType
     conversationId?: string
     actorId?: string
     workspaceMemberId?: string
@@ -2149,15 +2245,17 @@ export async function updateInstallation(
     configData?: Record<string, unknown>
     authSessionIds?: Record<string, string>
     lifecycleScope?: ReuseScope
-    attachmentTarget?: AttachmentTarget
+    attachmentScope?: PluginAttachmentScope
     conversationTypeMaskOverride?: number | null
     updatedByWorkspaceMemberId?: string
   }
 ) {
   const currentRow = await db
-    .selectFrom("plugin_installations")
-    .select("workspace_id")
-    .where("id", "=", installId)
+    .selectFrom("plugin_installations as installation")
+    .innerJoin("workspace_apps as app", "app.id", "installation.id")
+    .select("app.workspace_id as workspace_id")
+    .where("installation.id", "=", installId)
+    .where("app.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!currentRow) {
@@ -2168,9 +2266,9 @@ export async function updateInstallation(
   const { row, plugin, workspaceConversationTypeMask } =
     await getInstallationPayload(workspaceId, installId)
 
-  const nextAttachmentType =
-    data.attachmentTarget?.type ||
-    publicAttachmentScope(row.attachment_target_type)
+  const nextAttachmentScopeType =
+    data.attachmentScope?.type ||
+    publicAttachmentScope(row.attachment_scope_type)
   const nextLifecycleScope =
     data.lifecycleScope || publicReuseScope(row.reuse_scope)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
@@ -2183,9 +2281,9 @@ export async function updateInstallation(
     plugin.slug
   )
 
-  const target = normalizeAttachmentTarget({
-    attachmentTarget: data.attachmentTarget || {
-      type: nextAttachmentType,
+  const target = normalizePluginAttachmentScope({
+    attachmentScope: data.attachmentScope || {
+      type: nextAttachmentScopeType,
       actorId: row.attachment_actor_id || undefined,
       conversationId: row.attachment_conversation_id || undefined,
       workspaceMemberId: row.attachment_workspace_member_id || undefined,
@@ -2286,7 +2384,7 @@ export async function updateInstallation(
             installationId: installId,
             workspaceId,
             workspaceMemberId:
-              data.attachmentTarget?.workspaceMemberId ||
+              data.attachmentScope?.workspaceMemberId ||
               row.attachment_workspace_member_id ||
               "",
             configFields: plugin.config_fields || [],
@@ -2317,14 +2415,7 @@ export async function updateInstallation(
     }
 
     if (data.isEnabled !== undefined) {
-      await client
-        .updateTable("plugin_installations")
-        .set({
-          status: data.isEnabled ? "active" : "disabled",
-          updated_at: sql`NOW()`,
-        })
-        .where("id", "=", installId)
-        .execute()
+      // root-only status source; no detail-table status update remains
     }
 
     if (data.lifecycleScope) {
@@ -2338,12 +2429,12 @@ export async function updateInstallation(
         .execute()
     }
 
-    if (data.attachmentTarget) {
+    if (data.attachmentScope) {
       const newSubjectId = await upsertAccessSubjectOn(
         client,
         buildPluginAttachmentSubjectRef({
           workspaceId,
-          scope: target.mountScope,
+          scope: target.attachmentScope,
           actorId: target.actorId,
           conversationId: target.conversationId,
           workspaceMemberId: target.workspaceMemberId,
@@ -2352,7 +2443,7 @@ export async function updateInstallation(
       await client
         .updateTable("plugin_installations")
         .set({
-          attachment_subject_id: newSubjectId,
+          attachment_scope_subject_id: newSubjectId,
           updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
@@ -2360,15 +2451,27 @@ export async function updateInstallation(
     }
 
     if (data.conversationTypeMaskOverride !== undefined) {
-      await client
-        .updateTable("plugin_installations")
-        .set({
-          conversation_type_mask_override: data.conversationTypeMaskOverride,
-          updated_at: sql`NOW()`,
-        })
-        .where("id", "=", installId)
-        .execute()
+      // root-only conversation-type policy source; no detail-table override update remains
     }
+
+    await updateWorkspaceAppRoot(client, {
+      id: installId,
+      displayName: row.root_display_name,
+      status:
+        data.isEnabled === undefined
+          ? row.root_status === "active"
+            ? "active"
+            : row.root_status === "disabled"
+              ? "disabled"
+              : "error"
+          : data.isEnabled
+            ? "active"
+            : "disabled",
+      conversationTypeMaskOverride:
+        data.conversationTypeMaskOverride === undefined
+          ? row.root_conversation_type_mask_override
+          : data.conversationTypeMaskOverride,
+    })
   })
 
   await incrementMcpVersion(workspaceId)
@@ -2385,7 +2488,7 @@ export async function updateInstallation(
   return getInstallation(workspaceId, installId)
 }
 
-export async function getPluginInstallationAccessState(
+export async function getPluginInstallationGrantState(
   workspaceId: string,
   installationId: string
 ) {
@@ -2395,16 +2498,11 @@ export async function getPluginInstallationAccessState(
   const grants = accessRows
     .filter((binding) => binding.status === "active")
     .map((binding) =>
-      mapAccessRowToGrant(
-        binding,
-        plugin.authorization?.requiredPermissions || [],
-        plugin.authorization?.reason,
-        {
-          workspaceConversationTypeMask,
-          instanceConversationTypeMaskOverride:
-            installation.conversation_type_mask_override ?? null,
-        }
-      )
+      mapAccessRowToGrant(binding, {
+        workspaceConversationTypeMask,
+        instanceConversationTypeMaskOverride:
+          installation.conversation_type_mask_override ?? null,
+      })
     )
 
   return {
@@ -2434,7 +2532,7 @@ export async function getPluginInstallationAccessState(
   }
 }
 
-export async function grantPluginInstallationAccess(input: {
+export async function createPluginInstallationGrant(input: {
   workspaceId: string
   installationId: string
   accessTarget?: CapabilityAccessTarget
@@ -2504,32 +2602,45 @@ export async function grantPluginInstallationAccess(input: {
       entry.workspace_member_id === accessTargetWorkspaceMemberId
   )
   if (existing) {
-    return mapAccessRowToGrant(
-      existing,
-      plugin.authorization?.requiredPermissions || [],
-      plugin.authorization?.reason,
-      {
-        workspaceConversationTypeMask,
-        instanceConversationTypeMaskOverride:
-          installation.conversation_type_mask_override ?? null,
-      }
-    )
+    return mapAccessRowToGrant(existing, {
+      workspaceConversationTypeMask,
+      instanceConversationTypeMaskOverride:
+        installation.conversation_type_mask_override ?? null,
+    })
   }
 
   const result = await withDbTransaction(async (client) => {
-    const inserted = await insertAccessBindingReturningRowOn(client, {
+    const inserted = await insertWorkspaceAppGrant(client as any, {
       workspaceId: input.workspaceId,
-      resourceType: "plugin_installation",
-      resourceId: input.installationId,
+      workspaceAppId: input.installationId,
       target: accessTarget,
+      permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
       conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
       createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
       reason: input.reason || plugin.authorization?.reason || null,
     })
 
-    const accessRow = buildInstallationAccessRow(
-      normalizeAccessBindingRow(inserted)
-    )
+    const accessRow = buildInstallationAccessRow({
+      id: inserted.id,
+      workspaceId: inserted.workspace_id,
+      installationId: inserted.workspace_app_id,
+      target: accessTarget,
+      conversationTypeMaskOverride: inserted.conversation_type_mask_override,
+      status: inserted.status,
+      source: inserted.source,
+      createdByWorkspaceMemberId: inserted.created_by_workspace_member_id,
+      reason: inserted.reason,
+      createdAt:
+        inserted.created_at instanceof Date
+          ? inserted.created_at.toISOString()
+          : String(inserted.created_at),
+      revokedAt:
+        inserted.revoked_at instanceof Date
+          ? inserted.revoked_at.toISOString()
+          : inserted.revoked_at
+            ? String(inserted.revoked_at)
+            : null,
+    })
     return {
       accessRow,
     }
@@ -2537,19 +2648,14 @@ export async function grantPluginInstallationAccess(input: {
 
   await incrementMcpVersion(input.workspaceId)
 
-  return mapAccessRowToGrant(
-    result.accessRow,
-    plugin.authorization?.requiredPermissions || [],
-    plugin.authorization?.reason,
-    {
-      workspaceConversationTypeMask,
-      instanceConversationTypeMaskOverride:
-        installation.conversation_type_mask_override ?? null,
-    }
-  )
+  return mapAccessRowToGrant(result.accessRow, {
+    workspaceConversationTypeMask,
+    instanceConversationTypeMaskOverride:
+      installation.conversation_type_mask_override ?? null,
+  })
 }
 
-export async function updatePluginInstallationAccessGrant(input: {
+export async function updatePluginInstallationGrant(input: {
   workspaceId: string
   installationId: string
   grantId: string
@@ -2563,16 +2669,11 @@ export async function updatePluginInstallationAccessGrant(input: {
     if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
       throw new McpPluginError(404, "Access grant not found")
     }
-    return mapAccessRowToGrant(
-      accessRow,
-      plugin.authorization?.requiredPermissions || [],
-      plugin.authorization?.reason,
-      {
-        workspaceConversationTypeMask,
-        instanceConversationTypeMaskOverride:
-          installation.conversation_type_mask_override ?? null,
-      }
-    )
+    return mapAccessRowToGrant(accessRow, {
+      workspaceConversationTypeMask,
+      instanceConversationTypeMaskOverride:
+        installation.conversation_type_mask_override ?? null,
+    })
   }
 
   const { plugin, installation, workspaceConversationTypeMask } =
@@ -2603,11 +2704,15 @@ export async function updatePluginInstallationAccessGrant(input: {
     buildError: (message) => new McpPluginError(400, message),
   })
 
-  await updateGrantConversationTypeMaskOverride(db, {
-    bindingId: input.grantId,
-    workspaceId: input.workspaceId,
-    conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-  })
+  await db
+    .updateTable("workspace_app_grants")
+    .set({
+      conversation_type_mask_override:
+        input.conversationTypeMaskOverride ?? null,
+    } as any)
+    .where("id", "=", input.grantId)
+    .where("workspace_id", "=", input.workspaceId)
+    .execute()
 
   const updatedAccessRows = await listAccessRows(input.installationId)
   const updatedAccessRow = updatedAccessRows.find(
@@ -2617,19 +2722,14 @@ export async function updatePluginInstallationAccessGrant(input: {
     throw new McpPluginError(404, "Access grant not found")
   }
 
-  return mapAccessRowToGrant(
-    updatedAccessRow,
-    plugin.authorization?.requiredPermissions || [],
-    plugin.authorization?.reason,
-    {
-      workspaceConversationTypeMask,
-      instanceConversationTypeMaskOverride:
-        installation.conversation_type_mask_override ?? null,
-    }
-  )
+  return mapAccessRowToGrant(updatedAccessRow, {
+    workspaceConversationTypeMask,
+    instanceConversationTypeMaskOverride:
+      installation.conversation_type_mask_override ?? null,
+  })
 }
 
-export async function revokePluginInstallationAccess(input: {
+export async function revokePluginInstallationGrant(input: {
   workspaceId: string
   installationId: string
   grantId: string
@@ -2640,10 +2740,10 @@ export async function revokePluginInstallationAccess(input: {
     throw new McpPluginError(404, "Access grant not found")
   }
   if (accessRow.status === "revoked") {
-    return mapAccessRowToGrant(accessRow, [], undefined)
+    return mapAccessRowToGrant(accessRow)
   }
 
-  await revokeGrant(db, { bindingId: accessRow.id })
+  await revokeWorkspaceAppGrant(db as any, accessRow.id)
 
   await incrementMcpVersion(input.workspaceId)
 
@@ -2656,23 +2756,23 @@ export async function revokePluginInstallationAccess(input: {
 export async function createPluginInstallPlan(input: {
   workspaceId: string
   pluginId: string
-  attachmentTarget: AttachmentTarget
+  attachmentScope: PluginAttachmentScope
 }) {
   const plugin = await getPlugin(input.pluginId)
   const defaultAccessTarget = defaultAccessTargetForAttachment(
-    input.attachmentTarget,
+    input.attachmentScope,
     input.workspaceId
   )
   return {
     packageId: plugin.id,
     revisionId: (await getPluginCatalogRowByItemId(plugin.id))!.version_id,
     workspaceId: input.workspaceId,
-    attachmentTarget: input.attachmentTarget,
+    attachmentScope: input.attachmentScope,
     defaultAccessTarget,
     checks: [],
     grantPlan: buildPluginGrantPlan({
       authorization: plugin.authorization,
-      attachmentTarget: input.attachmentTarget,
+      attachmentScope: input.attachmentScope,
       workspaceId: input.workspaceId,
     }),
   }
@@ -2782,7 +2882,7 @@ export async function seedBuiltinMcpPlugins() {
         entryPoint: pluginSeed.entryPoint,
         lifecycleScope: pluginSeed.defaultReuseScope,
         supportedReuseScopes: pluginSeed.supportedReuseScopes,
-        defaultInstanceScope: pluginSeed.defaultInstanceScope,
+        defaultAttachmentScope: pluginSeed.defaultAttachmentScope,
         requiresHandshake: pluginSeed.requiresHandshake,
         tags: pluginSeed.tags,
         categorySlugs: pluginSeed.categorySlugs,

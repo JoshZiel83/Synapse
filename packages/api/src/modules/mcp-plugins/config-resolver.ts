@@ -44,6 +44,7 @@ export async function resolveInstallationConfig(
     // manifest liveValues. Read the base table (not the _live view) so the NOT
     // NULL column types are preserved (views type every column nullable).
     .selectFrom("plugin_installations as installation")
+    .innerJoin("workspace_apps as app", "app.id", "installation.id")
     .innerJoin(
       "plugin_package_version_specs as spec",
       "spec.catalog_version_id",
@@ -56,8 +57,8 @@ export async function resolveInstallationConfig(
       "spec.config_schema",
     ])
     .where("installation.id", "=", installationId)
-    .where("installation.deleted_at", "is", null)
-    .where("installation.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
 

@@ -117,8 +117,8 @@ export function ActorEditorSheet({
 
   async function saveActor() {
     if (!workspaceId) return
-    if (!form.name.trim()) {
-      toast.error("Name is required")
+    if (!form.displayName.trim()) {
+      toast.error("Display name is required")
       return
     }
 
@@ -127,7 +127,7 @@ export function ActorEditorSheet({
       .filter((doc): doc is ActorDoc => !!doc)
 
     const payload = {
-      name: form.name.trim(),
+      displayName: form.displayName.trim(),
       role: form.role,
       title: form.title.trim(),
       avatarFileId: form.avatarFileId,
@@ -160,7 +160,7 @@ export function ActorEditorSheet({
       <SheetContent className="w-full p-0 sm:max-w-4xl">
         <SheetHeader className="border-b border-border">
           <SheetTitle>
-            {actor ? `Edit ${actor.definition.name}` : "Create actor"}
+            {actor ? `Edit ${actor.displayName}` : "Create actor"}
           </SheetTitle>
           <SheetDescription>
             Define the actor as a person with structured authority fields and
@@ -181,14 +181,14 @@ export function ActorEditorSheet({
               <CardContent className="flex flex-col gap-6">
                 <FieldGroup>
                   <Field>
-                    <FieldLabel htmlFor="actor-name">Name</FieldLabel>
+                    <FieldLabel htmlFor="actor-name">Display name</FieldLabel>
                     <Input
                       id="actor-name"
-                      value={form.name}
+                      value={form.displayName}
                       onChange={(event) =>
                         setForm((current) => ({
                           ...current,
-                          name: event.target.value,
+                          displayName: event.target.value,
                         }))
                       }
                       placeholder="Alice"
@@ -260,7 +260,7 @@ export function ActorEditorSheet({
                               .filter((option) => option.id !== actor?.id)
                               .map((option) => (
                                 <SelectItem key={option.id} value={option.id}>
-                                  {option.definition.name} ·{" "}
+                                  {option.displayName} ·{" "}
                                   {option.definition.title ||
                                     option.definition.role}
                                 </SelectItem>
@@ -302,7 +302,7 @@ export function ActorEditorSheet({
                       {form.avatarUrl ? (
                         <img
                           src={resolveFileUrl(form.avatarUrl)}
-                          alt={form.name || "Actor avatar"}
+                          alt={form.displayName || "Actor avatar"}
                           className="size-20 rounded-2xl object-cover"
                         />
                       ) : (

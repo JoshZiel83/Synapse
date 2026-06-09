@@ -136,9 +136,11 @@ async function resolveOwningWorkspaceId(
     }
     case SUBJECT_KIND.ACTOR: {
       const row = await db
-        .selectFrom("actors")
-        .select("workspace_id")
-        .where("id", "=", ref.actorId)
+        .selectFrom("actors as actor")
+        .innerJoin("workspace_apps as app", "app.id", "actor.id")
+        .select("app.workspace_id")
+        .where("actor.id", "=", ref.actorId)
+        .where("app.deleted_at", "is", null)
         .executeTakeFirst()
       if (!row) {
         throw new Error(`upsertAccessSubject: actors(${ref.actorId}) not found`)
@@ -147,9 +149,11 @@ async function resolveOwningWorkspaceId(
     }
     case SUBJECT_KIND.REMOTE_AGENT: {
       const row = await db
-        .selectFrom("remote_agents")
-        .select("workspace_id")
-        .where("id", "=", ref.remoteAgentId)
+        .selectFrom("remote_agents as agent")
+        .innerJoin("workspace_apps as app", "app.id", "agent.id")
+        .select("app.workspace_id")
+        .where("agent.id", "=", ref.remoteAgentId)
+        .where("app.deleted_at", "is", null)
         .executeTakeFirst()
       if (!row) {
         throw new Error(

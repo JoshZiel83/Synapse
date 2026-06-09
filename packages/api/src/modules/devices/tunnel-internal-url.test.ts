@@ -79,7 +79,13 @@ async function seedService(
     // access_subject(actor) + file_space.
     const actorId = randomUUID()
     await db.executeQuery(
-      sql`INSERT INTO actors (id, workspace_id, name, role, title) VALUES (${actorId}, ${workspaceId}, 'a', 'assistant', 'A')`.compile(
+      sql`INSERT INTO workspace_apps (id, workspace_id, kind, display_name, status)
+          VALUES (${actorId}, ${workspaceId}, 'actor', 'a', 'active')`.compile(
+        db
+      )
+    )
+    await db.executeQuery(
+      sql`INSERT INTO actors (id, role, title) VALUES (${actorId}, 'assistant', 'A')`.compile(
         db
       )
     )

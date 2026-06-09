@@ -99,6 +99,7 @@ function normalizeSessionRow(row: any) {
 async function getActorJoinVersionId(actorId: UUID) {
   const row = await db
     .selectFrom("actors as a")
+    .innerJoin("workspace_apps as app", "app.id", "a.id")
     .innerJoin("actor_versions as current_version", (join) =>
       join
         .onRef("current_version.actor_id", "=", "a.id")
@@ -106,6 +107,7 @@ async function getActorJoinVersionId(actorId: UUID) {
     )
     .select("current_version.id as actor_version_id")
     .where("a.id", "=", actorId)
+    .where("app.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
   return row?.actor_version_id || undefined
@@ -115,10 +117,11 @@ async function loadSession(sessionId: UUID): Promise<any | null> {
   const row = await db
     .selectFrom("sessions as s")
     .innerJoin("actors as a", "a.id", "s.actor_id")
+    .innerJoin("workspace_apps as app", "app.id", "a.id")
     .innerJoin("conversations as c", "c.id", "s.conversation_id")
     .selectAll("s")
     .select((eb) => [
-      "a.name as actor_name",
+      "app.display_name as actor_display_name",
       "c.kind as conversation_kind",
       eb
         .exists(
@@ -465,20 +468,22 @@ export async function addSessionMessage(params: {
     !isGroupConversationKind(session.conversation_kind) &&
     (role === "user" || role === "assistant")
   ) {
-    let actorName: string | undefined
+    let actorDisplayName: string | undefined
     if (fromActorId) {
-      actorName = (
+      actorDisplayName = (
         await db
-          .selectFrom("actors")
-          .select("name")
-          .where("id", "=", fromActorId)
+          .selectFrom("actors as actor")
+          .innerJoin("workspace_apps as app", "app.id", "actor.id")
+          .select("app.display_name as display_name")
+          .where("actor.id", "=", fromActorId)
+          .where("app.deleted_at", "is", null)
           .executeTakeFirst()
-      )?.name
+      )?.display_name
     }
     // session.message.new event emit removed (S13): no subscribers remain.
     void normalizedMessage
     void item
-    void actorName
+    void actorDisplayName
     void role
     void fromWorkspaceMemberId
   }
@@ -509,6 +514,7 @@ export async function getSessionMessages(
     )
     .leftJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
     .leftJoin("actors as a", "a.id", "cpsubj.actor_id")
+    .leftJoin("workspace_apps as actor_app", "actor_app.id", "a.id")
     .leftJoin("workspace_members as wm", "wm.id", "cpsubj.workspace_member_id")
     .leftJoin("users as u", "u.id", "wm.user_id")
     .select([
@@ -525,7 +531,9 @@ export async function getSessionMessages(
       "s.workspace_id",
       "cpsubj.actor_id as from_actor_id",
       "cpsubj.workspace_member_id as from_workspace_member_id",
-      sql<string | null>`COALESCE(a.name, u.name, cp.display_name)`.as(
+      sql<
+        string | null
+      >`COALESCE(actor_app.display_name, u.name, cp.display_name)`.as(
         "author_name"
       ),
     ])

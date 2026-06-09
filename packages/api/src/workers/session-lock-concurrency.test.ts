@@ -129,7 +129,11 @@ async function seedSession(db: any): Promise<string> {
     )
   )
   await db.executeQuery(
-    sql`INSERT INTO actors (id, workspace_id, name, role, title) VALUES (${actorId}, ${workspaceId}, 'A', 'assistant', 'A')`.compile(
+    sql`INSERT INTO workspace_apps (id, workspace_id, kind, display_name, status)
+        VALUES (${actorId}, ${workspaceId}, 'actor', 'A', 'active')`.compile(db)
+  )
+  await db.executeQuery(
+    sql`INSERT INTO actors (id, role, title) VALUES (${actorId}, 'assistant', 'A')`.compile(
       db
     )
   )
@@ -161,6 +165,7 @@ async function insertPendingWakeup(db: any, sessionId: string) {
  * and compute the requeue decision the same way the handler does.
  */
 async function runLockLossRecovery(
+  db: any,
   sessionId: string,
   turnId: string,
   replayUnsafeStarted: boolean
@@ -170,11 +175,11 @@ async function runLockLossRecovery(
     pendingAfterRecovery: 0, // provisional; recomputed after applying
   }).wakeupAction
   if (action === "drop") {
-    await markTurnWakeupsDropped(turnId)
+    await markTurnWakeupsDropped(turnId, db)
   } else {
-    await restoreTurnWakeupsToPending(turnId)
+    await restoreTurnWakeupsToPending(turnId, db)
   }
-  const pendingAfterRecovery = await getPendingWakeupCount(sessionId)
+  const pendingAfterRecovery = await getPendingWakeupCount(sessionId, db)
   const recovery = decideLockLossRecovery({
     replayUnsafeStarted,
     pendingAfterRecovery,
@@ -183,20 +188,19 @@ async function runLockLossRecovery(
 }
 
 test("lock lost while REPLAY-SAFE → restore wakeups + requeue (new owner re-drives)", async () => {
-  await withTestDb(async () => {
-    const { db } = await import("../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const sessionId = await seedSession(db)
     await insertPendingWakeup(db, sessionId)
     await insertPendingWakeup(db, sessionId)
 
     const turnId = randomUUID()
-    await attachPendingWakeupsToTurn(sessionId, turnId)
-    assert.equal(await getPendingWakeupCount(sessionId), 0)
+    await attachPendingWakeupsToTurn(sessionId, turnId, db)
+    assert.equal(await getPendingWakeupCount(sessionId, db), 0)
 
-    const r = await runLockLossRecovery(sessionId, turnId, false)
+    const r = await runLockLossRecovery(db, sessionId, turnId, false)
     assert.equal(r.wakeupAction, "restore")
     assert.equal(
-      await getPendingWakeupCount(sessionId),
+      await getPendingWakeupCount(sessionId, db),
       2,
       "restored wakeups must be pending again"
     )
@@ -207,19 +211,18 @@ test("lock lost while REPLAY-SAFE → restore wakeups + requeue (new owner re-dr
 test("pure-reasoning turn (no actions/message) is REPLAY-SAFE → wakeups restored not dropped", async () => {
   // Regression for the bug where sideEffectsStarted flipped true even with zero
   // actions, dropping a reasoning-only turn's input wakeups.
-  await withTestDb(async () => {
-    const { db } = await import("../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const sessionId = await seedSession(db)
     await insertPendingWakeup(db, sessionId)
 
     const turnId = randomUUID()
-    await attachPendingWakeupsToTurn(sessionId, turnId)
+    await attachPendingWakeupsToTurn(sessionId, turnId, db)
 
     // replayUnsafeStarted stays false for a no-action, no-message turn.
-    const r = await runLockLossRecovery(sessionId, turnId, false)
+    const r = await runLockLossRecovery(db, sessionId, turnId, false)
     assert.equal(r.wakeupAction, "restore")
     assert.equal(
-      await getPendingWakeupCount(sessionId),
+      await getPendingWakeupCount(sessionId, db),
       1,
       "reasoning-only turn must NOT lose its input wakeup"
     )
@@ -228,18 +231,17 @@ test("pure-reasoning turn (no actions/message) is REPLAY-SAFE → wakeups restor
 })
 
 test("lock lost while REPLAY-UNSAFE → drop this turn's wakeups (no replay)", async () => {
-  await withTestDb(async () => {
-    const { db } = await import("../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const sessionId = await seedSession(db)
     await insertPendingWakeup(db, sessionId)
 
     const turnId = randomUUID()
-    await attachPendingWakeupsToTurn(sessionId, turnId)
+    await attachPendingWakeupsToTurn(sessionId, turnId, db)
 
-    const r = await runLockLossRecovery(sessionId, turnId, true)
+    const r = await runLockLossRecovery(db, sessionId, turnId, true)
     assert.equal(r.wakeupAction, "drop")
     assert.equal(
-      await getPendingWakeupCount(sessionId),
+      await getPendingWakeupCount(sessionId, db),
       0,
       "replay-unsafe loss must NOT restore this turn's wakeups"
     )
@@ -250,21 +252,20 @@ test("lock lost while REPLAY-UNSAFE → drop this turn's wakeups (no replay)", a
 test("REPLAY-UNSAFE loss still requeues for LATE independent pending wakeups", async () => {
   // Regression for the bug where post-side-effect loss skipped the pending
   // check, stranding a message that arrived mid-turn (never attached to it).
-  await withTestDb(async () => {
-    const { db } = await import("../infrastructure/database/kysely.js")
+  await withTestDb(async (db) => {
     const sessionId = await seedSession(db)
     await insertPendingWakeup(db, sessionId) // this turn's input
 
     const turnId = randomUUID()
-    await attachPendingWakeupsToTurn(sessionId, turnId)
+    await attachPendingWakeupsToTurn(sessionId, turnId, db)
 
     // A LATE wakeup arrives mid-turn (not attached to this turn).
     await insertPendingWakeup(db, sessionId)
 
-    const r = await runLockLossRecovery(sessionId, turnId, true)
+    const r = await runLockLossRecovery(db, sessionId, turnId, true)
     assert.equal(r.wakeupAction, "drop") // this turn's own wakeup dropped
     assert.equal(
-      await getPendingWakeupCount(sessionId),
+      await getPendingWakeupCount(sessionId, db),
       1,
       "the late independent wakeup is still pending"
     )

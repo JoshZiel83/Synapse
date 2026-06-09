@@ -78,16 +78,6 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "workspace-scoped relationship entries",
   },
   {
-    table: "entity_access_requests",
-    requiredColumns: [
-      "workspace_id",
-      "target_subject_id",
-      "requester_workspace_member_id",
-      "status",
-    ],
-    reason: "merged actor + remote_agent access approval flow",
-  },
-  {
     table: "direct_conversation_bindings",
     requiredColumns: [
       "conversation_id",

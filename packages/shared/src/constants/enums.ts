@@ -36,21 +36,6 @@ export const RELATIONSHIP_APPROVAL_MODES = [
   RELATIONSHIP_APPROVAL_MODE.AUTO,
   RELATIONSHIP_APPROVAL_MODE.MANUAL,
 ] as const
-// P2: this enum used to be the value of the dropped `actors.access_policy` /
-// `remote_agents.access_policy` columns. After P2 it is a pure
-// application-layer "intent" enum — input to `setAccessPolicy(policy)` and the
-// API request bodies. `workspace_open` translates to "ensure a
-// source=default_open binding exists targeting the workspace"; `approval_required`
-// translates to "revoke any default_open binding so access requires explicit
-// approval". The DB no longer stores this value directly.
-export const RELATIONSHIP_ACCESS_POLICY = {
-  WORKSPACE_OPEN: "workspace_open",
-  APPROVAL_REQUIRED: "approval_required",
-} as const
-export const RELATIONSHIP_ACCESS_POLICIES = [
-  RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
-  RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED,
-] as const
 export const RELATIONSHIP_REQUEST_STATUS = {
   PENDING: "pending",
   APPROVED: "approved",
@@ -390,7 +375,7 @@ export const CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES = [
   "installed_skill",
   "device_capability",
 ] as const
-export const ATTACHMENT_TARGET_TYPES = [
+export const PLUGIN_ATTACHMENT_SCOPE_TYPES = [
   "workspace",
   "conversation",
   "actor",
@@ -699,11 +684,6 @@ export const TRANSPORT_DELIVERY_STATUSES = [
   "skipped",
 ] as const
 
-export const PLUGIN_AUTH_OWNER_SCOPES = [
-  "installation",
-  "workspace_member",
-  "workspace",
-] as const
 export const PLUGIN_AUTH_SESSION_STATUSES = [
   "pending",
   "completed",

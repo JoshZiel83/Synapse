@@ -51,7 +51,7 @@ function mapToolSurfaceItem(tool: ProjectedToolDefinition): ToolSurfaceItem {
 function mapSkillSurfaceItem(skill: AvailableSkillSummary): SkillSurfaceItem {
   return {
     id: skill.instanceId,
-    slug: skill.slug,
+    name: skill.name,
     source: "installed",
   }
 }

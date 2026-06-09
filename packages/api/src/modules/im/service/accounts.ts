@@ -99,11 +99,13 @@ async function assertWorkspaceActor(params: {
   }
 
   const actor = await db
-    .selectFrom("actors")
-    .select("id")
-    .where("id", "=", actorId)
-    .where("workspace_id", "=", params.workspaceId)
-    .where("is_active", "=", true)
+    .selectFrom("actors as actor")
+    .innerJoin("workspace_apps as app", "app.id", "actor.id")
+    .select("actor.id")
+    .where("actor.id", "=", actorId)
+    .where("app.workspace_id", "=", params.workspaceId)
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "=", "active")
     .limit(1)
     .executeTakeFirst()
   if (!actor?.id) {

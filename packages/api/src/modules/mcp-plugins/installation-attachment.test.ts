@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import { sql } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
@@ -55,11 +56,21 @@ async function insertWorkspaceMember(
 }
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: "test actor",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: "test actor",
+      id: actorId,
       role: "assistant",
       title: "test",
       current_version: 1,
@@ -128,16 +139,25 @@ async function insertPluginInstallation(
     catalogVersionId: string
   }
 ): Promise<string> {
+  const installationId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: installationId,
+      workspace_id: input.workspaceId,
+      kind: "plugin_installation",
+      display_name: "test installation",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("plugin_installations")
     .values({
-      workspace_id: input.workspaceId,
+      id: installationId,
       catalog_item_id: input.catalogItemId,
       catalog_version_id: input.catalogVersionId,
-      display_name: "test installation",
-      attachment_subject_id: input.subjectId,
+      attachment_scope_subject_id: input.subjectId,
       config_data: {} as any,
-      status: "active",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -164,7 +184,11 @@ test(
       })
       const row = await db
         .selectFrom("plugin_installations as p")
-        .innerJoin("access_subjects as s", "s.id", "p.attachment_subject_id")
+        .innerJoin(
+          "access_subjects as s",
+          "s.id",
+          "p.attachment_scope_subject_id"
+        )
         .select(["s.kind", "s.workspace_id"])
         .where("p.id", "=", installationId)
         .executeTakeFirstOrThrow()
@@ -212,7 +236,11 @@ test(
 
       const rows = await db
         .selectFrom("plugin_installations as p")
-        .innerJoin("access_subjects as s", "s.id", "p.attachment_subject_id")
+        .innerJoin(
+          "access_subjects as s",
+          "s.id",
+          "p.attachment_scope_subject_id"
+        )
         .select(["s.kind"])
         .where("p.id", "in", ids)
         .execute()

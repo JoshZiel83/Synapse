@@ -21,9 +21,9 @@ export interface ConversationParticipantInfo {
   participant_type?: string
   actor_id?: string
   user_id?: string
-  actor_name?: string
-  actor_title?: string
-  actor_role?: string
+  participant_name?: string
+  participant_title?: string
+  participant_role?: string
   user_name?: string
   display_name?: string
   transport_display_name?: string
@@ -119,7 +119,9 @@ function renderDocSections(
 }
 
 function buildRosterEntry(member: ConversationParticipantInfo): string {
-  const title = member.actor_title || member.actor_role || "Actor"
+  const title = member.participant_title || member.participant_role || "Actor"
+  const displayName =
+    member.participant_name || member.display_name || "Unknown actor"
   const docs = parseActorDocs(member)
     .filter((doc) => isDocVisible(doc, "multi_member_conversation", false))
     .sort((left, right) => right.priority - left.priority)
@@ -130,7 +132,7 @@ function buildRosterEntry(member: ConversationParticipantInfo): string {
     ? ` v${member.actor_current_version}`
     : ""
   const participantIdNote = member.id ? ` [participantId=${member.id}]` : ""
-  return `- [actor] **${member.actor_name}**${version} — ${title}${participantIdNote}${summary ? ` — ${summary}` : ""}`
+  return `- [actor] **${displayName}**${version} — ${title}${participantIdNote}${summary ? ` — ${summary}` : ""}`
 }
 
 function buildToolRoutingGuidance(tools: ToolDefinition[] | undefined): string {
@@ -231,7 +233,8 @@ export function buildActorPrompt(
       ? "multi_member_conversation"
       : "direct_conversation"
   const source = actorSource(actor)
-  const actorName = source.name || actor.name || "Actor"
+  const actorName =
+    source.displayName || source.name || actor.displayName || "Actor"
   const actorTitle =
     source.title || source.role || actor.title || actor.role || "Actor"
   const actorVersion = actor.current_version ?? actor.currentVersion ?? 1
@@ -293,7 +296,10 @@ export function buildActorPrompt(
         `These skills are available on demand. Do not assume their detailed contents are already loaded.\n` +
         `If one skill clearly matches the task, call \`read_skill\` to read its description or a referenced attachment before using it.\n` +
         orderedSkills
-          .map((skill) => `- \`${skill.slug}\`: ${skill.description}`)
+          .map(
+            (skill) =>
+              `- \`${skill.name}\` (\`${skill.instanceId}\`): ${skill.description}`
+          )
           .join("\n")
     )
   }

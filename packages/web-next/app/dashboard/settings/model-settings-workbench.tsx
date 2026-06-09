@@ -138,10 +138,10 @@ type WorkspaceMember = {
 
 type WorkspaceActor = {
   id: string
+  displayName?: string
   definition?: {
-    name?: string
+    title?: string
   }
-  name?: string
 }
 
 type WorkbenchUser = {
@@ -404,7 +404,12 @@ function grantTargetLabel(
     }
     case MODEL_GROUP_GRANT_SCOPE.ACTOR: {
       const actor = actors.find((item) => item.id === grant.actor_id)
-      return actor?.definition?.name || actor?.name || grant.actor_id || "Actor"
+      return (
+        actor?.displayName ||
+        actor?.definition?.title ||
+        grant.actor_id ||
+        "Actor"
+      )
     }
     default:
       return "Target"
@@ -551,7 +556,7 @@ function GrantDialog({
               >
                 {actors.map((actor) => (
                   <option key={actor.id} value={actor.id}>
-                    {actor.definition?.name || actor.name || actor.id}
+                    {actor.displayName || actor.definition?.title || actor.id}
                   </option>
                 ))}
               </select>

@@ -133,8 +133,8 @@ export type DevicePrincipal =
  * Consumer kind controls permission semantics. See docs/device-runtime-v3.md §11:
  *
  * - `chat_runtime` / `reverse_mcp` — only count explicit `use` grants from
- *   resource_access_bindings; manageable resources are NOT auto-included so
- *   the active-device picker actually narrows chat surface.
+ *   workspace_app_grants; manageable resources are NOT auto-included so the
+ *   active-device picker actually narrows chat surface.
  * - `dashboard` — also counts `view` / `manage`-derived permissions.
  */
 export type CapabilityProjectionConsumer =

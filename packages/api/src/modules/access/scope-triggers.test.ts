@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import {
   MEMORY_PERMISSION,
   SUBJECT_KIND,
@@ -44,11 +45,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 }
 
 async function newActor(db: Kysely<any>, workspaceId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: `${NS} actor`,
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: `actor-${rid()}`,
+      id: actorId,
       role: "assistant",
       title: `${NS} actor`,
       current_version: 1,
@@ -62,11 +73,21 @@ async function newRemoteAgent(
   db: Kysely<any>,
   workspaceId: string
 ): Promise<string> {
+  const remoteAgentId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: remoteAgentId,
+      workspace_id: workspaceId,
+      kind: "remote_agent",
+      display_name: `${NS} agent`,
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("remote_agents")
     .values({
-      workspace_id: workspaceId,
-      name: `agent-${rid()}`,
+      id: remoteAgentId,
       title: `${NS} agent`,
       runtime_kind: "claude_code",
     })
@@ -91,9 +112,53 @@ async function newConversation(
   return row.id as string
 }
 
-// We use resource_type='actor' for RAB tests — it has the simplest fixture
-// requirements and is in ACCESS_BINDABLE_RESOURCE_TYPES like every other
-// bindable resource.
+async function newWorkspaceMember(
+  db: Kysely<any>,
+  workspaceId: string,
+  label: string
+): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `${label}-${rid()}@${NS}`,
+      name: label,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: workspaceId,
+      user_id: user.id as string,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return member.id as string
+}
+
+async function newAutomationEventSource(
+  db: Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const memberId = await newWorkspaceMember(db, workspaceId, "creator")
+  const row = await db
+    .insertInto("automation_event_sources")
+    .values({
+      workspace_id: workspaceId,
+      provider_kind: "internal",
+      source_key: `src-${rid()}`,
+      name: "source",
+      created_by_kind: "workspace_member",
+      created_by_workspace_member_id: memberId,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+// The legacy binding table is now being narrowed toward automation-only, so
+// these trigger tests use automation_event_source as the bound resource.
 
 function rid(): string {
   return Math.random().toString(36).slice(2, 10)
@@ -192,7 +257,7 @@ test(
     await withTestDb(async (db) => {
       const wsId = await newWorkspace(db)
       const subjectActor = await newActor(db, wsId)
-      const targetActor = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
       const subjectSubj = await subj(db, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: subjectActor,
@@ -203,8 +268,8 @@ test(
           .insertInto("resource_access_bindings")
           .values({
             workspace_id: wsId,
-            resource_type: "actor",
-            actor_id: targetActor,
+            resource_type: "automation_event_source",
+            automation_event_source_id: eventSourceId,
             subject_id: subjectSubj,
             scope_subject_id: subjectSubj, // actor is NOT scope-eligible
           })
@@ -224,7 +289,7 @@ test(
       const otherWs = await newWorkspace(db)
       const otherConv = await newConversation(db, otherWs)
       const subjectActor = await newActor(db, wsId)
-      const targetActor = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
       const subjectSubj = await subj(db, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: subjectActor,
@@ -239,8 +304,8 @@ test(
           .insertInto("resource_access_bindings")
           .values({
             workspace_id: wsId,
-            resource_type: "actor",
-            actor_id: targetActor,
+            resource_type: "automation_event_source",
+            automation_event_source_id: eventSourceId,
             subject_id: subjectSubj,
             scope_subject_id: otherConvSubj,
           })
@@ -258,7 +323,7 @@ test(
     await withTestDb(async (db) => {
       const wsId = await newWorkspace(db)
       const subjectActor = await newActor(db, wsId)
-      const targetActor = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
       const subjectSubj = await subj(db, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: subjectActor,
@@ -268,8 +333,8 @@ test(
         .insertInto("resource_access_bindings")
         .values({
           workspace_id: wsId,
-          resource_type: "actor",
-          actor_id: targetActor,
+          resource_type: "automation_event_source",
+          automation_event_source_id: eventSourceId,
           subject_id: subjectSubj,
           // scope_subject_id omitted → NULL
         })
@@ -286,7 +351,7 @@ test(
       const wsId = await newWorkspace(db)
       const conv = await newConversation(db, wsId)
       const subjectActor = await newActor(db, wsId)
-      const targetActor = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
       const subjectSubj = await subj(db, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: subjectActor,
@@ -300,8 +365,8 @@ test(
         .insertInto("resource_access_bindings")
         .values({
           workspace_id: wsId,
-          resource_type: "actor",
-          actor_id: targetActor,
+          resource_type: "automation_event_source",
+          automation_event_source_id: eventSourceId,
           subject_id: subjectSubj,
           scope_subject_id: convSubj,
         })
@@ -316,7 +381,7 @@ test(
   async () => {
     await withTestDb(async (db) => {
       const wsId = await newWorkspace(db)
-      const targetActor = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
       const userRow = await db
         .insertInto("users")
         .values({
@@ -335,8 +400,8 @@ test(
           .insertInto("resource_access_bindings")
           .values({
             workspace_id: wsId,
-            resource_type: "actor",
-            actor_id: targetActor,
+            resource_type: "automation_event_source",
+            automation_event_source_id: eventSourceId,
             subject_id: userSubj,
           })
           .execute(),
@@ -354,7 +419,7 @@ test(
       const wsA = await newWorkspace(db)
       const wsB = await newWorkspace(db)
       const actorB = await newActor(db, wsB)
-      const targetA = await newActor(db, wsA)
+      const eventSourceId = await newAutomationEventSource(db, wsA)
       const actorBSubj = await subj(db, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: actorB,
@@ -365,8 +430,8 @@ test(
           .insertInto("resource_access_bindings")
           .values({
             workspace_id: wsA,
-            resource_type: "actor",
-            actor_id: targetA,
+            resource_type: "automation_event_source",
+            automation_event_source_id: eventSourceId,
             subject_id: actorBSubj,
           })
           .execute(),
@@ -384,7 +449,7 @@ test(
       const wsA = await newWorkspace(db)
       const wsB = await newWorkspace(db)
       const actorA = await newActor(db, wsA)
-      const targetB = await newActor(db, wsB)
+      const eventSourceB = await newAutomationEventSource(db, wsB)
       const actorASubj = await subj(db, {
         kind: SUBJECT_KIND.ACTOR,
         actorId: actorA,
@@ -395,8 +460,8 @@ test(
           .insertInto("resource_access_bindings")
           .values({
             workspace_id: wsA,
-            resource_type: "actor",
-            actor_id: targetB,
+            resource_type: "automation_event_source",
+            automation_event_source_id: eventSourceB,
             subject_id: actorASubj,
           })
           .execute(),
@@ -446,10 +511,21 @@ async function newDevice(
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
+  const capabilityId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: capabilityId,
+      workspace_id: workspaceId,
+      kind: "device_capability",
+      display_name: `${NS} capability`,
+      status: "active",
+    } as any)
+    .execute()
   const cap = await db
     .insertInto("device_capabilities")
     .values({
-      workspace_id: workspaceId,
+      id: capabilityId,
       exposure_id: exp.id as string,
     } as any)
     .returning("id")

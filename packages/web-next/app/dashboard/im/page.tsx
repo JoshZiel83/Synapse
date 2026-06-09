@@ -123,7 +123,7 @@ type WorkspaceDirectoryMember = {
 
 type WorkspaceActorOption = {
   actorId: string
-  name: string
+  displayName: string
   title?: string
 }
 
@@ -262,7 +262,9 @@ function workspaceMemberLabel(member: WorkspaceDirectoryMember) {
 }
 
 function actorOptionLabel(actor: WorkspaceActorOption) {
-  return actor.title ? `${actor.name} · ${actor.title}` : actor.name
+  return actor.title
+    ? `${actor.displayName} · ${actor.title}`
+    : actor.displayName
 }
 
 function transportAccountOwnerLabel(
@@ -724,7 +726,11 @@ export default function ImPage() {
         .filter((actor) => actor.isActive)
         .map((actor) => ({
           actorId: actor.id,
-          name: actor.definition.name,
+          displayName:
+            actor.displayName ||
+            actor.definition.title ||
+            actor.definition.role ||
+            "Untitled actor",
           title: actor.definition.title || actor.definition.role,
         }))
         .sort((left, right) =>
@@ -2744,7 +2750,7 @@ export default function ImPage() {
                     ? actorOptionLabel(
                         actorById.get(draft.inboundActorId) || {
                           actorId: draft.inboundActorId,
-                          name: draft.inboundActorId,
+                          displayName: draft.inboundActorId,
                         }
                       )
                     : "Select actor"

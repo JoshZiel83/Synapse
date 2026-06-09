@@ -127,21 +127,25 @@ const emptyMachineDraft = {
 }
 
 type CreateAgentDraft = {
-  name: string
+  displayName: string
   title: string
   description: string
   runtimeKind: RemoteAgentRuntimeKind
-  accessPolicy: "workspace_open" | "approval_required"
+  requiresContactApproval: boolean
   isPublicShared: boolean
 }
 
 const emptyAgentDraft: CreateAgentDraft = {
-  name: "",
+  displayName: "",
   title: "",
   description: "",
   runtimeKind: "claude_code" as RemoteAgentRuntimeKind,
-  accessPolicy: "workspace_open",
+  requiresContactApproval: false,
   isPublicShared: false,
+}
+
+function contactApprovalLabel(requiresContactApproval: boolean) {
+  return requiresContactApproval ? "Approval required" : "Open to workspace"
 }
 
 export default function RemoteAgentsPage() {
@@ -212,7 +216,7 @@ export default function RemoteAgentsPage() {
     if (!deferredSearch) return agents
     return agents.filter((agent) =>
       [
-        agent.name,
+        agent.displayName,
         agent.title,
         agent.description,
         agent.runtimeKind,
@@ -255,11 +259,11 @@ export default function RemoteAgentsPage() {
     setCreatingAgent(true)
     try {
       const result = await api.createRemoteAgent(workspaceId, {
-        name: agentDraft.name.trim(),
+        displayName: agentDraft.displayName.trim(),
         title: agentDraft.title.trim(),
         description: agentDraft.description.trim() || undefined,
         runtimeKind: agentDraft.runtimeKind,
-        accessPolicy: agentDraft.accessPolicy,
+        requiresContactApproval: agentDraft.requiresContactApproval,
         isPublicShared: agentDraft.isPublicShared,
       })
       setAgentDialogOpen(false)
@@ -421,7 +425,7 @@ export default function RemoteAgentsPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
                       <div className="text-base font-semibold text-foreground">
-                        {agent.name}
+                        {agent.displayName}
                       </div>
                       <div className="text-sm text-muted-foreground">
                         {agent.title}
@@ -455,7 +459,10 @@ export default function RemoteAgentsPage() {
                     </p>
                   ) : null}
                   <div className="mt-4 grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
-                    <div>Access: {agent.accessPolicy.replace("_", " ")}</div>
+                    <div>
+                      Contact access:{" "}
+                      {contactApprovalLabel(agent.requiresContactApproval)}
+                    </div>
                     <div>
                       Machine: {agent.binding?.machineTitle || "Not bound yet"}
                     </div>
@@ -568,15 +575,15 @@ export default function RemoteAgentsPage() {
           </DialogHeader>
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="agent-name">Name</FieldLabel>
+              <FieldLabel htmlFor="agent-name">Display name</FieldLabel>
               <FieldContent>
                 <Input
                   id="agent-name"
-                  value={agentDraft.name}
+                  value={agentDraft.displayName}
                   onChange={(event) =>
                     setAgentDraft((current) => ({
                       ...current,
-                      name: event.target.value,
+                      displayName: event.target.value,
                     }))
                   }
                   placeholder="Claude Repo A"
@@ -629,36 +636,26 @@ export default function RemoteAgentsPage() {
               </FieldContent>
             </Field>
             <Field>
-              <FieldLabel htmlFor="agent-access">Access policy</FieldLabel>
+              <FieldLabel htmlFor="agent-approval">
+                Require contact approval
+              </FieldLabel>
               <FieldContent>
-                <Select
-                  value={agentDraft.accessPolicy}
-                  onValueChange={(
-                    value: "workspace_open" | "approval_required"
-                  ) =>
-                    setAgentDraft((current) => ({
-                      ...current,
-                      accessPolicy: value,
-                    }))
-                  }
-                >
-                  <SelectTrigger
-                    id="agent-access"
-                    className="w-full rounded-2xl"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="workspace_open">
-                        Workspace open
-                      </SelectItem>
-                      <SelectItem value="approval_required">
-                        Approval required
-                      </SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center justify-between gap-4 rounded-2xl border border-border px-4 py-3">
+                  <FieldDescription className="m-0">
+                    When enabled, workspace members must request access before
+                    they can start a direct conversation with this remote agent.
+                  </FieldDescription>
+                  <Switch
+                    id="agent-approval"
+                    checked={agentDraft.requiresContactApproval}
+                    onCheckedChange={(checked) =>
+                      setAgentDraft((current) => ({
+                        ...current,
+                        requiresContactApproval: checked,
+                      }))
+                    }
+                  />
+                </div>
               </FieldContent>
             </Field>
             <Field>
@@ -715,7 +712,7 @@ export default function RemoteAgentsPage() {
               onClick={() => void handleCreateAgent()}
               disabled={
                 creatingAgent ||
-                !agentDraft.name.trim() ||
+                !agentDraft.displayName.trim() ||
                 !agentDraft.title.trim()
               }
             >

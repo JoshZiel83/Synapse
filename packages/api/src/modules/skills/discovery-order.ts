@@ -2,8 +2,8 @@ import type { AvailableSkillSummary } from "@synapse/shared"
 
 // Device-runtime v3 (PR #20+): the `relay_auto_loaded` source kind has been
 // removed alongside the relay subsystem. All visible skills are now
-// installed skills. The discovery order is purely alphabetical by slug
-// (cli-anything-* aliases of installed skills already share that prefix).
+// installed skills. The discovery order is purely alphabetical by display
+// name, with instance id as a stable tiebreaker.
 function skillDiscoveryPriority(_skill: AvailableSkillSummary) {
   return 0
 }
@@ -17,7 +17,11 @@ export function compareAvailableSkillDiscoveryOrder(
   if (leftPriority !== rightPriority) {
     return leftPriority - rightPriority
   }
-  return left.slug.localeCompare(right.slug)
+  const nameOrder = left.name.localeCompare(right.name)
+  if (nameOrder !== 0) {
+    return nameOrder
+  }
+  return left.instanceId.localeCompare(right.instanceId)
 }
 
 export function sortAvailableSkillsForDiscovery(

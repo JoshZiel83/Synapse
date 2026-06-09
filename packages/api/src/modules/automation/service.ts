@@ -2,7 +2,7 @@ import crypto from "node:crypto"
 import cronParser from "cron-parser"
 import { v4 as uuidv4 } from "uuid"
 import type {
-  AccessGrant,
+  AutomationEventSourceAccessGrant,
   CapabilityAccessTarget,
   AutomationCategory,
   AutomationCompletionStatus,
@@ -75,18 +75,18 @@ import { enqueueSessionWakeup } from "../session/runtime.js"
 import { getSession } from "../session/service.js"
 import { getWorkspaceMemberIdentityById } from "../chat/workspace-identity.js"
 import {
-  accessBindingHasTarget,
-  mapAccessBindingToGrant,
-  normalizeAccessBindingRow,
-  readAccessBindingTarget,
-  type AccessBindingRow,
+  automationEventSourceAccessBindingHasTarget,
+  mapAutomationEventSourceAccessBindingToGrant,
+  normalizeAutomationEventSourceAccessBindingRow,
+  readAutomationEventSourceAccessBindingTarget,
+  type AutomationEventSourceBindingRow,
 } from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
-  insertAccessBindingReturningRowOn,
-  loadAccessBindingRowsForResources,
-  revokeGrant,
-  updateGrantConversationTypeMaskOverride,
+  insertAutomationEventSourceAccessBindingReturningRowOn,
+  loadAutomationEventSourceAccessBindingRowsForSources,
+  revokeAutomationEventSourceAccessBinding,
+  updateAutomationEventSourceAccessGrantConversationTypeMaskOverride,
 } from "../access/binding-storage.js"
 
 type AutomationRuleRow = {
@@ -260,7 +260,7 @@ type TargetParticipantRow = {
   target_participant_id: string
 }
 
-type AutomationEventSourceAccessRow = AccessBindingRow
+type AutomationEventSourceAccessRow = AutomationEventSourceBindingRow
 
 type AutomationEventSourceAccessContext = {
   conversationId: string
@@ -1353,9 +1353,9 @@ async function loadAutomationEventSourceAccessRows(
   }
 
   // P3: delegate the SELECT-with-access_subjects-JOIN to binding-storage. The
-  // helper returns normalized AccessBindingRow rows; this function only has to
+  // helper returns normalized AutomationEventSourceBindingRow rows; this function only has to
   // bucket them by event source.
-  const rows = await loadAccessBindingRowsForResources(db, {
+  const rows = await loadAutomationEventSourceAccessBindingRowsForSources(db, {
     resourceType: "automation_event_source",
     resourceIds: uniqueIds,
     workspaceId,
@@ -1398,7 +1398,7 @@ function automationEventSourceGrantApplies(params: {
     return false
   }
 
-  const target = readAccessBindingTarget(params.row as any)
+  const target = readAutomationEventSourceAccessBindingTarget(params.row as any)
   const subject = target.subject
   const scope = target.scope
   switch (subject.kind) {
@@ -1473,8 +1473,8 @@ async function assertAutomationEventSourceAccessible(params: {
 
 function mapAutomationEventSourceAccessGrant(
   row: AutomationEventSourceAccessRow
-) {
-  return mapAccessBindingToGrant(
+): AutomationEventSourceAccessGrant {
+  return mapAutomationEventSourceAccessBindingToGrant(
     row,
     "Automation event sources require explicit use access.",
     {
@@ -1592,33 +1592,35 @@ export async function grantAutomationEventSourceAccess(input: {
     input.eventSourceId
   )
   const existing = existingRows.find((row) =>
-    accessBindingHasTarget(row, target)
+    automationEventSourceAccessBindingHasTarget(row, target)
   )
   if (existing) {
     return mapAutomationEventSourceAccessGrant(existing)
   }
 
   const inserted = await withDbTransaction(async (trx) => {
-    const binding = await insertAccessBindingReturningRowOn(trx, {
-      workspaceId: input.workspaceId,
-      resourceType: "automation_event_source",
-      resourceId: input.eventSourceId,
-      target,
-      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
-      reason: input.reason || "Automation event source access grant",
-    })
+    const binding =
+      await insertAutomationEventSourceAccessBindingReturningRowOn(trx, {
+        workspaceId: input.workspaceId,
+        resourceType: "automation_event_source",
+        resourceId: input.eventSourceId,
+        target,
+        conversationTypeMaskOverride:
+          input.conversationTypeMaskOverride ?? null,
+        createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+        reason: input.reason || "Automation event source access grant",
+      })
 
     return {
       binding: {
         ...binding,
         resource_id: binding.automation_event_source_id!,
-      } as AccessBindingRow,
+      } as AutomationEventSourceBindingRow,
     }
   })
 
   return mapAutomationEventSourceAccessGrant(
-    normalizeAccessBindingRow(inserted.binding)
+    normalizeAutomationEventSourceAccessBindingRow(inserted.binding)
   )
 }
 
@@ -1651,11 +1653,15 @@ export async function updateAutomationEventSourceAccessGrant(input: {
       })
     }
 
-    await updateGrantConversationTypeMaskOverride(db, {
-      bindingId: input.bindingId,
-      workspaceId: input.workspaceId,
-      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
-    })
+    await updateAutomationEventSourceAccessGrantConversationTypeMaskOverride(
+      db,
+      {
+        bindingId: input.bindingId,
+        workspaceId: input.workspaceId,
+        conversationTypeMaskOverride:
+          input.conversationTypeMaskOverride ?? null,
+      }
+    )
   }
 
   const updatedRows = await listAutomationEventSourceAccessRows(
@@ -1770,7 +1776,9 @@ export async function revokeAutomationEventSourceAccess(input: {
     throw new Error("Automation event source access binding not found")
   }
 
-  await revokeGrant(db, { bindingId: input.bindingId })
+  await revokeAutomationEventSourceAccessBinding(db, {
+    bindingId: input.bindingId,
+  })
   await pauseAutomationRulesMissingEventSourceAccess(
     input.eventSourceId,
     input.operator,

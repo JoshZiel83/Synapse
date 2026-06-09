@@ -1744,7 +1744,7 @@ export async function actorThink(
               participantType: "actor",
               actorId: actor.id,
               sessionId: options?.sessionId,
-              name: actorDefinition.name,
+              name: actorDefinition.displayName,
               isSelf: true,
             },
             content:

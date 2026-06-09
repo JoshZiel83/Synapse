@@ -33,7 +33,7 @@ type PickerMode = "launch"
 type PickerIntent = "submit" | "target"
 type LaunchActor = {
   id: string
-  name: string
+  displayName: string
   role: string
   title: string
   avatarUrl?: string
@@ -61,7 +61,7 @@ function toLaunchActor(
 
   return {
     id: actor.id,
-    name: actor.name,
+    displayName: actor.displayName,
     role: actor.role,
     title: actor.title,
     avatarUrl: actor.avatarUrl,
@@ -144,7 +144,7 @@ export default function DashboardHomePage() {
             const normalized = normalizeChiefActorOption(actor)
             return {
               id: normalized.id,
-              name: normalized.name,
+              displayName: normalized.displayName,
               role: normalized.role,
               title: normalized.title,
               avatarUrl: normalized.avatarUrl,
@@ -152,7 +152,9 @@ export default function DashboardHomePage() {
               summary: normalized.summary,
             } satisfies LaunchActor
           })
-          .sort((left, right) => left.name.localeCompare(right.name))
+          .sort((left, right) =>
+            left.displayName.localeCompare(right.displayName)
+          )
 
         setAvailableActors(nextActors)
       })
@@ -175,7 +177,7 @@ export default function DashboardHomePage() {
     () =>
       availableActors.map((actor) => ({
         id: actor.id,
-        name: actor.name,
+        name: actor.displayName,
         participantType: "actor",
         targetType: "actor",
         actorId: actor.id,
@@ -184,7 +186,12 @@ export default function DashboardHomePage() {
         avatarUrl: actor.avatarUrl,
         emoji: actor.emoji,
         description: actor.summary || actor.title || actor.role,
-        searchTerms: [actor.name, actor.title, actor.role, actor.summary || ""],
+        searchTerms: [
+          actor.displayName,
+          actor.title,
+          actor.role,
+          actor.summary || "",
+        ],
       })),
     [availableActors]
   )
@@ -210,7 +217,7 @@ export default function DashboardHomePage() {
       new Set(groupedActors.map((actor) => actor.id).filter(Boolean))
     )
     const threadTitle = groupedActors
-      .map((actor) => actor.name.trim())
+      .map((actor) => actor.displayName.trim())
       .filter(Boolean)
       .join(", ")
 
@@ -368,7 +375,7 @@ export default function DashboardHomePage() {
                       >
                         {launchActor ? (
                           <ChatAvatar
-                            name={launchActor.name}
+                            name={launchActor.displayName}
                             avatarUrl={launchActor.avatarUrl}
                             emoji={launchActor.emoji}
                             entityType="actor"
@@ -381,7 +388,9 @@ export default function DashboardHomePage() {
                           To
                         </span>
                         <span className="min-w-0 truncate font-medium text-foreground">
-                          {launchActor ? launchActor.name : "Select actor"}
+                          {launchActor
+                            ? launchActor.displayName
+                            : "Select actor"}
                         </span>
                         {targetLabel ? (
                           <span className="hidden max-w-36 truncate text-xs sm:inline">

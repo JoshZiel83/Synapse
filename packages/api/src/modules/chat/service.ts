@@ -779,28 +779,28 @@ async function listConversationParticipantRows(
     return [] as ParticipantRow[]
   }
 
-  const actorNameExpr = options?.useProfileSnapshot
-    ? "COALESCE(ra.name, joined_version.name, a.name)"
-    : "COALESCE(ra.name, a.name)"
-  const actorTitleExpr = options?.useProfileSnapshot
+  const participantDisplayNameExpr = options?.useProfileSnapshot
+    ? "COALESCE(remote_agent_app.display_name, joined_version.display_name, actor_app.display_name)"
+    : "COALESCE(remote_agent_app.display_name, actor_app.display_name)"
+  const participantTitleExpr = options?.useProfileSnapshot
     ? "COALESCE(ra.title, joined_version.title, a.title)"
     : "COALESCE(ra.title, a.title)"
-  const actorRoleExpr = options?.useProfileSnapshot
+  const participantRoleExpr = options?.useProfileSnapshot
     ? "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, joined_version.role::text, a.role::text)"
     : "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text)"
-  const actorCanRepresentExpr = options?.useProfileSnapshot
+  const participantCanRepresentExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.can_represent_user, a.can_represent_user)"
     : "a.can_represent_user"
-  const actorSpecialtiesExpr = options?.useProfileSnapshot
+  const participantSpecialtiesExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.specialties, a.specialties)"
     : "a.specialties"
-  const actorConfigExpr = options?.useProfileSnapshot
+  const participantConfigExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.config, a.config)"
     : "a.config"
-  const actorCurrentVersionExpr = options?.useProfileSnapshot
+  const participantCurrentVersionExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.version, a.current_version)"
     : "a.current_version"
-  const actorDocVersionExpr = options?.useProfileSnapshot
+  const participantDocVersionExpr = options?.useProfileSnapshot
     ? "COALESCE(cp.actor_join_version_id, current_version.id)"
     : "current_version.id"
 
@@ -823,9 +823,9 @@ async function listConversationParticipantRows(
         cp.left_at,
         wm.user_id,
         u.name AS user_name,
-        ${actorNameExpr} AS participant_name,
-        ${actorTitleExpr} AS participant_title,
-        ${actorRoleExpr} AS participant_role,
+        ${participantDisplayNameExpr} AS participant_name,
+        ${participantTitleExpr} AS participant_title,
+        ${participantRoleExpr} AS participant_role,
         CASE
           WHEN ra.id IS NOT NULL THEN '[]'::jsonb
           ELSE COALESCE(
@@ -841,15 +841,15 @@ async function listConversationParticipantRows(
                 ORDER BY avd.priority DESC, avd.created_at ASC
               )
               FROM actor_version_docs avd
-              WHERE avd.actor_version_id = ${actorDocVersionExpr}
+              WHERE avd.actor_version_id = ${participantDocVersionExpr}
             ),
             '[]'::jsonb
           )
         END AS actor_docs,
-        ${actorCanRepresentExpr} AS actor_can_represent_user,
-        ${actorSpecialtiesExpr} AS actor_specialties,
-        ${actorConfigExpr} AS actor_config,
-        ${actorCurrentVersionExpr} AS actor_current_version,
+        ${participantCanRepresentExpr} AS actor_can_represent_user,
+        ${participantSpecialtiesExpr} AS actor_specialties,
+        ${participantConfigExpr} AS actor_config,
+        ${participantCurrentVersionExpr} AS actor_current_version,
         a.avatar_emoji AS participant_avatar_emoji,
         a.avatar_file_id AS participant_avatar_file_id,
         u.avatar_file_id AS user_avatar_file_id,
@@ -867,7 +867,9 @@ async function listConversationParticipantRows(
       LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN actors a ON a.id = cpsubj.actor_id
+      LEFT JOIN workspace_apps actor_app ON actor_app.id = a.id
       LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
+      LEFT JOIN workspace_apps remote_agent_app ON remote_agent_app.id = ra.id
       LEFT JOIN actor_versions current_version
         ON current_version.actor_id = a.id
        AND current_version.version = a.current_version
@@ -932,7 +934,7 @@ async function getWorkspaceMemberConversationParticipantRow(
         cp.left_at,
         wm.user_id,
         u.name AS user_name,
-        COALESCE(ra.name, a.name) AS participant_name,
+        COALESCE(remote_agent_app.display_name, actor_app.display_name) AS participant_name,
         COALESCE(ra.title, a.title) AS participant_title,
         COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text) AS participant_role,
         '[]'::jsonb AS actor_docs,
@@ -957,7 +959,9 @@ async function getWorkspaceMemberConversationParticipantRow(
       LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN actors a ON a.id = cpsubj.actor_id
+      LEFT JOIN workspace_apps actor_app ON actor_app.id = a.id
       LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
+      LEFT JOIN workspace_apps remote_agent_app ON remote_agent_app.id = ra.id
       LEFT JOIN LATERAL (
         SELECT
           ta.id,
@@ -2583,15 +2587,19 @@ async function loadActorsByIds(
   actorIds: string[]
 ) {
   if (actorIds.length === 0) {
-    return [] as Array<{ id: string; name: string }>
+    return [] as Array<{ id: string; display_name: string }>
   }
-  const result = await runOn<{ id: string; name: string }>(
+  const result = await runOn<{ id: string; display_name: string }>(
     queryable,
     `
-      SELECT id, name
-      FROM actors
-      WHERE workspace_id = $1
-        AND id = ANY($2::uuid[])
+      SELECT actor.id, app.display_name
+      FROM actors actor
+      INNER JOIN workspace_apps app
+        ON app.id = actor.id
+      WHERE app.workspace_id = $1
+        AND app.deleted_at IS NULL
+        AND app.status = 'active'
+        AND actor.id = ANY($2::uuid[])
     `,
     [workspaceId, actorIds]
   )
@@ -2604,16 +2612,19 @@ async function loadRemoteAgentsByIds(
   remoteAgentIds: string[]
 ) {
   if (remoteAgentIds.length === 0) {
-    return [] as Array<{ id: string; name: string }>
+    return [] as Array<{ id: string; display_name: string }>
   }
-  const result = await runOn<{ id: string; name: string }>(
+  const result = await runOn<{ id: string; display_name: string }>(
     queryable,
     `
-      SELECT id, name
-      FROM remote_agents
-      WHERE workspace_id = $1
-        AND is_active = TRUE
-        AND id = ANY($2::uuid[])
+      SELECT agent.id, app.display_name
+      FROM remote_agents agent
+      INNER JOIN workspace_apps app
+        ON app.id = agent.id
+      WHERE app.workspace_id = $1
+        AND app.deleted_at IS NULL
+        AND app.status = 'active'
+        AND agent.id = ANY($2::uuid[])
     `,
     [workspaceId, remoteAgentIds]
   )
@@ -2788,7 +2799,7 @@ export async function createConversationForWorkspaceMember(params: {
         conversationId: conversation.id as string,
         participantType: "actor",
         actorId: actor.id,
-        displayName: actor.name,
+        displayName: actor.display_name,
         queryable,
       })
     }
@@ -2798,7 +2809,7 @@ export async function createConversationForWorkspaceMember(params: {
         conversationId: conversation.id as string,
         participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
-        displayName: remoteAgent.name,
+        displayName: remoteAgent.display_name,
         queryable,
       })
     }
@@ -3168,7 +3179,7 @@ export async function addConversationParticipants(params: {
           conversationId: params.conversationId,
           participantType: "actor",
           actorId: actor.id,
-          displayName: actor.name,
+          displayName: actor.display_name,
           queryable,
         })
       }
@@ -3192,7 +3203,7 @@ export async function addConversationParticipants(params: {
           conversationId: params.conversationId,
           participantType: "remote_agent",
           remoteAgentId: remoteAgent.id,
-          displayName: remoteAgent.name,
+          displayName: remoteAgent.display_name,
           queryable,
         })
       }
@@ -4562,7 +4573,7 @@ export async function createChatConversation(params: {
         conversationId: newConversationId,
         participantType: "actor",
         actorId: actor.id,
-        displayName: actor.name,
+        displayName: actor.display_name,
         roleKey: "member",
         metadata: {},
       })
@@ -4573,7 +4584,7 @@ export async function createChatConversation(params: {
         conversationId: newConversationId,
         participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
-        displayName: remoteAgent.name,
+        displayName: remoteAgent.display_name,
         roleKey: "member",
         metadata: {},
       })

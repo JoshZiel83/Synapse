@@ -204,7 +204,7 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
             <Avatar className="size-14 rounded-3xl">
               <AvatarImage
                 src={resolveFileUrl(actor.avatarUrl) || undefined}
-                alt={actor.definition.name}
+                alt={actor.displayName}
               />
               <AvatarFallback className="rounded-3xl bg-primary/10 text-primary">
                 <Bot className="size-6" />
@@ -212,7 +212,7 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
             </Avatar>
             <div className="min-w-0 flex-1">
               <div className="truncate text-base font-semibold text-foreground">
-                {actor.definition.name}
+                {actor.displayName}
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {actor.definition.title || titleCase(actor.definition.role)}
@@ -464,7 +464,7 @@ export function ActorVersionHistoryPage({ actorId }: { actorId: string }) {
                                 Name
                               </span>
                               <span className="font-medium text-foreground">
-                                {selectedVersion.snapshot.name}
+                                {selectedVersion.snapshot.displayName}
                               </span>
                             </div>
                             <Separator />

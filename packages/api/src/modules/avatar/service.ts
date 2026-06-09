@@ -372,14 +372,14 @@ export async function createGeneratedOfficialActorAvatarFile(
   executor: DatabaseExecutor,
   params: {
     actorSlug: string
-    actorName: string
+    actorDisplayName: string
     actorTitle: string
     uploaderUserId?: string | null
     theme?: PixelArtAvatarTheme
   }
 ): Promise<StoredAvatarFile> {
   const svg = buildPixelArtSvg(
-    `official-actor:${params.actorSlug}:${params.actorName}:${params.actorTitle}`,
+    `official-actor:${params.actorSlug}:${params.actorDisplayName}:${params.actorTitle}`,
     params.theme
   )
 
@@ -394,7 +394,7 @@ export async function createGeneratedOfficialActorAvatarFile(
       style: "pixel-art",
       subjectType: "official_actor_template",
       actorSlug: params.actorSlug,
-      actorName: params.actorName,
+      actorDisplayName: params.actorDisplayName,
       actorTitle: params.actorTitle,
       transparentBackground: true,
     },
@@ -406,7 +406,7 @@ export async function createGeneratedActorPixelArtAvatarFile(
   params: {
     workspaceId: string
     actorId: string
-    actorName: string
+    actorDisplayName: string
     actorTitle: string
     uploaderUserId?: string | null
     options?: PixelArtAvatarOptionsInput
@@ -415,7 +415,7 @@ export async function createGeneratedActorPixelArtAvatarFile(
   const normalizedOptions = normalizePixelArtOptions(params.options)
   const seed =
     normalizedOptions.seed ||
-    `actor:${params.actorId}:${params.actorName.trim()}:${params.actorTitle.trim()}`
+    `actor:${params.actorId}:${params.actorDisplayName.trim()}:${params.actorTitle.trim()}`
   const svg = buildPixelArtSvg(
     seed,
     buildPixelArtThemeFromOptions(normalizedOptions)
@@ -423,7 +423,7 @@ export async function createGeneratedActorPixelArtAvatarFile(
 
   const storedFile = await saveSvgAvatarFile(executor, {
     svg,
-    originalName: `${sanitizeFileStem(params.actorName)}-avatar.svg`,
+    originalName: `${sanitizeFileStem(params.actorDisplayName)}-avatar.svg`,
     workspaceId: params.workspaceId,
     uploaderUserId: params.uploaderUserId || null,
     originSystem: FILE_ORIGIN_SYSTEMS.GENERATED_ACTOR_PIXEL_ART_AVATAR,
@@ -432,7 +432,7 @@ export async function createGeneratedActorPixelArtAvatarFile(
       style: "pixel-art",
       subjectType: "actor",
       actorId: params.actorId,
-      actorName: params.actorName,
+      actorDisplayName: params.actorDisplayName,
       actorTitle: params.actorTitle,
       seed,
       options: normalizedOptions,

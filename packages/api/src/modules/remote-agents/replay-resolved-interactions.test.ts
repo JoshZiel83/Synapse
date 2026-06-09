@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { sql } from "kysely"
 import type { Kysely } from "kysely"
+import crypto from "node:crypto"
 import { withTestDb } from "../../test/helpers/db.js"
 
 /**
@@ -74,11 +75,21 @@ async function buildAgentMachineFixture(db: Kysely<any>) {
     .values({ kind: "group", workspace_id: ws.id as string, title: `${NS} c` })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const remoteAgentId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: remoteAgentId,
+      workspace_id: ws.id as string,
+      kind: "remote_agent",
+      display_name: `${NS} agent`,
+      status: "active",
+    } as any)
+    .execute()
   const agent = await db
     .insertInto("remote_agents")
     .values({
-      workspace_id: ws.id as string,
-      name: `agent-${rid()}`,
+      id: remoteAgentId,
       title: `${NS} agent`,
       runtime_kind: "claude_code",
     })

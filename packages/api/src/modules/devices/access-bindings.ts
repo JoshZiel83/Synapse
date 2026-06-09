@@ -201,9 +201,11 @@ async function assertTargetInWorkspace(
     case "actor": {
       if (!target.actorId) return { ok: false, reason: "actorId required" }
       const row = await db
-        .selectFrom("actors")
-        .select("workspace_id")
-        .where("id", "=", target.actorId)
+        .selectFrom("actors as actor")
+        .innerJoin("workspace_apps as app", "app.id", "actor.id")
+        .select("app.workspace_id as workspace_id")
+        .where("actor.id", "=", target.actorId)
+        .where("app.deleted_at", "is", null)
         .executeTakeFirst()
       if (!row || row.workspace_id !== workspaceId) {
         return {
@@ -246,9 +248,11 @@ async function assertTargetInWorkspace(
       if (!target.remoteAgentId)
         return { ok: false, reason: "remoteAgentId required" }
       const row = await db
-        .selectFrom("remote_agents")
-        .select("workspace_id")
-        .where("id", "=", target.remoteAgentId)
+        .selectFrom("remote_agents as agent")
+        .innerJoin("workspace_apps as app", "app.id", "agent.id")
+        .select("app.workspace_id as workspace_id")
+        .where("agent.id", "=", target.remoteAgentId)
+        .where("app.deleted_at", "is", null)
         .executeTakeFirst()
       if (!row || row.workspace_id !== workspaceId) {
         return {
@@ -280,9 +284,11 @@ async function assertCapabilitiesInWorkspace(
 ): Promise<{ ok: true } | { ok: false; missing: string[] }> {
   if (capabilityIds.length === 0) return { ok: true }
   const rows = await db
-    .selectFrom("device_capabilities")
-    .select(["id", "workspace_id"])
-    .where("id", "in", capabilityIds)
+    .selectFrom("device_capabilities as capability")
+    .innerJoin("workspace_apps as app", "app.id", "capability.id")
+    .select(["capability.id as id", "app.workspace_id as workspace_id"])
+    .where("capability.id", "in", capabilityIds)
+    .where("app.deleted_at", "is", null)
     .execute()
   const ownedIds = new Set(
     rows

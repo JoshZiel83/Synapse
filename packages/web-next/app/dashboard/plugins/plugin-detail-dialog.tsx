@@ -50,7 +50,7 @@ const transportLabels: Record<string, string> = {
   stdio: "Local (stdio)",
 }
 
-const attachmentTypeLabels: Record<string, string> = {
+const attachmentScopeLabels: Record<string, string> = {
   workspace: "Workspace",
   conversation: "Conversation",
   actor: "Actor",
@@ -135,8 +135,8 @@ export default function PluginDetailDialog({
               className="border-gray-200 dark:border-white/10"
             >
               Default owner:{" "}
-              {attachmentTypeLabels[plugin.default_instance_scope] ||
-                plugin.default_instance_scope ||
+              {attachmentScopeLabels[plugin.default_attachment_scope] ||
+                plugin.default_attachment_scope ||
                 "Workspace"}
             </Badge>
             <Badge

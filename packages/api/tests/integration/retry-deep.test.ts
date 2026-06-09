@@ -89,11 +89,23 @@ test("retry succeeds end-to-end and enqueues a session_wakeup with the correct w
     const sessionId = randomUUID()
     const itemId = randomUUID()
 
-    await pg.query(
-      `INSERT INTO actors (id, workspace_id, name, role, title)
-       VALUES ($1, $2, 'retry-test-actor', 'assistant', 'tester')`,
-      [actorId, ws.id]
-    )
+    await pg.query("BEGIN")
+    try {
+      await pg.query(
+        `INSERT INTO workspace_apps (id, workspace_id, kind, display_name, owner_workspace_member_id, status)
+         VALUES ($1, $2, 'actor', 'retry-test-actor', $3, 'active')`,
+        [actorId, ws.id, workspaceMemberId]
+      )
+      await pg.query(
+        `INSERT INTO actors (id, role, title)
+         VALUES ($1, 'assistant', 'tester')`,
+        [actorId]
+      )
+      await pg.query("COMMIT")
+    } catch (error) {
+      await pg.query("ROLLBACK")
+      throw error
+    }
     // P1b: conversation_participants.subject_id is a polymorphic FK into
     // access_subjects (one row per logical subject — actor/member/etc.).
     // The conversation-participants insert below needs a matching

@@ -57,11 +57,6 @@ const BUSINESS_UNIQUES = [
     cols: "provider_id, account_id",
   },
   {
-    table: "installed_skills",
-    constraint: "installed_skills_workspace_id_slug_key",
-    cols: "workspace_id, slug",
-  },
-  {
     table: "transport_accounts",
     constraint:
       "transport_accounts_workspace_id_transport_kind_account_key_key",

@@ -1,9 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
-import {
-  RELATIONSHIP_ACCESS_POLICIES,
-  REMOTE_AGENT_RUNTIME_KINDS,
-} from "@synapse/shared"
+import { REMOTE_AGENT_RUNTIME_KINDS } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -33,16 +30,14 @@ import {
 import { handleRemoteAgentMcpRequest } from "./mcp-endpoint.js"
 
 const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
-const accessPolicySchema = z.enum(RELATIONSHIP_ACCESS_POLICIES)
-
 const createRemoteAgentSchema = z.object({
-  name: z.string().trim().min(1).max(255),
+  displayName: z.string().trim().min(1).max(255),
   title: z.string().trim().min(1).max(255),
   description: z.string().trim().max(5000).optional(),
   runtimeKind: runtimeKindSchema,
   avatarFileId: z.uuid().optional(),
   avatarEmoji: z.string().trim().max(32).optional(),
-  accessPolicy: accessPolicySchema.optional(),
+  requiresContactApproval: z.boolean().optional(),
   isPublicShared: z.boolean().optional(),
   metadata: z.record(z.string(), z.any()).optional(),
 })
@@ -196,13 +191,13 @@ export default async function remoteAgentsController(app: FastifyInstance) {
           await createRemoteAgent({
             workspaceId: request.params.workspaceId,
             userId: getRequestUserId(request),
-            name: body.name,
+            displayName: body.displayName,
             title: body.title,
             description: body.description,
             runtimeKind: body.runtimeKind,
             avatarFileId: body.avatarFileId,
             avatarEmoji: body.avatarEmoji,
-            accessPolicy: body.accessPolicy,
+            requiresContactApproval: body.requiresContactApproval,
             isPublicShared: body.isPublicShared,
             metadata: body.metadata,
           })
@@ -248,12 +243,12 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             workspaceId: request.params.workspaceId,
             remoteAgentId: request.params.remoteAgentId,
             userId: getRequestUserId(request),
-            name: body.name,
+            displayName: body.displayName,
             title: body.title,
             description: body.description,
             avatarFileId: body.avatarFileId,
             avatarEmoji: body.avatarEmoji,
-            accessPolicy: body.accessPolicy,
+            requiresContactApproval: body.requiresContactApproval,
             isPublicShared: body.isPublicShared,
             isActive: body.isActive,
             metadata: body.metadata,

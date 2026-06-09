@@ -121,7 +121,7 @@ export function summarizeRuntimePreview(
 
   if (activeRuntimes.length === 0) return null
 
-  const names = activeRuntimes.map((runtime) => runtime.actorName)
+  const names = activeRuntimes.map((runtime) => runtime.actorDisplayName)
   const lead = names.slice(0, 2).join(", ")
   const suffix = names.length > 2 ? ` +${names.length - 2}` : ""
   const blocked = activeRuntimes.find(

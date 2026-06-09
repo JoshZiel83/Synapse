@@ -194,6 +194,7 @@ async function loadConversationKindAndBoundary(
 async function loadDeviceCapabilityRequestState(capabilityId: string) {
   return db
     .selectFrom("device_capabilities as capability")
+    .innerJoin("workspace_apps as app", "app.id", "capability.id")
     .innerJoin(
       "device_exposures as exposure",
       "exposure.id",
@@ -202,7 +203,7 @@ async function loadDeviceCapabilityRequestState(capabilityId: string) {
     .innerJoin("devices as device", "device.id", "exposure.device_id")
     .select([
       "capability.id as capability_id",
-      "capability.status as capability_status",
+      "app.status as capability_status",
       "exposure.id as exposure_id",
       "exposure.runtime_status as exposure_runtime_status",
       "device.workspace_id as owner_workspace_id",
@@ -214,6 +215,7 @@ async function loadDeviceCapabilityRequestState(capabilityId: string) {
       )`.as("has_active_device_session"),
     ])
     .where("capability.id", "=", capabilityId)
+    .where("app.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
 }

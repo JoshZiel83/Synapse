@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply } from "fastify"
 import {
-  ATTACHMENT_TARGET_TYPES,
+  PLUGIN_ATTACHMENT_SCOPE_TYPES,
   REUSE_SCOPES,
 } from "@synapse/shared/constants"
 import {
@@ -21,16 +21,16 @@ import {
   getInstallations,
   getOrganization,
   getPlugin,
-  getPluginInstallationAccessState,
-  grantPluginInstallationAccess,
+  getPluginInstallationGrantState,
+  createPluginInstallationGrant,
   installPluginUnified,
   listOrganizations,
   listPluginCategories,
   listPlugins,
   McpPluginError,
-  revokePluginInstallationAccess,
+  revokePluginInstallationGrant,
   uninstallPluginUnified,
-  updatePluginInstallationAccessGrant,
+  updatePluginInstallationGrant,
   updateInstallation,
   validateConfig,
 } from "./service.js"
@@ -43,7 +43,7 @@ import {
 } from "./plugin-auth-connections.js"
 import { getEventLogs, getToolCallLogs } from "./audit.js"
 
-const attachmentTargetTypeSchema = z.enum(ATTACHMENT_TARGET_TYPES)
+const attachmentScopeTypeSchema = z.enum(PLUGIN_ATTACHMENT_SCOPE_TYPES)
 const accessTargetTypeSchema = z.enum([
   "workspace",
   "workspace_member",
@@ -52,8 +52,8 @@ const accessTargetTypeSchema = z.enum([
 ])
 const lifecycleScopeSchema = z.enum(REUSE_SCOPES)
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const attachmentTargetSchema = z.object({
-  type: attachmentTargetTypeSchema,
+const attachmentScopeSchema = z.object({
+  type: attachmentScopeTypeSchema,
   actorId: z.uuid().optional(),
   conversationId: z.uuid().optional(),
   workspaceMemberId: z.uuid().optional(),
@@ -67,7 +67,7 @@ const accessTargetSchema = z.object({
 
 const installSchema = z.object({
   pluginId: z.uuid(),
-  attachmentTarget: attachmentTargetSchema,
+  attachmentScope: attachmentScopeSchema,
   lifecycleScope: lifecycleScopeSchema.optional(),
   configData: z.record(z.string(), z.unknown()).optional(),
   authSessionIds: z.record(z.string(), z.uuid()).optional(),
@@ -77,7 +77,7 @@ const updateInstallSchema = z.object({
   isEnabled: z.boolean().optional(),
   configData: z.record(z.string(), z.unknown()).optional(),
   lifecycleScope: lifecycleScopeSchema.optional(),
-  attachmentTarget: attachmentTargetSchema.optional(),
+  attachmentScope: attachmentScopeSchema.optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema
     .nullable()
     .optional(),
@@ -85,7 +85,7 @@ const updateInstallSchema = z.object({
 })
 
 const installPlanSchema = z.object({
-  attachmentTarget: attachmentTargetSchema,
+  attachmentScope: attachmentScopeSchema,
 })
 
 const startAuthSchema = z.object({
@@ -275,7 +275,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         const plan = await createPluginInstallPlan({
           workspaceId,
           pluginId,
-          attachmentTarget: body.attachmentTarget,
+          attachmentScope: body.attachmentScope,
         })
         reply.send({ plan })
       } catch (error) {
@@ -431,13 +431,13 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
 
         const { workspaceId } = request.params as { workspaceId: string }
         const {
-          attachmentType,
+          attachmentScopeType,
           conversationId,
           actorId,
           workspaceMemberId,
           pluginId,
         } = request.query as {
-          attachmentType?:
+          attachmentScopeType?:
             | "workspace"
             | "conversation"
             | "actor"
@@ -449,7 +449,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         }
         reply.send(
           await getInstallations(workspaceId, {
-            attachmentType,
+            attachmentScopeType,
             conversationId,
             actorId,
             workspaceMemberId,
@@ -521,7 +521,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         const installation = await installPluginUnified({
           workspaceId,
           pluginId: body.pluginId,
-          attachmentTarget: body.attachmentTarget,
+          attachmentScope: body.attachmentScope,
           lifecycleScope: body.lifecycleScope,
           configData: body.configData,
           authSessionIds: body.authSessionIds,
@@ -602,7 +602,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   )
 
   app.get(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/access",
+    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/grants",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -619,7 +619,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           installId: string
         }
         reply.send(
-          await getPluginInstallationAccessState(workspaceId, installId)
+          await getPluginInstallationGrantState(workspaceId, installId)
         )
       } catch (error) {
         handleError(reply, error)
@@ -628,7 +628,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   )
 
   app.post(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/access",
+    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/grants",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -646,7 +646,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         }
         const body = accessGrantSchema.parse(request.body)
 
-        const grant = await grantPluginInstallationAccess({
+        const grant = await createPluginInstallationGrant({
           workspaceId,
           installationId: installId,
           accessTarget: body.accessTarget
@@ -665,7 +665,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   )
 
   app.put(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/access/:grantId",
+    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/grants/:grantId",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -684,7 +684,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         }
         const body = accessGrantUpdateSchema.parse(request.body)
 
-        const grant = await updatePluginInstallationAccessGrant({
+        const grant = await updatePluginInstallationGrant({
           workspaceId,
           installationId: installId,
           grantId,
@@ -699,7 +699,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
   )
 
   app.delete(
-    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/access/:grantId",
+    "/api/v1/workspaces/:workspaceId/mcp/installations/:installId/grants/:grantId",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -716,7 +716,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
           installId: string
           grantId: string
         }
-        await revokePluginInstallationAccess({
+        await revokePluginInstallationGrant({
           workspaceId,
           installationId: installId,
           grantId,

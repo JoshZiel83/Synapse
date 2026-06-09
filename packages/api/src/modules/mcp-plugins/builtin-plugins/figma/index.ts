@@ -39,7 +39,7 @@ export const figmaSeed: BuiltinOrgSeed = {
           Authorization: "Bearer ${auth:figmaAccount.accessToken}",
         },
       }),
-      defaultInstanceScope: "workspace_member",
+      defaultAttachmentScope: "workspace_member",
       defaultReuseScope: "session",
       requiresHandshake: false,
       iconAssetPath: "assets/icons/figma.svg",
@@ -117,7 +117,6 @@ export const figmaSeed: BuiltinOrgSeed = {
             "Authorize Synapse to access Figma on your behalf via OAuth.",
             "通过 OAuth 授权 Synapse 代表你访问 Figma。"
           ),
-          ownerScope: "installation",
           authorizeUrl: "https://www.figma.com/oauth/mcp",
           tokenUrl: "https://api.figma.com/v1/oauth/token",
           // The driver reads binding.scopes (array) and joins them into the

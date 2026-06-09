@@ -43,6 +43,7 @@ export default async function auditModule(app: FastifyInstance) {
         .selectFrom("audit_logs as al")
         .leftJoin("users as u", "u.id", "al.user_id")
         .leftJoin("actors as a", "a.id", "al.actor_id")
+        .leftJoin("workspace_apps as actor_app", "actor_app.id", "a.id")
         .select([
           "al.id",
           "al.action",
@@ -54,7 +55,7 @@ export default async function auditModule(app: FastifyInstance) {
           "al.ip_address as ipAddress",
           "al.created_at as createdAt",
           "u.email as userName",
-          "a.name as actorName",
+          "actor_app.display_name as actorName",
         ])
         .where("al.workspace_id", "=", workspaceId)
 

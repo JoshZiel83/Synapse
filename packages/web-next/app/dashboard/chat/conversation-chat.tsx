@@ -85,7 +85,7 @@ function summarizeMemberCounts(conversation: ConversationSummary) {
 }
 
 function summarizeCurrentUserProcessingActors(runtimes: ActorRuntimeState[]) {
-  const names = runtimes.map((runtime) => runtime.actorName)
+  const names = runtimes.map((runtime) => runtime.actorDisplayName)
   if (names.length === 0) return null
   if (names.length === 1) return `${names[0]} is processing your message`
   if (names.length === 2)
@@ -347,7 +347,7 @@ export default function ConversationChat({
         const normalized = normalizeChiefActorOption(actor)
         return {
           id: normalized.id,
-          name: normalized.name,
+          name: normalized.displayName,
           participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
           targetType: CHAT_COMPOSER_MENTION_TARGET_TYPE.ACTOR,
           actorId: normalized.id,
@@ -358,7 +358,7 @@ export default function ConversationChat({
           emoji: normalized.emoji,
           description: `${normalized.title || normalized.role} · Not in this conversation`,
           searchTerms: [
-            normalized.name,
+            normalized.displayName,
             normalized.title,
             normalized.role,
             normalized.summary || "",
@@ -385,7 +385,18 @@ export default function ConversationChat({
     [conversation.members]
   )
   const workspaceActorDirectory = useMemo(
-    () => workspaceActors.map((actor) => normalizeChiefActorOption(actor)),
+    () =>
+      workspaceActors.map((actor) => {
+        const normalized = normalizeChiefActorOption(actor)
+        return {
+          id: normalized.id,
+          name: normalized.displayName,
+          role: normalized.role,
+          title: normalized.title,
+          emoji: normalized.emoji,
+          avatarUrl: normalized.avatarUrl,
+        }
+      }),
     [workspaceActors]
   )
   const activeRuntimes = useMemo(

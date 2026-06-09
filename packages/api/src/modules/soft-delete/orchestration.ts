@@ -18,13 +18,10 @@ import type { Executor } from "../../infrastructure/database/kysely.js"
 
 /** Soft-delete roots that are workspace-scoped via a plain workspace_id column. */
 const WORKSPACE_SCOPED_ROOTS_BY_WORKSPACE_ID = [
-  "actors",
-  "remote_agents",
+  "workspace_apps",
   "remote_agent_machines",
   "conversations",
   "devices",
-  "plugin_installations",
-  "installed_skills",
   "plugin_connections",
   "memory_spaces",
   "memory_items",
@@ -34,6 +31,14 @@ const WORKSPACE_SCOPED_ROOTS_BY_WORKSPACE_ID = [
   "automation_webhook_endpoints",
   "automation_integration_bindings",
   "transport_accounts",
+] as const
+
+/** Detail roots whose owning workspace is resolved through workspace_apps. */
+const WORKSPACE_APP_SCOPED_DETAIL_ROOTS = [
+  "actors",
+  "installed_skills",
+  "plugin_installations",
+  "remote_agents",
 ] as const
 
 /** Roots with nullable/global workspace_id — only the workspace-owned rows are
@@ -108,6 +113,18 @@ export async function markWorkspaceDeleted(
     await sql`
       UPDATE ${sql.id(table)} SET deleted_at = NOW()
       WHERE workspace_id = ${workspaceId} AND deleted_at IS NULL
+    `.execute(db)
+  }
+  for (const table of WORKSPACE_APP_SCOPED_DETAIL_ROOTS) {
+    await sql`
+      UPDATE ${sql.id(table)} SET deleted_at = NOW()
+      WHERE deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM workspace_apps app
+          WHERE app.id = ${sql.id(table)}.id
+            AND app.workspace_id = ${workspaceId}
+        )
     `.execute(db)
   }
   // model_groups: owner-derived scope (workspace + member-owned)

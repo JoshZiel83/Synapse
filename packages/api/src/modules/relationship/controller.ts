@@ -1,10 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
-import {
-  CONTACT_HUB_KINDS,
-  RELATIONSHIP_ACCESS_POLICIES,
-  RELATIONSHIP_APPROVAL_MODES,
-} from "@synapse/shared"
+import { CONTACT_HUB_KINDS, RELATIONSHIP_APPROVAL_MODES } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -31,7 +27,6 @@ import {
 } from "./service.js"
 
 const approvalModeSchema = z.enum(RELATIONSHIP_APPROVAL_MODES)
-const actorAccessPolicySchema = z.enum(RELATIONSHIP_ACCESS_POLICIES)
 const contactKindSchema = z.enum(CONTACT_HUB_KINDS)
 
 const scanSchema = z.object({
@@ -61,7 +56,7 @@ const updateActorProfileSchema = z.object({
   approvalMode: approvalModeSchema,
   identityId: z.string().trim().min(4).max(32).optional(),
   identitySearchEnabled: z.boolean().optional(),
-  accessPolicy: actorAccessPolicySchema.optional(),
+  requiresContactApproval: z.boolean().optional(),
   isPublicShared: z.boolean().optional(),
 })
 
@@ -169,7 +164,7 @@ export default async function relationshipController(app: FastifyInstance) {
             approvalMode: body.approvalMode,
             identityId: body.identityId,
             identitySearchEnabled: body.identitySearchEnabled,
-            accessPolicy: body.accessPolicy,
+            requiresContactApproval: body.requiresContactApproval,
             isPublicShared: body.isPublicShared,
           })
         )
@@ -232,7 +227,7 @@ export default async function relationshipController(app: FastifyInstance) {
             approvalMode: body.approvalMode,
             identityId: body.identityId,
             identitySearchEnabled: body.identitySearchEnabled,
-            accessPolicy: body.accessPolicy,
+            requiresContactApproval: body.requiresContactApproval,
             isPublicShared: body.isPublicShared,
           })
         )

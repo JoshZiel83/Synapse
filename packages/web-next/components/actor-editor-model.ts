@@ -98,7 +98,7 @@ export type EditableDoc = {
 }
 
 export type ActorFormState = {
-  name: string
+  displayName: string
   role: ActorRole
   title: string
   parentId: string | null
@@ -273,7 +273,7 @@ export function getAvailableActorDocTemplates(
 export function buildInitialState(actor?: Actor | null): ActorFormState {
   const definition = actor?.definition
   return {
-    name: definition?.name || "",
+    displayName: actor?.displayName || definition?.displayName || "",
     role: definition?.role || "specialist",
     title: definition?.title || "",
     parentId: definition?.parentId || null,

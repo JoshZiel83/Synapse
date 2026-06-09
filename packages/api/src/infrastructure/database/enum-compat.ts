@@ -8,13 +8,18 @@ import type {
   MemorySpaceType,
   MemoryItemState,
   PluginAuthConnectionStatus,
-  PluginAuthOwnerScope,
   PluginAuthSessionStatus,
   SessionInterruptType,
   SessionStatus,
   SessionWakeupSourceType,
   SessionWakeupStatus,
   TaskNoticeStatus,
+  WorkspaceAppGrantPermission,
+  WorkspaceAppGrantRequestStatus,
+  WorkspaceAppGrantSource,
+  WorkspaceAppGrantStatus,
+  WorkspaceAppKind,
+  WorkspaceAppStatus,
 } from "@synapse/shared"
 import {
   ACCESS_BINDABLE_RESOURCE_TYPES,
@@ -35,13 +40,12 @@ import {
   AUTOMATION_TARGET_POLICIES,
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
-  ATTACHMENT_TARGET_TYPES,
+  PLUGIN_ATTACHMENT_SCOPE_TYPES,
   CONTACT_TARGET_TYPES,
   MEMORY_SPACE_TYPES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
   PLATFORM_ACCESS_KEYS,
-  RELATIONSHIP_ACCESS_POLICIES,
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_REQUEST_STATUSES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
@@ -80,7 +84,6 @@ import type {
   ModelGroupsRoutingStrategy,
   PlatformAccessBindingsAccessKey,
   PluginAuthSessionsStatus,
-  PluginConnectionsOwnerScope,
   PluginConnectionsStatus,
   RuntimeAuthorizationGrantsRetention,
   RuntimeAuthorizationGrantsStatus,
@@ -104,6 +107,12 @@ import type {
   TransportAccountsTransportKind,
   ConversationTransportBindingsInboundActorMode,
   WorkspaceAccessBindingsAccessKey,
+  WorkspaceAppGrantPermission as DbWorkspaceAppGrantPermission,
+  WorkspaceAppGrantRequestsStatus as DbWorkspaceAppGrantRequestsStatus,
+  WorkspaceAppGrantsSource as DbWorkspaceAppGrantsSource,
+  WorkspaceAppGrantsStatus as DbWorkspaceAppGrantsStatus,
+  WorkspaceAppsKind as DbWorkspaceAppsKind,
+  WorkspaceAppsStatus as DbWorkspaceAppsStatus,
   WorkspaceInvitesTrustLevel,
   ToolCallsSourceKind,
 } from "./generated/db.js"
@@ -283,9 +292,6 @@ type _TransportConnectionModeMatchesDb = Assert<
 type _TransportAccountStatusMatchesDb = Assert<
   IsEqual<(typeof TRANSPORT_ACCOUNT_STATUSES)[number], TransportAccountsStatus>
 >
-type _PluginAuthOwnerScopeMatchesDb = Assert<
-  IsEqual<PluginAuthOwnerScope, PluginConnectionsOwnerScope>
->
 type _PluginAuthSessionStatusMatchesDb = Assert<
   IsEqual<PluginAuthSessionStatus, PluginAuthSessionsStatus>
 >
@@ -314,12 +320,6 @@ type _CatalogFileRoleMatchesDb = Assert<
 type _SubjectKindMatchesDb = Assert<
   IsEqual<(typeof SUBJECT_KINDS)[number], SubjectKind>
 >
-type _AccessBindableResourceTypeMatchesDb = Assert<
-  IsEqual<
-    (typeof ACCESS_BINDABLE_RESOURCE_TYPES)[number],
-    ResourceAccessBindingResourceType
-  >
->
 type _AccessBindingStatusMatchesDb = Assert<
   IsEqual<
     (typeof ACCESS_BINDING_STATUSES)[number],
@@ -329,8 +329,26 @@ type _AccessBindingStatusMatchesDb = Assert<
 type _AccessBindingSourceMatchesDb = Assert<
   IsEqual<(typeof ACCESS_BINDING_SOURCES)[number], ResourceAccessBindingsSource>
 >
-// P1b: plugin_installations.attachment_target_type column + the DB enum
-// have been dropped. ATTACHMENT_TARGET_TYPES remains a pure application-layer
+type _WorkspaceAppKindMatchesDb = Assert<
+  IsEqual<WorkspaceAppKind, DbWorkspaceAppsKind>
+>
+type _WorkspaceAppStatusMatchesDb = Assert<
+  IsEqual<WorkspaceAppStatus, DbWorkspaceAppsStatus>
+>
+type _WorkspaceAppGrantPermissionMatchesDb = Assert<
+  IsEqual<WorkspaceAppGrantPermission, DbWorkspaceAppGrantPermission>
+>
+type _WorkspaceAppGrantStatusMatchesDb = Assert<
+  IsEqual<WorkspaceAppGrantStatus, DbWorkspaceAppGrantsStatus>
+>
+type _WorkspaceAppGrantSourceMatchesDb = Assert<
+  IsEqual<WorkspaceAppGrantSource, DbWorkspaceAppGrantsSource>
+>
+type _WorkspaceAppGrantRequestStatusMatchesDb = Assert<
+  IsEqual<WorkspaceAppGrantRequestStatus, DbWorkspaceAppGrantRequestsStatus>
+>
+// P1b: plugin_installations.attachment_scope_type column + the DB enum
+// have been dropped. PLUGIN_ATTACHMENT_SCOPE_TYPES remains a pure application-layer
 // enum used at the API layer / translated to SubjectKind via
 // buildPluginAttachmentSubjectRef.
 // external-first-class-subject: conversation_participants.participant_type
@@ -338,11 +356,9 @@ type _AccessBindingSourceMatchesDb = Assert<
 // participant type is now derived from the joined access_subjects.kind via
 // subjectKindToParticipantType. CONVERSATION_PARTICIPANT_TYPES remains a pure
 // application/API-layer enum (the API still exposes a derived participantType).
-// Note: the historical `actor_access_policy` Postgres enum + the
-// `actors.access_policy` / `remote_agents.access_policy` columns have been
-// dropped (P2). `RELATIONSHIP_ACCESS_POLICIES` is now a pure
-// application-layer constant (input to `setAccessPolicy` / API request bodies)
-// with no DB-side counterpart to assert equality against.
+// Note: the historical actor/remote-agent access-policy enum + columns have
+// been dropped (P2). Contact approval now travels as a boolean
+// `requiresContactApproval` field instead of an application enum.
 type _RelationshipApprovalModeMatchesDb = Assert<
   IsEqual<
     (typeof RELATIONSHIP_APPROVAL_MODES)[number],

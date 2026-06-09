@@ -21,19 +21,19 @@ import {
 import {
   createWorkspaceSkill,
   SkillError,
-  getInstalledSkillAccessState,
+  getInstalledSkillGrantState,
   getInstalledSkill,
   getMarketplaceSkill,
-  grantInstalledSkillAccess,
+  createInstalledSkillGrant,
   importMarketplaceMirrorSkill,
   refreshMarketplaceSkill,
   installMarketplaceSkill,
   listInstalledSkills,
   listMarketplaceSkills,
   publishMarketplaceSkill,
-  revokeInstalledSkillAccess,
+  revokeInstalledSkillGrant,
   uninstallInstalledSkill,
-  updateInstalledSkillAccessGrant,
+  updateInstalledSkillGrant,
   updateInstalledSkill,
   upgradeInstalledSkill,
 } from "./service.js"
@@ -150,7 +150,7 @@ const updateInstalledSkillSchema = z.object({
   attachmentFiles: z.array(skillAttachmentSchema).optional(),
 })
 
-const skillAccessGrantSchema = z.object({
+const skillGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema
     .nullable()
@@ -158,7 +158,7 @@ const skillAccessGrantSchema = z.object({
   reason: z.string().trim().min(1).optional(),
 })
 
-const skillAccessGrantUpdateSchema = z.object({
+const skillGrantUpdateSchema = z.object({
   conversationTypeMaskOverride: conversationTypeMaskSchema
     .nullable()
     .optional(),
@@ -583,7 +583,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
   )
 
   app.get(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/access",
+    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/grants",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -600,7 +600,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const state = await getInstalledSkillAccessState(
+        const state = await getInstalledSkillGrantState(
           workspaceId,
           installedSkillId
         )
@@ -612,7 +612,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
   )
 
   app.post(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/access",
+    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/grants",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -629,9 +629,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const body = skillAccessGrantSchema.parse(request.body)
+        const body = skillGrantSchema.parse(request.body)
         const workspaceMemberId = (request as any).workspaceMember?.id as string
-        const grant = await grantInstalledSkillAccess({
+        const grant = await createInstalledSkillGrant({
           workspaceId,
           installedSkillId,
           accessTarget: body.accessTarget
@@ -649,7 +649,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
   )
 
   app.put(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/access/:grantId",
+    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/grants/:grantId",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -667,8 +667,8 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const body = skillAccessGrantUpdateSchema.parse(request.body)
-        const grant = await updateInstalledSkillAccessGrant({
+        const body = skillGrantUpdateSchema.parse(request.body)
+        const grant = await updateInstalledSkillGrant({
           workspaceId,
           installedSkillId,
           grantId,
@@ -682,7 +682,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
   )
 
   app.delete(
-    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/access/:grantId",
+    "/api/v1/workspaces/:workspaceId/skills/:installedSkillId/grants/:grantId",
     workspaceHook,
     async (request, reply) => {
       try {
@@ -700,7 +700,7 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        await revokeInstalledSkillAccess({
+        await revokeInstalledSkillGrant({
           workspaceId,
           installedSkillId,
           grantId,

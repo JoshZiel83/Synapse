@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import { withTestDb } from "../../test/helpers/db.js"
 import {
   authorizeAction,
@@ -9,9 +10,9 @@ import {
   workspaceMemberSubject,
 } from "./service.js"
 import {
-  grantApprovedAccess,
-  setAccessPolicy,
-} from "./default-access-policy.js"
+  grantApprovedContactVisibility,
+  setRequiresContactApproval,
+} from "./contact-approval.js"
 
 type AnyDb = import("kysely").Kysely<any>
 
@@ -58,11 +59,21 @@ async function insertWorkspaceMember(
 }
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: "test actor",
+      status: "active",
+    })
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: "test actor",
+      id: actorId,
       role: "assistant",
       title: "test",
       current_version: 1,
@@ -109,7 +120,7 @@ test(
 )
 
 test(
-  "authorizeAction(actor.invoke) returns false for a non-owner member with no grant, true after grantApprovedAccess",
+  "authorizeAction(actor.invoke) returns false for a non-owner member with no grant, true after approved contact visibility",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -129,7 +140,7 @@ test(
       })
       assert.equal(before, false)
 
-      await grantApprovedAccess(db, {
+      await grantApprovedContactVisibility(db, {
         resourceType: "actor",
         resourceId: actorId,
         workspaceId,
@@ -156,11 +167,11 @@ test(
       const guestUserId = await insertUser(db)
       const memberId = await insertWorkspaceMember(db, workspaceId, guestUserId)
       const actorId = await insertActor(db, workspaceId)
-      await setAccessPolicy(db, {
+      await setRequiresContactApproval(db, {
         resourceType: "actor",
         resourceId: actorId,
         workspaceId,
-        policy: "workspace_open",
+        requiresContactApproval: false,
       })
 
       const allowed = await authorizePermission(db, {

@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { insertSessionWakeupRow } from "./runtime.js"
@@ -44,11 +45,21 @@ async function buildSessionFixture(db: Kysely<any>) {
     .values({ kind: "group", workspace_id: ws.id as string, title: `${NS} c` })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const actorRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      id: crypto.randomUUID(),
+      workspace_id: ws.id as string,
+      kind: "actor",
+      display_name: `${NS} actor`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const actor = await db
     .insertInto("actors")
     .values({
-      workspace_id: ws.id as string,
-      name: `actor-${rid()}`,
+      id: actorRoot.id as string,
       role: "assistant",
       title: `${NS} actor`,
       current_version: 1,

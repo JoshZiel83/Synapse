@@ -62,12 +62,24 @@ async function buildDeviceFixture(opts: {
   const turnId = uuidv4()
   const toolCallId = uuidv4()
 
-  const actorRow = await client.query(
-    `INSERT INTO actors (workspace_id, name, role, title)
-     VALUES ($1, 'TP Actor', 'assistant', 'TP Title') RETURNING id`,
-    [seed.workspaceId]
-  )
-  const actorId = actorRow.rows[0].id
+  const actorId = uuidv4()
+  await client.query("BEGIN")
+  try {
+    await client.query(
+      `INSERT INTO workspace_apps (id, workspace_id, kind, display_name, owner_workspace_member_id, status)
+       VALUES ($1, $2, 'actor', 'TP Actor', $3, 'active')`,
+      [actorId, seed.workspaceId, seed.workspaceMemberId]
+    )
+    await client.query(
+      `INSERT INTO actors (id, role, title)
+       VALUES ($1, 'assistant', 'TP Title')`,
+      [actorId]
+    )
+    await client.query("COMMIT")
+  } catch (error) {
+    await client.query("ROLLBACK")
+    throw error
+  }
 
   await client.query(
     `INSERT INTO conversations (id, kind, workspace_id, created_by_workspace_member_id)

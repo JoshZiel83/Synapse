@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import {
   SUBJECT_KIND,
   actorRef,
@@ -11,13 +12,13 @@ import {
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import {
-  buildResourceAccessBindingInsertValues,
-  loadAccessBindingRowsForResources,
+  buildAutomationEventSourceAccessBindingInsertValues,
+  loadAutomationEventSourceAccessBindingRowsForSources,
 } from "../access/binding-storage.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
-  normalizeAccessBindingRow,
-  readAccessBindingTarget,
+  normalizeAutomationEventSourceAccessBindingRow,
+  readAutomationEventSourceAccessBindingTarget,
 } from "../access/bindings.js"
 
 /**
@@ -32,7 +33,7 @@ import {
  *
  * These tests directly exercise the parts that broke:
  *   1. subjectScopeLabel returns the correct composite labels.
- *   2. readAccessBindingTarget round-trips a remote_agent target
+ *   2. readAutomationEventSourceAccessBindingTarget round-trips a remote_agent target
  *      stored in resource_access_bindings.
  *   3. Two remote_agent bindings for the same resource but different
  *      remote agents are distinct rows (no collapse) — verifies the
@@ -68,11 +69,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 }
 
 async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: wsId,
+      kind: "actor",
+      display_name: `${NS} actor`,
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: wsId,
-      name: `actor-${rid()}`,
+      id: actorId,
       role: "assistant",
       title: `${NS} actor`,
       current_version: 1,
@@ -83,11 +94,22 @@ async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
 }
 
 async function newRemoteAgent(db: Kysely<any>, wsId: string): Promise<string> {
+  const remoteAgentId = crypto.randomUUID()
+  const agentName = `agent-${rid()}`
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: remoteAgentId,
+      workspace_id: wsId,
+      kind: "remote_agent",
+      display_name: agentName,
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("remote_agents")
     .values({
-      workspace_id: wsId,
-      name: `agent-${rid()}`,
+      id: remoteAgentId,
       title: `${NS} agent`,
       runtime_kind: "claude_code",
     } as any)
@@ -104,6 +126,51 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
       workspace_id: wsId,
       title: `${NS} conv`,
     })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function newWorkspaceMember(
+  db: Kysely<any>,
+  wsId: string,
+  label: string
+): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `${label}-${rid()}@${NS}`,
+      name: label,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: wsId,
+      user_id: user.id as string,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return member.id as string
+}
+
+async function newAutomationEventSource(
+  db: Kysely<any>,
+  wsId: string
+): Promise<string> {
+  const memberId = await newWorkspaceMember(db, wsId, "creator")
+  const row = await db
+    .insertInto("automation_event_sources")
+    .values({
+      workspace_id: wsId,
+      provider_kind: "internal",
+      source_key: `src-${rid()}`,
+      name: "source",
+      created_by_kind: "workspace_member",
+      created_by_workspace_member_id: memberId,
+    } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string
@@ -134,42 +201,51 @@ test("subjectScopeLabel emits subject kind independent of scope", () => {
 })
 
 test(
-  "readAccessBindingTarget round-trips remote_agent bindings",
+  "readAutomationEventSourceAccessBindingTarget round-trips remote_agent bindings",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
       const wsId = await newWorkspace(db)
       const remoteAgentId = await newRemoteAgent(db, wsId)
-      const targetActorId = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
 
       // Unscoped remote_agent grant.
-      const unscoped = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: { subject: remoteAgentRef(remoteAgentId) },
-      })
+      const unscoped =
+        await buildAutomationEventSourceAccessBindingInsertValues(db, {
+          workspaceId: wsId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: { subject: remoteAgentRef(remoteAgentId) },
+        })
       await db.insertInto("resource_access_bindings").values(unscoped).execute()
 
       // Scoped remote_agent grant.
       const convId = await newConversation(db, wsId)
-      const scoped = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: {
-          subject: remoteAgentRef(remoteAgentId),
-          scope: conversationRef(convId),
-        },
-      })
+      const scoped = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId: wsId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: {
+            subject: remoteAgentRef(remoteAgentId),
+            scope: conversationRef(convId),
+          },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(scoped).execute()
 
-      const rows = await loadAccessBindingRowsForResources(db, {
-        resourceType: "actor",
-        resourceIds: [targetActorId],
-      })
+      const rows = await loadAutomationEventSourceAccessBindingRowsForSources(
+        db,
+        {
+          resourceType: "automation_event_source",
+          resourceIds: [eventSourceId],
+        }
+      )
       const decoded = rows.map((row) =>
-        readAccessBindingTarget(normalizeAccessBindingRow(row as any) as any)
+        readAutomationEventSourceAccessBindingTarget(
+          normalizeAutomationEventSourceAccessBindingRow(row as any) as any
+        )
       )
       const labels = decoded.map((t) => subjectScopeLabel(t as any)).sort()
       assert.deepEqual(labels, ["remote_agent", "remote_agent"])
@@ -197,20 +273,26 @@ test(
       const wsId = await newWorkspace(db)
       const remoteAgentA = await newRemoteAgent(db, wsId)
       const remoteAgentB = await newRemoteAgent(db, wsId)
-      const targetActorId = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
 
-      const aValues = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: { subject: remoteAgentRef(remoteAgentA) },
-      })
-      const bValues = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActorId,
-        target: { subject: remoteAgentRef(remoteAgentB) },
-      })
+      const aValues = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId: wsId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: { subject: remoteAgentRef(remoteAgentA) },
+        }
+      )
+      const bValues = await buildAutomationEventSourceAccessBindingInsertValues(
+        db,
+        {
+          workspaceId: wsId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: { subject: remoteAgentRef(remoteAgentB) },
+        }
+      )
       await db.insertInto("resource_access_bindings").values(aValues).execute()
       // Must NOT collide with the prior insert.
       await db.insertInto("resource_access_bindings").values(bValues).execute()
@@ -232,7 +314,7 @@ test(
       const rows = await db
         .selectFrom("resource_access_bindings")
         .select(["id", "subject_id"])
-        .where("actor_id", "=", targetActorId)
+        .where("automation_event_source_id", "=", eventSourceId)
         .where("status", "=", "active")
         .execute()
       const subjectIds = rows.map((r) => r.subject_id as string).sort()
@@ -252,37 +334,39 @@ test(
     // Round-9 review service-level regression: when an unscoped (actor,
     // null) binding already exists and we add (actor, scope=conv), the
     // INSERT must succeed (a distinct row). This test inserts directly
-    // via buildResourceAccessBindingInsertValues — the production
+    // via buildAutomationEventSourceAccessBindingInsertValues — the production
     // ensureSkillBinding in skills/service.ts gates the insert behind
-    // findActiveBindingIdByResourceAndSubject(scopeSubjectId) which
+    // findActiveAutomationEventSourceAccessBindingIdBySubject(scopeSubjectId) which
     // round-8 and round-9 fixed; this end-to-end test makes sure the
     // unique index respects the (subject, scope) pair.
     await withTestDb(async (db) => {
       const wsId = await newWorkspace(db)
       const grantedActor = await newActor(db, wsId)
-      const targetActor = await newActor(db, wsId)
+      const eventSourceId = await newAutomationEventSource(db, wsId)
       const convId = await newConversation(db, wsId)
 
-      const unscopedValues = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActor,
-        target: { subject: actorRef(grantedActor) },
-      })
+      const unscopedValues =
+        await buildAutomationEventSourceAccessBindingInsertValues(db, {
+          workspaceId: wsId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: { subject: actorRef(grantedActor) },
+        })
       await db
         .insertInto("resource_access_bindings")
         .values(unscopedValues)
         .execute()
 
-      const scopedValues = await buildResourceAccessBindingInsertValues(db, {
-        workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActor,
-        target: {
-          subject: actorRef(grantedActor),
-          scope: conversationRef(convId),
-        },
-      })
+      const scopedValues =
+        await buildAutomationEventSourceAccessBindingInsertValues(db, {
+          workspaceId: wsId,
+          resourceType: "automation_event_source",
+          resourceId: eventSourceId,
+          target: {
+            subject: actorRef(grantedActor),
+            scope: conversationRef(convId),
+          },
+        })
       // Pre-round-8 fix this insert would have either silently
       // collapsed via the dedup query OR (without the dedup) succeeded
       // — depending on the path. With the unique index correctly
@@ -305,7 +389,7 @@ test(
           "binding.scope_subject_id as scope_subject_id",
           "scope_subj.conversation_id as scope_conversation_id",
         ])
-        .where("binding.actor_id", "=", targetActor)
+        .where("binding.automation_event_source_id", "=", eventSourceId)
         .where("binding.status", "=", "active")
         .execute()
       assert.equal(rows.length, 2, "both unscoped and scoped rows must exist")

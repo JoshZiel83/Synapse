@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import { actorRef, conversationRef } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDbAndClient } from "../../test/helpers/db.js"
@@ -52,11 +53,21 @@ async function seedWorkspace(db: Kysely<any>) {
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
+  const actorRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      id: crypto.randomUUID(),
+      workspace_id: ws.id,
+      kind: "actor",
+      display_name: `actor-${rid()}`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const actor = await db
     .insertInto("actors")
     .values({
-      workspace_id: ws.id,
-      name: `actor-${rid()}`,
+      id: actorRoot.id as string,
       role: "assistant",
       title: `${NS} actor`,
       current_version: 1,

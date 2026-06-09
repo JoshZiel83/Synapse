@@ -27,9 +27,15 @@ CREATE TYPE file_mount_status AS ENUM ('provisioning', 'active', 'committing', '
 -- NOTE: content_blobs.backend is TEXT + CHECK (not a PG enum) on purpose:
 -- adding a future backend (s3, tiered, remote) is then a one-line CHECK
 -- loosen rather than an ALTER TYPE. See plan round-9 #10.
+CREATE TYPE workspace_apps_kind AS ENUM ('plugin_installation', 'installed_skill', 'actor', 'remote_agent', 'device_capability');
+CREATE TYPE workspace_apps_status AS ENUM ('active', 'disabled', 'error', 'deprecated', 'archived');
+CREATE TYPE workspace_app_grants_status AS ENUM ('active', 'revoked');
+CREATE TYPE workspace_app_grants_source AS ENUM ('manual', 'approval', 'system');
+CREATE TYPE workspace_app_grant_permission AS ENUM ('use', 'manage', 'contact_visible');
+CREATE TYPE workspace_app_grant_requests_status AS ENUM ('pending', 'approved', 'rejected', 'cancelled');
 CREATE TYPE resource_access_bindings_status AS ENUM ('active', 'revoked');
 CREATE TYPE resource_access_bindings_source AS ENUM ('manual', 'default_open', 'approval', 'system');
-CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'device_capability', 'automation_event_source', 'actor', 'remote_agent');
+CREATE TYPE resource_access_binding_resource_type AS ENUM ('automation_event_source');
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
 CREATE TYPE catalog_categories_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
 CREATE TYPE catalog_items_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
@@ -166,12 +172,10 @@ CREATE TYPE skill_mirror_sources_source_type AS ENUM ('github', 'clawhub');
 CREATE TYPE skill_mirror_sources_refresh_mode AS ENUM ('manual');
 CREATE TYPE skill_mirror_sources_sync_status AS ENUM ('pending', 'synced', 'error');
 CREATE TYPE plugin_installations_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
-CREATE TYPE plugin_installations_status AS ENUM ('active', 'disabled', 'error', 'archived');
 CREATE TYPE automation_integration_bindings_provider AS ENUM ('github', 'gitlab');
 CREATE TYPE automation_integration_bindings_ingress_kind AS ENUM ('webhook', 'polling');
 CREATE TYPE automation_integration_bindings_target_kind AS ENUM ('repository', 'project');
 CREATE TYPE plugin_auth_sessions_status AS ENUM ('pending', 'completed', 'failed', 'expired', 'consumed');
-CREATE TYPE plugin_connections_owner_scope AS ENUM ('installation', 'workspace_member', 'workspace');
 CREATE TYPE plugin_connections_status AS ENUM ('active', 'expired', 'revoked');
 CREATE TYPE plugin_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
 -- Runtime authorization enums (renamed from relay_* in PR #20). These back the
@@ -216,7 +220,6 @@ CREATE TYPE device_exposures_builtin_kind AS ENUM ('filesystem', 'commandline', 
 CREATE TYPE device_exposures_runtime_status AS ENUM (
   'discovered', 'healthy', 'degraded', 'failed', 'quarantined', 'offline'
 );
-CREATE TYPE device_capabilities_status AS ENUM ('active', 'deprecated', 'archived');
 CREATE TYPE device_catalog_revisions_status AS ENUM ('active', 'superseded', 'invalid');
 CREATE TYPE device_tools_status AS ENUM ('active', 'hidden', 'removed');
 CREATE TYPE device_operations_task_mode AS ENUM ('sync', 'async');
@@ -372,6 +375,25 @@ CREATE TABLE workspace_members (
 
 CREATE INDEX idx_workspace_members_workspace ON workspace_members(workspace_id);
 CREATE INDEX idx_workspace_members_user ON workspace_members(user_id);
+
+CREATE TABLE workspace_apps (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+  kind workspace_apps_kind NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  owner_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  status workspace_apps_status NOT NULL DEFAULT 'active',
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
+  deleted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(id, workspace_id)
+);
+
+CREATE INDEX idx_workspace_apps_workspace ON workspace_apps(workspace_id, kind, created_at DESC);
+CREATE INDEX idx_workspace_apps_owner ON workspace_apps(owner_workspace_member_id, created_at DESC)
+  WHERE owner_workspace_member_id IS NOT NULL;
 
 CREATE TABLE workspace_access_bindings (
   workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE RESTRICT,
@@ -746,7 +768,7 @@ CREATE INDEX idx_catalog_version_files_version ON catalog_version_files(catalog_
 CREATE TABLE actor_template_version_specs (
   catalog_version_id UUID PRIMARY KEY REFERENCES catalog_versions(id) ON DELETE RESTRICT,
   role actors_role NOT NULL,
-  name VARCHAR(255) NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
   avatar_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   avatar_emoji VARCHAR(32),
   title VARCHAR(255) NOT NULL,
@@ -954,8 +976,6 @@ CREATE TABLE plugin_version_runtime_permissions (
 -- ============ Actor Runtime ============
 CREATE TABLE actors (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
-  name VARCHAR(255) NOT NULL,
   role actors_role NOT NULL,
   title VARCHAR(255) NOT NULL,
   avatar_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
@@ -963,43 +983,35 @@ CREATE TABLE actors (
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
   specialties TEXT[] DEFAULT '{}',
-  -- P2: `access_policy` column has been removed. Authorization intent is now
-  -- represented by the existence of a workspace-scoped binding in
-  -- `resource_access_bindings` with `resource_type='actor'`, `source='default_open'`.
-  -- See packages/api/src/modules/relationship/service.ts for the lifecycle.
+  -- P2: the old access-policy column has been removed. Authorization intent is now
+  -- represented by the existence of a workspace-scoped `contact_visible`
+  -- grant in `workspace_app_grants` with `source='default_open'`. See
+  -- packages/api/src/modules/relationship/service.ts for the lifecycle.
   config JSONB DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
   is_public_shared BOOLEAN NOT NULL DEFAULT FALSE,
-  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (avatar_file_id IS NULL OR avatar_emoji IS NULL)
 );
 
-CREATE INDEX idx_actors_workspace ON actors(workspace_id, created_at DESC);
 CREATE INDEX idx_actors_parent ON actors(parent_id);
 
 CREATE TABLE remote_agents (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
-  name VARCHAR(255) NOT NULL,
   title VARCHAR(255) NOT NULL,
   description TEXT,
   runtime_kind remote_agents_runtime_kind NOT NULL,
   avatar_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   avatar_emoji VARCHAR(32),
-  -- P2: see actors.access_policy comment above.
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  -- P2: see actor authorization comment above.
   is_public_shared BOOLEAN NOT NULL DEFAULT FALSE,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (avatar_file_id IS NULL OR avatar_emoji IS NULL)
 );
 
-CREATE INDEX idx_remote_agents_workspace ON remote_agents(workspace_id, created_at DESC);
 CREATE INDEX idx_remote_agents_runtime ON remote_agents(runtime_kind, created_at DESC);
 
 CREATE TABLE remote_agent_machines (
@@ -1209,31 +1221,6 @@ CREATE INDEX idx_workspace_friend_entries_owner
 CREATE INDEX idx_workspace_friend_entries_peer_subject
   ON workspace_friend_entries(peer_subject_id);
 
--- P2 / P1b: actor_access_requests and remote_agent_access_requests have been
--- merged into a single entity_access_requests table. The target entity is
--- expressed via subject_id into access_subjects (kind=actor or remote_agent),
--- which removes the two-table duplication and lets a single endpoint handle
--- both flows. Deferred FK applied later in the file.
-CREATE TABLE entity_access_requests (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
-  target_subject_id UUID NOT NULL,
-  requester_workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE RESTRICT,
-  status relationship_request_status NOT NULL DEFAULT 'pending',
-  resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  resolved_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX uq_entity_access_requests_pending
-  ON entity_access_requests(workspace_id, target_subject_id, requester_workspace_member_id)
-  WHERE status = 'pending';
-CREATE INDEX idx_entity_access_requests_target
-  ON entity_access_requests(workspace_id, target_subject_id, created_at DESC);
-CREATE INDEX idx_entity_access_requests_requester
-  ON entity_access_requests(workspace_id, requester_workspace_member_id, created_at DESC);
-
 CREATE TABLE direct_conversation_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE RESTRICT,
@@ -1265,7 +1252,7 @@ CREATE TABLE actor_versions (
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE RESTRICT,
   version INT NOT NULL,
   previous_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
-  name VARCHAR(255) NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
   role actors_role NOT NULL,
   title VARCHAR(255) NOT NULL,
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
@@ -1597,12 +1584,6 @@ ALTER TABLE direct_conversation_bindings
 ALTER TABLE direct_conversation_bindings
   ADD CONSTRAINT fk_direct_conversation_bindings_participant_two_subject
   FOREIGN KEY (participant_two_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
-
--- P2/P1b: deferred FK from entity_access_requests.target_subject_id (the
--- merged actor/remote_agent target).
-ALTER TABLE entity_access_requests
-  ADD CONSTRAINT fk_entity_access_requests_target_subject
-  FOREIGN KEY (target_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
 
 -- P1b: deferred FK from workspace_capability_conversation_type_policies.subject_id
 -- (always points to a kind='workspace' access_subjects row).
@@ -3102,23 +3083,13 @@ CREATE INDEX idx_runtime_events_tool_call_time ON runtime_events(tool_call_id, c
 -- ============ Skill Runtime ============
 CREATE TABLE installed_skills (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
-  slug VARCHAR(120) NOT NULL,
-  name VARCHAR(255) NOT NULL,
   icon_file_id UUID REFERENCES file_assets(id) ON DELETE SET NULL,
   tags TEXT[] DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   current_snapshot_id UUID NOT NULL REFERENCES skill_snapshots(id) ON DELETE RESTRICT,
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
-  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(workspace_id, slug)
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX idx_installed_skills_workspace ON installed_skills(workspace_id, created_at DESC);
 
 CREATE TABLE skill_versions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3145,38 +3116,31 @@ CREATE TABLE skill_source_refs (
 -- ============ Plugin Runtime ============
 CREATE TABLE plugin_installations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
   catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
   catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE RESTRICT,
-  display_name VARCHAR(255) NOT NULL,
-  -- P1b: polymorphic attachment (attachment_target_type + 3 nullable FKs)
-  -- collapsed into a single attachment_subject_id FK into access_subjects.
+  -- P1b: polymorphic attachment (attachment_scope_type + 3 nullable FKs)
+  -- collapsed into a single attachment_scope_subject_id FK into access_subjects.
   -- Mapping: workspace → SUBJECT_KIND.WORKSPACE; conversation → CONVERSATION;
   -- actor → ACTOR; workspace_member → WORKSPACE_MEMBER. The FK is added by
   -- a deferred ALTER TABLE after access_subjects exists (search
   -- "ALTER TABLE plugin_installations").
-  attachment_subject_id UUID NOT NULL,
+  attachment_scope_subject_id UUID NOT NULL,
   config_data JSONB NOT NULL DEFAULT '{}',
   approved_runtime_permissions TEXT[] DEFAULT '{}',
   reuse_scope plugin_installations_reuse_scope NOT NULL DEFAULT 'conversation',
-  conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
-  status plugin_installations_status NOT NULL DEFAULT 'active',
-  installed_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_plugin_installations_workspace ON plugin_installations(workspace_id, created_at DESC);
 CREATE INDEX idx_plugin_installations_item ON plugin_installations(catalog_item_id, created_at DESC);
 CREATE INDEX idx_plugin_installations_attachment_subject
-  ON plugin_installations(attachment_subject_id);
--- P1b: deferred FK from plugin_installations.attachment_subject_id —
+  ON plugin_installations(attachment_scope_subject_id);
+-- P1b: deferred FK from plugin_installations.attachment_scope_subject_id —
 -- access_subjects is created earlier in this file so a forward reference is
 -- safe; we add the FK here (after plugin_installations exists) for clarity.
 ALTER TABLE plugin_installations
   ADD CONSTRAINT fk_plugin_installations_attachment_subject
-  FOREIGN KEY (attachment_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
+  FOREIGN KEY (attachment_scope_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
 
 CREATE TABLE automation_integration_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3211,6 +3175,12 @@ CREATE INDEX idx_automation_integration_bindings_workspace
   ON automation_integration_bindings(workspace_id, created_at DESC);
 CREATE INDEX idx_automation_integration_bindings_installation
   ON automation_integration_bindings(installation_id, created_at DESC);
+ALTER TABLE automation_integration_bindings
+  ADD CONSTRAINT fk_automation_integration_bindings_workspace_app_root
+  FOREIGN KEY (installation_id, workspace_id)
+  REFERENCES workspace_apps(id, workspace_id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
 
 ALTER TABLE automation_event_sources
   ADD CONSTRAINT fk_automation_event_sources_integration_binding
@@ -3245,13 +3215,17 @@ CREATE TABLE plugin_auth_sessions (
 CREATE INDEX idx_plugin_auth_sessions_workspace ON plugin_auth_sessions(workspace_id, created_at DESC);
 CREATE INDEX idx_plugin_auth_sessions_item ON plugin_auth_sessions(catalog_item_id, created_at DESC);
 CREATE INDEX idx_plugin_auth_sessions_workspace_member ON plugin_auth_sessions(workspace_member_id, created_at DESC);
+ALTER TABLE plugin_auth_sessions
+  ADD CONSTRAINT fk_plugin_auth_sessions_workspace_app_root
+  FOREIGN KEY (installation_id, workspace_id)
+  REFERENCES workspace_apps(id, workspace_id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE plugin_connections (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   installation_id UUID NOT NULL REFERENCES plugin_installations(id) ON DELETE RESTRICT,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
-  owner_scope plugin_connections_owner_scope NOT NULL DEFAULT 'installation',
-  owner_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   binding_key VARCHAR(100) NOT NULL,
   driver VARCHAR(100) NOT NULL,
   external_account_id VARCHAR(255),
@@ -3267,6 +3241,12 @@ CREATE TABLE plugin_connections (
 
 CREATE INDEX idx_plugin_connections_installation ON plugin_connections(installation_id, created_at DESC);
 CREATE INDEX idx_plugin_connections_binding ON plugin_connections(binding_key, created_at DESC);
+ALTER TABLE plugin_connections
+  ADD CONSTRAINT fk_plugin_connections_workspace_app_root
+  FOREIGN KEY (installation_id, workspace_id)
+  REFERENCES workspace_apps(id, workspace_id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE plugin_source_refs (
   installation_id UUID PRIMARY KEY REFERENCES plugin_installations(id) ON DELETE RESTRICT,
@@ -3277,6 +3257,69 @@ CREATE TABLE plugin_source_refs (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ============ Workspace App Grants ============
+CREATE TABLE workspace_app_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+  workspace_app_id UUID NOT NULL REFERENCES workspace_apps(id) ON DELETE RESTRICT,
+  subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE RESTRICT,
+  scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE RESTRICT,
+  permissions workspace_app_grant_permission[] NOT NULL,
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
+  status workspace_app_grants_status NOT NULL DEFAULT 'active',
+  source workspace_app_grants_source NOT NULL DEFAULT 'manual',
+  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX uq_workspace_app_grants_active
+  ON workspace_app_grants(
+    workspace_app_id,
+    subject_id,
+    COALESCE(scope_subject_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  )
+  WHERE status = 'active';
+CREATE INDEX idx_workspace_app_grants_workspace
+  ON workspace_app_grants(workspace_id, created_at DESC);
+CREATE INDEX idx_workspace_app_grants_app
+  ON workspace_app_grants(workspace_app_id, status, created_at DESC);
+CREATE INDEX idx_workspace_app_grants_subject
+  ON workspace_app_grants(subject_id, status, created_at DESC);
+
+CREATE TABLE workspace_app_grant_requests (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+  workspace_app_id UUID NOT NULL REFERENCES workspace_apps(id) ON DELETE RESTRICT,
+  grantee_subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE RESTRICT,
+  grantee_scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE RESTRICT,
+  requested_permissions workspace_app_grant_permission[] NOT NULL,
+  requester_workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE RESTRICT,
+  status workspace_app_grant_requests_status NOT NULL DEFAULT 'pending',
+  resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ,
+  reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_workspace_app_grant_requests_pending
+  ON workspace_app_grant_requests(
+    workspace_app_id,
+    requester_workspace_member_id,
+    grantee_subject_id,
+    COALESCE(grantee_scope_subject_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  )
+  WHERE status = 'pending';
+CREATE INDEX idx_workspace_app_grant_requests_workspace
+  ON workspace_app_grant_requests(workspace_id, status, created_at DESC);
+CREATE INDEX idx_workspace_app_grant_requests_app
+  ON workspace_app_grant_requests(workspace_app_id, status, created_at DESC);
+CREATE INDEX idx_workspace_app_grant_requests_requester
+  ON workspace_app_grant_requests(requester_workspace_member_id, status, created_at DESC);
+
 -- ============ Resource access bindings ============
 -- Keep resource access bindings here so every resource and subject foreign key
 -- can be declared inline instead of being patched in later.
@@ -3284,12 +3327,7 @@ CREATE TABLE resource_access_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
   resource_type resource_access_binding_resource_type NOT NULL,
-  installed_skill_id UUID REFERENCES installed_skills(id) ON DELETE RESTRICT,
-  plugin_installation_id UUID REFERENCES plugin_installations(id) ON DELETE RESTRICT,
-  device_capability_id UUID,                       -- v3 addition; FK added at bottom
   automation_event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE RESTRICT,
-  actor_id UUID REFERENCES actors(id) ON DELETE RESTRICT,
-  remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE RESTRICT,
   -- P1b contract: `subject_id` is the sole subject reference. Legacy polymorphic
   -- columns (target_type + subject_*_id) have been dropped. Readers JOIN
   -- access_subjects via subject_id and project equivalent fields when needed
@@ -3311,48 +3349,23 @@ CREATE TABLE resource_access_bindings (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_resource_access_bindings_resource CHECK (
-    (resource_type = 'installed_skill' AND installed_skill_id IS NOT NULL AND plugin_installation_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'plugin_installation' AND installed_skill_id IS NULL AND plugin_installation_id IS NOT NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'device_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND device_capability_id IS NOT NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'automation_event_source' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'actor' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'remote_agent' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL)
+    resource_type = 'automation_event_source' AND automation_event_source_id IS NOT NULL
   )
 );
 
 CREATE UNIQUE INDEX uq_resource_access_bindings_active
   ON resource_access_bindings(
     resource_type,
-    COALESCE(installed_skill_id::text, ''),
-    COALESCE(plugin_installation_id::text, ''),
-    COALESCE(device_capability_id::text, ''),
     COALESCE(automation_event_source_id::text, ''),
-    COALESCE(actor_id::text, ''),
-    COALESCE(remote_agent_id::text, ''),
     subject_id,
     COALESCE(scope_subject_id::text, '')
   )
   WHERE status = 'active';
 CREATE INDEX idx_resource_access_bindings_workspace
   ON resource_access_bindings(workspace_id, created_at DESC);
-CREATE INDEX idx_resource_access_bindings_installed_skill
-  ON resource_access_bindings(installed_skill_id, created_at DESC)
-  WHERE installed_skill_id IS NOT NULL;
-CREATE INDEX idx_resource_access_bindings_plugin_installation
-  ON resource_access_bindings(plugin_installation_id, created_at DESC)
-  WHERE plugin_installation_id IS NOT NULL;
-CREATE INDEX idx_resource_access_bindings_device_capability
-  ON resource_access_bindings(device_capability_id, created_at DESC)
-  WHERE device_capability_id IS NOT NULL;
 CREATE INDEX idx_resource_access_bindings_automation_event_source
   ON resource_access_bindings(automation_event_source_id, created_at DESC)
   WHERE automation_event_source_id IS NOT NULL;
-CREATE INDEX idx_resource_access_bindings_actor
-  ON resource_access_bindings(actor_id, created_at DESC)
-  WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_resource_access_bindings_remote_agent
-  ON resource_access_bindings(remote_agent_id, created_at DESC)
-  WHERE remote_agent_id IS NOT NULL;
 CREATE INDEX idx_resource_access_bindings_subject_id
   ON resource_access_bindings(subject_id, status, created_at DESC);
 -- subject-scope-refactor: partial index supports scope-aware visibility queries
@@ -3714,6 +3727,12 @@ CREATE INDEX idx_runtime_authorization_grants_dispatch
     device_id, device_capability_id, device_exposure_id,
     subject_id, scope_subject_id, status
   );
+ALTER TABLE runtime_authorization_grants
+  ADD CONSTRAINT fk_runtime_authorization_grants_workspace_app_root
+  FOREIGN KEY (device_capability_id, workspace_id)
+  REFERENCES workspace_apps(id, workspace_id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
 -- subject-scope-refactor: subject_id is now NOT NULL; deferred FK still added
 -- post-access_subjects so the cross-reference works even if the tables are
 -- created out of order at bootstrap.
@@ -3974,15 +3993,45 @@ CREATE INDEX idx_device_exposures_service
 
 CREATE TABLE device_capabilities (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
   exposure_id UUID NOT NULL UNIQUE REFERENCES device_exposures(id) ON DELETE RESTRICT,
-  status device_capabilities_status NOT NULL DEFAULT 'active',
-  conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 15)),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_device_capabilities_workspace ON device_capabilities(workspace_id, created_at DESC);
+
+ALTER TABLE actors
+  ADD CONSTRAINT fk_actors_workspace_app_root
+  FOREIGN KEY (id)
+  REFERENCES workspace_apps(id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
+
+ALTER TABLE remote_agents
+  ADD CONSTRAINT fk_remote_agents_workspace_app_root
+  FOREIGN KEY (id)
+  REFERENCES workspace_apps(id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
+
+ALTER TABLE installed_skills
+  ADD CONSTRAINT fk_installed_skills_workspace_app_root
+  FOREIGN KEY (id)
+  REFERENCES workspace_apps(id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
+
+ALTER TABLE plugin_installations
+  ADD CONSTRAINT fk_plugin_installations_workspace_app_root
+  FOREIGN KEY (id)
+  REFERENCES workspace_apps(id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
+
+ALTER TABLE device_capabilities
+  ADD CONSTRAINT fk_device_capabilities_workspace_app_root
+  FOREIGN KEY (id)
+  REFERENCES workspace_apps(id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE device_catalog_revisions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -4116,6 +4165,12 @@ CREATE INDEX idx_device_operations_task
 CREATE INDEX idx_device_operations_runtime_session
   ON device_operations(runtime_session_id)
   WHERE runtime_session_id IS NOT NULL;
+ALTER TABLE device_operations
+  ADD CONSTRAINT fk_device_operations_workspace_app_root
+  FOREIGN KEY (device_capability_id, workspace_id)
+  REFERENCES workspace_apps(id, workspace_id)
+  ON DELETE RESTRICT
+  DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE device_operation_attempts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -4155,9 +4210,6 @@ CREATE TABLE device_operation_results (
 ALTER TABLE device_services
   ADD CONSTRAINT fk_device_services_current_session
   FOREIGN KEY (current_session_id) REFERENCES device_control_plane_sessions(id) ON DELETE SET NULL;
-ALTER TABLE resource_access_bindings
-  ADD CONSTRAINT fk_resource_access_bindings_device_capability
-  FOREIGN KEY (device_capability_id) REFERENCES device_capabilities(id) ON DELETE RESTRICT;
 ALTER TABLE runtime_authorization_grants
   ADD CONSTRAINT fk_runtime_authorization_grants_device
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE RESTRICT;
@@ -4311,6 +4363,144 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION workspace_member_workspace_id(p_workspace_member_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_workspace_id UUID;
+BEGIN
+  IF p_workspace_member_id IS NULL THEN RETURN NULL; END IF;
+  SELECT workspace_id INTO v_workspace_id
+    FROM workspace_members
+   WHERE id = p_workspace_member_id;
+  RETURN v_workspace_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION assert_workspace_app_detail_consistency(
+  p_workspace_app_id UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_kind workspace_apps_kind;
+  v_workspace_id UUID;
+  v_has_actor BOOLEAN;
+  v_has_remote_agent BOOLEAN;
+  v_has_installed_skill BOOLEAN;
+  v_has_plugin_installation BOOLEAN;
+  v_has_device_capability BOOLEAN;
+  v_detail_count INT;
+BEGIN
+  IF p_workspace_app_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  SELECT kind, workspace_id
+    INTO v_kind, v_workspace_id
+    FROM workspace_apps
+   WHERE id = p_workspace_app_id;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  SELECT EXISTS(
+           SELECT 1 FROM actors
+            WHERE id = p_workspace_app_id
+         ),
+         EXISTS(
+           SELECT 1 FROM remote_agents
+            WHERE id = p_workspace_app_id
+         ),
+         EXISTS(
+           SELECT 1 FROM installed_skills
+            WHERE id = p_workspace_app_id
+         ),
+         EXISTS(
+           SELECT 1 FROM plugin_installations
+            WHERE id = p_workspace_app_id
+         ),
+         EXISTS(
+           SELECT 1 FROM device_capabilities
+            WHERE id = p_workspace_app_id
+         )
+    INTO v_has_actor,
+         v_has_remote_agent,
+         v_has_installed_skill,
+         v_has_plugin_installation,
+         v_has_device_capability;
+
+  v_detail_count :=
+    v_has_actor::INT +
+    v_has_remote_agent::INT +
+    v_has_installed_skill::INT +
+    v_has_plugin_installation::INT +
+    v_has_device_capability::INT;
+
+  IF v_detail_count <> 1 THEN
+    RAISE EXCEPTION
+      'workspace_app % kind=% must have exactly one matching detail row, found actor=% remote_agent=% installed_skill=% plugin_installation=% device_capability=%',
+      p_workspace_app_id,
+      v_kind,
+      v_has_actor,
+      v_has_remote_agent,
+      v_has_installed_skill,
+      v_has_plugin_installation,
+      v_has_device_capability
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'workspace_apps_exactly_one_detail_chk';
+  END IF;
+
+  IF v_kind = 'actor' AND NOT v_has_actor THEN
+    RAISE EXCEPTION
+      'workspace_app % kind=actor is missing its actor detail row',
+      p_workspace_app_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'workspace_apps_kind_detail_match_chk';
+  ELSIF v_kind = 'remote_agent' AND NOT v_has_remote_agent THEN
+    RAISE EXCEPTION
+      'workspace_app % kind=remote_agent is missing its remote_agent detail row',
+      p_workspace_app_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'workspace_apps_kind_detail_match_chk';
+  ELSIF v_kind = 'installed_skill' AND NOT v_has_installed_skill THEN
+    RAISE EXCEPTION
+      'workspace_app % kind=installed_skill is missing its installed_skill detail row',
+      p_workspace_app_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'workspace_apps_kind_detail_match_chk';
+  ELSIF v_kind = 'plugin_installation' AND NOT v_has_plugin_installation THEN
+    RAISE EXCEPTION
+      'workspace_app % kind=plugin_installation is missing its plugin_installation detail row',
+      p_workspace_app_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'workspace_apps_kind_detail_match_chk';
+  ELSIF v_kind = 'device_capability' AND NOT v_has_device_capability THEN
+    RAISE EXCEPTION
+      'workspace_app % kind=device_capability is missing its device_capability detail row',
+      p_workspace_app_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'workspace_apps_kind_detail_match_chk';
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION validate_workspace_app_detail_consistency()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_workspace_app_id UUID;
+BEGIN
+  v_workspace_app_id := COALESCE(NEW.id, OLD.id);
+  PERFORM assert_workspace_app_detail_consistency(v_workspace_app_id);
+  RETURN NULL;
+END;
+$$;
+
 -- Helper: workspace_id of a device_capability row.
 CREATE OR REPLACE FUNCTION device_capability_workspace_id(p_capability_id UUID)
 RETURNS UUID
@@ -4320,9 +4510,10 @@ AS $$
 DECLARE v_workspace_id UUID;
 BEGIN
   IF p_capability_id IS NULL THEN RETURN NULL; END IF;
-  SELECT dc.workspace_id INTO v_workspace_id
-    FROM device_capabilities dc
-    WHERE dc.id = p_capability_id;
+  SELECT app.workspace_id INTO v_workspace_id
+    FROM workspace_apps app
+    WHERE app.id = p_capability_id
+      AND app.kind = 'device_capability';
   RETURN v_workspace_id;
 END;
 $$;
@@ -4391,14 +4582,11 @@ BEGIN
     END IF;
   END IF;
   -- resource workspace must match binding workspace (per resource_type CASE)
-  v_resource_ws := CASE NEW.resource_type
-    WHEN 'installed_skill'         THEN (SELECT workspace_id FROM installed_skills         WHERE id = NEW.installed_skill_id)
-    WHEN 'plugin_installation'     THEN (SELECT workspace_id FROM plugin_installations     WHERE id = NEW.plugin_installation_id)
-    WHEN 'device_capability'       THEN device_capability_workspace_id(NEW.device_capability_id)
-    WHEN 'automation_event_source' THEN (SELECT workspace_id FROM automation_event_sources WHERE id = NEW.automation_event_source_id)
-    WHEN 'actor'                   THEN (SELECT workspace_id FROM actors                   WHERE id = NEW.actor_id)
-    WHEN 'remote_agent'            THEN (SELECT workspace_id FROM remote_agents            WHERE id = NEW.remote_agent_id)
-  END;
+  v_resource_ws := (
+    SELECT workspace_id
+      FROM automation_event_sources
+     WHERE id = NEW.automation_event_source_id
+  );
   IF v_resource_ws IS NULL OR v_resource_ws IS DISTINCT FROM NEW.workspace_id THEN
     RAISE EXCEPTION 'resource_access_bindings resource_type=% missing or workspace mismatch (% vs %)', NEW.resource_type, v_resource_ws, NEW.workspace_id;
   END IF;
@@ -4410,6 +4598,308 @@ CREATE TRIGGER tg_rab_validate
   BEFORE INSERT OR UPDATE ON resource_access_bindings
   FOR EACH ROW
   EXECUTE FUNCTION validate_resource_access_binding_subject_scope();
+
+CREATE CONSTRAINT TRIGGER workspace_apps_detail_consistency_root_chk
+AFTER INSERT OR UPDATE OF kind, workspace_id ON workspace_apps
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_workspace_app_detail_consistency();
+
+CREATE CONSTRAINT TRIGGER workspace_apps_detail_consistency_actor_chk
+AFTER INSERT OR UPDATE OR DELETE ON actors
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_workspace_app_detail_consistency();
+
+CREATE CONSTRAINT TRIGGER workspace_apps_detail_consistency_remote_agent_chk
+AFTER INSERT OR UPDATE OR DELETE ON remote_agents
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_workspace_app_detail_consistency();
+
+CREATE CONSTRAINT TRIGGER workspace_apps_detail_consistency_installed_skill_chk
+AFTER INSERT OR UPDATE OR DELETE ON installed_skills
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_workspace_app_detail_consistency();
+
+CREATE CONSTRAINT TRIGGER workspace_apps_detail_consistency_plugin_installation_chk
+AFTER INSERT OR UPDATE OR DELETE ON plugin_installations
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_workspace_app_detail_consistency();
+
+CREATE CONSTRAINT TRIGGER workspace_apps_detail_consistency_device_capability_chk
+AFTER INSERT OR UPDATE OR DELETE ON device_capabilities
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_workspace_app_detail_consistency();
+
+-- ============================================================================
+-- workspace_apps / workspace_app_grants / workspace_app_grant_requests
+-- ============================================================================
+CREATE OR REPLACE FUNCTION validate_workspace_app_root()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_owner_ws UUID;
+BEGIN
+  IF NEW.owner_workspace_member_id IS NOT NULL THEN
+    v_owner_ws := workspace_member_workspace_id(NEW.owner_workspace_member_id);
+    IF v_owner_ws IS NULL OR v_owner_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION
+        'workspace_apps.owner_workspace_member_id % workspace % does not match app workspace %',
+        NEW.owner_workspace_member_id, v_owner_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+
+  IF NEW.kind = 'plugin_installation'
+     AND NEW.status NOT IN ('active', 'disabled', 'error', 'archived') THEN
+    RAISE EXCEPTION 'workspace_apps.kind=plugin_installation does not allow status=%', NEW.status;
+  ELSIF NEW.kind = 'installed_skill'
+     AND NEW.status NOT IN ('active', 'disabled', 'archived') THEN
+    RAISE EXCEPTION 'workspace_apps.kind=installed_skill does not allow status=%', NEW.status;
+  ELSIF NEW.kind = 'actor'
+     AND NEW.status NOT IN ('active', 'disabled', 'archived') THEN
+    RAISE EXCEPTION 'workspace_apps.kind=actor does not allow status=%', NEW.status;
+  ELSIF NEW.kind = 'remote_agent'
+     AND NEW.status NOT IN ('active', 'disabled', 'archived') THEN
+    RAISE EXCEPTION 'workspace_apps.kind=remote_agent does not allow status=%', NEW.status;
+  ELSIF NEW.kind = 'device_capability'
+     AND NEW.status NOT IN ('active', 'deprecated', 'archived') THEN
+    RAISE EXCEPTION 'workspace_apps.kind=device_capability does not allow status=%', NEW.status;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_workspace_apps_validate
+  BEFORE INSERT OR UPDATE ON workspace_apps
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_workspace_app_root();
+
+CREATE OR REPLACE FUNCTION normalize_workspace_app_grant_permissions(
+  p_permissions workspace_app_grant_permission[]
+)
+RETURNS workspace_app_grant_permission[]
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT COALESCE(
+    ARRAY(
+      SELECT DISTINCT permission
+      FROM unnest(p_permissions) AS permission
+      ORDER BY permission
+    ),
+    ARRAY[]::workspace_app_grant_permission[]
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION validate_workspace_app_grant()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_subject_ws UUID;
+  v_scope_ws UUID;
+  v_app_ws UUID;
+  v_app_kind workspace_apps_kind;
+  v_subject_kind subject_kind;
+  v_scope_kind subject_kind;
+  v_creator_ws UUID;
+BEGIN
+  NEW.permissions := normalize_workspace_app_grant_permissions(NEW.permissions);
+  IF cardinality(NEW.permissions) = 0 THEN
+    RAISE EXCEPTION 'workspace_app_grants.permissions must be non-empty';
+  END IF;
+
+  SELECT workspace_id, kind INTO v_app_ws, v_app_kind
+    FROM workspace_apps
+   WHERE id = NEW.workspace_app_id;
+  IF v_app_ws IS NULL OR v_app_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION
+      'workspace_app_grants.workspace_app_id % workspace % does not match grant workspace %',
+      NEW.workspace_app_id, v_app_ws, NEW.workspace_id;
+  END IF;
+
+  IF NEW.created_by_workspace_member_id IS NOT NULL THEN
+    v_creator_ws := workspace_member_workspace_id(NEW.created_by_workspace_member_id);
+    IF v_creator_ws IS NULL OR v_creator_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION
+        'workspace_app_grants.created_by_workspace_member_id % workspace % does not match grant workspace %',
+        NEW.created_by_workspace_member_id, v_creator_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+
+  IF NOT is_workspace_bound_subject_kind(NEW.subject_id) THEN
+    RAISE EXCEPTION 'workspace_app_grants.subject_id % is not workspace-bound', NEW.subject_id;
+  END IF;
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION
+      'workspace_app_grants.subject_id % workspace % does not match grant workspace %',
+      NEW.subject_id, v_subject_ws, NEW.workspace_id;
+  END IF;
+
+  SELECT kind INTO v_subject_kind FROM access_subjects WHERE id = NEW.subject_id;
+
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+      RAISE EXCEPTION
+        'workspace_app_grants.scope_subject_id % must reference workspace|conversation',
+        NEW.scope_subject_id;
+    END IF;
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION
+        'workspace_app_grants.scope_subject_id % workspace % does not match grant workspace %',
+        NEW.scope_subject_id, v_scope_ws, NEW.workspace_id;
+    END IF;
+    SELECT kind INTO v_scope_kind FROM access_subjects WHERE id = NEW.scope_subject_id;
+  END IF;
+
+  IF NEW.conversation_type_mask_override IS NOT NULL
+     AND NOT ('use'::workspace_app_grant_permission = ANY(NEW.permissions)) THEN
+    RAISE EXCEPTION
+      'workspace_app_grants.conversation_type_mask_override is only allowed on use grants';
+  END IF;
+
+  IF 'use'::workspace_app_grant_permission = ANY(NEW.permissions) THEN
+    IF v_app_kind NOT IN ('plugin_installation', 'installed_skill', 'device_capability') THEN
+      RAISE EXCEPTION 'workspace_app_grants.use is not allowed for app kind=%', v_app_kind;
+    END IF;
+    IF NEW.scope_subject_id IS NOT NULL THEN
+      IF v_subject_kind NOT IN ('actor', 'remote_agent') OR v_scope_kind <> 'conversation' THEN
+        RAISE EXCEPTION
+          'workspace_app_grants scoped use requires subject kind actor|remote_agent and conversation scope';
+      END IF;
+    ELSIF v_subject_kind NOT IN ('workspace', 'workspace_member', 'actor', 'remote_agent', 'conversation') THEN
+      RAISE EXCEPTION
+        'workspace_app_grants.use does not allow subject kind=%', v_subject_kind;
+    END IF;
+  END IF;
+
+  IF 'manage'::workspace_app_grant_permission = ANY(NEW.permissions) THEN
+    IF NEW.scope_subject_id IS NOT NULL OR v_subject_kind <> 'workspace_member' THEN
+      RAISE EXCEPTION
+        'workspace_app_grants.manage requires an unscoped workspace_member subject';
+    END IF;
+  END IF;
+
+  IF 'contact_visible'::workspace_app_grant_permission = ANY(NEW.permissions) THEN
+    IF v_app_kind NOT IN ('actor', 'remote_agent') THEN
+      RAISE EXCEPTION
+        'workspace_app_grants.contact_visible is not allowed for app kind=%', v_app_kind;
+    END IF;
+    IF NEW.scope_subject_id IS NOT NULL
+       OR v_subject_kind NOT IN ('workspace', 'workspace_member') THEN
+      RAISE EXCEPTION
+        'workspace_app_grants.contact_visible requires an unscoped workspace|workspace_member subject';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_workspace_app_grants_validate
+  BEFORE INSERT OR UPDATE ON workspace_app_grants
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_workspace_app_grant();
+
+CREATE OR REPLACE FUNCTION validate_workspace_app_grant_request()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_grantee_ws UUID;
+  v_app_ws UUID;
+  v_app_kind workspace_apps_kind;
+  v_grantee_kind subject_kind;
+  v_requester_ws UUID;
+  v_resolver_ws UUID;
+BEGIN
+  NEW.requested_permissions :=
+    normalize_workspace_app_grant_permissions(NEW.requested_permissions);
+  IF NEW.requested_permissions <>
+     ARRAY['contact_visible'::workspace_app_grant_permission] THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests.requested_permissions must be exactly [contact_visible] in this phase';
+  END IF;
+
+  SELECT workspace_id, kind INTO v_app_ws, v_app_kind
+    FROM workspace_apps
+   WHERE id = NEW.workspace_app_id;
+  IF v_app_ws IS NULL OR v_app_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests.workspace_app_id % workspace % does not match request workspace %',
+      NEW.workspace_app_id, v_app_ws, NEW.workspace_id;
+  END IF;
+  IF v_app_kind NOT IN ('actor', 'remote_agent') THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests are only allowed for actor|remote_agent apps in this phase';
+  END IF;
+
+  v_requester_ws := workspace_member_workspace_id(NEW.requester_workspace_member_id);
+  IF v_requester_ws IS NULL OR v_requester_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests.requester_workspace_member_id % workspace % does not match request workspace %',
+      NEW.requester_workspace_member_id, v_requester_ws, NEW.workspace_id;
+  END IF;
+
+  IF NEW.resolved_by_workspace_member_id IS NOT NULL THEN
+    v_resolver_ws := workspace_member_workspace_id(NEW.resolved_by_workspace_member_id);
+    IF v_resolver_ws IS NULL OR v_resolver_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION
+        'workspace_app_grant_requests.resolved_by_workspace_member_id % workspace % does not match request workspace %',
+        NEW.resolved_by_workspace_member_id, v_resolver_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+
+  IF NEW.grantee_scope_subject_id IS NOT NULL THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests do not allow scoped grantees in this phase';
+  END IF;
+
+  IF NOT is_workspace_bound_subject_kind(NEW.grantee_subject_id) THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests.grantee_subject_id % is not workspace-bound',
+      NEW.grantee_subject_id;
+  END IF;
+
+  v_grantee_ws := access_subject_workspace_id(NEW.grantee_subject_id);
+  IF v_grantee_ws IS NULL OR v_grantee_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests.grantee_subject_id % workspace % does not match request workspace %',
+      NEW.grantee_subject_id, v_grantee_ws, NEW.workspace_id;
+  END IF;
+
+  SELECT kind INTO v_grantee_kind FROM access_subjects WHERE id = NEW.grantee_subject_id;
+  IF v_grantee_kind <> 'workspace_member' THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests only allow workspace_member grantees in this phase';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+      FROM access_subjects subj
+     WHERE subj.id = NEW.grantee_subject_id
+       AND subj.workspace_member_id = NEW.requester_workspace_member_id
+  ) THEN
+    RAISE EXCEPTION
+      'workspace_app_grant_requests requester must request on behalf of their own workspace_member subject';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_workspace_app_grant_requests_validate
+  BEFORE INSERT OR UPDATE ON workspace_app_grant_requests
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_workspace_app_grant_request();
 
 -- ============================================================================
 -- tg_conversation_participant_validate: participant subject invariants
@@ -5306,8 +5796,6 @@ ALTER TABLE publishers DROP CONSTRAINT IF EXISTS publishers_slug_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_publishers_slug_live ON publishers (slug) WHERE deleted_at IS NULL;
 ALTER TABLE account DROP CONSTRAINT IF EXISTS uq_account_provider_account;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_account_provider_id_account_id_live ON account (provider_id, account_id) WHERE deleted_at IS NULL;
-ALTER TABLE installed_skills DROP CONSTRAINT IF EXISTS installed_skills_workspace_id_slug_key;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_installed_skills_workspace_id_slug_live ON installed_skills (workspace_id, slug) WHERE deleted_at IS NULL;
 ALTER TABLE transport_accounts DROP CONSTRAINT IF EXISTS transport_accounts_workspace_id_transport_kind_account_key_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_transport_accounts_workspace_id_transport_kind_account_key_live ON transport_accounts (workspace_id, transport_kind, account_key) WHERE deleted_at IS NULL;
 
@@ -5436,8 +5924,6 @@ DROP TRIGGER IF EXISTS sd_reject_delete ON devices;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON devices FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON direct_conversation_bindings;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON direct_conversation_bindings FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
-DROP TRIGGER IF EXISTS sd_reject_delete ON entity_access_requests;
-CREATE TRIGGER sd_reject_delete BEFORE DELETE ON entity_access_requests FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON file_access_grants;
 CREATE TRIGGER sd_reject_delete BEFORE DELETE ON file_access_grants FOR EACH ROW EXECUTE FUNCTION sd_reject_delete();
 DROP TRIGGER IF EXISTS sd_reject_delete ON file_assets;
@@ -5658,6 +6144,7 @@ DROP TRIGGER IF EXISTS sd_fk_live_workspace_access_bindings_workspace_member_id 
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_access_bindings_assigned_by_workspace_member_id ON workspace_access_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_invites_workspace_id ON workspace_invites;
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_invites_created_by_workspace_member_id ON workspace_invites;
+DROP TRIGGER IF EXISTS sd_fk_live_workspace_apps_workspace_id ON workspace_apps;
 DROP TRIGGER IF EXISTS sd_fk_live_conversations_workspace_id ON conversations;
 DROP TRIGGER IF EXISTS sd_fk_live_conversations_created_by_workspace_member_id ON conversations;
 DROP TRIGGER IF EXISTS sd_fk_live_audit_logs_workspace_id ON audit_logs;
@@ -5675,13 +6162,9 @@ DROP TRIGGER IF EXISTS sd_fk_live_catalog_items_icon_file_id ON catalog_items;
 DROP TRIGGER IF EXISTS sd_fk_live_catalog_versions_catalog_item_id ON catalog_versions;
 DROP TRIGGER IF EXISTS sd_fk_live_catalog_versions_created_by_user_id ON catalog_versions;
 DROP TRIGGER IF EXISTS sd_fk_live_actor_template_version_specs_avatar_file_id ON actor_template_version_specs;
-DROP TRIGGER IF EXISTS sd_fk_live_actors_workspace_id ON actors;
 DROP TRIGGER IF EXISTS sd_fk_live_actors_avatar_file_id ON actors;
 DROP TRIGGER IF EXISTS sd_fk_live_actors_parent_id ON actors;
-DROP TRIGGER IF EXISTS sd_fk_live_actors_created_by_workspace_member_id ON actors;
-DROP TRIGGER IF EXISTS sd_fk_live_remote_agents_workspace_id ON remote_agents;
 DROP TRIGGER IF EXISTS sd_fk_live_remote_agents_avatar_file_id ON remote_agents;
-DROP TRIGGER IF EXISTS sd_fk_live_remote_agents_created_by_workspace_member_id ON remote_agents;
 DROP TRIGGER IF EXISTS sd_fk_live_remote_agent_machines_workspace_id ON remote_agent_machines;
 DROP TRIGGER IF EXISTS sd_fk_live_remote_agent_machines_created_by_workspace_member_id ON remote_agent_machines;
 DROP TRIGGER IF EXISTS sd_fk_live_remote_agent_runtime_catalog_machine_id ON remote_agent_runtime_catalog;
@@ -5693,9 +6176,6 @@ DROP TRIGGER IF EXISTS sd_fk_live_workspace_friend_requests_requester_workspace_
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_friend_requests_resolved_by_workspace_member_id ON workspace_friend_requests;
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_friend_entries_workspace_id ON workspace_friend_entries;
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_friend_entries_owner_workspace_member_id ON workspace_friend_entries;
-DROP TRIGGER IF EXISTS sd_fk_live_entity_access_requests_workspace_id ON entity_access_requests;
-DROP TRIGGER IF EXISTS sd_fk_live_entity_access_requests_requester_workspace_member_id ON entity_access_requests;
-DROP TRIGGER IF EXISTS sd_fk_live_entity_access_requests_resolved_by_workspace_member_id ON entity_access_requests;
 DROP TRIGGER IF EXISTS sd_fk_live_direct_conversation_bindings_conversation_id ON direct_conversation_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_member_preferences_workspace_member_id ON workspace_member_preferences;
 DROP TRIGGER IF EXISTS sd_fk_live_workspace_member_preferences_chief_actor_id ON workspace_member_preferences;
@@ -5785,30 +6265,21 @@ DROP TRIGGER IF EXISTS sd_fk_live_runtime_events_workspace_id ON runtime_events;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_events_conversation_id ON runtime_events;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_events_actor_id ON runtime_events;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_events_user_id ON runtime_events;
-DROP TRIGGER IF EXISTS sd_fk_live_installed_skills_workspace_id ON installed_skills;
 DROP TRIGGER IF EXISTS sd_fk_live_installed_skills_icon_file_id ON installed_skills;
-DROP TRIGGER IF EXISTS sd_fk_live_installed_skills_created_by_workspace_member_id ON installed_skills;
 DROP TRIGGER IF EXISTS sd_fk_live_skill_versions_skill_id ON skill_versions;
 DROP TRIGGER IF EXISTS sd_fk_live_skill_versions_created_by_workspace_member_id ON skill_versions;
 DROP TRIGGER IF EXISTS sd_fk_live_skill_source_refs_skill_id ON skill_source_refs;
 DROP TRIGGER IF EXISTS sd_fk_live_skill_source_refs_source_catalog_item_id ON skill_source_refs;
-DROP TRIGGER IF EXISTS sd_fk_live_plugin_installations_workspace_id ON plugin_installations;
 DROP TRIGGER IF EXISTS sd_fk_live_plugin_installations_catalog_item_id ON plugin_installations;
-DROP TRIGGER IF EXISTS sd_fk_live_plugin_installations_installed_by_workspace_member_id ON plugin_installations;
 DROP TRIGGER IF EXISTS sd_fk_live_automation_integration_bindings_workspace_id ON automation_integration_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_automation_integration_bindings_installation_id ON automation_integration_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_automation_integration_bindings_webhook_endpoint_id ON automation_integration_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_plugin_connections_installation_id ON plugin_connections;
 DROP TRIGGER IF EXISTS sd_fk_live_plugin_connections_workspace_id ON plugin_connections;
-DROP TRIGGER IF EXISTS sd_fk_live_plugin_connections_owner_workspace_member_id ON plugin_connections;
 DROP TRIGGER IF EXISTS sd_fk_live_plugin_source_refs_installation_id ON plugin_source_refs;
 DROP TRIGGER IF EXISTS sd_fk_live_plugin_source_refs_source_catalog_item_id ON plugin_source_refs;
 DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_workspace_id ON resource_access_bindings;
-DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_installed_skill_id ON resource_access_bindings;
-DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_plugin_installation_id ON resource_access_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_automation_event_source_id ON resource_access_bindings;
-DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_actor_id ON resource_access_bindings;
-DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_remote_agent_id ON resource_access_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_created_by_workspace_member_id ON resource_access_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_tool_call_task_response_commands_created_by_workspace_member_id ON tool_call_task_response_commands;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_workspace_id ON runtime_authorization_grants;
@@ -5820,7 +6291,6 @@ DROP TRIGGER IF EXISTS sd_fk_live_device_services_remote_agent_machine_id ON dev
 DROP TRIGGER IF EXISTS sd_fk_live_device_service_keys_service_id ON device_service_keys;
 DROP TRIGGER IF EXISTS sd_fk_live_device_exposures_device_id ON device_exposures;
 DROP TRIGGER IF EXISTS sd_fk_live_device_exposures_service_id ON device_exposures;
-DROP TRIGGER IF EXISTS sd_fk_live_device_capabilities_workspace_id ON device_capabilities;
 DROP TRIGGER IF EXISTS sd_fk_live_device_capabilities_exposure_id ON device_capabilities;
 DROP TRIGGER IF EXISTS sd_fk_live_device_catalog_revisions_exposure_id ON device_catalog_revisions;
 DROP TRIGGER IF EXISTS sd_fk_live_device_tools_exposure_id ON device_tools;
@@ -5850,7 +6320,6 @@ DROP TRIGGER IF EXISTS sd_fk_live_users_avatar_file_id ON users;
 DROP TRIGGER IF EXISTS sd_fk_live_conversation_items_author_participant_id ON conversation_items;
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_webhook_endpoint_id ON automation_event_sources;
 DROP TRIGGER IF EXISTS sd_fk_live_automation_event_sources_integration_binding_id ON automation_event_sources;
-DROP TRIGGER IF EXISTS sd_fk_live_resource_access_bindings_device_capability_id ON resource_access_bindings;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_device_id ON runtime_authorization_grants;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_device_capability_id ON runtime_authorization_grants;
 DROP TRIGGER IF EXISTS sd_fk_live_runtime_authorization_grants_device_exposure_id ON runtime_authorization_grants;
@@ -5864,6 +6333,7 @@ CREATE TRIGGER sd_fk_live_workspace_members_workspace_id BEFORE INSERT OR UPDATE
 CREATE TRIGGER sd_fk_live_workspace_members_user_id BEFORE INSERT OR UPDATE OF user_id, status ON workspace_members FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('users', 'user_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_workspace_access_bindings_workspace_member_id BEFORE INSERT OR UPDATE OF workspace_member_id, status ON workspace_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspace_members', 'workspace_member_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_workspace_invites_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON workspace_invites FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
+CREATE TRIGGER sd_fk_live_workspace_apps_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at, status ON workspace_apps FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', 'active,disabled,error,deprecated', 'status');
 CREATE TRIGGER sd_fk_live_conversations_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON conversations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_audit_logs_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON audit_logs FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_file_assets_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON file_assets FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
@@ -5871,8 +6341,6 @@ CREATE TRIGGER sd_fk_live_publishers_workspace_id BEFORE INSERT OR UPDATE OF wor
 CREATE TRIGGER sd_fk_live_catalog_items_publisher_id BEFORE INSERT OR UPDATE OF publisher_id, deleted_at ON catalog_items FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('publishers', 'publisher_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_catalog_items_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON catalog_items FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_catalog_versions_catalog_item_id BEFORE INSERT OR UPDATE OF catalog_item_id ON catalog_versions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('catalog_items', 'catalog_item_id', 'id', 'false', '');
-CREATE TRIGGER sd_fk_live_actors_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON actors FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
-CREATE TRIGGER sd_fk_live_remote_agents_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON remote_agents FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_remote_agent_machines_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON remote_agent_machines FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_remote_agent_runtime_catalog_machine_id BEFORE INSERT OR UPDATE OF machine_id ON remote_agent_runtime_catalog FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('remote_agent_machines', 'machine_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_remote_agent_bindings_remote_agent_id BEFORE INSERT OR UPDATE OF remote_agent_id ON remote_agent_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('remote_agents', 'remote_agent_id', 'id', 'false', '');
@@ -5880,7 +6348,6 @@ CREATE TRIGGER sd_fk_live_remote_agent_bindings_machine_id BEFORE INSERT OR UPDA
 CREATE TRIGGER sd_fk_live_workspace_relationship_profiles_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON workspace_relationship_profiles FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_workspace_friend_entries_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON workspace_friend_entries FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_workspace_friend_entries_owner_workspace_member_id BEFORE INSERT OR UPDATE OF owner_workspace_member_id ON workspace_friend_entries FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspace_members', 'owner_workspace_member_id', 'id', 'false', '');
-CREATE TRIGGER sd_fk_live_entity_access_requests_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON entity_access_requests FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_direct_conversation_bindings_conversation_id BEFORE INSERT OR UPDATE OF conversation_id ON direct_conversation_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_workspace_member_preferences_workspace_member_id BEFORE INSERT OR UPDATE OF workspace_member_id ON workspace_member_preferences FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspace_members', 'workspace_member_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_actor_versions_actor_id BEFORE INSERT OR UPDATE OF actor_id ON actor_versions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('actors', 'actor_id', 'id', 'false', '');
@@ -5937,23 +6404,17 @@ CREATE TRIGGER sd_fk_live_memory_item_parts_memory_item_id BEFORE INSERT OR UPDA
 CREATE TRIGGER sd_fk_live_memory_recall_runs_workspace_id BEFORE INSERT OR UPDATE OF workspace_id ON memory_recall_runs FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_memory_recall_run_results_memory_item_id BEFORE INSERT OR UPDATE OF memory_item_id ON memory_recall_run_results FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('memory_items', 'memory_item_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_context_archive_points_conversation_id BEFORE INSERT OR UPDATE OF conversation_id ON context_archive_points FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('conversations', 'conversation_id', 'id', 'false', '');
-CREATE TRIGGER sd_fk_live_installed_skills_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON installed_skills FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_skill_versions_skill_id BEFORE INSERT OR UPDATE OF skill_id ON skill_versions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('installed_skills', 'skill_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_skill_source_refs_skill_id BEFORE INSERT OR UPDATE OF skill_id ON skill_source_refs FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('installed_skills', 'skill_id', 'id', 'false', '');
-CREATE TRIGGER sd_fk_live_plugin_installations_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at, status ON plugin_installations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', 'active,disabled,error');
-CREATE TRIGGER sd_fk_live_plugin_installations_catalog_item_id BEFORE INSERT OR UPDATE OF catalog_item_id, deleted_at, status ON plugin_installations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('catalog_items', 'catalog_item_id', 'id', 'true', 'active,disabled,error');
+CREATE TRIGGER sd_fk_live_plugin_installations_catalog_item_id BEFORE INSERT OR UPDATE OF catalog_item_id, deleted_at ON plugin_installations FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('catalog_items', 'catalog_item_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_automation_integration_bindings_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON automation_integration_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_automation_integration_bindings_installation_id BEFORE INSERT OR UPDATE OF installation_id, deleted_at ON automation_integration_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('plugin_installations', 'installation_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_automation_integration_bindings_webhook_endpoint_id BEFORE INSERT OR UPDATE OF webhook_endpoint_id, deleted_at ON automation_integration_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_webhook_endpoints', 'webhook_endpoint_id', 'id', 'true', '');
-CREATE TRIGGER sd_fk_live_plugin_connections_installation_id BEFORE INSERT OR UPDATE OF installation_id, deleted_at, status ON plugin_connections FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('plugin_installations', 'installation_id', 'id', 'true', 'active');
+CREATE TRIGGER sd_fk_live_plugin_connections_installation_id BEFORE INSERT OR UPDATE OF installation_id, deleted_at, status ON plugin_connections FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspace_apps', 'installation_id', 'id', 'true', 'active,disabled,error');
 CREATE TRIGGER sd_fk_live_plugin_connections_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at, status ON plugin_connections FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', 'active');
 CREATE TRIGGER sd_fk_live_plugin_source_refs_installation_id BEFORE INSERT OR UPDATE OF installation_id ON plugin_source_refs FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('plugin_installations', 'installation_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_resource_access_bindings_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', 'active');
-CREATE TRIGGER sd_fk_live_resource_access_bindings_installed_skill_id BEFORE INSERT OR UPDATE OF installed_skill_id, status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('installed_skills', 'installed_skill_id', 'id', 'false', 'active');
-CREATE TRIGGER sd_fk_live_resource_access_bindings_plugin_installation_id BEFORE INSERT OR UPDATE OF plugin_installation_id, status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('plugin_installations', 'plugin_installation_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_resource_access_bindings_automation_event_source_id BEFORE INSERT OR UPDATE OF automation_event_source_id, status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_event_sources', 'automation_event_source_id', 'id', 'false', 'active');
-CREATE TRIGGER sd_fk_live_resource_access_bindings_actor_id BEFORE INSERT OR UPDATE OF actor_id, status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('actors', 'actor_id', 'id', 'false', 'active');
-CREATE TRIGGER sd_fk_live_resource_access_bindings_remote_agent_id BEFORE INSERT OR UPDATE OF remote_agent_id, status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('remote_agents', 'remote_agent_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_runtime_authorization_grants_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, status ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_devices_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, deleted_at ON devices FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'true', '');
 CREATE TRIGGER sd_fk_live_device_services_device_id BEFORE INSERT OR UPDATE OF device_id, status ON device_services FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('devices', 'device_id', 'id', 'false', 'starting,online,degraded');
@@ -5961,8 +6422,7 @@ CREATE TRIGGER sd_fk_live_device_services_remote_agent_machine_id BEFORE INSERT 
 CREATE TRIGGER sd_fk_live_device_service_keys_service_id BEFORE INSERT OR UPDATE OF service_id ON device_service_keys FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_services', 'service_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_device_exposures_device_id BEFORE INSERT OR UPDATE OF device_id ON device_exposures FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('devices', 'device_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_device_exposures_service_id BEFORE INSERT OR UPDATE OF service_id ON device_exposures FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_services', 'service_id', 'id', 'false', '');
-CREATE TRIGGER sd_fk_live_device_capabilities_workspace_id BEFORE INSERT OR UPDATE OF workspace_id, status ON device_capabilities FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('workspaces', 'workspace_id', 'id', 'false', 'active,deprecated');
-CREATE TRIGGER sd_fk_live_device_capabilities_exposure_id BEFORE INSERT OR UPDATE OF exposure_id, status ON device_capabilities FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'exposure_id', 'id', 'false', 'active,deprecated');
+CREATE TRIGGER sd_fk_live_device_capabilities_exposure_id BEFORE INSERT OR UPDATE OF exposure_id ON device_capabilities FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'exposure_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_device_catalog_revisions_exposure_id BEFORE INSERT OR UPDATE OF exposure_id ON device_catalog_revisions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'exposure_id', 'id', 'false', '');
 CREATE TRIGGER sd_fk_live_device_tools_exposure_id BEFORE INSERT OR UPDATE OF exposure_id, status ON device_tools FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'exposure_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_device_tool_revisions_tool_id BEFORE INSERT OR UPDATE OF tool_id ON device_tool_revisions FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_tools', 'tool_id', 'id', 'false', '');
@@ -5983,7 +6443,6 @@ CREATE TRIGGER sd_fk_live_file_access_grants_file_space_id BEFORE INSERT OR UPDA
 CREATE TRIGGER sd_fk_live_file_access_grants_file_asset_id BEFORE INSERT OR UPDATE OF file_asset_id, status ON file_access_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('file_assets', 'file_asset_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_automation_event_sources_webhook_endpoint_id BEFORE INSERT OR UPDATE OF webhook_endpoint_id, deleted_at, status ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_webhook_endpoints', 'webhook_endpoint_id', 'id', 'true', 'active,deprecated,disabled');
 CREATE TRIGGER sd_fk_live_automation_event_sources_integration_binding_id BEFORE INSERT OR UPDATE OF integration_binding_id, deleted_at, status ON automation_event_sources FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('automation_integration_bindings', 'integration_binding_id', 'id', 'true', 'active,deprecated,disabled');
-CREATE TRIGGER sd_fk_live_resource_access_bindings_device_capability_id BEFORE INSERT OR UPDATE OF device_capability_id, status ON resource_access_bindings FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_capabilities', 'device_capability_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_runtime_authorization_grants_device_id BEFORE INSERT OR UPDATE OF device_id, status ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('devices', 'device_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_runtime_authorization_grants_device_capability_id BEFORE INSERT OR UPDATE OF device_capability_id, status ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_capabilities', 'device_capability_id', 'id', 'false', 'active');
 CREATE TRIGGER sd_fk_live_runtime_authorization_grants_device_exposure_id BEFORE INSERT OR UPDATE OF device_exposure_id, status ON runtime_authorization_grants FOR EACH ROW EXECUTE FUNCTION sd_assert_parent_live('device_exposures', 'device_exposure_id', 'id', 'false', 'active');
@@ -6212,6 +6671,7 @@ DROP VIEW IF EXISTS conversations_live;
 DROP VIEW IF EXISTS automation_event_sources_live;
 DROP VIEW IF EXISTS automation_integration_bindings_live;
 DROP VIEW IF EXISTS plugin_installations_live;
+DROP VIEW IF EXISTS workspace_apps_live;
 DROP VIEW IF EXISTS catalog_items_live;
 DROP VIEW IF EXISTS publishers_live;
 DROP VIEW IF EXISTS automation_webhook_endpoints_live;
@@ -6222,11 +6682,31 @@ DROP VIEW IF EXISTS users_live;
 CREATE VIEW users_live AS SELECT * FROM users WHERE deleted_at IS NULL WITH CASCADED CHECK OPTION;
 CREATE VIEW account_live AS SELECT base.* FROM account base WHERE deleted_at IS NULL AND (base.user_id IS NULL OR EXISTS (SELECT 1 FROM users_live lp0 WHERE lp0.id = base.user_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW workspaces_live AS SELECT base.* FROM workspaces base WHERE deleted_at IS NULL AND (base.owner_id IS NULL OR EXISTS (SELECT 1 FROM users_live lp0 WHERE lp0.id = base.owner_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW actors_live AS SELECT base.* FROM actors base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW workspace_apps_live AS SELECT base.* FROM workspace_apps base WHERE deleted_at IS NULL AND status IN ('active', 'disabled', 'error', 'deprecated') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW actors_live AS
+  SELECT base.*
+  FROM actors base
+  WHERE EXISTS (
+    SELECT 1
+    FROM workspace_apps app
+    WHERE app.id = base.id
+      AND app.deleted_at IS NULL
+      AND app.status IN ('active', 'disabled')
+  );
 CREATE VIEW automation_webhook_endpoints_live AS SELECT base.* FROM automation_webhook_endpoints base WHERE deleted_at IS NULL AND status IN ('active', 'disabled') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW publishers_live AS SELECT base.* FROM publishers base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW catalog_items_live AS SELECT base.* FROM catalog_items base WHERE deleted_at IS NULL AND (base.publisher_id IS NULL OR EXISTS (SELECT 1 FROM publishers_live lp0 WHERE lp0.id = base.publisher_id)) AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp1 WHERE lp1.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW plugin_installations_live AS SELECT base.* FROM plugin_installations base WHERE deleted_at IS NULL AND status IN ('active', 'disabled', 'error') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.catalog_item_id IS NULL OR EXISTS (SELECT 1 FROM catalog_items_live lp1 WHERE lp1.id = base.catalog_item_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW plugin_installations_live AS
+  SELECT base.*
+  FROM plugin_installations base
+  WHERE EXISTS (
+    SELECT 1
+    FROM workspace_apps app
+    WHERE app.id = base.id
+      AND app.deleted_at IS NULL
+      AND app.status IN ('active', 'disabled', 'error')
+  )
+    AND (base.catalog_item_id IS NULL OR EXISTS (SELECT 1 FROM catalog_items_live lp0 WHERE lp0.id = base.catalog_item_id));
 CREATE VIEW automation_integration_bindings_live AS SELECT base.* FROM automation_integration_bindings base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.installation_id IS NULL OR EXISTS (SELECT 1 FROM plugin_installations_live lp1 WHERE lp1.id = base.installation_id)) AND (base.webhook_endpoint_id IS NULL OR EXISTS (SELECT 1 FROM automation_webhook_endpoints_live lp2 WHERE lp2.id = base.webhook_endpoint_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW automation_event_sources_live AS SELECT base.* FROM automation_event_sources base WHERE deleted_at IS NULL AND status IN ('active', 'deprecated', 'disabled') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.webhook_endpoint_id IS NULL OR EXISTS (SELECT 1 FROM automation_webhook_endpoints_live lp1 WHERE lp1.id = base.webhook_endpoint_id)) AND (base.integration_binding_id IS NULL OR EXISTS (SELECT 1 FROM automation_integration_bindings_live lp2 WHERE lp2.id = base.integration_binding_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW conversations_live AS SELECT base.* FROM conversations base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
@@ -6236,12 +6716,31 @@ CREATE VIEW devices_live AS SELECT base.* FROM devices base WHERE deleted_at IS 
 CREATE VIEW remote_agent_machines_live AS SELECT base.* FROM remote_agent_machines base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW device_services_live AS SELECT base.* FROM device_services base WHERE status IN ('starting', 'online', 'degraded') AND (base.device_id IS NULL OR EXISTS (SELECT 1 FROM devices_live lp0 WHERE lp0.id = base.device_id)) AND (base.remote_agent_machine_id IS NULL OR EXISTS (SELECT 1 FROM remote_agent_machines_live lp1 WHERE lp1.id = base.remote_agent_machine_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW device_exposures_live AS SELECT base.* FROM device_exposures base WHERE (base.device_id IS NULL OR EXISTS (SELECT 1 FROM devices_live lp0 WHERE lp0.id = base.device_id)) AND (base.service_id IS NULL OR EXISTS (SELECT 1 FROM device_services_live lp1 WHERE lp1.id = base.service_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW device_capabilities_live AS SELECT base.* FROM device_capabilities base WHERE status IN ('active', 'deprecated') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.exposure_id IS NULL OR EXISTS (SELECT 1 FROM device_exposures_live lp1 WHERE lp1.id = base.exposure_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW device_capabilities_live AS
+  SELECT base.*
+  FROM device_capabilities base
+  WHERE EXISTS (
+    SELECT 1
+    FROM workspace_apps app
+    WHERE app.id = base.id
+      AND app.deleted_at IS NULL
+      AND app.status IN ('active', 'deprecated')
+  )
+    AND (base.exposure_id IS NULL OR EXISTS (SELECT 1 FROM device_exposures_live lp0 WHERE lp0.id = base.exposure_id));
 CREATE VIEW device_tools_live AS SELECT base.* FROM device_tools base WHERE status IN ('active') AND (base.exposure_id IS NULL OR EXISTS (SELECT 1 FROM device_exposures_live lp0 WHERE lp0.id = base.exposure_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW file_spaces_live AS SELECT base.* FROM file_spaces base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW file_assets_live AS SELECT base.* FROM file_assets base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW file_access_grants_live AS SELECT base.* FROM file_access_grants base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.file_space_id IS NULL OR EXISTS (SELECT 1 FROM file_spaces_live lp1 WHERE lp1.id = base.file_space_id)) AND (base.file_asset_id IS NULL OR EXISTS (SELECT 1 FROM file_assets_live lp2 WHERE lp2.id = base.file_asset_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW installed_skills_live AS SELECT base.* FROM installed_skills base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW installed_skills_live AS
+  SELECT base.*
+  FROM installed_skills base
+  WHERE EXISTS (
+    SELECT 1
+    FROM workspace_apps app
+    WHERE app.id = base.id
+      AND app.deleted_at IS NULL
+      AND app.status IN ('active', 'disabled')
+  );
 CREATE VIEW memory_spaces_live AS SELECT base.* FROM memory_spaces base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW memory_items_live AS SELECT base.* FROM memory_items base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.memory_space_id IS NULL OR EXISTS (SELECT 1 FROM memory_spaces_live lp1 WHERE lp1.id = base.memory_space_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW memory_access_grants_live AS SELECT base.* FROM memory_access_grants base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.memory_space_id IS NULL OR EXISTS (SELECT 1 FROM memory_spaces_live lp1 WHERE lp1.id = base.memory_space_id)) AND (base.memory_item_id IS NULL OR EXISTS (SELECT 1 FROM memory_items_live lp2 WHERE lp2.id = base.memory_item_id)) WITH CASCADED CHECK OPTION;
@@ -6251,8 +6750,17 @@ CREATE VIEW model_bindings_live AS SELECT base.* FROM model_bindings base WHERE 
 CREATE VIEW model_group_grants_live AS SELECT base.* FROM model_group_grants base WHERE status IN ('active') AND (base.group_id IS NULL OR EXISTS (SELECT 1 FROM model_groups_live lp0 WHERE lp0.id = base.group_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW platform_access_bindings_live AS SELECT base.* FROM platform_access_bindings base WHERE status IN ('active') AND (base.user_id IS NULL OR EXISTS (SELECT 1 FROM users_live lp0 WHERE lp0.id = base.user_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW plugin_connections_live AS SELECT base.* FROM plugin_connections base WHERE deleted_at IS NULL AND status IN ('active') AND (base.installation_id IS NULL OR EXISTS (SELECT 1 FROM plugin_installations_live lp0 WHERE lp0.id = base.installation_id)) AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp1 WHERE lp1.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW remote_agents_live AS SELECT base.* FROM remote_agents base WHERE deleted_at IS NULL AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) WITH CASCADED CHECK OPTION;
-CREATE VIEW resource_access_bindings_live AS SELECT base.* FROM resource_access_bindings base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.installed_skill_id IS NULL OR EXISTS (SELECT 1 FROM installed_skills_live lp1 WHERE lp1.id = base.installed_skill_id)) AND (base.plugin_installation_id IS NULL OR EXISTS (SELECT 1 FROM plugin_installations_live lp2 WHERE lp2.id = base.plugin_installation_id)) AND (base.automation_event_source_id IS NULL OR EXISTS (SELECT 1 FROM automation_event_sources_live lp3 WHERE lp3.id = base.automation_event_source_id)) AND (base.actor_id IS NULL OR EXISTS (SELECT 1 FROM actors_live lp4 WHERE lp4.id = base.actor_id)) AND (base.remote_agent_id IS NULL OR EXISTS (SELECT 1 FROM remote_agents_live lp5 WHERE lp5.id = base.remote_agent_id)) AND (base.device_capability_id IS NULL OR EXISTS (SELECT 1 FROM device_capabilities_live lp6 WHERE lp6.id = base.device_capability_id)) WITH CASCADED CHECK OPTION;
+CREATE VIEW remote_agents_live AS
+  SELECT base.*
+  FROM remote_agents base
+  WHERE EXISTS (
+    SELECT 1
+    FROM workspace_apps app
+    WHERE app.id = base.id
+      AND app.deleted_at IS NULL
+      AND app.status IN ('active', 'disabled')
+  );
+CREATE VIEW resource_access_bindings_live AS SELECT base.* FROM resource_access_bindings base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.automation_event_source_id IS NULL OR EXISTS (SELECT 1 FROM automation_event_sources_live lp1 WHERE lp1.id = base.automation_event_source_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW runtime_authorization_grants_live AS SELECT base.* FROM runtime_authorization_grants base WHERE status IN ('active') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.device_id IS NULL OR EXISTS (SELECT 1 FROM devices_live lp1 WHERE lp1.id = base.device_id)) AND (base.device_capability_id IS NULL OR EXISTS (SELECT 1 FROM device_capabilities_live lp2 WHERE lp2.id = base.device_capability_id)) AND (base.device_exposure_id IS NULL OR EXISTS (SELECT 1 FROM device_exposures_live lp3 WHERE lp3.id = base.device_exposure_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW transport_accounts_live AS SELECT base.* FROM transport_accounts base WHERE deleted_at IS NULL AND status IN ('active', 'disabled', 'error') AND (base.workspace_id IS NULL OR EXISTS (SELECT 1 FROM workspaces_live lp0 WHERE lp0.id = base.workspace_id)) AND (base.owner_workspace_member_id IS NULL OR EXISTS (SELECT 1 FROM workspace_members_live lp1 WHERE lp1.id = base.owner_workspace_member_id)) WITH CASCADED CHECK OPTION;
 CREATE VIEW workspace_access_bindings_live AS SELECT base.* FROM workspace_access_bindings base WHERE status IN ('active') AND (base.workspace_member_id IS NULL OR EXISTS (SELECT 1 FROM workspace_members_live lp0 WHERE lp0.id = base.workspace_member_id)) WITH CASCADED CHECK OPTION;
@@ -6298,26 +6806,23 @@ BEGIN
   UPDATE catalog_items t0 SET mirror_source_id = NULL WHERE mirror_source_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE catalog_versions t0 SET created_by_user_id = NULL WHERE created_by_user_id IS NOT NULL AND (EXISTS (SELECT 1 FROM catalog_items t1_0 WHERE t1_0.id = t0.catalog_item_id AND t1_0.workspace_id = p_workspace_id));
   UPDATE actor_template_version_specs t0 SET avatar_file_id = NULL WHERE avatar_file_id IS NOT NULL AND (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.avatar_file_id AND t1_0.workspace_id = p_workspace_id));
-  UPDATE actors t0 SET avatar_file_id = NULL WHERE avatar_file_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE actors t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE remote_agents t0 SET avatar_file_id = NULL WHERE avatar_file_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE remote_agents t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE actors t0 SET avatar_file_id = NULL WHERE avatar_file_id IS NOT NULL AND EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id);
+  UPDATE remote_agents t0 SET avatar_file_id = NULL WHERE avatar_file_id IS NOT NULL AND EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id);
   UPDATE remote_agent_machines t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE remote_agent_runs t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
-  UPDATE remote_agent_group_interaction_grants t0 SET granted_by_workspace_member_id = NULL WHERE granted_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE remote_agent_runs t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE remote_agent_group_interaction_grants t0 SET granted_by_workspace_member_id = NULL WHERE granted_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE workspace_relationship_profiles t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE workspace_friend_requests t0 SET requested_via_profile_id = NULL WHERE requested_via_profile_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.requester_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_relationship_profiles t1_1 WHERE t1_1.id = t0.requested_via_profile_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.resolved_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_3 WHERE t1_3.id = t0.target_subject_id AND t1_3.workspace_id = p_workspace_id));
   UPDATE workspace_friend_requests t0 SET resolved_by_workspace_member_id = NULL WHERE resolved_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.requester_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_relationship_profiles t1_1 WHERE t1_1.id = t0.requested_via_profile_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.resolved_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_3 WHERE t1_3.id = t0.target_subject_id AND t1_3.workspace_id = p_workspace_id));
   UPDATE workspace_friend_entries t0 SET source_request_id = NULL WHERE source_request_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE entity_access_requests t0 SET resolved_by_workspace_member_id = NULL WHERE resolved_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE workspace_member_preferences t0 SET chief_actor_id = NULL WHERE chief_actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.chief_actor_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE actor_versions t0 SET parent_id = NULL WHERE parent_id IS NOT NULL AND (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
-  UPDATE actor_versions t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
-  UPDATE actor_versions t0 SET source_workspace_member_id = NULL WHERE source_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
-  UPDATE actor_versions t0 SET source_actor_id = NULL WHERE source_actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
-  UPDATE actor_versions t0 SET source_conversation_id = NULL WHERE source_conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
-  UPDATE actor_source_refs t0 SET source_catalog_item_id = NULL WHERE source_catalog_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE actor_source_refs t0 SET source_catalog_version_id = NULL WHERE source_catalog_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE workspace_member_preferences t0 SET chief_actor_id = NULL WHERE chief_actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.chief_actor_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE actor_versions t0 SET parent_id = NULL WHERE parent_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
+  UPDATE actor_versions t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
+  UPDATE actor_versions t0 SET source_workspace_member_id = NULL WHERE source_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
+  UPDATE actor_versions t0 SET source_actor_id = NULL WHERE source_actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
+  UPDATE actor_versions t0 SET source_conversation_id = NULL WHERE source_conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id));
+  UPDATE actor_source_refs t0 SET source_catalog_item_id = NULL WHERE source_catalog_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE actor_source_refs t0 SET source_catalog_version_id = NULL WHERE source_catalog_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE model_groups t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.owner_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE model_bindings t0 SET installed_by_workspace_member_id = NULL WHERE installed_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.installed_by_workspace_member_id AND t1_0.workspace_id = p_workspace_id));
   UPDATE model_group_grants t0 SET granted_by_workspace_member_id = NULL WHERE granted_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.granted_by_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.subject_id AND t1_1.workspace_id = p_workspace_id));
@@ -6327,23 +6832,23 @@ BEGIN
   UPDATE conversation_participants t0 SET actor_join_version_id = NULL WHERE actor_join_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.subject_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE conversation_participant_states t0 SET last_read_item_id = NULL WHERE last_read_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id));
   UPDATE workspace_member_conversation_views t0 SET last_visible_item_id = NULL WHERE last_visible_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE remote_agent_conversation_views t0 SET last_read_item_id = NULL WHERE last_read_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE remote_agent_conversation_views t0 SET last_delivery_item_id = NULL WHERE last_delivery_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE remote_agent_conversation_views t0 SET last_read_item_id = NULL WHERE last_read_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE remote_agent_conversation_views t0 SET last_delivery_item_id = NULL WHERE last_delivery_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE workspace_member_sync_events t0 SET item_id = NULL WHERE item_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE turns t0 SET trigger_item_id = NULL WHERE trigger_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
-  UPDATE provider_steps t0 SET model_group_id = NULL WHERE model_group_id IS NOT NULL AND (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id))));
-  UPDATE provider_steps t0 SET model_binding_id = NULL WHERE model_binding_id IS NOT NULL AND (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id))));
-  UPDATE provider_steps t0 SET request_payload_blob_id = NULL WHERE request_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id))));
-  UPDATE provider_steps t0 SET response_payload_blob_id = NULL WHERE response_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id))));
-  UPDATE tool_calls t0 SET provider_step_id = NULL WHERE provider_step_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
-  UPDATE tool_calls t0 SET session_id = NULL WHERE session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE turns t0 SET trigger_item_id = NULL WHERE trigger_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE provider_steps t0 SET model_group_id = NULL WHERE model_group_id IS NOT NULL AND (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id))));
+  UPDATE provider_steps t0 SET model_binding_id = NULL WHERE model_binding_id IS NOT NULL AND (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id))));
+  UPDATE provider_steps t0 SET request_payload_blob_id = NULL WHERE request_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id))));
+  UPDATE provider_steps t0 SET response_payload_blob_id = NULL WHERE response_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id))));
+  UPDATE tool_calls t0 SET provider_step_id = NULL WHERE provider_step_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE tool_calls t0 SET session_id = NULL WHERE session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE tool_call_tasks t0 SET turn_id = NULL WHERE turn_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_call_tasks t0 SET source_tool_call_id = NULL WHERE source_tool_call_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_call_tasks t0 SET conversation_item_id = NULL WHERE conversation_item_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_call_tasks t0 SET completion_item_id = NULL WHERE completion_item_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE tool_execution_attempts t0 SET request_payload_blob_id = NULL WHERE request_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id))));
-  UPDATE tool_execution_attempts t0 SET response_payload_blob_id = NULL WHERE response_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id))));
-  UPDATE tool_results t0 SET attempt_id = NULL WHERE attempt_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id))));
+  UPDATE tool_execution_attempts t0 SET request_payload_blob_id = NULL WHERE request_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id))));
+  UPDATE tool_execution_attempts t0 SET response_payload_blob_id = NULL WHERE response_payload_blob_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id))));
+  UPDATE tool_results t0 SET attempt_id = NULL WHERE attempt_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id))));
   UPDATE session_wakeups t0 SET source_item_id = NULL WHERE source_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.source_session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_executions t1_2 WHERE t1_2.id = t0.automation_execution_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_occurrences t1_3 WHERE t1_3.id = t0.automation_occurrence_id AND t1_3.workspace_id = p_workspace_id));
   UPDATE session_wakeups t0 SET source_session_id = NULL WHERE source_session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.source_session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_executions t1_2 WHERE t1_2.id = t0.automation_execution_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_occurrences t1_3 WHERE t1_3.id = t0.automation_occurrence_id AND t1_3.workspace_id = p_workspace_id));
   UPDATE automation_rules t0 SET created_by_session_id = NULL WHERE created_by_session_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
@@ -6352,12 +6857,12 @@ BEGIN
   UPDATE automation_event_sources t0 SET created_by_session_id = NULL WHERE created_by_session_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE automation_webhook_endpoints t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE automation_occurrences t0 SET event_source_id = NULL WHERE event_source_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE automation_execution_targets t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE automation_execution_targets t0 SET target_participant_id = NULL WHERE target_participant_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE automation_execution_targets t0 SET session_id = NULL WHERE session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE automation_execution_targets t0 SET target_actor_id = NULL WHERE target_actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE automation_execution_targets t0 SET created_item_id = NULL WHERE created_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE automation_execution_targets t0 SET wakeup_id = NULL WHERE wakeup_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE automation_execution_targets t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE automation_execution_targets t0 SET target_participant_id = NULL WHERE target_participant_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE automation_execution_targets t0 SET session_id = NULL WHERE session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE automation_execution_targets t0 SET target_actor_id = NULL WHERE target_actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE automation_execution_targets t0 SET created_item_id = NULL WHERE created_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE automation_execution_targets t0 SET wakeup_id = NULL WHERE wakeup_id IS NOT NULL AND (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id));
   UPDATE memory_recall_runs t0 SET actor_id = NULL WHERE actor_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE memory_recall_runs t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE memory_recall_runs t0 SET workspace_member_id = NULL WHERE workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
@@ -6378,16 +6883,13 @@ BEGIN
   UPDATE runtime_events t0 SET tool_attempt_id = NULL WHERE tool_attempt_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE runtime_events t0 SET actor_id = NULL WHERE actor_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE runtime_events t0 SET user_id = NULL WHERE user_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE installed_skills t0 SET icon_file_id = NULL WHERE icon_file_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE installed_skills t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE skill_versions t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM installed_skills t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE skill_source_refs t0 SET source_catalog_item_id = NULL WHERE source_catalog_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM installed_skills t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE skill_source_refs t0 SET source_catalog_version_id = NULL WHERE source_catalog_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM installed_skills t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE plugin_installations t0 SET installed_by_workspace_member_id = NULL WHERE installed_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
+  UPDATE installed_skills t0 SET icon_file_id = NULL WHERE icon_file_id IS NOT NULL AND EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id);
+  UPDATE skill_versions t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE skill_source_refs t0 SET source_catalog_item_id = NULL WHERE source_catalog_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE skill_source_refs t0 SET source_catalog_version_id = NULL WHERE source_catalog_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE plugin_auth_sessions t0 SET catalog_version_id = NULL WHERE catalog_version_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE plugin_connections t0 SET owner_workspace_member_id = NULL WHERE owner_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE plugin_source_refs t0 SET source_catalog_item_id = NULL WHERE source_catalog_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM plugin_installations t1_0 WHERE t1_0.id = t0.installation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE plugin_source_refs t0 SET source_catalog_version_id = NULL WHERE source_catalog_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM plugin_installations t1_0 WHERE t1_0.id = t0.installation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE plugin_source_refs t0 SET source_catalog_item_id = NULL WHERE source_catalog_item_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.installation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE plugin_source_refs t0 SET source_catalog_version_id = NULL WHERE source_catalog_version_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.installation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE resource_access_bindings t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_call_task_transport_projections t0 SET transport_message_link_id = NULL WHERE transport_message_link_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE tool_call_task_response_commands t0 SET created_by_workspace_member_id = NULL WHERE created_by_workspace_member_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id));
@@ -6397,8 +6899,8 @@ BEGIN
   UPDATE device_pairing_sessions t0 SET requested_by_workspace_member_id = NULL WHERE requested_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_pairing_sessions t0 SET device_id = NULL WHERE device_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_exposures t0 SET sync_source_id = NULL WHERE sync_source_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id));
-  UPDATE device_runtime_sessions t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
-  UPDATE device_runtime_sessions t0 SET actor_id = NULL WHERE actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE device_runtime_sessions t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE device_runtime_sessions t0 SET actor_id = NULL WHERE actor_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE device_operations t0 SET conversation_id = NULL WHERE conversation_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_operations t0 SET task_id = NULL WHERE task_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
   UPDATE device_operations t0 SET initiated_by_workspace_member_id = NULL WHERE initiated_by_workspace_member_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
@@ -6424,27 +6926,27 @@ BEGIN
   UPDATE conversation_items t0 SET author_participant_id = NULL WHERE author_participant_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE conversation_items t0 SET turn_id = NULL WHERE turn_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE sessions t0 SET active_plan_approval_interaction_id = NULL WHERE active_plan_approval_interaction_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE remote_agent_conversation_contexts t0 SET active_interaction_id = NULL WHERE active_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE remote_agent_conversation_contexts t0 SET active_plan_approval_interaction_id = NULL WHERE active_plan_approval_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE remote_agent_runs t0 SET interaction_id = NULL WHERE interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE remote_agent_conversation_contexts t0 SET active_interaction_id = NULL WHERE active_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE remote_agent_conversation_contexts t0 SET active_plan_approval_interaction_id = NULL WHERE active_plan_approval_interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE remote_agent_runs t0 SET interaction_id = NULL WHERE interaction_id IS NOT NULL AND (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id));
   UPDATE device_tools t0 SET latest_revision_id = NULL WHERE latest_revision_id IS NOT NULL AND (EXISTS (SELECT 1 FROM device_exposures t1_0 WHERE t1_0.id = t0.exposure_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_0.device_id AND t2_0.workspace_id = p_workspace_id))));
   UPDATE device_services t0 SET current_session_id = NULL WHERE current_session_id IS NOT NULL AND (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t1_1 WHERE t1_1.id = t0.remote_agent_machine_id AND t1_1.workspace_id = p_workspace_id));
-  UPDATE tool_call_task_device_tool t0 SET device_operation_id = NULL WHERE device_operation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_1 WHERE t1_1.id = t0.device_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_capabilities t1_2 WHERE t1_2.id = t0.device_capability_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_operations t1_3 WHERE t1_3.id = t0.device_operation_id AND t1_3.workspace_id = p_workspace_id));
-  UPDATE tool_call_task_external_mcp t0 SET plugin_installation_id = NULL WHERE plugin_installation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_1 WHERE t1_1.id = t0.plugin_installation_id AND t1_1.workspace_id = p_workspace_id));
+  UPDATE tool_call_task_device_tool t0 SET device_operation_id = NULL WHERE device_operation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_1 WHERE t1_1.id = t0.device_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.device_capability_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_operations t1_3 WHERE t1_3.id = t0.device_operation_id AND t1_3.workspace_id = p_workspace_id));
+  UPDATE tool_call_task_external_mcp t0 SET plugin_installation_id = NULL WHERE plugin_installation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.plugin_installation_id AND t1_1.workspace_id = p_workspace_id));
   UPDATE file_spaces t0 SET current_snapshot_id = NULL WHERE current_snapshot_id IS NOT NULL AND t0.workspace_id = p_workspace_id;
-  UPDATE tool_calls t0 SET plugin_installation_id = NULL WHERE plugin_installation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
-  UPDATE tool_calls t0 SET device_tool_id = NULL WHERE device_tool_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE tool_calls t0 SET plugin_installation_id = NULL WHERE plugin_installation_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
+  UPDATE tool_calls t0 SET device_tool_id = NULL WHERE device_tool_id IS NOT NULL AND (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id));
 
   -- 2. delete every workspace-reachable row leaf→root
   DELETE FROM account t0 WHERE (EXISTS (SELECT 1 FROM users t1_0 WHERE t1_0.id = t0.user_id AND (EXISTS (SELECT 1 FROM file_assets t2_0 WHERE t2_0.id = t1_0.avatar_file_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actor_model_group_assignments t0 WHERE (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actor_source_refs t0 WHERE (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actor_model_group_assignments t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actor_source_refs t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM actor_template_version_specs t0 WHERE (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.avatar_file_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actor_version_docs t0 WHERE (EXISTS (SELECT 1 FROM actor_versions t1_0 WHERE t1_0.id = t0.actor_version_id AND (EXISTS (SELECT 1 FROM actors t2_0 WHERE t2_0.id = t1_0.actor_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_1 WHERE t2_1.id = t1_0.parent_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_2 WHERE t2_2.id = t1_0.created_by_workspace_member_id AND t2_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_3 WHERE t2_3.id = t1_0.source_workspace_member_id AND t2_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_4 WHERE t2_4.id = t1_0.source_actor_id AND t2_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_5 WHERE t2_5.id = t1_0.source_conversation_id AND t2_5.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actor_version_docs t0 WHERE (EXISTS (SELECT 1 FROM actor_versions t1_0 WHERE t1_0.id = t0.actor_version_id AND (EXISTS (SELECT 1 FROM workspace_apps t2_0 WHERE t2_0.id = t1_0.actor_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_1 WHERE t2_1.id = t1_0.parent_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_2 WHERE t2_2.id = t1_0.created_by_workspace_member_id AND t2_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_3 WHERE t2_3.id = t1_0.source_workspace_member_id AND t2_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_4 WHERE t2_4.id = t1_0.source_actor_id AND t2_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_5 WHERE t2_5.id = t1_0.source_conversation_id AND t2_5.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM audit_logs t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_deliveries t0 WHERE (EXISTS (SELECT 1 FROM automation_rules t1_0 WHERE t1_0.id = t0.rule_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_delivery_targets t0 WHERE (EXISTS (SELECT 1 FROM automation_rules t1_0 WHERE t1_0.id = t0.rule_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM automation_execution_targets t0 WHERE (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM automation_execution_targets t0 WHERE (EXISTS (SELECT 1 FROM automation_executions t1_0 WHERE t1_0.id = t0.execution_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_2 WHERE t1_2.id = t0.session_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_3 WHERE t1_3.id = t0.target_actor_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_policies t0 WHERE (EXISTS (SELECT 1 FROM automation_rules t1_0 WHERE t1_0.id = t0.rule_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_triggers t0 WHERE (EXISTS (SELECT 1 FROM automation_rules t1_0 WHERE t1_0.id = t0.rule_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_event_sources t1_1 WHERE t1_1.id = t0.event_source_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM catalog_item_categories t0 WHERE (EXISTS (SELECT 1 FROM catalog_items t1_0 WHERE t1_0.id = t0.catalog_item_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6467,11 +6969,10 @@ BEGIN
   DELETE FROM device_operation_attempts t0 WHERE (EXISTS (SELECT 1 FROM device_operations t1_0 WHERE t1_0.id = t0.operation_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_operation_results t0 WHERE (EXISTS (SELECT 1 FROM device_operations t1_0 WHERE t1_0.id = t0.operation_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_pairing_sessions t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM device_runtime_session_services t0 WHERE (EXISTS (SELECT 1 FROM device_runtime_sessions t1_0 WHERE t1_0.id = t0.session_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_0.device_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM device_services t1_1 WHERE t1_1.id = t0.service_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_1.device_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t2_1 WHERE t2_1.id = t1_1.remote_agent_machine_id AND t2_1.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM device_runtime_session_services t0 WHERE (EXISTS (SELECT 1 FROM device_runtime_sessions t1_0 WHERE t1_0.id = t0.session_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_0.device_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM device_services t1_1 WHERE t1_1.id = t0.service_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_1.device_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t2_1 WHERE t2_1.id = t1_1.remote_agent_machine_id AND t2_1.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_service_keys t0 WHERE (EXISTS (SELECT 1 FROM device_services t1_0 WHERE t1_0.id = t0.service_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_0.device_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t2_1 WHERE t2_1.id = t1_0.remote_agent_machine_id AND t2_1.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_sync_sources t0 WHERE (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM direct_conversation_bindings t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.participant_one_subject_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_2 WHERE t1_2.id = t0.participant_two_subject_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM entity_access_requests t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_access_grants t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_mounts t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_parse_outputs t0 WHERE (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.derived_asset_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6485,36 +6986,38 @@ BEGIN
   DELETE FROM plugin_auth_sessions t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM plugin_connections t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM plugin_package_version_specs t0 WHERE (EXISTS (SELECT 1 FROM catalog_versions t1_0 WHERE t1_0.id = t0.catalog_version_id AND (EXISTS (SELECT 1 FROM catalog_items t2_0 WHERE t2_0.id = t1_0.catalog_item_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM plugin_source_refs t0 WHERE (EXISTS (SELECT 1 FROM plugin_installations t1_0 WHERE t1_0.id = t0.installation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM plugin_source_refs t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.installation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM plugin_version_runtime_permissions t0 WHERE (EXISTS (SELECT 1 FROM catalog_versions t1_0 WHERE t1_0.id = t0.catalog_version_id AND (EXISTS (SELECT 1 FROM catalog_items t2_0 WHERE t2_0.id = t1_0.catalog_item_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM provider_steps t0 WHERE (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM provider_steps t0 WHERE (EXISTS (SELECT 1 FROM turns t1_0 WHERE t1_0.id = t0.turn_id AND (EXISTS (SELECT 1 FROM sessions t2_0 WHERE t2_0.id = t1_0.session_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t2_1 WHERE t2_1.id = t1_0.conversation_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.actor_id AND t2_2.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_groups t1_1 WHERE t1_1.id = t0.model_group_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_1.owner_workspace_member_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t2_1 WHERE t2_1.id = t1_1.created_by_workspace_member_id AND t2_1.workspace_id = p_workspace_id))) OR EXISTS (SELECT 1 FROM model_bindings t1_2 WHERE t1_2.id = t0.model_binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_2.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM realtime_event_outbox t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_bindings t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t1_1 WHERE t1_1.id = t0.machine_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_conversation_contexts t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_conversation_views t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_group_interaction_grants t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_bindings t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t1_1 WHERE t1_1.id = t0.machine_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_conversation_contexts t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.active_interaction_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_3 WHERE t1_3.id = t0.active_plan_approval_interaction_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_conversation_views t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_group_interaction_grants t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.granted_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machine_sessions t0 WHERE (EXISTS (SELECT 1 FROM remote_agent_machines t1_0 WHERE t1_0.id = t0.machine_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_message_deliveries t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_message_deliveries t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_runtime_catalog t0 WHERE (EXISTS (SELECT 1 FROM remote_agent_machines t1_0 WHERE t1_0.id = t0.machine_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM resource_access_bindings t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM runtime_authorization_grants t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM runtime_events t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM workspace_app_grant_requests t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM workspace_app_grants t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM session t0 WHERE (EXISTS (SELECT 1 FROM users t1_0 WHERE t1_0.id = t0.user_id AND (EXISTS (SELECT 1 FROM file_assets t2_0 WHERE t2_0.id = t1_0.avatar_file_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM session_context_states t0 WHERE (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM session_interrupts t0 WHERE (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.target_session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.from_session_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM session_wakeups t0 WHERE (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.source_session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_executions t1_2 WHERE t1_2.id = t0.automation_execution_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM automation_occurrences t1_3 WHERE t1_3.id = t0.automation_occurrence_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM skill_package_version_specs t0 WHERE (EXISTS (SELECT 1 FROM catalog_versions t1_0 WHERE t1_0.id = t0.catalog_version_id AND (EXISTS (SELECT 1 FROM catalog_items t2_0 WHERE t2_0.id = t1_0.catalog_item_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM skill_source_refs t0 WHERE (EXISTS (SELECT 1 FROM installed_skills t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM skill_versions t0 WHERE (EXISTS (SELECT 1 FROM installed_skills t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM skill_source_refs t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM catalog_items t1_1 WHERE t1_1.id = t0.source_catalog_item_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM skill_versions t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.skill_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_action_tokens t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_call_task_device_tool t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_1 WHERE t1_1.id = t0.device_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_capabilities t1_2 WHERE t1_2.id = t0.device_capability_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_operations t1_3 WHERE t1_3.id = t0.device_operation_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_call_task_external_mcp t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_1 WHERE t1_1.id = t0.plugin_installation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_device_tool t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_1 WHERE t1_1.id = t0.device_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.device_capability_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_operations t1_3 WHERE t1_3.id = t0.device_operation_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_external_mcp t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.plugin_installation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_output_chunks t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_response_commands t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_call_task_runtime_authorization t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.principal_subject_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_2 WHERE t1_2.id = t0.principal_scope_subject_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_3 WHERE t1_3.id = t0.device_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM device_capabilities t1_4 WHERE t1_4.id = t0.device_capability_id AND t1_4.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_call_task_runtime_authorization t0 WHERE (EXISTS (SELECT 1 FROM tool_call_tasks t1_0 WHERE t1_0.id = t0.task_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.principal_subject_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_2 WHERE t1_2.id = t0.principal_scope_subject_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM devices t1_3 WHERE t1_3.id = t0.device_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_4 WHERE t1_4.id = t0.device_capability_id AND t1_4.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_task_transport_projections t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_execution_attempts t0 WHERE (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_result_parts t0 WHERE (EXISTS (SELECT 1 FROM tool_results t1_0 WHERE t1_0.id = t0.tool_result_id AND (EXISTS (SELECT 1 FROM tool_calls t2_0 WHERE t2_0.id = t1_0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t3_0 WHERE t3_0.id = t2_0.conversation_id AND t3_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t3_1 WHERE t3_1.id = t2_0.session_id AND t3_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t3_2 WHERE t3_2.id = t2_0.plugin_installation_id AND t3_2.workspace_id = p_workspace_id)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_execution_attempts t0 WHERE (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_result_parts t0 WHERE (EXISTS (SELECT 1 FROM tool_results t1_0 WHERE t1_0.id = t0.tool_result_id AND (EXISTS (SELECT 1 FROM tool_calls t2_0 WHERE t2_0.id = t1_0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t3_0 WHERE t3_0.id = t2_0.conversation_id AND t3_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t3_1 WHERE t3_1.id = t2_0.session_id AND t3_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t3_2 WHERE t3_2.id = t2_0.plugin_installation_id AND t3_2.workspace_id = p_workspace_id)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM transport_message_links t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_access_bindings t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.assigned_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.revoked_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_capability_conversation_type_policies t0 WHERE (EXISTS (SELECT 1 FROM access_subjects t1_0 WHERE t1_0.id = t0.subject_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6522,10 +7025,10 @@ BEGIN
   DELETE FROM workspace_friend_requests t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.requester_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_relationship_profiles t1_1 WHERE t1_1.id = t0.requested_via_profile_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.resolved_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_3 WHERE t1_3.id = t0.target_subject_id AND t1_3.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_invites t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_member_conversation_views t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM workspace_member_preferences t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.chief_actor_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM workspace_member_preferences t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.chief_actor_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_member_sync_events t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_relationship_profiles t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actor_versions t0 WHERE (EXISTS (SELECT 1 FROM actors t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actor_versions t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.actor_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_1 WHERE t1_1.id = t0.parent_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_2 WHERE t1_2.id = t0.created_by_workspace_member_id AND t1_2.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_3 WHERE t1_3.id = t0.source_workspace_member_id AND t1_3.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_4 WHERE t1_4.id = t0.source_actor_id AND t1_4.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_5 WHERE t1_5.id = t0.source_conversation_id AND t1_5.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_event_sources t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_executions t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM catalog_categories t0 WHERE (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.icon_file_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6534,47 +7037,48 @@ BEGIN
   DELETE FROM context_compaction_runs t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_items t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_operations t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM device_runtime_sessions t0 WHERE (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM device_runtime_sessions t0 WHERE (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_parse_runs t0 WHERE (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.asset_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_spaces t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM installed_skills t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM installed_skills t0 WHERE EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_items t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_recall_runs t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM model_binding_versions t0 WHERE (EXISTS (SELECT 1 FROM model_bindings t1_0 WHERE t1_0.id = t0.binding_id AND (EXISTS (SELECT 1 FROM workspace_members t2_0 WHERE t2_0.id = t1_0.installed_by_workspace_member_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_call_tasks t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_results t0 WHERE (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_results t0 WHERE (EXISTS (SELECT 1 FROM tool_calls t1_0 WHERE t1_0.id = t0.tool_call_id AND (EXISTS (SELECT 1 FROM conversations t2_0 WHERE t2_0.id = t1_0.conversation_id AND t2_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t2_1 WHERE t2_1.id = t1_0.session_id AND t2_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t2_2 WHERE t2_2.id = t1_0.plugin_installation_id AND t2_2.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM transport_endpoints t0 WHERE (EXISTS (SELECT 1 FROM transport_accounts t1_0 WHERE t1_0.id = t0.transport_account_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_integration_bindings t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_occurrences t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_rules t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM context_archive_points t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM device_capabilities t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM device_capabilities t0 WHERE EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_tool_revisions t0 WHERE (EXISTS (SELECT 1 FROM device_tools t1_0 WHERE t1_0.id = t0.tool_id AND (EXISTS (SELECT 1 FROM device_exposures t2_0 WHERE t2_0.id = t1_0.exposure_id AND (EXISTS (SELECT 1 FROM devices t3_0 WHERE t3_0.id = t2_0.device_id AND t3_0.workspace_id = p_workspace_id))))) OR EXISTS (SELECT 1 FROM device_catalog_revisions t1_1 WHERE t1_1.id = t0.catalog_revision_id AND (EXISTS (SELECT 1 FROM device_exposures t2_0 WHERE t2_0.id = t1_1.exposure_id AND (EXISTS (SELECT 1 FROM devices t3_0 WHERE t3_0.id = t2_0.device_id AND t3_0.workspace_id = p_workspace_id)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_assets t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM memory_spaces t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM model_bindings t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.installed_by_workspace_member_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agent_runs t0 WHERE (EXISTS (SELECT 1 FROM remote_agents t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM tool_calls t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM plugin_installations t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agent_runs t0 WHERE (EXISTS (SELECT 1 FROM workspace_apps t1_0 WHERE t1_0.id = t0.remote_agent_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM tool_call_tasks t1_2 WHERE t1_2.id = t0.interaction_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM tool_calls t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM sessions t1_1 WHERE t1_1.id = t0.session_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.plugin_installation_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_webhook_endpoints t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversation_participants t0 WHERE (EXISTS (SELECT 1 FROM conversations t1_0 WHERE t1_0.id = t0.conversation_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM access_subjects t1_1 WHERE t1_1.id = t0.subject_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_catalog_revisions t0 WHERE (EXISTS (SELECT 1 FROM device_exposures t1_0 WHERE t1_0.id = t0.exposure_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_0.device_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_tools t0 WHERE (EXISTS (SELECT 1 FROM device_exposures t1_0 WHERE t1_0.id = t0.exposure_id AND (EXISTS (SELECT 1 FROM devices t2_0 WHERE t2_0.id = t1_0.device_id AND t2_0.workspace_id = p_workspace_id)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM model_groups t0 WHERE (EXISTS (SELECT 1 FROM workspace_members t1_0 WHERE t1_0.id = t0.owner_workspace_member_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_members t1_1 WHERE t1_1.id = t0.created_by_workspace_member_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM plugin_installations t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM turns t0 WHERE (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM actors t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM plugin_installations t0 WHERE EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM turns t0 WHERE (EXISTS (SELECT 1 FROM sessions t1_0 WHERE t1_0.id = t0.session_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM conversations t1_1 WHERE t1_1.id = t0.conversation_id AND t1_1.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM workspace_apps t1_2 WHERE t1_2.id = t0.actor_id AND t1_2.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM access_subjects t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM catalog_versions t0 WHERE (EXISTS (SELECT 1 FROM catalog_items t1_0 WHERE t1_0.id = t0.catalog_item_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_exposures t0 WHERE (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM sessions t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM actors t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM actors t0 WHERE EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM catalog_items t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM conversations t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_services t0 WHERE (EXISTS (SELECT 1 FROM devices t1_0 WHERE t1_0.id = t0.device_id AND t1_0.workspace_id = p_workspace_id) OR EXISTS (SELECT 1 FROM remote_agent_machines t1_1 WHERE t1_1.id = t0.remote_agent_machine_id AND t1_1.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM remote_agents t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agents t0 WHERE EXISTS (SELECT 1 FROM workspace_apps app WHERE app.id = t0.id AND app.workspace_id = p_workspace_id); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM devices t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM publishers t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machines t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM transport_accounts t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM workspace_apps t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM workspace_members t0 WHERE t0.workspace_id = p_workspace_id; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM users t0 WHERE (EXISTS (SELECT 1 FROM file_assets t1_0 WHERE t1_0.id = t0.avatar_file_id AND t1_0.workspace_id = p_workspace_id)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
 
@@ -6633,7 +7137,6 @@ BEGIN
   DELETE FROM device_service_keys t0 WHERE EXISTS (SELECT 1 FROM device_services r1 WHERE r1.id = t0.service_id AND (EXISTS (SELECT 1 FROM devices r2 WHERE r2.id = r1.device_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_sync_sources t0 WHERE EXISTS (SELECT 1 FROM devices r1 WHERE r1.id = t0.device_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM direct_conversation_bindings t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM entity_access_requests t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_access_grants t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_mounts t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM file_parse_outputs t0 WHERE EXISTS (SELECT 1 FROM file_assets r1 WHERE r1.id = t0.derived_asset_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6659,6 +7162,8 @@ BEGIN
   DELETE FROM resource_access_bindings t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM runtime_authorization_grants t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM runtime_events t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM workspace_app_grant_requests t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM workspace_app_grants t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM session t0 WHERE EXISTS (SELECT 1 FROM users r1 WHERE r1.id = t0.user_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM session_context_states t0 WHERE EXISTS (SELECT 1 FROM sessions r1 WHERE r1.id = t0.session_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM session_interrupts t0 WHERE EXISTS (SELECT 1 FROM sessions r1 WHERE r1.id = t0.target_session_id AND (EXISTS (SELECT 1 FROM workspaces r2 WHERE r2.id = r1.workspace_id AND (r2.deleted_at IS NOT NULL AND r2.deleted_at < p_before)))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6701,7 +7206,7 @@ BEGIN
   DELETE FROM transport_endpoints t0 WHERE EXISTS (SELECT 1 FROM transport_accounts r1 WHERE r1.id = t0.transport_account_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM automation_occurrences t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM context_archive_points t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
-  DELETE FROM device_capabilities t0 WHERE EXISTS (SELECT 1 FROM workspaces r1 WHERE r1.id = t0.workspace_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM device_capabilities t0 WHERE EXISTS (SELECT 1 FROM workspace_apps r1 WHERE r1.id = t0.id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM device_tool_revisions t0 WHERE EXISTS (SELECT 1 FROM device_tools r1 WHERE r1.id = t0.tool_id AND (EXISTS (SELECT 1 FROM device_exposures r2 WHERE r2.id = r1.exposure_id AND (EXISTS (SELECT 1 FROM devices r3 WHERE r3.id = r2.device_id AND (r3.deleted_at IS NOT NULL AND r3.deleted_at < p_before)))))); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_runs t0 WHERE EXISTS (SELECT 1 FROM remote_agents r1 WHERE r1.id = t0.remote_agent_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM tool_calls t0 WHERE EXISTS (SELECT 1 FROM conversations r1 WHERE r1.id = t0.conversation_id AND (r1.deleted_at IS NOT NULL AND r1.deleted_at < p_before)); GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
@@ -6733,6 +7238,8 @@ BEGIN
   DELETE FROM devices WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM publishers WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   DELETE FROM remote_agent_machines WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM remote_agents WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
+  DELETE FROM workspace_apps WHERE deleted_at IS NOT NULL AND deleted_at < p_before; GET DIAGNOSTICS v_n = ROW_COUNT; v_total := v_total + v_n;
   INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
   VALUES (NULL, 'soft_delete.retention_purge', 'system', NULL,
           jsonb_build_object('before', p_before, 'rows_deleted', v_total, 'finished_at', NOW()));
@@ -6742,7 +7249,7 @@ $$;
 ALTER FUNCTION sd_purge_expired_soft_deleted(timestamptz) OWNER TO synapse_purge_fn_owner;
 REVOKE EXECUTE ON FUNCTION sd_purge_expired_soft_deleted(timestamptz) FROM PUBLIC;
 
-GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, entity_access_requests, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_interaction_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, resource_access_bindings, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_action_tokens, tool_call_task_device_tool, tool_call_task_external_mcp, tool_call_task_output_chunks, tool_call_task_response_commands, tool_call_task_runtime_authorization, tool_call_task_transport_projections, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspaces TO synapse_purge_fn_owner;
+GRANT SELECT, UPDATE, DELETE ON access_subjects, account, actor_model_group_assignments, actor_source_refs, actor_template_version_specs, actor_version_docs, actor_versions, actors, audit_logs, automation_deliveries, automation_delivery_targets, automation_event_sources, automation_execution_targets, automation_executions, automation_integration_bindings, automation_occurrences, automation_policies, automation_rules, automation_triggers, automation_webhook_endpoints, catalog_categories, catalog_item_categories, catalog_items, catalog_version_files, catalog_versions, chat_client_instances, chat_conversation_create_requests, chat_push_tokens, context_archive_frame_parts, context_archive_frames, context_archive_points, context_compaction_run_inputs, context_compaction_runs, conversation_context_states, conversation_device_states, conversation_item_context_targets, conversation_item_mentions, conversation_item_parts, conversation_item_targets, conversation_items, conversation_participant_addresses, conversation_participant_states, conversation_participants, conversation_transport_bindings, conversations, device_capabilities, device_catalog_revisions, device_code, device_control_plane_sessions, device_exposures, device_operation_attempts, device_operation_results, device_operations, device_pairing_sessions, device_runtime_session_services, device_runtime_sessions, device_service_keys, device_services, device_sync_sources, device_tool_revisions, device_tools, devices, direct_conversation_bindings, file_access_grants, file_assets, file_mounts, file_parse_outputs, file_parse_runs, file_snapshots, file_spaces, installed_skills, memory_access_grants, memory_item_chunks, memory_item_parts, memory_items, memory_recall_run_results, memory_recall_runs, memory_spaces, model_binding_versions, model_bindings, model_group_grants, model_groups, platform_access_bindings, plugin_auth_sessions, plugin_connections, plugin_installations, plugin_package_version_specs, plugin_source_refs, plugin_version_runtime_permissions, provider_steps, publishers, realtime_event_outbox, remote_agent_bindings, remote_agent_conversation_contexts, remote_agent_conversation_views, remote_agent_group_interaction_grants, remote_agent_machine_sessions, remote_agent_machines, remote_agent_message_deliveries, remote_agent_runs, remote_agent_runtime_catalog, remote_agents, resource_access_bindings, runtime_authorization_grants, runtime_events, session, session_context_states, session_interrupts, session_wakeups, sessions, skill_package_version_specs, skill_source_refs, skill_versions, tool_call_task_action_tokens, tool_call_task_device_tool, tool_call_task_external_mcp, tool_call_task_output_chunks, tool_call_task_response_commands, tool_call_task_runtime_authorization, tool_call_task_transport_projections, tool_call_tasks, tool_calls, tool_execution_attempts, tool_result_parts, tool_results, transport_accounts, transport_endpoints, transport_message_links, turns, users, workspace_access_bindings, workspace_app_grant_requests, workspace_app_grants, workspace_apps, workspace_capability_conversation_type_policies, workspace_friend_entries, workspace_friend_requests, workspace_invites, workspace_member_conversation_views, workspace_member_preferences, workspace_member_sync_events, workspace_members, workspace_relationship_profiles, workspaces TO synapse_purge_fn_owner;
 GRANT SELECT ON access_subjects, transport_addresses TO synapse_purge_fn_owner;
 GRANT INSERT ON audit_logs TO synapse_purge_fn_owner;
 

@@ -24,6 +24,10 @@ import type {
 } from "@synapse/device-protocol"
 import { db } from "../../infrastructure/database/kysely.js"
 import type { DB } from "../../infrastructure/database/generated/db.js"
+import {
+  insertWorkspaceAppRoot,
+  updateWorkspaceAppRoot,
+} from "../workspace-apps/root-storage.js"
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value)
@@ -268,18 +272,41 @@ async function ensureCapability(
   trx: Transaction<DB>,
   args: { workspaceId: string; exposureId: string }
 ): Promise<void> {
+  const capabilityOwner = await trx
+    .selectFrom("device_exposures as exposure")
+    .innerJoin("devices as device", "device.id", "exposure.device_id")
+    .select(["device.owner_workspace_member_id", "exposure.display_name"])
+    .where("exposure.id", "=", args.exposureId)
+    .executeTakeFirst()
   const existing = await trx
     .selectFrom("device_capabilities")
     .select(["id"])
     .where("exposure_id", "=", args.exposureId)
     .executeTakeFirst()
-  if (existing) return
+  if (existing) {
+    await updateWorkspaceAppRoot(trx, {
+      id: existing.id as string,
+      displayName:
+        (capabilityOwner?.display_name as string | null) || "Device capability",
+    })
+    return
+  }
+  const capabilityId = crypto.randomUUID()
+  await insertWorkspaceAppRoot(trx, {
+    id: capabilityId,
+    workspaceId: args.workspaceId,
+    kind: "device_capability",
+    displayName:
+      (capabilityOwner?.display_name as string | null) || "Device capability",
+    ownerWorkspaceMemberId:
+      (capabilityOwner?.owner_workspace_member_id as string | null) ?? null,
+    status: "active",
+  })
   await trx
     .insertInto("device_capabilities")
     .values({
-      workspace_id: args.workspaceId,
+      id: capabilityId,
       exposure_id: args.exposureId,
-      status: "active",
     } as never)
     .execute()
 }

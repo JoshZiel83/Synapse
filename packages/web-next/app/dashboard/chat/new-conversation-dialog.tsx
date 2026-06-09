@@ -9,7 +9,7 @@ import ChatAvatar from "./chat-avatar"
 
 interface Actor {
   id: string
-  name: string
+  displayName: string
   role: string
   title?: string
   avatarUrl?: string
@@ -19,12 +19,11 @@ interface Actor {
 type RawActorLike = {
   id: string
   avatarUrl?: string
-  name?: string
+  displayName?: string
   role?: string
   title?: string
   avatarEmoji?: string
   definition?: {
-    name?: string
     role?: string
     title?: string
     avatarEmoji?: string
@@ -35,7 +34,8 @@ function normalizeActor(actor: RawActorLike): Actor {
   const definition = actor?.definition || actor
   return {
     id: actor.id,
-    name: definition.name || "Unknown actor",
+    displayName:
+      actor.displayName || definition.title || actor.title || "Unknown actor",
     role: definition.role || "other",
     title: definition.title,
     avatarUrl: actor.avatarUrl,
@@ -100,7 +100,7 @@ export default function NewConversationDialog({
       try {
         const data = await api.getActors(workspaceId)
         const list: Actor[] = (data?.actors || data || []).map(normalizeActor)
-        list.sort((a, b) => a.name.localeCompare(b.name))
+        list.sort((a, b) => a.displayName.localeCompare(b.displayName))
         setActors(list)
 
         if (preselectedActorId) {
@@ -152,7 +152,8 @@ export default function NewConversationDialog({
     const q = search.toLowerCase()
     return actors.filter(
       (a) =>
-        a.name.toLowerCase().includes(q) || a.title?.toLowerCase().includes(q)
+        a.displayName.toLowerCase().includes(q) ||
+        a.title?.toLowerCase().includes(q)
     )
   }, [actors, search])
 
@@ -171,7 +172,7 @@ export default function NewConversationDialog({
   }) {
     return (
       <ChatAvatar
-        name={actor.name}
+        name={actor.displayName}
         avatarUrl={actor.avatarUrl}
         emoji={actor.emoji}
         entityType="actor"
@@ -245,7 +246,7 @@ export default function NewConversationDialog({
                       <ActorAvatar actor={actor} />
                       <div className="ml-3 min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-gray-900 dark:text-white">
-                          {actor.name}
+                          {actor.displayName}
                         </span>
                         {actor.title && (
                           <span className="block truncate text-xs text-gray-500 dark:text-gray-400">
@@ -300,7 +301,7 @@ export default function NewConversationDialog({
                       <ActorAvatar actor={actor} size="sm" />
                       <div className="ml-3 min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-gray-900 dark:text-white">
-                          {actor.name}
+                          {actor.displayName}
                         </span>
                         {actor.title && (
                           <span className="block truncate text-xs text-gray-500 dark:text-gray-400">

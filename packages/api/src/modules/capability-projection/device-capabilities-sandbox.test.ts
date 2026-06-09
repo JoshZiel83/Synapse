@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import {
@@ -33,11 +34,21 @@ async function seed(db: Kysely<any>) {
     .values({ owner_id: user.id, slug: `ws-${rid()}`, name: `${NS} ws` })
     .returning("id")
     .executeTakeFirstOrThrow()
+  const actorRoot = await db
+    .insertInto("workspace_apps")
+    .values({
+      id: crypto.randomUUID(),
+      workspace_id: ws.id,
+      kind: "actor",
+      display_name: `a-${rid()}`,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
   const actor = await db
     .insertInto("actors")
     .values({
-      workspace_id: ws.id,
-      name: `a-${rid()}`,
+      id: actorRoot.id as string,
       role: "assistant",
       title: "t",
       current_version: 1,
@@ -97,12 +108,22 @@ async function seed(db: Kysely<any>) {
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
+    const capId = crypto.randomUUID()
+    await db
+      .insertInto("workspace_apps")
+      .values({
+        id: capId,
+        workspace_id: ws.id,
+        kind: "device_capability",
+        display_name: "x",
+        status: "active",
+      } as any)
+      .execute()
     const cap = await db
       .insertInto("device_capabilities")
       .values({
-        workspace_id: ws.id,
+        id: capId,
         exposure_id: exposure.id,
-        status: "active",
       } as any)
       .returning("id")
       .executeTakeFirstOrThrow()
@@ -123,15 +144,14 @@ async function activeCapIds(
   workspaceId: string
 ): Promise<Set<string>> {
   const rows = await db
-    .selectFrom("resource_access_bindings")
-    .select("device_capability_id")
+    .selectFrom("workspace_app_grants")
+    .select("workspace_app_id")
     .where("workspace_id", "=", workspaceId)
-    .where("resource_type", "=", "device_capability")
     .where("status", "=", "active")
     .execute()
   return new Set(
     rows
-      .map((r: any) => r.device_capability_id as string | null)
+      .map((r: any) => r.workspace_app_id as string | null)
       .filter((v: string | null): v is string => v !== null)
   )
 }
@@ -182,10 +202,10 @@ test("addDeviceCapabilitiesForTarget is additive; revoke is targeted", async () 
       { db }
     )
     const dupCount = await db
-      .selectFrom("resource_access_bindings")
+      .selectFrom("workspace_app_grants")
       .select((eb) => eb.fn.countAll<string>().as("c"))
       .where("workspace_id", "=", s.workspaceId)
-      .where("device_capability_id", "=", s.sandboxCap1)
+      .where("workspace_app_id", "=", s.sandboxCap1)
       .where("status", "=", "active")
       .executeTakeFirstOrThrow()
     assert.equal(Number(dupCount.c), 1, "no duplicate active binding")

@@ -236,7 +236,7 @@ export default function ActorActivityBubble({
   return (
     <div className="flex w-full max-w-full min-w-0 gap-3">
       <ChatAvatar
-        name={runtime.actorName}
+        name={runtime.actorDisplayName}
         avatarUrl={member?.avatarUrl}
         emoji={member?.emoji}
         entityType="actor"
@@ -264,7 +264,7 @@ export default function ActorActivityBubble({
           <div className="flex min-w-0 items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-foreground">
-                {runtime.actorName}
+                {runtime.actorDisplayName}
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
                 {formatTargetsLabel(runtime)}

@@ -30,14 +30,14 @@ export function translate(
   )
 }
 
-export const attachmentTypeLabels: Record<string, string> = {
+export const attachmentScopeLabels: Record<string, string> = {
   workspace: "Workspace",
   conversation: "Conversation",
   actor: "Actor",
   workspace_member: "Workspace Member",
 }
 
-export const attachmentTypeColors: Record<string, string> = {
+export const attachmentScopeColors: Record<string, string> = {
   workspace: "border-blue-500/30 text-blue-500 dark:text-blue-300",
   conversation: "border-orange-500/30 text-orange-500 dark:text-orange-300",
   actor: "border-green-500/30 text-green-500 dark:text-green-300",
@@ -52,14 +52,14 @@ export const transportLabels: Record<string, string> = {
 }
 
 type PluginInstallationSummaryShape = {
-  attachment_target?: {
+  attachment_scope?: {
     type?: string | null
   } | null
   lifecycle_scope?: string | null
   is_enabled?: boolean | null
 }
 
-const ownershipSummaryByAttachmentType: Record<string, string> = {
+const ownershipSummaryByAttachmentScopeType: Record<string, string> = {
   workspace: "Owned by this workspace",
   conversation: "Owned by one conversation",
   actor: "Owned by one actor",
@@ -77,29 +77,29 @@ const lifecycleSummaryByScope: Record<string, string> = {
 export function getPluginInstallationTitle(
   installation: PluginInstallationSummaryShape
 ) {
-  const attachmentType = installation.attachment_target?.type
-  if (attachmentType === "workspace") {
+  const attachmentScopeType = installation.attachment_scope?.type
+  if (attachmentScopeType === "workspace") {
     return "Workspace configuration"
   }
-  if (attachmentType === "conversation") {
+  if (attachmentScopeType === "conversation") {
     return "Conversation configuration"
   }
-  if (attachmentType === "actor") {
+  if (attachmentScopeType === "actor") {
     return "Actor configuration"
   }
-  if (attachmentType === "workspace_member") {
+  if (attachmentScopeType === "workspace_member") {
     return "Workspace user configuration"
   }
-  return `${attachmentTypeLabels[attachmentType || ""] || attachmentType || "Plugin"} configuration`
+  return `${attachmentScopeLabels[attachmentScopeType || ""] || attachmentScopeType || "Plugin"} configuration`
 }
 
 export function getPluginInstallationDetails(
   installation: PluginInstallationSummaryShape
 ) {
-  const attachmentType = installation.attachment_target?.type || ""
+  const attachmentScopeType = installation.attachment_scope?.type || ""
   const ownershipSummary =
-    ownershipSummaryByAttachmentType[attachmentType] ||
-    `Owned by ${attachmentTypeLabels[attachmentType] || attachmentType || "this scope"}`
+    ownershipSummaryByAttachmentScopeType[attachmentScopeType] ||
+    `Owned by ${attachmentScopeLabels[attachmentScopeType] || attachmentScopeType || "this scope"}`
   const lifecycleSummary =
     lifecycleSummaryByScope[installation.lifecycle_scope || ""] ||
     `reuse: ${installation.lifecycle_scope || "turn"}`
@@ -156,11 +156,11 @@ export function ScopeBadge({ scope }: { scope: string }) {
     <Badge
       variant="outline"
       className={
-        attachmentTypeColors[scope] ||
+        attachmentScopeColors[scope] ||
         "border-gray-200 text-gray-600 dark:border-white/10 dark:text-gray-300"
       }
     >
-      {attachmentTypeLabels[scope] || scope}
+      {attachmentScopeLabels[scope] || scope}
     </Badge>
   )
 }

@@ -8,7 +8,6 @@ import {
   CONTACT_TARGET_TYPE,
   DIRECT_CONVERSATION_OPEN_STATUS,
   IDENTITY_SEARCH_MATCH_STATE,
-  RELATIONSHIP_ACCESS_POLICY,
   RELATIONSHIP_APPROVAL_MODE,
 } from "@synapse/shared"
 import QRCode from "qrcode"
@@ -121,10 +120,10 @@ function toggleApprovalMode(current: RelationshipProfileView["approvalMode"]) {
     : RELATIONSHIP_APPROVAL_MODE.AUTO
 }
 
-function toggleAccessPolicy(current: RelationshipProfileView["accessPolicy"]) {
-  return current === RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
-    ? RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED
-    : RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
+function toggleRequiresContactApproval(
+  current: RelationshipProfileView["requiresContactApproval"]
+) {
+  return !current
 }
 
 function getIdentityMatchStateLabel(
@@ -646,27 +645,29 @@ export function ContactHubClient() {
       selectedEntry.actorId,
       {
         approvalMode: nextMode,
-        accessPolicy: selectedActorProfile.accessPolicy,
+        requiresContactApproval: selectedActorProfile.requiresContactApproval,
       }
     )
     setSelectedActorProfile(nextProfile)
     toast.success(`Actor approval mode switched to ${nextMode}.`)
   }
 
-  async function handleToggleActorAccessPolicy() {
+  async function handleToggleActorContactApproval() {
     if (!workspaceId || !selectedEntry?.actorId || !selectedActorProfile) return
-    const nextPolicy = toggleAccessPolicy(selectedActorProfile.accessPolicy)
+    const nextRequiresContactApproval = toggleRequiresContactApproval(
+      selectedActorProfile.requiresContactApproval
+    )
     const nextProfile = await api.updateActorRelationshipProfile(
       workspaceId,
       selectedEntry.actorId,
       {
         approvalMode: selectedActorProfile.approvalMode,
-        accessPolicy: nextPolicy,
+        requiresContactApproval: nextRequiresContactApproval,
       }
     )
     setSelectedActorProfile(nextProfile)
     await loadHub(selectedEntry)
-    toast.success(`Actor access policy switched to ${nextPolicy}.`)
+    toast.success("Actor contact approval updated.")
   }
 
   async function handleToggleActorPublicShare() {
@@ -677,7 +678,7 @@ export function ContactHubClient() {
       selectedEntry.actorId,
       {
         approvalMode: selectedActorProfile.approvalMode,
-        accessPolicy: selectedActorProfile.accessPolicy,
+        requiresContactApproval: selectedActorProfile.requiresContactApproval,
         isPublicShared: nextPublicShared,
       }
     )
@@ -702,34 +703,35 @@ export function ContactHubClient() {
       selectedEntry.remoteAgentId,
       {
         approvalMode: nextMode,
-        accessPolicy: selectedRemoteAgentProfile.accessPolicy,
+        requiresContactApproval:
+          selectedRemoteAgentProfile.requiresContactApproval,
       }
     )
     setSelectedRemoteAgentProfile(nextProfile)
     toast.success(`Remote agent approval mode switched to ${nextMode}.`)
   }
 
-  async function handleToggleRemoteAgentAccessPolicy() {
+  async function handleToggleRemoteAgentContactApproval() {
     if (
       !workspaceId ||
       !selectedEntry?.remoteAgentId ||
       !selectedRemoteAgentProfile
     )
       return
-    const nextPolicy = toggleAccessPolicy(
-      selectedRemoteAgentProfile.accessPolicy
+    const nextRequiresContactApproval = toggleRequiresContactApproval(
+      selectedRemoteAgentProfile.requiresContactApproval
     )
     const nextProfile = await api.updateRemoteAgentRelationshipProfile(
       workspaceId,
       selectedEntry.remoteAgentId,
       {
         approvalMode: selectedRemoteAgentProfile.approvalMode,
-        accessPolicy: nextPolicy,
+        requiresContactApproval: nextRequiresContactApproval,
       }
     )
     setSelectedRemoteAgentProfile(nextProfile)
     await loadHub(selectedEntry)
-    toast.success(`Remote agent access policy switched to ${nextPolicy}.`)
+    toast.success("Remote agent contact approval updated.")
   }
 
   async function handleToggleRemoteAgentPublicShare() {
@@ -745,7 +747,8 @@ export function ContactHubClient() {
       selectedEntry.remoteAgentId,
       {
         approvalMode: selectedRemoteAgentProfile.approvalMode,
-        accessPolicy: selectedRemoteAgentProfile.accessPolicy,
+        requiresContactApproval:
+          selectedRemoteAgentProfile.requiresContactApproval,
         isPublicShared: nextPublicShared,
       }
     )
@@ -851,7 +854,7 @@ export function ContactHubClient() {
                           </div>
                           <div className="mt-1 text-sm text-muted-foreground">
                             {request.targetType === CONTACT_TARGET_TYPE.ACTOR
-                              ? `Requested actor ${request.targetActor?.name || "Unknown actor"}`
+                              ? `Requested actor ${request.targetActor?.displayName || "Unknown actor"}`
                               : `Requested friendship from ${request.requester?.workspace.name || "another workspace"}`}
                           </div>
                           <div className="mt-3 flex gap-2">
@@ -889,7 +892,7 @@ export function ContactHubClient() {
                           className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
                         >
                           <div className="text-sm font-medium text-foreground">
-                            {request.actor?.name || "Unknown actor"}
+                            {request.actor?.displayName || "Unknown actor"}
                           </div>
                           <div className="mt-1 text-sm text-muted-foreground">
                             {request.requester?.name || "A user"} wants to start
@@ -930,7 +933,7 @@ export function ContactHubClient() {
                           className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
                         >
                           <div className="text-sm font-medium text-foreground">
-                            {request.remoteAgent?.name ||
+                            {request.remoteAgent?.displayName ||
                               "Unknown remote agent"}
                           </div>
                           <div className="mt-1 text-sm text-muted-foreground">
@@ -1393,8 +1396,11 @@ export function ContactHubClient() {
                       )}
                       <p className="text-sm text-muted-foreground">
                         Approval mode: {selectedActorProfile.approvalMode} ·
-                        access policy {selectedActorProfile.accessPolicy} ·
-                        public share{" "}
+                        contact approval{" "}
+                        {selectedActorProfile.requiresContactApproval
+                          ? "required"
+                          : "open"}{" "}
+                        · public share{" "}
                         {selectedActorProfile.isPublicShared ? "on" : "off"}
                       </p>
                       <div className="grid gap-2">
@@ -1413,12 +1419,16 @@ export function ContactHubClient() {
                           variant="outline"
                           size="sm"
                           className="w-full rounded-full"
-                          onClick={() => void handleToggleActorAccessPolicy()}
+                          onClick={() =>
+                            void handleToggleActorContactApproval()
+                          }
                         >
-                          Switch policy to{" "}
-                          {toggleAccessPolicy(
-                            selectedActorProfile.accessPolicy
-                          )}
+                          Switch contact approval to{" "}
+                          {toggleRequiresContactApproval(
+                            selectedActorProfile.requiresContactApproval
+                          )
+                            ? "required"
+                            : "open"}
                         </Button>
                         <Button
                           variant="outline"
@@ -1453,8 +1463,11 @@ export function ContactHubClient() {
                       )}
                       <p className="text-sm text-muted-foreground">
                         Approval mode: {selectedRemoteAgentProfile.approvalMode}{" "}
-                        · access policy{" "}
-                        {selectedRemoteAgentProfile.accessPolicy} · public share{" "}
+                        · contact approval{" "}
+                        {selectedRemoteAgentProfile.requiresContactApproval
+                          ? "required"
+                          : "open"}{" "}
+                        · public share{" "}
                         {selectedRemoteAgentProfile.isPublicShared
                           ? "on"
                           : "off"}
@@ -1478,13 +1491,15 @@ export function ContactHubClient() {
                           size="sm"
                           className="w-full rounded-full"
                           onClick={() =>
-                            void handleToggleRemoteAgentAccessPolicy()
+                            void handleToggleRemoteAgentContactApproval()
                           }
                         >
-                          Switch policy to{" "}
-                          {toggleAccessPolicy(
-                            selectedRemoteAgentProfile.accessPolicy
-                          )}
+                          Switch contact approval to{" "}
+                          {toggleRequiresContactApproval(
+                            selectedRemoteAgentProfile.requiresContactApproval
+                          )
+                            ? "required"
+                            : "open"}
                         </Button>
                         <Button
                           variant="outline"

@@ -49,11 +49,21 @@ async function insertWorkspaceMember(
 }
 
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
+  const actorId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: actorId,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: "test actor",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: "test actor",
+      id: actorId,
       role: "assistant",
       title: "test",
       current_version: 1,
@@ -67,11 +77,21 @@ async function insertRemoteAgent(
   db: AnyDb,
   workspaceId: string
 ): Promise<string> {
+  const remoteAgentId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: remoteAgentId,
+      workspace_id: workspaceId,
+      kind: "remote_agent",
+      display_name: "test remote agent",
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("remote_agents")
     .values({
-      workspace_id: workspaceId,
-      name: "test remote agent",
+      id: remoteAgentId,
       title: "test",
       runtime_kind: "claude_code",
     })

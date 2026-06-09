@@ -1,12 +1,13 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDbAndClient } from "../../test/helpers/db.js"
 import { checkPermission } from "./evaluator.js"
 import { buildRuntimePrincipalContext } from "./subject-resolution.js"
-import { insertAccessBindingReturningIdOn } from "./binding-storage.js"
 import { upsertAccessSubject } from "./subject-registry.js"
+import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
 
 /**
  * PR3 — scope-aware checkPermission. Verifies that:
@@ -45,11 +46,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 }
 
 async function newActor(db: Kysely<any>, workspaceId: string): Promise<string> {
+  const id = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id,
+      workspace_id: workspaceId,
+      kind: "actor",
+      display_name: `actor-${rid()}`,
+      status: "active",
+    } as any)
+    .execute()
   const row = await db
     .insertInto("actors")
     .values({
-      workspace_id: workspaceId,
-      name: `actor-${rid()}`,
+      id,
       role: "assistant",
       title: `${NS} actor`,
       current_version: 1,
@@ -99,6 +110,42 @@ async function newConversation(
   return row.id as string
 }
 
+async function newInstalledSkill(
+  db: Kysely<any>,
+  workspaceId: string
+): Promise<string> {
+  const snapshot = await db
+    .insertInto("skill_snapshots")
+    .values({
+      name: `${NS} skill`,
+      description: "",
+      content_hash: `hash-${rid()}`,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const skillId = crypto.randomUUID()
+  await db
+    .insertInto("workspace_apps")
+    .values({
+      id: skillId,
+      workspace_id: workspaceId,
+      kind: "installed_skill",
+      display_name: `${NS} skill`,
+      status: "active",
+    } as any)
+    .execute()
+  const row = await db
+    .insertInto("installed_skills")
+    .values({
+      id: skillId,
+      current_snapshot_id: snapshot.id,
+      current_version: 1,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
 async function addParticipant(
   db: Kysely<any>,
   conversationId: string,
@@ -115,74 +162,75 @@ async function addParticipant(
 }
 
 test(
-  "checkPermission: workspace_member + scope=conversation grant visible only inside that conversation",
+  "checkPermission: actor + scope=conversation skill grant is visible only inside that conversation",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db }) => {
       const wsId = await newWorkspace(db)
-      const memberId = await newWorkspaceMember(db, wsId)
-      const targetActorId = await newActor(db, wsId)
+      const actorId = await newActor(db, wsId)
+      const skillId = await newInstalledSkill(db, wsId)
       const convA = await newConversation(db, wsId)
       const convB = await newConversation(db, wsId)
 
-      // Write a `subject=workspace_member + scope=conversation` binding on
-      // the target actor. The member should be able to "use" the actor only
-      // when the runtime context places them inside conv A.
-      await insertAccessBindingReturningIdOn(db, {
+      // Current grant model: scoped grants live on capability apps and only
+      // support subject=actor|remote_agent with scope=conversation. The actor
+      // should be able to use the skill only when the runtime context places
+      // them inside conv A.
+      await insertWorkspaceAppGrant(db, {
         workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActorId,
+        workspaceAppId: skillId,
         target: {
           subject: {
-            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId,
+            kind: SUBJECT_KIND.ACTOR,
+            actorId,
           },
           scope: {
             kind: SUBJECT_KIND.CONVERSATION,
             conversationId: convA,
           },
         },
+        permissions: ["use"],
       })
 
-      // workspace_member must be an active participant of both conversations
+      // The actor must be an active participant of both conversations
       // for buildRuntimePrincipalContext to surface the conv subject_id in
       // runtimeScopeSubjectIds.
-      const memberSubjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId,
+      const actorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId,
       })
-      await addParticipant(db, convA, memberSubjectId)
-      await addParticipant(db, convB, memberSubjectId)
+      await addParticipant(db, convA, actorSubjectId)
+      await addParticipant(db, convB, actorSubjectId)
 
       const inA = await buildRuntimePrincipalContext(db, {
         principal: {
-          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId,
+          kind: SUBJECT_KIND.ACTOR,
+          actorId,
         },
         workspaceId: wsId,
         conversationId: convA,
       })
       const inB = await buildRuntimePrincipalContext(db, {
         principal: {
-          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-          memberId,
+          kind: SUBJECT_KIND.ACTOR,
+          actorId,
         },
         workspaceId: wsId,
         conversationId: convB,
       })
 
       const visibleInA = await checkPermission(db, {
-        resourceType: "actor",
-        resourceId: targetActorId,
-        permission: "view",
-        subject: { type: "workspace_member", id: memberId },
+        resourceType: "installed_skill",
+        resourceId: skillId,
+        permission: "use",
+        subject: { type: "actor", id: actorId },
         runtimeScopeSubjectIds: inA.runtimeScopeSubjectIds,
       })
       const visibleInB = await checkPermission(db, {
-        resourceType: "actor",
-        resourceId: targetActorId,
-        permission: "view",
-        subject: { type: "workspace_member", id: memberId },
+        resourceType: "installed_skill",
+        resourceId: skillId,
+        permission: "use",
+        subject: { type: "actor", id: actorId },
         runtimeScopeSubjectIds: inB.runtimeScopeSubjectIds,
       })
       assert.equal(visibleInA, true, "scoped grant must apply in conv A")
@@ -200,10 +248,9 @@ test(
       const memberId = await newWorkspaceMember(db, wsId)
       const targetActorId = await newActor(db, wsId)
 
-      await insertAccessBindingReturningIdOn(db, {
+      await insertWorkspaceAppGrant(db, {
         workspaceId: wsId,
-        resourceType: "actor",
-        resourceId: targetActorId,
+        workspaceAppId: targetActorId,
         target: {
           subject: {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
@@ -211,6 +258,7 @@ test(
           },
           // no scope
         },
+        permissions: ["contact_visible"],
       })
 
       const visible = await checkPermission(db, {

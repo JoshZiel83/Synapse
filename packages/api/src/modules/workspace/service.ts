@@ -11,7 +11,6 @@ import {
   INVITE_TRUST_LEVELS,
   normalizeActorDocs,
   parseJsonObject,
-  RELATIONSHIP_ACCESS_POLICY,
   slugify,
   type ActorDoc,
   type ActorDocInput,
@@ -19,8 +18,9 @@ import {
   type WorkspaceChiefActorPreference,
 } from "@synapse/shared"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
-import { setAccessPolicy } from "../access/default-access-policy.js"
+import { setRequiresContactApproval } from "../access/contact-approval.js"
 import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
+import { insertWorkspaceAppRoot } from "../workspace-apps/root-storage.js"
 import type {
   WorkspaceAccessBindingsAccessKey,
   WorkspaceMembersTrustLevel,
@@ -114,7 +114,7 @@ type LoadedOfficialActorTemplate = {
   packageId: string
   packageSlug: string
   versionId: string
-  actorName: string
+  actorDisplayName: string
   actorRole: ActorRole
   actorAvatarFileId?: string
   actorAvatarEmoji?: string
@@ -144,6 +144,7 @@ async function findOfficialChiefActorId(
 ) {
   const result = await executor
     .selectFrom("actors as a")
+    .innerJoin("workspace_apps as app", "app.id", "a.id")
     .leftJoin("actor_source_refs as source_ref", "source_ref.actor_id", "a.id")
     .leftJoin(
       "catalog_items as item",
@@ -151,8 +152,9 @@ async function findOfficialChiefActorId(
       "source_ref.source_catalog_item_id"
     )
     .select("a.id")
-    .where("a.workspace_id", "=", workspaceId)
-    .where("a.is_active", "=", true)
+    .where("app.workspace_id", "=", workspaceId)
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "=", "active")
     .where((eb) =>
       eb.or([
         sql<boolean>`a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb`,
@@ -247,7 +249,7 @@ async function loadOfficialActorTemplates(
       "item.slug as package_slug",
       "version.id as version_id",
       "spec.role as actor_role",
-      "spec.name as actor_name",
+      "spec.display_name as actor_template_display_name",
       "spec.avatar_file_id as actor_avatar_file_id",
       "spec.avatar_emoji as actor_avatar_emoji",
       "spec.title as actor_title",
@@ -277,7 +279,7 @@ async function loadOfficialActorTemplates(
       packageId: row.package_id,
       packageSlug: row.package_slug,
       versionId: row.version_id,
-      actorName: row.actor_name,
+      actorDisplayName: row.actor_template_display_name,
       actorRole: row.actor_role,
       actorAvatarFileId: row.actor_avatar_file_id || undefined,
       actorAvatarEmoji: row.actor_avatar_emoji || undefined,
@@ -341,11 +343,19 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     }> = []
 
     for (const template of officialActorTemplates) {
+      const actorId = crypto.randomUUID()
+      await insertWorkspaceAppRoot(trx, {
+        id: actorId,
+        workspaceId: String(workspace.id),
+        kind: "actor",
+        displayName: template.actorDisplayName,
+        ownerWorkspaceMemberId: String(creatorMember.id),
+        status: "active",
+      })
       const actorRow = await trx
         .insertInto("actors")
         .values({
-          workspace_id: String(workspace.id),
-          name: template.actorName,
+          id: actorId,
           role: template.actorRole,
           title: template.actorTitle,
           avatar_file_id: template.actorAvatarFileId || null,
@@ -355,21 +365,21 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           specialties: template.actorSpecialties,
           config: template.actorConfig as TableInsert<"actors">["config"],
           current_version: 1,
-          created_by_workspace_member_id: String(creatorMember.id),
         })
         .returningAll()
         .executeTakeFirst()
       if (!actorRow) {
-        throw new Error(`Failed to install actor ${template.actorName}`)
+        throw new Error(`Failed to install actor ${template.actorDisplayName}`)
       }
 
-      // P2 contract: bootstrap actors are workspace-open by default — write
-      // the binding instead of relying on the legacy access_policy column.
-      await setAccessPolicy(trx, {
+      // P2 contract: bootstrap actors are workspace-visible by default —
+      // write the default contact-visibility grant instead of relying on the
+      // legacy stored access-policy column.
+      await setRequiresContactApproval(trx, {
         resourceType: "actor",
         resourceId: String(actorRow.id),
         workspaceId: String(workspace.id),
-        policy: RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
+        requiresContactApproval: false,
         createdByWorkspaceMemberId: String(creatorMember.id),
       })
 
@@ -378,7 +388,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
         .values({
           actor_id: String(actorRow.id),
           version: 1,
-          name: template.actorName,
+          display_name: template.actorDisplayName,
           role: template.actorRole,
           title: template.actorTitle,
           parent_id: null,
@@ -392,7 +402,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
         .executeTakeFirst()
       if (!actorVersionResult) {
         throw new Error(
-          `Failed to create actor version for ${template.actorName}`
+          `Failed to create actor version for ${template.actorDisplayName}`
         )
       }
       const actorVersionId = actorVersionResult.id
@@ -528,11 +538,18 @@ export async function getWorkspaceChiefActorPreference(
     .selectFrom("workspace_member_preferences as pref")
     .innerJoin("workspace_members as wm", "wm.id", "pref.workspace_member_id")
     .leftJoin("actors as a", (join) =>
-      join
-        .onRef("a.id", "=", "pref.chief_actor_id")
-        .onRef("a.workspace_id", "=", "wm.workspace_id")
-        .on("a.is_active", "=", true)
+      join.onRef("a.id", "=", "pref.chief_actor_id").on(
+        sql<boolean>`EXISTS (
+            SELECT 1
+            FROM workspace_apps app
+            WHERE app.id = a.id
+              AND app.workspace_id = wm.workspace_id
+              AND app.deleted_at IS NULL
+              AND app.status = 'active'
+          )`
+      )
     )
+    .leftJoin("workspace_apps as chief_actor_app", "chief_actor_app.id", "a.id")
     .leftJoin(
       "file_assets as avatar_file",
       "avatar_file.id",
@@ -545,7 +562,7 @@ export async function getWorkspaceChiefActorPreference(
       "pref.chief_actor_id",
       "pref.created_at",
       "pref.updated_at",
-      "a.name as chief_actor_name",
+      "chief_actor_app.display_name as chief_actor_display_name",
       "a.role as chief_actor_role",
       "a.title as chief_actor_title",
       "avatar_file.id as chief_actor_avatar_file_id",
@@ -583,11 +600,13 @@ export async function updateWorkspaceChiefActorPreference(
   }
 
   const actorRow = await db
-    .selectFrom("actors")
-    .select("id")
-    .where("id", "=", chiefActorId)
-    .where("workspace_id", "=", workspaceId)
-    .where("is_active", "=", true)
+    .selectFrom("actors as actor")
+    .innerJoin("workspace_apps as app", "app.id", "actor.id")
+    .select("actor.id")
+    .where("actor.id", "=", chiefActorId)
+    .where("app.workspace_id", "=", workspaceId)
+    .where("app.deleted_at", "is", null)
+    .where("app.status", "=", "active")
     .limit(1)
     .executeTakeFirst()
 
@@ -962,17 +981,19 @@ function mapWorkspaceChiefActorPreferenceRow(
   row: any
 ): WorkspaceChiefActorPreference {
   const chiefActorId =
-    row.chief_actor_id && row.chief_actor_name ? row.chief_actor_id : undefined
+    row.chief_actor_id && row.chief_actor_display_name
+      ? row.chief_actor_id
+      : undefined
 
   return {
     workspaceId: row.workspace_id,
     workspaceMemberId: row.workspace_member_id,
     chiefActorId,
     chiefActor:
-      chiefActorId && row.chief_actor_name
+      chiefActorId && row.chief_actor_display_name
         ? {
             id: chiefActorId,
-            name: row.chief_actor_name,
+            displayName: row.chief_actor_display_name,
             role: row.chief_actor_role,
             title: row.chief_actor_title || row.chief_actor_role || "Actor",
             avatarUrl: row.chief_actor_avatar_file_id

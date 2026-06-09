@@ -43,7 +43,7 @@ export const mijiaSeed: BuiltinOrgSeed = {
           "X-Mijia-Expose-Raw": "${config:exposeRawMiotTools}",
         },
       }),
-      defaultInstanceScope: "workspace_member",
+      defaultAttachmentScope: "workspace_member",
       defaultReuseScope: "session",
       supportedReuseScopes: [
         "turn",
@@ -202,7 +202,6 @@ export const mijiaSeed: BuiltinOrgSeed = {
             "使用米家 App 扫描二维码，以授权 Synapse 托管的智能家居访问。"
           ),
           prerequisiteFields: ["locale"],
-          ownerScope: "installation",
         },
       ],
       authorization: {

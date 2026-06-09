@@ -227,11 +227,21 @@ test(
         })
         .returning("id")
         .executeTakeFirstOrThrow()
+      const remoteAgentId = rid()
+      await db
+        .insertInto("workspace_apps")
+        .values({
+          id: remoteAgentId,
+          workspace_id: ws.id as string,
+          kind: "remote_agent",
+          display_name: `ra-${rid()}`,
+          status: "active",
+        } as any)
+        .execute()
       const agent = await db
         .insertInto("remote_agents")
         .values({
-          workspace_id: ws.id as string,
-          name: `ra-${rid()}`,
+          id: remoteAgentId,
           title: "ra",
           runtime_kind: "claude_code",
         } as any)

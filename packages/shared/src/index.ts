@@ -41,6 +41,33 @@ export type { NormalizedDevicePlatform } from "./access/policies/commandline-nor
 export * from "./utils/index.js"
 export * from "./automation/index.js"
 export * from "./access/index.js"
+export {
+  WORKSPACE_APP_KIND,
+  WORKSPACE_APP_KINDS,
+  WORKSPACE_APP_STATUS,
+  WORKSPACE_APP_STATUSES,
+  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_APP_GRANT_PERMISSIONS,
+  WORKSPACE_APP_GRANT_STATUS,
+  WORKSPACE_APP_GRANT_STATUSES,
+  WORKSPACE_APP_GRANT_SOURCE,
+  WORKSPACE_APP_GRANT_SOURCES,
+  WORKSPACE_APP_GRANT_REQUEST_STATUS,
+  WORKSPACE_APP_GRANT_REQUEST_STATUSES,
+} from "./access/enums.js"
+export type {
+  WorkspaceAppGrantPermission,
+  WorkspaceAppGrantRequestStatus,
+  WorkspaceAppGrantSource,
+  WorkspaceAppGrantStatus,
+  WorkspaceAppKind,
+  WorkspaceAppStatus,
+} from "./access/enums.js"
+export type {
+  PluginAttachmentScope,
+  PluginAttachmentScopeType,
+  McpAttachmentScopeType,
+} from "./types/index.js"
 export * from "./chat-catalog/index.js"
 export * from "./chat-queue/index.js"
 // Tool provenance & routing (Layer A/B primitives).

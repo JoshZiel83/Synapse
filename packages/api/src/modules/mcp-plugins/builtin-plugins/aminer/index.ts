@@ -36,7 +36,7 @@ export const aminerSeed: BuiltinOrgSeed = {
         url: "https://mcp.aminer.cn/sse",
         headers: { Authorization: "Bearer ${config:apiKey}" },
       }),
-      defaultInstanceScope: "workspace",
+      defaultAttachmentScope: "workspace",
       defaultReuseScope: "workspace",
       requiresHandshake: false,
       iconAssetPath: "assets/icons/aminer.svg",

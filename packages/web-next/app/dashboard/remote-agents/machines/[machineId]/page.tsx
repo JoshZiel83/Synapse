@@ -276,7 +276,7 @@ export default function RemoteAgentMachineDetailPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
                     <div className="text-base font-semibold text-foreground">
-                      {binding.name}
+                      {binding.displayName}
                     </div>
                     <div className="text-sm text-muted-foreground">
                       {runtimeLabel(binding.runtimeKind)}
