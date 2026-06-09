@@ -121,6 +121,7 @@ const PRINCIPAL_ANCHORED_ALLOWLIST = new Set([
   "workspace_friend_entries", // anchored by the owner member (removed)
   "workspace_member_preferences", // 1:1 child of the member (removed)
   "workspace_relationship_profiles", // anchored by the member/subject
+  "workspace_app_grant_requests", // historical child of workspace + app; no independent lifecycle
 ])
 
 // Files allowed to issue managed DELETE / base-table reads (relative to SRC).

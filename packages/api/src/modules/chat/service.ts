@@ -861,9 +861,9 @@ async function listConversationParticipantRows(
       LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN actors a ON a.id = cpsubj.actor_id
-      LEFT JOIN workspace_apps actor_app ON actor_app.id = a.id
+      LEFT JOIN workspace_apps_live actor_app ON actor_app.id = a.id
       LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
-      LEFT JOIN workspace_apps remote_agent_app ON remote_agent_app.id = ra.id
+      LEFT JOIN workspace_apps_live remote_agent_app ON remote_agent_app.id = ra.id
       LEFT JOIN actor_versions current_version
         ON current_version.actor_id = a.id
        AND current_version.version = a.current_version
@@ -953,9 +953,9 @@ async function getWorkspaceMemberConversationParticipantRow(
       LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN actors a ON a.id = cpsubj.actor_id
-      LEFT JOIN workspace_apps actor_app ON actor_app.id = a.id
+      LEFT JOIN workspace_apps_live actor_app ON actor_app.id = a.id
       LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
-      LEFT JOIN workspace_apps remote_agent_app ON remote_agent_app.id = ra.id
+      LEFT JOIN workspace_apps_live remote_agent_app ON remote_agent_app.id = ra.id
       LEFT JOIN LATERAL (
         SELECT
           ta.id,
@@ -2591,7 +2591,7 @@ async function loadActorsByIds(
     `
       SELECT actor.id, app.display_name
       FROM actors actor
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = actor.id
       WHERE app.workspace_id = $1
         AND app.deleted_at IS NULL
@@ -2616,7 +2616,7 @@ async function loadRemoteAgentsByIds(
     `
       SELECT agent.id, app.display_name
       FROM remote_agents agent
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = agent.id
       WHERE app.workspace_id = $1
         AND app.deleted_at IS NULL

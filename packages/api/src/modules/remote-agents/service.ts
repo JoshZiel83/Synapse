@@ -250,7 +250,7 @@ async function loadBoundRemoteAgentsForMachine(machineId: string) {
         binding.local_root_path
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = agent.id
       WHERE binding.machine_id = $1
         AND binding.status = 'active'
@@ -426,7 +426,7 @@ async function loadAgentStartTargetsForMachine(machineId: string) {
         ctx.runtime_session_id
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = agent.id
       INNER JOIN (
         SELECT DISTINCT remote_agent_id, conversation_id
@@ -1115,7 +1115,7 @@ export async function authenticateMachineForRemoteAgent(params: {
         binding.local_root_path
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = agent.id
       WHERE binding.remote_agent_id = $1
         AND binding.machine_id = $2
@@ -1699,7 +1699,7 @@ export async function listRemoteAgents(params: {
             AND delivery.status = 'pending'
         ) AS unread_delivery_count
       FROM remote_agents agent
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = agent.id
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = agent.id
@@ -1775,7 +1775,7 @@ export async function getRemoteAgent(params: {
             AND delivery.status = 'pending'
         ) AS unread_delivery_count
       FROM remote_agents agent
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = agent.id
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = agent.id
@@ -1923,7 +1923,7 @@ export async function updateRemoteAgent(params: {
       WHERE id = $2
         AND EXISTS (
           SELECT 1
-          FROM workspace_apps app
+          FROM workspace_apps_live app
           WHERE app.id = remote_agents.id
             AND app.workspace_id = $1
             AND app.deleted_at IS NULL
@@ -2116,7 +2116,7 @@ export async function getRemoteAgentMachine(params: {
           ) AS unread_delivery_count
         FROM remote_agent_bindings binding
         INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
-        INNER JOIN workspace_apps app ON app.id = agent.id
+        INNER JOIN workspace_apps_live app ON app.id = agent.id
         ${LATEST_CONVERSATION_CONTEXT_LATERAL}
         WHERE binding.machine_id = $1
         ORDER BY agent.created_at DESC

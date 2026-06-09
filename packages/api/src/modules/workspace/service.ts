@@ -521,7 +521,7 @@ export async function getWorkspaceChiefActorPreference(
       join.onRef("a.id", "=", "pref.chief_actor_id").on(
         sql<boolean>`EXISTS (
             SELECT 1
-            FROM workspace_apps app
+            FROM workspace_apps_live app
             WHERE app.id = a.id
               AND app.workspace_id = wm.workspace_id
               AND app.deleted_at IS NULL

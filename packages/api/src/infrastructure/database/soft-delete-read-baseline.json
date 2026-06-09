@@ -1,38 +1,22 @@
 {
   "modules/access/evaluator.ts": {
-    "actors": 3,
     "conversations": 1,
     "devices": 1,
-    "installed_skills": 2,
     "memory_items": 1,
     "memory_spaces": 1,
-    "model_groups": 3,
-    "plugin_installations": 2,
-    "remote_agents": 3
+    "model_groups": 3
   },
   "modules/access/policy.ts": {
     "conversations": 1
   },
   "modules/access/subject-registry.ts": {
-    "actors": 1,
-    "conversations": 1,
-    "remote_agents": 1
-  },
-  "modules/access/subject-resolution.ts": {
-    "actors": 3,
-    "remote_agents": 3
-  },
-  "modules/ai/session-tools.ts": {
-    "actors": 1
+    "conversations": 1
   },
   "modules/auth/better-auth.ts": {
     "users": 2
   },
   "modules/auth/service.ts": {
     "users": 2
-  },
-  "modules/automation/integrations.ts": {
-    "plugin_installations": 1
   },
   "modules/automation/service.ts": {
     "automation_event_sources": 13,
@@ -42,15 +26,11 @@
     "workspaces": 1
   },
   "modules/chat/service.ts": {
-    "actors": 3,
     "conversations": 4,
-    "remote_agents": 3,
     "users": 5
   },
   "modules/devices/access-bindings.ts": {
-    "actors": 1,
-    "conversations": 3,
-    "remote_agents": 1
+    "conversations": 3
   },
   "modules/devices/catalog-sync.ts": {
     "devices": 1
@@ -73,7 +53,6 @@
     "workspaces": 1
   },
   "modules/im/service/accounts.ts": {
-    "actors": 1,
     "transport_accounts": 6
   },
   "modules/im/service/bindings.ts": {
@@ -85,23 +64,15 @@
   "modules/im/service/weixin-binding.ts": {
     "transport_accounts": 1
   },
-  "modules/mcp-plugins/config-resolver.ts": {
-    "plugin_installations": 1
-  },
   "modules/mcp-plugins/plugin-auth-connections.ts": {
     "catalog_items": 1,
-    "plugin_connections": 2,
-    "plugin_installations": 4
+    "plugin_connections": 2
   },
   "modules/mcp-plugins/service.ts": {
     "catalog_items": 2,
     "file_assets": 1,
     "plugin_connections": 2,
-    "plugin_installations": 2,
     "publishers": 4
-  },
-  "modules/mcp-plugins/tool-resolver.ts": {
-    "plugin_installations": 1
   },
   "modules/memory/controller.ts": {
     "memory_items": 2,
@@ -111,26 +82,20 @@
     "memory_items": 2
   },
   "modules/memory/service.ts": {
-    "actors": 1,
     "conversations": 2,
     "memory_items": 5,
     "memory_spaces": 3,
-    "remote_agents": 1,
     "users": 1
   },
   "modules/model-groups/service.ts": {
-    "actors": 1,
     "model_groups": 8,
     "workspaces": 1
   },
   "modules/organization/service.ts": {
-    "actors": 4,
     "catalog_items": 2,
     "publishers": 2
   },
   "modules/relationship/service.ts": {
-    "actors": 3,
-    "remote_agents": 3,
     "workspaces": 3
   },
   "modules/remote-agents/mcp-endpoint.ts": {
@@ -139,7 +104,6 @@
   "modules/remote-agents/service.ts": {
     "conversations": 2,
     "remote_agent_machines": 6,
-    "remote_agents": 6,
     "users": 1
   },
   "modules/runtime-authorizations/requests.ts": {
@@ -148,30 +112,19 @@
   "modules/sandbox/space.ts": {
     "file_spaces": 2
   },
-  "modules/session/service.ts": {
-    "actors": 2
-  },
   "modules/skills/service.ts": {
-    "catalog_items": 3,
-    "installed_skills": 6,
     "publishers": 1
   },
   "modules/tasks/service.ts": {
-    "actors": 6,
     "conversations": 1,
     "devices": 2,
-    "remote_agents": 6,
     "users": 6
   },
   "modules/workspace/invite-service.ts": {
     "workspaces": 1
   },
   "modules/workspace/service.ts": {
-    "actors": 2,
     "catalog_items": 1,
     "workspaces": 3
-  },
-  "workers/session-thinking.ts": {
-    "actors": 1
   }
 }

@@ -1269,11 +1269,11 @@ async function getTaskRowById(taskId: string, queryable?: Executor) {
        ON requester_subj.id = requester.subject_id
      LEFT JOIN actors requester_actor
        ON requester_actor.id = requester_subj.actor_id
-     LEFT JOIN workspace_apps requester_actor_app
+     LEFT JOIN workspace_apps_live requester_actor_app
        ON requester_actor_app.id = requester_actor.id
      LEFT JOIN remote_agents requester_remote_agent
        ON requester_remote_agent.id = requester_subj.remote_agent_id
-     LEFT JOIN workspace_apps requester_remote_agent_app
+     LEFT JOIN workspace_apps_live requester_remote_agent_app
        ON requester_remote_agent_app.id = requester_remote_agent.id
      LEFT JOIN workspace_members requester_wm
        ON requester_wm.id = requester_subj.workspace_member_id
@@ -1285,11 +1285,11 @@ async function getTaskRowById(taskId: string, queryable?: Executor) {
        ON target_subj.id = target.subject_id
      LEFT JOIN actors target_actor
        ON target_actor.id = target_subj.actor_id
-     LEFT JOIN workspace_apps target_actor_app
+     LEFT JOIN workspace_apps_live target_actor_app
        ON target_actor_app.id = target_actor.id
      LEFT JOIN remote_agents target_remote_agent
        ON target_remote_agent.id = target_subj.remote_agent_id
-     LEFT JOIN workspace_apps target_remote_agent_app
+     LEFT JOIN workspace_apps_live target_remote_agent_app
        ON target_remote_agent_app.id = target_remote_agent.id
      LEFT JOIN workspace_members target_wm
        ON target_wm.id = target_subj.workspace_member_id
@@ -1301,11 +1301,11 @@ async function getTaskRowById(taskId: string, queryable?: Executor) {
        ON resolver_subj.id = resolver.subject_id
      LEFT JOIN actors resolver_actor
        ON resolver_actor.id = resolver_subj.actor_id
-     LEFT JOIN workspace_apps resolver_actor_app
+     LEFT JOIN workspace_apps_live resolver_actor_app
        ON resolver_actor_app.id = resolver_actor.id
      LEFT JOIN remote_agents resolver_remote_agent
        ON resolver_remote_agent.id = resolver_subj.remote_agent_id
-     LEFT JOIN workspace_apps resolver_remote_agent_app
+     LEFT JOIN workspace_apps_live resolver_remote_agent_app
        ON resolver_remote_agent_app.id = resolver_remote_agent.id
      LEFT JOIN workspace_members resolver_wm
        ON resolver_wm.id = resolver_subj.workspace_member_id
@@ -1439,11 +1439,11 @@ async function getTaskRowByIdForUpdate(taskId: string, queryable: Executor) {
        ON requester_subj.id = requester.subject_id
      LEFT JOIN actors requester_actor
        ON requester_actor.id = requester_subj.actor_id
-     LEFT JOIN workspace_apps requester_actor_app
+     LEFT JOIN workspace_apps_live requester_actor_app
        ON requester_actor_app.id = requester_actor.id
      LEFT JOIN remote_agents requester_remote_agent
        ON requester_remote_agent.id = requester_subj.remote_agent_id
-     LEFT JOIN workspace_apps requester_remote_agent_app
+     LEFT JOIN workspace_apps_live requester_remote_agent_app
        ON requester_remote_agent_app.id = requester_remote_agent.id
      LEFT JOIN workspace_members requester_wm
        ON requester_wm.id = requester_subj.workspace_member_id
@@ -1455,11 +1455,11 @@ async function getTaskRowByIdForUpdate(taskId: string, queryable: Executor) {
        ON target_subj.id = target.subject_id
      LEFT JOIN actors target_actor
        ON target_actor.id = target_subj.actor_id
-     LEFT JOIN workspace_apps target_actor_app
+     LEFT JOIN workspace_apps_live target_actor_app
        ON target_actor_app.id = target_actor.id
      LEFT JOIN remote_agents target_remote_agent
        ON target_remote_agent.id = target_subj.remote_agent_id
-     LEFT JOIN workspace_apps target_remote_agent_app
+     LEFT JOIN workspace_apps_live target_remote_agent_app
        ON target_remote_agent_app.id = target_remote_agent.id
      LEFT JOIN workspace_members target_wm
        ON target_wm.id = target_subj.workspace_member_id
@@ -1471,11 +1471,11 @@ async function getTaskRowByIdForUpdate(taskId: string, queryable: Executor) {
        ON resolver_subj.id = resolver.subject_id
      LEFT JOIN actors resolver_actor
        ON resolver_actor.id = resolver_subj.actor_id
-     LEFT JOIN workspace_apps resolver_actor_app
+     LEFT JOIN workspace_apps_live resolver_actor_app
        ON resolver_actor_app.id = resolver_actor.id
      LEFT JOIN remote_agents resolver_remote_agent
        ON resolver_remote_agent.id = resolver_subj.remote_agent_id
-     LEFT JOIN workspace_apps resolver_remote_agent_app
+     LEFT JOIN workspace_apps_live resolver_remote_agent_app
        ON resolver_remote_agent_app.id = resolver_remote_agent.id
      LEFT JOIN workspace_members resolver_wm
        ON resolver_wm.id = resolver_subj.workspace_member_id

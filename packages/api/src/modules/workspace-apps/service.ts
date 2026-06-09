@@ -16,6 +16,10 @@ import {
   type WorkspaceAppGrantPermission,
   type WorkspaceAppKind,
 } from "@synapse/shared"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import { isSubjectActiveConversationParticipant } from "../access/subject-resolution.js"
@@ -72,8 +76,8 @@ type WorkspaceAppRow = {
   owner_workspace_member_id: string | null
   status: string
   conversation_type_mask_override: number | null
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
 }
 
 const IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS = [
@@ -107,8 +111,8 @@ function mapWorkspaceAppRow(row: WorkspaceAppRow): WorkspaceAppView {
     status: row.status as WorkspaceAppView["status"],
     conversationTypeMaskOverride:
       row.conversation_type_mask_override || undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -175,14 +179,8 @@ function mapGrantRow(row: any): WorkspaceAppGrant {
     reason: row.reason || undefined,
     conversationTypeMaskOverride:
       row.conversation_type_mask_override ?? undefined,
-    createdAt:
-      row.created_at instanceof Date
-        ? row.created_at.toISOString()
-        : row.created_at,
-    revokedAt:
-      row.revoked_at instanceof Date
-        ? row.revoked_at.toISOString()
-        : row.revoked_at || undefined,
+    createdAt: serializeInstant(row.created_at),
+    revokedAt: serializeOptionalInstant(row.revoked_at),
   }
 }
 
@@ -207,19 +205,10 @@ function mapGrantRequestRow(row: any): WorkspaceAppGrantRequest {
     status: row.status,
     resolvedByWorkspaceMemberId:
       row.resolved_by_workspace_member_id || undefined,
-    resolvedAt:
-      row.resolved_at instanceof Date
-        ? row.resolved_at.toISOString()
-        : row.resolved_at || undefined,
+    resolvedAt: serializeOptionalInstant(row.resolved_at),
     reason: row.reason || undefined,
-    createdAt:
-      row.created_at instanceof Date
-        ? row.created_at.toISOString()
-        : row.created_at,
-    updatedAt:
-      row.updated_at instanceof Date
-        ? row.updated_at.toISOString()
-        : row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -302,7 +291,7 @@ async function requireManageWorkspaceApp(
     throw new Error("Workspace member not found")
   }
   const app = await db
-    .selectFrom("workspace_apps")
+    .selectFrom("workspace_apps_live")
     .selectAll()
     .where("id", "=", appId)
     .where("workspace_id", "=", workspaceId)
@@ -336,7 +325,7 @@ export async function listWorkspaceAppsInventory(params: {
   }
 
   let query = db
-    .selectFrom("workspace_apps")
+    .selectFrom("workspace_apps_live")
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
     .where("deleted_at", "is", null)
@@ -350,6 +339,7 @@ export async function listWorkspaceAppsInventory(params: {
   const rows = await query.execute()
   const filtered = await Promise.all(
     rows.map(async (row) => {
+      if (!row?.id || !row.kind) return null
       const kind = row.kind as WorkspaceAppKind
       if (isAdmin || hasKindAdmin(access, kind)) return row
       if (row.owner_workspace_member_id === access.workspaceMemberId) return row
@@ -432,7 +422,7 @@ export async function discoverWorkspaceAppsForMember(params: {
     .execute()
 
   const implicitOwnerRows = await db
-    .selectFrom("workspace_apps as app")
+    .selectFrom("workspace_apps_live as app")
     .selectAll()
     .where("app.workspace_id", "=", params.workspaceId)
     .where("app.deleted_at", "is", null)

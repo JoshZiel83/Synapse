@@ -478,7 +478,7 @@ ${SKILL_SNAPSHOT_SELECT},
     publisher.slug AS publisher_slug,
     publisher.display_name AS publisher_display_name,
     publisher.owner_user_id AS publisher_owner_user_id
-  FROM catalog_items item
+  FROM catalog_items_live item
   JOIN publishers publisher
     ON publisher.id = item.publisher_id
   LEFT JOIN catalog_versions version
@@ -521,7 +521,7 @@ const INSTALLED_SKILL_SELECT = `
     imported_spec.default_conversation_type_mask AS source_default_conversation_type_mask,
 ${SKILL_SNAPSHOT_SELECT}
   FROM installed_skills skill
-  JOIN workspace_apps app
+  JOIN workspace_apps_live app
     ON app.id = skill.id
   JOIN skill_versions version_row
     ON version_row.skill_id = skill.id
@@ -530,7 +530,7 @@ ${SKILL_SNAPSHOT_SELECT}
     ON snapshot.id = skill.current_snapshot_id
   LEFT JOIN skill_source_refs source_ref
     ON source_ref.skill_id = skill.id
-  LEFT JOIN catalog_items source_item
+  LEFT JOIN catalog_items_live source_item
     ON source_item.id = source_ref.source_catalog_item_id
   LEFT JOIN catalog_versions imported_version
     ON imported_version.id = source_ref.source_catalog_version_id
@@ -1390,7 +1390,7 @@ async function allocateMarketplaceItemSlug(
     const existing = await runBuilder(
       executor,
       executor
-        .selectFrom("catalog_items")
+        .selectFrom("catalog_items_live")
         .select("id")
         .where("publisher_id", "=", publisherId)
         .where("item_kind", "=", "skill_package")
@@ -1556,7 +1556,7 @@ async function buildMarketplaceInstallationMap(workspaceId: string) {
      FROM skill_source_refs source_ref
      JOIN installed_skills skill
        ON skill.id = source_ref.skill_id
-     JOIN workspace_apps app
+     JOIN workspace_apps_live app
        ON app.id = skill.id
      WHERE app.workspace_id = $1
        AND app.deleted_at IS NULL
@@ -3034,14 +3034,8 @@ export async function createInstalledSkillGrant(input: {
         source: inserted.source,
         created_by_workspace_member_id: inserted.created_by_workspace_member_id,
         reason: inserted.reason,
-        created_at:
-          inserted.created_at instanceof Date
-            ? inserted.created_at.toISOString()
-            : (inserted.created_at as any),
-        revoked_at:
-          inserted.revoked_at instanceof Date
-            ? inserted.revoked_at.toISOString()
-            : (inserted.revoked_at as any),
+        created_at: inserted.created_at,
+        revoked_at: inserted.revoked_at,
         relation: "use_workspace",
       } as SkillAccessRow,
     }
@@ -3708,7 +3702,7 @@ export async function listVisibleSkills(input: {
                  NULL::uuid AS workspace_member_id,
                  app.updated_at AS access_created_at
                FROM installed_skills skill
-               JOIN workspace_apps app
+               JOIN workspace_apps_live app
                  ON app.id = skill.id
                JOIN skill_versions version_row
                  ON version_row.skill_id = skill.id
@@ -3717,7 +3711,7 @@ export async function listVisibleSkills(input: {
                  ON snapshot.id = skill.current_snapshot_id
 		               LEFT JOIN skill_source_refs source_ref
 		                 ON source_ref.skill_id = skill.id
-		               LEFT JOIN catalog_items source_item
+		               LEFT JOIN catalog_items_live source_item
 		                 ON source_item.id = source_ref.source_catalog_item_id
 		               LEFT JOIN catalog_versions imported_version
 		                 ON imported_version.id = source_ref.source_catalog_version_id

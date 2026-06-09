@@ -471,7 +471,7 @@ async function assertPrincipalBelongsToWorkspaceOn(
         sql<{ workspace_id: string }>`
           SELECT app.workspace_id
           FROM actors actor
-          INNER JOIN workspace_apps app
+          INNER JOIN workspace_apps_live app
             ON app.id = actor.id
           WHERE actor.id = ${principal.actorId}
             AND app.deleted_at IS NULL
@@ -490,7 +490,7 @@ async function assertPrincipalBelongsToWorkspaceOn(
         sql<{ workspace_id: string }>`
           SELECT app.workspace_id
           FROM remote_agents agent
-          INNER JOIN workspace_apps app
+          INNER JOIN workspace_apps_live app
             ON app.id = agent.id
           WHERE agent.id = ${principal.remoteAgentId}
             AND app.deleted_at IS NULL

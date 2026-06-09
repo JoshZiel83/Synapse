@@ -696,9 +696,9 @@ function memoryRowFromSql(itemAlias = "mi", spaceAlias = "ms") {
       JOIN access_subjects owner_subj ON owner_subj.id = ${space}.owner_subject_id
       LEFT JOIN access_subjects scope_subj ON scope_subj.id = ${space}.scope_subject_id
       LEFT JOIN actors owner_actor ON owner_actor.id = owner_subj.actor_id
-      LEFT JOIN workspace_apps owner_actor_app ON owner_actor_app.id = owner_actor.id
+      LEFT JOIN workspace_apps_live owner_actor_app ON owner_actor_app.id = owner_actor.id
       LEFT JOIN remote_agents owner_remote_agent ON owner_remote_agent.id = owner_subj.remote_agent_id
-      LEFT JOIN workspace_apps owner_remote_agent_app ON owner_remote_agent_app.id = owner_remote_agent.id
+      LEFT JOIN workspace_apps_live owner_remote_agent_app ON owner_remote_agent_app.id = owner_remote_agent.id
       LEFT JOIN conversations owner_conv ON owner_conv.id = owner_subj.conversation_id
       LEFT JOIN workspace_members owner_wm ON owner_wm.id = owner_subj.workspace_member_id
       LEFT JOIN users owner_user ON owner_user.id = owner_wm.user_id

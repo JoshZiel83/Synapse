@@ -363,7 +363,7 @@ async function getRemoteAgentSummary(
         ra.avatar_emoji,
         ra.is_public_shared
       FROM remote_agents ra
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = ra.id
       INNER JOIN workspaces w ON w.id = app.workspace_id
       WHERE ra.id = ${remoteAgentId}
@@ -964,7 +964,7 @@ async function hasWorkspaceAppContactVisible(params: {
   )
   if (!viewer) return false
   const app = await db
-    .selectFrom("workspace_apps")
+    .selectFrom("workspace_apps_live")
     .select(["owner_workspace_member_id", "kind"])
     .where("id", "=", params.workspaceAppId)
     .where("workspace_id", "=", params.workspaceId)
@@ -1301,7 +1301,7 @@ async function buildContactHubEntryMap(params: {
             ra.avatar_emoji,
             ra.avatar_file_id
           FROM remote_agents ra
-          INNER JOIN workspace_apps app
+          INNER JOIN workspace_apps_live app
             ON app.id = ra.id
           INNER JOIN workspaces w ON w.id = app.workspace_id
           WHERE app.workspace_id = ${params.workspaceId}
@@ -2625,7 +2625,7 @@ export async function updateActorRelationshipProfile(params: {
       .where((eb) =>
         eb.exists(
           db
-            .selectFrom("workspace_apps as app")
+            .selectFrom("workspace_apps_live as app")
             .select("app.id")
             .where("app.id", "=", params.actorId)
             .where("app.workspace_id", "=", params.workspaceId)
@@ -2716,7 +2716,7 @@ export async function updateRemoteAgentRelationshipProfile(params: {
         WHERE id = ${params.remoteAgentId}
           AND EXISTS (
             SELECT 1
-            FROM workspace_apps app
+            FROM workspace_apps_live app
             WHERE app.id = remote_agents.id
               AND app.workspace_id = ${params.workspaceId}
               AND app.deleted_at IS NULL
@@ -3199,7 +3199,7 @@ export async function listRemoteAgentAccessRequests(params: {
                request.created_at, request.updated_at,
                request.workspace_app_id AS remote_agent_id
         FROM workspace_app_grant_requests request
-        JOIN workspace_apps app ON app.id = request.workspace_app_id
+        JOIN workspace_apps_live app ON app.id = request.workspace_app_id
         WHERE request.workspace_id = ${params.workspaceId}
           AND request.status = 'pending'
           AND app.kind = 'remote_agent'
@@ -3213,7 +3213,7 @@ export async function listRemoteAgentAccessRequests(params: {
                request.created_at, request.updated_at,
                request.workspace_app_id AS remote_agent_id
         FROM workspace_app_grant_requests request
-        JOIN workspace_apps app ON app.id = request.workspace_app_id
+        JOIN workspace_apps_live app ON app.id = request.workspace_app_id
         WHERE request.workspace_id = ${params.workspaceId}
           AND request.requester_workspace_member_id = ${viewerWorkspaceMember.workspaceMemberId}
           AND request.status = 'pending'
@@ -3354,7 +3354,7 @@ export async function resolveRemoteAgentAccessRequest(params: {
              request.status, request.resolved_at, request.resolved_by_workspace_member_id,
              request.workspace_app_id AS remote_agent_id, app.kind AS target_kind
       FROM workspace_app_grant_requests request
-      JOIN workspace_apps app ON app.id = request.workspace_app_id
+      JOIN workspace_apps_live app ON app.id = request.workspace_app_id
       WHERE request.id = ${params.requestId}
       LIMIT 1
     `.execute(db)

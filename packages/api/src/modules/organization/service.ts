@@ -224,7 +224,7 @@ const ACTOR_SELECT = `
     imported_version.version AS source_imported_version,
     latest_version.version AS source_latest_version
   FROM actors a
-  JOIN workspace_apps app
+  JOIN workspace_apps_live app
     ON app.id = a.id
   JOIN actor_versions current_version
     ON current_version.actor_id = a.id
@@ -931,7 +931,7 @@ async function ensureParentActor(
   const parent = await runner<{ id: string }>(
     `SELECT actor.id
      FROM actors actor
-     INNER JOIN workspace_apps app
+     INNER JOIN workspace_apps_live app
        ON app.id = actor.id
      WHERE actor.id = $1
        AND app.workspace_id = $2
@@ -1012,7 +1012,7 @@ export async function listActorVersions(
   const actorExists = await runQuery<{ id: string }>(
     `SELECT actor.id
      FROM actors actor
-     INNER JOIN workspace_apps app
+     INNER JOIN workspace_apps_live app
        ON app.id = actor.id
      WHERE actor.id = $1
        AND app.workspace_id = $2
@@ -1300,7 +1300,7 @@ export async function updateActor(
          WHERE id = $1
            AND EXISTS (
              SELECT 1
-             FROM workspace_apps app
+             FROM workspace_apps_live app
              WHERE app.id = actors.id
                AND app.workspace_id = $4
                AND app.deleted_at IS NULL
@@ -1417,7 +1417,7 @@ export async function updateActor(
        WHERE id = $1
          AND EXISTS (
            SELECT 1
-           FROM workspace_apps app
+           FROM workspace_apps_live app
            WHERE app.id = actors.id
              AND app.workspace_id = $11
              AND app.deleted_at IS NULL
@@ -1457,7 +1457,7 @@ export async function deleteActor(
     const existing = await runner<{ id: string }>(
       `SELECT actor.id
        FROM actors actor
-       INNER JOIN workspace_apps app
+       INNER JOIN workspace_apps_live app
          ON app.id = actor.id
        WHERE actor.id = $1
          AND app.workspace_id = $2

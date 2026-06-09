@@ -37,6 +37,7 @@ tables:
     class: child
     softDelete: none
     workspaceScope: none
+    livePredicate: TRUE
   audit_logs:
     class: append-only
     softDelete: none
@@ -232,9 +233,7 @@ tables:
     class: child
     softDelete: none
     workspaceScope: workspace_id
-    liveValues:
-      - active
-      - deprecated
+    livePredicate: TRUE
   device_catalog_revisions:
     class: append-only
     softDelete: none
@@ -395,6 +394,7 @@ tables:
     class: child
     softDelete: none
     workspaceScope: none
+    livePredicate: TRUE
   memory_access_grants:
     class: junction
     softDelete: status
@@ -511,6 +511,7 @@ tables:
     class: child
     softDelete: none
     workspaceScope: none
+    livePredicate: TRUE
   plugin_package_version_specs:
     class: reference
     softDelete: none
@@ -593,6 +594,7 @@ tables:
     class: child
     softDelete: none
     workspaceScope: none
+    livePredicate: TRUE
   resource_access_bindings:
     class: junction
     softDelete: status
@@ -801,7 +803,6 @@ tables:
       - disabled
       - error
       - deprecated
-      - archived
   workspace_capability_conversation_type_policies:
     class: reference
     softDelete: none

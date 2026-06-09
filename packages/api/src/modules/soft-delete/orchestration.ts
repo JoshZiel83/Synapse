@@ -43,6 +43,7 @@ const WORKSPACE_SCOPED_ROOTS_NULLABLE_GLOBAL = [
 
 /** Active grant/binding tables to revoke for a workspace (status flip). */
 const WORKSPACE_GRANT_TABLES = [
+  "workspace_app_grants",
   "resource_access_bindings",
   "runtime_authorization_grants",
   "memory_access_grants",
@@ -232,6 +233,11 @@ export async function markUserDeleted(
     WHERE wm.user_id = ${userId}
   )`
   // grants keyed by subject_id and/or scope_subject_id
+  await sql`
+    UPDATE workspace_app_grants SET status = 'revoked', revoked_at = NOW()
+    WHERE status = 'active'
+      AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
+  `.execute(db)
   await sql`
     UPDATE resource_access_bindings SET status = 'revoked', revoked_at = NOW()
     WHERE status = 'active'

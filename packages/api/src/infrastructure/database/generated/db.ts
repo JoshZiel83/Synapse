@@ -2967,6 +2967,22 @@ export interface WorkspaceAppGrants {
   workspace_id: string;
 }
 
+export interface WorkspaceAppGrantsLive {
+  conversation_type_mask_override: number | null;
+  created_at: Date | null;
+  created_by_workspace_member_id: string | null;
+  id: string | null;
+  permissions: ArrayType<WorkspaceAppGrantPermission> | null;
+  reason: string | null;
+  revoked_at: Date | null;
+  scope_subject_id: string | null;
+  source: WorkspaceAppGrantsSource | null;
+  status: WorkspaceAppGrantsStatus | null;
+  subject_id: string | null;
+  workspace_app_id: string | null;
+  workspace_id: string | null;
+}
+
 export interface WorkspaceApps {
   conversation_type_mask_override: number | null;
   created_at: Generated<Date | null>;
@@ -3309,6 +3325,7 @@ export interface DB {
   workspace_access_bindings_live: WorkspaceAccessBindingsLive;
   workspace_app_grant_requests: WorkspaceAppGrantRequests;
   workspace_app_grants: WorkspaceAppGrants;
+  workspace_app_grants_live: WorkspaceAppGrantsLive;
   workspace_apps: WorkspaceApps;
   workspace_apps_live: WorkspaceAppsLive;
   workspace_capability_conversation_type_policies: WorkspaceCapabilityConversationTypePolicies;

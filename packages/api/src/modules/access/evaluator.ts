@@ -6,6 +6,7 @@ import {
   WORKSPACE_APP_GRANT_PERMISSION,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_STATUS,
+  type WorkspaceAppStatus,
 } from "@synapse/shared"
 import type { MemoryPermission, SubjectRef } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
@@ -153,7 +154,7 @@ async function loadRemoteAgentRow(
       (app.status = 'active') AS is_active,
       agent.is_public_shared
     FROM remote_agents agent
-    INNER JOIN workspace_apps app
+    INNER JOIN workspace_apps_live app
       ON app.id = agent.id
     WHERE agent.id = ${remoteAgentId}
       AND app.deleted_at IS NULL
@@ -943,28 +944,31 @@ async function listManageableWorkspaceAppIds(
   }
 
   const appKind = BINDABLE_WORKSPACE_APP_KIND[params.resourceType]
+  const manageableIds = (
+    rows: Array<{ id: string | null; status: WorkspaceAppStatus | null }>
+  ) =>
+    rows.flatMap((row) =>
+      typeof row.id === "string" &&
+      typeof row.status === "string" &&
+      isBindableWorkspaceAppManagementVisible(row.status)
+        ? [row.id]
+        : []
+    )
   if (workspacePermissionFromAccess(access, params.manageAccessKey)) {
     const rows = await db
-      .selectFrom("workspace_apps as app")
+      .selectFrom("workspace_apps_live as app")
       .select(["app.id", "app.status"])
       .where("app.workspace_id", "=", access.workspaceId)
       .where("app.kind", "=", appKind)
       .where("app.deleted_at", "is", null)
       .orderBy("app.created_at", "desc")
       .execute()
-    return finalizeResourceIdList(
-      [
-        rows
-          .filter((row) => isBindableWorkspaceAppManagementVisible(row.status))
-          .map((row) => row.id),
-      ],
-      params.limit
-    )
+    return finalizeResourceIdList([manageableIds(rows)], params.limit)
   }
 
   const [ownRows, grantRows] = await Promise.all([
     db
-      .selectFrom("workspace_apps as app")
+      .selectFrom("workspace_apps_live as app")
       .select(["app.id", "app.status"])
       .where("app.workspace_id", "=", access.workspaceId)
       .where("app.kind", "=", appKind)
@@ -989,7 +993,7 @@ async function listManageableWorkspaceAppIds(
     grantedIds.length === 0
       ? []
       : await db
-          .selectFrom("workspace_apps as app")
+          .selectFrom("workspace_apps_live as app")
           .select(["app.id", "app.status"])
           .where("app.id", "in", grantedIds)
           .where("app.workspace_id", "=", access.workspaceId)
@@ -999,14 +1003,7 @@ async function listManageableWorkspaceAppIds(
           .execute()
 
   return finalizeResourceIdList(
-    [
-      ownRows
-        .filter((row) => isBindableWorkspaceAppManagementVisible(row.status))
-        .map((row) => row.id),
-      grantedRows
-        .filter((row) => isBindableWorkspaceAppManagementVisible(row.status))
-        .map((row) => row.id),
-    ],
+    [manageableIds(ownRows), manageableIds(grantedRows)],
     params.limit
   )
 }

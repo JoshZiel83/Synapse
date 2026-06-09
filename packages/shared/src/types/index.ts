@@ -2758,8 +2758,8 @@ export interface WorkspaceAppView {
   workspaceConversationTypeMask?: ConversationTypeMask
   conversationTypeMaskOverride?: ConversationTypeMask
   effectiveConversationTypeMask?: ConversationTypeMask
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface WorkspaceAppGrant {
@@ -2774,8 +2774,8 @@ export interface WorkspaceAppGrant {
   reason?: string
   conversationTypeMaskOverride?: ConversationTypeMask | null
   effectiveConversationTypeMask?: ConversationTypeMask
-  createdAt: string
-  revokedAt?: string
+  createdAt: Timestamp
+  revokedAt?: Timestamp
 }
 
 export interface WorkspaceAppGrantRequest {
@@ -2787,10 +2787,10 @@ export interface WorkspaceAppGrantRequest {
   requesterWorkspaceMemberId: string
   status: WorkspaceAppGrantRequestStatus
   resolvedByWorkspaceMemberId?: string
-  resolvedAt?: string
+  resolvedAt?: Timestamp
   reason?: string
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface WorkspaceCapabilityConversationTypePolicy {

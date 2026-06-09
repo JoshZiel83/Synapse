@@ -50,7 +50,10 @@ import {
   type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
-import { serializeInstant } from "../../infrastructure/datetime.js"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
 import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
@@ -212,8 +215,8 @@ type InstallationAccessRow = {
   source: "manual" | "approval" | "system"
   created_by_workspace_member_id: string | null
   reason: string | null
-  created_at: string
-  revoked_at: string | null
+  created_at: Date
+  revoked_at: Date | null
 }
 
 const PLUGIN_CATALOG_SELECT = `
@@ -827,8 +830,8 @@ function buildInstallationAccessRow(input: {
   source: "manual" | "approval" | "system"
   createdByWorkspaceMemberId: string | null
   reason: string | null
-  createdAt: string
-  revokedAt: string | null
+  createdAt: Date
+  revokedAt: Date | null
 }): InstallationAccessRow {
   const target = input.target
   const label = subjectScopeLabel(target)
@@ -960,7 +963,7 @@ async function loadInstallationRows(
       -- tombstoned (deleted_at) AND non-live status (archived) installations,
       -- the same definition as plugin_installations manifest liveValues.
       FROM plugin_installations installation
-      INNER JOIN workspace_apps app
+      INNER JOIN workspace_apps_live app
         ON app.id = installation.id
       LEFT JOIN plugin_source_refs source_ref
         ON source_ref.installation_id = installation.id
@@ -1088,8 +1091,8 @@ function mapAccessRowToGrant(
     reason: mount.reason || undefined,
     conversationTypeMaskOverride: mount.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask,
-    createdAt: mount.created_at,
-    revokedAt: mount.revoked_at || undefined,
+    createdAt: serializeInstant(mount.created_at),
+    revokedAt: serializeOptionalInstant(mount.revoked_at),
   }
 }
 
@@ -2385,16 +2388,8 @@ export async function createPluginInstallationGrant(input: {
       source: inserted.source,
       createdByWorkspaceMemberId: inserted.created_by_workspace_member_id,
       reason: inserted.reason,
-      createdAt:
-        inserted.created_at instanceof Date
-          ? inserted.created_at.toISOString()
-          : String(inserted.created_at),
-      revokedAt:
-        inserted.revoked_at instanceof Date
-          ? inserted.revoked_at.toISOString()
-          : inserted.revoked_at
-            ? String(inserted.revoked_at)
-            : null,
+      createdAt: inserted.created_at,
+      revokedAt: inserted.revoked_at,
     })
     return {
       accessRow,

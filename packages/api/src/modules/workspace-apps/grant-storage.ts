@@ -120,7 +120,7 @@ async function loadWorkspaceAppOwner(
   workspaceAppId: string
 ) {
   const row = await run
-    .selectFrom("workspace_apps")
+    .selectFrom("workspace_apps_live")
     .select(["workspace_id", "kind", "owner_workspace_member_id"])
     .where("id", "=", workspaceAppId)
     .executeTakeFirst()
