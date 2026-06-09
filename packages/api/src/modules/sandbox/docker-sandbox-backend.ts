@@ -442,7 +442,7 @@ async function defaultDockerFailCleanup(
   if (args.pairingSessionId) {
     await db
       .updateTable("device_pairing_sessions")
-      .set({ status: "cancelled", updated_at: sql`NOW()` } as never)
+      .set({ status: "cancelled" } as never)
       .where("id", "=", args.pairingSessionId)
       .where("status", "=", "pending")
       .execute()

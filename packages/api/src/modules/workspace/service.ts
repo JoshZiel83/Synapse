@@ -466,8 +466,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     try {
       await sql`
         UPDATE catalog_items
-           SET download_count = download_count + 1,
-               updated_at = NOW()
+           SET download_count = download_count + 1
          WHERE id = ${templateId}`.execute(db)
     } catch (err) {
       log.warn(

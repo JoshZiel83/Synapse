@@ -35,7 +35,7 @@ test(
         trx,
         trx
           .updateTable("users")
-          .set({ name: "renamed", updated_at: sql`NOW()` })
+          .set({ name: "renamed" })
           .where("id", "=", userId)
       )
       // The exact check tasks/service.ts performs.

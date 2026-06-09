@@ -746,7 +746,7 @@ export async function consumeRuntimeAuthorizationGrant(
   // expose a clean way to nest a FOR UPDATE SKIP LOCKED sub-select.
   const statement = sql<{ id: string }>`
     UPDATE runtime_authorization_grants
-    SET status = 'consumed', consumed_at = NOW(), updated_at = NOW()
+    SET status = 'consumed', consumed_at = NOW()
     WHERE id = (
       SELECT id FROM runtime_authorization_grants
       WHERE id = ${id} AND status = 'active'

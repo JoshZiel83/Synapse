@@ -386,14 +386,14 @@ export async function persistTaskReceived(
   if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
-    .set({ status: "received", updated_at: sql`NOW()` })
+    .set({ status: "received" })
     .where("id", "=", parsed.data.operation_id)
     .where("device_id", "=", deviceId)
     .execute()
   if (parsed.data.attempt_id) {
     await db
       .updateTable("device_operation_attempts")
-      .set({ status: "sent", updated_at: sql`NOW()` })
+      .set({ status: "sent" })
       .where("id", "=", parsed.data.attempt_id)
       .where("device_service_id", "=", serviceId)
       .execute()
@@ -420,7 +420,7 @@ export async function persistTaskStarted(
   if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
-    .set({ status: "started", updated_at: sql`NOW()` })
+    .set({ status: "started" })
     .where("id", "=", parsed.data.operation_id)
     .where("device_id", "=", deviceId)
     .execute()
@@ -446,7 +446,7 @@ export async function persistTaskOutput(
   if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
-    .set({ status: "output_streaming", updated_at: sql`NOW()` })
+    .set({ status: "output_streaming" })
     .where("id", "=", parsed.data.operation_id)
     .where("device_id", "=", deviceId)
     .where("status", "in", ["started", "output_streaming"])

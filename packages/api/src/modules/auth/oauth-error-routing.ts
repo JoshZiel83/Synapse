@@ -171,7 +171,7 @@ export async function resolveOAuthErrorRedirect({
   // not a valid one — treat it as invalid (web fallback, not consumed), same as
   // an expired or oauthState-mismatched row.
   const now = Date.now()
-  const dbExpired = new Date(row.expires_at).getTime() <= now
+  const dbExpired = row.expires_at.getTime() <= now
   const payloadExpiryValid =
     typeof stored.expiresAt === "number" &&
     Number.isFinite(stored.expiresAt) &&

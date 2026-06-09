@@ -481,8 +481,7 @@ async function maybeCompactChain(params: {
 
     await sql`
       UPDATE ${sql.table(stateTable)}
-      SET ${sql.ref(archiveIdColumn)} = ${archivePointId},
-          updated_at = NOW()
+      SET ${sql.ref(archiveIdColumn)} = ${archivePointId}
       WHERE ${sql.ref(stateIdColumn)} = ${stateIdValue}`.execute(trx)
   })
 }

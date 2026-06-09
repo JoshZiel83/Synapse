@@ -22,8 +22,7 @@ async function deactivateLegacyOfficialActorTemplates(
 
   await sql`
     UPDATE catalog_items item
-    SET is_active = FALSE,
-        updated_at = NOW()
+    SET is_active = FALSE
     WHERE item.publisher_id = ${publisherId}
       AND item.workspace_id IS NULL
       AND item.item_kind = 'actor_template'
@@ -117,8 +116,7 @@ export async function seedOfficialActorCatalog(
           icon_file_id = EXCLUDED.icon_file_id,
           tags = EXCLUDED.tags,
           is_active = TRUE,
-          metadata = EXCLUDED.metadata,
-          updated_at = NOW()
+          metadata = EXCLUDED.metadata
         RETURNING id`.execute(client)
       const actorItemId = actorItem.rows[0]!.id
 
@@ -149,8 +147,7 @@ export async function seedOfficialActorCatalog(
 
       await sql`
         UPDATE catalog_items
-        SET latest_version_id = ${actorVersionId},
-            updated_at = NOW()
+        SET latest_version_id = ${actorVersionId}
         WHERE id = ${actorItemId}`.execute(client)
 
       await sql`

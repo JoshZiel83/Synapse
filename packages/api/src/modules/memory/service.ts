@@ -31,6 +31,7 @@ import {
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
 import {
+  parseInstantString,
   serializeInstant,
   serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
@@ -435,8 +436,10 @@ function deriveSummaryDecayMultiplier(
     ? Math.max(1, config.memory.summaryDecayHalfLifeDays)
     : 30
   const floor = clamp01(config.memory.summaryDecayFloor)
-  const createdAtMs = new Date(memory.createdAt).getTime()
-  if (!Number.isFinite(createdAtMs)) {
+  let createdAtMs: number
+  try {
+    createdAtMs = parseInstantString(memory.createdAt).getTime()
+  } catch {
     return 1
   }
   const ageMs = Math.max(0, Date.now() - createdAtMs)

@@ -804,7 +804,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
     return row
   }
 
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
+  if (row.expires_at.getTime() <= Date.now()) {
     return expirePluginAuthSession(row.id)
   }
 
@@ -911,7 +911,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
     return row
   }
 
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
+  if (row.expires_at.getTime() <= Date.now()) {
     return expirePluginAuthSession(row.id)
   }
 
@@ -1302,7 +1302,7 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
   if (
     row.status !== "active" ||
     !row.expires_at ||
-    new Date(row.expires_at).getTime() > Date.now() + 60_000
+    row.expires_at.getTime() > Date.now() + 60_000
   ) {
     return row
   }
@@ -1610,7 +1610,7 @@ export async function getPluginAuthSession(
     row = await progressFeishuPluginAuthSession(row)
   } else if (
     row.status === "pending" &&
-    new Date(row.expires_at).getTime() <= Date.now()
+    row.expires_at.getTime() <= Date.now()
   ) {
     row = await expirePluginAuthSession(row.id)
   }
@@ -1686,7 +1686,7 @@ export async function handlePluginAuthCallback(input: {
 
   const session = await getSessionRowByState(input.state)
 
-  if (new Date(session.expires_at).getTime() <= Date.now()) {
+  if (session.expires_at.getTime() <= Date.now()) {
     await db
       .updateTable("plugin_auth_sessions")
       .set({
@@ -1941,8 +1941,7 @@ export async function attachAuthConnectionsToConfig(input: {
                status = 'active',
                expires_at = $6,
                public_payload = $7::jsonb,
-               secret_payload = $8::jsonb,
-               updated_at = NOW()
+               secret_payload = $8::jsonb
            WHERE id = $1
            RETURNING *,
              (
@@ -2011,8 +2010,7 @@ export async function attachAuthConnectionsToConfig(input: {
       await run(
         `UPDATE plugin_auth_sessions
          SET status = 'consumed',
-             metadata = $2::jsonb,
-             updated_at = NOW()
+             metadata = $2::jsonb
          WHERE id = $1`,
         [
           session.id,

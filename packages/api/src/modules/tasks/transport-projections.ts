@@ -49,8 +49,7 @@ export async function upsertTaskTransportProjection(
           next_attempt_at = NOW(),
           attempts = 0,
           error = NULL,
-          transport_message_link_id = NULL,
-          updated_at = NOW()
+          transport_message_link_id = NULL
       WHERE tool_call_task_transport_projections.status = 'skipped'
         AND tool_call_task_transport_projections.error IN (
           'no_binding',

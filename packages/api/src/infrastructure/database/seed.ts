@@ -38,8 +38,7 @@ async function seedCredentialUser(input: {
     VALUES (${input.email}, ${input.name}, ${input.emailVerified ?? true})
     ON CONFLICT (email) WHERE deleted_at IS NULL DO UPDATE SET
       name = EXCLUDED.name,
-      email_verified = EXCLUDED.email_verified,
-      updated_at = NOW()
+      email_verified = EXCLUDED.email_verified
     RETURNING id`.execute(db)
   const userId = userRow.rows[0]!.id
 
@@ -47,8 +46,7 @@ async function seedCredentialUser(input: {
     INSERT INTO account (account_id, provider_id, user_id, password)
     VALUES (${userId}, 'credential', ${userId}, ${passwordHash})
     ON CONFLICT (provider_id, account_id) WHERE deleted_at IS NULL DO UPDATE SET
-      password = EXCLUDED.password,
-      updated_at = NOW()`.execute(db)
+      password = EXCLUDED.password`.execute(db)
 
   const avatar = await createGeneratedUserAvatarFile(db, {
     userId,
@@ -57,8 +55,7 @@ async function seedCredentialUser(input: {
   })
   await sql`
     UPDATE users
-    SET avatar_file_id = ${avatar.fileId},
-        updated_at = NOW()
+    SET avatar_file_id = ${avatar.fileId}
     WHERE id = ${userId} AND avatar_file_id IS NULL`.execute(db)
 
   return { id: userId }
@@ -103,8 +100,7 @@ async function seedDemoWorkspace(userId: string) {
     ON CONFLICT (slug) WHERE deleted_at IS NULL DO UPDATE SET
       name = EXCLUDED.name,
       description = EXCLUDED.description,
-      is_trusted = EXCLUDED.is_trusted,
-      updated_at = NOW()
+      is_trusted = EXCLUDED.is_trusted
     RETURNING id`.execute(db)
   const workspaceId = result.rows[0]!.id
 
@@ -148,8 +144,7 @@ async function seedDefaultActorDiscoveryProfiles(params: {
       ON CONFLICT (workspace_id, subject_id)
       DO UPDATE SET
         identity_search_enabled = EXCLUDED.identity_search_enabled,
-        approval_mode = EXCLUDED.approval_mode,
-        updated_at = NOW()`.execute(db)
+        approval_mode = EXCLUDED.approval_mode`.execute(db)
   }
 
   if (params.actorIds.length === 0) {
@@ -158,8 +153,7 @@ async function seedDefaultActorDiscoveryProfiles(params: {
 
   await sql`
     UPDATE actors
-    SET is_public_shared = TRUE,
-        updated_at = NOW()
+    SET is_public_shared = TRUE
     WHERE workspace_id = ${params.workspaceId}
       AND id = ANY(${params.actorIds}::uuid[])`.execute(db)
 }
@@ -632,8 +626,7 @@ export async function seedDatabase() {
     VALUES (${workspaceMemberId}, ${runtimeRefs.chiefActorId}, NOW(), NOW())
     ON CONFLICT (workspace_member_id)
     DO UPDATE SET
-      chief_actor_id = EXCLUDED.chief_actor_id,
-      updated_at = NOW()`.execute(db)
+      chief_actor_id = EXCLUDED.chief_actor_id`.execute(db)
   const [actorMarketplaceCount, skillMarketplaceCount, pluginMarketplaceCount] =
     await Promise.all([
       countCatalogItems("actor_template"),

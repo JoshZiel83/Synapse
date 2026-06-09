@@ -30,8 +30,7 @@ export async function ensurePublisher(
       description = EXCLUDED.description,
       owner_user_id = COALESCE(publishers.owner_user_id, EXCLUDED.owner_user_id),
       is_builtin = EXCLUDED.is_builtin,
-      is_verified = EXCLUDED.is_verified,
-      updated_at = NOW()
+      is_verified = EXCLUDED.is_verified
     RETURNING id`.execute(executor)
 
   return result.rows[0]!.id

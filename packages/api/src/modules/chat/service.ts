@@ -737,7 +737,6 @@ async function createClientInstance(
       metadata: jsonbValue(input.metadata ?? {}),
       last_seen_at: sql`NOW()`,
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .execute()
 
@@ -760,7 +759,6 @@ async function touchClientInstance(
       )}`,
       status: "active",
       last_seen_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", input.clientInstanceId)
     .execute()
@@ -1499,7 +1497,6 @@ async function upsertConversationView(
       unread_count: params.unreadCount,
       summary: jsonbValue(params.summary ?? {}),
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.columns(["workspace_member_id", "conversation_id"]).doUpdateSet({
@@ -1508,7 +1505,6 @@ async function upsertConversationView(
         last_visible_at: sql`COALESCE(EXCLUDED.last_visible_at, workspace_member_conversation_views.last_visible_at)`,
         unread_count: sql`EXCLUDED.unread_count`,
         summary: sql`COALESCE(workspace_member_conversation_views.summary, '{}'::jsonb) || EXCLUDED.summary`,
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -2527,7 +2523,6 @@ async function insertParticipant(
       participant_id: participantId,
       read_watermark_sequence: 0,
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.columns(["conversation_id", "participant_id"]).doNothing()
@@ -2543,7 +2538,6 @@ async function insertParticipant(
         is_primary: true,
         metadata: jsonbValue({}),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc
@@ -2978,14 +2972,12 @@ export async function ensureConversationParticipant(params: {
           is_primary: true,
           metadata: jsonbValue({}),
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc
             .columns(["conversation_participant_id", "transport_address_id"])
             .doUpdateSet({
               is_primary: sql`EXCLUDED.is_primary`,
-              updated_at: sql`NOW()`,
             })
         )
         .execute()
@@ -3442,6 +3434,8 @@ export async function createConversationItem(params: {
 
     await queryable
       .updateTable("conversations")
+      // Conversation items are appended in child tables; touching the parent
+      // conversation preserves "last activity" semantics for list ordering.
       .set({ updated_at: sql`NOW()` })
       .where("id", "=", params.conversationId)
       .execute()
@@ -4540,7 +4534,6 @@ export async function createChatConversation(params: {
         created_by_workspace_member_id: creator.workspaceMemberId,
         metadata: jsonbValue(params.metadata ?? {}),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -5408,14 +5401,12 @@ export async function updateChatConversationReadWatermark(
         last_read_item_id: lastReadItemId,
         last_read_at: sql`NOW()`,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc.columns(["conversation_id", "participant_id"]).doUpdateSet({
           read_watermark_sequence: sql`GREATEST(conversation_participant_states.read_watermark_sequence, EXCLUDED.read_watermark_sequence)`,
           last_read_item_id: sql`EXCLUDED.last_read_item_id`,
           last_read_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
       )
       .execute()
@@ -5435,13 +5426,11 @@ export async function updateChatConversationReadWatermark(
           last_inbox_seq: 0,
           draft_payload: jsonbValue({}),
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc.columns(["conversation_id", "client_instance_id"]).doUpdateSet({
             last_visible_sequence: sql`GREATEST(conversation_device_states.last_visible_sequence, EXCLUDED.last_visible_sequence)`,
             last_opened_at: sql`NOW()`,
-            updated_at: sql`NOW()`,
           })
         )
         .execute()
@@ -5579,7 +5568,9 @@ export async function patchChatConversation(params: {
       setFragments.push(`metadata = $${position++}::jsonb`)
       values.push(JSON.stringify(params.metadata))
     }
-    setFragments.push("updated_at = NOW()")
+    if (setFragments.length === 0) {
+      return
+    }
     values.push(params.conversationId)
 
     await runOn(

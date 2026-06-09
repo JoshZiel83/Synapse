@@ -382,8 +382,7 @@ async function updateConversationRuntimeStatus(
             WHEN EXCLUDED.last_error IS NULL THEN remote_agent_conversation_contexts.last_error
             WHEN EXCLUDED.last_error = '' THEN NULL
             ELSE EXCLUDED.last_error
-          END,
-          updated_at = NOW()
+          END
     `,
     [
       params.remoteAgentId,
@@ -720,8 +719,7 @@ async function updateRemoteAgentRuntimeStatus(
           capabilities = CASE
             WHEN $3::jsonb IS NULL THEN binding.capabilities
             ELSE COALESCE(binding.capabilities, '{}'::jsonb) || $3::jsonb
-          END,
-          updated_at = NOW()
+          END
       WHERE binding.remote_agent_id = $1
         AND binding.machine_id = $2
     `,
@@ -1247,8 +1245,7 @@ async function ensureRemoteAgentRun(params: {
             ended_at = CASE
               WHEN $3::text IN ('completed', 'failed', 'cancelled') THEN NOW()
               ELSE NULL
-            END,
-            updated_at = NOW()
+            END
         WHERE id = $1
       `,
       [
@@ -1852,8 +1849,7 @@ export async function updateRemoteAgent(params: {
           avatar_emoji = $7,
           is_public_shared = $8,
           is_active = $9,
-          metadata = $10::jsonb,
-          updated_at = NOW()
+          metadata = $10::jsonb
       WHERE workspace_id = $1
         AND id = $2
       RETURNING *
@@ -2686,8 +2682,7 @@ export async function completeRemoteAgentDeliveries(params: {
                   AND pending.conversation_id = $2
                   AND pending.status = 'pending'
               )
-            ),
-            updated_at = NOW()
+            )
       `,
       [params.remoteAgentId, conversationId, state.itemId, state.sequence]
     )

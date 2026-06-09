@@ -29,6 +29,7 @@
 
 import type { Redis } from "ioredis"
 import { nowIsoInstant } from "@synapse/shared/datetime"
+import { parseInstantString } from "../../../../infrastructure/datetime.js"
 import type {
   QqAnchorKind,
   QqLatestInboundAnchor,
@@ -124,11 +125,13 @@ export async function reserveFirstSend(
   // not a fresh 5 minutes. Reservation TTL also accounts for the time
   // already elapsed since `receivedAt` so Redis cleans up at the right
   // moment.
-  const receivedAtMs = Date.parse(params.anchor.receivedAt)
-  const validReceivedAt = Number.isFinite(receivedAtMs)
-    ? receivedAtMs
-    : Date.now()
-  const expiresAtMs = validReceivedAt + windowSeconds * 1000
+  let receivedAtMs: number
+  try {
+    receivedAtMs = parseInstantString(params.anchor.receivedAt).getTime()
+  } catch {
+    return { ok: false, reason: "no_anchor" }
+  }
+  const expiresAtMs = receivedAtMs + windowSeconds * 1000
   const now = Date.now()
   if (expiresAtMs <= now) {
     return { ok: false, reason: "no_anchor" }

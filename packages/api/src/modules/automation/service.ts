@@ -1287,8 +1287,7 @@ async function pauseAutomationRulesForEventSource(
     `UPDATE automation_rules ar
      SET status = 'paused',
          last_error_at = NOW(),
-         last_error_message = $2,
-         updated_at = NOW()
+         last_error_message = $2
      FROM automation_triggers at
      WHERE at.rule_id = ar.id
        AND at.event_source_id = $1
@@ -2808,8 +2807,7 @@ async function expireAutomationRules(params: {
   const referenceTime = params.referenceTime || nowIsoInstant()
   const result = await runner.run<{ id: string; workspace_id: string }>(
     `UPDATE automation_rules ar
-     SET status = 'expired',
-         updated_at = NOW()
+     SET status = 'expired'
      FROM automation_policies ap
      WHERE ap.rule_id = ar.id
        AND ar.status = 'active'
@@ -2825,8 +2823,7 @@ async function expireAutomationRules(params: {
     result.rows.map((row) =>
       runner.run(
         `UPDATE automation_policies
-         SET completed_at = COALESCE(completed_at, $2),
-             updated_at = NOW()
+         SET completed_at = COALESCE(completed_at, $2)
          WHERE rule_id = $1`,
         [row.id, referenceTime]
       )
@@ -2859,8 +2856,7 @@ async function pauseAutomationRulesForInactiveCreators(params: {
     `UPDATE automation_rules ar
      SET status = 'paused',
          last_error_at = NOW(),
-         last_error_message = 'Creator participant is no longer active',
-         updated_at = NOW()
+         last_error_message = 'Creator participant is no longer active'
      FROM conversation_participants cp
      WHERE cp.id = ar.created_by_participant_id
        AND ar.status = 'active'
@@ -3710,8 +3706,7 @@ export async function updateAutomationRule(
            interval_seconds = $11,
            starts_at = $12,
            next_fire_at = $13,
-           metadata = $14,
-           updated_at = NOW()
+           metadata = $14
        WHERE rule_id = $1`,
       [
         ruleId,
@@ -4284,8 +4279,7 @@ export async function processAutomationExecution(
     `UPDATE automation_executions
      SET status = 'running',
          attempt_count = attempt_count + 1,
-         started_at = COALESCE(started_at, NOW()),
-         updated_at = NOW()
+         started_at = COALESCE(started_at, NOW())
      WHERE id = $1
        AND status = 'pending'
      RETURNING *`,

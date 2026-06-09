@@ -619,6 +619,8 @@ async function updateActorAccessPolicy(params: {
       policy: params.accessPolicy,
       createdByWorkspaceMemberId: params.updatedByWorkspaceMemberId,
     })
+    // The policy row lives under access_subjects; touch the actor so resource
+    // observers can see the policy mutation on the primary entity timeline.
     await sql`UPDATE actors SET updated_at = NOW() WHERE id = ${actor.id}`.execute(
       trx
     )
@@ -653,6 +655,8 @@ async function updateRemoteAgentAccessPolicy(params: {
   })
   await db
     .updateTable("remote_agents")
+    // Access policy is stored on the related subject row, so keep the resource
+    // itself visibly fresh when that policy changes.
     .set({ updated_at: sql`NOW()` })
     .where("id", "=", remoteAgent.id)
     .execute()
@@ -2533,7 +2537,6 @@ export async function updateMemberRelationshipProfile(params: {
           typeof params.identitySearchEnabled === "boolean"
             ? params.identitySearchEnabled
             : profile.identity_search_enabled,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", profile.id)
       .returningAll()
@@ -2663,7 +2666,6 @@ export async function updateActorRelationshipProfile(params: {
           typeof params.identitySearchEnabled === "boolean"
             ? params.identitySearchEnabled
             : profile.identity_search_enabled,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", profile.id)
       .returningAll()
@@ -2695,7 +2697,6 @@ export async function updateActorRelationshipProfile(params: {
       .updateTable("actors")
       .set({
         is_public_shared: params.isPublicShared,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", params.actorId)
       .where("workspace_id", "=", params.workspaceId)
@@ -2757,7 +2758,6 @@ export async function updateRemoteAgentRelationshipProfile(params: {
           typeof params.identitySearchEnabled === "boolean"
             ? params.identitySearchEnabled
             : profile.identity_search_enabled,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", profile.id)
       .returningAll()
@@ -2787,11 +2787,10 @@ export async function updateRemoteAgentRelationshipProfile(params: {
 
   if (typeof params.isPublicShared === "boolean") {
     const updateResult = await sql<{ is_public_shared: boolean }>`
-        UPDATE remote_agents
-        SET is_public_shared = ${params.isPublicShared},
-            updated_at = NOW()
-        WHERE id = ${params.remoteAgentId}
-          AND workspace_id = ${params.workspaceId}
+      UPDATE remote_agents
+      SET is_public_shared = ${params.isPublicShared},
+      WHERE id = ${params.remoteAgentId}
+        AND workspace_id = ${params.workspaceId}
           AND is_active = TRUE
         RETURNING is_public_shared
       `.execute(db)
@@ -3138,7 +3137,6 @@ export async function resolveFriendRequest(params: {
       status: params.decision === "approve" ? "approved" : "rejected",
       resolved_by_workspace_member_id: viewerWorkspaceMember.workspaceMemberId,
       resolved_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", request.id)
     .returningAll()
@@ -3395,7 +3393,6 @@ export async function resolveActorAccessRequest(params: {
       resolved_by_workspace_member_id:
         approverWorkspaceMember.workspaceMemberId,
       resolved_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", request.id)
     .returningAll()
@@ -3476,8 +3473,7 @@ export async function resolveRemoteAgentAccessRequest(params: {
       UPDATE entity_access_requests
       SET status = ${params.decision === "approve" ? "approved" : "rejected"},
           resolved_by_workspace_member_id = ${approverWorkspaceMember.workspaceMemberId},
-          resolved_at = NOW(),
-          updated_at = NOW()
+          resolved_at = NOW()
       WHERE id = ${request.id}
       RETURNING *
     `.execute(db)

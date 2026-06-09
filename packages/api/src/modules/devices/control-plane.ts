@@ -375,7 +375,7 @@ async function ensureTunnelPathToken(serviceId: string): Promise<string> {
   const fresh = randomBytes(32).toString("hex")
   await db
     .updateTable("device_services")
-    .set({ tunnel_path_token: fresh, updated_at: sql`NOW()` } as never)
+    .set({ tunnel_path_token: fresh } as never)
     .where("id", "=", serviceId)
     .where("tunnel_path_token", "is", null)
     .execute()

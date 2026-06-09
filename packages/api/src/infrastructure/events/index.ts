@@ -92,8 +92,7 @@ async function claimPendingRealtimeOutboxEntries(limit: number) {
       SET status = 'processing',
           attempts = attempts + 1,
           last_error = NULL,
-          processing_started_at = NOW(),
-          updated_at = NOW()
+          processing_started_at = NOW()
       FROM claimed
       WHERE reo.id = claimed.id
       RETURNING reo.id,

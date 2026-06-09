@@ -87,7 +87,6 @@ export async function markLinkSkipped(params: {
  * SQL contract (asserted by `accounts.re-enable-bindings.test.ts`):
  *  - `outbound_enabled = TRUE`
  *  - `metadata = metadata - 'autoDisabledReason'`
- *  - `updated_at = NOW()`
  *  - filter: workspace_id = $1 AND metadata->>'autoDisabledReason' = $2
  */
 export async function reEnableAutoDisabledBindings(params: {
@@ -218,8 +217,7 @@ export async function recoverProjectionForBindingChangedLink(
           transport_message_link_id = NULL,
           error = NULL,
           next_attempt_at = NOW(),
-          attempts = 0,
-          updated_at = NOW()
+          attempts = 0
       WHERE transport_message_link_id = ${linkId}
         AND status = 'projected'
     `.execute(tx)
@@ -229,8 +227,7 @@ export async function recoverProjectionForBindingChangedLink(
           metadata = metadata || ${JSON.stringify({
             skippedReason: "binding_changed",
             replacedByProjectionRecovery: true,
-          })}::jsonb,
-          updated_at = NOW()
+          })}::jsonb
       WHERE id = ${linkId}
     `.execute(tx)
   }
@@ -288,8 +285,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
             next_attempt_at = NOW(),
             attempts = 0,
             error = NULL,
-            transport_message_link_id = NULL,
-            updated_at = NOW()
+            transport_message_link_id = NULL
         FROM conversation_transport_bindings ctb
         WHERE ctb.conversation_id = p.conversation_id
           AND ctb.transport_account_id = ${event.transportAccountId}
@@ -306,8 +302,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
             next_attempt_at = NOW(),
             attempts = 0,
             error = NULL,
-            transport_message_link_id = NULL,
-            updated_at = NOW()
+            transport_message_link_id = NULL
         FROM conversation_transport_bindings ctb
         WHERE ctb.conversation_id = p.conversation_id
           AND ctb.transport_account_id = ${event.transportAccountId}
@@ -325,8 +320,7 @@ export async function recoverSkippedProjectionsForRecoveryEvent(
             next_attempt_at = NOW(),
             attempts = 0,
             error = NULL,
-            transport_message_link_id = NULL,
-            updated_at = NOW()
+            transport_message_link_id = NULL
         WHERE p.conversation_id = ${event.conversationId}
           AND p.status = 'skipped'
           AND p.error = ANY (${reasons}::text[])

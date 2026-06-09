@@ -1,6 +1,7 @@
 import { redis } from "../../infrastructure/redis/index.js"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import {
+  parseInstantString,
   requireInstantDate,
   serializeInstant,
   serializeOptionalInstant,
@@ -161,7 +162,8 @@ function pickLatestTimestamp(
       Boolean(value)
     )
     .sort(
-      (left, right) => new Date(right).getTime() - new Date(left).getTime()
+      (left, right) =>
+        parseInstantString(right).getTime() - parseInstantString(left).getTime()
     )[0]
 }
 

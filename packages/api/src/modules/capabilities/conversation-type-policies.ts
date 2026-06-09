@@ -118,8 +118,9 @@ export async function updateWorkspaceCapabilityConversationTypePolicies(input: {
         ${normalizeConversationTypeMask(defaultMask, DEFAULT_CONVERSATION_TYPE_MASK)}
       )
       ON CONFLICT (subject_id, resource_family) DO UPDATE
-        SET default_conversation_type_mask = EXCLUDED.default_conversation_type_mask,
-            updated_at = NOW()`.execute(db)
+        SET default_conversation_type_mask = EXCLUDED.default_conversation_type_mask`.execute(
+      db
+    )
   }
 
   return listWorkspaceCapabilityConversationTypePolicies(input.workspaceId)

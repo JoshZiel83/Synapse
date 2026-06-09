@@ -1906,8 +1906,7 @@ async function insertTaskRequest(
       SET requester_participant_id = ${params.requesterParticipantId},
           target_participant_id = ${params.targetParticipantId || null},
           remote_agent_run_id = COALESCE(${params.remoteAgentRunId || null}, remote_agent_run_id),
-          expires_at = COALESCE(${params.expiresAt || null}, expires_at),
-          updated_at = NOW()
+          expires_at = COALESCE(${params.expiresAt || null}, expires_at)
       WHERE id = ${params.taskId}
         AND lifecycle_status IN ('submitted', 'working', 'input_required', 'auth_required')
       RETURNING id
@@ -2583,8 +2582,7 @@ export async function createRemoteAgentPlanApprovalTaskRequest(
         DO UPDATE SET
           collaboration_mode = EXCLUDED.collaboration_mode,
           collaboration_state = EXCLUDED.collaboration_state,
-          active_plan_approval_task_id = EXCLUDED.active_plan_approval_task_id,
-          updated_at = NOW()
+          active_plan_approval_task_id = EXCLUDED.active_plan_approval_task_id
         RETURNING remote_agent_id
       `,
       [

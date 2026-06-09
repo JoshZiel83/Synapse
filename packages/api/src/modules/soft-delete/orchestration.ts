@@ -241,12 +241,12 @@ export async function markUserDeleted(
       AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
   `.execute(db)
   await sql`
-    UPDATE memory_access_grants SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+    UPDATE memory_access_grants SET status = 'revoked', revoked_at = NOW()
     WHERE status = 'active'
       AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
   `.execute(db)
   await sql`
-    UPDATE file_access_grants SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+    UPDATE file_access_grants SET status = 'revoked', revoked_at = NOW()
     WHERE status = 'active'
       AND (subject_id IN ${subjectSet} OR scope_subject_id IN ${subjectSet})
   `.execute(db)
@@ -256,7 +256,7 @@ export async function markUserDeleted(
   `.execute(db)
   // workspace_access_bindings keyed by the user's workspace_member ids.
   await sql`
-    UPDATE workspace_access_bindings SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+    UPDATE workspace_access_bindings SET status = 'revoked', revoked_at = NOW()
     WHERE status = 'active'
       AND workspace_member_id IN (
         SELECT id FROM workspace_members WHERE user_id = ${userId}
@@ -265,7 +265,7 @@ export async function markUserDeleted(
   // chat_client_instances: close the user's member-bound client sessions (the
   // table has no revoked_at; record via updated_at).
   await sql`
-    UPDATE chat_client_instances SET status = 'revoked', updated_at = NOW()
+    UPDATE chat_client_instances SET status = 'revoked'
     WHERE status = 'active'
       AND workspace_member_id IN (
         SELECT id FROM workspace_members WHERE user_id = ${userId}
@@ -281,8 +281,7 @@ export async function markUserDeleted(
     UPDATE account
     SET deleted_at = NOW(),
         account_id = 'deleted:' || id::text,
-        access_token = NULL, refresh_token = NULL, id_token = NULL, password = NULL,
-        updated_at = NOW()
+        access_token = NULL, refresh_token = NULL, id_token = NULL, password = NULL
     WHERE user_id = ${userId} AND deleted_at IS NULL
   `.execute(db)
 
@@ -292,8 +291,7 @@ export async function markUserDeleted(
     SET email = 'deleted+' || id::text || '@deleted.invalid',
         name = 'Deleted User',
         image = NULL,
-        feishu_open_id = NULL, feishu_union_id = NULL, feishu_tenant_key = NULL,
-        updated_at = NOW()
+        feishu_open_id = NULL, feishu_union_id = NULL, feishu_tenant_key = NULL
     WHERE id = ${userId}
   `.execute(db)
 
@@ -344,8 +342,7 @@ export async function markAccountUnlinked(
     UPDATE account
     SET deleted_at = NOW(),
         account_id = 'deleted:' || id::text,
-        access_token = NULL, refresh_token = NULL, id_token = NULL, password = NULL,
-        updated_at = NOW()
+        access_token = NULL, refresh_token = NULL, id_token = NULL, password = NULL
     WHERE id = ${target.id} AND deleted_at IS NULL
   `.execute(db)
   return true

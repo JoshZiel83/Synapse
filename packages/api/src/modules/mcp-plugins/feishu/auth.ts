@@ -8,7 +8,11 @@ import {
   resolveFeishuAccountsBaseUrl,
   resolveFeishuOpenBaseUrl,
 } from "./client.js"
-import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
+import {
+  dateToIsoInstant,
+  nowIsoInstant,
+  parseIsoInstant,
+} from "@synapse/shared/datetime"
 import type { Timestamp } from "@synapse/shared"
 
 type JsonObject = Record<string, unknown>
@@ -128,7 +132,9 @@ function buildQrChallenge(input: {
 
 function shouldPoll(lastPollAt: string | undefined, intervalSeconds: number) {
   if (!lastPollAt) return true
-  return Date.now() - new Date(lastPollAt).getTime() >= intervalSeconds * 1000
+  return (
+    Date.now() - parseIsoInstant(lastPollAt).getTime() >= intervalSeconds * 1000
+  )
 }
 
 async function readJsonResponse(response: Response) {

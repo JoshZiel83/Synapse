@@ -454,8 +454,7 @@ async function markRowProjected(
       UPDATE tool_call_task_transport_projections
       SET status = 'projected',
           transport_message_link_id = $2,
-          error = NULL,
-          updated_at = NOW()
+          error = NULL
       WHERE id = $1
     `,
     [rowId, linkId]
@@ -472,8 +471,7 @@ async function skipRow(
     `
       UPDATE tool_call_task_transport_projections
       SET status = 'skipped',
-          error = $2,
-          updated_at = NOW()
+          error = $2
       WHERE id = $1
     `,
     [rowId, error]
@@ -493,8 +491,7 @@ async function bumpAttemptsOnRow(
         UPDATE tool_call_task_transport_projections
         SET status = 'failed',
             attempts = $2,
-            error = $3,
-            updated_at = NOW()
+            error = $3
         WHERE id = $1
       `,
       [row.id, nextAttempts, error]
@@ -509,8 +506,7 @@ async function bumpAttemptsOnRow(
       UPDATE tool_call_task_transport_projections
       SET attempts = $2,
           next_attempt_at = NOW() + ($3 || ' seconds')::interval,
-          error = $4,
-          updated_at = NOW()
+          error = $4
       WHERE id = $1
     `,
     [row.id, nextAttempts, String(backoffSeconds), error]

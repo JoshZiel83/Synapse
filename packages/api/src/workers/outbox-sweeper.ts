@@ -46,6 +46,7 @@
 import type { Job, JobsOptions, Queue } from "bullmq"
 import { sql } from "kysely"
 import { nowIsoInstant } from "@synapse/shared/datetime"
+import { parseInstantString } from "../infrastructure/datetime.js"
 import { db } from "../infrastructure/database/kysely.js"
 import { redis } from "../infrastructure/redis/index.js"
 import { acquireLock, releaseLock } from "../infrastructure/redis/lock.js"
@@ -492,7 +493,11 @@ export function readLastSweeperRetryAtMs(
       : {}
   ) as Record<string, unknown>
   if (typeof delivery.lastSweeperRetryAt === "string") {
-    return Date.parse(delivery.lastSweeperRetryAt)
+    try {
+      return parseInstantString(delivery.lastSweeperRetryAt).getTime()
+    } catch {
+      return 0
+    }
   }
   const legacyQq = (
     metadata.qq && typeof metadata.qq === "object"
@@ -500,7 +505,11 @@ export function readLastSweeperRetryAtMs(
       : {}
   ) as Record<string, unknown>
   if (typeof legacyQq.lastSweeperRetryAt === "string") {
-    return Date.parse(legacyQq.lastSweeperRetryAt)
+    try {
+      return parseInstantString(legacyQq.lastSweeperRetryAt).getTime()
+    } catch {
+      return 0
+    }
   }
   return 0
 }

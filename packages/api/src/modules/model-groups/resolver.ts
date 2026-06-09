@@ -283,7 +283,7 @@ async function listCandidateGroups(
     const bOwnerRank = ownerRank(b, current)
     if (aOwnerRank !== bOwnerRank) return aOwnerRank - bOwnerRank
 
-    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    return b.updated_at.getTime() - a.updated_at.getTime()
   })
 }
 

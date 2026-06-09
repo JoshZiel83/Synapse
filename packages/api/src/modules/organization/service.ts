@@ -1267,8 +1267,7 @@ export async function updateActor(
       await runQuery(
         `UPDATE actors
          SET avatar_file_id = $2,
-             avatar_emoji = $3,
-             updated_at = NOW()
+             avatar_emoji = $3
          WHERE id = $1
            AND workspace_id = $4`,
         [
@@ -1375,8 +1374,7 @@ export async function updateActor(
            can_represent_user = $8,
            specialties = $9,
            config = $10::jsonb,
-           current_version = $11,
-           updated_at = NOW()
+           current_version = $11
        WHERE id = $1
          AND workspace_id = $12`,
       [
@@ -1424,7 +1422,7 @@ export async function deleteActor(
     // stays (immutable registry, §5); hard delete is forbidden by sd_reject_delete.
     await runner(
       `UPDATE actors
-         SET deleted_at = NOW(), updated_at = NOW()
+         SET deleted_at = NOW()
        WHERE id = $1
          AND workspace_id = $2
          AND deleted_at IS NULL`,
@@ -1635,8 +1633,7 @@ export async function installActorPackage(input: {
 
     await runner(
       `UPDATE catalog_items
-       SET download_count = download_count + 1,
-           updated_at = NOW()
+       SET download_count = download_count + 1
        WHERE id = $1`,
       [actorPackage.package.id]
     )
