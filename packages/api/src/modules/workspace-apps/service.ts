@@ -1,11 +1,14 @@
 import { sql } from "kysely"
 import {
+  ACCESS_BINDING_STATUS,
   SUBJECT_KIND,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
   WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
+  WORKSPACE_APP_GRANT_REQUEST_STATUS,
   type WorkspaceAppGrantRequestDirection,
   WORKSPACE_APP_GRANT_STATUS,
+  WORKSPACE_APP_STATUS,
   type CapabilityAccessTarget,
   type WorkspaceAppGrant,
   type WorkspaceAppGrantRequest,
@@ -72,6 +75,11 @@ type WorkspaceAppRow = {
   created_at: string
   updated_at: string
 }
+
+const IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS = [
+  WORKSPACE_APP_KIND.ACTOR,
+  WORKSPACE_APP_KIND.REMOTE_AGENT,
+] as const
 
 function workspaceAppKindAdminKey(kind: WorkspaceAppKind): string {
   switch (kind) {
@@ -241,7 +249,7 @@ async function loadWorkspaceMemberAccess(
     .selectFrom("workspace_access_bindings")
     .select("access_key")
     .where("workspace_member_id", "=", row.id)
-    .where("status", "=", "active")
+    .where("status", "=", ACCESS_BINDING_STATUS.ACTIVE)
     .execute()
 
   return {
@@ -275,9 +283,9 @@ async function hasManageGrant(
     .select("id")
     .where("workspace_app_id", "=", workspaceAppId)
     .where("subject_id", "=", memberSubjectId)
-    .where("status", "=", "active")
+    .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
     .where(
-      sql<boolean>`'manage'::workspace_app_grant_permission = ANY(permissions)`
+      sql<boolean>`${WORKSPACE_APP_GRANT_PERMISSION.MANAGE}::workspace_app_grant_permission = ANY(permissions)`
     )
     .limit(1)
     .executeTakeFirst()
@@ -403,7 +411,7 @@ export async function discoverWorkspaceAppsForMember(params: {
     ])
     .where("app.workspace_id", "=", params.workspaceId)
     .where("app.deleted_at", "is", null)
-    .where("app.status", "=", "active")
+    .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
     .where("app_grant.status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
     .where("app_grant.subject_id", "in", claimSubjectIds)
     .where((eb) =>
@@ -416,8 +424,8 @@ export async function discoverWorkspaceAppsForMember(params: {
     )
     .where(
       sql<boolean>`(
-        'use'::workspace_app_grant_permission = ANY(app_grant.permissions)
-        OR 'contact_visible'::workspace_app_grant_permission = ANY(app_grant.permissions)
+        ${WORKSPACE_APP_GRANT_PERMISSION.USE}::workspace_app_grant_permission = ANY(app_grant.permissions)
+        OR ${WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE}::workspace_app_grant_permission = ANY(app_grant.permissions)
       )`
     )
     .distinct()
@@ -428,9 +436,9 @@ export async function discoverWorkspaceAppsForMember(params: {
     .selectAll()
     .where("app.workspace_id", "=", params.workspaceId)
     .where("app.deleted_at", "is", null)
-    .where("app.status", "=", "active")
+    .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
     .where("app.owner_workspace_member_id", "=", identity.workspaceMemberId)
-    .where("app.kind", "in", ["actor", "remote_agent"])
+    .where("app.kind", "in", IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS)
     .execute()
 
   const byId = new Map<string, WorkspaceAppView>()
@@ -732,7 +740,7 @@ export async function cancelWorkspaceAppGrantRequestByRequester(params: {
   if (request.requester_workspace_member_id !== identity.workspaceMemberId) {
     throw new Error("Not allowed to cancel this workspace app grant request")
   }
-  if (request.status !== "pending") {
+  if (request.status !== WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING) {
     throw new Error("Workspace app grant request is no longer pending")
   }
   const cancelled = await cancelWorkspaceAppGrantRequest(db, {
@@ -1097,7 +1105,7 @@ export async function deleteWorkspaceApp(params: {
     case WORKSPACE_APP_KIND.DEVICE_CAPABILITY:
       await updateWorkspaceAppRoot(db, {
         id: params.appId,
-        status: "archived",
+        status: WORKSPACE_APP_STATUS.ARCHIVED,
         deletedAt: new Date(),
       })
       await revokeWorkspaceAppGrantsForApp(db, params.appId)
