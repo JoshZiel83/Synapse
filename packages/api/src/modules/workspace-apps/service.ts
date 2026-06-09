@@ -665,7 +665,7 @@ export async function approveWorkspaceAppGrantRequest(params: {
     workspaceId: params.workspaceId,
     appId: params.appId,
     userId: params.userId,
-    direction: "incoming",
+    direction: WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
   }).then(
     (rows) => rows.find((item) => item.id === row.id) || mapGrantRequestRow(row)
   )
@@ -693,7 +693,7 @@ export async function rejectWorkspaceAppGrantRequest(params: {
     workspaceId: params.workspaceId,
     appId: params.appId,
     userId: params.userId,
-    direction: "incoming",
+    direction: WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
   }).then(
     (rows) => rows.find((item) => item.id === row.id) || mapGrantRequestRow(row)
   )
