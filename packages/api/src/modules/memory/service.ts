@@ -1018,7 +1018,6 @@ async function maybeMarkSuperseded(executor: Executor, memoryItemId?: string) {
       .updateTable("memory_items")
       .set({
         state: "superseded",
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", memoryItemId)
   )
@@ -1729,7 +1728,6 @@ export async function createMemory(
         metadata: (input.metadata ||
           {}) as TableInsert<"memory_items">["metadata"],
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
     )
     await insertMemoryParts(trx, memoryItemId, normalizedContent.parts)
@@ -1828,7 +1826,6 @@ export async function updateMemory(
           metadata: (input.metadata ||
             existing.metadata ||
             {}) as TableInsert<"memory_items">["metadata"],
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", memoryId)
         .where("workspace_id", "=", workspaceId)
@@ -2022,7 +2019,6 @@ export async function moveMemoryToSpace(
         .updateTable("memory_items")
         .set({
           memory_space_id: targetSpace.id,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", memoryId)
         .where("workspace_id", "=", workspaceId)

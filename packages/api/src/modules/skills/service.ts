@@ -1279,7 +1279,6 @@ async function ensureMarketplacePublisher(
             description: sql`excluded.description`,
             owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
             is_verified: true,
-            updated_at: sql`NOW()`,
           })
       )
       .returning("id")
@@ -1487,7 +1486,6 @@ async function upsertSkillMirrorSource(
           source_warnings: sql`excluded.source_warnings`,
           last_error: null,
           last_synced_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
       )
       .returning("id")
@@ -2203,7 +2201,6 @@ async function upsertImportedMarketplaceSkill(
           long_description: imported.frontmatter.description,
           tags: imported.tags,
           metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.item_id)
         .execute()
@@ -2233,7 +2230,6 @@ async function upsertImportedMarketplaceSkill(
           tags: imported.tags,
           is_active: true,
           metadata: sql`${JSON.stringify(imported.itemMetadata)}::jsonb`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.item_id)
         .execute()
@@ -2329,7 +2325,6 @@ async function upsertImportedMarketplaceSkill(
       .updateTable("catalog_items")
       .set({
         latest_version_id: versionId,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId!)
       .execute()
@@ -2503,7 +2498,6 @@ export async function publishMarketplaceSkill(input: {
           is_active: input.isActive ?? true,
           icon_file_id: nextIconFileId,
           metadata: sql`${JSON.stringify(itemMetadata)}::jsonb`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.item_id)
         .execute()
@@ -2600,7 +2594,6 @@ export async function publishMarketplaceSkill(input: {
       .updateTable("catalog_items")
       .set({
         latest_version_id: versionId,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId!)
       .execute()
@@ -3183,7 +3176,6 @@ export async function installMarketplaceSkill(input: {
       .updateTable("catalog_items")
       .set({
         download_count: sql`${sql.ref("download_count")} + 1`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", marketplaceSkill.item_id)
       .execute()
@@ -3308,7 +3300,6 @@ export async function updateInstalledSkill(input: {
           current_version: nextVersion,
           current_snapshot_id: snapshotId,
           is_active: sql`COALESCE(${input.isEnabled === undefined ? null : input.isEnabled}, is_active)`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.skill_id)
         .execute()
@@ -3318,7 +3309,6 @@ export async function updateInstalledSkill(input: {
           .updateTable("skill_source_refs")
           .set({
             is_customized: true,
-            updated_at: sql`NOW()`,
           })
           .where("skill_id", "=", existing.skill_id)
           .execute()
@@ -3355,7 +3345,6 @@ export async function updateInstalledSkill(input: {
             input.conversationTypeMaskOverride === undefined
               ? existing.conversation_type_mask_override
               : input.conversationTypeMaskOverride,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.skill_id)
         .execute()
@@ -3420,7 +3409,6 @@ export async function upgradeInstalledSkill(input: {
         tags: marketplaceSkill.item_tags || [],
         current_version: existing.current_version + 1,
         current_snapshot_id: marketplaceSkill.snapshot_id!,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", existing.skill_id)
       .execute()
@@ -3430,7 +3418,6 @@ export async function upgradeInstalledSkill(input: {
       .set({
         source_catalog_version_id: marketplaceSkill.latest_version_id,
         is_customized: false,
-        updated_at: sql`NOW()`,
       })
       .where("skill_id", "=", existing.skill_id)
       .execute()

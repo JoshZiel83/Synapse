@@ -701,7 +701,6 @@ export async function revokeRuntimeAuthorizationGrant(
     .set({
       status: "revoked",
       revoked_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
     .where("status", "=", "active")
@@ -721,7 +720,6 @@ export async function supersedeRuntimeAuthorizationGrant(
     .set({
       status: "superseded",
       superseded_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
     .where("status", "=", "active")

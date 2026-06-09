@@ -358,7 +358,6 @@ async function insertControlPlaneSession(args: {
     .set({
       current_session_id: sessionId,
       last_seen_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     } as never)
     .where("id", "=", args.serviceId)
     .execute()
@@ -410,7 +409,6 @@ async function closeControlPlaneSession(
         status: "closed",
         ended_at: sql`NOW()`,
         close_reason: reason,
-        updated_at: sql`NOW()`,
       } as never)
       .where("id", "=", sessionId)
       .execute()
@@ -418,7 +416,6 @@ async function closeControlPlaneSession(
       .updateTable("device_services")
       .set({
         current_session_id: null,
-        updated_at: sql`NOW()`,
       } as never)
       .where("current_session_id", "=", sessionId)
       .execute()

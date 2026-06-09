@@ -103,7 +103,6 @@ export async function revokeMemoryAccessGrant(
     .set({
       status: MEMORY_ACCESS_GRANT_STATUS.REVOKED,
       revoked_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     } as any)
     .where("id", "=", grantId)
     .where("status", "=", MEMORY_ACCESS_GRANT_STATUS.ACTIVE)

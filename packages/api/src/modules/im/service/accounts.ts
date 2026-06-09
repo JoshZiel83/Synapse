@@ -492,7 +492,6 @@ export async function createTransportAccount(params: {
       metadata: (params.metadata ||
         {}) as TableInsert<"transport_accounts">["metadata"],
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .returningAll()
     .executeTakeFirstOrThrow()
@@ -633,7 +632,6 @@ export async function updateTransportAccount(params: {
           : parseJsonObject(
               existing.metadata
             )) as TableInsert<"transport_accounts">["metadata"],
-        updated_at: sql`NOW()`,
       })
       .where("workspace_id", "=", params.workspaceId)
       .where("id", "=", params.accountId)

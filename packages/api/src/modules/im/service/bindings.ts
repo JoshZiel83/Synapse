@@ -284,7 +284,6 @@ export async function upsertConversationTransportBinding(params: {
         metadata: (params.metadata ||
           {}) as TableInsert<"transport_endpoints">["metadata"],
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc
@@ -293,7 +292,6 @@ export async function upsertConversationTransportBinding(params: {
             parent_external_id: sql`excluded.parent_external_id`,
             display_name: sql`COALESCE(excluded.display_name, transport_endpoints.display_name)`,
             metadata: sql`transport_endpoints.metadata || excluded.metadata`,
-            updated_at: sql`NOW()`,
           })
       )
       .returning("id")
@@ -317,7 +315,6 @@ export async function upsertConversationTransportBinding(params: {
         metadata:
           effectiveMetadata as TableInsert<"conversation_transport_bindings">["metadata"],
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc.column("conversation_id").doUpdateSet({
@@ -327,7 +324,6 @@ export async function upsertConversationTransportBinding(params: {
           inbound_actor_mode: sql`excluded.inbound_actor_mode`,
           inbound_actor_id: sql`excluded.inbound_actor_id`,
           metadata: sql`excluded.metadata`,
-          updated_at: sql`NOW()`,
         })
       )
       .execute()
@@ -381,9 +377,7 @@ export async function updateConversationTransportSettings(params: {
     inboundActorId: nextInboundActorId,
   })
 
-  const updates: Record<string, unknown> = {
-    updated_at: sql`NOW()`,
-  }
+  const updates: Record<string, unknown> = {}
   if (params.outboundEnabled !== undefined) {
     updates.outbound_enabled = params.outboundEnabled
   }

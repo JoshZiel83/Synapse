@@ -262,7 +262,6 @@ export async function completeDeviceOperation(
         status: input.ok ? "acknowledged" : "failed",
         response_at: sql`NOW()`,
         acknowledged_at: input.ok ? sql`NOW()` : null,
-        updated_at: sql`NOW()`,
         metadata: input.error
           ? sql`${JSON.stringify({ error: input.error })}::jsonb`
           : sql`'{}'::jsonb`,
@@ -279,7 +278,6 @@ export async function completeDeviceOperation(
         error_code: input.error?.code ?? null,
         error_message: input.error?.message ?? null,
         completed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", input.operationId)
       .execute()

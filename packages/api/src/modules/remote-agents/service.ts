@@ -270,12 +270,10 @@ async function getOrInitConversationContext(
         conversation_id: conversationId,
         runtime_kind: runtimeKind,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc.columns(["remote_agent_id", "conversation_id"]).doUpdateSet({
           runtime_kind: sql`COALESCE(remote_agent_conversation_contexts.runtime_kind, EXCLUDED.runtime_kind)`,
-          updated_at: sql`NOW()`,
         })
       )
       .returning([
@@ -451,7 +449,6 @@ async function setMachineLifecycleState(
     .set({
       lifecycle_state: state,
       last_seen_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", machineId)
     .execute()
@@ -475,7 +472,6 @@ async function upsertRuntimeCatalog(
         last_seen_at: sql`NOW()`,
         last_error: entry.lastError ?? null,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc.columns(["machine_id", "runtime_kind"]).doUpdateSet({
@@ -485,7 +481,6 @@ async function upsertRuntimeCatalog(
           metadata: sql`EXCLUDED.metadata`,
           last_seen_at: sql`NOW()`,
           last_error: sql`EXCLUDED.last_error`,
-          updated_at: sql`NOW()`,
         })
       )
       .execute()
@@ -656,7 +651,6 @@ async function updateRemoteAgentRuntimeStatus(
         status_text: message.statusText ?? null,
         last_activity_at: sql`NOW()`,
         last_run_finished_at: sql`COALESCE(last_run_finished_at, NOW())`,
-        updated_at: sql`NOW()`,
       })
       .where("remote_agent_id", "=", message.remoteAgentId)
       .where("runtime_state", "!=", "offline")
@@ -743,7 +737,6 @@ async function updateRemoteAgentRuntimeStatus(
       .updateTable("remote_agent_runs")
       .set({
         task_id: message.taskId,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", runId)
       .execute()
@@ -961,7 +954,6 @@ async function scheduleDeliveryRetry(
       .set({
         attempts: sql`attempts + 1`,
         last_failure_reason: reason,
-        updated_at: sql`NOW()`,
       })
       .where("id", "in", deliveryIds)
       .where("status", "=", "pending")
@@ -975,7 +967,6 @@ async function scheduleDeliveryRetry(
         .set({
           status: "failed",
           next_attempt_at: null,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", row.id)
         .execute()
@@ -986,7 +977,6 @@ async function scheduleDeliveryRetry(
       .updateTable("remote_agent_message_deliveries")
       .set({
         next_attempt_at: scheduled,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", row.id)
       .execute()
@@ -1945,7 +1935,6 @@ export async function createRemoteAgentMachinePairingSession(params: {
         trust_status: "active",
         created_by_workspace_member_id: identity.workspaceMemberId,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .returningAll()
   )
@@ -2184,7 +2173,6 @@ export async function bindRemoteAgent(params: {
       local_root_path: params.localRootPath ?? null,
       status: "active",
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.column("remote_agent_id").doUpdateSet({
@@ -2193,7 +2181,6 @@ export async function bindRemoteAgent(params: {
         runtime_path: sql`EXCLUDED.runtime_path`,
         local_root_path: sql`EXCLUDED.local_root_path`,
         status: "active",
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -2312,7 +2299,6 @@ export async function updateRemoteAgentGroupTaskGrants(params: {
           workspace_member_id: workspaceMemberId,
           granted_by_workspace_member_id: identity.workspaceMemberId,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .execute()
     }
@@ -2484,7 +2470,6 @@ export async function createRemoteAgentDeliveriesForItem(params: {
           status: "pending",
           attempts: 0,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc.columns(["remote_agent_id", "item_id"]).doNothing()
@@ -2501,14 +2486,12 @@ export async function createRemoteAgentDeliveriesForItem(params: {
           last_delivery_item_id: params.itemId,
           last_delivery_at: sql`NOW()`,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc.columns(["remote_agent_id", "conversation_id"]).doUpdateSet({
             unread_count: sql`remote_agent_conversation_views.unread_count + 1`,
             last_delivery_item_id: sql`EXCLUDED.last_delivery_item_id`,
             last_delivery_at: sql`NOW()`,
-            updated_at: sql`NOW()`,
           })
         )
         .execute()
@@ -2655,7 +2638,6 @@ export async function completeRemoteAgentDeliveries(params: {
     .set({
       status: "completed",
       last_acked_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("remote_agent_id", "=", params.remoteAgentId)
     .where("id", "in", uniqueIds)
@@ -2910,7 +2892,6 @@ async function finalizeMachineSession(
       status: "closed",
       close_reason: sql`COALESCE(${closeReason ?? null}, close_reason)`,
       ended_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", connection.sessionId)
     .where("status", "!=", "closed")
@@ -2929,7 +2910,6 @@ async function finalizeMachineSession(
       .set({
         runtime_state: "offline",
         status_text: closeReason ?? "Daemon disconnected",
-        updated_at: sql`NOW()`,
       })
       .where("remote_agent_id", "=", binding.remote_agent_id)
       .execute()
@@ -2939,7 +2919,6 @@ async function finalizeMachineSession(
         runtime_state: "offline",
         status_text: closeReason ?? "Daemon disconnected",
         last_run_finished_at: sql`COALESCE(last_run_finished_at, NOW())`,
-        updated_at: sql`NOW()`,
       })
       .where("remote_agent_id", "=", binding.remote_agent_id)
       .where("runtime_state", "in", [
@@ -2999,7 +2978,6 @@ export async function handleRemoteAgentDaemonConnection(
         status: "closed",
         close_reason: "superseded by newer connection",
         ended_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", existing.sessionId)
       .where("status", "!=", "closed")
@@ -3012,7 +2990,6 @@ export async function handleRemoteAgentDaemonConnection(
       status: "closed",
       close_reason: sql`COALESCE(close_reason, 'superseded by newer connection')`,
       ended_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("machine_id", "=", machine.id)
     .where("status", "in", ["connecting", "active"])
@@ -3030,7 +3007,6 @@ export async function handleRemoteAgentDaemonConnection(
         last_heartbeat_at: sql`NOW()`,
         started_at: sql`NOW()`,
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .returning(["id", "fencing_token"])
   )
@@ -3086,7 +3062,6 @@ export async function handleRemoteAgentDaemonConnection(
         .updateTable("remote_agent_machine_sessions")
         .set({
           last_heartbeat_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", sessionId)
         .execute()
@@ -3103,7 +3078,6 @@ export async function handleRemoteAgentDaemonConnection(
         .set({
           status: "active",
           last_heartbeat_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", sessionId)
         .execute()

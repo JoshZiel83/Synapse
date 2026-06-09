@@ -1387,7 +1387,6 @@ async function ensureCatalogItem(
         is_active: true,
         icon_file_id: input.iconFileId || null,
         metadata: sql`${JSON.stringify(metadata)}::jsonb`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId)
       .execute()
@@ -1551,7 +1550,6 @@ async function upsertPluginVersion(
     .updateTable("catalog_items")
     .set({
       latest_version_id: versionId,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", itemId)
     .execute()
@@ -1625,7 +1623,6 @@ export async function createOrganization(data: {
           owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
           is_builtin: data.isBuiltin === true,
           is_verified: data.isVerified === true,
-          updated_at: sql`NOW()`,
         })
     )
     .returningAll()
@@ -1979,7 +1976,6 @@ export async function installPluginUnified(data: {
         .set({
           config_data:
             encryptedConfig as TableInsert<"plugin_installations">["config_data"],
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installationId)
     )
@@ -2015,7 +2011,6 @@ export async function installPluginUnified(data: {
         .updateTable("catalog_items")
         .set({
           download_count: sql`download_count + 1`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", plugin.id)
     )
@@ -2064,7 +2059,6 @@ export async function tearDownPluginInstallationOn(
       .set({
         deleted_at: sql`NOW()`,
         status: "revoked",
-        updated_at: sql`NOW()`,
       })
       .where("installation_id", "=", installId)
       .where("deleted_at", "is", null)
@@ -2311,7 +2305,6 @@ export async function updateInstallation(
         .updateTable("plugin_installations")
         .set({
           config_data: sql`${JSON.stringify(encryptedConfig)}::jsonb`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
         .execute()
@@ -2322,7 +2315,6 @@ export async function updateInstallation(
         .updateTable("plugin_installations")
         .set({
           status: data.isEnabled ? "active" : "disabled",
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
         .execute()
@@ -2333,7 +2325,6 @@ export async function updateInstallation(
         .updateTable("plugin_installations")
         .set({
           reuse_scope: internalReuseScope(nextLifecycleScope),
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
         .execute()
@@ -2354,7 +2345,6 @@ export async function updateInstallation(
         .updateTable("plugin_installations")
         .set({
           attachment_subject_id: newSubjectId,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
         .execute()
@@ -2365,7 +2355,6 @@ export async function updateInstallation(
         .updateTable("plugin_installations")
         .set({
           conversation_type_mask_override: data.conversationTypeMaskOverride,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", installId)
         .execute()
@@ -2842,7 +2831,6 @@ export async function seedBuiltinPluginCategories() {
             },
             defaultLocale: category.defaultLocale || "en",
           } as TableInsert<"catalog_categories">["metadata"],
-          updated_at: sql`NOW()`,
         })
       )
       .execute()

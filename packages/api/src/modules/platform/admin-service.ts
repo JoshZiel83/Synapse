@@ -130,7 +130,6 @@ export async function grantPlatformAccess(input: {
         revoked_at: null,
         source: "manual",
         assigned_by_user_id: input.assignedByUserId,
-        updated_at: sql`NOW()`,
       })
     )
     .returningAll()
@@ -167,7 +166,6 @@ export async function ensureSeedPlatformAdminForUser(user: UserIdentity) {
       oc.columns(["user_id", "access_key"]).doUpdateSet({
         status: "active",
         revoked_at: null,
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -224,7 +222,6 @@ export async function ensureConfiguredPlatformAdminForUser(user: UserIdentity) {
         status: "active",
         revoked_at: null,
         source: "config",
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -285,7 +282,6 @@ export async function syncConfiguredPlatformAdmins() {
           status: "active",
           revoked_at: null,
           source: "config",
-          updated_at: sql`NOW()`,
         })
       )
       .execute()

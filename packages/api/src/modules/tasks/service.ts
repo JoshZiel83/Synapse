@@ -2138,7 +2138,6 @@ async function updateTaskConversationItemId(
       .updateTable("tool_call_tasks")
       .set({
         conversation_item_id: conversationItemId,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", taskId)
   )
@@ -2780,7 +2779,6 @@ export async function cancelTaskRequest(taskId: string, note?: string) {
       lifecycle_status: "cancelled",
       revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
 
     const payload = {
@@ -3369,7 +3367,6 @@ export async function resolveTaskRequest(
               nextStatus === "approved" ? "default" : "plan_drafting",
             collaboration_state: jsonbValue({}),
             active_plan_approval_task_id: null,
-            updated_at: sql`NOW()`,
           })
           .where("remote_agent_id", "=", locked.requester_remote_agent_id)
           .where("conversation_id", "=", locked.conversation_id)
@@ -3619,7 +3616,6 @@ export async function resolveTaskRequest(
       revision: sql`revision + 1`,
       resolved_by_participant_id: params.resolverParticipantId,
       resolved_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
 
     await updateTaskResolutionPayload(client, params.taskId, resolutionPayload)
@@ -3787,7 +3783,6 @@ export async function markRuntimeAuthorizationTaskSuperseded(
       lifecycle_status: "cancelled",
       revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     await updateTaskResolutionPayload(client, taskId, {
       ...resolutionPayload,

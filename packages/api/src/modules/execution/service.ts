@@ -160,7 +160,6 @@ export async function createTurn(params: {
       status: "running",
       metadata: (params.metadata || {}) as TableInsert<"turns">["metadata"],
       started_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .returningAll()
     .executeTakeFirst()
@@ -177,7 +176,6 @@ export async function updateTurnStatus(
     .updateTable("turns")
     .set({
       status,
-      updated_at: sql`NOW()`,
       completed_at: sql`NOW()`,
       ...(extra?.metadata
         ? {

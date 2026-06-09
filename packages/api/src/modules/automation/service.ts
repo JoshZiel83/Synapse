@@ -1698,7 +1698,6 @@ async function pauseAutomationRule(params: {
         status: "paused",
         last_error_at: sql`NOW()`,
         last_error_message: params.reason,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", params.ruleId)
       .where("status", "=", "active")
@@ -1900,7 +1899,6 @@ async function updateWebhookEndpointStatus(
     .updateTable("automation_webhook_endpoints")
     .set({
       status,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", endpointId)
     .execute()
@@ -1982,7 +1980,6 @@ async function ensureAutomationIntegrationBinding(params: {
         .updateTable("automation_integration_bindings")
         .set({
           target_label: targetLabel,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", existing.id)
         .execute()
@@ -2022,7 +2019,6 @@ async function ensureAutomationIntegrationBinding(params: {
           created_by_workspace_member_id:
             params.creator.workspaceMemberId || null,
           created_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .execute()
     }
@@ -2045,7 +2041,6 @@ async function ensureAutomationIntegrationBinding(params: {
           integrationTargetKind: params.integration.targetKind,
         }),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
   })
@@ -2103,7 +2098,6 @@ async function reconcileIntegrationBindingWebhook(
       .updateTable("automation_integration_bindings")
       .set({
         external_subscription_id: null,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", binding.id)
       .execute()
@@ -2168,7 +2162,6 @@ async function reconcileIntegrationBindingWebhook(
     .updateTable("automation_integration_bindings")
     .set({
       external_subscription_id: externalSubscriptionId,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", binding.id)
     .execute()
@@ -2255,7 +2248,6 @@ async function createIntegrationAutomationEventSource(
           ...(template.metadata || {}),
           ...(input.metadata || {}),
         }),
-        updated_at: sql`NOW()`,
       })
       .where("workspace_id", "=", workspaceId)
       .where("id", "=", existing.id)
@@ -2338,7 +2330,6 @@ async function createIntegrationAutomationEventSource(
           ...(input.metadata || {}),
         }),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -2455,7 +2446,6 @@ export async function createAutomationEventSource(
         example_payload: JSON.stringify(input.examplePayload || {}),
         status: input.status || "active",
         metadata: JSON.stringify(input.metadata || existing.metadata || {}),
-        updated_at: sql`NOW()`,
       })
       .where("workspace_id", "=", workspaceId)
       .where("id", "=", existing.id)
@@ -2513,7 +2503,6 @@ export async function createAutomationEventSource(
       created_by_session_id: creator.sessionId || null,
       metadata: JSON.stringify(input.metadata || {}),
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .execute()
 
@@ -2609,7 +2598,6 @@ export async function updateAutomationEventSource(
       metadata: JSON.stringify(
         input.metadata !== undefined ? input.metadata : existing.metadata
       ),
-      updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", workspaceId)
     .where("id", "=", eventSourceId)
@@ -2685,7 +2673,6 @@ export async function archiveAutomationEventSource(
     .updateTable("automation_event_sources")
     .set({
       status: "archived",
-      updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", workspaceId)
     .where("id", "=", eventSourceId)
@@ -2807,7 +2794,6 @@ async function updateRuleError(ruleId: string, errorMessage: string | null) {
     .set({
       last_error_at: errorMessage ? new Date() : null,
       last_error_message: errorMessage,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", ruleId)
     .execute()
@@ -2930,7 +2916,6 @@ async function applyAutomationPolicyAfterTrigger(params: {
       .updateTable("automation_policies")
       .set({
         trigger_count: sql`${sql.ref("trigger_count")} + 1`,
-        updated_at: sql`NOW()`,
       })
       .where("rule_id", "=", params.ruleId)
       .returningAll()
@@ -2952,7 +2937,6 @@ async function applyAutomationPolicyAfterTrigger(params: {
     .updateTable("automation_rules")
     .set({
       status: policy.completion_status,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", params.ruleId)
     .execute()
@@ -2960,7 +2944,6 @@ async function applyAutomationPolicyAfterTrigger(params: {
     .updateTable("automation_policies")
     .set({
       completed_at: sql`COALESCE(${sql.ref("completed_at")}, NOW())`,
-      updated_at: sql`NOW()`,
     })
     .where("rule_id", "=", params.ruleId)
     .execute()
@@ -2990,7 +2973,6 @@ async function touchWebhookReceived(endpointId: string) {
     .updateTable("automation_webhook_endpoints")
     .set({
       last_received_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", endpointId)
     .execute()
@@ -3001,7 +2983,6 @@ async function touchAutomationEventSourceTriggered(eventSourceId: string) {
     .updateTable("automation_event_sources")
     .set({
       last_triggered_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", eventSourceId)
     .execute()
@@ -3154,7 +3135,6 @@ async function recordExecutionTarget(params: {
       status: params.status,
       metadata: JSON.stringify(params.metadata || {}),
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .execute()
 }
@@ -3486,7 +3466,6 @@ export async function createAutomationRule(
         created_by_session_id: creator.sessionId || null,
         metadata: JSON.stringify(input.metadata || {}),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -3502,7 +3481,6 @@ export async function createAutomationRule(
         completed_at: normalizedPolicy.completed_at,
         metadata: JSON.stringify(normalizedPolicy.metadata),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -3540,7 +3518,6 @@ export async function createAutomationRule(
         target_policy: normalizedDelivery.target_policy,
         metadata: JSON.stringify(normalizedDelivery.metadata),
         created_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .execute()
 
@@ -3697,7 +3674,6 @@ export async function updateAutomationRule(
         name: mergedInput.name.trim(),
         description: (mergedInput.description || "").trim(),
         metadata: JSON.stringify(mergedInput.metadata || {}),
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", ruleId)
       .execute()
@@ -3716,7 +3692,6 @@ export async function updateAutomationRule(
               ? parseInstantString(existing.policy.completedAt)
               : null,
         metadata: JSON.stringify(normalizedPolicy.metadata),
-        updated_at: sql`NOW()`,
       })
       .where("rule_id", "=", ruleId)
       .execute()
@@ -3764,7 +3739,6 @@ export async function updateAutomationRule(
         message_blocks: JSON.stringify(normalizedDelivery.message_blocks),
         target_policy: normalizedDelivery.target_policy,
         metadata: JSON.stringify(normalizedDelivery.metadata),
-        updated_at: sql`NOW()`,
       })
       .where("rule_id", "=", ruleId)
       .execute()
@@ -4291,7 +4265,6 @@ export async function scheduleDueAutomationExecutions(
         .set({
           last_fired_at: row.next_fire_at,
           next_fire_at: nextFireAt ? parseInstantString(nextFireAt) : null,
-          updated_at: sql`NOW()`,
         })
         .where("rule_id", "=", row.rule_id)
         .execute()
@@ -4371,7 +4344,6 @@ export async function processAutomationExecution(
           status: "skipped",
           error_message: `Automation rule is ${rule.status}`,
           completed_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", executionId)
         .execute()
@@ -4392,7 +4364,6 @@ export async function processAutomationExecution(
           error_message:
             "No active target participants matched this automation",
           completed_at: sql`NOW()`,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", executionId)
         .execute()
@@ -4401,7 +4372,6 @@ export async function processAutomationExecution(
         .set({
           last_error_at: null,
           last_error_message: null,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", rule.id)
         .execute()
@@ -4432,7 +4402,6 @@ export async function processAutomationExecution(
         status: "completed",
         error_message: null,
         completed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", executionId)
       .execute()
@@ -4442,7 +4411,6 @@ export async function processAutomationExecution(
         last_triggered_at: sql`NOW()`,
         last_error_at: null,
         last_error_message: null,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", rule.id)
       .execute()
@@ -4490,7 +4458,6 @@ export async function processAutomationExecution(
         status: "failed",
         error_message: message,
         completed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", executionId)
       .execute()

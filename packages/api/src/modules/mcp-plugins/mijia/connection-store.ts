@@ -38,7 +38,6 @@ export async function persistMijiaConnectionState(
           ? new Date(authState.expireTime)
           : null,
       status: "active",
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", connectionId)
     .execute()
@@ -49,7 +48,6 @@ export async function markMijiaConnectionExpired(connectionId: string) {
     .updateTable("plugin_connections")
     .set({
       status: "expired",
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", connectionId)
     .execute()

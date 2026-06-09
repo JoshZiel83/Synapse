@@ -816,9 +816,7 @@ export async function updateModelGroup(
     )
   }
 
-  const updateData: Record<string, unknown> = {
-    updated_at: sql`NOW()`,
-  }
+  const updateData: Record<string, unknown> = {}
 
   if (data.name !== undefined) {
     updateData.name = data.name
@@ -867,7 +865,6 @@ export async function deleteModelGroup(groupId: string) {
       is_enabled: false,
       is_default: false,
       deleted_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", groupId)
     .execute()
@@ -876,7 +873,6 @@ export async function deleteModelGroup(groupId: string) {
     .set({
       is_enabled: false,
       deleted_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("group_id", "=", groupId)
     .execute()
@@ -943,7 +939,6 @@ export async function addModelItem(
     .updateTable("model_bindings")
     .set({
       current_version_id: version.id,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", binding.id)
     .execute()
@@ -1041,7 +1036,6 @@ export async function updateModelItem(
       .updateTable("model_bindings")
       .set({
         ...(bindingUpdate as any),
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId)
       .execute()
@@ -1094,7 +1088,6 @@ export async function updateModelItem(
       .updateTable("model_bindings")
       .set({
         current_version_id: version.id,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", itemId)
       .execute()
@@ -1152,7 +1145,6 @@ export async function deleteModelItem(groupId: string, itemId: string) {
     .set({
       is_enabled: false,
       deleted_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", itemId)
     .where("group_id", "=", groupId)

@@ -115,7 +115,6 @@ export async function consumeCloudBootstrap(
         status: "consumed",
         confirmed_at: sql`NOW()`,
         consumed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       } as never)
       .where("bootstrap_token_hash", "=", tokenHash)
       .where("status", "=", "pending")

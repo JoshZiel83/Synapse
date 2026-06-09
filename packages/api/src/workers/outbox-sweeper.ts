@@ -579,7 +579,6 @@ async function markDeadLetter(linkId: string): Promise<void> {
       metadata: sql`transport_message_links.metadata || ${JSON.stringify({
         lastError: "exceeded_sweeper_retry_budget",
       })}::jsonb`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", linkId)
     .execute()

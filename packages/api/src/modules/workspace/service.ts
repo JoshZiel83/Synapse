@@ -189,12 +189,10 @@ export async function assignOfficialChiefActorPreference(
       workspace_member_id: workspaceMemberId,
       chief_actor_id: chiefActorId,
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.column("workspace_member_id").doUpdateSet({
         chief_actor_id: chiefActorId,
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -596,12 +594,10 @@ export async function updateWorkspaceChiefActorPreference(
       workspace_member_id: member.id,
       chief_actor_id: chiefActorId,
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc.column("workspace_member_id").doUpdateSet({
         chief_actor_id: chiefActorId,
-        updated_at: sql`NOW()`,
       })
     )
     .execute()
@@ -624,7 +620,6 @@ export async function updateWorkspace(
       ...(updates.description !== undefined
         ? { description: updates.description }
         : {}),
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", workspaceId)
     .returningAll()
@@ -849,7 +844,6 @@ export async function grantWorkspaceAccess(input: {
         status: "active",
         revoked_at: null,
         assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
-        updated_at: sql`NOW()`,
       })
     )
     .returningAll()

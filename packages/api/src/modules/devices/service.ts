@@ -432,7 +432,6 @@ export async function consumePairing(
         status: "consumed",
         confirmed_at: sql`NOW()`,
         consumed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
       } as never)
       .where("pairing_code", "=", input.pairingCode)
       .where("status", "=", "pending")

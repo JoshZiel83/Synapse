@@ -792,7 +792,6 @@ async function expirePluginAuthSession(sessionId: string) {
       phase: null,
       error_code: "AUTH_SESSION_EXPIRED",
       error_message: "Auth session expired",
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", sessionId)
     .returningAll()
@@ -830,7 +829,6 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
           .updateTable("plugin_auth_sessions")
           .set({
             phase: progress.phase,
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -851,7 +849,6 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
               resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
             error_code: null,
             error_message: null,
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -866,7 +863,6 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
             phase: null,
             error_code: progress.errorCode,
             error_message: progress.errorMessage,
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -881,7 +877,6 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
             phase: null,
             error_code: progress.errorCode,
             error_message: progress.errorMessage,
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -903,7 +898,6 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
         phase: null,
         error_code: "MIJIA_AUTH_ERROR",
         error_message: message,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", row.id)
       .returningAll()
@@ -948,7 +942,6 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
               typeof nextExpiresAt === "string"
                 ? parseInstantString(nextExpiresAt)
                 : nextExpiresAt,
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -987,7 +980,6 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
               resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
             error_code: null,
             error_message: null,
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -1002,7 +994,6 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
             phase: null,
             error_code: progress.errorCode,
             error_message: progress.errorMessage,
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -1029,7 +1020,6 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
               baseMessage: progress.errorMessage,
               inspection: appScopeStatus,
             }),
-            updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -1051,7 +1041,6 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         phase: null,
         error_code: "FEISHU_AUTH_ERROR",
         error_message: message,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", row.id)
       .returningAll()
@@ -1231,7 +1220,6 @@ async function refreshOAuthConnection(
         typeof expiresAt === "string"
           ? parseInstantString(expiresAt)
           : expiresAt,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", row.id)
     .execute()
@@ -1289,7 +1277,6 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
         nextSecretPayload as TableInsert<"plugin_connections">["secret_payload"],
       status: "active",
       expires_at: expiresAt,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", row.id)
     .execute()
@@ -1360,7 +1347,6 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
       .updateTable("plugin_connections")
       .set({
         status: "expired",
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", row.id)
       .execute()
@@ -1678,7 +1664,6 @@ export async function inspectPluginAuthSession(input: {
     .set({
       result_preview:
         nextPreview as TableInsert<"plugin_auth_sessions">["result_preview"],
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", row.id)
     .returningAll()
@@ -1706,7 +1691,6 @@ export async function handlePluginAuthCallback(input: {
       .updateTable("plugin_auth_sessions")
       .set({
         status: "expired",
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", session.id)
       .execute()
@@ -1721,7 +1705,6 @@ export async function handlePluginAuthCallback(input: {
         phase: null,
         error_code: input.error,
         error_message: input.errorDescription || input.error,
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", session.id)
       .returningAll()
@@ -1836,7 +1819,6 @@ export async function handlePluginAuthCallback(input: {
             resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
           error_code: null,
           error_message: null,
-          updated_at: sql`NOW()`,
         })
         .where("id", "=", session.id)
         .returningAll()

@@ -308,7 +308,6 @@ export async function updateSessionStatus(
     .updateTable("sessions")
     .set({
       status,
-      updated_at: sql`NOW()`,
       completed_at: status === "closed" ? sql`NOW()` : null,
       ...(extra?.errorMessage !== undefined
         ? { error_message: extra.errorMessage }
@@ -327,9 +326,7 @@ export async function updateSessionCollaboration(
   },
   queryable: Executor = db
 ): Promise<void> {
-  const values: Record<string, unknown> = {
-    updated_at: sql`NOW()`,
-  }
+  const values: Record<string, unknown> = {}
 
   if (params.collaborationMode) {
     values.collaboration_mode = params.collaborationMode

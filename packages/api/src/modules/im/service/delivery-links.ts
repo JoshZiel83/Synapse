@@ -115,7 +115,6 @@ export async function queueConversationTransportProjection(params: {
         ...(params.metadata || {}),
       } as TableInsert<"transport_message_links">["metadata"],
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc
@@ -125,7 +124,6 @@ export async function queueConversationTransportProjection(params: {
           external_reply_to_id: sql`COALESCE(excluded.external_reply_to_id, transport_message_links.external_reply_to_id)`,
           external_thread_id: sql`COALESCE(excluded.external_thread_id, transport_message_links.external_thread_id)`,
           metadata: sql`transport_message_links.metadata || excluded.metadata`,
-          updated_at: sql`NOW()`,
         })
     )
     .returningAll()
@@ -204,7 +202,6 @@ export async function updateTransportMessageLinkStatus(params: {
         ...(params.status === "sent"
           ? { delivered_at: sql`COALESCE(delivered_at, NOW())` }
           : {}),
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", params.linkId)
       .returningAll()
@@ -251,7 +248,6 @@ export async function patchTransportMessageLinkMetadata(params: {
       .updateTable("transport_message_links")
       .set({
         metadata: merged as TableInsert<"transport_message_links">["metadata"],
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", params.linkId)
       .execute()
@@ -370,7 +366,6 @@ export async function removeTransportMessageLinkMetadataKey(
     .set({
       metadata:
         sql`metadata - ${key}` as unknown as TableInsert<"transport_message_links">["metadata"],
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", linkId)
     .execute()
@@ -409,7 +404,6 @@ export async function persistOutboundLinkRowRaw(params: {
       metadata: (params.metadata ||
         {}) as TableInsert<"transport_message_links">["metadata"],
       created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .returning("id")
     .executeTakeFirstOrThrow()

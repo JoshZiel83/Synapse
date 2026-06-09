@@ -166,7 +166,6 @@ export async function revokeInvite(inviteId: string, workspaceId: string) {
     .updateTable("workspace_invites")
     .set({
       is_revoked: true,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", inviteId)
     .where("workspace_id", "=", workspaceId)

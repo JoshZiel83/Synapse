@@ -133,7 +133,6 @@ export async function updateProfile(
     .set({
       name: nextName,
       avatar_file_id: nextAvatarFileId ?? null,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", userId)
     .returning(userSelection)

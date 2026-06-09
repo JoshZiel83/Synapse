@@ -1007,7 +1007,6 @@ async function deliverTaskNotice(
                 .updateTable("tool_call_tasks")
                 .set({
                   completion_item_id: completionItemId,
-                  updated_at: sql`NOW()`,
                 })
                 .where("id", "=", record.id)
                 .returningAll()

@@ -68,7 +68,6 @@ export async function markLinkSkipped(params: {
       // right tool here.
       metadata:
         sql`metadata || ${JSON.stringify({ skippedReason: params.reason })}::jsonb` as unknown as TableUpdate<"transport_message_links">["metadata"],
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", params.linkId)
     .execute()
@@ -127,7 +126,6 @@ export function buildReEnableAutoDisabledBindingsSql(params: {
       outbound_enabled: true,
       metadata:
         sql`metadata - 'autoDisabledReason'` as unknown as TableUpdate<"conversation_transport_bindings">["metadata"],
-      updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", params.workspaceId)
     .where(
@@ -193,7 +191,6 @@ export async function recoverSkippedDisabledLink(
       .updateTable("transport_message_links")
       .set({
         delivery_status: "pending",
-        updated_at: sql`NOW()`,
       })
       .where("id", "=", linkId)
       .where("delivery_status", "=", "skipped")

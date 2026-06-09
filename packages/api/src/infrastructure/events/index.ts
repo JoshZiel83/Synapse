@@ -115,7 +115,6 @@ async function markRealtimeOutboxEntryDispatched(id: string) {
       status: "dispatched",
       last_error: null,
       dispatched_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
     .execute()
@@ -129,7 +128,6 @@ async function markRealtimeOutboxEntryFailed(id: string, error: unknown) {
       status: "failed",
       last_error: message,
       available_at: sql`NOW() + (LEAST(attempts, 6) * INTERVAL '5 seconds')`,
-      updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
     .execute()
@@ -326,7 +324,6 @@ export async function recoverStuckProcessingRealtimeOutboxEntries(
       status: "failed",
       last_error: "recovered: stuck in processing past timeout",
       available_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
     })
     .where("status", "=", "processing")
     .where(

@@ -53,7 +53,6 @@ export async function saveTransportEmojiReactions(input: {
     .updateTable("transport_message_links")
     .set({
       external_emoji_reactions: sql`${JSON.stringify(input.reactionIdsByEmoji)}::jsonb`,
-      updated_at: sql`NOW()`,
     })
     .where("transport_account_id", "=", input.transportAccountId)
     .where("external_message_id", "=", input.externalMessageId)
