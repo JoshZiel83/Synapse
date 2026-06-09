@@ -54,9 +54,12 @@ export {
   WORKSPACE_APP_GRANT_SOURCES,
   WORKSPACE_APP_GRANT_REQUEST_STATUS,
   WORKSPACE_APP_GRANT_REQUEST_STATUSES,
+  WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
+  WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS,
 } from "./access/enums.js"
 export type {
   WorkspaceAppGrantPermission,
+  WorkspaceAppGrantRequestDirection,
   WorkspaceAppGrantRequestStatus,
   WorkspaceAppGrantSource,
   WorkspaceAppGrantStatus,

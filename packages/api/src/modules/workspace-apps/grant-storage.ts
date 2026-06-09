@@ -3,6 +3,8 @@ import {
   SUBJECT_KIND,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
+  type WorkspaceAppGrantRequestDirection,
   WORKSPACE_APP_GRANT_REQUEST_STATUS,
   WORKSPACE_APP_GRANT_SOURCE,
   WORKSPACE_APP_GRANT_STATUS,
@@ -323,7 +325,7 @@ export async function listWorkspaceAppGrantRequests(
   run: KyselyDb,
   params: {
     workspaceAppId: string
-    direction: "incoming" | "outgoing"
+    direction: WorkspaceAppGrantRequestDirection
     requesterWorkspaceMemberId?: string
   }
 ): Promise<WorkspaceAppGrantRequestRow[]> {
@@ -332,7 +334,10 @@ export async function listWorkspaceAppGrantRequests(
     .selectAll()
     .where("workspace_app_id", "=", params.workspaceAppId)
     .orderBy("created_at", "desc")
-  if (params.direction === "outgoing" && params.requesterWorkspaceMemberId) {
+  if (
+    params.direction === WORKSPACE_APP_GRANT_REQUEST_DIRECTION.OUTGOING &&
+    params.requesterWorkspaceMemberId
+  ) {
     query = query.where(
       "requester_workspace_member_id",
       "=",

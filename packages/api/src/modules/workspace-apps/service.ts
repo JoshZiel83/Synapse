@@ -3,6 +3,8 @@ import {
   SUBJECT_KIND,
   WORKSPACE_APP_KIND,
   WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
+  type WorkspaceAppGrantRequestDirection,
   WORKSPACE_APP_GRANT_STATUS,
   type CapabilityAccessTarget,
   type WorkspaceAppGrant,
@@ -542,13 +544,13 @@ export async function listWorkspaceAppGrantRequestsView(params: {
   workspaceId: string
   appId: string
   userId: string
-  direction: "incoming" | "outgoing"
+  direction: WorkspaceAppGrantRequestDirection
 }): Promise<WorkspaceAppGrantRequest[]> {
   const identity = await requireWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
   )
-  if (params.direction === "incoming") {
+  if (params.direction === WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING) {
     await requireManageWorkspaceApp(
       params.workspaceId,
       params.appId,
@@ -591,7 +593,7 @@ export async function listWorkspaceAppGrantRequestsView(params: {
     ])
     .where("app_request.workspace_app_id", "=", params.appId)
     .where((eb) =>
-      params.direction === "outgoing"
+      params.direction === WORKSPACE_APP_GRANT_REQUEST_DIRECTION.OUTGOING
         ? eb(
             "app_request.requester_workspace_member_id",
             "=",

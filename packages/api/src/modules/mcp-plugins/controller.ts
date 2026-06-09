@@ -317,7 +317,7 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         const allowed = await requireWorkspacePermission(
           request,
           reply,
-          "workspace.manage_plugins",
+          "workspace.view",
           "Not allowed to view plugin installations in this workspace"
         )
         if (!allowed) return

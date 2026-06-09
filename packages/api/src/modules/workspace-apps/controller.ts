@@ -10,9 +10,11 @@ import {
   remoteAgentRef,
   SUBJECT_KIND,
   WORKSPACE_APP_KIND,
+  WORKSPACE_APP_GRANT_REQUEST_DIRECTION,
   workspaceMemberRef,
   workspaceRef,
   WORKSPACE_APP_GRANT_PERMISSIONS,
+  WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS,
   WORKSPACE_APP_KINDS,
   type CapabilityAccessTarget,
   type WorkspaceAppGrantPermission,
@@ -42,15 +44,6 @@ const workspaceAppGrantPermissionSchema = z.enum(
   WORKSPACE_APP_GRANT_PERMISSIONS
 )
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const requestDirections = {
-  INCOMING: "incoming",
-  OUTGOING: "outgoing",
-} as const
-const requestDirectionValues = [
-  requestDirections.INCOMING,
-  requestDirections.OUTGOING,
-] as const
-
 const targetSubjectSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE),
@@ -98,8 +91,8 @@ const replaceGrantsSchema = z.object({
 })
 
 const requestDirectionSchema = z
-  .enum(requestDirectionValues)
-  .default(requestDirections.INCOMING)
+  .enum(WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS)
+  .default(WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS[0])
 const createGrantRequestSchema = z.object({
   reason: z.string().trim().min(1).optional(),
 })
@@ -582,7 +575,8 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
           workspaceId,
           appId,
           userId: (request as any).user.userId,
-          direction: query.direction || "incoming",
+          direction:
+            query.direction || WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
         })
         reply.send({ requests })
       } catch (error) {

@@ -126,6 +126,19 @@ export const WORKSPACE_APP_GRANT_REQUEST_STATUSES = [
 export type WorkspaceAppGrantRequestStatus =
   (typeof WORKSPACE_APP_GRANT_REQUEST_STATUSES)[number]
 
+export const WORKSPACE_APP_GRANT_REQUEST_DIRECTION = {
+  INCOMING: "incoming",
+  OUTGOING: "outgoing",
+} as const
+
+export const WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS = [
+  WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
+  WORKSPACE_APP_GRANT_REQUEST_DIRECTION.OUTGOING,
+] as const
+
+export type WorkspaceAppGrantRequestDirection =
+  (typeof WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS)[number]
+
 /**
  * Resource types recognized by the access evaluator. A superset of the resources
  * that can be the target of an explicit binding row (see ACCESS_BINDABLE_RESOURCE_TYPES).
