@@ -40,8 +40,8 @@ const baseEnvelope: Omit<OperationEnvelope, "signature"> = {
   device_tool_revision_id: "77777777-7777-7777-7777-777777777777",
   input_hash: hashArguments({ foo: "bar" }),
   task_mode: "sync",
-  issued_at: "2026-05-25T00:00:00Z",
-  expires_at: "9999-12-31T00:00:00Z",
+  issued_at: "2026-05-25T00:00:00.000Z",
+  expires_at: "9999-12-31T00:00:00.000Z",
   signature_kid: "test-kid",
 }
 
@@ -87,7 +87,7 @@ test("envelope verifier rejects expired envelope", async () => {
   const expired = {
     ...baseEnvelope,
     attempt_id: "88888888-8888-8888-8888-888888888888",
-    expires_at: "2020-01-01T00:00:00Z",
+    expires_at: "2020-01-01T00:00:00.000Z",
   }
   const signature = signEnvelope(expired, privatePem)
   const envelope: OperationEnvelope = { ...expired, signature }
@@ -98,6 +98,31 @@ test("envelope verifier rejects expired envelope", async () => {
   )
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.code, "expired_envelope")
+})
+
+test("envelope verifier rejects non-canonical instant strings", async () => {
+  const { publicPem, privatePem } = makeKeys()
+  const verifier = createInMemoryEnvelopeVerifier()
+  const nonCanonical = {
+    ...baseEnvelope,
+    attempt_id: "99999999-8888-7777-6666-555555555555",
+    issued_at: "2026-05-25T00:00:00Z",
+  }
+  const signature = signEnvelope(
+    nonCanonical as unknown as Omit<OperationEnvelope, "signature">,
+    privatePem
+  )
+  const envelope = {
+    ...nonCanonical,
+    signature,
+  } as unknown as OperationEnvelope
+  const result = await verifier.verify(
+    envelope,
+    envelope.input_hash,
+    new Map([["test-kid", publicPem]])
+  )
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.code, "invalid_request")
 })
 
 test("envelope verifier rejects input_hash mismatch", async () => {
