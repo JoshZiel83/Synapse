@@ -3587,11 +3587,6 @@ foreignKeys:
     _child: automation_event_sources(webhook_endpoint_id)
     _parent: automation_webhook_endpoints(id)
     _was: RESTRICT
-  constraint:fk_plugin_installations_attachment_subject:
-    targetAction: RESTRICT
-    _child: plugin_installations(attachment_scope_subject_id)
-    _parent: access_subjects(id)
-    _was: CASCADE
   constraint:fk_automation_event_sources_integration_binding:
     targetAction: RESTRICT
     liveIntegrity: enforce

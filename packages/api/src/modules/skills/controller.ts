@@ -5,6 +5,7 @@ import {
   actorRef,
   CAPABILITY_ACCESS_TARGET_TYPES,
   conversationRef,
+  remoteAgentRef,
   SUBJECT_KIND,
   workspaceMemberRef,
   workspaceRef,
@@ -41,6 +42,7 @@ const accessTargetTypeSchema = z.enum([
   CAPABILITY_ACCESS_TARGET_TYPES[1],
   CAPABILITY_ACCESS_TARGET_TYPES[2],
   CAPABILITY_ACCESS_TARGET_TYPES[3],
+  CAPABILITY_ACCESS_TARGET_TYPES[4],
 ] as const satisfies readonly SkillAccessTargetType[])
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
 const accessTargetSchema = z.object({
@@ -48,6 +50,7 @@ const accessTargetSchema = z.object({
   actorId: z.uuid().optional(),
   conversationId: z.uuid().optional(),
   workspaceMemberId: z.uuid().optional(),
+  remoteAgentId: z.uuid().optional(),
 })
 
 function inputToCapabilityAccessTarget(
@@ -71,6 +74,19 @@ function inputToCapabilityAccessTarget(
       }
       return {
         subject: actorRef(input.actorId),
+        ...(input.conversationId
+          ? { scope: conversationRef(input.conversationId) }
+          : {}),
+      }
+    case SUBJECT_KIND.REMOTE_AGENT:
+      if (!input.remoteAgentId) {
+        throw new SkillError(
+          400,
+          "remoteAgentId is required for remote_agent access target"
+        )
+      }
+      return {
+        subject: remoteAgentRef(input.remoteAgentId),
         ...(input.conversationId
           ? { scope: conversationRef(input.conversationId) }
           : {}),
@@ -492,9 +508,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
         const allowed = await requireRequestAction(
           request,
           reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to edit installed skills in this workspace"
+          "installed_skill.edit",
+          installedSkillId,
+          "Not allowed to edit this installed skill"
         )
         if (!allowed) return
 
@@ -523,9 +539,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
         const allowed = await requireRequestAction(
           request,
           reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to upgrade installed skills in this workspace"
+          "installed_skill.edit",
+          installedSkillId,
+          "Not allowed to upgrade this installed skill"
         )
         if (!allowed) return
 
@@ -552,9 +568,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
         const allowed = await requireRequestAction(
           request,
           reply,
-          "workspace.manage_skills",
-          workspaceId,
-          "Not allowed to uninstall skills in this workspace"
+          "installed_skill.delete",
+          installedSkillId,
+          "Not allowed to delete this installed skill"
         )
         if (!allowed) return
 

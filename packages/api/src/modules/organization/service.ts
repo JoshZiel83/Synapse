@@ -11,6 +11,7 @@ import {
   summarizeActorForRole,
   textBlocks,
   type Actor,
+  type CapabilityAccessTarget,
   type ActorDefinition,
   type ActorDoc,
   type ActorDocInput,
@@ -33,6 +34,7 @@ import {
   type MarketplaceVersion,
   type MarketplaceVersionStatus,
   type UUID,
+  type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
 import { CompiledQuery } from "kysely"
 import {
@@ -46,11 +48,11 @@ import {
   listAuthorizedResourceIds,
   type AccessSubject,
 } from "../access/service.js"
-import { setRequiresContactApproval } from "../access/contact-approval.js"
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
 } from "../workspace-apps/root-storage.js"
+import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
 
 type QueryRow = pg.QueryResultRow
 type QueryResultLike<T extends QueryRow> = { rows: T[] }
@@ -448,7 +450,6 @@ function buildActorPackageRecord(row: ActorPackageRow): ActorPackageRecord {
       Boolean(row.publisher_is_builtin),
     downloadCount: row.package_download_count,
     latestRevisionId: row.version_id,
-    defaultAttachmentScope: "workspace",
     defaultReuseScope: "workspace",
     requiresHandshake: false,
     metadata: parseJsonObject(row.package_metadata),
@@ -1065,6 +1066,12 @@ export async function createActor(input: {
   parentId?: UUID
   specialties?: string[]
   config?: Record<string, unknown>
+  grants?: Array<{
+    target: CapabilityAccessTarget
+    permissions: WorkspaceAppGrantPermission[]
+    conversationTypeMaskOverride?: number | null
+    reason?: string
+  }>
 }): Promise<Actor> {
   if (input.avatarFileId && normalizeAvatarEmoji(input.avatarEmoji)) {
     throw new Error("avatarFileId and avatarEmoji are mutually exclusive")
@@ -1120,17 +1127,18 @@ export async function createActor(input: {
     )
     const insertedActorId = actorResult.rows[0]!.id
 
-    // P2 contract: actors no longer carry a stored access-policy column. New actors
-    // default to workspace-visible by writing a `source='default_open'`
-    // workspace-scoped contact_visible grant so the evaluator and the
-    // contact-hub UI both see them as accessible to all members.
-    await setRequiresContactApproval(trx, {
-      resourceType: "actor",
-      resourceId: insertedActorId,
-      workspaceId: input.workspaceId,
-      requiresContactApproval: false,
-      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
-    })
+    for (const grant of input.grants || []) {
+      await insertWorkspaceAppGrant(trx, {
+        workspaceId: input.workspaceId,
+        workspaceAppId: insertedActorId,
+        target: grant.target,
+        permissions: grant.permissions,
+        conversationTypeMaskOverride:
+          grant.conversationTypeMaskOverride ?? null,
+        createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
+        reason: grant.reason ?? null,
+      })
+    }
 
     const versionResult = await runner<{ id: string }>(
       `INSERT INTO actor_versions (
@@ -1544,6 +1552,12 @@ export async function installActorPackage(input: {
   title?: string
   parentId?: UUID | null
   syncMode?: ActorPackageSyncMode
+  grants?: Array<{
+    target: CapabilityAccessTarget
+    permissions: WorkspaceAppGrantPermission[]
+    conversationTypeMaskOverride?: number | null
+    reason?: string
+  }>
 }): Promise<ActorPackageInstallResult> {
   const actorPackage = await getActorPackage(input.packageId, input.workspaceId)
   const packageActor = actorPackage.manifest.actor
@@ -1601,15 +1615,18 @@ export async function installActorPackage(input: {
     )
     const insertedActorId = actorResult.rows[0]!.id
 
-    // P2 contract: write a default workspace-visible contact grant so the
-    // package's synthesized actors are reachable to all members by default.
-    await setRequiresContactApproval(trx, {
-      resourceType: "actor",
-      resourceId: insertedActorId,
-      workspaceId: input.workspaceId,
-      requiresContactApproval: false,
-      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
-    })
+    for (const grant of input.grants || []) {
+      await insertWorkspaceAppGrant(trx, {
+        workspaceId: input.workspaceId,
+        workspaceAppId: insertedActorId,
+        target: grant.target,
+        permissions: grant.permissions,
+        conversationTypeMaskOverride:
+          grant.conversationTypeMaskOverride ?? null,
+        createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
+        reason: grant.reason ?? null,
+      })
+    }
 
     const versionResult = await runner<{ id: string }>(
       `INSERT INTO actor_versions (

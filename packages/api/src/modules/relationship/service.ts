@@ -33,7 +33,7 @@ import {
   type RelationshipScanResponse,
   type RemoteAgentAccessRequestListResponse,
 } from "@synapse/shared"
-import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
+import { db } from "../../infrastructure/database/kysely.js"
 import { getFileUrlById } from "../files/service.js"
 import {
   authorizeAction,
@@ -44,7 +44,6 @@ import {
 import {
   deriveRequiresContactApproval,
   deriveRequiresContactApprovalMany,
-  setRequiresContactApproval,
 } from "../access/contact-approval.js"
 import {
   insertWorkspaceAppGrant,
@@ -600,76 +599,6 @@ async function ensureRelationshipProfile(params: {
     throw new Error("Failed to create relationship profile")
   }
   return inserted
-}
-
-async function updateActorContactApprovalRequirement(params: {
-  workspaceId: string
-  actorId: string
-  updatedByWorkspaceMemberId: string
-  requiresContactApproval: boolean
-}) {
-  const actor = await db
-    .selectFrom("actors as actor")
-    .innerJoin("workspace_apps as app", "app.id", "actor.id")
-    .select(["actor.id", "app.workspace_id"])
-    .where("actor.id", "=", params.actorId)
-    .where("app.deleted_at", "is", null)
-    .executeTakeFirst()
-  if (!actor || actor.workspace_id !== params.workspaceId) {
-    throw new Error("Actor not found")
-  }
-  await withDbTransaction(async (trx) => {
-    await setRequiresContactApproval(trx, {
-      resourceType: "actor",
-      resourceId: actor.id,
-      workspaceId: actor.workspace_id,
-      requiresContactApproval: params.requiresContactApproval,
-      createdByWorkspaceMemberId: params.updatedByWorkspaceMemberId,
-    })
-    await sql`UPDATE actors SET updated_at = NOW() WHERE id = ${actor.id}`.execute(
-      trx
-    )
-  })
-  return {
-    id: actor.id,
-    workspaceId: actor.workspace_id,
-    requiresContactApproval: params.requiresContactApproval,
-  }
-}
-
-async function updateRemoteAgentContactApprovalRequirement(params: {
-  workspaceId: string
-  remoteAgentId: string
-  requiresContactApproval: boolean
-}) {
-  const remoteAgent = await db
-    .selectFrom("remote_agents as agent")
-    .innerJoin("workspace_apps as app", "app.id", "agent.id")
-    .select(["agent.id", "app.workspace_id"])
-    .where("agent.id", "=", params.remoteAgentId)
-    .where("app.workspace_id", "=", params.workspaceId)
-    .where("app.deleted_at", "is", null)
-    .where("app.status", "=", "active")
-    .executeTakeFirst()
-  if (!remoteAgent) {
-    throw new Error("Remote agent not found")
-  }
-  await setRequiresContactApproval(db, {
-    resourceType: "remote_agent",
-    resourceId: remoteAgent.id,
-    workspaceId: remoteAgent.workspace_id,
-    requiresContactApproval: params.requiresContactApproval,
-  })
-  await db
-    .updateTable("remote_agents")
-    .set({ updated_at: sql`NOW()` })
-    .where("id", "=", remoteAgent.id)
-    .execute()
-  return {
-    id: remoteAgent.id,
-    workspaceId: remoteAgent.workspace_id,
-    requiresContactApproval: params.requiresContactApproval,
-  }
 }
 
 async function grantActorContactVisibilityToMember(params: {
@@ -2645,7 +2574,6 @@ export async function updateActorRelationshipProfile(params: {
   approvalMode: ApprovalMode
   identityId?: string
   identitySearchEnabled?: boolean
-  requiresContactApproval?: boolean
   isPublicShared?: boolean
 }): Promise<RelationshipProfileView> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
@@ -2694,15 +2622,6 @@ export async function updateActorRelationshipProfile(params: {
   const actorSummary = await getActorSummary(params.actorId)
   let requiresContactApproval = actorSummary?.requiresContactApproval ?? false
   let isPublicShared = actorSummary?.isPublicShared ?? false
-  if (params.requiresContactApproval !== undefined) {
-    const actorResult = await updateActorContactApprovalRequirement({
-      workspaceId: params.workspaceId,
-      actorId: params.actorId,
-      updatedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-      requiresContactApproval: params.requiresContactApproval,
-    })
-    requiresContactApproval = actorResult.requiresContactApproval
-  }
   if (typeof params.isPublicShared === "boolean") {
     const actorResult = await db
       .updateTable("actors")
@@ -2748,7 +2667,6 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   approvalMode: ApprovalMode
   identityId?: string
   identitySearchEnabled?: boolean
-  requiresContactApproval?: boolean
   isPublicShared?: boolean
 }): Promise<RelationshipProfileView> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
@@ -2798,17 +2716,6 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   let requiresContactApproval =
     remoteAgentSummary?.requiresContactApproval ?? false
   let isPublicShared = remoteAgentSummary?.isPublicShared ?? false
-
-  if (params.requiresContactApproval !== undefined) {
-    const remoteAgentResult = await updateRemoteAgentContactApprovalRequirement(
-      {
-        workspaceId: params.workspaceId,
-        remoteAgentId: params.remoteAgentId,
-        requiresContactApproval: params.requiresContactApproval,
-      }
-    )
-    requiresContactApproval = remoteAgentResult.requiresContactApproval
-  }
 
   if (typeof params.isPublicShared === "boolean") {
     const updateResult = await sql<{ is_public_shared: boolean }>`

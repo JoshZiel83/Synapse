@@ -56,7 +56,6 @@ const updateActorProfileSchema = z.object({
   approvalMode: approvalModeSchema,
   identityId: z.string().trim().min(4).max(32).optional(),
   identitySearchEnabled: z.boolean().optional(),
-  requiresContactApproval: z.boolean().optional(),
   isPublicShared: z.boolean().optional(),
 })
 
@@ -164,7 +163,6 @@ export default async function relationshipController(app: FastifyInstance) {
             approvalMode: body.approvalMode,
             identityId: body.identityId,
             identitySearchEnabled: body.identitySearchEnabled,
-            requiresContactApproval: body.requiresContactApproval,
             isPublicShared: body.isPublicShared,
           })
         )
@@ -227,7 +225,6 @@ export default async function relationshipController(app: FastifyInstance) {
             approvalMode: body.approvalMode,
             identityId: body.identityId,
             identitySearchEnabled: body.identitySearchEnabled,
-            requiresContactApproval: body.requiresContactApproval,
             isPublicShared: body.isPublicShared,
           })
         )

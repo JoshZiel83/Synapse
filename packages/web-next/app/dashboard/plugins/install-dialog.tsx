@@ -4,7 +4,7 @@ import QRCode from "qrcode"
 import { useEffect, useMemo, useRef, useState } from "react"
 import type {
   AutomationIntegrationProvider,
-  PluginAttachmentScopeType,
+  CapabilityAccessTargetType,
   PluginAuthBindingDefinition,
   PluginAuthSession,
   PluginConfigFieldDefinition,
@@ -70,13 +70,20 @@ interface Props {
   pageChrome?: "card" | "plain" | "tab"
   includePlacementSteps?: boolean
   includeAccessStep?: boolean
-  lifecyclePreviewScopeType?: PluginAttachmentScopeType
+  lifecyclePreviewScopeType?: Exclude<
+    CapabilityAccessTargetType,
+    "remote_agent"
+  >
   defaultLifecycleScope?: PluginReuseScope
   createDefaultWorkspaceAccess?: boolean
   closeLabel?: string
 }
 
 type PluginReuseScope = ReuseScope
+type LifecyclePreviewScopeType = Exclude<
+  CapabilityAccessTargetType,
+  "remote_agent"
+>
 type AccessStep = {
   id: "access"
   kind: "access"
@@ -610,14 +617,11 @@ export default function InstallDialog({
     () => new Map(authBindings.map((binding) => [binding.key, binding])),
     [authBindings]
   )
-  const reusePreviewScopeType = useMemo<PluginAttachmentScopeType>(
+  const reusePreviewScopeType = useMemo<LifecyclePreviewScopeType>(
     () =>
       lifecyclePreviewScopeType ||
-      ((defaultActorId
-        ? "actor"
-        : plugin.default_attachment_scope ||
-          "workspace") as PluginAttachmentScopeType),
-    [defaultActorId, lifecyclePreviewScopeType, plugin.default_attachment_scope]
+      ((defaultActorId ? "actor" : "workspace") as LifecyclePreviewScopeType),
+    [defaultActorId, lifecyclePreviewScopeType]
   )
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>(
     ((initialInstallation?.lifecycle_scope as PluginReuseScope | undefined) ||

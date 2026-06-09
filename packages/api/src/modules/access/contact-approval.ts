@@ -1,7 +1,7 @@
 /**
  * Contact visibility for actor / remote_agent workspace apps is expressed by
  * `workspace_app_grants` rows:
- * - a workspace-scoped `contact_visible` grant with `source=default_open`
+ * - a workspace-scoped `contact_visible` grant with `source=system`
  *   means no approval is required
  * - otherwise members must be explicitly granted `contact_visible`
  *
@@ -21,7 +21,7 @@ import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
 
 const DEFAULT_CONTACT_VISIBILITY_GRANT_REASON =
-  "default workspace-visible contact grant written by access lifecycle"
+  "workspace contact-visible grant written by access lifecycle"
 
 async function hasWorkspaceDefaultContactVisibilityGrant(
   db: KyselyDb,
@@ -95,7 +95,7 @@ export async function deriveRequiresContactApprovalMany(
 }
 
 /**
- * Idempotently align the default workspace-visible contact grant to the
+ * Idempotently align the workspace-wide contact-visible grant to the
  * desired approval requirement. Call this on actor/remote_agent creation and
  * on approval-setting updates.
  */

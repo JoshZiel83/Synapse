@@ -1,6 +1,5 @@
 import { normalizeActorDocs, textBlocks } from "@synapse/shared"
 import type {
-  PluginAttachmentScopeType,
   ActorDefinition,
   ActorPackageDependency,
   ReuseScope,
@@ -20,7 +19,6 @@ interface BuiltinActorPackageSeed {
     targetPackageKind: ActorPackageDependency["targetPackageKind"]
     targetPublisherSlug?: string
     targetPackageSlug: string
-    acceptableAttachmentScopes?: PluginAttachmentScopeType[]
     acceptableReuseScopes?: ReuseScope[]
     description: string
     notes?: ReturnType<typeof textBlocks>
@@ -131,7 +129,6 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
         targetPackageKind: "plugin",
         targetPublisherSlug: "z_ai",
         targetPackageSlug: "toolkit",
-        acceptableAttachmentScopes: ["workspace", "actor"],
         acceptableReuseScopes: ["workspace", "actor", "conversation"],
         description:
           "Mira needs the official ZhipuAI Toolkit for live research and document-reading workflows.",
@@ -252,7 +249,6 @@ export const builtinActorPackageSeeds: BuiltinActorPackageSeed[] = [
         targetPackageKind: "plugin",
         targetPublisherSlug: "z_ai",
         targetPackageSlug: "toolkit",
-        acceptableAttachmentScopes: ["workspace", "actor"],
         acceptableReuseScopes: ["workspace", "actor", "conversation"],
         description:
           "Recommended if Orian needs to inspect uploaded documents, screenshots, or external references during coordination.",

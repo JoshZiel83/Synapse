@@ -36,7 +36,6 @@ export const githubSeed: BuiltinOrgSeed = {
         url: "https://api.githubcopilot.com/mcp/",
         headers: { Authorization: "Bearer ${config:apiKey}" },
       }),
-      defaultAttachmentScope: "workspace",
       defaultReuseScope: "conversation",
       requiresHandshake: false,
       categorySlugs: ["integrations-and-automation"],

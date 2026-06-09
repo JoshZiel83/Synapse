@@ -6,8 +6,18 @@ import {
   ACTOR_DOC_VISIBILITIES,
   ACTOR_PACKAGE_SYNC_MODES,
   ACTOR_ROLES,
+  CAPABILITY_ACCESS_TARGET_TYPES,
   CANONICAL_FILE_CATEGORIES,
+  SUBJECT_KIND,
+  WORKSPACE_APP_GRANT_PERMISSIONS,
+  actorRef,
+  conversationRef,
   type ActorDoc,
+  type CapabilityAccessTarget,
+  type WorkspaceAppGrantPermission,
+  remoteAgentRef,
+  workspaceMemberRef,
+  workspaceRef,
 } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
@@ -52,6 +62,57 @@ const actorDocSchema = z.object({
   priority: z.number().int().min(-1000).max(1000),
 })
 
+const workspaceAppGrantPermissionSchema = z.enum(
+  WORKSPACE_APP_GRANT_PERMISSIONS
+)
+const initialGrantTargetSchema = z.object({
+  subject: z.object({
+    kind: z.enum(CAPABILITY_ACCESS_TARGET_TYPES),
+    workspaceId: z.uuid().optional(),
+    memberId: z.uuid().optional(),
+    conversationId: z.uuid().optional(),
+    actorId: z.uuid().optional(),
+    remoteAgentId: z.uuid().optional(),
+  }),
+  scope: z
+    .object({
+      kind: z.literal(SUBJECT_KIND.CONVERSATION),
+      conversationId: z.uuid(),
+    })
+    .optional(),
+})
+const initialGrantSchema = z.object({
+  target: initialGrantTargetSchema,
+  permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
+  conversationTypeMaskOverride: z
+    .number()
+    .int()
+    .min(1)
+    .max(15)
+    .nullable()
+    .optional(),
+  reason: z.string().trim().min(1).optional(),
+})
+
+function toCapabilityAccessTarget(
+  input: z.infer<typeof initialGrantTargetSchema>
+): CapabilityAccessTarget {
+  const subject =
+    input.subject.kind === SUBJECT_KIND.WORKSPACE
+      ? workspaceRef(input.subject.workspaceId || "")
+      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
+        ? workspaceMemberRef(input.subject.memberId || "")
+        : input.subject.kind === SUBJECT_KIND.CONVERSATION
+          ? conversationRef(input.subject.conversationId || "")
+          : input.subject.kind === SUBJECT_KIND.ACTOR
+            ? actorRef(input.subject.actorId || "")
+            : remoteAgentRef(input.subject.remoteAgentId || "")
+  const scope = input.scope
+    ? conversationRef(input.scope.conversationId)
+    : undefined
+  return scope ? { subject, scope } : { subject }
+}
+
 const createActorSchema = z
   .object({
     displayName: z.string().min(1).max(255),
@@ -64,6 +125,7 @@ const createActorSchema = z
     parentId: z.uuid().optional(),
     specialties: z.array(z.string()).optional(),
     config: z.record(z.string(), z.unknown()).optional(),
+    grants: z.array(initialGrantSchema).optional(),
   })
   .refine((body) => !(body.avatarFileId && body.avatarEmoji), {
     message: "avatarFileId and avatarEmoji are mutually exclusive",
@@ -93,6 +155,7 @@ const installActorPackageSchema = z.object({
   title: z.string().max(255).optional(),
   parentId: z.uuid().nullable().optional(),
   syncMode: z.enum(ACTOR_PACKAGE_SYNC_MODES).default("notify"),
+  grants: z.array(initialGrantSchema).optional(),
 })
 
 type WorkspaceParams = { workspaceId: string }
@@ -148,6 +211,13 @@ export async function organizationController(app: FastifyInstance) {
         workspaceId: (request.params as WorkspaceParams).workspaceId,
         createdByWorkspaceMemberId: (request as any).workspaceMember!.id,
         ...parsed.data,
+        grants: parsed.data.grants?.map((grant) => ({
+          target: toCapabilityAccessTarget(grant.target),
+          permissions: grant.permissions as WorkspaceAppGrantPermission[],
+          conversationTypeMaskOverride:
+            grant.conversationTypeMaskOverride ?? null,
+          reason: grant.reason,
+        })),
       })
       return reply.status(201).send(actor)
     } catch (error) {
@@ -226,6 +296,13 @@ export async function organizationController(app: FastifyInstance) {
         title: parsed.data.title,
         parentId: parsed.data.parentId,
         syncMode: parsed.data.syncMode,
+        grants: parsed.data.grants?.map((grant) => ({
+          target: toCapabilityAccessTarget(grant.target),
+          permissions: grant.permissions as WorkspaceAppGrantPermission[],
+          conversationTypeMaskOverride:
+            grant.conversationTypeMaskOverride ?? null,
+          reason: grant.reason,
+        })),
       })
       return reply.status(201).send(result)
     } catch (error) {

@@ -6,7 +6,6 @@ import {
   CONTACT_DIRECT_STATES,
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
-  PLUGIN_ATTACHMENT_SCOPE_TYPES,
   CANONICAL_FILE_CATEGORIES,
   CONVERSATION_ITEM_ROLES,
   CONVERSATION_ITEM_SCOPES,
@@ -2399,8 +2398,6 @@ export type ConversationTypeKey = (typeof CONVERSATION_TYPE_KEYS)[number]
 export type ConversationTypeMask = number
 export type CapabilityConversationTypePolicyResourceFamily =
   (typeof CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES)[number]
-export type PluginAttachmentScopeType =
-  (typeof PLUGIN_ATTACHMENT_SCOPE_TYPES)[number]
 export type AccessTargetType = (typeof ACCESS_TARGET_TYPES)[number]
 export type CapabilityAccessTargetType =
   (typeof CAPABILITY_ACCESS_TARGET_TYPES)[number]
@@ -2481,13 +2478,6 @@ export type PluginAuthSessionPhase =
   | "pending_confirm"
   | "finalizing"
 export type PluginAuthChallengeKind = "redirect" | "qr_code" | "none"
-
-export interface PluginAttachmentScope {
-  type: PluginAttachmentScopeType
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
-}
 
 // AccessTarget / CapabilityAccessTarget are canonical scoped-subject payloads:
 // {subject: SubjectRef; scope?: SubjectRef}. Conversation scoping is represented
@@ -2702,7 +2692,6 @@ export interface MarketplaceItem {
   isBuiltin: boolean
   downloadCount: number
   latestRevisionId?: string
-  defaultAttachmentScope?: PluginAttachmentScopeType
   defaultReuseScope?: ReuseScope
   defaultConversationTypeMask?: ConversationTypeMask
   supportedReuseScopes?: ReuseScope[]
@@ -2860,7 +2849,6 @@ export interface MarketplaceRequirement {
   targetPublisherSlug?: string
   targetPackageSlug?: string
   targetTag?: string
-  acceptableAttachmentScopes: PluginAttachmentScopeType[]
   acceptableReuseScopes: ReuseScope[]
   description: string
   configPredicate: Record<string, unknown>
@@ -2914,7 +2902,6 @@ export interface ActorPackageDependency {
   targetPackageKind: ActorPackageTargetKind
   targetPublisherSlug?: string
   targetPackageSlug: string
-  acceptableAttachmentScopes: PluginAttachmentScopeType[]
   acceptableReuseScopes: ReuseScope[]
   description: string
   notes: CanonicalContentBlock[]
@@ -3104,7 +3091,6 @@ export interface InstalledSkill {
 // Catalog-spec transport set (= PluginTransport minus "filesystem").
 export type McpTransport = PluginSpecTransport
 export type McpLifecycleScope = ReuseScope
-export type McpAttachmentScopeType = PluginAttachmentScopeType
 
 export type McpOrganization = MarketplacePublisher
 export type McpPluginTool = MarketplaceTool
@@ -5595,7 +5581,6 @@ export interface PluginPackageVersionSpecRecord {
   defaultConfig: Record<string, unknown>
   installFlow: Record<string, unknown>
   authBindings: PluginAuthBindingDefinition[]
-  defaultAttachmentScope: PluginAttachmentScopeType
   defaultReuseScope: PluginReuseScopeV2
   supportedReuseScopes: PluginReuseScopeV2[]
   requiresHandshake: boolean
@@ -5700,22 +5685,6 @@ export interface PluginInstallationRecord {
   approvedRuntimePermissions: string[]
   status: "active" | "disabled" | "error" | "archived"
   ownerWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface PluginMountRecord {
-  id: string
-  installationId: string
-  workspaceId: string
-  attachmentScope: PluginAttachmentScopeType
-  conversationId?: string
-  actorId?: string
-  workspaceMemberId?: string
-  reuseScope: PluginReuseScopeV2
-  status: "active" | "disabled" | "revoked"
-  metadata: Record<string, unknown>
-  createdByWorkspaceMemberId?: string
   createdAt: string
   updatedAt: string
 }

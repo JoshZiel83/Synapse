@@ -713,6 +713,12 @@ class ApiClient {
       title?: string
       parentId?: string | null
       syncMode?: "notify" | "manual_merge"
+      grants?: Array<{
+        target: CapabilityAccessTarget
+        permissions: string[]
+        conversationTypeMaskOverride?: number | null
+        reason?: string
+      }>
     }
   ): Promise<ActorPackageInstallResult> {
     return this.fetch(
@@ -739,6 +745,12 @@ class ApiClient {
       parentId?: string
       specialties?: string[]
       config?: Record<string, unknown>
+      grants?: Array<{
+        target: CapabilityAccessTarget
+        permissions: string[]
+        conversationTypeMaskOverride?: number | null
+        reason?: string
+      }>
     }
   ): Promise<Actor> {
     return this.fetch(`/workspaces/${wsId}/actors`, {
@@ -1074,7 +1086,6 @@ class ApiClient {
       approvalMode: "auto" | "manual"
       identityId?: string
       identitySearchEnabled?: boolean
-      requiresContactApproval?: boolean
       isPublicShared?: boolean
     }
   ): Promise<RelationshipProfileView> {
@@ -1101,7 +1112,6 @@ class ApiClient {
       approvalMode: "auto" | "manual"
       identityId?: string
       identitySearchEnabled?: boolean
-      requiresContactApproval?: boolean
       isPublicShared?: boolean
     }
   ): Promise<RelationshipProfileView> {
@@ -1252,9 +1262,14 @@ class ApiClient {
       runtimeKind: RemoteAgentRuntimeKind
       avatarFileId?: string
       avatarEmoji?: string
-      requiresContactApproval?: boolean
       isPublicShared?: boolean
       metadata?: Record<string, unknown>
+      grants?: Array<{
+        target: CapabilityAccessTarget
+        permissions: string[]
+        conversationTypeMaskOverride?: number | null
+        reason?: string
+      }>
     }
   ): Promise<{ remoteAgent: RemoteAgentView }> {
     return this.fetch(`/workspaces/${wsId}/remote-agents`, {
@@ -1271,7 +1286,6 @@ class ApiClient {
       description?: string | null
       avatarFileId?: string | null
       avatarEmoji?: string | null
-      requiresContactApproval?: boolean
       isPublicShared?: boolean
       isActive?: boolean
       metadata?: Record<string, unknown>

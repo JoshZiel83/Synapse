@@ -34,7 +34,6 @@ export const gitlabSeed: BuiltinOrgSeed = {
       // removed when the remote client became transport-pure).
       entryPoint:
         '{"url":"${config:baseUrl}/api/v4/mcp","headers":{"Authorization":"Bearer ${config:apiKey}"}}',
-      defaultAttachmentScope: "workspace",
       defaultReuseScope: "conversation",
       requiresHandshake: false,
       categorySlugs: ["integrations-and-automation"],

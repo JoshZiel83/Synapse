@@ -42,7 +42,6 @@ export const feishuSeed: BuiltinOrgSeed = {
       defaultLocale: "zh-CN",
       transport: "builtin",
       entryPoint: "feishu/app",
-      defaultAttachmentScope: "workspace",
       defaultReuseScope: "conversation",
       requiresHandshake: false,
       iconAssetPath: "assets/icons/feishu.svg",

@@ -18,7 +18,6 @@ import {
   type WorkspaceChiefActorPreference,
 } from "@synapse/shared"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
-import { setRequiresContactApproval } from "../access/contact-approval.js"
 import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
 import { insertWorkspaceAppRoot } from "../workspace-apps/root-storage.js"
 import type {
@@ -371,17 +370,6 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       if (!actorRow) {
         throw new Error(`Failed to install actor ${template.actorDisplayName}`)
       }
-
-      // P2 contract: bootstrap actors are workspace-visible by default —
-      // write the default contact-visibility grant instead of relying on the
-      // legacy stored access-policy column.
-      await setRequiresContactApproval(trx, {
-        resourceType: "actor",
-        resourceId: String(actorRow.id),
-        workspaceId: String(workspace.id),
-        requiresContactApproval: false,
-        createdByWorkspaceMemberId: String(creatorMember.id),
-      })
 
       const actorVersionResult = await trx
         .insertInto("actor_versions")

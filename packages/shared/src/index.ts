@@ -63,11 +63,6 @@ export type {
   WorkspaceAppKind,
   WorkspaceAppStatus,
 } from "./access/enums.js"
-export type {
-  PluginAttachmentScope,
-  PluginAttachmentScopeType,
-  McpAttachmentScopeType,
-} from "./types/index.js"
 export * from "./chat-catalog/index.js"
 export * from "./chat-queue/index.js"
 // Tool provenance & routing (Layer A/B primitives).

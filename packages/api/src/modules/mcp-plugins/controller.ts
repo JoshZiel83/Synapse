@@ -431,18 +431,19 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     workspaceHook,
     async (request, reply) => {
       try {
-        const allowed = await requireWorkspacePermission(
-          request,
-          reply,
-          "workspace.manage_plugins",
-          "Not allowed to manage plugin installations in this workspace"
-        )
-        if (!allowed) return
-
         const { workspaceId, installId } = request.params as {
           workspaceId: string
           installId: string
         }
+        const allowed = await requireRequestAction(
+          request,
+          reply,
+          "plugin_installation.edit",
+          installId,
+          "Not allowed to edit this plugin installation"
+        )
+        if (!allowed) return
+
         const body = updateInstallSchema.parse(request.body)
 
         if (body.configData) {
@@ -476,15 +477,16 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
     workspaceHook,
     async (request, reply) => {
       try {
-        const allowed = await requireWorkspacePermission(
+        const { installId } = request.params as { installId: string }
+        const allowed = await requireRequestAction(
           request,
           reply,
-          "workspace.manage_plugins",
-          "Not allowed to manage plugin installations in this workspace"
+          "plugin_installation.delete",
+          installId,
+          "Not allowed to delete this plugin installation"
         )
         if (!allowed) return
 
-        const { installId } = request.params as { installId: string }
         await uninstallPluginUnified(installId)
         reply.send({ success: true })
       } catch (error) {

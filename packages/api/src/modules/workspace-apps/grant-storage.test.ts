@@ -141,7 +141,6 @@ async function insertWorkspaceAppDetail(
           id: input.appId,
           catalog_item_id: item.id,
           catalog_version_id: version.id,
-          attachment_scope_subject_id: null,
         } as any)
         .execute()
       return

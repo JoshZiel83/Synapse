@@ -66,12 +66,6 @@ function approvalModeLabel(value?: RelationshipProfileView["approvalMode"]) {
   return value || RELATIONSHIP_APPROVAL_MODE.MANUAL
 }
 
-function toggleRequiresContactApproval(
-  current?: RelationshipProfileView["requiresContactApproval"]
-) {
-  return !current
-}
-
 function contactApprovalLabel(
   value?:
     | RelationshipProfileView["requiresContactApproval"]
@@ -344,7 +338,6 @@ export default function RemoteAgentDetailPage() {
           approvalMode: profile.approvalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
-          requiresContactApproval: profile.requiresContactApproval,
           isPublicShared: profile.isPublicShared,
         }
       )
@@ -376,7 +369,6 @@ export default function RemoteAgentDetailPage() {
           approvalMode: nextApprovalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
-          requiresContactApproval: profile.requiresContactApproval,
           isPublicShared: profile.isPublicShared,
         }
       )
@@ -398,40 +390,6 @@ export default function RemoteAgentDetailPage() {
     }
   }
 
-  async function handleToggleContactApproval() {
-    if (!workspaceId || !remoteAgentId || !profile) return
-    setSavingProfile(true)
-    try {
-      const nextRequiresContactApproval = toggleRequiresContactApproval(
-        profile.requiresContactApproval
-      )
-      const nextProfile = await api.updateRemoteAgentRelationshipProfile(
-        workspaceId,
-        remoteAgentId,
-        {
-          approvalMode: profile.approvalMode,
-          identityId: identityIdDraft.trim() || undefined,
-          identitySearchEnabled,
-          requiresContactApproval: nextRequiresContactApproval,
-          isPublicShared: profile.isPublicShared,
-        }
-      )
-      setProfile(nextProfile)
-      applyProfileToAgent(nextProfile)
-      toast.success(
-        `Contact approval switched to ${contactApprovalLabel(nextProfile.requiresContactApproval)}`
-      )
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Failed to update contact approval"
-      )
-    } finally {
-      setSavingProfile(false)
-    }
-  }
-
   async function handleTogglePublicShare() {
     if (!workspaceId || !remoteAgentId || !profile) return
     setSavingProfile(true)
@@ -443,7 +401,6 @@ export default function RemoteAgentDetailPage() {
           approvalMode: profile.approvalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
-          requiresContactApproval: profile.requiresContactApproval,
           isPublicShared: !profile.isPublicShared,
         }
       )
@@ -1061,19 +1018,6 @@ export default function RemoteAgentDetailPage() {
                     Switch to{" "}
                     {approvalModeLabel(
                       toggleApprovalMode(profile.approvalMode)
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="rounded-full"
-                    onClick={() => void handleToggleContactApproval()}
-                    disabled={savingProfile}
-                  >
-                    Contact approval:{" "}
-                    {contactApprovalLabel(
-                      toggleRequiresContactApproval(
-                        profile.requiresContactApproval
-                      )
                     )}
                   </Button>
                   <Button

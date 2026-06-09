@@ -131,7 +131,6 @@ type CreateAgentDraft = {
   title: string
   description: string
   runtimeKind: RemoteAgentRuntimeKind
-  requiresContactApproval: boolean
   isPublicShared: boolean
 }
 
@@ -140,12 +139,7 @@ const emptyAgentDraft: CreateAgentDraft = {
   title: "",
   description: "",
   runtimeKind: "claude_code" as RemoteAgentRuntimeKind,
-  requiresContactApproval: false,
   isPublicShared: false,
-}
-
-function contactApprovalLabel(requiresContactApproval: boolean) {
-  return requiresContactApproval ? "Approval required" : "Open to workspace"
 }
 
 export default function RemoteAgentsPage() {
@@ -263,7 +257,6 @@ export default function RemoteAgentsPage() {
         title: agentDraft.title.trim(),
         description: agentDraft.description.trim() || undefined,
         runtimeKind: agentDraft.runtimeKind,
-        requiresContactApproval: agentDraft.requiresContactApproval,
         isPublicShared: agentDraft.isPublicShared,
       })
       setAgentDialogOpen(false)
@@ -460,10 +453,6 @@ export default function RemoteAgentsPage() {
                   ) : null}
                   <div className="mt-4 grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
                     <div>
-                      Contact access:{" "}
-                      {contactApprovalLabel(agent.requiresContactApproval)}
-                    </div>
-                    <div>
                       Machine: {agent.binding?.machineTitle || "Not bound yet"}
                     </div>
                     <div className="sm:col-span-2">
@@ -633,29 +622,6 @@ export default function RemoteAgentsPage() {
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-              </FieldContent>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="agent-approval">
-                Require contact approval
-              </FieldLabel>
-              <FieldContent>
-                <div className="flex items-center justify-between gap-4 rounded-2xl border border-border px-4 py-3">
-                  <FieldDescription className="m-0">
-                    When enabled, workspace members must request access before
-                    they can start a direct conversation with this remote agent.
-                  </FieldDescription>
-                  <Switch
-                    id="agent-approval"
-                    checked={agentDraft.requiresContactApproval}
-                    onCheckedChange={(checked) =>
-                      setAgentDraft((current) => ({
-                        ...current,
-                        requiresContactApproval: checked,
-                      }))
-                    }
-                  />
-                </div>
               </FieldContent>
             </Field>
             <Field>

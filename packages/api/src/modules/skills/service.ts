@@ -1688,7 +1688,7 @@ export function buildSkillAccessRow(
     workspace_member_id: workspaceMemberId,
     conversation_type_mask_override: row.conversation_type_mask_override,
     status: row.status,
-    source: row.source === "default_open" ? "manual" : row.source,
+    source: row.source as SkillAccessRow["source"],
     created_by_workspace_member_id: row.created_by_workspace_member_id,
     reason: row.reason,
     created_at: row.created_at,

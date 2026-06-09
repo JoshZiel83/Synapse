@@ -19,7 +19,6 @@ import {
   workspaceRef,
 } from "@synapse/shared"
 import type {
-  PluginAttachmentScopeType,
   CapabilityAccessTarget,
   WorkspaceAppGrant,
 } from "@synapse/shared/types"
@@ -129,7 +128,6 @@ type PluginCatalogRow = {
   spec_default_config: unknown
   spec_install_flow: unknown
   spec_auth_bindings: unknown
-  spec_default_mount_scope: PluginAttachmentScopeType | null
   spec_default_reuse_scope: PluginReuseScopeV2 | null
   spec_default_conversation_type_mask: number | null
   spec_supported_reuse_scopes: unknown
@@ -178,10 +176,6 @@ type InstallationRow = {
   catalog_item_id: string
   catalog_version_id: string
   root_display_name: string
-  attachment_scope_type: PluginAttachmentScopeType
-  attachment_conversation_id: string | null
-  attachment_actor_id: string | null
-  attachment_workspace_member_id: string | null
   config_data: unknown
   approved_runtime_permissions: string[] | null
   reuse_scope: PluginReuseScopeV2
@@ -251,7 +245,6 @@ const PLUGIN_CATALOG_SELECT = `
     spec.default_config AS spec_default_config,
     spec.install_flow AS spec_install_flow,
     spec.auth_bindings AS spec_auth_bindings,
-    spec.default_mount_scope AS spec_default_mount_scope,
     spec.default_reuse_scope AS spec_default_reuse_scope,
     spec.default_conversation_type_mask AS spec_default_conversation_type_mask,
     spec.supported_reuse_scopes AS spec_supported_reuse_scopes,
@@ -403,18 +396,6 @@ function assertSupportedReuseScope(
   }
 }
 
-function publicAttachmentScope(
-  scope: PluginAttachmentScopeType | null | undefined
-): PluginAttachmentScopeType {
-  return scope || "workspace"
-}
-
-function internalAttachmentScope(
-  scope: PluginAttachmentScopeType
-): PluginAttachmentScopeType {
-  return scope
-}
-
 function publicReuseScope(
   scope: PluginReuseScopeV2 | null | undefined
 ): ReuseScope {
@@ -512,7 +493,6 @@ async function ensureBuiltinPluginIcon(
 
 function authorizationFromRuntimePermissions(
   runtimePermissions: unknown,
-  defaultScope: PluginAttachmentScopeType,
   specMetadata: JsonObject
 ) {
   const rows = asArray<JsonObject>(runtimePermissions)
@@ -533,9 +513,6 @@ function authorizationFromRuntimePermissions(
 function mapPluginView(row: PluginCatalogRow) {
   const itemMetadata = asObject(row.item_metadata)
   const specMetadata = asObject(row.spec_metadata)
-  const defaultAttachmentScope = publicAttachmentScope(
-    row.spec_default_mount_scope
-  )
   const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope)
   const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
     defaultMask: row.spec_default_conversation_type_mask,
@@ -547,7 +524,6 @@ function mapPluginView(row: PluginCatalogRow) {
   )
   const authorization = authorizationFromRuntimePermissions(
     row.runtime_permissions_json,
-    defaultAttachmentScope,
     specMetadata
   )
   const configFields = asArray<PluginConfigFieldDefinition>(
@@ -598,7 +574,6 @@ function mapPluginView(row: PluginCatalogRow) {
     default_reuse_scope: defaultReuseScope,
     default_conversation_type_mask: defaultConversationTypeMask,
     supported_reuse_scopes: supportedReuseScopes,
-    default_attachment_scope: defaultAttachmentScope,
     config_schema: asObject(row.spec_config_schema),
     config_fields: configFields,
     default_config: asObject(row.spec_default_config),
@@ -939,10 +914,6 @@ async function getPluginCatalogRowByItemId(itemId: string) {
 async function loadInstallationRows(
   workspaceId: string,
   filters?: {
-    attachmentScopeType?: PluginAttachmentScopeType
-    conversationId?: string
-    actorId?: string
-    workspaceMemberId?: string
     pluginId?: string
     installationId?: string
   }
@@ -966,13 +937,6 @@ async function loadInstallationRows(
         installation.catalog_item_id,
         installation.catalog_version_id,
         app.display_name AS root_display_name,
-        -- Optional legacy placement hint. New installs no longer require
-        -- attachment scope, but older/admin records may still project one from
-        -- attachment_scope_subject_id when present.
-        attachment_subj.kind AS attachment_scope_type,
-        attachment_subj.conversation_id AS attachment_conversation_id,
-        attachment_subj.actor_id AS attachment_actor_id,
-        attachment_subj.workspace_member_id AS attachment_workspace_member_id,
         installation.config_data,
         installation.approved_runtime_permissions,
         installation.reuse_scope,
@@ -990,8 +954,6 @@ async function loadInstallationRows(
       FROM plugin_installations installation
       INNER JOIN workspace_apps app
         ON app.id = installation.id
-      LEFT JOIN access_subjects attachment_subj
-        ON attachment_subj.id = installation.attachment_scope_subject_id
       LEFT JOIN plugin_source_refs source_ref
         ON source_ref.installation_id = installation.id
       WHERE app.deleted_at IS NULL
@@ -1000,33 +962,7 @@ async function loadInstallationRows(
       ORDER BY installation.created_at DESC`.compile(db)
   )
 
-  return result.rows.filter((row) => {
-    const attachmentScopeType = row.attachment_scope_type
-      ? publicAttachmentScope(row.attachment_scope_type)
-      : null
-    if (
-      filters?.attachmentScopeType &&
-      attachmentScopeType !== filters.attachmentScopeType
-    ) {
-      return false
-    }
-    if (
-      filters?.conversationId &&
-      row.attachment_conversation_id !== filters.conversationId
-    ) {
-      return false
-    }
-    if (filters?.actorId && row.attachment_actor_id !== filters.actorId) {
-      return false
-    }
-    if (
-      filters?.workspaceMemberId &&
-      row.attachment_workspace_member_id !== filters.workspaceMemberId
-    ) {
-      return false
-    }
-    return true
-  })
+  return result.rows
 }
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
@@ -1368,7 +1304,6 @@ async function upsertPluginVersion(
     entryPoint?: string
     lifecycleScope?: ReuseScope
     supportedReuseScopes?: ReuseScope[]
-    defaultAttachmentScope?: PluginAttachmentScopeType
     defaultConversationTypeMask?: number
     requiresHandshake?: boolean
     toolsManifest?: unknown[]
@@ -1438,9 +1373,6 @@ async function upsertPluginVersion(
         input.installFlow || { steps: input.setupSteps || [] }
       )}::jsonb`,
       auth_bindings: sql`${JSON.stringify(input.authBindings || [])}::jsonb`,
-      default_mount_scope: internalAttachmentScope(
-        input.defaultAttachmentScope || "workspace"
-      ),
       default_reuse_scope: internalReuseScope(defaultReuseScope),
       default_conversation_type_mask: defaultConversationTypeMask,
       supported_reuse_scopes: supportedReuseScopes.map((scope) =>
@@ -1459,7 +1391,6 @@ async function upsertPluginVersion(
         default_config: sql`excluded.default_config`,
         install_flow: sql`excluded.install_flow`,
         auth_bindings: sql`excluded.auth_bindings`,
-        default_mount_scope: sql`excluded.default_mount_scope`,
         default_reuse_scope: sql`excluded.default_reuse_scope`,
         default_conversation_type_mask: sql`excluded.default_conversation_type_mask`,
         supported_reuse_scopes: sql`excluded.supported_reuse_scopes`,
@@ -1650,7 +1581,6 @@ export async function createPlugin(data: {
   longDescriptionI18n?: Record<string, string>
   summaryI18n?: Record<string, string>
   defaultLocale?: string
-  defaultAttachmentScope?: PluginAttachmentScopeType
   supportedReuseScopes?: ReuseScope[]
   requiresHandshake?: boolean
   authorization?: {
@@ -1877,7 +1807,6 @@ export async function installPluginUnified(data: {
           id: installationId,
           catalog_item_id: plugin.id,
           catalog_version_id: catalogVersionId,
-          attachment_scope_subject_id: null,
           config_data: {} as TableInsert<"plugin_installations">["config_data"],
           approved_runtime_permissions: approvedRuntimePermissions,
           reuse_scope: internalReuseScope(lifecycleScope),
@@ -2024,10 +1953,6 @@ export async function uninstallPluginUnified(installId: string) {
 export async function getInstallations(
   workspaceId: string,
   filters?: {
-    attachmentScopeType?: PluginAttachmentScopeType
-    conversationId?: string
-    actorId?: string
-    workspaceMemberId?: string
     pluginId?: string
   }
 ) {
@@ -2657,7 +2582,6 @@ export async function seedBuiltinMcpPlugins() {
         entryPoint: pluginSeed.entryPoint,
         lifecycleScope: pluginSeed.defaultReuseScope,
         supportedReuseScopes: pluginSeed.supportedReuseScopes,
-        defaultAttachmentScope: pluginSeed.defaultAttachmentScope,
         requiresHandshake: pluginSeed.requiresHandshake,
         tags: pluginSeed.tags,
         categorySlugs: pluginSeed.categorySlugs,

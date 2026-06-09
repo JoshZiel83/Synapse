@@ -1,6 +1,18 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
-import { REMOTE_AGENT_RUNTIME_KINDS } from "@synapse/shared"
+import {
+  CAPABILITY_ACCESS_TARGET_TYPES,
+  REMOTE_AGENT_RUNTIME_KINDS,
+  SUBJECT_KIND,
+  WORKSPACE_APP_GRANT_PERMISSIONS,
+  actorRef,
+  conversationRef,
+  remoteAgentRef,
+  workspaceMemberRef,
+  workspaceRef,
+  type CapabilityAccessTarget,
+  type WorkspaceAppGrantPermission,
+} from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -30,6 +42,37 @@ import {
 import { handleRemoteAgentMcpRequest } from "./mcp-endpoint.js"
 
 const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
+const workspaceAppGrantPermissionSchema = z.enum(
+  WORKSPACE_APP_GRANT_PERMISSIONS
+)
+const initialGrantTargetSchema = z.object({
+  subject: z.object({
+    kind: z.enum(CAPABILITY_ACCESS_TARGET_TYPES),
+    workspaceId: z.uuid().optional(),
+    memberId: z.uuid().optional(),
+    conversationId: z.uuid().optional(),
+    actorId: z.uuid().optional(),
+    remoteAgentId: z.uuid().optional(),
+  }),
+  scope: z
+    .object({
+      kind: z.literal(SUBJECT_KIND.CONVERSATION),
+      conversationId: z.uuid(),
+    })
+    .optional(),
+})
+const initialGrantSchema = z.object({
+  target: initialGrantTargetSchema,
+  permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
+  conversationTypeMaskOverride: z
+    .number()
+    .int()
+    .min(1)
+    .max(15)
+    .nullable()
+    .optional(),
+  reason: z.string().trim().min(1).optional(),
+})
 const createRemoteAgentSchema = z.object({
   displayName: z.string().trim().min(1).max(255),
   title: z.string().trim().min(1).max(255),
@@ -37,17 +80,40 @@ const createRemoteAgentSchema = z.object({
   runtimeKind: runtimeKindSchema,
   avatarFileId: z.uuid().optional(),
   avatarEmoji: z.string().trim().max(32).optional(),
-  requiresContactApproval: z.boolean().optional(),
   isPublicShared: z.boolean().optional(),
   metadata: z.record(z.string(), z.any()).optional(),
+  grants: z.array(initialGrantSchema).optional(),
 })
 
-const updateRemoteAgentSchema = createRemoteAgentSchema.partial().extend({
+const updateRemoteAgentSchema = z.object({
+  displayName: z.string().trim().min(1).max(255).optional(),
+  title: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().max(5000).nullable().optional(),
   avatarFileId: z.uuid().nullable().optional(),
   avatarEmoji: z.string().trim().max(32).nullable().optional(),
+  isPublicShared: z.boolean().optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
   isActive: z.boolean().optional(),
 })
+
+function toCapabilityAccessTarget(
+  input: z.infer<typeof initialGrantTargetSchema>
+): CapabilityAccessTarget {
+  const subject =
+    input.subject.kind === SUBJECT_KIND.WORKSPACE
+      ? workspaceRef(input.subject.workspaceId || "")
+      : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
+        ? workspaceMemberRef(input.subject.memberId || "")
+        : input.subject.kind === SUBJECT_KIND.CONVERSATION
+          ? conversationRef(input.subject.conversationId || "")
+          : input.subject.kind === SUBJECT_KIND.ACTOR
+            ? actorRef(input.subject.actorId || "")
+            : remoteAgentRef(input.subject.remoteAgentId || "")
+  const scope = input.scope
+    ? conversationRef(input.scope.conversationId)
+    : undefined
+  return scope ? { subject, scope } : { subject }
+}
 
 const createMachineSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
@@ -197,9 +263,15 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             runtimeKind: body.runtimeKind,
             avatarFileId: body.avatarFileId,
             avatarEmoji: body.avatarEmoji,
-            requiresContactApproval: body.requiresContactApproval,
             isPublicShared: body.isPublicShared,
             metadata: body.metadata,
+            grants: body.grants?.map((grant) => ({
+              target: toCapabilityAccessTarget(grant.target),
+              permissions: grant.permissions as WorkspaceAppGrantPermission[],
+              conversationTypeMaskOverride:
+                grant.conversationTypeMaskOverride ?? null,
+              reason: grant.reason,
+            })),
           })
         )
       } catch (error) {
@@ -235,7 +307,14 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId",
     { preHandler: workspacePreHandler },
     async (request, reply) => {
-      if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        "remote_agent.edit",
+        request.params.remoteAgentId,
+        "Not allowed to edit this remote agent"
+      )
+      if (!allowed) return
       try {
         const body = updateRemoteAgentSchema.parse(request.body)
         return reply.send(
@@ -248,7 +327,6 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             description: body.description,
             avatarFileId: body.avatarFileId,
             avatarEmoji: body.avatarEmoji,
-            requiresContactApproval: body.requiresContactApproval,
             isPublicShared: body.isPublicShared,
             isActive: body.isActive,
             metadata: body.metadata,
@@ -266,7 +344,14 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId",
     { preHandler: workspacePreHandler },
     async (request, reply) => {
-      if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        "remote_agent.delete",
+        request.params.remoteAgentId,
+        "Not allowed to delete this remote agent"
+      )
+      if (!allowed) return
       try {
         return reply.send(
           await deleteRemoteAgent({
@@ -288,7 +373,14 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/bind",
     { preHandler: workspacePreHandler },
     async (request, reply) => {
-      if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        "remote_agent.edit",
+        request.params.remoteAgentId,
+        "Not allowed to bind this remote agent"
+      )
+      if (!allowed) return
       try {
         const body = bindRemoteAgentSchema.parse(request.body)
         return reply.send(
@@ -314,7 +406,14 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-interaction-grants",
     { preHandler: workspacePreHandler },
     async (request, reply) => {
-      if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        "remote_agent.grant",
+        request.params.remoteAgentId,
+        "Not allowed to manage this remote agent grant state"
+      )
+      if (!allowed) return
       try {
         return reply.send(
           await listRemoteAgentGroupInteractionGrants({
@@ -336,7 +435,14 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     "/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-interaction-grants",
     { preHandler: workspacePreHandler },
     async (request, reply) => {
-      if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return
+      const allowed = await requireRequestAction(
+        request,
+        reply,
+        "remote_agent.grant",
+        request.params.remoteAgentId,
+        "Not allowed to manage this remote agent grant state"
+      )
+      if (!allowed) return
       try {
         const body = groupInteractionGrantsSchema.parse(request.body)
         return reply.send(

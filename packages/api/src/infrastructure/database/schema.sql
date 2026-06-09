@@ -44,7 +44,6 @@ CREATE TYPE catalog_items_visibility AS ENUM ('public', 'workspace', 'private');
 CREATE TYPE catalog_versions_status AS ENUM ('draft', 'active', 'deprecated', 'archived');
 CREATE TYPE catalog_version_files_file_role AS ENUM ('document', 'reference', 'script', 'image', 'json', 'binary');
 CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'sse');
-CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'workspace_member');
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
 CREATE TYPE remote_agents_runtime_kind AS ENUM ('claude_code', 'codex');
@@ -798,7 +797,6 @@ CREATE TABLE plugin_package_version_specs (
   default_config JSONB NOT NULL DEFAULT '{}',
   install_flow JSONB NOT NULL DEFAULT '{}',
   auth_bindings JSONB NOT NULL DEFAULT '[]',
-  default_mount_scope plugin_package_version_specs_default_mount_scope NOT NULL DEFAULT 'workspace',
   default_reuse_scope plugin_package_version_specs_default_reuse_scope NOT NULL DEFAULT 'conversation',
   default_conversation_type_mask INT NOT NULL DEFAULT 15
     CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 15),
@@ -985,8 +983,8 @@ CREATE TABLE actors (
   specialties TEXT[] DEFAULT '{}',
   -- P2: the old access-policy column has been removed. Authorization intent is now
   -- represented by the existence of a workspace-scoped `contact_visible`
-  -- grant in `workspace_app_grants` with `source='default_open'`. See
-  -- packages/api/src/modules/relationship/service.ts for the lifecycle.
+  -- grant in `workspace_app_grants` with `source='system'` or by explicit
+  -- per-subject grants/requests. See packages/api/src/modules/access/contact-approval.ts.
   config JSONB DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   is_public_shared BOOLEAN NOT NULL DEFAULT FALSE,
@@ -3118,11 +3116,6 @@ CREATE TABLE plugin_installations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
   catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE RESTRICT,
-  -- Legacy optional attachment hint. New installs no longer require an
-  -- attachment scope; visibility/use now live in workspace_app_grants. When
-  -- present, this still points at an access_subjects row for older/admin
-  -- records that want an explicit placement hint.
-  attachment_scope_subject_id UUID,
   config_data JSONB NOT NULL DEFAULT '{}',
   approved_runtime_permissions TEXT[] DEFAULT '{}',
   reuse_scope plugin_installations_reuse_scope NOT NULL DEFAULT 'conversation',
@@ -3131,14 +3124,6 @@ CREATE TABLE plugin_installations (
 );
 
 CREATE INDEX idx_plugin_installations_item ON plugin_installations(catalog_item_id, created_at DESC);
-CREATE INDEX idx_plugin_installations_attachment_subject
-  ON plugin_installations(attachment_scope_subject_id);
--- P1b: deferred FK from plugin_installations.attachment_scope_subject_id —
--- access_subjects is created earlier in this file so a forward reference is
--- safe; we add the FK here (after plugin_installations exists) for clarity.
-ALTER TABLE plugin_installations
-  ADD CONSTRAINT fk_plugin_installations_attachment_subject
-  FOREIGN KEY (attachment_scope_subject_id) REFERENCES access_subjects(id) ON DELETE RESTRICT;
 
 CREATE TABLE automation_integration_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

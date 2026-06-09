@@ -43,7 +43,6 @@ export const mijiaSeed: BuiltinOrgSeed = {
           "X-Mijia-Expose-Raw": "${config:exposeRawMiotTools}",
         },
       }),
-      defaultAttachmentScope: "workspace_member",
       defaultReuseScope: "session",
       supportedReuseScopes: [
         "turn",

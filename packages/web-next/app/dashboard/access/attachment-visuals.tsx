@@ -1,7 +1,12 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import type { PluginAttachmentScopeType, ReuseScope } from "@synapse/shared"
+import type { CapabilityAccessTargetType, ReuseScope } from "@synapse/shared"
+
+type AttachmentScopePreviewType = Exclude<
+  CapabilityAccessTargetType,
+  "remote_agent"
+>
 
 export type AccessTargetType =
   | "workspace"
@@ -108,7 +113,7 @@ type FakeLifecycleNode = FakeLifecycleCall & {
   instance: { key: string; label: string } | null
 }
 
-export const attachmentScopeOptionDefs: ScopeOptionDef<PluginAttachmentScopeType>[] =
+export const attachmentScopeOptionDefs: ScopeOptionDef<AttachmentScopePreviewType>[] =
   [
     {
       value: "workspace",
@@ -235,7 +240,7 @@ const reuseOptionDefs: ReuseOptionDef[] = [
   },
 ]
 
-const lifecycleOptionMap: Record<PluginAttachmentScopeType, ReuseScope[]> = {
+const lifecycleOptionMap: Record<AttachmentScopePreviewType, ReuseScope[]> = {
   workspace: ["turn", "session", "conversation", "actor", "workspace"],
   conversation: ["turn", "session", "conversation", "actor", "workspace"],
   actor: ["turn", "session", "conversation", "actor", "workspace"],
@@ -243,7 +248,7 @@ const lifecycleOptionMap: Record<PluginAttachmentScopeType, ReuseScope[]> = {
 }
 
 export function getAllowedReuseScopes(
-  attachmentScopeType: PluginAttachmentScopeType
+  attachmentScopeType: AttachmentScopePreviewType
 ) {
   const allowedScopes = new Set(
     lifecycleOptionMap[attachmentScopeType] || ["turn"]
@@ -266,7 +271,7 @@ export function getConversationDisplayName(
   return "Untitled conversation"
 }
 
-function getScopeOption(scope: PluginAttachmentScopeType) {
+function getScopeOption(scope: AttachmentScopePreviewType) {
   return (
     attachmentScopeOptionDefs.find((option) => option.value === scope) ||
     attachmentScopeOptionDefs[0]
@@ -737,9 +742,9 @@ export function AccessAttachmentScopeStep({
   onConversationChange,
   error,
 }: {
-  value: PluginAttachmentScopeType
-  onChange: (value: PluginAttachmentScopeType) => void
-  allowedScopes?: PluginAttachmentScopeType[]
+  value: AttachmentScopePreviewType
+  onChange: (value: AttachmentScopePreviewType) => void
+  allowedScopes?: AttachmentScopePreviewType[]
   actors: AccessVisualActor[]
   conversations: AccessVisualConversation[]
   selectedActorId?: string
@@ -855,7 +860,7 @@ export function AccessAttachmentScopeStep({
         <RadioGroup
           value={value}
           onValueChange={(nextValue) =>
-            onChange(nextValue as PluginAttachmentScopeType)
+            onChange(nextValue as AttachmentScopePreviewType)
           }
           className="w-full"
         >
@@ -1129,7 +1134,7 @@ export function AccessReuseScopeStep({
   selectedActorId,
   allowedReuseScopes,
 }: {
-  attachmentScopeType: PluginAttachmentScopeType
+  attachmentScopeType: AttachmentScopePreviewType
   value: ReuseScope
   onChange: (value: ReuseScope) => void
   actors: AccessVisualActor[]

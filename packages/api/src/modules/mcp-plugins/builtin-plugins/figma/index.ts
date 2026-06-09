@@ -39,7 +39,6 @@ export const figmaSeed: BuiltinOrgSeed = {
           Authorization: "Bearer ${auth:figmaAccount.accessToken}",
         },
       }),
-      defaultAttachmentScope: "workspace_member",
       defaultReuseScope: "session",
       requiresHandshake: false,
       iconAssetPath: "assets/icons/figma.svg",

@@ -226,8 +226,6 @@ export type PluginConnectionsStatus = "active" | "expired" | "revoked";
 
 export type PluginInstallationsReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
-export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation" | "workspace" | "workspace_member";
-
 export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
 export type PluginPackageVersionSpecsTransport = "builtin" | "http" | "sse" | "stdio";
@@ -2047,7 +2045,6 @@ export interface PluginConnectionsLive {
 
 export interface PluginInstallations {
   approved_runtime_permissions: Generated<string[] | null>;
-  attachment_scope_subject_id: string | null;
   catalog_item_id: string;
   catalog_version_id: string;
   config_data: Generated<Json>;
@@ -2059,7 +2056,6 @@ export interface PluginInstallations {
 
 export interface PluginInstallationsLive {
   approved_runtime_permissions: string[] | null;
-  attachment_scope_subject_id: string | null;
   catalog_item_id: string | null;
   catalog_version_id: string | null;
   config_data: Json | null;
@@ -2076,7 +2072,6 @@ export interface PluginPackageVersionSpecs {
   created_at: Generated<Timestamp | null>;
   default_config: Generated<Json>;
   default_conversation_type_mask: Generated<number>;
-  default_mount_scope: Generated<PluginPackageVersionSpecsDefaultMountScope>;
   default_reuse_scope: Generated<PluginPackageVersionSpecsDefaultReuseScope>;
   entry_point: string | null;
   install_flow: Generated<Json>;

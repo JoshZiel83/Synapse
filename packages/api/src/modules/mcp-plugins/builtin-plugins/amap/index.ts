@@ -37,7 +37,6 @@ export const amapSeed: BuiltinOrgSeed = {
         url: "https://mcp.amap.com/mcp",
         query: { key: "${config:apiKey}" },
       }),
-      defaultAttachmentScope: "workspace",
       defaultReuseScope: "workspace",
       requiresHandshake: false,
       iconAssetPath: "assets/icons/amap.svg",

@@ -5,6 +5,7 @@ import {
   REMOTE_AGENT_MACHINE_TRUST_STATUS,
   REMOTE_AGENT_RUNTIME_CATALOG_STATUS,
   REMOTE_AGENT_RUNTIME_STATE,
+  type CapabilityAccessTarget,
   type RemoteAgentLifecycleState,
   type RemoteAgentMachineDetailView,
   type RemoteAgentMachinePairingSessionView,
@@ -18,6 +19,7 @@ import {
   type RemoteAgentRuntimeSummaryView,
   type RemoteAgentRuntimeState,
   type RemoteAgentView,
+  type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { buildDaemonCommand as buildDaemonCommandImpl } from "./daemon-command.js"
@@ -32,15 +34,16 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
-import { authorizeAction } from "../access/service.js"
 import {
-  deriveRequiresContactApproval,
-  setRequiresContactApproval,
-} from "../access/contact-approval.js"
+  authorizeAction,
+  listAuthorizedResourceIds,
+} from "../access/service.js"
+import { deriveRequiresContactApproval } from "../access/contact-approval.js"
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
 } from "../workspace-apps/root-storage.js"
+import { insertWorkspaceAppGrant } from "../workspace-apps/grant-storage.js"
 import {
   getConversationParticipant,
   listVisibleConversationItemsForParticipant,
@@ -1638,7 +1641,20 @@ export async function listRemoteAgents(params: {
   workspaceId: string
   userId: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
+  const identity = await requireWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId
+  )
+  const visibleIds = await listAuthorizedResourceIds(db, {
+    subject: {
+      type: "workspace_member",
+      id: identity.workspaceMemberId,
+    },
+    action: "remote_agent.view",
+  })
+  if (visibleIds.length === 0) {
+    return { remoteAgents: [] }
+  }
   const result = await runOnDb<any>(
     `
       SELECT
@@ -1685,9 +1701,10 @@ export async function listRemoteAgents(params: {
       ${LATEST_CONVERSATION_CONTEXT_LATERAL}
       WHERE app.workspace_id = $1
         AND app.deleted_at IS NULL
+        AND agent.id = ANY($2::uuid[])
       ORDER BY agent.created_at DESC, agent.id DESC
     `,
-    [params.workspaceId]
+    [params.workspaceId, visibleIds]
   )
   return {
     remoteAgents: await Promise.all(result.rows.map(mapRemoteAgentRow)),
@@ -1699,7 +1716,21 @@ export async function getRemoteAgent(params: {
   remoteAgentId: string
   userId: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
+  const identity = await requireWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId
+  )
+  const allowed = await authorizeAction(db, {
+    subject: {
+      type: "workspace_member",
+      id: identity.workspaceMemberId,
+    },
+    action: "remote_agent.view",
+    resourceId: params.remoteAgentId,
+  })
+  if (!allowed) {
+    throw new Error("Not allowed to view this remote agent")
+  }
   const result = await runOnDb<any>(
     `
       SELECT
@@ -1769,18 +1800,19 @@ export async function createRemoteAgent(params: {
   runtimeKind: RemoteAgentRuntimeKind
   avatarFileId?: string
   avatarEmoji?: string
-  requiresContactApproval?: boolean
   isPublicShared?: boolean
   metadata?: Record<string, unknown>
+  grants?: Array<{
+    target: CapabilityAccessTarget
+    permissions: WorkspaceAppGrantPermission[]
+    conversationTypeMaskOverride?: number | null
+    reason?: string
+  }>
 }) {
   const identity = await requireWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
   )
-  // P2 atomicity: wrap the INSERT remote_agents +
-  // setRequiresContactApproval(false) in a single transaction so we never
-  // leave a remote_agent row
-  // without its expected default-open grant when the second write fails.
   const insertedRow = await withDbTransaction(async (client) => {
     const remoteAgentId = crypto.randomUUID()
     await insertWorkspaceAppRoot(client, {
@@ -1821,15 +1853,18 @@ export async function createRemoteAgent(params: {
       ]
     )
     const row = result.rows[0]!
-    // Persist contact approval intent as a default_open contact_visible grant
-    // instead of a column on remote_agents. New agents default to workspace-visible.
-    await setRequiresContactApproval(client, {
-      resourceType: "remote_agent",
-      resourceId: row.id,
-      workspaceId: params.workspaceId,
-      requiresContactApproval: params.requiresContactApproval ?? false,
-      createdByWorkspaceMemberId: identity.workspaceMemberId,
-    })
+    for (const grant of params.grants || []) {
+      await insertWorkspaceAppGrant(client, {
+        workspaceId: params.workspaceId,
+        workspaceAppId: row.id,
+        target: grant.target,
+        permissions: grant.permissions,
+        conversationTypeMaskOverride:
+          grant.conversationTypeMaskOverride ?? null,
+        createdByWorkspaceMemberId: identity.workspaceMemberId,
+        reason: grant.reason ?? null,
+      })
+    }
     return row
   })
   return {
@@ -1852,7 +1887,6 @@ export async function updateRemoteAgent(params: {
   description?: string | null
   avatarFileId?: string | null
   avatarEmoji?: string | null
-  requiresContactApproval?: boolean
   isPublicShared?: boolean
   isActive?: boolean
   metadata?: Record<string, unknown>
@@ -1906,18 +1940,6 @@ export async function updateRemoteAgent(params: {
       JSON.stringify(nextMetadata),
     ]
   )
-  if (
-    params.requiresContactApproval !== undefined &&
-    params.requiresContactApproval !==
-      existing.remoteAgent.requiresContactApproval
-  ) {
-    await setRequiresContactApproval(db, {
-      resourceType: "remote_agent",
-      resourceId: params.remoteAgentId,
-      workspaceId: params.workspaceId,
-      requiresContactApproval: params.requiresContactApproval,
-    })
-  }
   await updateWorkspaceAppRoot(db, {
     id: params.remoteAgentId,
     displayName: params.displayName?.trim() || existing.remoteAgent.displayName,

@@ -50,13 +50,6 @@ const transportLabels: Record<string, string> = {
   stdio: "Local (stdio)",
 }
 
-const attachmentScopeLabels: Record<string, string> = {
-  workspace: "Workspace",
-  conversation: "Conversation",
-  actor: "Actor",
-  workspace_member: "Workspace Member",
-}
-
 const reuseScopeLabels: Record<string, string> = {
   turn: "Turn",
   session: "Session",
@@ -129,15 +122,6 @@ export default function PluginDetailDialog({
               className="border-gray-200 dark:border-white/10"
             >
               {transportLabels[plugin.transport] || plugin.transport}
-            </Badge>
-            <Badge
-              variant="outline"
-              className="border-gray-200 dark:border-white/10"
-            >
-              Default owner:{" "}
-              {attachmentScopeLabels[plugin.default_attachment_scope] ||
-                plugin.default_attachment_scope ||
-                "Workspace"}
             </Badge>
             <Badge
               variant="outline"

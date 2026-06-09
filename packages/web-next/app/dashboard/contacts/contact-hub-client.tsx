@@ -120,12 +120,6 @@ function toggleApprovalMode(current: RelationshipProfileView["approvalMode"]) {
     : RELATIONSHIP_APPROVAL_MODE.AUTO
 }
 
-function toggleRequiresContactApproval(
-  current: RelationshipProfileView["requiresContactApproval"]
-) {
-  return !current
-}
-
 function getIdentityMatchStateLabel(
   state: IdentitySearchResponse["matches"][number]["state"]
 ) {
@@ -645,29 +639,10 @@ export function ContactHubClient() {
       selectedEntry.actorId,
       {
         approvalMode: nextMode,
-        requiresContactApproval: selectedActorProfile.requiresContactApproval,
       }
     )
     setSelectedActorProfile(nextProfile)
     toast.success(`Actor approval mode switched to ${nextMode}.`)
-  }
-
-  async function handleToggleActorContactApproval() {
-    if (!workspaceId || !selectedEntry?.actorId || !selectedActorProfile) return
-    const nextRequiresContactApproval = toggleRequiresContactApproval(
-      selectedActorProfile.requiresContactApproval
-    )
-    const nextProfile = await api.updateActorRelationshipProfile(
-      workspaceId,
-      selectedEntry.actorId,
-      {
-        approvalMode: selectedActorProfile.approvalMode,
-        requiresContactApproval: nextRequiresContactApproval,
-      }
-    )
-    setSelectedActorProfile(nextProfile)
-    await loadHub(selectedEntry)
-    toast.success("Actor contact approval updated.")
   }
 
   async function handleToggleActorPublicShare() {
@@ -678,7 +653,6 @@ export function ContactHubClient() {
       selectedEntry.actorId,
       {
         approvalMode: selectedActorProfile.approvalMode,
-        requiresContactApproval: selectedActorProfile.requiresContactApproval,
         isPublicShared: nextPublicShared,
       }
     )
@@ -703,35 +677,10 @@ export function ContactHubClient() {
       selectedEntry.remoteAgentId,
       {
         approvalMode: nextMode,
-        requiresContactApproval:
-          selectedRemoteAgentProfile.requiresContactApproval,
       }
     )
     setSelectedRemoteAgentProfile(nextProfile)
     toast.success(`Remote agent approval mode switched to ${nextMode}.`)
-  }
-
-  async function handleToggleRemoteAgentContactApproval() {
-    if (
-      !workspaceId ||
-      !selectedEntry?.remoteAgentId ||
-      !selectedRemoteAgentProfile
-    )
-      return
-    const nextRequiresContactApproval = toggleRequiresContactApproval(
-      selectedRemoteAgentProfile.requiresContactApproval
-    )
-    const nextProfile = await api.updateRemoteAgentRelationshipProfile(
-      workspaceId,
-      selectedEntry.remoteAgentId,
-      {
-        approvalMode: selectedRemoteAgentProfile.approvalMode,
-        requiresContactApproval: nextRequiresContactApproval,
-      }
-    )
-    setSelectedRemoteAgentProfile(nextProfile)
-    await loadHub(selectedEntry)
-    toast.success("Remote agent contact approval updated.")
   }
 
   async function handleToggleRemoteAgentPublicShare() {
@@ -747,8 +696,6 @@ export function ContactHubClient() {
       selectedEntry.remoteAgentId,
       {
         approvalMode: selectedRemoteAgentProfile.approvalMode,
-        requiresContactApproval:
-          selectedRemoteAgentProfile.requiresContactApproval,
         isPublicShared: nextPublicShared,
       }
     )
@@ -1419,21 +1366,6 @@ export function ContactHubClient() {
                           variant="outline"
                           size="sm"
                           className="w-full rounded-full"
-                          onClick={() =>
-                            void handleToggleActorContactApproval()
-                          }
-                        >
-                          Switch contact approval to{" "}
-                          {toggleRequiresContactApproval(
-                            selectedActorProfile.requiresContactApproval
-                          )
-                            ? "required"
-                            : "open"}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full rounded-full"
                           onClick={() => void handleToggleActorPublicShare()}
                         >
                           Turn public share{" "}
@@ -1485,21 +1417,6 @@ export function ContactHubClient() {
                           {toggleApprovalMode(
                             selectedRemoteAgentProfile.approvalMode
                           )}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full rounded-full"
-                          onClick={() =>
-                            void handleToggleRemoteAgentContactApproval()
-                          }
-                        >
-                          Switch contact approval to{" "}
-                          {toggleRequiresContactApproval(
-                            selectedRemoteAgentProfile.requiresContactApproval
-                          )
-                            ? "required"
-                            : "open"}
                         </Button>
                         <Button
                           variant="outline"

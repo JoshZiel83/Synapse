@@ -504,7 +504,11 @@ test(
         permission: "view",
         subject,
       })
-      assert.equal(before, true, "live actor is viewable by admin")
+      assert.equal(
+        before,
+        false,
+        "admin no longer gets actor visibility implicitly"
+      )
       await db
         .updateTable("workspace_apps")
         .set({ deleted_at: new Date() })
@@ -889,7 +893,6 @@ test(
           id: instId,
           catalog_item_id: item.id,
           catalog_version_id: ver.id,
-          attachment_scope_subject_id: wsSubject.id,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -981,7 +984,6 @@ test(
           id: instId,
           catalog_item_id: item.id,
           catalog_version_id: ver.id,
-          attachment_scope_subject_id: wsSubject.id,
         })
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -1168,7 +1170,6 @@ async function insertInstallation(
       id: instId,
       catalog_item_id: item.id,
       catalog_version_id: ver.id,
-      attachment_scope_subject_id: wsSubject.id,
     })
     .returning("id")
     .executeTakeFirstOrThrow()

@@ -686,7 +686,7 @@ test(
 )
 
 test(
-  "lookupResources(remote_agent.invoke) returns owned remote agents for the creating member",
+  "lookupResources(remote_agent.invoke) returns only owner-visible or granted remote agents",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -711,7 +711,7 @@ test(
         permission: "invoke",
         subject: { type: "workspace_member", id: ownerMemberId },
       })
-      assert.ok(adminIds.includes(owned))
+      assert.ok(!adminIds.includes(owned))
       assert.ok(adminIds.includes(adminVisible))
     })
   }
@@ -965,20 +965,61 @@ test(
 )
 
 test(
-  "lookupResources(actor.invoke) for an admin owner returns every active actor in the workspace",
+  "lookupResources(actor.invoke) only returns actors the member owns or is explicitly granted",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const { workspaceId, ownerMemberId } = await seedOwnerMemberAndGuest(db)
-      const a1 = await insertActor(db, workspaceId)
-      const a2 = await insertActor(db, workspaceId)
+      const { workspaceId, ownerMemberId, guestMemberId } =
+        await seedOwnerMemberAndGuest(db)
+      const owned = crypto.randomUUID()
+      await db
+        .insertInto("workspace_apps")
+        .values({
+          id: owned,
+          workspace_id: workspaceId,
+          kind: "actor",
+          display_name: "owned actor",
+          owner_workspace_member_id: ownerMemberId,
+          status: "active",
+        } as any)
+        .execute()
+      await db
+        .insertInto("actors")
+        .values({
+          id: owned,
+          role: "assistant",
+          title: "owned",
+          current_version: 1,
+        })
+        .execute()
+      const guestOwned = crypto.randomUUID()
+      await db
+        .insertInto("workspace_apps")
+        .values({
+          id: guestOwned,
+          workspace_id: workspaceId,
+          kind: "actor",
+          display_name: "guest actor",
+          owner_workspace_member_id: guestMemberId,
+          status: "active",
+        } as any)
+        .execute()
+      await db
+        .insertInto("actors")
+        .values({
+          id: guestOwned,
+          role: "assistant",
+          title: "guest",
+          current_version: 1,
+        })
+        .execute()
       const ids = await lookupResources(db, {
         resourceType: "actor",
         permission: "invoke",
         subject: { type: "workspace_member", id: ownerMemberId },
       })
-      assert.ok(ids.includes(a1))
-      assert.ok(ids.includes(a2))
+      assert.ok(ids.includes(owned))
+      assert.ok(!ids.includes(guestOwned))
     })
   }
 )
@@ -1178,10 +1219,6 @@ async function insertPluginInstallation(
     })
     .returning("id")
     .executeTakeFirstOrThrow()
-  const attachmentSubject = await upsertAccessSubject(db, {
-    kind: SUBJECT_KIND.WORKSPACE,
-    workspaceId: params.workspaceId,
-  })
   void params.attachmentScopeSkillId
   const id = crypto.randomUUID()
   await db
@@ -1201,7 +1238,6 @@ async function insertPluginInstallation(
       id,
       catalog_item_id: item.id,
       catalog_version_id: version.id,
-      attachment_scope_subject_id: attachmentSubject,
     })
     .returning("id")
     .executeTakeFirstOrThrow()

@@ -1,6 +1,5 @@
 import type { ConversationTypeMask } from "@synapse/shared/types"
 import type {
-  PluginAttachmentScopeType,
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
   PluginInstallFlow,
@@ -23,7 +22,6 @@ export interface BuiltinPluginSeed {
   defaultLocale?: string
   transport: PluginSpecTransport
   entryPoint: string
-  defaultAttachmentScope: PluginAttachmentScopeType
   defaultReuseScope: ReuseScope
   defaultConversationTypeMask?: ConversationTypeMask
   supportedReuseScopes?: ReuseScope[]

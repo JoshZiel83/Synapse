@@ -395,16 +395,25 @@ async function hasActorPermission(
   const canManage =
     isWorkspaceOwnerOrAdmin(access) ||
     hasWorkspaceAccessKey(access, "actor_admin") ||
-    actor.owner_workspace_member_id === access.id
+    actor.owner_workspace_member_id === access.id ||
+    (await hasWorkspaceAppGrant(db, {
+      resourceType: "actor",
+      resourceId: actorId,
+      requiredGrantPermission: "manage",
+      subject: {
+        type: "workspace_member",
+        id: access.id,
+      },
+      runtimeScopeSubjectIds,
+      runtimeSubjectIds,
+    }))
   // P2: `canUse` is now derived purely from grants. The historical
   // actor visibility shortcut and friend_entries join have been replaced by
   // workspace_app_grants rows:
-  //   - workspace-visible actors get a workspace-scoped contact_visible grant
-  //     (source=default_open) written on creation by relationship/service.ts.
-  //   - approval-gated actors get an actor-scoped or conversation-scoped
-  //     grant written by the approval flow.
+  //   - owners stay implicitly visible to themselves, and
+  //   - everyone else needs an explicit contact_visible grant.
   const canUse =
-    canManage ||
+    actor.owner_workspace_member_id === access.id ||
     (await hasWorkspaceAppGrant(db, {
       resourceType: "actor",
       resourceId: actorId,
@@ -463,12 +472,23 @@ async function hasRemoteAgentPermission(
     sameWorkspace &&
     (isWorkspaceOwnerOrAdmin(access) ||
       hasWorkspaceAccessKey(access, "remote_agent_admin") ||
-      remoteAgent.owner_workspace_member_id === access.id)
+      remoteAgent.owner_workspace_member_id === access.id ||
+      (await hasWorkspaceAppGrant(db, {
+        resourceType: "remote_agent",
+        resourceId: remoteAgentId,
+        requiredGrantPermission: "manage",
+        subject: {
+          type: "workspace_member",
+          id: access.id,
+        },
+        runtimeScopeSubjectIds,
+        runtimeSubjectIds,
+      })))
   // P2: same fold as hasActorPermission — bindings are authoritative.
   // Cross-workspace `is_public_shared` still requires an explicit binding to
   // be granted; the publishing workspace's auto-write happens on create.
   const canUse =
-    canManage ||
+    (sameWorkspace && remoteAgent.owner_workspace_member_id === access.id) ||
     (await hasWorkspaceAppGrant(db, {
       resourceType: "remote_agent",
       resourceId: remoteAgentId,
@@ -668,7 +688,7 @@ async function listWorkspaceAppGrantRows(
       | "actor"
       | "remote_agent"
     resourceId: string | null
-    requiredGrantPermission: "use" | "contact_visible"
+    requiredGrantPermission: "use" | "contact_visible" | "manage"
     subject: PermissionSubject
     runtimeScopeSubjectIds?: readonly string[]
     runtimeSubjectIds?: readonly string[]
@@ -811,7 +831,7 @@ async function hasWorkspaceAppGrant(
       | "actor"
       | "remote_agent"
     resourceId: string
-    requiredGrantPermission: "use" | "contact_visible"
+    requiredGrantPermission: "use" | "contact_visible" | "manage"
     subject: PermissionSubject
     runtimeScopeSubjectIds?: readonly string[]
     runtimeSubjectIds?: readonly string[]
@@ -984,6 +1004,14 @@ async function resolveBindableResourceAccess(
   }
 
   return (
+    (await hasWorkspaceAppGrant(db, {
+      resourceType: params.resourceType,
+      resourceId: params.resourceId,
+      requiredGrantPermission: "manage",
+      subject: params.subject,
+      runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+      runtimeSubjectIds: params.runtimeSubjectIds,
+    })) ||
     workspacePermissionFromAccess(access, params.manageAccessKey) ||
     params.ownerWorkspaceMemberId === access.id
   )
@@ -1203,28 +1231,10 @@ async function listActorIds(
     return []
   }
 
-  // Admins / actor_admins see every active actor in the workspace.
-  if (
-    isWorkspaceOwnerOrAdmin(access) ||
-    hasWorkspaceAccessKey(access, "actor_admin")
-  ) {
-    const rows = await db
-      .selectFrom("actors as a")
-      .innerJoin("workspace_apps as app", "app.id", "a.id")
-      .select("a.id")
-      .where("app.workspace_id", "=", access.workspaceId)
-      .where("app.deleted_at", "is", null)
-      .where("app.status", "=", "active")
-      .orderBy("a.created_at", "desc")
-      .limit(limit && limit > 0 ? limit : 1000)
-      .execute()
-    return rows.map((row) => row.id)
-  }
-
-  // Otherwise, visible actors = actors created by this member +
+  // Visible actors = actors created by this member +
   // grants reachable by the workspace_member subject. listResourceGrantRows's
   // workspace_member branch already matches both:
-  //   (a) workspace-scoped grants (default_open + workspace-wide grants), and
+  //   (a) workspace-scoped grants, and
   //   (b) workspace_member-scoped approval grants for this specific member.
   // Passing the member subject directly is what makes (b) visible here.
   const [ownActors, grantedIds] = await Promise.all([
@@ -1266,31 +1276,6 @@ async function listRemoteAgentIds(
   const access = await loadWorkspaceMemberAccess(db, subject.id)
   if (!access) {
     return []
-  }
-
-  const isAdmin =
-    isWorkspaceOwnerOrAdmin(access) ||
-    hasWorkspaceAccessKey(access, "remote_agent_admin")
-
-  // Admins see every active remote agent in their workspace (and any public
-  // shared ones from other workspaces).
-  if (isAdmin) {
-    const rows = await db
-      .selectFrom("remote_agents as agent")
-      .innerJoin("workspace_apps as app", "app.id", "agent.id")
-      .select("agent.id")
-      .where("app.status", "=", "active")
-      .where("app.deleted_at", "is", null)
-      .where((eb) =>
-        eb.or([
-          eb("app.workspace_id", "=", access.workspaceId),
-          eb("agent.is_public_shared", "=", true),
-        ])
-      )
-      .orderBy("agent.created_at", "desc")
-      .limit(limit && limit > 0 ? limit : 1000)
-      .execute()
-    return rows.map((row) => row.id)
   }
 
   // P2: same-workspace remote-agent visibility now comes from
