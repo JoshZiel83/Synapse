@@ -31,13 +31,13 @@ function signEnvelope(
 }
 
 const baseEnvelope: Omit<OperationEnvelope, "signature"> = {
-  operation_id: "11111111-1111-1111-1111-111111111111",
-  attempt_id: "22222222-2222-2222-2222-222222222222",
-  device_runtime_session_id: "33333333-3333-3333-3333-333333333333",
-  device_capability_id: "44444444-4444-4444-4444-444444444444",
-  device_exposure_id: "55555555-5555-5555-5555-555555555555",
-  device_tool_id: "66666666-6666-6666-6666-666666666666",
-  device_tool_revision_id: "77777777-7777-7777-7777-777777777777",
+  operation_id: "11111111-1111-4111-8111-111111111111",
+  attempt_id: "22222222-2222-4222-8222-222222222222",
+  device_runtime_session_id: "33333333-3333-4333-8333-333333333333",
+  device_capability_id: "44444444-4444-4444-8444-444444444444",
+  device_exposure_id: "55555555-5555-4555-8555-555555555555",
+  device_tool_id: "66666666-6666-4666-8666-666666666666",
+  device_tool_revision_id: "77777777-7777-4777-8777-777777777777",
   input_hash: hashArguments({ foo: "bar" }),
   task_mode: "sync",
   issued_at: "2026-05-25T00:00:00.000Z",
@@ -86,7 +86,7 @@ test("envelope verifier rejects expired envelope", async () => {
   const verifier = createInMemoryEnvelopeVerifier()
   const expired = {
     ...baseEnvelope,
-    attempt_id: "88888888-8888-8888-8888-888888888888",
+    attempt_id: "88888888-8888-4888-8888-888888888888",
     expires_at: "2020-01-01T00:00:00.000Z",
   }
   const signature = signEnvelope(expired, privatePem)
@@ -105,7 +105,7 @@ test("envelope verifier rejects non-canonical instant strings", async () => {
   const verifier = createInMemoryEnvelopeVerifier()
   const nonCanonical = {
     ...baseEnvelope,
-    attempt_id: "99999999-8888-7777-6666-555555555555",
+    attempt_id: "99999999-8888-4777-8666-555555555555",
     issued_at: "2026-05-25T00:00:00Z",
   }
   const signature = signEnvelope(

@@ -36,6 +36,11 @@ import type {
 } from "./types.js"
 import { hashArguments } from "./envelope.js"
 
+type ExtractEnvelopeResult =
+  | { kind: "missing" }
+  | { kind: "invalid" }
+  | { kind: "ok"; envelope: OperationEnvelope }
+
 export interface InMemoryMcpHostHandle extends McpHost {
   getCatalogSnapshot(): Promise<DeviceCatalogExposure[]>
   /**
@@ -171,17 +176,31 @@ export function createInMemoryMcpHost(
       params.arguments && typeof params.arguments === "object"
         ? (params.arguments as Record<string, unknown>)
         : {}
-    const envelope = extractEnvelope(params._meta)
+    const envelopeResult = extractEnvelope(params._meta)
+    const verifiedEnvelope =
+      envelopeResult.kind === "ok" ? envelopeResult.envelope : undefined
     // Envelope verification gates every tool call. Without a verifier
     // configured, this is a v3-skeleton loopback smoke test (no envelope
     // means no enforcement); ANY production wiring MUST pass an
     // envelopeVerifier so missing/unsigned calls are rejected.
     if (opts.envelopeVerifier) {
-      if (!envelope) {
+      if (envelopeResult.kind === "missing") {
         const synapseError: SynapseError = {
           code: "permission_denied",
           message:
             "tools/call requires _meta.synapse_operation envelope; the server must sign every dispatch",
+        }
+        return {
+          content: [{ type: "text", text: synapseError.message }],
+          isError: true,
+          _meta: { synapse_error: synapseError },
+        }
+      }
+      if (envelopeResult.kind === "invalid") {
+        const synapseError: SynapseError = {
+          code: "invalid_request",
+          message:
+            "tools/call rejected: _meta.synapse_operation envelope failed schema validation",
         }
         return {
           content: [{ type: "text", text: synapseError.message }],
@@ -204,7 +223,7 @@ export function createInMemoryMcpHost(
         }
       }
       const verifyResult = await opts.envelopeVerifier.verify(
-        envelope,
+        verifiedEnvelope,
         hashArguments(args),
         trustedServerKeys
       )
@@ -241,11 +260,13 @@ export function createInMemoryMcpHost(
       // UUID. Bare params.name routing collapses two providers that ship
       // same-named tools (search/read/bash) so we can't use it as the
       // primary key.
-      const expectedTarget = toolTargetIndex.get(envelope.device_tool_id)
+      const expectedTarget = toolTargetIndex.get(
+        verifiedEnvelope.device_tool_id
+      )
       if (!expectedTarget) {
         const synapseError: SynapseError = {
           code: "permission_denied",
-          message: `envelope device_tool_id ${envelope.device_tool_id} is not in this device's synced catalog`,
+          message: `envelope device_tool_id ${verifiedEnvelope.device_tool_id} is not in this device's synced catalog`,
         }
         return {
           content: [{ type: "text", text: synapseError.message }],
@@ -254,8 +275,10 @@ export function createInMemoryMcpHost(
         }
       }
       if (
-        envelope.device_exposure_id !== expectedTarget.deviceExposureId ||
-        envelope.device_tool_revision_id !== expectedTarget.deviceToolRevisionId
+        verifiedEnvelope.device_exposure_id !==
+          expectedTarget.deviceExposureId ||
+        verifiedEnvelope.device_tool_revision_id !==
+          expectedTarget.deviceToolRevisionId
       ) {
         const synapseError: SynapseError = {
           code: "permission_denied",
@@ -292,8 +315,10 @@ export function createInMemoryMcpHost(
     // single-exposure scan over params.name (unique within v3-skeleton
     // catalogs that ship one builtin per provider).
     let entry: ToolEntry | undefined
-    if (opts.envelopeVerifier && envelope) {
-      const expectedTarget = toolTargetIndex.get(envelope.device_tool_id)!
+    if (opts.envelopeVerifier && verifiedEnvelope) {
+      const expectedTarget = toolTargetIndex.get(
+        verifiedEnvelope.device_tool_id
+      )!
       entry = index.get(
         compositeToolKey(
           expectedTarget.exposureStableKey,
@@ -334,7 +359,7 @@ export function createInMemoryMcpHost(
       return await entry.provider.invokeTool({
         toolName: params.name,
         args,
-        envelope,
+        envelope: verifiedEnvelope,
       })
     } catch (err) {
       const synapseError: SynapseError = {
@@ -349,12 +374,13 @@ export function createInMemoryMcpHost(
     }
   }
 
-  function extractEnvelope(meta: unknown): OperationEnvelope | undefined {
-    if (!meta || typeof meta !== "object") return undefined
+  function extractEnvelope(meta: unknown): ExtractEnvelopeResult {
+    if (!meta || typeof meta !== "object") return { kind: "missing" }
     const raw = (meta as Record<string, unknown>)["synapse_operation"]
-    if (!raw || typeof raw !== "object") return undefined
+    if (!raw || typeof raw !== "object") return { kind: "missing" }
     const parsed = OperationEnvelopeSchema.safeParse(raw)
-    return parsed.success ? parsed.data : undefined
+    if (!parsed.success) return { kind: "invalid" }
+    return { kind: "ok", envelope: parsed.data }
   }
 
   async function handleJsonRpc(body: {
