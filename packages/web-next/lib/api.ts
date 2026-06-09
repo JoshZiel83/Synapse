@@ -688,7 +688,11 @@ class ApiClient {
   }
   createInvite(
     wsId: string,
-    data: { trustLevel?: string; maxUses?: number; expiresAt?: string }
+    data: {
+      trustLevel?: string
+      maxUses?: number
+      expiresAt?: import("@synapse/shared").Timestamp
+    }
   ) {
     return this.fetch(`/workspaces/${wsId}/invites`, {
       method: "POST",

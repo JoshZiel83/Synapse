@@ -3,6 +3,7 @@ import {
   getFeishuFeatureScopeCoverage,
   resolveFeishuFeatureScopes,
 } from "./features.js"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 
 type JsonObject = Record<string, unknown>
 type RequestBody =
@@ -228,7 +229,7 @@ export async function inspectFeishuAppScopeStatus(input: {
   requestedFeatures: FeishuFeatureKey[]
   requestedScopes?: string[]
 }): Promise<FeishuAppScopeInspection> {
-  const checkedAt = new Date().toISOString()
+  const checkedAt = nowIsoInstant()
   const requestedScopes = Array.from(
     new Set(
       (input.requestedScopes && input.requestedScopes.length > 0

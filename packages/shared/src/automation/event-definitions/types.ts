@@ -2,6 +2,7 @@ import type {
   AutomationEventProviderKind,
   AutomationIntegrationProvider,
   AutomationIntegrationTargetKind,
+  Timestamp,
 } from "../../types/index.js"
 
 export interface AutomationEventSourceDefinitionContext {
@@ -29,7 +30,7 @@ export interface AutomationOccurrenceDisplayContext {
   providerRef?: string
   sourceSnapshot: Record<string, unknown>
   payload: Record<string, unknown>
-  occurredAt?: string
+  occurredAt?: Timestamp
 }
 
 export interface AutomationOccurrenceDisplay {

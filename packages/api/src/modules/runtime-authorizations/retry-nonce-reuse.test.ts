@@ -13,6 +13,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 
 import type { TaskSummary } from "@synapse/shared/types"
 import { pickPersistedRetryNonce, didInnerDedupeReuseRow } from "./requests.js"
@@ -29,8 +30,8 @@ function makeRuntimeAuthSummary(
     conversationId: "00000000-0000-0000-0000-00000000000b",
     lifecycleStatus: "auth_required",
     revision: 1,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: nowIsoInstant(),
+    updatedAt: nowIsoInstant(),
     viewerCanResolve: true,
     requester: {
       participantType: "actor",
@@ -69,8 +70,8 @@ function makeUserInputSummary(): TaskSummary {
     conversationId: "00000000-0000-0000-0000-00000000000b",
     lifecycleStatus: "input_required",
     revision: 1,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: nowIsoInstant(),
+    updatedAt: nowIsoInstant(),
     viewerCanResolve: true,
     requester: {
       participantType: "actor",

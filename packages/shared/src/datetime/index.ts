@@ -15,6 +15,8 @@
  * service-worker-reachable barrel surface tight.
  */
 
+export * from "./instant.js"
+
 export type ChatTimestampStyle = "relative" | "inboxShort" | "time"
 
 export interface FormatChatTimestampOptions {
@@ -24,9 +26,13 @@ export interface FormatChatTimestampOptions {
   locale?: string
 }
 
+function isDateObject(value: unknown): value is Date {
+  return Object.prototype.toString.call(value) === "[object Date]"
+}
+
 function toDate(value: string | number | Date | null | undefined): Date | null {
   if (value === null || value === undefined || value === "") return null
-  const date = value instanceof Date ? value : new Date(value)
+  const date = isDateObject(value) ? value : new Date(value)
   return Number.isNaN(date.getTime()) ? null : date
 }
 

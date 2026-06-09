@@ -12,6 +12,7 @@ import {
   type DatabaseTransaction,
   type KyselyDb,
 } from "../../infrastructure/database/kysely.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import type { RuntimePrincipalContext } from "../access/subject-resolution.js"
 import { SUBJECT_KIND } from "@synapse/shared"
 
@@ -187,7 +188,7 @@ export async function beginDeviceOperationOn(
         input.envelope.runtime_authorization ?? {}
       )}::jsonb`,
       input_hash: input.envelope.input_hash,
-      expires_at: input.envelope.expires_at,
+      expires_at: parseInstantString(input.envelope.expires_at),
     })
     .execute()
 

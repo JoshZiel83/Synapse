@@ -18,6 +18,10 @@ import {
   CONVERSATION_PARTICIPANT_TYPE,
   TASK_REQUEST_KIND,
 } from "@synapse/shared"
+import {
+  assertIsoInstant,
+  type IsoInstantString,
+} from "@synapse/shared/datetime"
 import type {
   RuntimeAuthorizationGrantSpec,
   RuntimeAuthorizationPreset,
@@ -395,7 +399,7 @@ function buildMessageReplyRef(input: {
   author?: ConversationEntityRef
   content: string
   contentBlocks: CanonicalContentBlock[]
-  createdAt?: string
+  createdAt?: IsoInstantString
 }) {
   return {
     itemId: input.messageId,
@@ -2785,7 +2789,7 @@ export default function MessageBubble({
         author,
         content: textContent,
         contentBlocks,
-        createdAt: timestamp,
+        createdAt: timestamp ? assertIsoInstant(timestamp) : undefined,
       })
     )
 
@@ -2820,7 +2824,7 @@ export default function MessageBubble({
         author,
         content: textContent,
         contentBlocks,
-        createdAt: timestamp,
+        createdAt: timestamp ? assertIsoInstant(timestamp) : undefined,
       })
     )
     setContextMenu(null)

@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import {
   createDockerSandboxBackend,
   createDockerReconnectBackend,
@@ -71,7 +72,7 @@ function fakePairing(over: Record<string, string> = {}) {
     pending_device_id: "pend-1",
     bootstrap_token: "tok",
     pairing_session_id: "pair-1",
-    expires_at: "2099-01-01T00:00:00.000Z",
+    expires_at: assertIsoInstant("2099-01-01T00:00:00.000Z"),
     ...over,
   })
 }

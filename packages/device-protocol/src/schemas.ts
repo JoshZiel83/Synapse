@@ -2,6 +2,7 @@
 // and the operation envelope embedded in MCP _meta.synapse_operation (§4.5).
 
 import { z } from "zod"
+import { IsoInstantStringSchema } from "./instant.schema.js"
 import {
   DEVICE_BUILTIN_KINDS,
   DEVICE_CONTROL_PLANE_SESSION_STATUSES,
@@ -248,8 +249,8 @@ export const OperationEnvelopeSchema = z.object({
   // when an envelope is present but this field is absent. See
   // capability-projection/cua-scope.ts for the derivation rule.
   cua_focus_scope_id: z.string().optional(),
-  issued_at: z.string(),
-  expires_at: z.string(),
+  issued_at: IsoInstantStringSchema,
+  expires_at: IsoInstantStringSchema,
   signature_kid: z.string(),
   signature: z.string(),
 })
@@ -278,8 +279,8 @@ export const DeviceSummarySchema = z.object({
   device_type: z.enum(DEVICE_TYPES),
   platform: z.string().nullable(),
   trust_status: z.enum(DEVICE_TRUST_STATUSES),
-  last_seen_at: z.string().nullable(),
-  last_connected_at: z.string().nullable(),
+  last_seen_at: IsoInstantStringSchema.nullable(),
+  last_connected_at: IsoInstantStringSchema.nullable(),
 })
 export type DeviceSummary = z.infer<typeof DeviceSummarySchema>
 
@@ -289,7 +290,7 @@ export const DeviceServiceSummarySchema = z.object({
   service_kind: z.enum(DEVICE_SERVICE_KINDS),
   version: z.string().nullable(),
   status: z.enum(DEVICE_SERVICE_STATUSES),
-  last_seen_at: z.string().nullable(),
+  last_seen_at: IsoInstantStringSchema.nullable(),
   remote_agent_machine_id: z.uuid().nullable(),
 })
 export type DeviceServiceSummary = z.infer<typeof DeviceServiceSummarySchema>
@@ -341,7 +342,7 @@ export const CreateCloudDeviceResultSchema = z.object({
   pending_device_id: z.uuid(),
   bootstrap_token: z.string(),
   pairing_session_id: z.uuid(),
-  expires_at: z.string(),
+  expires_at: IsoInstantStringSchema,
 })
 export type CreateCloudDeviceResult = z.infer<
   typeof CreateCloudDeviceResultSchema
@@ -363,7 +364,7 @@ export const PairingTicketSchema = z.object({
   pairing_session_id: z.uuid(),
   mode: z.enum(DEVICE_PAIRING_MODES),
   pairing_code: z.string().nullable(),
-  expires_at: z.string(),
+  expires_at: IsoInstantStringSchema,
   verification_uri: z.string().nullable(),
   verification_uri_complete: z.string().nullable(),
   status: z.enum(DEVICE_PAIRING_STATUSES),

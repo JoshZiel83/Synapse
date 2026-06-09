@@ -7,7 +7,9 @@ import type {
   AutomationTargetPolicy,
   AutomationTriggerKind,
   CanonicalContentBlock,
+  Timestamp,
 } from "../types/index.js"
+import { dateToIsoInstant } from "../datetime/instant.js"
 
 export interface AutomationRuleCreateTriggerPayload {
   triggerKind: AutomationTriggerKind
@@ -20,12 +22,12 @@ export interface AutomationRuleCreateTriggerPayload {
   scheduleExpr?: string
   scheduleTimezone?: string
   intervalSeconds?: number
-  startsAt?: string
+  startsAt?: Timestamp
 }
 
 export interface AutomationRuleCreatePolicyPayload {
-  activeFrom?: string
-  activeUntil?: string
+  activeFrom?: Timestamp
+  activeUntil?: Timestamp
   maxTriggerCount?: number
   completionStatus?: AutomationCompletionStatus
 }
@@ -125,14 +127,14 @@ function toDateTimeLocalInput(value: string | undefined) {
   return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
-function toIsoString(value: string | undefined, label: string) {
+function normalizeDraftInstantInput(value: string | undefined, label: string) {
   const trimmed = trimString(value)
   if (!trimmed) return undefined
   const parsed = new Date(trimmed)
   if (Number.isNaN(parsed.getTime())) {
     throw new Error(`${label} must be a valid date/time`)
   }
-  return parsed.toISOString()
+  return dateToIsoInstant(parsed)
 }
 
 export function parseAutomationIdList(input: string) {
@@ -511,7 +513,7 @@ export function buildAutomationRuleCreatePayloadFromDraft(
               draft.scheduleKind === "interval"
                 ? Number.parseInt(draft.intervalSeconds, 10) || undefined
                 : undefined,
-            startsAt: toIsoString(draft.startsAt, "First fire"),
+            startsAt: normalizeDraftInstantInput(draft.startsAt, "First fire"),
           }
 
     const payload: AutomationRuleCreatePayload = {
@@ -520,8 +522,11 @@ export function buildAutomationRuleCreatePayloadFromDraft(
       conversationId: trimString(draft.conversationId) || "",
       trigger,
       policy: {
-        activeFrom: toIsoString(draft.activeFrom, "Active from"),
-        activeUntil: toIsoString(draft.activeUntil, "Active until"),
+        activeFrom: normalizeDraftInstantInput(draft.activeFrom, "Active from"),
+        activeUntil: normalizeDraftInstantInput(
+          draft.activeUntil,
+          "Active until"
+        ),
         maxTriggerCount: trimString(draft.maxTriggerCount)
           ? Number.parseInt(draft.maxTriggerCount, 10) || undefined
           : undefined,

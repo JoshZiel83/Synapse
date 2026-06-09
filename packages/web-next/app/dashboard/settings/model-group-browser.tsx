@@ -10,6 +10,7 @@ import {
   vendorSupportsServerTools,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
+  type Timestamp,
 } from "@synapse/shared"
 import { Cpu, Plus, RefreshCw, Save, Search, Star, Trash2 } from "lucide-react"
 import { toast } from "sonner"
@@ -54,7 +55,7 @@ type ModelGroupSummary = {
   routing_strategy: ModelGroupRoutingStrategy
   is_default: boolean
   is_active?: boolean
-  created_at: string
+  created_at: Timestamp
 }
 
 type ModelItem = {

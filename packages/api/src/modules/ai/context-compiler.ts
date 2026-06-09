@@ -10,6 +10,7 @@ import {
   buildConversationMessageRef,
   textBlock,
 } from "@synapse/shared"
+import { dateToIsoInstant } from "@synapse/shared/datetime"
 import type {
   CanonicalContextItem,
   CanonicalContextTarget,
@@ -64,7 +65,7 @@ function formatContextTimestamp(timestamp?: string) {
   if (!timestamp) return ""
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return ""
-  return date.toISOString()
+  return dateToIsoInstant(date)
 }
 
 type XmlEntityLike = {

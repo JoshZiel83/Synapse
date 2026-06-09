@@ -9,7 +9,7 @@
     "dev": "next dev --turbopack",
     "build": "next build --webpack",
     "predev": "npm run build:chat-worker",
-    "prebuild": "npm run build:chat-worker",
+    "prebuild": "npm --workspace=@synapse/shared run build && npm run build:chat-worker",
     "start": "next start",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",

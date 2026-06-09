@@ -14,6 +14,7 @@ import { resolve } from "path"
 import { fileURLToPath } from "url"
 import { sql } from "kysely"
 import { db } from "./kysely.js"
+import { serializeInstant } from "../datetime.js"
 
 function parseArgs(argv: string[]) {
   const out: Record<string, string | boolean> = {}
@@ -35,12 +36,13 @@ function parseArgs(argv: string[]) {
 
 async function retention(beforeDays: number) {
   const before = new Date(Date.now() - beforeDays * 24 * 60 * 60 * 1000)
+  const beforeIso = serializeInstant(before)
   const res = await sql<{ sd_purge_expired_soft_deleted: number }>`
-    SELECT sd_purge_expired_soft_deleted(${before.toISOString()}::timestamptz)
+    SELECT sd_purge_expired_soft_deleted(${beforeIso}::timestamptz)
   `.execute(db)
   const n = res.rows[0]?.sd_purge_expired_soft_deleted ?? 0
   console.log(
-    `retention purge: removed ${n} row(s) soft-deleted before ${before.toISOString()}`
+    `retention purge: removed ${n} row(s) soft-deleted before ${beforeIso}`
   )
 }
 

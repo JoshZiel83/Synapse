@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import { AsrResultAccumulator } from "./normalizer.js"
 
 test("AsrResultAccumulator emits partial and final utterances without duplicates", () => {
@@ -28,7 +29,7 @@ test("AsrResultAccumulator emits partial and final utterances without duplicates
         duration: 450,
       },
     },
-    "2026-04-02T00:00:00.000Z",
+    assertIsoInstant("2026-04-02T00:00:00.000Z"),
     false
   )
 
@@ -63,7 +64,7 @@ test("AsrResultAccumulator emits partial and final utterances without duplicates
         duration: 900,
       },
     },
-    "2026-04-02T00:00:01.000Z",
+    assertIsoInstant("2026-04-02T00:00:01.000Z"),
     true
   )
 

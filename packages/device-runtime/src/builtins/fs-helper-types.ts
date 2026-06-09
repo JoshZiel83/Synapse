@@ -2,6 +2,7 @@
 // contract. Kept in a dedicated file so both the client and any future
 // integration tests can import without pulling the full filesystem builtin
 // surface.
+import type { IsoInstantString } from "@synapse/shared/datetime"
 
 export interface HistoryGetInput {
   path: string
@@ -13,7 +14,7 @@ export interface HistoryGetResult {
   sha256: string | null
   mtime_ms: number | null
   op: "pre_write" | "pre_edit" | "pre_restore" | "delete"
-  recorded_at: string
+  recorded_at: IsoInstantString
 }
 
 export interface HistorySnapshotInput {
@@ -50,7 +51,7 @@ export interface HistoryListEntry {
   size: number
   sha256: string | null
   mtime_ms: number | null
-  recorded_at: string
+  recorded_at: IsoInstantString
 }
 export interface HistoryListResult {
   entries: HistoryListEntry[]
@@ -92,7 +93,7 @@ export interface IndexStatusInput {
 }
 export interface IndexStatusResult {
   subtree: string
-  last_indexed_at: string | null
+  last_indexed_at: IsoInstantString | null
   doc_count: number
   queue_depth: number
   errors: {
@@ -109,8 +110,8 @@ export interface IndexTaskStatusResult {
   task_id: string
   subtree: string
   status: "running" | "completed" | "failed"
-  started_at: string
-  finished_at: string | null
+  started_at: IsoInstantString
+  finished_at: IsoInstantString | null
   error: string | null
 }
 export interface IndexUpsertInput {

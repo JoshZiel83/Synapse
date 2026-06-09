@@ -1,3 +1,4 @@
+import { nowIsoInstant } from "@synapse/shared/datetime"
 // Device Control Plane WSS handler (§7.1).
 //
 // Authentication flow:
@@ -591,7 +592,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 }
                 writeResult(socket, req.id ?? null, {
                   accepted: true,
-                  server_time: new Date().toISOString(),
+                  server_time: nowIsoInstant(),
                   service_key_id: result.serviceKeyId,
                   pubkey_fingerprint: result.pubkeyFingerprint,
                   control_plane_session_id: state.sessionId,

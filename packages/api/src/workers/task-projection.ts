@@ -39,6 +39,7 @@ import {
   withDbTransaction,
   type Executor,
 } from "../infrastructure/database/kysely.js"
+import { parseInstantString } from "../infrastructure/datetime.js"
 import {
   mintActionToken,
   sweepExpiredActionTokens,
@@ -268,7 +269,7 @@ async function processOne(
   const lockedTask = await runOn<{
     id: string
     status: string
-    expires_at: string | Date | null
+    expires_at: Date | null
   }>(
     client,
     `
@@ -294,11 +295,7 @@ async function processOne(
     return "skipped"
   }
   if (lock.expires_at) {
-    const expiresAt =
-      lock.expires_at instanceof Date
-        ? lock.expires_at
-        : new Date(lock.expires_at)
-    if (expiresAt.getTime() < Date.now()) {
+    if (lock.expires_at.getTime() < Date.now()) {
       await skipRow(client, row.id, "task_already_resolved_or_expired")
       return "skipped"
     }
@@ -378,7 +375,7 @@ async function processOne(
     await runOn(client, "SAVEPOINT projection_business", [])
     const mintedOptions = await mintOptionsAndTokens(client, {
       taskId: task.id,
-      taskExpiresAt: task.expiresAt,
+      taskExpiresAt: task.expiresAt ? parseInstantString(task.expiresAt) : null,
       presets:
         task.runtimeAuthorization?.availablePresets ??
         (["once"] as RuntimeAuthorizationPreset[]),
@@ -540,7 +537,7 @@ async function mintOptionsAndTokens(
   client: Executor,
   params: {
     taskId: string
-    taskExpiresAt?: string | Date | null
+    taskExpiresAt?: Date | null
     presets: readonly RuntimeAuthorizationPreset[]
     grantOptions: ReadonlyArray<{ id: string; summary: string }>
   }

@@ -57,7 +57,7 @@ export async function mintActionToken(
   executor: Executor,
   params: {
     taskId: string
-    taskExpiresAt: Date | string | null | undefined
+    taskExpiresAt: Date | null | undefined
     payload: ActionTokenPayload
   }
 ): Promise<ActionTokenRecord> {
@@ -100,8 +100,7 @@ export async function lookupActionToken(
     .limit(1)
     .executeTakeFirst()
   if (!row) return null
-  const expiresAt =
-    row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at)
+  const expiresAt = row.expires_at
   if (expiresAt.getTime() < Date.now()) return null
   return {
     token: row.token,
@@ -124,11 +123,7 @@ export async function sweepExpiredActionTokens(): Promise<number> {
   return Number(result.numDeletedRows ?? 0)
 }
 
-function parseTimestamp(
-  value: Date | string | null | undefined
-): number | null {
+function parseTimestamp(value: Date | null | undefined): number | null {
   if (!value) return null
-  if (value instanceof Date) return value.getTime()
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : null
+  return value.getTime()
 }

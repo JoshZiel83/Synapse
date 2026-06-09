@@ -1,4 +1,5 @@
 import { PLAN_CHECKLIST_STEP_STATUSES } from "@synapse/shared"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import type {
   PlanChecklistStep,
   Session,
@@ -76,7 +77,9 @@ function parsePlanDraftState(
       : undefined
   const enteredAt =
     typeof value.enteredAt === "string"
-      ? value.enteredAt.trim() || undefined
+      ? value.enteredAt.trim()
+        ? assertIsoInstant(value.enteredAt.trim())
+        : undefined
       : undefined
 
   return {
@@ -123,7 +126,9 @@ export function buildSessionPlanDraftState(params: {
     summary: params.summary?.trim() || undefined,
     checklist: params.checklist,
     explanation: params.explanation?.trim() || undefined,
-    enteredAt: params.enteredAt?.trim() || undefined,
+    enteredAt: params.enteredAt?.trim()
+      ? assertIsoInstant(params.enteredAt.trim())
+      : undefined,
   }
 }
 

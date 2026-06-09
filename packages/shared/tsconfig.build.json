@@ -2,7 +2,16 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "sourceMap": false,
-    "declarationMap": false
+    "declarationMap": false,
+    "baseUrl": ".",
+    "paths": {
+      "@synapse/device-protocol/instant": [
+        "../device-protocol/dist/instant.d.ts"
+      ],
+      "@synapse/device-protocol/instant/schema": [
+        "../device-protocol/dist/instant.schema.d.ts"
+      ]
+    }
   },
   "exclude": ["**/*.test.ts", "**/__test*__/**", "**/__fixtures__/**"]
 }

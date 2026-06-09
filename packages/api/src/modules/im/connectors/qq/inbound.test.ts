@@ -1,5 +1,6 @@
 import test, { after } from "node:test"
 import assert from "node:assert/strict"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import type { InboundEnvelope, WebhookHandlerInput } from "../types.js"
 import { handleQqWebhook } from "./inbound.js"
 import { signEd25519UrlVerification } from "./webhook-signature.js"
@@ -38,8 +39,8 @@ function buildAccount(
     config: overrides.config ?? {},
     metadata: {},
     inboundActorMode: "none" as const,
-    createdAt: "2026-01-01T00:00:00Z",
-    updatedAt: "2026-01-01T00:00:00Z",
+    createdAt: assertIsoInstant("2026-01-01T00:00:00.000Z"),
+    updatedAt: assertIsoInstant("2026-01-01T00:00:00.000Z"),
   }
 }
 

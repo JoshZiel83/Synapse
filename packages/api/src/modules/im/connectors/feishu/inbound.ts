@@ -6,6 +6,7 @@
  */
 
 import * as Lark from "@larksuiteoapi/node-sdk"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import type {
   AccountStartContext,
@@ -38,7 +39,7 @@ function envelopeFromEvent(
     externalReplyToId: normalized.externalReplyToId,
     externalThreadId: normalized.externalThreadId,
     sender: { externalId: normalized.senderExternalId },
-    receivedAt: new Date().toISOString(),
+    receivedAt: nowIsoInstant(),
     message: normalized.message,
     raw: normalized.raw,
   }

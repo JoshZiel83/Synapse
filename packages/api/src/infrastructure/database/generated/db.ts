@@ -307,8 +307,6 @@ export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_m
 
 export type SubjectKind = "actor" | "conversation" | "external" | "platform" | "remote_agent" | "user" | "workspace" | "workspace_member";
 
-export type Timestamp = ColumnType<Date, Date | string, Date | string>;
-
 export type ToolCallsSourceKind = "device" | "plugin" | "system";
 
 export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
@@ -364,7 +362,7 @@ export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 export interface AccessSubjects {
   actor_id: string | null;
   conversation_id: string | null;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   id: Generated<string>;
   kind: SubjectKind;
   remote_agent_id: string | null;
@@ -376,41 +374,41 @@ export interface AccessSubjects {
 
 export interface Account {
   access_token: string | null;
-  access_token_expires_at: Timestamp | null;
+  access_token_expires_at: Date | null;
   account_id: string;
-  created_at: Generated<Timestamp>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date>;
+  deleted_at: Date | null;
   id: Generated<string>;
   id_token: string | null;
   password: string | null;
   provider_id: string;
   refresh_token: string | null;
-  refresh_token_expires_at: Timestamp | null;
+  refresh_token_expires_at: Date | null;
   scope: string | null;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   user_id: string;
 }
 
 export interface AccountLive {
   access_token: string | null;
-  access_token_expires_at: Timestamp | null;
+  access_token_expires_at: Date | null;
   account_id: string | null;
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   id: string | null;
   id_token: string | null;
   password: string | null;
   provider_id: string | null;
   refresh_token: string | null;
-  refresh_token_expires_at: Timestamp | null;
+  refresh_token_expires_at: Date | null;
   scope: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   user_id: string | null;
 }
 
 export interface ActorModelGroupAssignments {
   actor_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   group_id: string;
   priority: Generated<number>;
 }
@@ -420,10 +418,10 @@ export interface Actors {
   avatar_file_id: string | null;
   can_represent_user: Generated<boolean>;
   config: Generated<Json | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
   current_version: Generated<number>;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   id: Generated<string>;
   is_active: Generated<boolean>;
   is_public_shared: Generated<boolean>;
@@ -432,7 +430,7 @@ export interface Actors {
   role: ActorsRole;
   specialties: Generated<string[] | null>;
   title: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
@@ -441,10 +439,10 @@ export interface ActorsLive {
   avatar_file_id: string | null;
   can_represent_user: boolean | null;
   config: Json | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
   current_version: number | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   id: string | null;
   is_active: boolean | null;
   is_public_shared: boolean | null;
@@ -453,18 +451,18 @@ export interface ActorsLive {
   role: ActorsRole | null;
   specialties: string[] | null;
   title: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface ActorSourceRefs {
   actor_id: string;
   baseline_actor_version: number | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
   sync_mode: Generated<ActorSourceRefsSyncMode>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface ActorTemplateVersionSpecs {
@@ -473,7 +471,7 @@ export interface ActorTemplateVersionSpecs {
   can_represent_user: Generated<boolean>;
   catalog_version_id: string;
   config: Generated<Json | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   docs: Generated<Json>;
   metadata: Generated<Json | null>;
   name: string;
@@ -485,12 +483,12 @@ export interface ActorTemplateVersionSpecs {
 export interface ActorVersionDocs {
   actor_version_id: string;
   content_blocks: Generated<Json>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   doc_key: string;
   id: Generated<string>;
   priority: Generated<number>;
   title: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   visibility: Generated<ActorVersionDocsVisibility>;
 }
 
@@ -498,7 +496,7 @@ export interface ActorVersions {
   actor_id: string;
   can_represent_user: Generated<boolean>;
   config: Generated<Json | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
   id: Generated<string>;
   name: string;
@@ -521,7 +519,7 @@ export interface ActorVersions {
 export interface AuditLogs {
   action: string;
   actor_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   details: Generated<Json | null>;
   id: Generated<string>;
   ip_address: string | null;
@@ -532,35 +530,35 @@ export interface AuditLogs {
 }
 
 export interface AutomationDeliveries {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   message_blocks: Generated<Json>;
   message_text: Generated<string>;
   metadata: Generated<Json>;
   rule_id: string;
   target_policy: Generated<AutomationDeliveriesTargetPolicy>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   wake_reason_text: string | null;
 }
 
 export interface AutomationDeliveryTargets {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   rule_id: string;
   target_participant_id: string;
 }
 
 export interface AutomationEventSources {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_actor_id: string | null;
   created_by_kind: AutomationEventSourcesCreatedByKind;
   created_by_session_id: string | null;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: Generated<string>;
   example_payload: Generated<Json>;
   id: Generated<string>;
   integration_binding_id: string | null;
-  last_triggered_at: Timestamp | null;
+  last_triggered_at: Date | null;
   metadata: Generated<Json>;
   name: string;
   payload_schema: Generated<Json>;
@@ -569,23 +567,23 @@ export interface AutomationEventSources {
   recommended_usage: Generated<string>;
   source_key: string;
   status: Generated<AutomationEventSourcesStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   webhook_endpoint_id: string | null;
   workspace_id: string;
 }
 
 export interface AutomationEventSourcesLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_actor_id: string | null;
   created_by_kind: AutomationEventSourcesCreatedByKind | null;
   created_by_session_id: string | null;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: string | null;
   example_payload: Json | null;
   id: string | null;
   integration_binding_id: string | null;
-  last_triggered_at: Timestamp | null;
+  last_triggered_at: Date | null;
   metadata: Json | null;
   name: string | null;
   payload_schema: Json | null;
@@ -594,28 +592,28 @@ export interface AutomationEventSourcesLive {
   recommended_usage: string | null;
   source_key: string | null;
   status: AutomationEventSourcesStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   webhook_endpoint_id: string | null;
   workspace_id: string | null;
 }
 
 export interface AutomationExecutions {
   attempt_count: Generated<number>;
-  completed_at: Timestamp | null;
-  created_at: Generated<Timestamp | null>;
+  completed_at: Date | null;
+  created_at: Generated<Date | null>;
   error_message: string | null;
   id: Generated<string>;
   occurrence_id: string;
   rule_id: string;
-  started_at: Timestamp | null;
+  started_at: Date | null;
   status: Generated<AutomationExecutionsStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface AutomationExecutionTargets {
   conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_item_id: string | null;
   execution_id: string;
   id: Generated<string>;
@@ -624,13 +622,13 @@ export interface AutomationExecutionTargets {
   status: Generated<AutomationExecutionTargetsStatus>;
   target_actor_id: string | null;
   target_participant_id: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   wakeup_id: string | null;
 }
 
 export interface AutomationIntegrationBindings {
-  created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deleted_at: Date | null;
   external_subscription_id: string | null;
   id: Generated<string>;
   ingress_kind: AutomationIntegrationBindingsIngressKind;
@@ -640,14 +638,14 @@ export interface AutomationIntegrationBindings {
   target_id: string;
   target_kind: AutomationIntegrationBindingsTargetKind;
   target_label: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   webhook_endpoint_id: string | null;
   workspace_id: string;
 }
 
 export interface AutomationIntegrationBindingsLive {
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   external_subscription_id: string | null;
   id: string | null;
   ingress_kind: AutomationIntegrationBindingsIngressKind | null;
@@ -657,18 +655,18 @@ export interface AutomationIntegrationBindingsLive {
   target_id: string | null;
   target_kind: AutomationIntegrationBindingsTargetKind | null;
   target_label: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   webhook_endpoint_id: string | null;
   workspace_id: string | null;
 }
 
 export interface AutomationOccurrences {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   dedupe_key: string | null;
   event_source_id: string | null;
   id: Generated<string>;
   match_key: string | null;
-  occurred_at: Timestamp;
+  occurred_at: Date;
   payload: Generated<Json>;
   source_kind: AutomationOccurrencesSourceKind;
   source_locator: string | null;
@@ -677,110 +675,110 @@ export interface AutomationOccurrences {
 }
 
 export interface AutomationPolicies {
-  active_from: Timestamp | null;
-  active_until: Timestamp | null;
-  completed_at: Timestamp | null;
+  active_from: Date | null;
+  active_until: Date | null;
+  completed_at: Date | null;
   completion_status: Generated<AutomationPoliciesCompletionStatus>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   max_trigger_count: number | null;
   metadata: Generated<Json>;
   rule_id: string;
   trigger_count: Generated<number>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface AutomationRules {
   category: AutomationRulesCategory;
   conversation_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_participant_id: string;
   created_by_session_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: Generated<string>;
   id: Generated<string>;
-  last_error_at: Timestamp | null;
+  last_error_at: Date | null;
   last_error_message: string | null;
-  last_triggered_at: Timestamp | null;
+  last_triggered_at: Date | null;
   metadata: Generated<Json>;
   name: string;
   status: Generated<AutomationRulesStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface AutomationRulesLive {
   category: AutomationRulesCategory | null;
   conversation_id: string | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_participant_id: string | null;
   created_by_session_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: string | null;
   id: string | null;
-  last_error_at: Timestamp | null;
+  last_error_at: Date | null;
   last_error_message: string | null;
-  last_triggered_at: Timestamp | null;
+  last_triggered_at: Date | null;
   metadata: Json | null;
   name: string | null;
   status: AutomationRulesStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface AutomationTriggers {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   event_source_id: string | null;
   interval_seconds: number | null;
-  last_fired_at: Timestamp | null;
+  last_fired_at: Date | null;
   match_key: string | null;
   matcher: Generated<Json>;
   metadata: Generated<Json>;
-  next_fire_at: Timestamp | null;
+  next_fire_at: Date | null;
   rule_id: string;
   schedule_expr: string | null;
   schedule_kind: AutomationTriggersScheduleKind | null;
   schedule_timezone: string | null;
   source_kind: AutomationTriggersSourceKind;
   source_locator: string | null;
-  starts_at: Timestamp | null;
+  starts_at: Date | null;
   trigger_kind: AutomationTriggersTriggerKind;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface AutomationWebhookEndpoints {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   id: Generated<string>;
-  last_received_at: Timestamp | null;
+  last_received_at: Date | null;
   metadata: Generated<Json>;
   name: string;
   path_token: string;
   secret_ciphertext: string;
   secret_hint: string;
   status: Generated<AutomationWebhookEndpointsStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface AutomationWebhookEndpointsLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   id: string | null;
-  last_received_at: Timestamp | null;
+  last_received_at: Date | null;
   metadata: Json | null;
   name: string | null;
   path_token: string | null;
   secret_ciphertext: string | null;
   secret_hint: string | null;
   status: AutomationWebhookEndpointsStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface CatalogCategories {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   description: Generated<string | null>;
   display_name: string;
   icon_file_id: string | null;
@@ -789,18 +787,18 @@ export interface CatalogCategories {
   metadata: Generated<Json | null>;
   slug: string;
   sort_order: Generated<number>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface CatalogItemCategories {
   catalog_item_id: string;
   category_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
 }
 
 export interface CatalogItems {
-  created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deleted_at: Date | null;
   display_name: string;
   download_count: Generated<number>;
   icon_file_id: string | null;
@@ -816,14 +814,14 @@ export interface CatalogItems {
   source_kind: Generated<CatalogItemsSourceKind>;
   summary: Generated<string | null>;
   tags: Generated<string[] | null>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   visibility: Generated<CatalogItemsVisibility>;
   workspace_id: string | null;
 }
 
 export interface CatalogItemsLive {
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   display_name: string | null;
   download_count: number | null;
   icon_file_id: string | null;
@@ -839,7 +837,7 @@ export interface CatalogItemsLive {
   source_kind: CatalogItemsSourceKind | null;
   summary: string | null;
   tags: string[] | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   visibility: CatalogItemsVisibility | null;
   workspace_id: string | null;
 }
@@ -847,7 +845,7 @@ export interface CatalogItemsLive {
 export interface CatalogVersionFiles {
   catalog_version_id: string;
   content_blocks: Generated<Json | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   file_role: CatalogVersionFilesFileRole;
   id: Generated<string>;
   media_type: string | null;
@@ -861,7 +859,7 @@ export interface CatalogVersionFiles {
 export interface CatalogVersions {
   catalog_item_id: string;
   changelog: Generated<string | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_user_id: string | null;
   id: Generated<string>;
   metadata: Generated<Json | null>;
@@ -870,14 +868,14 @@ export interface CatalogVersions {
 }
 
 export interface ChatClientInstances {
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   device_label: string | null;
   id: string;
-  last_seen_at: Generated<Timestamp>;
+  last_seen_at: Generated<Date>;
   metadata: Generated<Json>;
   platform: string | null;
   status: Generated<ChatClientInstancesStatus>;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
   workspace_member_id: string;
 }
@@ -885,16 +883,16 @@ export interface ChatClientInstances {
 export interface ChatConversationCreateRequests {
   client_request_id: string;
   conversation_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   workspace_id: string;
   workspace_member_id: string;
 }
 
 export interface ChatPushTokens {
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   device_label: string | null;
   id: Generated<string>;
-  last_seen_at: Generated<Timestamp>;
+  last_seen_at: Generated<Date>;
   metadata: Generated<Json>;
   platform: string;
   token: string;
@@ -903,7 +901,7 @@ export interface ChatPushTokens {
 
 export interface ContentBlobs {
   backend: Generated<string>;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   locator_json: Generated<Json>;
   sha256: string;
   size_bytes: Int8;
@@ -939,7 +937,7 @@ export interface ContextArchivePoints {
   chain_scope: ContextArchivePointsChainScope;
   conversation_id: string;
   covers_until_sequence: Generated<Int8>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   metadata: Generated<Json | null>;
   parent_archive_point_id: string | null;
@@ -960,14 +958,14 @@ export interface ContextCompactionRunInputs {
 export interface ContextCompactionRuns {
   base_archive_point_id: string | null;
   chain_scope: ContextCompactionRunsChainScope;
-  completed_at: Timestamp | null;
+  completed_at: Date | null;
   conversation_id: string;
   error_message: string | null;
   id: Generated<string>;
   metadata: Generated<Json | null>;
   output_archive_point_id: string | null;
   session_id: string | null;
-  started_at: Generated<Timestamp | null>;
+  started_at: Generated<Date | null>;
   status: Generated<ContextCompactionRunsStatus>;
   strategy_key: string;
 }
@@ -975,18 +973,18 @@ export interface ContextCompactionRuns {
 export interface ConversationContextStates {
   active_shared_archive_point_id: string | null;
   conversation_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface ConversationDeviceStates {
   client_instance_id: string;
   conversation_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   draft_payload: Generated<Json>;
   last_inbox_seq: Generated<Int8>;
-  last_opened_at: Timestamp | null;
+  last_opened_at: Date | null;
   last_visible_sequence: Generated<Int8>;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
 }
 
 export interface ConversationItemContextTargets {
@@ -1020,7 +1018,7 @@ export interface ConversationItems {
   caused_by_item_id: string | null;
   client_message_id: string | null;
   conversation_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   event_context_policy: ConversationItemsEventContextPolicy | null;
   event_payload: Generated<Json | null>;
   event_timeline_policy: ConversationItemsEventTimelinePolicy | null;
@@ -1045,11 +1043,11 @@ export interface ConversationItemTargets {
 
 export interface ConversationParticipantAddresses {
   conversation_participant_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   is_primary: Generated<boolean>;
   metadata: Generated<Json>;
   transport_address_id: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
 }
 
 export interface ConversationParticipants {
@@ -1057,8 +1055,8 @@ export interface ConversationParticipants {
   conversation_id: string;
   display_name: string | null;
   id: Generated<string>;
-  joined_at: Generated<Timestamp>;
-  left_at: Timestamp | null;
+  joined_at: Generated<Date>;
+  left_at: Date | null;
   metadata: Generated<Json>;
   role_key: Generated<string>;
   state: Generated<ConversationParticipantsState>;
@@ -1070,8 +1068,8 @@ export interface ConversationParticipantsLive {
   conversation_id: string | null;
   display_name: string | null;
   id: string | null;
-  joined_at: Timestamp | null;
-  left_at: Timestamp | null;
+  joined_at: Date | null;
+  left_at: Date | null;
   metadata: Json | null;
   role_key: string | null;
   state: ConversationParticipantsState | null;
@@ -1080,41 +1078,41 @@ export interface ConversationParticipantsLive {
 
 export interface ConversationParticipantStates {
   conversation_id: string;
-  created_at: Generated<Timestamp>;
-  last_read_at: Timestamp | null;
+  created_at: Generated<Date>;
+  last_read_at: Date | null;
   last_read_item_id: string | null;
   participant_id: string;
   read_watermark_sequence: Generated<Int8>;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
 }
 
 export interface Conversations {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   id: Generated<string>;
   kind: ConversationsKind;
   metadata: Generated<Json | null>;
   title: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface ConversationsLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   id: string | null;
   kind: ConversationsKind | null;
   metadata: Json | null;
   title: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface ConversationTransportBindings {
   conversation_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   id: Generated<string>;
   inbound_actor_id: string | null;
   inbound_actor_mode: Generated<ConversationTransportBindingsInboundActorMode>;
@@ -1122,53 +1120,53 @@ export interface ConversationTransportBindings {
   outbound_enabled: Generated<boolean>;
   transport_account_id: string;
   transport_endpoint_id: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
 export interface DeviceCapabilities {
   conversation_type_mask_override: number | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   exposure_id: string;
   id: Generated<string>;
   status: Generated<DeviceCapabilitiesStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface DeviceCapabilitiesLive {
   conversation_type_mask_override: number | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   exposure_id: string | null;
   id: string | null;
   status: DeviceCapabilitiesStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface DeviceCatalogRevisions {
-  activated_at: Generated<Timestamp | null>;
-  created_at: Generated<Timestamp | null>;
+  activated_at: Generated<Date | null>;
+  created_at: Generated<Date | null>;
   exposure_id: string;
   id: Generated<string>;
-  invalidated_at: Timestamp | null;
+  invalidated_at: Date | null;
   revision_seq: Int8;
   schema_hash: string;
   status: Generated<DeviceCatalogRevisionsStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface DeviceCode {
   client_id: string | null;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   device_code: string;
-  expires_at: Timestamp;
+  expires_at: Date;
   id: Generated<string>;
-  last_polled_at: Timestamp | null;
+  last_polled_at: Date | null;
   polling_interval: number | null;
   scope: string | null;
   status: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   user_code: string;
   user_id: string | null;
 }
@@ -1176,63 +1174,63 @@ export interface DeviceCode {
 export interface DeviceControlPlaneSessions {
   client_version: string | null;
   close_reason: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   device_id: string;
-  ended_at: Timestamp | null;
+  ended_at: Date | null;
   id: Generated<string>;
-  last_heartbeat_at: Timestamp | null;
+  last_heartbeat_at: Date | null;
   last_sequence: Generated<Int8>;
   protocol_version: Generated<number>;
   remote_addr: string | null;
   service_id: string;
-  started_at: Generated<Timestamp | null>;
+  started_at: Generated<Date | null>;
   status: Generated<DeviceControlPlaneSessionsStatus>;
   transport: Generated<DeviceControlPlaneSessionsTransport>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface DeviceExposures {
   builtin_kind: DeviceExposuresBuiltinKind | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   description: string | null;
   device_id: string;
   display_name: string;
   id: Generated<string>;
   last_error: string | null;
-  last_healthy_at: Timestamp | null;
-  last_seen_at: Timestamp | null;
+  last_healthy_at: Date | null;
+  last_seen_at: Date | null;
   metadata: Generated<Json>;
   runtime_status: Generated<DeviceExposuresRuntimeStatus>;
   service_id: string;
   stable_key: string;
   sync_source_id: string | null;
   transport: DeviceExposuresTransport;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface DeviceExposuresLive {
   builtin_kind: DeviceExposuresBuiltinKind | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   description: string | null;
   device_id: string | null;
   display_name: string | null;
   id: string | null;
   last_error: string | null;
-  last_healthy_at: Timestamp | null;
-  last_seen_at: Timestamp | null;
+  last_healthy_at: Date | null;
+  last_seen_at: Date | null;
   metadata: Json | null;
   runtime_status: DeviceExposuresRuntimeStatus | null;
   service_id: string | null;
   stable_key: string | null;
   sync_source_id: string | null;
   transport: DeviceExposuresTransport | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
 }
 
 export interface DeviceOperationAttempts {
-  acknowledged_at: Timestamp | null;
+  acknowledged_at: Date | null;
   attempt_seq: Int8;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   device_control_plane_session_id: string | null;
   device_service_id: string;
   envelope_signature_kid: string | null;
@@ -1240,36 +1238,36 @@ export interface DeviceOperationAttempts {
   mcp_request_id: string | null;
   metadata: Generated<Json>;
   operation_id: string;
-  response_at: Timestamp | null;
-  started_at: Timestamp | null;
+  response_at: Date | null;
+  started_at: Date | null;
   status: Generated<DeviceOperationAttemptsStatus>;
   transport: DeviceOperationAttemptsTransport;
   tunnel_internal_url: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface DeviceOperationResults {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   operation_id: string;
   output_payload: Generated<Json>;
   output_preview: string | null;
   result_hash: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface DeviceOperations {
   authorization_payload: Generated<Json>;
   catalog_revision_id: string;
-  completed_at: Timestamp | null;
+  completed_at: Date | null;
   conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   device_capability_id: string;
   device_exposure_id: string;
   device_id: string;
   error_code: string | null;
   error_message: string | null;
-  expires_at: Timestamp | null;
+  expires_at: Date | null;
   id: Generated<string>;
   initiated_by_session_id: string | null;
   initiated_by_workspace_member_id: string | null;
@@ -1286,19 +1284,19 @@ export interface DeviceOperations {
   task_mode: Generated<DeviceOperationsTaskMode>;
   tool_id: string;
   tool_revision_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   visible_tool_name: string;
   workspace_id: string;
 }
 
 export interface DevicePairingSessions {
   bootstrap_token_hash: Buffer | null;
-  confirmed_at: Timestamp | null;
-  consumed_at: Timestamp | null;
+  confirmed_at: Date | null;
+  consumed_at: Date | null;
   context: Generated<Json>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   device_id: string | null;
-  expires_at: Timestamp;
+  expires_at: Date;
   id: Generated<string>;
   mode: DevicePairingSessionsMode;
   pairing_code: string | null;
@@ -1308,7 +1306,7 @@ export interface DevicePairingSessions {
   requested_title: string | null;
   server_base_url: string;
   status: Generated<DevicePairingSessionsStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   verification_uri: string | null;
   verification_uri_complete: string | null;
   workspace_id: string;
@@ -1316,19 +1314,19 @@ export interface DevicePairingSessions {
 
 export interface DeviceRuntimeSessions {
   actor_id: string | null;
-  closed_at: Timestamp | null;
+  closed_at: Date | null;
   conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   device_id: string;
   id: Generated<string>;
-  opened_at: Generated<Timestamp | null>;
+  opened_at: Generated<Date | null>;
   status: Generated<DeviceRuntimeSessionsStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface DeviceRuntimeSessionServices {
-  closed_at: Timestamp | null;
-  opened_at: Generated<Timestamp | null>;
+  closed_at: Date | null;
+  opened_at: Generated<Date | null>;
   service_id: string;
   session_id: string;
   status: Generated<DeviceRuntimeSessionServicesStatus>;
@@ -1336,20 +1334,20 @@ export interface DeviceRuntimeSessionServices {
 
 export interface Devices {
   arch: string | null;
-  automation_lifecycle_event_at: Timestamp | null;
-  automation_lifecycle_grace_until: Timestamp | null;
+  automation_lifecycle_event_at: Date | null;
+  automation_lifecycle_grace_until: Date | null;
   automation_lifecycle_state: DevicesAutomationLifecycleState | null;
   conversation_type_mask_override: number | null;
-  created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deleted_at: Date | null;
   description: string | null;
   device_type: Generated<DevicesDeviceType>;
   host_kind: Generated<DevicesHostKind>;
   host_provider: string | null;
   id: Generated<string>;
-  last_catalog_changed_at: Timestamp | null;
-  last_connected_at: Timestamp | null;
-  last_seen_at: Timestamp | null;
+  last_catalog_changed_at: Date | null;
+  last_connected_at: Date | null;
+  last_seen_at: Date | null;
   lifecycle_kind: Generated<DevicesLifecycleKind>;
   owner_workspace_member_id: string | null;
   platform: string | null;
@@ -1358,65 +1356,65 @@ export interface Devices {
   source_session_id: string | null;
   title: string;
   trust_status: Generated<DevicesTrustStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface DeviceServiceKeys {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   pubkey: string;
   pubkey_fingerprint: string;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   service_id: string;
 }
 
 export interface DeviceServices {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   current_session_id: string | null;
   device_id: string;
   id: Generated<string>;
-  last_seen_at: Timestamp | null;
+  last_seen_at: Date | null;
   metadata: Generated<Json>;
   remote_agent_machine_id: string | null;
   service_kind: DeviceServicesServiceKind;
   status: Generated<DeviceServicesStatus>;
   tunnel_path_token: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   version: string | null;
 }
 
 export interface DeviceServicesLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   current_session_id: string | null;
   device_id: string | null;
   id: string | null;
-  last_seen_at: Timestamp | null;
+  last_seen_at: Date | null;
   metadata: Json | null;
   remote_agent_machine_id: string | null;
   service_kind: DeviceServicesServiceKind | null;
   status: DeviceServicesStatus | null;
   tunnel_path_token: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   version: string | null;
 }
 
 export interface DevicesLive {
   arch: string | null;
-  automation_lifecycle_event_at: Timestamp | null;
-  automation_lifecycle_grace_until: Timestamp | null;
+  automation_lifecycle_event_at: Date | null;
+  automation_lifecycle_grace_until: Date | null;
   automation_lifecycle_state: DevicesAutomationLifecycleState | null;
   conversation_type_mask_override: number | null;
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   description: string | null;
   device_type: DevicesDeviceType | null;
   host_kind: DevicesHostKind | null;
   host_provider: string | null;
   id: string | null;
-  last_catalog_changed_at: Timestamp | null;
-  last_connected_at: Timestamp | null;
-  last_seen_at: Timestamp | null;
+  last_catalog_changed_at: Date | null;
+  last_connected_at: Date | null;
+  last_seen_at: Date | null;
   lifecycle_kind: DevicesLifecycleKind | null;
   owner_workspace_member_id: string | null;
   platform: string | null;
@@ -1425,28 +1423,28 @@ export interface DevicesLive {
   source_session_id: string | null;
   title: string | null;
   trust_status: DevicesTrustStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface DeviceSyncSources {
   config_path: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   device_id: string;
   id: Generated<string>;
   last_error: string | null;
-  last_synced_at: Timestamp | null;
+  last_synced_at: Date | null;
   source_key: string;
   source_kind: DeviceSyncSourcesSourceKind;
   status: Generated<DeviceSyncSourcesStatus>;
   sync_mode: Generated<DeviceSyncSourcesSyncMode>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface DeviceToolRevisions {
   annotations: Generated<Json>;
   catalog_revision_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   definition_hash: string;
   description: Generated<string>;
   id: Generated<string>;
@@ -1456,94 +1454,94 @@ export interface DeviceToolRevisions {
 }
 
 export interface DeviceTools {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   current_name: string;
   exposure_id: string;
-  first_seen_at: Generated<Timestamp | null>;
+  first_seen_at: Generated<Date | null>;
   id: Generated<string>;
-  last_seen_at: Generated<Timestamp | null>;
+  last_seen_at: Generated<Date | null>;
   latest_revision_id: string | null;
   metadata: Generated<Json>;
   stable_key: string;
   status: Generated<DeviceToolsStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface DeviceToolsLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   current_name: string | null;
   exposure_id: string | null;
-  first_seen_at: Timestamp | null;
+  first_seen_at: Date | null;
   id: string | null;
-  last_seen_at: Timestamp | null;
+  last_seen_at: Date | null;
   latest_revision_id: string | null;
   metadata: Json | null;
   stable_key: string | null;
   status: DeviceToolsStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
 }
 
 export interface DirectConversationBindings {
   conversation_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   participant_one_subject_id: string;
   participant_two_subject_id: string;
 }
 
 export interface EntityAccessRequests {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   requester_workspace_member_id: string;
-  resolved_at: Timestamp | null;
+  resolved_at: Date | null;
   resolved_by_workspace_member_id: string | null;
   status: Generated<RelationshipRequestStatus>;
   target_subject_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface FileAccessGrants {
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   created_by_workspace_member_id: string | null;
   file_asset_id: string | null;
   file_space_id: string;
   id: Generated<string>;
   permissions: ArrayType<FilePermission>;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   scope_subject_id: string | null;
   source: string | null;
   source_task_id: string | null;
   status: Generated<FileAccessGrantsStatus>;
   subject_id: string;
-  superseded_at: Timestamp | null;
-  updated_at: Generated<Timestamp>;
+  superseded_at: Date | null;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
 export interface FileAccessGrantsLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
   file_asset_id: string | null;
   file_space_id: string | null;
   id: string | null;
   permissions: ArrayType<FilePermission> | null;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   scope_subject_id: string | null;
   source: string | null;
   source_task_id: string | null;
   status: FileAccessGrantsStatus | null;
   subject_id: string | null;
-  superseded_at: Timestamp | null;
-  updated_at: Timestamp | null;
+  superseded_at: Date | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface FileAssets {
   content_kind: FileContentKind;
   content_sha256: string;
-  created_at: Generated<Timestamp>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date>;
+  deleted_at: Date | null;
   details_json: Generated<Json>;
   id: Generated<string>;
   initiator_actor_id: string | null;
@@ -1553,7 +1551,7 @@ export interface FileAssets {
   size_bytes: Int8;
   source_family: FileOriginFamily;
   source_system: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   uploader_user_id: string | null;
   workspace_id: string | null;
 }
@@ -1561,8 +1559,8 @@ export interface FileAssets {
 export interface FileAssetsLive {
   content_kind: FileContentKind | null;
   content_sha256: string | null;
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   details_json: Json | null;
   id: string | null;
   initiator_actor_id: string | null;
@@ -1572,15 +1570,15 @@ export interface FileAssetsLive {
   size_bytes: Int8 | null;
   source_family: FileOriginFamily | null;
   source_system: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   uploader_user_id: string | null;
   workspace_id: string | null;
 }
 
 export interface FileMounts {
   base_snapshot_id: string | null;
-  closed_at: Timestamp | null;
-  created_at: Generated<Timestamp>;
+  closed_at: Date | null;
+  created_at: Generated<Date>;
   device_id: string | null;
   error_message: string | null;
   file_space_id: string;
@@ -1595,12 +1593,12 @@ export interface FileMounts {
   sandbox_resource_id: string | null;
   session_id: string;
   status: Generated<FileMountStatus>;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
 export interface FileParseOutputs {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   derived_asset_id: string | null;
   id: Generated<string>;
   is_primary: Generated<boolean>;
@@ -1613,22 +1611,22 @@ export interface FileParseOutputs {
 
 export interface FileParseRuns {
   asset_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   error_code: string | null;
   error_message: string | null;
-  finished_at: Timestamp | null;
+  finished_at: Date | null;
   id: Generated<string>;
   metadata: Generated<Json>;
   parser_key: string;
   parser_version: string | null;
   pipeline: string;
-  started_at: Timestamp | null;
+  started_at: Date | null;
   status: Generated<FileParseRunStatus>;
   trigger: string;
 }
 
 export interface FileSnapshots {
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   created_by_session_id: string | null;
   entry_count: Generated<number>;
   file_space_id: string;
@@ -1642,113 +1640,113 @@ export interface FileSnapshots {
 }
 
 export interface FileSpaces {
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   current_snapshot_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   id: Generated<string>;
   namespace_key: Generated<string>;
   owner_subject_id: string;
   scope_subject_id: string | null;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
 export interface FileSpacesLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   current_snapshot_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   id: string | null;
   namespace_key: string | null;
   owner_subject_id: string | null;
   scope_subject_id: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface InstalledSkills {
   conversation_type_mask_override: number | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
   current_snapshot_id: string;
   current_version: Generated<number>;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   icon_file_id: string | null;
   id: Generated<string>;
   is_active: Generated<boolean>;
   name: string;
   slug: string;
   tags: Generated<string[] | null>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface InstalledSkillsLive {
   conversation_type_mask_override: number | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
   current_snapshot_id: string | null;
   current_version: number | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   icon_file_id: string | null;
   id: string | null;
   is_active: boolean | null;
   name: string | null;
   slug: string | null;
   tags: string[] | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface MemoryAccessGrants {
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   created_by_workspace_member_id: string | null;
   id: Generated<string>;
   memory_item_id: string | null;
   memory_space_id: string;
   permissions: ArrayType<MemoryPermission>;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   scope_subject_id: string | null;
   source: string | null;
   source_task_id: string | null;
   status: Generated<MemoryAccessGrantsStatus>;
   subject_id: string;
-  superseded_at: Timestamp | null;
-  updated_at: Generated<Timestamp>;
+  superseded_at: Date | null;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
 export interface MemoryAccessGrantsLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
   id: string | null;
   memory_item_id: string | null;
   memory_space_id: string | null;
   permissions: ArrayType<MemoryPermission> | null;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   scope_subject_id: string | null;
   source: string | null;
   source_task_id: string | null;
   status: MemoryAccessGrantsStatus | null;
   subject_id: string | null;
-  superseded_at: Timestamp | null;
-  updated_at: Timestamp | null;
+  superseded_at: Date | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface MemoryEmbeddingCache {
   content_hash: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   embedding: string;
   embedding_dim: number;
   input_type: string;
   model_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface MemoryItemChunks {
   chunk_index: number;
   chunk_kind: Generated<string>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   embedding: string | null;
   id: Generated<string>;
   index_version: number;
@@ -1756,7 +1754,7 @@ export interface MemoryItemChunks {
   metadata: Generated<Json | null>;
   search_text: string;
   token_count: Generated<number | null>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
@@ -1778,15 +1776,15 @@ export interface MemoryItems {
   active_index_version: Generated<number>;
   category: MemoryItemsCategory;
   confidence: Generated<number>;
-  created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deleted_at: Date | null;
   embedding_dim: number | null;
   embedding_model: Generated<string>;
   id: Generated<string>;
   importance: Generated<number>;
   index_error: string | null;
   index_status: Generated<MemoryItemsIndexStatus>;
-  indexed_at: Timestamp | null;
+  indexed_at: Date | null;
   memory_space_id: string;
   metadata: Generated<Json | null>;
   search_text: Generated<string>;
@@ -1799,7 +1797,7 @@ export interface MemoryItems {
   supersedes_item_id: string | null;
   tags: Generated<string[] | null>;
   text_digest: Generated<string>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
@@ -1807,15 +1805,15 @@ export interface MemoryItemsLive {
   active_index_version: number | null;
   category: MemoryItemsCategory | null;
   confidence: number | null;
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   embedding_dim: number | null;
   embedding_model: string | null;
   id: string | null;
   importance: number | null;
   index_error: string | null;
   index_status: MemoryItemsIndexStatus | null;
-  indexed_at: Timestamp | null;
+  indexed_at: Date | null;
   memory_space_id: string | null;
   metadata: Json | null;
   search_text: string | null;
@@ -1828,12 +1826,12 @@ export interface MemoryItemsLive {
   supersedes_item_id: string | null;
   tags: string[] | null;
   text_digest: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface MemoryRecallRunResults {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   final_score: Generated<number>;
   id: Generated<string>;
   matched_chunk_id: string | null;
@@ -1851,7 +1849,7 @@ export interface MemoryRecallRunResults {
 export interface MemoryRecallRuns {
   actor_id: string | null;
   conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   metadata: Generated<Json | null>;
   query_blocks: Generated<Json | null>;
@@ -1862,52 +1860,52 @@ export interface MemoryRecallRuns {
 }
 
 export interface MemorySpaces {
-  created_at: Generated<Timestamp>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date>;
+  deleted_at: Date | null;
   id: Generated<string>;
   namespace_key: Generated<string>;
   owner_subject_id: string;
   scope_subject_id: string | null;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
 export interface MemorySpacesLive {
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   id: string | null;
   namespace_key: string | null;
   owner_subject_id: string | null;
   scope_subject_id: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface ModelBindings {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   current_version_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   display_name: string;
   group_id: string;
   id: Generated<string>;
   installed_by_workspace_member_id: string | null;
   is_enabled: Generated<boolean | null>;
   priority: Generated<number>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   weight: Generated<number>;
 }
 
 export interface ModelBindingsLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   current_version_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   display_name: string | null;
   group_id: string | null;
   id: string | null;
   installed_by_workspace_member_id: string | null;
   is_enabled: boolean | null;
   priority: number | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   weight: number | null;
 }
 
@@ -1916,7 +1914,7 @@ export interface ModelBindingVersions {
   base_url: string;
   binding_id: string;
   capability_tags: Generated<string[] | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   features: Generated<Json>;
   id: Generated<string>;
   max_output_tokens: Generated<number>;
@@ -1930,32 +1928,32 @@ export interface ModelBindingVersions {
 }
 
 export interface ModelGroupGrants {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   granted_by_workspace_member_id: string | null;
   group_id: string;
   id: Generated<string>;
   reason: string | null;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   status: Generated<ModelGroupGrantsStatus>;
   subject_id: string;
 }
 
 export interface ModelGroupGrantsLive {
-  created_at: Timestamp | null;
+  created_at: Date | null;
   granted_by_workspace_member_id: string | null;
   group_id: string | null;
   id: string | null;
   reason: string | null;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   status: ModelGroupGrantsStatus | null;
   subject_id: string | null;
 }
 
 export interface ModelGroups {
   attempt_policy: Generated<Json | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: Generated<string | null>;
   id: Generated<string>;
   is_default: Generated<boolean | null>;
@@ -1965,14 +1963,14 @@ export interface ModelGroups {
   owner_workspace_id: string | null;
   owner_workspace_member_id: string | null;
   routing_strategy: Generated<ModelGroupsRoutingStrategy>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface ModelGroupsLive {
   attempt_policy: Json | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: string | null;
   id: string | null;
   is_default: boolean | null;
@@ -1982,13 +1980,13 @@ export interface ModelGroupsLive {
   owner_workspace_id: string | null;
   owner_workspace_member_id: string | null;
   routing_strategy: ModelGroupsRoutingStrategy | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
 }
 
 export interface PayloadBlobs {
   byte_size: Generated<number>;
   content_type: PayloadBlobsContentType;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   json_body: Json | null;
   retention_class: Generated<PayloadBlobsRetentionClass>;
@@ -1999,24 +1997,24 @@ export interface PayloadBlobs {
 export interface PlatformAccessBindings {
   access_key: PlatformAccessBindingsAccessKey;
   assigned_by_user_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  revoked_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  revoked_at: Date | null;
   revoked_by_user_id: string | null;
   source: Generated<PlatformAccessBindingsSource>;
   status: Generated<AccessBindingStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   user_id: string;
 }
 
 export interface PlatformAccessBindingsLive {
   access_key: PlatformAccessBindingsAccessKey | null;
   assigned_by_user_id: string | null;
-  created_at: Timestamp | null;
-  revoked_at: Timestamp | null;
+  created_at: Date | null;
+  revoked_at: Date | null;
   revoked_by_user_id: string | null;
   source: PlatformAccessBindingsSource | null;
   status: AccessBindingStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   user_id: string | null;
 }
 
@@ -2025,11 +2023,11 @@ export interface PluginAuthSessions {
   catalog_item_id: string;
   catalog_version_id: string | null;
   challenge_payload: Generated<Json | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   driver: string;
   error_code: string | null;
   error_message: string | null;
-  expires_at: Timestamp;
+  expires_at: Date;
   id: Generated<string>;
   installation_id: string | null;
   metadata: Generated<Json | null>;
@@ -2039,7 +2037,7 @@ export interface PluginAuthSessions {
   state: string | null;
   status: Generated<PluginAuthSessionsStatus>;
   transient_payload: Generated<Json | null>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
   workspace_member_id: string;
 }
@@ -2047,11 +2045,11 @@ export interface PluginAuthSessions {
 export interface PluginConnections {
   avatar_url: string | null;
   binding_key: string;
-  created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deleted_at: Date | null;
   display_name: string | null;
   driver: string;
-  expires_at: Timestamp | null;
+  expires_at: Date | null;
   external_account_id: string | null;
   id: Generated<string>;
   installation_id: string;
@@ -2060,18 +2058,18 @@ export interface PluginConnections {
   public_payload: Generated<Json | null>;
   secret_payload: Generated<Json | null>;
   status: Generated<PluginConnectionsStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface PluginConnectionsLive {
   avatar_url: string | null;
   binding_key: string | null;
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   display_name: string | null;
   driver: string | null;
-  expires_at: Timestamp | null;
+  expires_at: Date | null;
   external_account_id: string | null;
   id: string | null;
   installation_id: string | null;
@@ -2080,7 +2078,7 @@ export interface PluginConnectionsLive {
   public_payload: Json | null;
   secret_payload: Json | null;
   status: PluginConnectionsStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
@@ -2091,14 +2089,14 @@ export interface PluginInstallations {
   catalog_version_id: string;
   config_data: Generated<Json>;
   conversation_type_mask_override: number | null;
-  created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deleted_at: Date | null;
   display_name: string;
   id: Generated<string>;
   installed_by_workspace_member_id: string | null;
   reuse_scope: Generated<PluginInstallationsReuseScope>;
   status: Generated<PluginInstallationsStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
@@ -2109,14 +2107,14 @@ export interface PluginInstallationsLive {
   catalog_version_id: string | null;
   config_data: Json | null;
   conversation_type_mask_override: number | null;
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   display_name: string | null;
   id: string | null;
   installed_by_workspace_member_id: string | null;
   reuse_scope: PluginInstallationsReuseScope | null;
   status: PluginInstallationsStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
@@ -2124,7 +2122,7 @@ export interface PluginPackageVersionSpecs {
   auth_bindings: Generated<Json>;
   catalog_version_id: string;
   config_schema: Generated<Json>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   default_config: Generated<Json>;
   default_conversation_type_mask: Generated<number>;
   default_mount_scope: Generated<PluginPackageVersionSpecsDefaultMountScope>;
@@ -2139,17 +2137,17 @@ export interface PluginPackageVersionSpecs {
 }
 
 export interface PluginSourceRefs {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   installation_id: string;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
   sync_mode: Generated<PluginSourceRefsSyncMode>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface PluginVersionRuntimePermissions {
   catalog_version_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   is_required: Generated<boolean>;
   permission_key: string;
@@ -2159,7 +2157,7 @@ export interface PluginVersionRuntimePermissions {
 export interface ProviderSteps {
   capabilities_snapshot: Generated<Json | null>;
   cost_micros: Generated<Int8 | null>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   error_message: string | null;
   id: Generated<string>;
   input_tokens: Generated<number | null>;
@@ -2180,8 +2178,8 @@ export interface ProviderSteps {
 }
 
 export interface Publishers {
-  created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deleted_at: Date | null;
   description: Generated<string | null>;
   display_name: string;
   id: Generated<string>;
@@ -2190,13 +2188,13 @@ export interface Publishers {
   logo_file_id: string | null;
   owner_user_id: string | null;
   slug: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string | null;
 }
 
 export interface PublishersLive {
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   description: string | null;
   display_name: string | null;
   id: string | null;
@@ -2205,32 +2203,32 @@ export interface PublishersLive {
   logo_file_id: string | null;
   owner_user_id: string | null;
   slug: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface RealtimeEventOutbox {
   attempts: Generated<number>;
-  available_at: Generated<Timestamp>;
-  created_at: Generated<Timestamp | null>;
-  dispatched_at: Timestamp | null;
-  event_timestamp: Timestamp;
+  available_at: Generated<Date>;
+  created_at: Generated<Date | null>;
+  dispatched_at: Date | null;
+  event_timestamp: Date;
   event_type: string;
   id: Generated<string>;
   last_error: string | null;
   payload: Generated<Json>;
-  processing_started_at: Timestamp | null;
+  processing_started_at: Date | null;
   recipient_workspace_member_id: string;
   status: Generated<RealtimeEventOutboxStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface RemoteAgentBindings {
   capabilities: Generated<Json>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
-  last_activity_at: Timestamp | null;
+  last_activity_at: Date | null;
   last_error: string | null;
   local_root_path: string | null;
   machine_id: string;
@@ -2240,7 +2238,7 @@ export interface RemoteAgentBindings {
   runtime_state: Generated<RemoteAgentBindingsRuntimeState>;
   status: Generated<RemoteAgentBindingsStatus>;
   status_text: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface RemoteAgentConversationContexts {
@@ -2249,134 +2247,134 @@ export interface RemoteAgentConversationContexts {
   collaboration_mode: Generated<string>;
   collaboration_state: Generated<Json>;
   conversation_id: string;
-  created_at: Generated<Timestamp | null>;
-  last_activity_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  last_activity_at: Date | null;
   last_error: string | null;
-  last_run_finished_at: Timestamp | null;
-  last_run_started_at: Timestamp | null;
+  last_run_finished_at: Date | null;
+  last_run_started_at: Date | null;
   remote_agent_id: string;
   runtime_kind: RemoteAgentsRuntimeKind | null;
   runtime_session_id: string | null;
   runtime_state: Generated<RemoteAgentBindingsRuntimeState>;
   status_text: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface RemoteAgentConversationViews {
   conversation_id: string;
-  created_at: Generated<Timestamp>;
-  last_delivery_at: Timestamp | null;
+  created_at: Generated<Date>;
+  last_delivery_at: Date | null;
   last_delivery_item_id: string | null;
-  last_read_at: Timestamp | null;
+  last_read_at: Date | null;
   last_read_item_id: string | null;
   last_read_sequence: Generated<Int8>;
   remote_agent_id: string;
   unread_count: Generated<number>;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
 }
 
 export interface RemoteAgentGroupTaskGrants {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   granted_by_workspace_member_id: string | null;
   remote_agent_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_member_id: string;
 }
 
 export interface RemoteAgentMachines {
   api_key_hash: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: string | null;
   id: Generated<string>;
-  last_seen_at: Timestamp | null;
+  last_seen_at: Date | null;
   lifecycle_state: RemoteAgentMachinesLifecycleState | null;
   title: string;
   trust_status: Generated<RemoteAgentMachinesTrustStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface RemoteAgentMachineSessions {
   close_reason: string | null;
-  created_at: Generated<Timestamp | null>;
-  ended_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  ended_at: Date | null;
   fencing_token: Generated<string>;
   id: Generated<string>;
-  last_heartbeat_at: Timestamp | null;
+  last_heartbeat_at: Date | null;
   machine_id: string;
   remote_addr: string | null;
-  started_at: Generated<Timestamp | null>;
+  started_at: Generated<Date | null>;
   status: Generated<RemoteAgentMachineSessionsStatus>;
   transport: Generated<RemoteAgentMachineSessionsTransport>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface RemoteAgentMachinesLive {
   api_key_hash: string | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: string | null;
   id: string | null;
-  last_seen_at: Timestamp | null;
+  last_seen_at: Date | null;
   lifecycle_state: RemoteAgentMachinesLifecycleState | null;
   title: string | null;
   trust_status: RemoteAgentMachinesTrustStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface RemoteAgentMessageDeliveries {
   attempts: Generated<number>;
   conversation_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   id: Generated<string>;
   item_id: string;
-  last_acked_at: Timestamp | null;
+  last_acked_at: Date | null;
   last_failure_reason: string | null;
-  next_attempt_at: Timestamp | null;
+  next_attempt_at: Date | null;
   remote_agent_id: string;
   status: Generated<RemoteAgentMessageDeliveriesStatus>;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
 }
 
 export interface RemoteAgentRuns {
   conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  ended_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  ended_at: Date | null;
   id: Generated<string>;
   last_error: string | null;
   remote_agent_id: string;
   run_key: string;
-  started_at: Timestamp | null;
+  started_at: Date | null;
   status: Generated<RemoteAgentRunsStatus>;
   status_text: string | null;
   task_id: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface RemoteAgentRuntimeCatalog {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   executable_path: string | null;
   id: Generated<string>;
   last_error: string | null;
-  last_seen_at: Timestamp | null;
+  last_seen_at: Date | null;
   machine_id: string;
   metadata: Generated<Json>;
   runtime_kind: RemoteAgentsRuntimeKind;
   status: Generated<RemoteAgentRuntimeCatalogStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   version: string | null;
 }
 
 export interface RemoteAgents {
   avatar_emoji: string | null;
   avatar_file_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: string | null;
   id: Generated<string>;
   is_active: Generated<boolean>;
@@ -2385,16 +2383,16 @@ export interface RemoteAgents {
   name: string;
   runtime_kind: RemoteAgentsRuntimeKind;
   title: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface RemoteAgentsLive {
   avatar_emoji: string | null;
   avatar_file_id: string | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   description: string | null;
   id: string | null;
   is_active: boolean | null;
@@ -2403,7 +2401,7 @@ export interface RemoteAgentsLive {
   name: string | null;
   runtime_kind: RemoteAgentsRuntimeKind | null;
   title: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
@@ -2411,7 +2409,7 @@ export interface ResourceAccessBindings {
   actor_id: string | null;
   automation_event_source_id: string | null;
   conversation_type_mask_override: number | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
   device_capability_id: string | null;
   id: Generated<string>;
@@ -2420,7 +2418,7 @@ export interface ResourceAccessBindings {
   reason: string | null;
   remote_agent_id: string | null;
   resource_type: ResourceAccessBindingResourceType;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   scope_subject_id: string | null;
   source: Generated<ResourceAccessBindingsSource>;
   status: Generated<ResourceAccessBindingsStatus>;
@@ -2432,7 +2430,7 @@ export interface ResourceAccessBindingsLive {
   actor_id: string | null;
   automation_event_source_id: string | null;
   conversation_type_mask_override: number | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
   device_capability_id: string | null;
   id: string | null;
@@ -2441,7 +2439,7 @@ export interface ResourceAccessBindingsLive {
   reason: string | null;
   remote_agent_id: string | null;
   resource_type: ResourceAccessBindingResourceType | null;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   scope_subject_id: string | null;
   source: ResourceAccessBindingsSource | null;
   status: ResourceAccessBindingsStatus | null;
@@ -2450,8 +2448,8 @@ export interface ResourceAccessBindingsLive {
 }
 
 export interface RuntimeAuthorizationGrants {
-  consumed_at: Timestamp | null;
-  created_at: Generated<Timestamp | null>;
+  consumed_at: Date | null;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
   device_capability_id: string;
   device_exposure_id: string;
@@ -2459,7 +2457,7 @@ export interface RuntimeAuthorizationGrants {
   id: Generated<string>;
   policy: Generated<Json>;
   retention: RuntimeAuthorizationGrantsRetention;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   scope_subject_id: string | null;
   source_request_args: Generated<Json>;
   source_retry_nonce: string | null;
@@ -2467,14 +2465,14 @@ export interface RuntimeAuthorizationGrants {
   source_task_id: string | null;
   status: Generated<RuntimeAuthorizationGrantsStatus>;
   subject_id: string;
-  superseded_at: Timestamp | null;
-  updated_at: Generated<Timestamp | null>;
+  superseded_at: Date | null;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface RuntimeAuthorizationGrantsLive {
-  consumed_at: Timestamp | null;
-  created_at: Timestamp | null;
+  consumed_at: Date | null;
+  created_at: Date | null;
   created_by_workspace_member_id: string | null;
   device_capability_id: string | null;
   device_exposure_id: string | null;
@@ -2482,7 +2480,7 @@ export interface RuntimeAuthorizationGrantsLive {
   id: string | null;
   policy: Json | null;
   retention: RuntimeAuthorizationGrantsRetention | null;
-  revoked_at: Timestamp | null;
+  revoked_at: Date | null;
   scope_subject_id: string | null;
   source_request_args: Json | null;
   source_retry_nonce: string | null;
@@ -2490,15 +2488,15 @@ export interface RuntimeAuthorizationGrantsLive {
   source_task_id: string | null;
   status: RuntimeAuthorizationGrantsStatus | null;
   subject_id: string | null;
-  superseded_at: Timestamp | null;
-  updated_at: Timestamp | null;
+  superseded_at: Date | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface RuntimeEvents {
   actor_id: string | null;
   conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   event_type: string;
   id: Generated<string>;
   level: Generated<RuntimeEventsLevel>;
@@ -2514,18 +2512,18 @@ export interface RuntimeEvents {
 }
 
 export interface SchemaMigrations {
-  applied_at: Generated<Timestamp>;
+  applied_at: Generated<Date>;
   description: Generated<string>;
   version: string;
 }
 
 export interface Session {
-  created_at: Generated<Timestamp>;
-  expires_at: Timestamp;
+  created_at: Generated<Date>;
+  expires_at: Date;
   id: Generated<string>;
   ip_address: string | null;
   token: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   user_agent: string | null;
   user_id: string;
 }
@@ -2533,12 +2531,12 @@ export interface Session {
 export interface SessionContextStates {
   active_private_archive_point_id: string | null;
   session_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface SessionInterrupts {
   content: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   from_session_id: string | null;
   id: Generated<string>;
   is_consumed: Generated<boolean | null>;
@@ -2551,26 +2549,26 @@ export interface Sessions {
   actor_id: string;
   collaboration_mode: Generated<SessionsCollaborationMode>;
   collaboration_state: Generated<Json>;
-  completed_at: Timestamp | null;
+  completed_at: Date | null;
   conversation_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   error_message: string | null;
   id: Generated<string>;
   memory_bootstrap_completed: Generated<boolean>;
   status: Generated<SessionsStatus>;
   trigger: Generated<string>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface SessionWakeups {
-  attached_at: Timestamp | null;
+  attached_at: Date | null;
   automation_execution_id: string | null;
   automation_occurrence_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   metadata: Generated<Json>;
-  processed_at: Timestamp | null;
+  processed_at: Date | null;
   reason_text: string | null;
   session_id: string;
   source_item_id: string | null;
@@ -2585,11 +2583,11 @@ export interface SessionWakeups {
 }
 
 export interface SkillMirrorSources {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   last_error: string | null;
   last_sync_status: Generated<SkillMirrorSourcesSyncStatus>;
-  last_synced_at: Timestamp | null;
+  last_synced_at: Date | null;
   locator: Generated<Json>;
   locator_key: string;
   refresh_mode: Generated<SkillMirrorSourcesRefreshMode>;
@@ -2597,26 +2595,26 @@ export interface SkillMirrorSources {
   resolved_revision: string | null;
   source_type: SkillMirrorSourcesSourceType;
   source_warnings: Generated<string[]>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface SkillPackageVersionSpecs {
   catalog_version_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   default_conversation_type_mask: Generated<number>;
   skill_snapshot_id: string;
 }
 
 export interface SkillSnapshotFiles {
   content_blocks: Generated<Json>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   media_type: string | null;
   path: string;
   sha256: string;
   size_bytes: Generated<number>;
   skill_snapshot_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface SkillSnapshots {
@@ -2626,7 +2624,7 @@ export interface SkillSnapshots {
   body_blocks: Generated<Json>;
   content_hash: string;
   context: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   description: string;
   disable_model_invocation: Generated<boolean>;
   effort: string | null;
@@ -2642,18 +2640,18 @@ export interface SkillSnapshots {
 }
 
 export interface SkillSourceRefs {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   is_customized: Generated<boolean>;
   metadata: Generated<Json | null>;
   skill_id: string;
   source_catalog_item_id: string | null;
   source_catalog_version_id: string | null;
   sync_mode: Generated<SkillSourceRefsSyncMode>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface SkillVersions {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
   id: Generated<string>;
   metadata: Generated<Json | null>;
@@ -2665,9 +2663,9 @@ export interface SkillVersions {
 export interface ToolCalls {
   bundle_id: string;
   call_index: Generated<number>;
-  completed_at: Timestamp | null;
+  completed_at: Date | null;
   conversation_id: string;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   device_tool_id: string | null;
   id: Generated<string>;
   normalized_input: Generated<Json>;
@@ -2683,8 +2681,8 @@ export interface ToolCalls {
 }
 
 export interface ToolCallTaskActionTokens {
-  created_at: Generated<Timestamp>;
-  expires_at: Timestamp;
+  created_at: Generated<Date>;
+  expires_at: Date;
   payload: Json;
   task_id: string;
   token: Generated<string>;
@@ -2713,7 +2711,7 @@ export interface ToolCallTaskExternalMcp {
 }
 
 export interface ToolCallTaskOutputChunks {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   metadata: Generated<Json>;
   seq: Int8;
@@ -2725,7 +2723,7 @@ export interface ToolCallTaskOutputChunks {
 export interface ToolCallTaskResponseCommands {
   base_revision: Int8;
   command_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   created_by_workspace_member_id: string | null;
   created_by_workspace_member_id_snapshot: string | null;
   id: Generated<string>;
@@ -2733,7 +2731,7 @@ export interface ToolCallTaskResponseCommands {
   request_payload: Generated<Json>;
   response_payload: Generated<Json>;
   task_id: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
 }
 
 export interface ToolCallTaskRuntimeAuthorization {
@@ -2758,22 +2756,22 @@ export interface ToolCallTaskRuntimeAuthorization {
 
 export interface ToolCallTasks {
   cancel_reason: string | null;
-  cancel_requested_at: Timestamp | null;
-  completed_at: Timestamp | null;
+  cancel_requested_at: Date | null;
+  completed_at: Date | null;
   completion_item_id: string | null;
   conversation_id: string;
   conversation_item_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  deadline_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deadline_at: Date | null;
   delivery_kind: ToolCallTasksDeliveryKind;
   executor_kind: ToolCallTasksExecutorKind;
-  expires_at: Timestamp | null;
+  expires_at: Date | null;
   final_error_payload: Generated<Json>;
   final_result_payload: Generated<Json>;
   human_surface: ToolCallTasksHumanSurface;
   id: Generated<string>;
   immediate_result_payload: Generated<Json>;
-  last_output_at: Timestamp | null;
+  last_output_at: Date | null;
   last_output_seq: Generated<Int8>;
   lifecycle_status: Generated<ToolCallTasksLifecycleStatus>;
   metadata: Generated<Json>;
@@ -2783,9 +2781,9 @@ export interface ToolCallTasks {
   request_key: string;
   request_payload: Generated<Json>;
   requester_participant_id: string | null;
-  resolved_at: Timestamp | null;
+  resolved_at: Date | null;
   resolved_by_participant_id: string | null;
-  retain_until: Timestamp | null;
+  retain_until: Date | null;
   retention_ttl_ms: number | null;
   revision: Generated<Int8>;
   session_id: string | null;
@@ -2796,27 +2794,27 @@ export interface ToolCallTasks {
   supports_output_tail: Generated<boolean>;
   target_participant_id: string | null;
   turn_id: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface ToolCallTaskTransportProjections {
   attempts: Generated<number>;
   conversation_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   error: string | null;
   id: Generated<string>;
-  next_attempt_at: Generated<Timestamp>;
+  next_attempt_at: Generated<Date>;
   status: Generated<string>;
   task_id: string;
   transport_message_link_id: string | null;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
 export interface ToolExecutionAttempts {
   attempt_no: number;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   duration_ms: number | null;
   error_message: string | null;
   id: Generated<string>;
@@ -2844,7 +2842,7 @@ export interface ToolResultParts {
 
 export interface ToolResults {
   attempt_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   error_message: string | null;
   id: Generated<string>;
   is_error: Generated<boolean | null>;
@@ -2857,9 +2855,9 @@ export interface TransportAccounts {
   account_key: string;
   config: Generated<Json>;
   connection_mode: TransportAccountsConnectionMode;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   credentials: Generated<Json>;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   display_name: string;
   id: Generated<string>;
   inbound_actor_id: string | null;
@@ -2869,7 +2867,7 @@ export interface TransportAccounts {
   owner_workspace_member_id: string | null;
   status: Generated<TransportAccountsStatus>;
   transport_kind: TransportAccountsTransportKind;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
@@ -2877,9 +2875,9 @@ export interface TransportAccountsLive {
   account_key: string | null;
   config: Json | null;
   connection_mode: TransportAccountsConnectionMode | null;
-  created_at: Timestamp | null;
+  created_at: Date | null;
   credentials: Json | null;
-  deleted_at: Timestamp | null;
+  deleted_at: Date | null;
   display_name: string | null;
   id: string | null;
   inbound_actor_id: string | null;
@@ -2889,26 +2887,26 @@ export interface TransportAccountsLive {
   owner_workspace_member_id: string | null;
   status: TransportAccountsStatus | null;
   transport_kind: TransportAccountsTransportKind | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_id: string | null;
 }
 
 export interface TransportAddresses {
   address_type: Generated<TransportAddressesAddressType>;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   display_name: string | null;
   external_id: string;
   id: Generated<string>;
   metadata: Generated<Json>;
   transport_account_id: string;
   transport_kind: TransportAddressesTransportKind;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
   workspace_member_id: string | null;
 }
 
 export interface TransportEndpoints {
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   display_name: string | null;
   endpoint_type: TransportEndpointsEndpointType;
   external_id: string;
@@ -2916,13 +2914,13 @@ export interface TransportEndpoints {
   metadata: Generated<Json>;
   parent_external_id: string | null;
   transport_account_id: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
 }
 
 export interface TransportMessageLinks {
   conversation_id: string;
-  created_at: Generated<Timestamp>;
-  delivered_at: Timestamp | null;
+  created_at: Generated<Date>;
+  delivered_at: Date | null;
   delivery_status: Generated<TransportMessageLinksDeliveryStatus>;
   direction: TransportMessageLinksDirection;
   external_emoji_reactions: Generated<Json>;
@@ -2935,28 +2933,28 @@ export interface TransportMessageLinks {
   transport_account_id: string;
   transport_endpoint_id: string;
   transport_kind: TransportMessageLinksTransportKind;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_id: string;
 }
 
 export interface Turns {
   actor_id: string;
-  completed_at: Timestamp | null;
+  completed_at: Date | null;
   conversation_id: string;
   id: Generated<string>;
   metadata: Generated<Json | null>;
   session_id: string;
-  started_at: Generated<Timestamp | null>;
+  started_at: Generated<Date | null>;
   status: Generated<TurnsStatus>;
   trigger_item_id: string | null;
   trigger_type: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface Users {
   avatar_file_id: string | null;
-  created_at: Generated<Timestamp>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date>;
+  deleted_at: Date | null;
   email: string;
   email_verified: Generated<boolean>;
   feishu_open_id: string | null;
@@ -2965,13 +2963,13 @@ export interface Users {
   id: Generated<string>;
   image: string | null;
   name: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
 }
 
 export interface UsersLive {
   avatar_file_id: string | null;
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   email: string | null;
   email_verified: boolean | null;
   feishu_open_id: string | null;
@@ -2980,80 +2978,80 @@ export interface UsersLive {
   id: string | null;
   image: string | null;
   name: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
 }
 
 export interface Verification {
-  created_at: Generated<Timestamp>;
-  expires_at: Timestamp;
+  created_at: Generated<Date>;
+  expires_at: Date;
   id: Generated<string>;
   identifier: string;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   value: string;
 }
 
 export interface WorkspaceAccessBindings {
   access_key: WorkspaceAccessBindingsAccessKey;
   assigned_by_workspace_member_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  revoked_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  revoked_at: Date | null;
   revoked_by_workspace_member_id: string | null;
   status: Generated<AccessBindingStatus>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_member_id: string;
 }
 
 export interface WorkspaceAccessBindingsLive {
   access_key: WorkspaceAccessBindingsAccessKey | null;
   assigned_by_workspace_member_id: string | null;
-  created_at: Timestamp | null;
-  revoked_at: Timestamp | null;
+  created_at: Date | null;
+  revoked_at: Date | null;
   revoked_by_workspace_member_id: string | null;
   status: AccessBindingStatus | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
   workspace_member_id: string | null;
 }
 
 export interface WorkspaceCapabilityConversationTypePolicies {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   default_conversation_type_mask: number;
   resource_family: string;
   subject_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface WorkspaceFriendEntries {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   owner_workspace_member_id: string;
   peer_subject_id: string;
   source_request_id: string | null;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface WorkspaceFriendRequests {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   id: Generated<string>;
   requested_via_profile_id: string | null;
   requester_workspace_member_id: string;
-  resolved_at: Timestamp | null;
+  resolved_at: Date | null;
   resolved_by_workspace_member_id: string | null;
   status: Generated<RelationshipRequestStatus>;
   target_subject_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface WorkspaceInvites {
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string;
-  expires_at: Timestamp | null;
+  expires_at: Date | null;
   id: Generated<string>;
   is_revoked: Generated<boolean | null>;
   max_uses: number | null;
   token: string;
   trust_level: Generated<WorkspaceInvitesTrustLevel>;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   use_count: Generated<number>;
   workspace_id: string;
 }
@@ -3061,30 +3059,30 @@ export interface WorkspaceInvites {
 export interface WorkspaceMemberConversationViews {
   archived: Generated<boolean>;
   conversation_id: string;
-  created_at: Generated<Timestamp>;
-  last_visible_at: Timestamp | null;
+  created_at: Generated<Date>;
+  last_visible_at: Date | null;
   last_visible_item_id: string | null;
   last_visible_sequence: Generated<Int8>;
   muted: Generated<boolean>;
-  pinned_sort_key: Timestamp | null;
+  pinned_sort_key: Date | null;
   summary: Generated<Json>;
   unread_count: Generated<number>;
-  updated_at: Generated<Timestamp>;
+  updated_at: Generated<Date>;
   workspace_member_id: string;
 }
 
 export interface WorkspaceMemberPreferences {
   chief_actor_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  updated_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
+  updated_at: Generated<Date | null>;
   workspace_member_id: string;
 }
 
 export interface WorkspaceMembers {
   id: Generated<string>;
-  joined_at: Generated<Timestamp | null>;
-  left_at: Timestamp | null;
-  removed_at: Timestamp | null;
+  joined_at: Generated<Date | null>;
+  left_at: Date | null;
+  removed_at: Date | null;
   status: Generated<WorkspaceMembersStatus>;
   trust_level: Generated<WorkspaceMembersTrustLevel>;
   user_id: string;
@@ -3093,9 +3091,9 @@ export interface WorkspaceMembers {
 
 export interface WorkspaceMembersLive {
   id: string | null;
-  joined_at: Timestamp | null;
-  left_at: Timestamp | null;
-  removed_at: Timestamp | null;
+  joined_at: Date | null;
+  left_at: Date | null;
+  removed_at: Date | null;
   status: WorkspaceMembersStatus | null;
   trust_level: WorkspaceMembersTrustLevel | null;
   user_id: string | null;
@@ -3104,11 +3102,11 @@ export interface WorkspaceMembersLive {
 
 export interface WorkspaceMemberSyncEvents {
   conversation_id: string | null;
-  created_at: Generated<Timestamp>;
+  created_at: Generated<Date>;
   event_type: string;
   item_id: string | null;
   member_seq: Int8;
-  occurred_at: Generated<Timestamp>;
+  occurred_at: Generated<Date>;
   payload: Generated<Json>;
   sync_seq: Generated<Int8>;
   workspace_id: string;
@@ -3117,39 +3115,39 @@ export interface WorkspaceMemberSyncEvents {
 
 export interface WorkspaceRelationshipProfiles {
   approval_mode: Generated<RelationshipApprovalMode>;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Date | null>;
   created_by_workspace_member_id: string | null;
   id: Generated<string>;
   identity_id: Generated<string>;
   identity_search_enabled: Generated<boolean>;
   qr_token: string;
   subject_id: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
   workspace_id: string;
 }
 
 export interface Workspaces {
-  created_at: Generated<Timestamp | null>;
-  deleted_at: Timestamp | null;
+  created_at: Generated<Date | null>;
+  deleted_at: Date | null;
   description: string | null;
   id: Generated<string>;
   is_trusted: Generated<boolean>;
   name: string;
   owner_id: string;
   slug: string;
-  updated_at: Generated<Timestamp | null>;
+  updated_at: Generated<Date | null>;
 }
 
 export interface WorkspacesLive {
-  created_at: Timestamp | null;
-  deleted_at: Timestamp | null;
+  created_at: Date | null;
+  deleted_at: Date | null;
   description: string | null;
   id: string | null;
   is_trusted: boolean | null;
   name: string | null;
   owner_id: string | null;
   slug: string | null;
-  updated_at: Timestamp | null;
+  updated_at: Date | null;
 }
 
 export interface DB {

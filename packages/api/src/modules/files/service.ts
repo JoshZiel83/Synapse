@@ -1,5 +1,9 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import {
+  requireInstantDate,
+  serializeInstant,
+} from "../../infrastructure/datetime.js"
+import {
   fileRefBlock,
   parseJsonObject,
   type CanonicalFileRefBlock,
@@ -55,12 +59,6 @@ export type FileAccessInfo = Pick<
   "id" | "workspaceId" | "mimeType" | "originalName" | "contentKind"
 >
 
-function toIsoString(value: string | Date | null | undefined): string {
-  if (typeof value === "string") return value
-  if (value instanceof Date) return value.toISOString()
-  return new Date(0).toISOString()
-}
-
 type FileJoinRow = {
   id: string
   workspace_id: string | null
@@ -70,7 +68,7 @@ type FileJoinRow = {
   content_kind: FileRecordView["contentKind"]
   size_bytes: string | number
   content_sha256: string
-  created_at: string | Date | null
+  created_at: Date | null
   source_family: FileRecordView["originSummary"]["family"]
   source_system: FileRecordView["originSummary"]["system"]
   initiator_actor_id: string | null
@@ -101,7 +99,9 @@ function mapStoredFileRecord(row: FileJoinRow): StoredFileRecord {
     sha256: row.content_sha256,
     storageBackend: "local_cas",
     originSummary: toFileOriginSummary(origin),
-    createdAt: toIsoString(row.created_at),
+    createdAt: serializeInstant(
+      requireInstantDate(row.created_at, `file_assets.${row.id}.created_at`)
+    ),
   }
 }
 

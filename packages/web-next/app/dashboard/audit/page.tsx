@@ -42,7 +42,7 @@ interface AuditLog {
   resourceId?: string
   details?: any
   ipAddress?: string
-  createdAt?: string
+  createdAt?: import("@synapse/shared").Timestamp
 }
 
 function getActionBadge(action: string) {

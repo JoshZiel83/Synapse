@@ -25,8 +25,8 @@ type GroupRow = {
   attempt_policy: Record<string, unknown> | null
   is_default: boolean
   is_enabled: boolean
-  created_at: string | Date
-  updated_at: string | Date
+  created_at: Date
+  updated_at: Date
 }
 
 type GroupItemRow = {

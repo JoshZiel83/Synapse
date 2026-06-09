@@ -12,6 +12,7 @@
  */
 
 import { sql } from "kysely"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import { db } from "../../../infrastructure/database/kysely.js"
 import type {
   CurrentUserWeixinBindingSummary,
@@ -175,7 +176,7 @@ export async function setCurrentUserWeixinBindingAutoLink(params: {
   if (nextTargetWorkspaceMemberId) {
     nextMetadata.pendingAutoLinkWorkspaceMemberId = nextTargetWorkspaceMemberId
     nextMetadata.pendingAutoLinkMode = "first_inbound_once"
-    nextMetadata.pendingAutoLinkConfiguredAt = new Date().toISOString()
+    nextMetadata.pendingAutoLinkConfiguredAt = nowIsoInstant()
   } else {
     delete (nextMetadata as any).pendingAutoLinkWorkspaceMemberId
     delete (nextMetadata as any).pendingAutoLinkMode

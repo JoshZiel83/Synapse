@@ -1,14 +1,15 @@
 import crypto from "node:crypto"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import {
   buildAutomationEventSourceTemplate,
   getAutomationEventDefinition,
 } from "@synapse/shared/automation"
-import { nowISO } from "@synapse/shared"
 import type {
   AutomationEventSource,
   AutomationEventSourceIntegration,
   AutomationIntegrationProvider,
   AutomationIntegrationTargetKind,
+  Timestamp,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
@@ -33,7 +34,7 @@ type IntegrationWebhookIngressResult =
       payload: Record<string, unknown>
       sourceSnapshot: Record<string, unknown>
       dedupeKey?: string
-      occurredAt?: string
+      occurredAt?: Timestamp
     }
 
 export interface ResolvedIntegrationInstallation {
@@ -166,7 +167,7 @@ function nestedTimestamp(payload: Record<string, unknown>, ...path: string[]) {
   const value = readString(current)
   if (!value) return null
   const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
+  return Number.isNaN(parsed.getTime()) ? null : dateToIsoInstant(parsed)
 }
 
 function githubApiBaseUrl(configData: Record<string, unknown>) {
@@ -688,7 +689,7 @@ export function normalizeIntegrationWebhookIngress(input: {
         nestedTimestamp(payload, "review", "submitted_at") ||
         nestedTimestamp(payload, "workflow_run", "updated_at") ||
         nestedTimestamp(payload, "head_commit", "timestamp") ||
-        nowISO(),
+        nowIsoInstant(),
       sourceSnapshot: {
         integrationProvider: "github",
         integrationTargetKind: input.integration.targetKind,
@@ -718,7 +719,7 @@ export function normalizeIntegrationWebhookIngress(input: {
       nestedTimestamp(payload, "object_attributes", "created_at") ||
       nestedTimestamp(payload, "object_attributes", "updated_at") ||
       nestedTimestamp(payload, "commit", "timestamp") ||
-      nowISO(),
+      nowIsoInstant(),
     sourceSnapshot: {
       integrationProvider: "gitlab",
       integrationTargetKind: input.integration.targetKind,

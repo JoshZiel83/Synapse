@@ -25,6 +25,10 @@ import type {
 } from "@synapse/shared/types"
 
 import { parseJsonObject } from "@synapse/shared"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../../infrastructure/datetime.js"
 
 export { parseJsonObject }
 
@@ -53,13 +57,6 @@ export function readTrimmedString(
   return undefined
 }
 
-export function toIsoString(
-  value: string | Date | null | undefined
-): string | undefined {
-  if (!value) return undefined
-  return value instanceof Date ? value.toISOString() : value
-}
-
 export function normalizeAccountRow(row: any): TransportAccountSummary {
   return {
     id: row.id,
@@ -86,8 +83,8 @@ export function normalizeAccountRow(row: any): TransportAccountSummary {
     credentials: parseJsonObject(row.credentials),
     config: parseJsonObject(row.config),
     metadata: parseJsonObject(row.metadata),
-    createdAt: toIsoString(row.created_at)!,
-    updatedAt: toIsoString(row.updated_at)!,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -104,8 +101,12 @@ export function normalizeEndpointRow(
     parentExternalId: row.parent_external_id || undefined,
     displayName: row.endpoint_display_name || row.display_name || undefined,
     metadata: parseJsonObject(row.endpoint_metadata || row.metadata),
-    createdAt: toIsoString(row.endpoint_created_at || row.created_at)!,
-    updatedAt: toIsoString(row.endpoint_updated_at || row.updated_at)!,
+    createdAt: serializeOptionalInstant(
+      row.endpoint_created_at || row.created_at
+    )!,
+    updatedAt: serializeOptionalInstant(
+      row.endpoint_updated_at || row.updated_at
+    )!,
   }
 }
 
@@ -125,8 +126,12 @@ export function normalizeBindingRow(
         | undefined) || "inherit_account",
     inboundActorId: row.inbound_actor_id || undefined,
     metadata: parseJsonObject(row.binding_metadata || row.metadata),
-    createdAt: toIsoString(row.binding_created_at || row.created_at)!,
-    updatedAt: toIsoString(row.binding_updated_at || row.updated_at)!,
+    createdAt: serializeOptionalInstant(
+      row.binding_created_at || row.created_at
+    )!,
+    updatedAt: serializeOptionalInstant(
+      row.binding_updated_at || row.updated_at
+    )!,
     account,
     endpoint: normalizeEndpointRow(row, row.transport_kind),
   }
@@ -150,16 +155,16 @@ export function normalizeTransportSessionRow(
     metadata: parseJsonObject(
       row.binding_metadata || row.endpoint_metadata || row.metadata
     ),
-    createdAt: toIsoString(
+    createdAt: serializeOptionalInstant(
       row.binding_created_at || row.endpoint_created_at || row.created_at
     )!,
-    updatedAt: toIsoString(
+    updatedAt: serializeOptionalInstant(
       row.binding_updated_at || row.endpoint_updated_at || row.updated_at
     )!,
     conversationId: row.conversation_id || undefined,
     conversationTitle: readTrimmedString(row, "conversation_title"),
-    lastInboundAt: toIsoString(row.last_inbound_at),
-    lastOutboundAt: toIsoString(row.last_outbound_at),
+    lastInboundAt: serializeOptionalInstant(row.last_inbound_at),
+    lastOutboundAt: serializeOptionalInstant(row.last_outbound_at),
     account,
     endpoint: normalizeEndpointRow(row, row.transport_kind),
   }
@@ -179,8 +184,8 @@ export function normalizeTransportExternalUserRow(
     linkedWorkspaceMemberId: row.linked_workspace_member_id || undefined,
     linkedWorkspaceMemberName: row.linked_workspace_member_name || undefined,
     metadata: parseJsonObject(row.metadata),
-    createdAt: toIsoString(row.created_at)!,
-    updatedAt: toIsoString(row.updated_at)!,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
     sessions: parseJsonArray<any>(row.sessions),
   }
 }
@@ -214,8 +219,8 @@ export function normalizeTransportMessageLinkRow(row: any) {
     externalThreadId: row.external_thread_id || undefined,
     externalEmojiReactions: reactions,
     metadata: parseJsonObject(row.metadata),
-    deliveredAt: toIsoString(row.delivered_at),
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
+    deliveredAt: serializeOptionalInstant(row.delivered_at),
+    createdAt: serializeOptionalInstant(row.created_at),
+    updatedAt: serializeOptionalInstant(row.updated_at),
   }
 }

@@ -8,6 +8,10 @@ import {
   type SubjectRef,
 } from "@synapse/shared"
 import type { AccessResourceType } from "./evaluator.js"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 
 export type AccessBindableResourceType = Extract<
   AccessResourceType,
@@ -47,8 +51,8 @@ export type AccessBindingRow = ResourceAccessBindingStorageRow & {
   source: "manual" | "default_open" | "approval" | "system"
   created_by_workspace_member_id: string | null
   reason: string | null
-  created_at: string
-  revoked_at: string | null
+  created_at: Date
+  revoked_at: Date | null
 }
 
 export function readAccessBindingResourceId(
@@ -510,8 +514,8 @@ export function mapAccessBindingToGrant(
     reason: row.reason || fallbackReason,
     conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask: options?.effectiveConversationTypeMask,
-    createdAt: row.created_at,
-    revokedAt: row.revoked_at || undefined,
+    createdAt: serializeInstant(row.created_at),
+    revokedAt: serializeOptionalInstant(row.revoked_at),
   }
 }
 

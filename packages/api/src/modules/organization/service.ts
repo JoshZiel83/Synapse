@@ -41,6 +41,10 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import { createConversationEvent } from "../chat/service.js"
 import { getFileUrlById } from "../files/service.js"
 import {
@@ -81,15 +85,15 @@ type ActorRow = {
   current_version: number
   is_active: boolean
   is_public_shared: boolean
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
   current_actor_version_id: string
   source_catalog_item_id: string | null
   source_catalog_version_id: string | null
   source_sync_mode: ActorPackageSyncMode | "follow_upstream" | "detached" | null
   source_baseline_actor_version: number | null
-  source_created_at: string | null
-  source_updated_at: string | null
+  source_created_at: Date | null
+  source_updated_at: Date | null
   source_slug: string | null
   source_display_name: string | null
   source_latest_version_id: string | null
@@ -120,7 +124,7 @@ type ActorVersionRow = {
   source_turn_id: string | null
   source_conversation_id: string | null
   source_reason: string | null
-  created_at: string
+  created_at: Date
 }
 
 type ActorDocRow = {
@@ -147,8 +151,8 @@ type ActorPackageRow = {
   package_download_count: number
   package_is_active: boolean
   package_metadata: Record<string, unknown> | string | null
-  package_created_at: string
-  package_updated_at: string
+  package_created_at: Date
+  package_updated_at: Date
   publisher_id: string
   publisher_slug: string
   publisher_display_name: string
@@ -157,15 +161,15 @@ type ActorPackageRow = {
   publisher_workspace_id: string | null
   publisher_is_builtin: boolean
   publisher_is_verified: boolean
-  publisher_created_at: string
-  publisher_updated_at: string
+  publisher_created_at: Date
+  publisher_updated_at: Date
   version_id: string
   version_value: string
   version_status: MarketplaceVersionStatus
   version_changelog: string
   version_metadata: Record<string, unknown> | string | null
   version_created_by_user_id: string | null
-  version_created_at: string
+  version_created_at: Date
   actor_role: ActorRole
   actor_name: string
   actor_avatar_file_id: string | null
@@ -367,8 +371,8 @@ function buildActorPackagePublisher(
     isBuiltin: Boolean(row.publisher_is_builtin),
     isVerified: Boolean(row.publisher_is_verified),
     ownerUserId: row.publisher_owner_user_id || undefined,
-    createdAt: row.publisher_created_at,
-    updatedAt: row.publisher_updated_at,
+    createdAt: serializeInstant(row.publisher_created_at),
+    updatedAt: serializeInstant(row.publisher_updated_at),
   }
 }
 
@@ -406,7 +410,7 @@ function buildActorPackageRevision(
     authBindings: [],
     metadata: versionMetadata,
     createdByUserId: row.version_created_by_user_id || undefined,
-    createdAt: row.version_created_at,
+    createdAt: serializeInstant(row.version_created_at),
     assets: [],
   }
 }
@@ -447,8 +451,8 @@ function buildActorPackageRecord(row: ActorPackageRow): ActorPackageRecord {
     defaultReuseScope: "workspace",
     requiresHandshake: false,
     metadata: parseJsonObject(row.package_metadata),
-    createdAt: row.package_created_at,
-    updatedAt: row.package_updated_at,
+    createdAt: serializeInstant(row.package_created_at),
+    updatedAt: serializeInstant(row.package_updated_at),
     publisher,
     latestRevision,
   }
@@ -511,8 +515,12 @@ function buildActorSourceLink(
     hasLocalChanges,
     hasUpstreamUpdate,
     status,
-    createdAt: row.source_created_at || row.created_at,
-    updatedAt: row.source_updated_at || row.updated_at,
+    createdAt:
+      serializeOptionalInstant(row.source_created_at) ||
+      serializeInstant(row.created_at),
+    updatedAt:
+      serializeOptionalInstant(row.source_updated_at) ||
+      serializeInstant(row.updated_at),
   }
 }
 
@@ -595,8 +603,8 @@ function mapActorRow(row: ActorRow, docs: ActorDoc[]): Actor {
     sourceLink: buildActorSourceLink(row),
     isActive: Boolean(row.is_active),
     isPublicShared: Boolean(row.is_public_shared),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -616,7 +624,7 @@ function mapActorVersionRow(
         : row.version_delta || undefined,
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     source: buildActorVersionSourceFromRow(row),
-    createdAt: row.created_at,
+    createdAt: serializeInstant(row.created_at),
   }
 }
 

@@ -23,6 +23,7 @@ import {
   summarizeConversationEvent,
   type ChatConversationItem,
   type ChatConversationView,
+  type Timestamp,
 } from "../types/index.js"
 import type {
   PendingConversationRead,
@@ -36,7 +37,7 @@ export interface CanonicalChatConversationMeta {
   hasMoreBefore: boolean
   hasLoadedLatest: boolean
   loadingLatest: boolean
-  lastFetchedAt?: string
+  lastFetchedAt?: Timestamp
   latestLoadError?: string
 }
 
@@ -49,7 +50,7 @@ export interface CanonicalChatState {
   workspaceMemberId?: string
   clientInstanceId?: string
   inboxCursor: number
-  lastBootstrappedAt?: string
+  lastBootstrappedAt?: Timestamp
   conversations: ChatConversationView[]
   itemsByConversationId: Record<string, ChatConversationItem[]>
   metaByConversationId: Record<string, CanonicalChatConversationMeta>

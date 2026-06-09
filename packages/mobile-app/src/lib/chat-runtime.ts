@@ -28,6 +28,7 @@ import {
 import type { ChatComposerSendPayload } from "@/lib/chat-compose"
 import { getDeviceLabel } from "@/lib/config"
 import { createId } from "@/lib/ids"
+import { nowIsoInstant } from "@shared/datetime"
 import {
   type ActorRuntimeState,
   extractText,
@@ -450,7 +451,7 @@ export class ChatRuntime {
             hasMoreBefore: response.hasMoreBefore,
             hasLoadedLatest: true,
             loadingLatest: false,
-            lastFetchedAt: new Date().toISOString(),
+            lastFetchedAt: nowIsoInstant(),
             latestLoadError: undefined,
           },
         },
@@ -540,7 +541,7 @@ export class ChatRuntime {
             response.participantReadWatermarkSequence
           ),
           hasMoreBefore: response.hasMoreBefore,
-          lastFetchedAt: new Date().toISOString(),
+          lastFetchedAt: nowIsoInstant(),
         },
       },
     }))
@@ -606,7 +607,7 @@ export class ChatRuntime {
                 snapshotValue.pendingReads[conversationId]
                   ?.lastVisibleSequence ?? 0
               ),
-              updatedAt: new Date().toISOString(),
+              updatedAt: nowIsoInstant(),
             },
           },
           metaByConversationId: {
@@ -692,7 +693,7 @@ export class ChatRuntime {
       contentBlocks: input.contentBlocks,
       replyToItemId: input.replyToItemId,
       replyTo: input.replyTo,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIsoInstant(),
       optimisticSequence,
       status: "sending",
       attemptCount: 0,
@@ -954,7 +955,7 @@ export class ChatRuntime {
       workspaceMemberId: bootstrap.workspaceMemberId,
       clientInstanceId,
       inboxCursor: nextInboxCursor,
-      lastBootstrappedAt: new Date().toISOString(),
+      lastBootstrappedAt: nowIsoInstant(),
       conversations: upsertChatConversations(
         prunedBase.conversations,
         bootstrap.conversations
@@ -1314,7 +1315,7 @@ export class ChatRuntime {
             [entry.clientMessageId]: {
               ...queuedEntry,
               attemptCount: queuedEntry.attemptCount + 1,
-              lastAttemptAt: new Date().toISOString(),
+              lastAttemptAt: nowIsoInstant(),
             },
           },
         }
@@ -1404,8 +1405,7 @@ export class ChatRuntime {
               [entry.clientMessageId]: {
                 ...queuedEntry,
                 status: "retrying",
-                firstFailedAt:
-                  queuedEntry.firstFailedAt ?? new Date().toISOString(),
+                firstFailedAt: queuedEntry.firstFailedAt ?? nowIsoInstant(),
                 lastErrorMessage:
                   error instanceof Error ? error.message : "发送失败",
               },

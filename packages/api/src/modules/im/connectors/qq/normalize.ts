@@ -16,6 +16,7 @@
 
 import { redis } from "../../../../infrastructure/redis/index.js"
 import { createLogger } from "../../../../infrastructure/logger/index.js"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import {
   buildCanonicalMessage,
   textOnlyMessage,
@@ -112,7 +113,7 @@ export async function normalizeQqC2cMessage(
     ext: data.message_scene?.ext,
     content: textFromContent(data.content ?? ""),
     senderExternalId,
-    timestamp: data.timestamp ?? new Date().toISOString(),
+    timestamp: data.timestamp ?? nowIsoInstant(),
   })
 
   return {
@@ -126,7 +127,7 @@ export async function normalizeQqC2cMessage(
         unionOpenid: trimmed(data.author?.union_openid),
       },
     },
-    receivedAt: data.timestamp ?? new Date().toISOString(),
+    receivedAt: data.timestamp ?? nowIsoInstant(),
     message,
     raw: {
       messageType: data.message_type,
@@ -173,7 +174,7 @@ export async function normalizeQqGroupAtMessage(
     ext: data.message_scene?.ext,
     content: textFromContent(cleanedText),
     senderExternalId,
-    timestamp: data.timestamp ?? new Date().toISOString(),
+    timestamp: data.timestamp ?? nowIsoInstant(),
   })
 
   return {
@@ -188,7 +189,7 @@ export async function normalizeQqGroupAtMessage(
         unionOpenid: trimmed(data.author?.union_openid),
       },
     },
-    receivedAt: data.timestamp ?? new Date().toISOString(),
+    receivedAt: data.timestamp ?? nowIsoInstant(),
     message,
     endpointMetadata: { groupOpenid },
     raw: {

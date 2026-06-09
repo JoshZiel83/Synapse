@@ -2,6 +2,7 @@ import type {
   RealtimeAsrFinalSegment,
   RealtimeAsrSocketEventPayloadMap,
 } from "@synapse/shared"
+import type { IsoInstantString } from "@synapse/shared/datetime"
 
 type ProviderUtterance = {
   text?: string
@@ -39,7 +40,7 @@ export class AsrResultAccumulator {
 
   ingest(
     payload: unknown,
-    receivedAt: string,
+    receivedAt: IsoInstantString,
     isFinal: boolean
   ): NormalizedAsrEvents {
     if (!isProviderPayload(payload)) {

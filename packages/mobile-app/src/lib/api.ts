@@ -19,6 +19,7 @@ import type {
   ChatTaskResolveResponse,
   ChatSyncResponse,
   TaskSummary,
+  Timestamp,
 } from "@shared"
 import { Platform } from "react-native"
 
@@ -581,7 +582,7 @@ class ApiClient {
     }
   ) {
     return this.request<{
-      token: { id: string; platform: string; createdAt: string }
+      token: { id: string; platform: string; createdAt: Timestamp }
     }>(`/workspaces/${workspaceId}/chat/push-tokens`, {
       method: "POST",
       body: JSON.stringify(input),

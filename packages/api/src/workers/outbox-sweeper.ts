@@ -45,6 +45,7 @@
 
 import type { Job, JobsOptions, Queue } from "bullmq"
 import { sql } from "kysely"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import { db } from "../infrastructure/database/kysely.js"
 import { redis } from "../infrastructure/redis/index.js"
 import { acquireLock, releaseLock } from "../infrastructure/redis/lock.js"
@@ -564,7 +565,7 @@ async function bumpSweeperRetryStamp(linkId: string): Promise<void> {
     patch: {
       delivery: {
         sweeperRetryCount: prev + 1,
-        lastSweeperRetryAt: new Date().toISOString(),
+        lastSweeperRetryAt: nowIsoInstant(),
       },
     },
   })

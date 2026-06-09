@@ -8,6 +8,8 @@ import {
   resolveFeishuAccountsBaseUrl,
   resolveFeishuOpenBaseUrl,
 } from "./client.js"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
+import type { Timestamp } from "@synapse/shared"
 
 type JsonObject = Record<string, unknown>
 
@@ -16,8 +18,8 @@ type DeviceLikePayload = {
   deviceCode: string
   verificationUrl: string
   interval: number
-  expiresAt: string
-  lastPollAt?: string
+  expiresAt: Timestamp
+  lastPollAt?: Timestamp
 }
 
 type AppRegistrationPayload = DeviceLikePayload
@@ -47,7 +49,7 @@ export type FeishuCliSetupProgressResult =
       status: "pending"
       transientPayload?: FeishuCliSetupTransientPayload
       challengePayload?: JsonObject
-      expiresAt?: string
+      expiresAt?: Timestamp
     }
   | {
       status: "completed"
@@ -94,7 +96,7 @@ function asNumber(value: unknown, fallback: number) {
 function buildQrChallenge(input: {
   stage: FeishuCliSetupStage
   scanUrl: string
-  expiresAt: string
+  expiresAt: Timestamp
   userCode?: string
 }) {
   const stageLabel =
@@ -172,9 +174,9 @@ async function beginAppRegistration() {
     brand: "feishu" as const,
     deviceCode: asString(payload.device_code),
     interval: asNumber(payload.interval, 5),
-    expiresAt: new Date(
-      Date.now() + asNumber(payload.expires_in, 300) * 1000
-    ).toISOString(),
+    expiresAt: dateToIsoInstant(
+      new Date(Date.now() + asNumber(payload.expires_in, 300) * 1000)
+    ),
     verificationUrl: buildVerificationUrl(
       resolveFeishuOpenBaseUrl("feishu"),
       userCode
@@ -216,7 +218,7 @@ async function pollAppRegistration(payload: AppRegistrationPayload): Promise<
   })
 
   const result = await readJsonResponse(response)
-  const nowIso = new Date().toISOString()
+  const nowIso = nowIsoInstant()
   const error = asString(result.error)
 
   if (!error && asString(result.client_id)) {
@@ -338,9 +340,9 @@ async function beginUserAuthorization(input: {
     brand: input.brand,
     deviceCode: asString(payload.device_code),
     interval: asNumber(payload.interval, 5),
-    expiresAt: new Date(
-      Date.now() + asNumber(payload.expires_in, 240) * 1000
-    ).toISOString(),
+    expiresAt: dateToIsoInstant(
+      new Date(Date.now() + asNumber(payload.expires_in, 240) * 1000)
+    ),
     verificationUrl,
     userCode: asString(payload.user_code),
     openBaseUrl: resolveFeishuOpenBaseUrl(input.brand),
@@ -392,7 +394,7 @@ async function pollUserAuthorization(input: {
   })
 
   const payload = await readJsonResponse(response)
-  const nowIso = new Date().toISOString()
+  const nowIso = nowIsoInstant()
   const error = asString(payload.error)
 
   if (!error && asString(payload.access_token)) {

@@ -7,6 +7,7 @@ import {
   type CapabilityConversationTypePolicyResourceFamily,
   type ConversationTypeKey,
 } from "@synapse/shared"
+import type { Timestamp } from "@synapse/shared"
 import { useCallback, useEffect, useState } from "react"
 import { Building2, RefreshCw, ShieldCheck, UserRound, Zap } from "lucide-react"
 import { useWorkspace } from "../workspace-provider"
@@ -65,8 +66,8 @@ type WorkspaceAccessBinding = {
   userId: string
   accessKey: WorkspaceAccessKey
   assignedByWorkspaceMemberId?: string | null
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
   trustLevel: string
   userName?: string
   userEmail?: string
@@ -77,8 +78,8 @@ type PlatformAccessBinding = {
   accessKey: PlatformAccessKey
   source: string
   assignedByUserId?: string | null
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
   userName?: string
   userEmail?: string
 }

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 import { z } from "zod"
 import {
   RELATIONSHIP_ACCESS_POLICIES,
@@ -109,7 +110,7 @@ const internalUserInputTaskSchema = z.object({
   title: z.string().trim().min(1).max(255),
   instructions: z.string().trim().max(5000).optional(),
   questions: z.array(z.any()).min(1).max(4),
-  expiresAt: z.iso.datetime().optional(),
+  expiresAt: IsoInstantStringSchema.optional(),
 })
 
 const internalPlanApprovalTaskSchema = z.object({
@@ -121,7 +122,7 @@ const internalPlanApprovalTaskSchema = z.object({
   checklist: z.array(z.any()).optional(),
   collaborationMode: z.string().trim().max(120).optional(),
   collaborationState: z.record(z.string(), z.any()).optional(),
-  expiresAt: z.iso.datetime().optional(),
+  expiresAt: IsoInstantStringSchema.optional(),
 })
 
 function getRequestUserId(request: any) {

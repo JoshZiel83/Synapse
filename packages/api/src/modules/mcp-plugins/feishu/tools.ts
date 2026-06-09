@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { dateToIsoInstant } from "@synapse/shared/datetime"
 import {
   FILE_ORIGIN_SYSTEMS,
   textBlock,
@@ -357,14 +358,14 @@ function buildFeishuDocSearchRequest(input: Record<string, unknown>) {
   return request
 }
 
-function toIsoStringFromUnixTimestamp(value: unknown) {
+function serializeUnixTimestampToInstant(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return new Date(value >= 1e12 ? value : value * 1000).toISOString()
+    return dateToIsoInstant(new Date(value >= 1e12 ? value : value * 1000))
   }
   if (typeof value === "string" && value.trim().length > 0) {
     const parsed = Number(value.trim())
     if (Number.isFinite(parsed)) {
-      return new Date(parsed >= 1e12 ? parsed : parsed * 1000).toISOString()
+      return dateToIsoInstant(new Date(parsed >= 1e12 ? parsed : parsed * 1000))
     }
   }
   return ""
@@ -375,7 +376,7 @@ function addIsoTimeFieldsToDocSearchResults(results: unknown[]) {
     const row = asObject(item)
     const resultMeta = { ...asObject(row.result_meta) }
     for (const field of ["create_time", "open_time", "update_time"] as const) {
-      const iso = toIsoStringFromUnixTimestamp(resultMeta[field])
+      const iso = serializeUnixTimestampToInstant(resultMeta[field])
       if (iso) {
         resultMeta[`${field}_iso`] = iso
       }

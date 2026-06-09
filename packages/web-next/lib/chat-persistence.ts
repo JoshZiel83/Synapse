@@ -1,6 +1,8 @@
 "use client"
 
 import { openDB, type DBSchema, type IDBPDatabase } from "idb"
+import { nowIsoInstant } from "@synapse/shared/datetime"
+import type { Timestamp } from "@synapse/shared"
 
 import {
   CHAT_QUEUE_DB_NAME,
@@ -33,7 +35,7 @@ export type {
 interface ChatQueueStateRow {
   workspaceId: string
   payload: StoredChatQueueState
-  updatedAt: string
+  updatedAt: Timestamp
 }
 
 interface ChatQueueDatabaseSchema extends DBSchema {
@@ -83,7 +85,7 @@ export async function saveStoredChatQueueState(
   await database.put(CHAT_QUEUE_STATE_STORE, {
     workspaceId: queueState.workspaceId,
     payload: normalizeStoredChatQueueState(queueState.workspaceId, queueState),
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIsoInstant(),
   })
 }
 
@@ -103,7 +105,7 @@ export async function updateStoredChatQueueState(
   await store.put({
     workspaceId,
     payload: normalizeStoredChatQueueState(workspaceId, next),
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIsoInstant(),
   })
   await transaction.done
 }

@@ -16,6 +16,7 @@
 import { randomUUID, createHash } from "node:crypto"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import { db } from "../../infrastructure/database/kysely.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
@@ -260,8 +261,8 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
             retry_nonce: args.sourceRetryNonce,
           },
           ...(cuaFocusScopeId ? { cua_focus_scope_id: cuaFocusScopeId } : {}),
-          issued_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 60_000).toISOString(),
+          issued_at: nowIsoInstant(),
+          expires_at: dateToIsoInstant(new Date(Date.now() + 60_000)),
         })
         return {
           ok: true,

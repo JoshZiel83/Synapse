@@ -4,6 +4,7 @@ import type {
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
   RuntimeAuthorizationRequestedAction,
+  Timestamp,
 } from "@synapse/shared/types"
 import { textBlocks } from "@synapse/shared"
 import { sql } from "kysely"
@@ -153,7 +154,7 @@ export interface RuntimeAuthorizationRequestResult {
 export interface WaitForRuntimeAuthorizationResolutionParams<T> {
   taskId: string
   conversationId: string
-  createdAt: string
+  createdAt: Timestamp
   onApproved: (task: TaskSummary) => Promise<T>
   maxWaitMs?: number
 }
