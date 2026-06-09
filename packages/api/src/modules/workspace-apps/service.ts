@@ -25,10 +25,13 @@ import {
   updateRemoteAgent,
 } from "../remote-agents/service.js"
 import {
+  createWorkspaceSkill,
+  installMarketplaceSkill,
   uninstallInstalledSkill,
   updateInstalledSkill,
 } from "../skills/service.js"
 import {
+  installPluginUnified,
   uninstallPluginUnified,
   updateInstallation,
 } from "../mcp-plugins/service.js"
@@ -764,6 +767,36 @@ export async function createWorkspaceApp(params: {
         }>
       }
     | {
+        kind: typeof WORKSPACE_APP_KIND.INSTALLED_SKILL
+        sourceType: "custom"
+        displayName: string
+        description?: unknown
+        iconFileId?: string
+        tags?: string[]
+        attachmentFiles?: Array<{
+          path: string
+          contentBlocks: unknown[]
+          mediaType?: string
+        }>
+        grants?: Array<{
+          target: CapabilityAccessTarget
+          permissions: WorkspaceAppGrantPermission[]
+          conversationTypeMaskOverride?: number | null
+          reason?: string
+        }>
+      }
+    | {
+        kind: typeof WORKSPACE_APP_KIND.INSTALLED_SKILL
+        sourceType: "marketplace"
+        marketSkillId: string
+        grants?: Array<{
+          target: CapabilityAccessTarget
+          permissions: WorkspaceAppGrantPermission[]
+          conversationTypeMaskOverride?: number | null
+          reason?: string
+        }>
+      }
+    | {
         kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT
         displayName: string
         title: string
@@ -773,6 +806,19 @@ export async function createWorkspaceApp(params: {
         avatarEmoji?: string
         isPublicShared?: boolean
         metadata?: Record<string, unknown>
+        grants?: Array<{
+          target: CapabilityAccessTarget
+          permissions: WorkspaceAppGrantPermission[]
+          conversationTypeMaskOverride?: number | null
+          reason?: string
+        }>
+      }
+    | {
+        kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
+        pluginId: string
+        lifecycleScope?: string
+        configData?: Record<string, unknown>
+        authSessionIds?: Record<string, string>
         grants?: Array<{
           target: CapabilityAccessTarget
           permissions: WorkspaceAppGrantPermission[]
@@ -802,6 +848,61 @@ export async function createWorkspaceApp(params: {
     return getWorkspaceAppInventoryDetail({
       workspaceId: params.workspaceId,
       appId: actor.id,
+      userId: params.userId,
+    })
+  }
+
+  if (params.input.kind === WORKSPACE_APP_KIND.INSTALLED_SKILL) {
+    const skill =
+      params.input.sourceType === "custom"
+        ? await createWorkspaceSkill({
+            workspaceId: params.workspaceId,
+            name: params.input.displayName,
+            description: params.input.description as any,
+            iconFileId: params.input.iconFileId,
+            tags: params.input.tags,
+            attachmentFiles: params.input.attachmentFiles as any,
+            grants: params.input.grants,
+            installedByWorkspaceMemberId: (
+              await requireWorkspaceMemberIdentity(
+                params.workspaceId,
+                params.userId
+              )
+            ).workspaceMemberId,
+          })
+        : await installMarketplaceSkill({
+            workspaceId: params.workspaceId,
+            marketSkillId: params.input.marketSkillId,
+            grants: params.input.grants,
+            installedByWorkspaceMemberId: (
+              await requireWorkspaceMemberIdentity(
+                params.workspaceId,
+                params.userId
+              )
+            ).workspaceMemberId,
+          })
+    return getWorkspaceAppInventoryDetail({
+      workspaceId: params.workspaceId,
+      appId: skill.id,
+      userId: params.userId,
+    })
+  }
+
+  if (params.input.kind === WORKSPACE_APP_KIND.PLUGIN_INSTALLATION) {
+    const installation = await installPluginUnified({
+      workspaceId: params.workspaceId,
+      pluginId: params.input.pluginId,
+      lifecycleScope: params.input.lifecycleScope as any,
+      configData: params.input.configData,
+      authSessionIds: params.input.authSessionIds,
+      grants: params.input.grants,
+      installedByWorkspaceMemberId: (
+        await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
+      ).workspaceMemberId,
+    })
+    return getWorkspaceAppInventoryDetail({
+      workspaceId: params.workspaceId,
+      appId: installation.id,
       userId: params.userId,
     })
   }

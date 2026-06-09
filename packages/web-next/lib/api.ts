@@ -1,4 +1,5 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
+import { WORKSPACE_APP_KIND } from "@synapse/shared"
 import type {
   DeviceCapabilitySummaryView,
   DeviceDetailView,
@@ -545,7 +546,7 @@ class ApiClient {
       body: "{}",
     })
   }
-  createWorkspaceSkill(
+  async createWorkspaceSkill(
     wsId: string,
     data: {
       name: string
@@ -560,10 +561,29 @@ class ApiClient {
       accessTarget: CapabilityAccessTarget
     }
   ): Promise<{ skill: InstalledSkill }> {
-    return this.fetch(`/workspaces/${wsId}/skills/custom`, {
+    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+        sourceType: "custom",
+        displayName: data.name,
+        description: data.description,
+        iconFileId: data.iconFileId,
+        tags: data.tags,
+        attachmentFiles: data.attachmentFiles,
+        grants: [
+          {
+            target: data.accessTarget,
+            permissions: ["use"],
+          },
+        ],
+      }),
     })
+    return {
+      skill: await this.getInstalledSkill(wsId, created.app.id).then(
+        (res) => res.skill
+      ),
+    }
   }
 
   // Skills
@@ -579,19 +599,34 @@ class ApiClient {
   ): Promise<{ skill: InstalledSkill }> {
     return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`)
   }
-  installSkill(
+  async installSkill(
     wsId: string,
     data: {
       marketSkillId: string
       accessTarget: CapabilityAccessTarget
     }
   ): Promise<{ skill: InstalledSkill }> {
-    return this.fetch(`/workspaces/${wsId}/skills`, {
+    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+        sourceType: "marketplace",
+        marketSkillId: data.marketSkillId,
+        grants: [
+          {
+            target: data.accessTarget,
+            permissions: ["use"],
+          },
+        ],
+      }),
     })
+    return {
+      skill: await this.getInstalledSkill(wsId, created.app.id).then(
+        (res) => res.skill
+      ),
+    }
   }
-  updateInstalledSkill(
+  async updateInstalledSkill(
     wsId: string,
     installedSkillId: string,
     data: {
@@ -608,10 +643,24 @@ class ApiClient {
       }>
     }
   ): Promise<{ skill: InstalledSkill }> {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`, {
+    await this.fetch(`/workspaces/${wsId}/workspace-apps/${installedSkillId}`, {
       method: "PUT",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+        displayName: data.name,
+        description: data.description,
+        iconFileId: data.iconFileId,
+        tags: data.tags,
+        isEnabled: data.isEnabled,
+        conversationTypeMaskOverride: data.conversationTypeMaskOverride,
+        attachmentFiles: data.attachmentFiles,
+      }),
     })
+    return {
+      skill: await this.getInstalledSkill(wsId, installedSkillId).then(
+        (res) => res.skill
+      ),
+    }
   }
   upgradeInstalledSkill(
     wsId: string,
@@ -626,9 +675,12 @@ class ApiClient {
     )
   }
   uninstallInstalledSkill(wsId: string, installedSkillId: string) {
-    return this.fetch(`/workspaces/${wsId}/skills/${installedSkillId}`, {
-      method: "DELETE",
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/workspace-apps/${installedSkillId}`,
+      {
+        method: "DELETE",
+      }
+    )
   }
   getWorkspaceAppGrants(
     wsId: string,
@@ -732,7 +784,7 @@ class ApiClient {
   getOrgTree(wsId: string) {
     return this.fetch(`/workspaces/${wsId}/actors/tree`)
   }
-  createActor(
+  async createActor(
     wsId: string,
     data: {
       displayName: string
@@ -753,12 +805,16 @@ class ApiClient {
       }>
     }
   ): Promise<Actor> {
-    return this.fetch(`/workspaces/${wsId}/actors`, {
+    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.ACTOR,
+        ...data,
+      }),
     })
+    return this.getActor(wsId, created.app.id)
   }
-  updateActor(
+  async updateActor(
     wsId: string,
     actorId: string,
     data: {
@@ -774,9 +830,18 @@ class ApiClient {
       config?: Record<string, unknown>
     }
   ): Promise<Actor> {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}`, {
+    await this.fetch(`/workspaces/${wsId}/workspace-apps/${actorId}`, {
       method: "PUT",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.ACTOR,
+        ...data,
+      }),
+    })
+    return this.getActor(wsId, actorId)
+  }
+  deleteActor(wsId: string, actorId: string) {
+    return this.fetch(`/workspaces/${wsId}/workspace-apps/${actorId}`, {
+      method: "DELETE",
     })
   }
 
@@ -1253,7 +1318,7 @@ class ApiClient {
   ): Promise<{ remoteAgent: RemoteAgentView }> {
     return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}`)
   }
-  createRemoteAgent(
+  async createRemoteAgent(
     wsId: string,
     input: {
       displayName: string
@@ -1272,12 +1337,20 @@ class ApiClient {
       }>
     }
   ): Promise<{ remoteAgent: RemoteAgentView }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agents`, {
+    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
+        ...input,
+      }),
     })
+    return {
+      remoteAgent: await this.getRemoteAgent(wsId, created.app.id).then(
+        (res) => res.remoteAgent
+      ),
+    }
   }
-  updateRemoteAgent(
+  async updateRemoteAgent(
     wsId: string,
     remoteAgentId: string,
     input: {
@@ -1291,16 +1364,24 @@ class ApiClient {
       metadata?: Record<string, unknown>
     }
   ): Promise<{ remoteAgent: RemoteAgentView }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}`, {
-      method: "PATCH",
-      body: JSON.stringify(input),
+    await this.fetch(`/workspaces/${wsId}/workspace-apps/${remoteAgentId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.REMOTE_AGENT,
+        ...input,
+      }),
     })
+    return {
+      remoteAgent: await this.getRemoteAgent(wsId, remoteAgentId).then(
+        (res) => res.remoteAgent
+      ),
+    }
   }
   deleteRemoteAgent(
     wsId: string,
     remoteAgentId: string
   ): Promise<{ deleted: boolean }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}`, {
+    return this.fetch(`/workspaces/${wsId}/workspace-apps/${remoteAgentId}`, {
       method: "DELETE",
     })
   }
@@ -1840,7 +1921,7 @@ class ApiClient {
   getInstallation(wsId: string, installId: string) {
     return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`)
   }
-  installPlugin(
+  async installPlugin(
     wsId: string,
     data: {
       pluginId: string
@@ -1852,21 +1933,35 @@ class ApiClient {
         | "actor"
       configData?: Record<string, unknown>
       authSessionIds?: Record<string, string>
+      grants?: Array<{
+        target: CapabilityAccessTarget
+        permissions: string[]
+        conversationTypeMaskOverride?: number | null
+        reason?: string
+      }>
     }
   ) {
-    return this.fetch(`/workspaces/${wsId}/mcp/installations`, {
+    const created = await this.fetch(`/workspaces/${wsId}/workspace-apps`, {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+        ...data,
+      }),
     })
+    return this.getInstallation(wsId, created.app.id)
   }
-  updateInstallation(wsId: string, installId: string, data: any) {
-    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`, {
+  async updateInstallation(wsId: string, installId: string, data: any) {
+    await this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {
       method: "PUT",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        kind: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+        ...data,
+      }),
     })
+    return this.getInstallation(wsId, installId)
   }
   uninstallPlugin(wsId: string, installId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/installations/${installId}`, {
+    return this.fetch(`/workspaces/${wsId}/workspace-apps/${installId}`, {
       method: "DELETE",
     })
   }

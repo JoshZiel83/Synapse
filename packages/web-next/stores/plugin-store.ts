@@ -1,6 +1,7 @@
 "use client"
 import { create } from "zustand"
 import type { ReuseScope } from "@synapse/shared"
+import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import { api } from "@/lib/api"
 
 interface PluginState {
@@ -22,6 +23,12 @@ interface PluginState {
       lifecycleScope?: ReuseScope
       configData?: Record<string, unknown>
       authSessionIds?: Record<string, string>
+      grants?: Array<{
+        target: CapabilityAccessTarget
+        permissions: string[]
+        conversationTypeMaskOverride?: number | null
+        reason?: string
+      }>
     }
   ) => Promise<any>
   uninstallPlugin: (wsId: string, installId: string) => Promise<void>

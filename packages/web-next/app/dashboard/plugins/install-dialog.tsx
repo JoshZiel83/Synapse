@@ -1132,19 +1132,17 @@ export default function InstallDialog({
           configData,
           authSessionIds:
             Object.keys(authSessionIds).length > 0 ? authSessionIds : undefined,
-        })
-        if (createDefaultWorkspaceAccess) {
-          await api.replaceWorkspaceAppGrants(workspaceId, installation.id, {
-            grants: [
-              {
-                target: {
-                  subject: { kind: "workspace", workspaceId },
+          grants: createDefaultWorkspaceAccess
+            ? [
+                {
+                  target: {
+                    subject: { kind: "workspace", workspaceId },
+                  },
+                  permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
                 },
-                permissions: [WORKSPACE_APP_GRANT_PERMISSION.USE],
-              },
-            ],
-          })
-        }
+              ]
+            : undefined,
+        })
       }
       setCurrentInstallation(installation)
       await onInstallationSaved?.(installation)

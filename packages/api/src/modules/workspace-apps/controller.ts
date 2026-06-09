@@ -130,6 +130,44 @@ const createWorkspaceAppSchema = z.discriminatedUnion("kind", [
       .optional(),
   }),
   z.object({
+    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
+    sourceType: z.literal("custom"),
+    displayName: z.string().trim().min(1).max(255),
+    description: z.any().optional(),
+    iconFileId: z.uuid().optional(),
+    tags: z.array(z.string()).optional(),
+    attachmentFiles: z.array(z.any()).optional(),
+    grants: z
+      .array(
+        z.object({
+          target: targetSchema,
+          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
+          conversationTypeMaskOverride: conversationTypeMaskSchema
+            .nullable()
+            .optional(),
+          reason: z.string().trim().min(1).optional(),
+        })
+      )
+      .optional(),
+  }),
+  z.object({
+    kind: z.literal(WORKSPACE_APP_KIND.INSTALLED_SKILL),
+    sourceType: z.literal("marketplace"),
+    marketSkillId: z.uuid(),
+    grants: z
+      .array(
+        z.object({
+          target: targetSchema,
+          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
+          conversationTypeMaskOverride: conversationTypeMaskSchema
+            .nullable()
+            .optional(),
+          reason: z.string().trim().min(1).optional(),
+        })
+      )
+      .optional(),
+  }),
+  z.object({
     kind: z.literal(WORKSPACE_APP_KIND.REMOTE_AGENT),
     displayName: z.string().trim().min(1).max(255),
     title: z.string().trim().min(1).max(255),
@@ -139,6 +177,25 @@ const createWorkspaceAppSchema = z.discriminatedUnion("kind", [
     avatarEmoji: z.string().trim().max(32).optional(),
     isPublicShared: z.boolean().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
+    grants: z
+      .array(
+        z.object({
+          target: targetSchema,
+          permissions: z.array(workspaceAppGrantPermissionSchema).min(1),
+          conversationTypeMaskOverride: conversationTypeMaskSchema
+            .nullable()
+            .optional(),
+          reason: z.string().trim().min(1).optional(),
+        })
+      )
+      .optional(),
+  }),
+  z.object({
+    kind: z.literal(WORKSPACE_APP_KIND.PLUGIN_INSTALLATION),
+    pluginId: z.uuid(),
+    lifecycleScope: z.enum(REUSE_SCOPES).optional(),
+    configData: z.record(z.string(), z.unknown()).optional(),
+    authSessionIds: z.record(z.string(), z.uuid()).optional(),
     grants: z
       .array(
         z.object({
@@ -259,7 +316,11 @@ export function registerWorkspaceAppRoutes(app: FastifyInstance) {
         const createAction =
           body.kind === WORKSPACE_APP_KIND.ACTOR
             ? "workspace.manage_actors"
-            : "workspace.manage_remote_agents"
+            : body.kind === WORKSPACE_APP_KIND.REMOTE_AGENT
+              ? "workspace.manage_remote_agents"
+              : body.kind === WORKSPACE_APP_KIND.INSTALLED_SKILL
+                ? "workspace.manage_skills"
+                : "workspace.manage_plugins"
         const allowed = await requireRequestAction(
           request,
           reply,

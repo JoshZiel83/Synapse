@@ -17,6 +17,7 @@ import {
   subjectScopeLabel,
   workspaceMemberRef,
   workspaceRef,
+  type WorkspaceAppGrantPermission,
 } from "@synapse/shared"
 import type {
   CapabilityAccessTarget,
@@ -1709,6 +1710,12 @@ export async function installPluginUnified(data: {
   configData?: Record<string, unknown>
   authSessionIds?: Record<string, string>
   installedByWorkspaceMemberId?: string
+  grants?: Array<{
+    target: CapabilityAccessTarget
+    permissions: WorkspaceAppGrantPermission[]
+    conversationTypeMaskOverride?: number | null
+    reason?: string
+  }>
 }) {
   const plugin = await getPlugin(data.pluginId)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
@@ -1867,6 +1874,22 @@ export async function installPluginUnified(data: {
         })
         .where("id", "=", plugin.id)
     )
+
+    for (const grant of data.grants || []) {
+      await insertWorkspaceAppGrant(client as any, {
+        workspaceId: data.workspaceId,
+        workspaceAppId: installationId,
+        target: await resolveAccessGrantTarget({
+          workspaceId: data.workspaceId,
+          target: grant.target,
+        }),
+        permissions: grant.permissions,
+        conversationTypeMaskOverride:
+          grant.conversationTypeMaskOverride ?? null,
+        createdByWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
+        reason: grant.reason ?? null,
+      })
+    }
 
     return {
       installationId,

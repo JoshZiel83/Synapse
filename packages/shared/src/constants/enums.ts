@@ -375,12 +375,6 @@ export const CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES = [
   "installed_skill",
   "device_capability",
 ] as const
-export const PLUGIN_ATTACHMENT_SCOPE_TYPES = [
-  "workspace",
-  "conversation",
-  "actor",
-  "workspace_member",
-] as const
 export const ACCESS_TARGET_TYPES = [
   "workspace",
   "workspace_member",

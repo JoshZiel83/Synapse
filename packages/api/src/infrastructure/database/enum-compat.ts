@@ -40,7 +40,6 @@ import {
   AUTOMATION_TARGET_POLICIES,
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
-  PLUGIN_ATTACHMENT_SCOPE_TYPES,
   CONTACT_TARGET_TYPES,
   MEMORY_SPACE_TYPES,
   MODEL_GROUP_GRANT_SCOPES,
@@ -347,10 +346,6 @@ type _WorkspaceAppGrantSourceMatchesDb = Assert<
 type _WorkspaceAppGrantRequestStatusMatchesDb = Assert<
   IsEqual<WorkspaceAppGrantRequestStatus, DbWorkspaceAppGrantRequestsStatus>
 >
-// P1b: plugin_installations.attachment_scope_type column + the DB enum
-// have been dropped. PLUGIN_ATTACHMENT_SCOPE_TYPES remains a pure application-layer
-// enum used at the API layer / translated to SubjectKind via
-// buildPluginAttachmentSubjectRef.
 // external-first-class-subject: conversation_participants.participant_type
 // column + the conversation_participants_type DB enum have been dropped. The
 // participant type is now derived from the joined access_subjects.kind via
