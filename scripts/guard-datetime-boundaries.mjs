@@ -64,7 +64,7 @@ const ruleDefs = [
     id: "camel_time_string",
     message: "forbidden camelCase time field typed as bare string",
     pattern:
-      /\b(?:createdAt|updatedAt|expiresAt|startedAt|finishedAt|occurredAt|completedAt|lastBootstrappedAt|lastSyncedAt|lastSeenAt|lastConnectedAt|revokedAt|deliveredAt|lastInboundAt|lastOutboundAt|activeFrom|activeUntil|nextFireAt|firstFailedAt|lastAttemptAt)\??:\s*string(?: \| null)?\b/g,
+      /\b(?:createdAt|updatedAt|expiresAt|startedAt|finishedAt|occurredAt|completedAt|lastBootstrappedAt|lastSyncedAt|lastSeenAt|lastConnectedAt|revokedAt|deliveredAt|lastInboundAt|lastOutboundAt|activeFrom|activeUntil|nextFireAt|firstFailedAt|lastAttemptAt|receivedAt|timestamp)\??:\s*string(?: \| null)?\b/g,
   },
   {
     id: "direct_to_iso_string",

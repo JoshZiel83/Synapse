@@ -61,9 +61,9 @@ function toXmlTextBlock(value: string) {
   return textBlock(value)
 }
 
-function formatContextTimestamp(timestamp?: string) {
-  if (!timestamp) return ""
-  const date = new Date(timestamp)
+function formatContextTimestamp(timeText?: string) {
+  if (!timeText) return ""
+  const date = new Date(timeText)
   if (Number.isNaN(date.getTime())) return ""
   return dateToIsoInstant(date)
 }

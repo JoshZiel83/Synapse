@@ -13,6 +13,7 @@ import type {
   ConversationReplyRef,
   TaskSummary,
   RemoteAgentRuntimeState,
+  Timestamp,
 } from "@synapse/shared"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
@@ -108,7 +109,7 @@ interface MessageBubbleProps {
   actorRole?: string
   actorRuntime?: ActorRuntimeState
   remoteAgentRuntime?: RemoteAgentRuntimeState
-  timestamp?: string
+  timestamp?: Timestamp
   isUser: boolean
   status?: "sending" | "retrying" | "sent"
   toolsUsed?: string[]

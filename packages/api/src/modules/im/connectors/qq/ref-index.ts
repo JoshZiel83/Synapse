@@ -17,6 +17,7 @@
  * message" from "user quoted the bot's reply".
  */
 
+import type { Timestamp } from "@synapse/shared/types"
 import type { Redis } from "ioredis"
 
 const TTL_SECONDS = 7 * 24 * 60 * 60
@@ -28,7 +29,7 @@ export interface QqRefIndexEntry {
   senderId: string
   senderName?: string
   /** ISO-8601 of when the original message was received/sent. */
-  timestamp: string
+  timestamp: Timestamp
   /** True if the bot itself sent this message (vs. a user). Helpful
    *  context for the AI to disambiguate "user quoted their own
    *  earlier message" from "user quoted bot's reply". */

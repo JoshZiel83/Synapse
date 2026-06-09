@@ -21,10 +21,11 @@
 
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import type {
+import {
   DeviceCatalogExposure,
   DeviceCatalogTool,
   OperationEnvelope,
+  OperationEnvelopeSchema,
   SynapseError,
 } from "@synapse/device-protocol"
 import type {
@@ -352,7 +353,8 @@ export function createInMemoryMcpHost(
     if (!meta || typeof meta !== "object") return undefined
     const raw = (meta as Record<string, unknown>)["synapse_operation"]
     if (!raw || typeof raw !== "object") return undefined
-    return raw as OperationEnvelope
+    const parsed = OperationEnvelopeSchema.safeParse(raw)
+    return parsed.success ? parsed.data : undefined
   }
 
   async function handleJsonRpc(body: {

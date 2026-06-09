@@ -9,6 +9,7 @@ import {
 } from "node:crypto"
 import {
   canonicalizeEnvelopePayload,
+  OperationEnvelopeSchema,
   type OperationEnvelope,
 } from "@synapse/device-protocol"
 import type { EnvelopeVerifier, EnvelopeVerifyResult } from "./types.js"
@@ -48,17 +49,28 @@ export function createInMemoryEnvelopeVerifier(
       actualArgsHash: string,
       serverPublicKeys: ReadonlyMap<string, string>
     ): Promise<EnvelopeVerifyResult> {
+      const parsedEnvelope = OperationEnvelopeSchema.safeParse(envelope)
+      if (!parsedEnvelope.success) {
+        return {
+          ok: false,
+          code: "invalid_request",
+          message: "operation envelope schema validation failed",
+        }
+      }
+      const normalizedEnvelope = parsedEnvelope.data
       // 1. signature
-      const serverPubkey = serverPublicKeys.get(envelope.signature_kid)
+      const serverPubkey = serverPublicKeys.get(
+        normalizedEnvelope.signature_kid
+      )
       if (!serverPubkey) {
         return {
           ok: false,
           code: "invalid_request",
-          message: `unknown signature_kid: ${envelope.signature_kid}`,
+          message: `unknown signature_kid: ${normalizedEnvelope.signature_kid}`,
         }
       }
       const signedPayload = canonicalizeEnvelopePayload({
-        ...envelope,
+        ...normalizedEnvelope,
         signature: undefined,
       })
       try {
@@ -70,7 +82,7 @@ export function createInMemoryEnvelopeVerifier(
           null,
           Buffer.from(signedPayload, "utf8"),
           pubKey,
-          Buffer.from(envelope.signature, "base64")
+          Buffer.from(normalizedEnvelope.signature, "base64")
         )
         if (!ok) {
           return {
@@ -87,7 +99,7 @@ export function createInMemoryEnvelopeVerifier(
         }
       }
       // 2. expires_at
-      const expiresAt = Date.parse(envelope.expires_at)
+      const expiresAt = Date.parse(normalizedEnvelope.expires_at)
       if (!Number.isFinite(expiresAt) || expiresAt < now()) {
         return {
           ok: false,
@@ -96,17 +108,17 @@ export function createInMemoryEnvelopeVerifier(
         }
       }
       // 3. atomic replay reserve
-      if (replay.has(envelope.attempt_id)) {
+      if (replay.has(normalizedEnvelope.attempt_id)) {
         return {
           ok: false,
           code: "replay_detected",
           message: "attempt already executed",
         }
       }
-      replay.set(envelope.attempt_id, { expiresAt })
+      replay.set(normalizedEnvelope.attempt_id, { expiresAt })
       gc()
       // 4. input hash match
-      if (actualArgsHash !== envelope.input_hash) {
+      if (actualArgsHash !== normalizedEnvelope.input_hash) {
         return {
           ok: false,
           code: "invalid_request",

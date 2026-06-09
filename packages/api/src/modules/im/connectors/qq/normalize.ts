@@ -17,6 +17,7 @@
 import { redis } from "../../../../infrastructure/redis/index.js"
 import { createLogger } from "../../../../infrastructure/logger/index.js"
 import { nowIsoInstant } from "@synapse/shared/datetime"
+import type { Timestamp } from "@synapse/shared/types"
 import {
   buildCanonicalMessage,
   textOnlyMessage,
@@ -53,7 +54,7 @@ export interface QqC2cMessageEventData {
   content?: string
   message_scene?: QqMessageScene
   message_type?: number
-  timestamp?: string
+  timestamp?: Timestamp
   attachments?: unknown[]
 }
 
@@ -65,7 +66,7 @@ export interface QqGroupAtMessageEventData {
   mentions?: unknown[]
   message_scene?: QqMessageScene
   message_type?: number
-  timestamp?: string
+  timestamp?: Timestamp
   attachments?: unknown[]
 }
 
@@ -251,7 +252,7 @@ async function recordSelfRefIndex(params: {
   ext: unknown
   content: string
   senderExternalId: string
-  timestamp: string
+  timestamp: Timestamp
 }): Promise<void> {
   if (!params.accountId) return
   const { msgIdx } = parseRefIndices({ ext: params.ext })

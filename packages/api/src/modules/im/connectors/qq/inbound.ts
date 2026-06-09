@@ -134,14 +134,16 @@ export async function handleQqWebhook(
     logger?.error?.("qq: webhook rawBody missing — cannot verify signature")
     return { statusCode: 400, body: { error: "raw body required" } }
   }
-  const { signatureHex, timestamp } = extractSignatureHeaders(input.headers)
-  if (!signatureHex || !timestamp) {
+  const { signatureHex, signatureTimestamp } = extractSignatureHeaders(
+    input.headers
+  )
+  if (!signatureHex || !signatureTimestamp) {
     return { statusCode: 401, body: { error: "missing signature headers" } }
   }
   const verified = verifyEd25519BusinessEvent({
     secret: getEd25519Seed(creds),
     signatureHex,
-    timestamp,
+    signatureTimestamp,
     rawBody: input.rawBody,
   })
   if (!verified) {
@@ -292,7 +294,7 @@ async function recordInboundAnchor(params: {
   anchorKind: "msg_id" | "event_id"
   anchorId: string
   eventType: string
-  receivedAt: string
+  receivedAt: import("@synapse/shared/types").Timestamp
 }): Promise<void> {
   await writeLatestInboundAnchor(redis, {
     accountId: params.accountId,
