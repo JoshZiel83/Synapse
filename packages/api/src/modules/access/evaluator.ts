@@ -1,5 +1,12 @@
 import { sql } from "kysely"
-import { SUBJECT_KIND, MEMORY_PERMISSION } from "@synapse/shared"
+import {
+  ACCESS_BINDING_STATUS,
+  MEMORY_PERMISSION,
+  SUBJECT_KIND,
+  WORKSPACE_APP_GRANT_PERMISSION,
+  WORKSPACE_APP_KIND,
+  WORKSPACE_APP_STATUS,
+} from "@synapse/shared"
 import type { MemoryPermission, SubjectRef } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
@@ -102,7 +109,7 @@ async function loadWorkspaceMemberAccess(
     .selectFrom("workspace_access_bindings")
     .select("access_key")
     .where("workspace_member_id", "=", workspaceMemberId)
-    .where("status", "=", "active")
+    .where("status", "=", ACCESS_BINDING_STATUS.ACTIVE)
     .execute()
 
   return {
@@ -532,6 +539,15 @@ type WorkspaceAppBindableResourceTypeLocal =
   | "plugin_installation"
   | "device_capability"
 
+const BINDABLE_WORKSPACE_APP_KIND: Record<
+  WorkspaceAppBindableResourceTypeLocal,
+  (typeof WORKSPACE_APP_KIND)[keyof typeof WORKSPACE_APP_KIND]
+> = {
+  installed_skill: WORKSPACE_APP_KIND.INSTALLED_SKILL,
+  plugin_installation: WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+  device_capability: WORKSPACE_APP_KIND.DEVICE_CAPABILITY,
+}
+
 function bindableResourceIdColumn(
   resourceType: LegacyBindableResourceTypeLocal
 ) {
@@ -896,6 +912,149 @@ async function listGrantedWorkspaceAppIds(
   return typeof params.limit === "number" && params.limit > 0
     ? ids.slice(0, params.limit)
     : ids
+}
+
+async function listManageableWorkspaceAppIds(
+  db: KyselyDb,
+  params: {
+    resourceType: WorkspaceAppBindableResourceTypeLocal
+    manageAccessKey: string
+    subject: PermissionSubject
+    limit?: number
+    runtimeScopeSubjectIds?: readonly string[]
+    runtimeSubjectIds?: readonly string[]
+  }
+) {
+  if (params.subject.type !== "workspace_member") {
+    return []
+  }
+
+  const access = await loadWorkspaceMemberAccess(db, params.subject.id)
+  if (!access) {
+    return []
+  }
+
+  const appKind = BINDABLE_WORKSPACE_APP_KIND[params.resourceType]
+  if (workspacePermissionFromAccess(access, params.manageAccessKey)) {
+    const rows = await db
+      .selectFrom("workspace_apps as app")
+      .select("app.id")
+      .where("app.workspace_id", "=", access.workspaceId)
+      .where("app.kind", "=", appKind)
+      .where("app.deleted_at", "is", null)
+      .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
+      .orderBy("app.created_at", "desc")
+      .execute()
+    return finalizeResourceIdList([rows.map((row) => row.id)], params.limit)
+  }
+
+  const [ownRows, grantRows] = await Promise.all([
+    db
+      .selectFrom("workspace_apps as app")
+      .select("app.id")
+      .where("app.workspace_id", "=", access.workspaceId)
+      .where("app.kind", "=", appKind)
+      .where("app.deleted_at", "is", null)
+      .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
+      .where("app.owner_workspace_member_id", "=", access.id)
+      .orderBy("app.created_at", "desc")
+      .execute(),
+    listWorkspaceAppGrantRows(db, {
+      resourceType: params.resourceType,
+      resourceId: null,
+      requiredGrantPermission: WORKSPACE_APP_GRANT_PERMISSION.MANAGE,
+      subject: params.subject,
+      runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+      runtimeSubjectIds: params.runtimeSubjectIds,
+    }),
+  ])
+
+  const grantedIds = Array.from(
+    new Set(grantRows.map((row) => row.resource_id))
+  )
+  const grantedRows =
+    grantedIds.length === 0
+      ? []
+      : await db
+          .selectFrom("workspace_apps as app")
+          .select("app.id")
+          .where("app.id", "in", grantedIds)
+          .where("app.workspace_id", "=", access.workspaceId)
+          .where("app.kind", "=", appKind)
+          .where("app.deleted_at", "is", null)
+          .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
+          .orderBy("app.created_at", "desc")
+          .execute()
+
+  return finalizeResourceIdList(
+    [ownRows.map((row) => row.id), grantedRows.map((row) => row.id)],
+    params.limit
+  )
+}
+
+async function listBindableWorkspaceAppIdsForPermission(
+  db: KyselyDb,
+  params: {
+    resourceType: WorkspaceAppBindableResourceTypeLocal
+    permission: string
+    manageAccessKey: string
+    subject: PermissionSubject
+    limit?: number
+    runtimeScopeSubjectIds?: readonly string[]
+    runtimeSubjectIds?: readonly string[]
+  }
+) {
+  if (params.permission === "use") {
+    return listGrantedWorkspaceAppIds(db, {
+      resourceType: params.resourceType,
+      requiredGrantPermission: WORKSPACE_APP_GRANT_PERMISSION.USE,
+      subject: params.subject,
+      limit: params.limit,
+      runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+      runtimeSubjectIds: params.runtimeSubjectIds,
+    })
+  }
+
+  if (params.permission === "request_runtime_authorization") {
+    return params.resourceType === "device_capability"
+      ? listGrantedWorkspaceAppIds(db, {
+          resourceType: params.resourceType,
+          requiredGrantPermission: WORKSPACE_APP_GRANT_PERMISSION.USE,
+          subject: params.subject,
+          limit: params.limit,
+          runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+          runtimeSubjectIds: params.runtimeSubjectIds,
+        })
+      : []
+  }
+
+  if (params.permission === "view") {
+    return listGrantedWorkspaceAppIds(db, {
+      resourceType: params.resourceType,
+      requiredGrantPermission: WORKSPACE_APP_GRANT_PERMISSION.USE,
+      subject: params.subject,
+      limit: params.limit,
+      runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+      runtimeSubjectIds: params.runtimeSubjectIds,
+    })
+  }
+
+  if (
+    params.permission === "edit" ||
+    params.permission === "grant" ||
+    params.permission === "delete"
+  ) {
+    return listManageableWorkspaceAppIds(db, {
+      resourceType: params.resourceType,
+      manageAccessKey: params.manageAccessKey,
+      subject: params.subject,
+      limit: params.limit,
+      runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+      runtimeSubjectIds: params.runtimeSubjectIds,
+    })
+  }
+
+  return []
 }
 
 function finalizeResourceIdList(groups: readonly string[][], limit?: number) {
@@ -2074,40 +2233,35 @@ export async function lookupResources(
         ? listModelGroupIds(db, params.subject, params.limit)
         : []
     case "installed_skill":
-      return params.permission === "use" || params.permission === "view"
-        ? listGrantedWorkspaceAppIds(db, {
-            resourceType: "installed_skill",
-            requiredGrantPermission: "use",
-            subject: params.subject,
-            limit: params.limit,
-            runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
-            runtimeSubjectIds: params.runtimeSubjectIds,
-          })
-        : []
+      return listBindableWorkspaceAppIdsForPermission(db, {
+        resourceType: "installed_skill",
+        permission: params.permission,
+        manageAccessKey: "manage_skills",
+        subject: params.subject,
+        limit: params.limit,
+        runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+        runtimeSubjectIds: params.runtimeSubjectIds,
+      })
     case "plugin_installation":
-      return params.permission === "use" || params.permission === "view"
-        ? listGrantedWorkspaceAppIds(db, {
-            resourceType: "plugin_installation",
-            requiredGrantPermission: "use",
-            subject: params.subject,
-            limit: params.limit,
-            runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
-            runtimeSubjectIds: params.runtimeSubjectIds,
-          })
-        : []
+      return listBindableWorkspaceAppIdsForPermission(db, {
+        resourceType: "plugin_installation",
+        permission: params.permission,
+        manageAccessKey: "manage_plugins",
+        subject: params.subject,
+        limit: params.limit,
+        runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+        runtimeSubjectIds: params.runtimeSubjectIds,
+      })
     case "device_capability":
-      return params.permission === "use" ||
-        params.permission === "view" ||
-        params.permission === "request_runtime_authorization"
-        ? listGrantedWorkspaceAppIds(db, {
-            resourceType: "device_capability",
-            requiredGrantPermission: "use",
-            subject: params.subject,
-            limit: params.limit,
-            runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
-            runtimeSubjectIds: params.runtimeSubjectIds,
-          })
-        : []
+      return listBindableWorkspaceAppIdsForPermission(db, {
+        resourceType: "device_capability",
+        permission: params.permission,
+        manageAccessKey: "manage_devices",
+        subject: params.subject,
+        limit: params.limit,
+        runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+        runtimeSubjectIds: params.runtimeSubjectIds,
+      })
     case "automation_event_source":
       return params.permission === "use" || params.permission === "view"
         ? listGrantedResourceIds(

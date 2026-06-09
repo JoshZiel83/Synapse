@@ -788,6 +788,88 @@ test(
 )
 
 test(
+  "lookupResources(installed_skill.edit) returns owned and manage-granted skills",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, ownerMemberId, guestMemberId } =
+        await seedOwnerMemberAndGuest(db)
+      const owned = await insertInstalledSkill(db, workspaceId, guestMemberId)
+      const managed = await insertInstalledSkill(db, workspaceId, ownerMemberId)
+      await insertWorkspaceAppGrant(db, {
+        workspaceId,
+        workspaceAppId: managed,
+        target: {
+          subject: {
+            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+            memberId: guestMemberId,
+          },
+        },
+        permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
+        source: "manual",
+      })
+      const ids = await lookupResources(db, {
+        resourceType: "installed_skill",
+        permission: "edit",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.ok(ids.includes(owned))
+      assert.ok(ids.includes(managed))
+    })
+  }
+)
+
+test(
+  "lookupResources(plugin_installation.edit) returns owned and manage-granted installations",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, ownerMemberId, guestMemberId } =
+        await seedOwnerMemberAndGuest(db)
+      const guestSkill = await insertInstalledSkill(
+        db,
+        workspaceId,
+        guestMemberId
+      )
+      const ownerSkill = await insertInstalledSkill(
+        db,
+        workspaceId,
+        ownerMemberId
+      )
+      const owned = await insertPluginInstallation(db, {
+        workspaceId,
+        installedByMemberId: guestMemberId,
+        attachmentScopeSkillId: guestSkill,
+      })
+      const managed = await insertPluginInstallation(db, {
+        workspaceId,
+        installedByMemberId: ownerMemberId,
+        attachmentScopeSkillId: ownerSkill,
+      })
+      await insertWorkspaceAppGrant(db, {
+        workspaceId,
+        workspaceAppId: managed,
+        target: {
+          subject: {
+            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+            memberId: guestMemberId,
+          },
+        },
+        permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
+        source: "manual",
+      })
+      const ids = await lookupResources(db, {
+        resourceType: "plugin_installation",
+        permission: "edit",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.ok(ids.includes(owned))
+      assert.ok(ids.includes(managed))
+    })
+  }
+)
+
+test(
   "lookupResources(automation_event_source.use) returns granted ids via the resource_access_bindings registry",
   { timeout: 5 * 60_000 },
   async () => {
