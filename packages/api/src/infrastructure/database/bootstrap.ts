@@ -7,6 +7,10 @@ import { db } from "./kysely.js"
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
+const schemaSqlWithoutExtensions = schemaSql.replace(
+  /^CREATE EXTENSION IF NOT EXISTS .+;[\r]?\n?/gm,
+  ""
+)
 
 /**
  * `schema_migrations.version` is `VARCHAR(64)` (see
@@ -71,9 +75,21 @@ async function recordCurrentSchemaVersion() {
 }
 
 async function applyBootstrapSchema() {
+  await db.transaction().execute(async (trx) => {
+    await sql`SELECT pg_advisory_xact_lock(922337203685477000)`.execute(trx)
+    await sql
+      .raw(
+        `
+      CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+      CREATE EXTENSION IF NOT EXISTS "vector";
+      CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+    `
+      )
+      .execute(trx)
+  })
   // schemaSql is a trusted local file (schema.sql) containing the full DDL with
   // multiple statements — must run as raw SQL, not a parameterized fragment.
-  await sql.raw(schemaSql).execute(db)
+  await sql.raw(schemaSqlWithoutExtensions).execute(db)
 }
 
 /**
