@@ -538,6 +538,61 @@ test(
   }
 )
 
+test(
+  "checkPermission(installed_skill.edit) stays true for a disabled skill the member owns",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, guestMemberId } = await seedOwnerMemberAndGuest(db)
+      const skillId = await insertInstalledSkill(db, workspaceId, guestMemberId)
+      await db
+        .updateTable("workspace_apps")
+        .set({ status: "disabled" } as any)
+        .where("id", "=", skillId)
+        .execute()
+      const allowed = await checkPermission(db, {
+        resourceType: "installed_skill",
+        resourceId: skillId,
+        permission: "edit",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(allowed, true)
+    })
+  }
+)
+
+test(
+  "checkPermission(plugin_installation.edit) stays true for a disabled installation the member owns",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, guestMemberId } = await seedOwnerMemberAndGuest(db)
+      const scopeSkillId = await insertInstalledSkill(
+        db,
+        workspaceId,
+        guestMemberId
+      )
+      const installationId = await insertPluginInstallation(db, {
+        workspaceId,
+        installedByMemberId: guestMemberId,
+        attachmentScopeSkillId: scopeSkillId,
+      })
+      await db
+        .updateTable("workspace_apps")
+        .set({ status: "disabled" } as any)
+        .where("id", "=", installationId)
+        .execute()
+      const allowed = await checkPermission(db, {
+        resourceType: "plugin_installation",
+        resourceId: installationId,
+        permission: "edit",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(allowed, true)
+    })
+  }
+)
+
 // 3d hardening: the bindable "manage-or-grant" resources (installed_skill /
 // plugin_installation / device_capability) historically returned `canManage`
 // for ANY permission string — i.e. an unknown/typo'd permission was fail-OPEN
@@ -808,6 +863,11 @@ test(
         permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
         source: "manual",
       })
+      await db
+        .updateTable("workspace_apps")
+        .set({ status: "disabled" } as any)
+        .where("id", "in", [owned, managed])
+        .execute()
       const ids = await lookupResources(db, {
         resourceType: "installed_skill",
         permission: "edit",
@@ -858,6 +918,11 @@ test(
         permissions: [WORKSPACE_APP_GRANT_PERMISSION.MANAGE],
         source: "manual",
       })
+      await db
+        .updateTable("workspace_apps")
+        .set({ status: "disabled" } as any)
+        .where("id", "in", [owned, managed])
+        .execute()
       const ids = await lookupResources(db, {
         resourceType: "plugin_installation",
         permission: "edit",
@@ -1672,6 +1737,34 @@ test(
         subject: { type: "workspace_member", id: strangerMemberId },
       })
       assert.equal(strangerDenied, false)
+    })
+  }
+)
+
+test(
+  "checkPermission(device_capability.grant) stays true for a deprecated capability the member owns",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const { workspaceId, guestMemberId } = await seedOwnerMemberAndGuest(db)
+      const { capabilityId } = await insertDevice(
+        db,
+        workspaceId,
+        guestMemberId
+      )
+      await db
+        .updateTable("workspace_apps")
+        .set({ status: "deprecated" } as any)
+        .where("id", "=", capabilityId)
+        .execute()
+
+      const allowed = await checkPermission(db, {
+        resourceType: "device_capability",
+        resourceId: capabilityId,
+        permission: "grant",
+        subject: { type: "workspace_member", id: guestMemberId },
+      })
+      assert.equal(allowed, true)
     })
   }
 )

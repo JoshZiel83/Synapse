@@ -729,10 +729,14 @@ async function listWorkspaceAppGrantRows(
     .where("app_grant.status", "=", "active")
     .where("app.kind", "=", params.resourceType)
     .where("app.deleted_at", "is", null)
-    .where("app.status", "=", "active")
     .where(
       sql<boolean>`${params.requiredGrantPermission}::workspace_app_grant_permission = ANY(app_grant.permissions)`
     )
+
+  query =
+    params.requiredGrantPermission === WORKSPACE_APP_GRANT_PERMISSION.MANAGE
+      ? query.where("app.status", "!=", WORKSPACE_APP_STATUS.ARCHIVED)
+      : query.where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
 
   const runtimeScopeSubjectIds = params.runtimeScopeSubjectIds ?? []
   if (runtimeScopeSubjectIds.length > 0) {
@@ -914,6 +918,10 @@ async function listGrantedWorkspaceAppIds(
     : ids
 }
 
+function isBindableWorkspaceAppManagementVisible(status: string) {
+  return status !== WORKSPACE_APP_STATUS.ARCHIVED
+}
+
 async function listManageableWorkspaceAppIds(
   db: KyselyDb,
   params: {
@@ -938,24 +946,29 @@ async function listManageableWorkspaceAppIds(
   if (workspacePermissionFromAccess(access, params.manageAccessKey)) {
     const rows = await db
       .selectFrom("workspace_apps as app")
-      .select("app.id")
+      .select(["app.id", "app.status"])
       .where("app.workspace_id", "=", access.workspaceId)
       .where("app.kind", "=", appKind)
       .where("app.deleted_at", "is", null)
-      .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
       .orderBy("app.created_at", "desc")
       .execute()
-    return finalizeResourceIdList([rows.map((row) => row.id)], params.limit)
+    return finalizeResourceIdList(
+      [
+        rows
+          .filter((row) => isBindableWorkspaceAppManagementVisible(row.status))
+          .map((row) => row.id),
+      ],
+      params.limit
+    )
   }
 
   const [ownRows, grantRows] = await Promise.all([
     db
       .selectFrom("workspace_apps as app")
-      .select("app.id")
+      .select(["app.id", "app.status"])
       .where("app.workspace_id", "=", access.workspaceId)
       .where("app.kind", "=", appKind)
       .where("app.deleted_at", "is", null)
-      .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
       .where("app.owner_workspace_member_id", "=", access.id)
       .orderBy("app.created_at", "desc")
       .execute(),
@@ -977,17 +990,23 @@ async function listManageableWorkspaceAppIds(
       ? []
       : await db
           .selectFrom("workspace_apps as app")
-          .select("app.id")
+          .select(["app.id", "app.status"])
           .where("app.id", "in", grantedIds)
           .where("app.workspace_id", "=", access.workspaceId)
           .where("app.kind", "=", appKind)
           .where("app.deleted_at", "is", null)
-          .where("app.status", "=", WORKSPACE_APP_STATUS.ACTIVE)
           .orderBy("app.created_at", "desc")
           .execute()
 
   return finalizeResourceIdList(
-    [ownRows.map((row) => row.id), grantedRows.map((row) => row.id)],
+    [
+      ownRows
+        .filter((row) => isBindableWorkspaceAppManagementVisible(row.status))
+        .map((row) => row.id),
+      grantedRows
+        .filter((row) => isBindableWorkspaceAppManagementVisible(row.status))
+        .map((row) => row.id),
+    ],
     params.limit
   )
 }
@@ -1188,6 +1207,8 @@ async function hasInstalledSkillPermission(
   runtimeScopeSubjectIds?: readonly string[],
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
+  const managementVisiblePermissions = ["edit", "grant", "delete"] as const
+  const manageablePermissions = ["view", "edit", "grant", "delete"] as const
   const row = await db
     .selectFrom("installed_skills as skill")
     .innerJoin("workspace_apps as app", "app.id", "skill.id")
@@ -1196,7 +1217,18 @@ async function hasInstalledSkillPermission(
     .where("app.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
-  if (!row || row.status !== "active") {
+  if (!row) {
+    return false
+  }
+
+  const isManagementPermission = managementVisiblePermissions.includes(
+    permission as any
+  )
+  if (
+    (isManagementPermission &&
+      !isBindableWorkspaceAppManagementVisible(row.status)) ||
+    (!isManagementPermission && row.status !== WORKSPACE_APP_STATUS.ACTIVE)
+  ) {
     return false
   }
 
@@ -1207,7 +1239,7 @@ async function hasInstalledSkillPermission(
     ownerWorkspaceMemberId: row.owner_workspace_member_id,
     manageAccessKey: "manage_skills",
     grantablePermissions: ["use", "view"],
-    manageablePermissions: ["view", "edit", "grant", "delete"],
+    manageablePermissions,
     requiredGrantPermission: "use",
     subject,
     permission,
@@ -1224,6 +1256,8 @@ async function hasPluginInstallationPermission(
   runtimeScopeSubjectIds?: readonly string[],
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
+  const managementVisiblePermissions = ["edit", "grant", "delete"] as const
+  const manageablePermissions = ["view", "edit", "grant", "delete"] as const
   const row = await db
     .selectFrom("plugin_installations as installation")
     .innerJoin("workspace_apps as app", "app.id", "installation.id")
@@ -1232,7 +1266,18 @@ async function hasPluginInstallationPermission(
     .where("app.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
-  if (!row || row.status !== "active") {
+  if (!row) {
+    return false
+  }
+
+  const isManagementPermission = managementVisiblePermissions.includes(
+    permission as any
+  )
+  if (
+    (isManagementPermission &&
+      !isBindableWorkspaceAppManagementVisible(row.status)) ||
+    (!isManagementPermission && row.status !== WORKSPACE_APP_STATUS.ACTIVE)
+  ) {
     return false
   }
 
@@ -1243,7 +1288,7 @@ async function hasPluginInstallationPermission(
     ownerWorkspaceMemberId: row.owner_workspace_member_id,
     manageAccessKey: "manage_plugins",
     grantablePermissions: ["use", "view"],
-    manageablePermissions: ["view", "edit", "grant", "delete"],
+    manageablePermissions,
     requiredGrantPermission: "use",
     subject,
     permission,
@@ -1258,6 +1303,7 @@ async function hasDevicePermission(
   deviceId: string,
   permission: string
 ): Promise<boolean> {
+  const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const row = await db
     .selectFrom("devices")
     .select(["workspace_id", "owner_workspace_member_id"])
@@ -1307,6 +1353,7 @@ async function hasExposurePermission(
   exposureId: string,
   permission: string
 ): Promise<boolean> {
+  const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const row = await db
     .selectFrom("device_exposures as exposure")
     .innerJoin("devices as device", "device.id", "exposure.device_id")
@@ -1333,6 +1380,7 @@ async function hasCapabilityPermission(
   runtimeScopeSubjectIds?: readonly string[],
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
+  const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const row = await db
     .selectFrom("device_capabilities as capability")
     .innerJoin("workspace_apps as app", "app.id", "capability.id")
@@ -1352,7 +1400,18 @@ async function hasCapabilityPermission(
     .where("app.deleted_at", "is", null)
     .limit(1)
     .executeTakeFirst()
-  if (!row || row.status !== "active") {
+  if (!row) {
+    return false
+  }
+
+  const isManagementPermission = managementVisiblePermissions.includes(
+    permission as any
+  )
+  if (
+    (isManagementPermission &&
+      !isBindableWorkspaceAppManagementVisible(row.status)) ||
+    (!isManagementPermission && row.status !== WORKSPACE_APP_STATUS.ACTIVE)
+  ) {
     return false
   }
 
