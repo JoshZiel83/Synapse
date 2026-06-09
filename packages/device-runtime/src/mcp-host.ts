@@ -177,8 +177,7 @@ export function createInMemoryMcpHost(
         ? (params.arguments as Record<string, unknown>)
         : {}
     const envelopeResult = extractEnvelope(params._meta)
-    const verifiedEnvelope =
-      envelopeResult.kind === "ok" ? envelopeResult.envelope : undefined
+    let verifiedEnvelope: OperationEnvelope | undefined
     // Envelope verification gates every tool call. Without a verifier
     // configured, this is a v3-skeleton loopback smoke test (no envelope
     // means no enforcement); ANY production wiring MUST pass an
@@ -208,6 +207,7 @@ export function createInMemoryMcpHost(
           _meta: { synapse_error: synapseError },
         }
       }
+      verifiedEnvelope = envelopeResult.envelope
       if (trustedServerKeys.size === 0) {
         // No keys yet (e.g. hello hasn't completed): refuse rather than
         // silently letting unauthenticated calls through.
