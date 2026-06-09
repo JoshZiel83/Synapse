@@ -992,6 +992,10 @@ async function resolveBindableResourceAccess(
     }
   }
 
+  if (!isManageable) {
+    return false
+  }
+
   // (2) manage path — workspace_member in the same workspace, holding the
   // manage key or being the app owner.
   if (params.subject.type !== "workspace_member") {

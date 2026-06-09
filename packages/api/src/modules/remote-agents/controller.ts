@@ -45,15 +45,30 @@ const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
 const workspaceAppGrantPermissionSchema = z.enum(
   WORKSPACE_APP_GRANT_PERMISSIONS
 )
-const initialGrantTargetSchema = z.object({
-  subject: z.object({
-    kind: z.enum(CAPABILITY_ACCESS_TARGET_TYPES),
-    workspaceId: z.uuid().optional(),
-    memberId: z.uuid().optional(),
-    conversationId: z.uuid().optional(),
-    actorId: z.uuid().optional(),
-    remoteAgentId: z.uuid().optional(),
+const initialGrantSubjectSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal(SUBJECT_KIND.WORKSPACE),
+    workspaceId: z.uuid(),
   }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
+    memberId: z.uuid(),
+  }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.CONVERSATION),
+    conversationId: z.uuid(),
+  }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.ACTOR),
+    actorId: z.uuid(),
+  }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
+    remoteAgentId: z.uuid(),
+  }),
+])
+const initialGrantTargetSchema = z.object({
+  subject: initialGrantSubjectSchema,
   scope: z
     .object({
       kind: z.literal(SUBJECT_KIND.CONVERSATION),
@@ -101,14 +116,14 @@ function toCapabilityAccessTarget(
 ): CapabilityAccessTarget {
   const subject =
     input.subject.kind === SUBJECT_KIND.WORKSPACE
-      ? workspaceRef(input.subject.workspaceId || "")
+      ? workspaceRef(input.subject.workspaceId)
       : input.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER
-        ? workspaceMemberRef(input.subject.memberId || "")
+        ? workspaceMemberRef(input.subject.memberId)
         : input.subject.kind === SUBJECT_KIND.CONVERSATION
-          ? conversationRef(input.subject.conversationId || "")
+          ? conversationRef(input.subject.conversationId)
           : input.subject.kind === SUBJECT_KIND.ACTOR
-            ? actorRef(input.subject.actorId || "")
-            : remoteAgentRef(input.subject.remoteAgentId || "")
+            ? actorRef(input.subject.actorId)
+            : remoteAgentRef(input.subject.remoteAgentId)
   const scope = input.scope
     ? conversationRef(input.scope.conversationId)
     : undefined

@@ -45,13 +45,43 @@ const accessTargetTypeSchema = z.enum([
   CAPABILITY_ACCESS_TARGET_TYPES[4],
 ] as const satisfies readonly SkillAccessTargetType[])
 const conversationTypeMaskSchema = z.number().int().min(1).max(15)
-const accessTargetSchema = z.object({
-  type: accessTargetTypeSchema,
-  actorId: z.uuid().optional(),
-  conversationId: z.uuid().optional(),
-  workspaceMemberId: z.uuid().optional(),
-  remoteAgentId: z.uuid().optional(),
-})
+const accessTargetSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal(SUBJECT_KIND.WORKSPACE),
+  }),
+  z.object({
+    type: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
+    workspaceMemberId: z.uuid(),
+  }),
+  z.object({
+    type: z.literal(SUBJECT_KIND.CONVERSATION),
+    conversationId: z.uuid(),
+  }),
+  z.object({
+    type: z.literal(SUBJECT_KIND.ACTOR),
+    actorId: z.uuid(),
+    conversationId: z.uuid().optional(),
+  }),
+  z.object({
+    type: z.literal(SUBJECT_KIND.REMOTE_AGENT),
+    remoteAgentId: z.uuid(),
+    conversationId: z.uuid().optional(),
+  }),
+]) satisfies z.ZodType<
+  | { type: typeof SUBJECT_KIND.WORKSPACE }
+  | { type: typeof SUBJECT_KIND.WORKSPACE_MEMBER; workspaceMemberId: string }
+  | { type: typeof SUBJECT_KIND.CONVERSATION; conversationId: string }
+  | {
+      type: typeof SUBJECT_KIND.ACTOR
+      actorId: string
+      conversationId?: string
+    }
+  | {
+      type: typeof SUBJECT_KIND.REMOTE_AGENT
+      remoteAgentId: string
+      conversationId?: string
+    }
+>
 
 function inputToCapabilityAccessTarget(
   workspaceId: string,

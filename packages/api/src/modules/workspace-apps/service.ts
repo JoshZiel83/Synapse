@@ -15,6 +15,24 @@ import { db } from "../../infrastructure/database/kysely.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import { isSubjectActiveConversationParticipant } from "../access/subject-resolution.js"
 import {
+  createActor,
+  deleteActor,
+  updateActor,
+} from "../organization/service.js"
+import {
+  createRemoteAgent,
+  deleteRemoteAgent,
+  updateRemoteAgent,
+} from "../remote-agents/service.js"
+import {
+  uninstallInstalledSkill,
+  updateInstalledSkill,
+} from "../skills/service.js"
+import {
+  uninstallPluginUnified,
+  updateInstallation,
+} from "../mcp-plugins/service.js"
+import {
   cancelWorkspaceAppGrantRequest,
   insertWorkspaceAppGrant,
   insertWorkspaceAppGrantRequest,
@@ -423,7 +441,7 @@ export async function getWorkspaceAppInventoryDetail(params: {
   appId: string
   userId: string
 }): Promise<WorkspaceAppView> {
-  const { app } = await requireManageWorkspaceApp(
+  const { access, app } = await requireManageWorkspaceApp(
     params.workspaceId,
     params.appId,
     params.userId
@@ -684,10 +702,282 @@ export async function cancelWorkspaceAppGrantRequestByRequester(params: {
     params.workspaceId,
     params.userId
   )
-  return cancelWorkspaceAppGrantRequest(db, {
+  const request = await db
+    .selectFrom("workspace_app_grant_requests")
+    .select([
+      "id",
+      "workspace_id",
+      "workspace_app_id",
+      "requester_workspace_member_id",
+      "status",
+    ])
+    .where("id", "=", params.requestId)
+    .executeTakeFirst()
+  if (!request) {
+    throw new Error("Workspace app grant request not found")
+  }
+  if (
+    request.workspace_id !== params.workspaceId ||
+    request.workspace_app_id !== params.appId
+  ) {
+    throw new Error("Workspace app grant request not found")
+  }
+  if (request.requester_workspace_member_id !== identity.workspaceMemberId) {
+    throw new Error("Not allowed to cancel this workspace app grant request")
+  }
+  if (request.status !== "pending") {
+    throw new Error("Workspace app grant request is no longer pending")
+  }
+  const cancelled = await cancelWorkspaceAppGrantRequest(db, {
     workspaceId: params.workspaceId,
     workspaceAppId: params.appId,
     requestId: params.requestId,
     requesterWorkspaceMemberId: identity.workspaceMemberId,
   })
+  if (!cancelled) {
+    throw new Error("Workspace app grant request is no longer pending")
+  }
+  return true
+}
+
+export async function createWorkspaceApp(params: {
+  workspaceId: string
+  userId: string
+  input:
+    | {
+        kind: typeof WORKSPACE_APP_KIND.ACTOR
+        displayName: string
+        role: string
+        title?: string
+        avatarFileId?: string
+        avatarEmoji?: string
+        canRepresentUser?: boolean
+        docs?: any[]
+        parentId?: string
+        specialties?: string[]
+        config?: Record<string, unknown>
+        grants?: Array<{
+          target: CapabilityAccessTarget
+          permissions: WorkspaceAppGrantPermission[]
+          conversationTypeMaskOverride?: number | null
+          reason?: string
+        }>
+      }
+    | {
+        kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT
+        displayName: string
+        title: string
+        description?: string
+        runtimeKind: string
+        avatarFileId?: string
+        avatarEmoji?: string
+        isPublicShared?: boolean
+        metadata?: Record<string, unknown>
+        grants?: Array<{
+          target: CapabilityAccessTarget
+          permissions: WorkspaceAppGrantPermission[]
+          conversationTypeMaskOverride?: number | null
+          reason?: string
+        }>
+      }
+}): Promise<WorkspaceAppView> {
+  if (params.input.kind === WORKSPACE_APP_KIND.ACTOR) {
+    const actor = await createActor({
+      workspaceId: params.workspaceId,
+      createdByWorkspaceMemberId: (
+        await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
+      ).workspaceMemberId,
+      displayName: params.input.displayName,
+      role: params.input.role as any,
+      title: params.input.title,
+      avatarFileId: params.input.avatarFileId,
+      avatarEmoji: params.input.avatarEmoji,
+      canRepresentUser: params.input.canRepresentUser,
+      docs: params.input.docs,
+      parentId: params.input.parentId,
+      specialties: params.input.specialties,
+      config: params.input.config,
+      grants: params.input.grants,
+    })
+    return getWorkspaceAppInventoryDetail({
+      workspaceId: params.workspaceId,
+      appId: actor.id,
+      userId: params.userId,
+    })
+  }
+
+  const remoteAgent = await createRemoteAgent({
+    workspaceId: params.workspaceId,
+    userId: params.userId,
+    displayName: params.input.displayName,
+    title: params.input.title,
+    description: params.input.description,
+    runtimeKind: params.input.runtimeKind as any,
+    avatarFileId: params.input.avatarFileId,
+    avatarEmoji: params.input.avatarEmoji,
+    isPublicShared: params.input.isPublicShared,
+    metadata: params.input.metadata,
+    grants: params.input.grants,
+  })
+  return getWorkspaceAppInventoryDetail({
+    workspaceId: params.workspaceId,
+    appId: remoteAgent.remoteAgent.id,
+    userId: params.userId,
+  })
+}
+
+export async function updateWorkspaceApp(params: {
+  workspaceId: string
+  appId: string
+  userId: string
+  input:
+    | {
+        kind: typeof WORKSPACE_APP_KIND.ACTOR
+        displayName?: string
+        role?: string
+        title?: string
+        avatarFileId?: string | null
+        avatarEmoji?: string | null
+        canRepresentUser?: boolean
+        docs?: any[]
+        parentId?: string | null
+        specialties?: string[]
+        config?: Record<string, unknown>
+      }
+    | {
+        kind: typeof WORKSPACE_APP_KIND.REMOTE_AGENT
+        displayName?: string
+        title?: string
+        description?: string | null
+        avatarFileId?: string | null
+        avatarEmoji?: string | null
+        isPublicShared?: boolean
+        isActive?: boolean
+        metadata?: Record<string, unknown>
+      }
+    | {
+        kind: typeof WORKSPACE_APP_KIND.INSTALLED_SKILL
+        displayName?: string
+        description?: unknown
+        iconFileId?: string | null
+        tags?: string[]
+        isEnabled?: boolean
+        conversationTypeMaskOverride?: number | null
+        attachmentFiles?: Array<{
+          path: string
+          contentBlocks: unknown[]
+          mediaType?: string
+        }>
+      }
+    | {
+        kind: typeof WORKSPACE_APP_KIND.PLUGIN_INSTALLATION
+        isEnabled?: boolean
+        configData?: Record<string, unknown>
+        authSessionIds?: Record<string, string>
+        lifecycleScope?: string
+        conversationTypeMaskOverride?: number | null
+      }
+}): Promise<WorkspaceAppView> {
+  const { access, app } = await requireManageWorkspaceApp(
+    params.workspaceId,
+    params.appId,
+    params.userId
+  )
+  if (app.kind !== params.input.kind) {
+    throw new Error("Workspace app kind does not match update payload")
+  }
+
+  switch (params.input.kind) {
+    case WORKSPACE_APP_KIND.ACTOR:
+      await updateActor(params.appId, params.workspaceId, {
+        displayName: params.input.displayName,
+        role: params.input.role as any,
+        title: params.input.title,
+        avatarFileId: params.input.avatarFileId,
+        avatarEmoji: params.input.avatarEmoji,
+        canRepresentUser: params.input.canRepresentUser,
+        docs: params.input.docs as any,
+        parentId: params.input.parentId,
+        specialties: params.input.specialties,
+        config: params.input.config,
+      })
+      break
+    case WORKSPACE_APP_KIND.REMOTE_AGENT:
+      await updateRemoteAgent({
+        workspaceId: params.workspaceId,
+        remoteAgentId: params.appId,
+        userId: params.userId,
+        displayName: params.input.displayName,
+        title: params.input.title,
+        description: params.input.description,
+        avatarFileId: params.input.avatarFileId,
+        avatarEmoji: params.input.avatarEmoji,
+        isPublicShared: params.input.isPublicShared,
+        isActive: params.input.isActive,
+        metadata: params.input.metadata,
+      })
+      break
+    case WORKSPACE_APP_KIND.INSTALLED_SKILL:
+      await updateInstalledSkill({
+        workspaceId: params.workspaceId,
+        installedSkillId: params.appId,
+        name: params.input.displayName,
+        description: params.input.description as any,
+        iconFileId: params.input.iconFileId,
+        tags: params.input.tags,
+        isEnabled: params.input.isEnabled,
+        conversationTypeMaskOverride: params.input.conversationTypeMaskOverride,
+        attachmentFiles: params.input.attachmentFiles as any,
+      })
+      break
+    case WORKSPACE_APP_KIND.PLUGIN_INSTALLATION:
+      await updateInstallation(params.appId, {
+        isEnabled: params.input.isEnabled,
+        configData: params.input.configData,
+        authSessionIds: params.input.authSessionIds,
+        lifecycleScope: params.input.lifecycleScope as any,
+        conversationTypeMaskOverride: params.input.conversationTypeMaskOverride,
+        updatedByWorkspaceMemberId: access.workspaceMemberId,
+      })
+      break
+    default:
+      throw new Error("Workspace app update is not supported for this kind")
+  }
+
+  return getWorkspaceAppInventoryDetail({
+    workspaceId: params.workspaceId,
+    appId: params.appId,
+    userId: params.userId,
+  })
+}
+
+export async function deleteWorkspaceApp(params: {
+  workspaceId: string
+  appId: string
+  userId: string
+}): Promise<boolean> {
+  const { app } = await requireManageWorkspaceApp(
+    params.workspaceId,
+    params.appId,
+    params.userId
+  )
+  switch (app.kind) {
+    case WORKSPACE_APP_KIND.ACTOR:
+      return deleteActor(params.appId, params.workspaceId)
+    case WORKSPACE_APP_KIND.REMOTE_AGENT:
+      return (
+        await deleteRemoteAgent({
+          workspaceId: params.workspaceId,
+          remoteAgentId: params.appId,
+          userId: params.userId,
+        })
+      ).deleted
+    case WORKSPACE_APP_KIND.INSTALLED_SKILL:
+      return uninstallInstalledSkill(params.workspaceId, params.appId)
+    case WORKSPACE_APP_KIND.PLUGIN_INSTALLATION:
+      await uninstallPluginUnified(params.appId)
+      return true
+    default:
+      throw new Error("Workspace app deletion is not supported for this kind")
+  }
 }

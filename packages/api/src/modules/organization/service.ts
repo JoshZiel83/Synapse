@@ -1462,22 +1462,7 @@ export async function deleteActor(
       return { deleted: false }
     }
 
-    // Soft delete (design §7.4): flip deleted_at. The actor's access_subjects row
-    // stays (immutable registry, §5); hard delete is forbidden by sd_reject_delete.
-    await runner(
-      `UPDATE actors
-         SET deleted_at = NOW(), updated_at = NOW()
-       WHERE id = $1
-         AND deleted_at IS NULL
-         AND EXISTS (
-           SELECT 1
-           FROM workspace_apps app
-           WHERE app.id = actors.id
-             AND app.workspace_id = $2
-             AND app.deleted_at IS NULL
-         )`,
-      [actorId, workspaceId]
-    )
+    // Root lifecycle lives on workspace_apps. The detail row stays until purge.
     await updateWorkspaceAppRoot(trx, {
       id: actorId,
       status: "archived",
