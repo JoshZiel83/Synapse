@@ -5,6 +5,7 @@ import type {
   CapabilityAccessTarget,
   ConversationTypeKey,
 } from "@synapse/shared/types"
+import type { Timestamp } from "@synapse/shared"
 type AccessTargetInput = CapabilityAccessTarget
 
 type PluginGrantScope =
@@ -226,7 +227,7 @@ type ResourceAccessGrant = {
   target?: CapabilityAccessTarget
   conversationTypeMaskOverride?: number | null
   effectiveConversationTypeMask?: number
-  createdAt?: string
+  createdAt?: Timestamp
   grantedAt?: string
 }
 

@@ -1,4 +1,9 @@
-import type { EventType, SystemEvent } from "@synapse/shared"
+import type { EventType, SystemEvent, Timestamp } from "@synapse/shared"
+import {
+  parseInstantString,
+  requireInstantDate,
+  serializeInstant,
+} from "../datetime.js"
 import { sql } from "kysely"
 import { REDIS_CHANNELS, parseJsonObject } from "@synapse/shared"
 import { config } from "../../config/index.js"
@@ -55,14 +60,13 @@ function isTransactionalRealtimeEventType(
   )
 }
 
-function eventTimestampToIso(value: string | Date) {
-  if (value instanceof Date) {
-    return value.toISOString()
+function eventTimestampToIso(value: unknown) {
+  if (typeof value === "string") {
+    return serializeInstant(parseInstantString(value))
   }
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime())
-    ? new Date().toISOString()
-    : parsed.toISOString()
+  return serializeInstant(
+    requireInstantDate(value as Date | null, "event timestamp")
+  )
 }
 
 async function wait(ms: number) {
@@ -180,7 +184,7 @@ export async function enqueueTransactionalEventDeliveries(
   event: {
     type: TransactionalRealtimeEventType
     payload: Record<string, unknown>
-    timestamp: string
+    timestamp: Timestamp
     recipients: TransactionalRealtimeRecipient[]
   }
 ) {
@@ -202,7 +206,7 @@ export async function enqueueTransactionalEventDeliveries(
     db.insertInto("realtime_event_outbox").values(
       recipients.map((recipient) => ({
         available_at: new Date(),
-        event_timestamp: event.timestamp,
+        event_timestamp: parseInstantString(event.timestamp),
         event_type: event.type,
         payload: (event.payload ||
           {}) as TableInsert<"realtime_event_outbox">["payload"],

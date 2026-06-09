@@ -44,6 +44,11 @@
 
 import { sql, type SqlBool } from "kysely"
 import { db } from "../../../infrastructure/database/kysely.js"
+import {
+  type IsoInstantString,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../../infrastructure/datetime.js"
 import { onEvent } from "../../../infrastructure/events/index.js"
 import { redis } from "../../../infrastructure/redis/index.js"
 import { createLogger } from "../../../infrastructure/logger/index.js"
@@ -100,7 +105,7 @@ interface InboundLinkLookup {
 }
 
 interface InboundLinkLookupWithCreatedAt extends InboundLinkLookup {
-  createdAt: string
+  createdAt: IsoInstantString
 }
 
 /**
@@ -115,7 +120,7 @@ interface InboundLinkLookupWithCreatedAt extends InboundLinkLookup {
  */
 interface RunningTurnRow {
   trigger_item_id: string | null
-  started_at: string | null
+  started_at: IsoInstantString | null
 }
 
 // Re-export the types the test file needs to type its fixtures. The
@@ -170,12 +175,7 @@ export async function loadCurrentRunningTurnRow(
   if (!row) return null
   return {
     trigger_item_id: row.trigger_item_id,
-    started_at:
-      row.started_at instanceof Date
-        ? row.started_at.toISOString()
-        : row.started_at
-          ? String(row.started_at)
-          : null,
+    started_at: serializeOptionalInstant(row.started_at) ?? null,
   }
 }
 
@@ -285,10 +285,7 @@ export async function findRecentInboundLinkForConversation(
     endpointType: row.endpointType as "direct" | "group",
     transportKind: String(row.transportKind),
     transportAccountId: String(row.transportAccountId),
-    createdAt:
-      row.createdAt instanceof Date
-        ? row.createdAt.toISOString()
-        : String(row.createdAt),
+    createdAt: serializeInstant(row.createdAt),
   }
 }
 
@@ -313,9 +310,10 @@ export function computeStatusFallbackCutoffIso(
   runningTurn: RunningTurnRow | null,
   now: number,
   starvationWindowMs: number = STARVATION_WINDOW_MS
-): string {
+): IsoInstantString {
   return (
-    runningTurn?.started_at ?? new Date(now - starvationWindowMs).toISOString()
+    runningTurn?.started_at ??
+    serializeInstant(new Date(now - starvationWindowMs))
   )
 }
 
@@ -332,7 +330,7 @@ export function computeStatusFallbackCutoffIso(
  *   - `none` → no usable link.
  *
  * `>=` on the cutoff includes the boundary. Both sides are normalized
- * ISO-8601 with `Z` suffix (Postgres TIMESTAMPTZ → `.toISOString()`),
+ * canonical UTC ISO-8601 with `Z` suffix,
  * so lexicographic comparison is correct.
  */
 export function decideStatusLookupSource(input: {

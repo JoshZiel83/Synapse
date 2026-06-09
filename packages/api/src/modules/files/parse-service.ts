@@ -6,6 +6,11 @@ import type {
 } from "@synapse/shared/types"
 import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
+import {
+  requireInstantDate,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import { fileParsingQueue } from "../../workers/queues.js"
 import { extractImageOcrText } from "../ai/image-fallback.js"
 import { getFileDetail, getFileRecord, readFileBufferById } from "./service.js"
@@ -59,9 +64,9 @@ type ParseRunRow = {
   status: FileParseRunView["status"]
   error_code: string | null
   error_message: string | null
-  created_at: string | Date | null
-  started_at: string | Date | null
-  finished_at: string | Date | null
+  created_at: Date | null
+  started_at: Date | null
+  finished_at: Date | null
 }
 
 type ParseOutputRow = {
@@ -73,13 +78,7 @@ type ParseOutputRow = {
   text_content: string | null
   structured_json: unknown
   derived_asset_id: string | null
-  created_at: string | Date | null
-}
-
-function toIsoString(value: string | Date | null | undefined): string {
-  if (typeof value === "string") return value
-  if (value instanceof Date) return value.toISOString()
-  return new Date(0).toISOString()
+  created_at: Date | null
 }
 
 function isTextLikeMimeType(mimeType: string): boolean {
@@ -257,7 +256,12 @@ async function listParseOutputsForRuns(
       derivedFile: row.derived_asset_id
         ? derivedFiles.get(row.derived_asset_id)
         : undefined,
-      createdAt: toIsoString(row.created_at),
+      createdAt: serializeInstant(
+        requireInstantDate(
+          row.created_at,
+          `file_parse_outputs.${row.id}.created_at`
+        )
+      ),
     })
   }
 
@@ -276,9 +280,11 @@ async function mapRunRow(row: ParseRunRow): Promise<FileParseRunView> {
     status: row.status,
     errorCode: row.error_code,
     errorMessage: row.error_message,
-    createdAt: toIsoString(row.created_at),
-    startedAt: row.started_at ? toIsoString(row.started_at) : null,
-    finishedAt: row.finished_at ? toIsoString(row.finished_at) : null,
+    createdAt: serializeInstant(
+      requireInstantDate(row.created_at, `file_parse_runs.${row.id}.created_at`)
+    ),
+    startedAt: serializeOptionalInstant(row.started_at) ?? null,
+    finishedAt: serializeOptionalInstant(row.finished_at) ?? null,
     outputs: outputsByRunId.get(row.id) || [],
   }
 }

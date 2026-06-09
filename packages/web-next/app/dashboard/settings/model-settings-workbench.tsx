@@ -15,6 +15,7 @@ import {
   type ModelGroupGrantStatus,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
+  type Timestamp,
 } from "@synapse/shared"
 import {
   ChevronDown,
@@ -87,7 +88,7 @@ type ModelGroupSummary = {
   routing_strategy: ModelGroupRoutingStrategy
   is_default: boolean
   is_active?: boolean
-  created_at: string
+  created_at: Timestamp
 }
 
 type ModelGroupGrant = {
@@ -100,8 +101,8 @@ type ModelGroupGrant = {
   status: ModelGroupGrantStatus
   grantedByWorkspaceMemberId?: string | null
   reason?: string | null
-  created_at?: string | null
-  revoked_at?: string | null
+  created_at?: Timestamp | null
+  revoked_at?: Timestamp | null
 }
 
 type ModelItem = {

@@ -1,4 +1,5 @@
 import * as SQLite from "expo-sqlite"
+import { nowIsoInstant } from "@shared/datetime"
 
 import {
   normalizeChatWorkspaceSnapshot,
@@ -67,11 +68,7 @@ export function createChatPersistence(): ChatPersistence {
             payload = excluded.payload,
             updated_at = excluded.updated_at
         `,
-        [
-          snapshot.workspaceId,
-          JSON.stringify(snapshot),
-          new Date().toISOString(),
-        ]
+        [snapshot.workspaceId, JSON.stringify(snapshot), nowIsoInstant()]
       )
     },
     async deleteWorkspaceState(workspaceId) {

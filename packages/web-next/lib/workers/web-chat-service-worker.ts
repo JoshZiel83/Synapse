@@ -1,6 +1,8 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb"
 
 import { flushOutboxQueue } from "@synapse/shared/chat-queue"
+import { nowIsoInstant } from "@synapse/shared/datetime"
+import type { Timestamp } from "@synapse/shared"
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
   CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
@@ -36,6 +38,7 @@ type ChatWorkerBroadcast =
       payload: {
         workspaceId: string
         reason?: string
+        updatedAt?: Timestamp
       }
     }
   | {
@@ -58,7 +61,7 @@ type BackgroundSyncEventLike = Event & {
 interface WorkerAuthContextRow {
   key: "active"
   payload: ChatWorkerAuthContext
-  updatedAt: string
+  updatedAt: Timestamp
 }
 
 interface WorkerDatabaseSchema extends DBSchema {
@@ -134,7 +137,7 @@ async function saveAuthContext(payload: ChatWorkerAuthContext) {
   await database.put(CHAT_WORKER_AUTH_CONTEXT_STORE, {
     key: "active",
     payload,
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIsoInstant(),
   })
 }
 
@@ -293,7 +296,7 @@ async function flushOutbox(
   snapshot: ReturnType<typeof createEmptyStoredChatQueueState>
 ) {
   return flushOutboxQueue(snapshot, {
-    now: () => new Date().toISOString(),
+    now: () => nowIsoInstant(),
     failureMessage: "Failed to send message",
     send: async (entry) => {
       await fetchJson(

@@ -20,6 +20,7 @@ import {
   type RemoteAgentRuntimeSummaryView,
   type RemoteAgentRuntimeState,
   type RemoteAgentView,
+  type Timestamp,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { buildDaemonCommand as buildDaemonCommandImpl } from "./daemon-command.js"
@@ -34,6 +35,11 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
+import {
+  requireInstantDate,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import { authorizeAction } from "../access/service.js"
 import {
   deriveAccessPolicy,
@@ -114,19 +120,13 @@ type DeliveryRow = {
   conversation_id: string
   item_id: string
   status: string
-  created_at: string | Date
+  created_at: Date
   sequence: string | number
 }
 
 const machineConnections = new Map<string, MachineConnection>()
 const deliveryInFlightByMachine = new Map<string, Map<string, number>>()
 const DELIVERY_IN_FLIGHT_TTL_MS = 5_000
-
-function toIso(value: string | Date | null | undefined) {
-  if (typeof value === "string") return value
-  if (value instanceof Date) return value.toISOString()
-  return undefined
-}
 
 function hashMachineApiKey(apiKey: string) {
   return createHash("sha256").update(apiKey).digest("hex")
@@ -985,7 +985,7 @@ async function scheduleDeliveryRetry(
     await queryable
       .updateTable("remote_agent_message_deliveries")
       .set({
-        next_attempt_at: scheduled.toISOString(),
+        next_attempt_at: scheduled,
         updated_at: sql`NOW()`,
       })
       .where("id", "=", row.id)
@@ -1159,9 +1159,9 @@ function mapRuntimeSummaryFromRow(row: {
   latest_runtime_session_id?: string | null
   latest_active_conversation_id?: string | null
   latest_active_task_id?: string | null
-  last_activity_at?: string | Date | null
-  latest_last_run_started_at?: string | Date | null
-  latest_last_run_finished_at?: string | Date | null
+  last_activity_at?: Date | null
+  latest_last_run_started_at?: Date | null
+  latest_last_run_finished_at?: Date | null
   last_error?: string | null
   capabilities?: unknown
   pending_conversation_count?: string | number | null
@@ -1176,9 +1176,11 @@ function mapRuntimeSummaryFromRow(row: {
     activeTaskId: row.latest_active_task_id ?? undefined,
     pendingConversationCount: Number(row.pending_conversation_count ?? 0),
     unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
-    lastActivityAt: toIso(row.last_activity_at),
-    lastRunStartedAt: toIso(row.latest_last_run_started_at),
-    lastRunFinishedAt: toIso(row.latest_last_run_finished_at),
+    lastActivityAt: serializeOptionalInstant(row.last_activity_at),
+    lastRunStartedAt: serializeOptionalInstant(row.latest_last_run_started_at),
+    lastRunFinishedAt: serializeOptionalInstant(
+      row.latest_last_run_finished_at
+    ),
     lastError: row.last_error ?? undefined,
     capabilities:
       row.capabilities && typeof row.capabilities === "object"
@@ -1381,18 +1383,18 @@ export async function loadRemoteAgentRuntimeSnapshot(
     latest_active_conversation_id: string | null
     latest_active_task_id: string | null
     latest_runtime_session_id: string | null
-    last_activity_at: string | Date | null
-    latest_last_run_started_at: string | Date | null
-    latest_last_run_finished_at: string | Date | null
+    last_activity_at: Date | null
+    latest_last_run_started_at: Date | null
+    latest_last_run_finished_at: Date | null
     last_error: string | null
-    updated_at: string | Date
+    updated_at: Date
     pending_conversation_count: string | number
     unread_delivery_count: string | number
     capabilities: unknown
     ctx_runtime_state: RemoteAgentRuntimeStateType | null
     ctx_status_text: string | null
     ctx_last_error: string | null
-    ctx_last_activity_at: string | Date | null
+    ctx_last_activity_at: Date | null
   }>(
     queryable,
     `
@@ -1470,8 +1472,20 @@ export async function loadRemoteAgentRuntimeSnapshot(
     ? row.ctx_last_activity_at
     : row.last_activity_at
   const lastErrorActivityAt = lastActivityAt
-  const updatedAt = toIso(row.updated_at) ?? new Date().toISOString()
-  const lastErrorAt = toIso(lastErrorActivityAt) || toIso(row.updated_at)
+  const updatedAt = serializeInstant(
+    requireInstantDate(
+      row.updated_at,
+      `Remote agent ${row.remote_agent_id} updated_at`
+    )
+  )
+  const lastErrorAt =
+    serializeOptionalInstant(lastErrorActivityAt) ||
+    serializeInstant(
+      requireInstantDate(
+        row.updated_at,
+        `Remote agent ${row.remote_agent_id} updated_at`
+      )
+    )
   return {
     remoteAgentId: row.remote_agent_id,
     runtimeKind: row.runtime_kind,
@@ -1482,9 +1496,11 @@ export async function loadRemoteAgentRuntimeSnapshot(
     sessionId: row.latest_runtime_session_id ?? undefined,
     pendingConversationCount: Number(row.pending_conversation_count ?? 0),
     unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
-    lastActivityAt: toIso(lastActivityAt),
-    lastRunStartedAt: toIso(row.latest_last_run_started_at),
-    lastRunFinishedAt: toIso(row.latest_last_run_finished_at),
+    lastActivityAt: serializeOptionalInstant(lastActivityAt),
+    lastRunStartedAt: serializeOptionalInstant(row.latest_last_run_started_at),
+    lastRunFinishedAt: serializeOptionalInstant(
+      row.latest_last_run_finished_at
+    ),
     lastError:
       lastErrorMessage && lastErrorAt
         ? {
@@ -1559,8 +1575,8 @@ async function mapRemoteAgentRow(row: {
   is_public_shared: boolean
   metadata: unknown
   created_by_workspace_member_id: string | null
-  created_at: string | Date
-  updated_at: string | Date
+  created_at: Date
+  updated_at: Date
   machine_id?: string | null
   machine_title?: string | null
   binding_status?: string | null
@@ -1572,9 +1588,9 @@ async function mapRemoteAgentRow(row: {
   latest_runtime_session_id?: string | null
   latest_active_conversation_id?: string | null
   latest_active_task_id?: string | null
-  last_activity_at?: string | Date | null
-  latest_last_run_started_at?: string | Date | null
-  latest_last_run_finished_at?: string | Date | null
+  last_activity_at?: Date | null
+  latest_last_run_started_at?: Date | null
+  latest_last_run_finished_at?: Date | null
   last_error?: string | null
   capabilities?: unknown
   pending_conversation_count?: string | number | null
@@ -1606,8 +1622,12 @@ async function mapRemoteAgentRow(row: {
         ? (row.metadata as Record<string, unknown>)
         : {},
     createdByWorkspaceMemberId: row.created_by_workspace_member_id ?? undefined,
-    createdAt: toIso(row.created_at),
-    updatedAt: toIso(row.updated_at),
+    createdAt: serializeInstant(
+      requireInstantDate(row.created_at, `Remote agent ${row.id} created_at`)
+    ),
+    updatedAt: serializeInstant(
+      requireInstantDate(row.updated_at, `Remote agent ${row.id} updated_at`)
+    ),
     runtimeSummary,
     binding: row.machine_id
       ? {
@@ -1938,9 +1958,9 @@ export async function createRemoteAgentMachinePairingSession(params: {
       description: result.rows[0]!.description ?? undefined,
       trustStatus: result.rows[0]!.trust_status,
       lifecycleState: result.rows[0]!.lifecycle_state ?? undefined,
-      lastSeenAt: toIso(result.rows[0]!.last_seen_at),
-      createdAt: toIso(result.rows[0]!.created_at),
-      updatedAt: toIso(result.rows[0]!.updated_at),
+      lastSeenAt: serializeOptionalInstant(result.rows[0]!.last_seen_at),
+      createdAt: serializeOptionalInstant(result.rows[0]!.created_at),
+      updatedAt: serializeOptionalInstant(result.rows[0]!.updated_at),
     },
     apiKey,
     daemonCommand: buildDaemonCommand(apiKey),
@@ -1978,9 +1998,9 @@ export async function listRemoteAgentMachines(params: {
       trustStatus: row.trust_status,
       lifecycleState: row.lifecycle_state ?? undefined,
       bindingCount: Number(row.binding_count ?? 0),
-      lastSeenAt: toIso(row.last_seen_at),
-      createdAt: toIso(row.created_at),
-      updatedAt: toIso(row.updated_at),
+      lastSeenAt: serializeOptionalInstant(row.last_seen_at),
+      createdAt: serializeOptionalInstant(row.created_at),
+      updatedAt: serializeOptionalInstant(row.updated_at),
     })),
   }
 }
@@ -2063,9 +2083,9 @@ export async function getRemoteAgentMachine(params: {
       description: machine.description ?? undefined,
       trustStatus: machine.trust_status,
       lifecycleState: machine.lifecycle_state ?? undefined,
-      lastSeenAt: toIso(machine.last_seen_at),
-      createdAt: toIso(machine.created_at),
-      updatedAt: toIso(machine.updated_at),
+      lastSeenAt: serializeOptionalInstant(machine.last_seen_at),
+      createdAt: serializeOptionalInstant(machine.created_at),
+      updatedAt: serializeOptionalInstant(machine.updated_at),
     },
     runtimeCatalog: catalogResult.rows.map((row) => ({
       runtimeKind: row.runtime_kind,
@@ -2077,7 +2097,7 @@ export async function getRemoteAgentMachine(params: {
           ? (row.metadata as Record<string, unknown>)
           : {},
       lastError: row.last_error ?? undefined,
-      lastSeenAt: toIso(row.last_seen_at),
+      lastSeenAt: serializeOptionalInstant(row.last_seen_at),
     })),
     bindings: bindingResult.rows.map((row) => ({
       remoteAgentId: row.remote_agent_id,
@@ -2200,8 +2220,8 @@ export async function listRemoteAgentGroupTaskGrants(params: {
   const result = await runOnDb<{
     workspace_member_id: string
     granted_by_workspace_member_id: string | null
-    created_at: string | Date
-    updated_at: string | Date
+    created_at: Date
+    updated_at: Date
     user_id: string
     user_name: string | null
     user_avatar_file_id: string | null
@@ -2228,8 +2248,18 @@ export async function listRemoteAgentGroupTaskGrants(params: {
       workspaceMemberId: row.workspace_member_id,
       grantedByWorkspaceMemberId:
         row.granted_by_workspace_member_id ?? undefined,
-      createdAt: toIso(row.created_at),
-      updatedAt: toIso(row.updated_at),
+      createdAt: serializeInstant(
+        requireInstantDate(
+          row.created_at,
+          "remote_agent_group_task_grants.created_at"
+        )
+      ),
+      updatedAt: serializeInstant(
+        requireInstantDate(
+          row.updated_at,
+          "remote_agent_group_task_grants.updated_at"
+        )
+      ),
       userId: row.user_id,
       name: row.user_name ?? "Unknown user",
       avatarUrl: row.user_avatar_file_id
@@ -2299,7 +2329,7 @@ export async function createRemoteAgentUserInputTask(params: {
   title: string
   instructions?: string
   questions: Array<Record<string, unknown>>
-  expiresAt?: string
+  expiresAt?: Timestamp
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
   const conversationAccess = await requireRemoteAgentConversationAccess(
@@ -2349,7 +2379,7 @@ export async function createRemoteAgentPlanApprovalTask(params: {
   checklist?: Array<Record<string, unknown>>
   collaborationMode?: string
   collaborationState?: Record<string, unknown>
-  expiresAt?: string
+  expiresAt?: Timestamp
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
   const conversationAccess = await requireRemoteAgentConversationAccess(
@@ -2530,7 +2560,7 @@ export async function listRemoteAgentConversations(params: {
       isIm: Boolean(row.is_im),
       title: row.title ?? undefined,
       unreadCount: Number(row.unread_count ?? 0),
-      updatedAt: toIso(row.updated_at),
+      updatedAt: serializeOptionalInstant(row.updated_at),
     })),
   }
 }
@@ -2578,7 +2608,12 @@ export async function checkRemoteAgentMessages(params: {
       conversationId: row.conversation_id,
       itemId: row.item_id,
       sequence: Number(row.sequence),
-      createdAt: toIso(row.created_at),
+      createdAt: serializeInstant(
+        requireInstantDate(
+          row.created_at,
+          "remote_agent_message_deliveries.created_at"
+        )
+      ),
       status: row.status,
     })),
   }

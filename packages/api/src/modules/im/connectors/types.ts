@@ -37,6 +37,7 @@
  */
 
 import type {
+  Timestamp,
   TransportAccountSummary,
   TransportConnectionMode,
   TransportConnectorCapability,
@@ -63,7 +64,7 @@ export interface InboundEnvelope {
     displayName?: string
     metadata?: Record<string, unknown>
   }
-  receivedAt: string
+  receivedAt: Timestamp
   message: CanonicalMessage
   endpointMetadata?: Record<string, unknown>
   /** Free-form per-connector payload (e.g. weixin contextToken, feishu chat_type). */

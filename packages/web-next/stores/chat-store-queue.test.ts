@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 
 import type {
   PendingConversationRead,
@@ -16,6 +17,7 @@ type Conversation = { conversationId: string; title?: string }
 type Snapshot = ChatQueueWorkspaceSnapshot<Conversation>
 
 const WS = "11111111-1111-1111-1111-111111111111"
+const iso = (value: string) => assertIsoInstant(value)
 
 function read(
   conversationId: string,
@@ -25,7 +27,7 @@ function read(
     conversationId,
     readUpToSequence,
     lastVisibleSequence: readUpToSequence,
-    updatedAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: iso("2026-06-06T00:00:00.000Z"),
   }
 }
 
@@ -37,7 +39,7 @@ function outbox(
     clientMessageId,
     conversationId,
     contentBlocks: [],
-    createdAt: "2026-06-06T00:00:00.000Z",
+    createdAt: iso("2026-06-06T00:00:00.000Z"),
     optimisticSequence: 1,
     status: "sending",
     attemptCount: 0,
@@ -127,13 +129,13 @@ describe("chat store queue race guards", () => {
 
   it("rebases the latest bootstrap timestamp from queue transitions", () => {
     const base = snapshot({
-      lastBootstrappedAt: "2026-06-06T00:00:00.000Z",
+      lastBootstrappedAt: iso("2026-06-06T00:00:00.000Z"),
     })
     const latest = snapshot({
-      lastBootstrappedAt: "2026-06-06T00:00:00.000Z",
+      lastBootstrappedAt: iso("2026-06-06T00:00:00.000Z"),
     })
     const processed = snapshot({
-      lastBootstrappedAt: "2026-06-06T00:01:00.000Z",
+      lastBootstrappedAt: iso("2026-06-06T00:01:00.000Z"),
     })
 
     const merged = rebaseQueueFieldsOntoLatest(base, latest, processed)

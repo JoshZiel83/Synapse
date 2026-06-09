@@ -34,6 +34,7 @@ import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { v4 as uuidv4 } from "uuid"
 import pg from "pg"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 
 import { publishSessionRuntime } from "../../src/modules/session/runtime.js"
 import { updateSessionStatus } from "../../src/modules/session/service.js"
@@ -125,7 +126,7 @@ async function stageBlockedCache(opts: {
       health: "error",
       phase: "error",
       statusText: opts.errorMessage,
-      lastError: { message: opts.errorMessage, at: new Date().toISOString() },
+      lastError: { message: opts.errorMessage, at: nowIsoInstant() },
     }
   )
   assert.ok(snapshot, "blocked publish should produce a snapshot")
@@ -257,7 +258,7 @@ test("lastError: null clearing is honored even when health stays 'ok'", async ()
     laneState: "blocked",
     health: "error",
     phase: "error",
-    lastError: { message: "first failure", at: new Date().toISOString() },
+    lastError: { message: "first failure", at: nowIsoInstant() },
   })
   await updateSessionStatus(fixture.sessionId, "queued", { errorMessage: null })
 

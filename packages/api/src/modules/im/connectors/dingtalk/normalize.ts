@@ -22,6 +22,7 @@ import {
   type CanonicalMessage,
   type CanonicalPart,
 } from "../../messaging/canonical-message.js"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import type { InboundEnvelope } from "../types.js"
 import { parseDingtalkMentions, type DingtalkAtUser } from "./mentions.js"
 
@@ -223,7 +224,7 @@ export function normalizeDingtalkPayload(
   const sessionWebhook = nonEmpty(payload.sessionWebhook)
   if (sessionWebhook) {
     endpointMetadata.sessionWebhook = sessionWebhook
-    endpointMetadata.sessionWebhookObservedAt = new Date().toISOString()
+    endpointMetadata.sessionWebhookObservedAt = nowIsoInstant()
     // Always write `sessionWebhookExpiredTime` (even as `null`) so a
     // stale value from a previous inbound doesn't leak across into the
     // outbound expiry check. The `transport_endpoints.metadata` upsert
@@ -258,8 +259,8 @@ export function normalizeDingtalkPayload(
 
   const createAtNum = asNumber(payload.createAt)
   const receivedAt = createAtNum
-    ? new Date(createAtNum).toISOString()
-    : new Date().toISOString()
+    ? dateToIsoInstant(new Date(createAtNum))
+    : nowIsoInstant()
 
   return {
     endpointType,

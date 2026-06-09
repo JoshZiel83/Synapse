@@ -87,20 +87,20 @@ export function signEd25519UrlVerification(input: {
 }
 
 /**
- * Verify the platform-issued signature over `timestamp + rawBody`.
+ * Verify the platform-issued signature over `signatureTimestamp + rawBody`.
  *
  * `signatureHex` is the value of the `X-Signature-Ed25519` header (hex
- * string). `timestamp` is the value of `X-Signature-Timestamp`.
+ * string). `signatureTimestamp` is the value of `X-Signature-Timestamp`.
  * `rawBody` is the unparsed HTTP body bytes — DO NOT pass the parsed
  * JSON re-serialized; whitespace differences will fail verification.
  */
 export function verifyEd25519BusinessEvent(input: {
   secret: string
   signatureHex: string
-  timestamp: string
+  signatureTimestamp: string
   rawBody: string
 }): boolean {
-  if (!input.signatureHex || !input.timestamp) return false
+  if (!input.signatureHex || !input.signatureTimestamp) return false
   let signature: Buffer
   try {
     signature = Buffer.from(input.signatureHex, "hex")
@@ -109,7 +109,7 @@ export function verifyEd25519BusinessEvent(input: {
   }
   if (signature.length !== 64) return false
   const { publicKey } = createSigningKeys(input.secret)
-  const message = Buffer.from(input.timestamp + input.rawBody, "utf8")
+  const message = Buffer.from(input.signatureTimestamp + input.rawBody, "utf8")
   try {
     return crypto.verify(null, message, publicKey, signature)
   } catch {
@@ -124,7 +124,7 @@ export function verifyEd25519BusinessEvent(input: {
  */
 export function extractSignatureHeaders(headers: Record<string, unknown>): {
   signatureHex: string | undefined
-  timestamp: string | undefined
+  signatureTimestamp: string | undefined
 } {
   const get = (name: string): string | undefined => {
     const v = headers[name.toLowerCase()] ?? headers[name]
@@ -133,6 +133,6 @@ export function extractSignatureHeaders(headers: Record<string, unknown>): {
   }
   return {
     signatureHex: get("X-Signature-Ed25519"),
-    timestamp: get("X-Signature-Timestamp"),
+    signatureTimestamp: get("X-Signature-Timestamp"),
   }
 }

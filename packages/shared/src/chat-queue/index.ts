@@ -1,6 +1,7 @@
 import type {
   CanonicalContentBlock,
   ConversationReplyRef,
+  Timestamp,
 } from "../types/index.js"
 import deepEqual from "fast-deep-equal"
 
@@ -21,7 +22,7 @@ export interface PendingConversationRead {
   conversationId: string
   readUpToSequence: number
   lastVisibleSequence: number
-  updatedAt: string
+  updatedAt: Timestamp
 }
 
 export interface PendingOutboxMessage {
@@ -30,12 +31,12 @@ export interface PendingOutboxMessage {
   contentBlocks: CanonicalContentBlock[]
   replyToItemId?: string
   replyTo?: ConversationReplyRef
-  createdAt: string
+  createdAt: Timestamp
   optimisticSequence: number
   status: "sending" | "retrying"
   attemptCount: number
-  lastAttemptAt?: string
-  firstFailedAt?: string
+  lastAttemptAt?: Timestamp
+  firstFailedAt?: Timestamp
   lastErrorMessage?: string
 }
 
@@ -58,7 +59,7 @@ export interface StoredChatQueueState {
   workspaceMemberId?: string
   clientInstanceId?: string
   inboxCursor: number
-  lastBootstrappedAt?: string
+  lastBootstrappedAt?: Timestamp
   pendingReads: Record<string, PendingConversationRead>
   outbox: Record<string, PendingOutboxMessage>
   /** conversationId -> tombstone. See ConversationTombstone. */
@@ -191,9 +192,9 @@ export function sameStoredChatQueueState(
 }
 
 function latestIsoTimestamp(
-  currentValue?: string,
-  nextValue?: string
-): string | undefined {
+  currentValue?: Timestamp,
+  nextValue?: Timestamp
+): Timestamp | undefined {
   if (!currentValue) return nextValue
   if (!nextValue) return currentValue
   return new Date(currentValue).getTime() >= new Date(nextValue).getTime()
@@ -326,7 +327,7 @@ export interface ChatQueueStateLike {
   workspaceMemberId?: string
   clientInstanceId?: string
   inboxCursor: number
-  lastBootstrappedAt?: string
+  lastBootstrappedAt?: Timestamp
   pendingReads: Record<string, unknown>
   outbox: Record<string, unknown>
   tombstones?: Record<string, unknown>
@@ -413,7 +414,7 @@ export function mergeQueueStateForSave<T extends ChatQueueStateLike>(
  */
 export interface FlushOutboxQueueDeps {
   send: (entry: PendingOutboxMessage) => Promise<void>
-  now: () => string
+  now: () => Timestamp
   failureMessage?: string
 }
 

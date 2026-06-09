@@ -9,7 +9,9 @@ import {
   CHAT_QUEUE_DB_NAME,
   CHAT_QUEUE_DB_VERSION,
   CHAT_QUEUE_STATE_STORE,
+  type Timestamp,
 } from "@shared"
+import { nowIsoInstant } from "@shared/datetime"
 
 // Mobile keeps its historical constant names but derives the actual
 // string values from @synapse/shared so web + mobile cannot diverge.
@@ -30,13 +32,13 @@ export interface MobileChatWorkerAuthContext {
 interface ChatQueueStateRow {
   workspaceId: string
   payload: ChatWorkspaceQueueState
-  updatedAt: string
+  updatedAt: Timestamp
 }
 
 interface ChatWorkerAuthContextRow {
   key: "active"
   payload: MobileChatWorkerAuthContext
-  updatedAt: string
+  updatedAt: Timestamp
 }
 
 interface ChatWebQueueDatabaseSchema extends DBSchema {
@@ -139,7 +141,7 @@ export async function saveStoredChatWorkspaceQueueState(
       queueState.workspaceId,
       queueState
     ),
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIsoInstant(),
   })
 }
 
@@ -166,7 +168,7 @@ export async function saveStoredChatWorkerAuthContext(
   await database.put(CHAT_WEB_WORKER_AUTH_CONTEXT_STORE, {
     key: "active",
     payload,
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIsoInstant(),
   })
 }
 

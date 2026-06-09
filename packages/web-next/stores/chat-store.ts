@@ -1,6 +1,7 @@
 "use client"
 
 import { create } from "zustand"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import { api } from "@/lib/api"
 import {
   createEmptyStoredChatQueueState,
@@ -11,6 +12,7 @@ import {
   type PendingConversationRead,
   type StoredChatQueueState,
 } from "@/lib/chat-persistence"
+import type { Timestamp } from "@synapse/shared"
 import {
   isChatServiceWorkerActive,
   requestChatServiceWorkerSync,
@@ -88,10 +90,10 @@ export interface ConversationSummary {
     content: string
     role: string
     actorName?: string
-    createdAt: string
+    createdAt: Timestamp
   }
   unreadCount: number
-  createdAt: string
+  createdAt: Timestamp
   title?: string
   name?: string
   avatarUrl?: string
@@ -117,7 +119,7 @@ export interface FeedMessage {
   actorName?: string
   actorRole?: string
   actorEmoji?: string
-  createdAt: string
+  createdAt: Timestamp
   clientMessageId?: string
   deliveryStatus?: "sending" | "retrying" | "sent"
   metadata?: Record<string, unknown>
@@ -230,7 +232,7 @@ interface ChatState {
     conversationId: string
     fromWorkspaceMemberId: string
     state: "started" | "stopped"
-    occurredAt: string
+    occurredAt: Timestamp
   }) => void
   sendTypingState: (
     conversationId: string,
@@ -312,9 +314,9 @@ function mergeStoredQueueIntoSnapshot(
 }
 
 function latestIsoTimestamp(
-  currentValue?: string,
-  nextValue?: string
-): string | undefined {
+  currentValue?: import("@synapse/shared").Timestamp,
+  nextValue?: import("@synapse/shared").Timestamp
+): import("@synapse/shared").Timestamp | undefined {
   if (!currentValue) {
     return nextValue
   }
@@ -1452,7 +1454,7 @@ async function bootstrapWorkspaceSnapshot(
     workspaceMemberId: bootstrap.workspaceMemberId,
     clientInstanceId,
     inboxCursor: nextInboxCursor,
-    lastBootstrappedAt: new Date().toISOString(),
+    lastBootstrappedAt: nowIsoInstant(),
     conversations: bootstrap.conversations.reduce(
       upsertRawConversation,
       prunedBase.conversations
@@ -1540,7 +1542,7 @@ async function flushOutboxInternal(
           ...nextSnapshot.outbox[entry.clientMessageId]!,
           attemptCount:
             nextSnapshot.outbox[entry.clientMessageId]!.attemptCount + 1,
-          lastAttemptAt: new Date().toISOString(),
+          lastAttemptAt: nowIsoInstant(),
         },
       },
     }
@@ -1609,8 +1611,7 @@ async function flushOutboxInternal(
           [entry.clientMessageId]: {
             ...currentEntry,
             status: "retrying",
-            firstFailedAt:
-              currentEntry.firstFailedAt || new Date().toISOString(),
+            firstFailedAt: currentEntry.firstFailedAt || nowIsoInstant(),
             lastErrorMessage:
               error instanceof Error ? error.message : "Failed to send message",
           },
@@ -1946,7 +1947,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       contentBlocks: input.contentBlocks,
       replyToItemId: input.replyToItemId,
       replyTo: input.replyTo,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIsoInstant(),
       optimisticSequence,
       status: "sending",
       attemptCount: 0,
@@ -2271,7 +2272,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             normalizedLastVisibleSequence,
             snapshot.pendingReads[conversationId]?.lastVisibleSequence || 0
           ),
-          updatedAt: new Date().toISOString(),
+          updatedAt: nowIsoInstant(),
         },
       },
       conversations: snapshot.conversations.map((conversation) =>

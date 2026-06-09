@@ -32,10 +32,10 @@
     "bundles/archives"
   ],
   "scripts": {
-    "prebuild": "rm -rf dist tsconfig.build.tsbuildinfo",
+    "prebuild": "npm run build -w @synapse/shared && rm -rf dist tsconfig.build.tsbuildinfo",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc --watch",
-    "pretest": "bash ../../scripts/pretest-fs-helper.sh",
+    "pretest": "bash ../../scripts/pretest-fs-helper.sh && npm run build -w @synapse/shared",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "prepublishOnly": "node ../../scripts/prepublish-guard.mjs"
   },

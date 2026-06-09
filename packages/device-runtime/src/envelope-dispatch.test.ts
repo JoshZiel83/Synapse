@@ -95,12 +95,24 @@ async function callBash(
   envelope: OperationEnvelope | undefined,
   args: Record<string, unknown>
 ) {
+  return callBashWithMeta(
+    host,
+    envelope ? { synapse_operation: envelope } : undefined,
+    args
+  )
+}
+
+async function callBashWithMeta(
+  host: ReturnType<typeof createInMemoryMcpHost>,
+  meta: Record<string, unknown> | undefined,
+  args: Record<string, unknown>
+) {
   const base = `http://127.0.0.1:${host.localPort}`
   const params: Record<string, unknown> = {
     name: "bash",
     arguments: args,
   }
-  if (envelope) params._meta = { synapse_operation: envelope }
+  if (meta) params._meta = meta
   const res = await fetch(`${base}/mcp`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -165,6 +177,35 @@ test("missing envelope is rejected with permission_denied", async () => {
       | { code: string }
       | undefined
     assert.equal(synapseError?.code, "permission_denied")
+  } finally {
+    await host.stop()
+  }
+})
+
+test("malformed envelope is rejected with invalid_request", async () => {
+  const signer = buildSigner()
+  const host = createInMemoryMcpHost({
+    envelopeVerifier: createInMemoryEnvelopeVerifier(),
+    serverPublicKeys: new Map([[signer.kid, signer.pubPem]]),
+  })
+  await host.start()
+  try {
+    await host.registerCatalog(createCommandlineBuiltin())
+    const res = await callBashWithMeta(
+      host,
+      {
+        synapse_operation: {
+          operation_id: "not-a-uuid",
+        },
+      },
+      { command: "ls" }
+    )
+    assert.equal(res.result?.isError, true)
+    const synapseError = res.result?._meta?.["synapse_error"] as
+      | { code: string; message: string }
+      | undefined
+    assert.equal(synapseError?.code, "invalid_request")
+    assert.match(synapseError?.message ?? "", /schema validation/)
   } finally {
     await host.stop()
   }

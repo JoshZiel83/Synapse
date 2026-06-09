@@ -1,4 +1,5 @@
 import { db } from "../database/kysely.js"
+import { serializeInstant } from "../datetime.js"
 import type { FileStorageBackend } from "@synapse/shared/types"
 import { createLogger } from "../logger/index.js"
 import {
@@ -126,10 +127,7 @@ async function createStoredFile(
       sha256: asset.content_sha256,
       storageBackend: "local_cas" as FileStorageBackend,
       originSummary: toFileOriginSummary(params.origin),
-      createdAt:
-        asset.created_at instanceof Date
-          ? asset.created_at.toISOString()
-          : String(asset.created_at),
+      createdAt: serializeInstant(asset.created_at),
     } satisfies StoredFileRecord
   })
 

@@ -30,7 +30,6 @@ import {
   type SessionTrigger,
   isGroupConversationKind,
   isThreadConversationKind,
-  nowISO,
 } from "@synapse/shared"
 import { sql } from "kysely"
 import { SUBJECT_KIND } from "@synapse/shared"

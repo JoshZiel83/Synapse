@@ -9,6 +9,10 @@
  */
 
 import crypto from "node:crypto"
+import {
+  serializeInstant,
+  serializeNowInstant,
+} from "../../../../infrastructure/datetime.js"
 import type {
   TransportAccountInboundActorMode,
   TransportAccountSummary,
@@ -50,7 +54,7 @@ type WeixinQrStatusResponse = {
 }
 
 function nowIso() {
-  return new Date().toISOString()
+  return serializeNowInstant()
 }
 
 function nonEmptyString(value: unknown) {
@@ -285,9 +289,9 @@ async function buildSummary(
     baseUrl: session.baseUrl,
     botId: session.botId,
     scannerUserId: session.scannerUserId,
-    createdAt: new Date(session.createdAt).toISOString(),
-    updatedAt: new Date(session.updatedAt).toISOString(),
-    expiresAt: new Date(session.expiresAt).toISOString(),
+    createdAt: serializeInstant(new Date(session.createdAt)),
+    updatedAt: serializeInstant(new Date(session.updatedAt)),
+    expiresAt: serializeInstant(new Date(session.expiresAt)),
     transportAccount: transportAccount || undefined,
   } satisfies WeixinQrLoginSessionSummary
 }

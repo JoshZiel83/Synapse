@@ -20,6 +20,7 @@ import {
   SUBJECT_KIND,
   textBlocks,
 } from "@synapse/shared"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
 import { upsertAccessSubject } from "../access/subject-registry.js"
@@ -29,6 +30,10 @@ import {
   type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
@@ -110,15 +115,15 @@ type MemoryRow = {
   index_status: "lexical_ready" | "ready" | "failed"
   embedding_model: string
   embedding_dim: number | null
-  indexed_at: string | Date | null
+  indexed_at: Date | null
   index_error: string | null
   source_item_id: string | null
   source_tool_call_id: string | null
   source_turn_id: string | null
   supersedes_item_id: string | null
   metadata: Record<string, unknown> | string | null
-  created_at: string | Date
-  updated_at: string | Date
+  created_at: Date
+  updated_at: Date
   owner_label: string | null
   scope_label: string | null
 }
@@ -177,11 +182,6 @@ const MEMORY_RECALL_QUERY_MAX_CHARS = 1_200
 const MEMORY_LEXICAL_TOKEN_LIMIT = 24
 const MEMORY_LEXICAL_QUERY_MAX_CHARS = 512
 const MEMORY_RRF_K = 60
-
-function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return undefined
-  return value instanceof Date ? value.toISOString() : value
-}
 
 function normalizeWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim()
@@ -587,10 +587,10 @@ function mapMemoryRow(
     indexStatus: row.index_status,
     embeddingModel: row.embedding_model || undefined,
     embeddingDim: row.embedding_dim ?? undefined,
-    indexedAt: toIsoString(row.indexed_at),
+    indexedAt: serializeOptionalInstant(row.indexed_at),
     indexError: row.index_error ?? undefined,
-    createdAt: toIsoString(row.created_at)!,
-    updatedAt: toIsoString(row.updated_at)!,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
     ownerLabel: row.owner_label ?? undefined,
     scopeLabel: row.scope_label ?? undefined,
   }
@@ -1662,7 +1662,7 @@ async function recordMemoryRecallRun(params: {
     queryText: params.queryText,
     queryBlocks: normalizedQueryBlocks,
     metadata: params.metadata || {},
-    createdAt: new Date().toISOString(),
+    createdAt: nowIsoInstant(),
     results: params.results,
   }
 }
@@ -1751,7 +1751,7 @@ export async function createMemory(
       scopeKind: memory.scope?.kind,
       namespaceKey: memory.namespaceKey,
     },
-    timestamp: new Date().toISOString(),
+    timestamp: nowIsoInstant(),
   })
   return memory
 }

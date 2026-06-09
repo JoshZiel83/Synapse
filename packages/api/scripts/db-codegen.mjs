@@ -12,7 +12,14 @@ import { config as loadDotenv } from "dotenv"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pkgRoot = resolve(here, "..")
-const candidates = [resolve(pkgRoot, ".env"), resolve(pkgRoot, "../../.env")]
+const candidates = []
+let cursor = pkgRoot
+for (;;) {
+  candidates.push(resolve(cursor, ".env"))
+  const parent = resolve(cursor, "..")
+  if (parent === cursor) break
+  cursor = parent
+}
 for (const candidate of candidates) {
   if (existsSync(candidate)) {
     loadDotenv({ path: candidate })

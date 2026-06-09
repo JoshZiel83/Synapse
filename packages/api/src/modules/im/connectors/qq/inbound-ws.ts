@@ -30,6 +30,7 @@
 
 import WebSocket from "ws"
 import { computeBackoff } from "@synapse/shared"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import { sleep } from "../../../../infrastructure/async/index.js"
 import {
   QQ_CLOSE_CODE,
@@ -433,7 +434,7 @@ async function routeBusinessDispatch(
               anchorKind: "event_id",
               anchorId: d.id,
               eventType: t,
-              receivedAt: new Date().toISOString(),
+              receivedAt: nowIsoInstant(),
             },
           }).catch(() => undefined)
         } else if (typeof d.user_openid === "string" && d.user_openid) {
@@ -445,7 +446,7 @@ async function routeBusinessDispatch(
               anchorKind: "event_id",
               anchorId: d.id,
               eventType: t,
-              receivedAt: new Date().toISOString(),
+              receivedAt: nowIsoInstant(),
             },
           }).catch(() => undefined)
         }

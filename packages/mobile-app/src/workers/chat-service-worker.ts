@@ -9,6 +9,7 @@ import {
   type MobileChatWorkerAuthContext,
 } from "../lib/chat-web-queue-storage"
 import { flushOutboxQueue, mergeQueueStateForSave } from "@shared/chat-queue"
+import { nowIsoInstant } from "@shared/datetime"
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
   CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
@@ -198,7 +199,7 @@ async function flushOutbox(
   queueState: ReturnType<typeof createEmptyStoredChatWorkspaceQueueState>
 ) {
   return flushOutboxQueue(queueState, {
-    now: () => new Date().toISOString(),
+    now: () => nowIsoInstant(),
     failureMessage: "发送失败",
     send: async (entry) => {
       await fetchJson(

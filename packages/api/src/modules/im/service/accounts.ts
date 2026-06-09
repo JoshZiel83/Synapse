@@ -18,6 +18,7 @@
  */
 
 import { sql } from "kysely"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import {
   db,
   withDbTransaction,
@@ -294,7 +295,7 @@ export async function consumeTransportAccountAutoLink(params: {
 
   const nextMetadata = {
     ...parseJsonObject(params.account.metadata),
-    pendingAutoLinkConsumedAt: new Date().toISOString(),
+    pendingAutoLinkConsumedAt: nowIsoInstant(),
     pendingAutoLinkConsumedExternalId: params.matchedExternalId,
   }
   delete (nextMetadata as any).pendingAutoLinkWorkspaceMemberId

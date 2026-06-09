@@ -1,6 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
+  assertIsoInstant,
+  type IsoInstantString,
+} from "@synapse/shared/datetime"
+import {
   computeStatusFallbackCutoffIso,
   decideStatusLookupSource,
   type StatusFallbackInboundLink,
@@ -30,8 +34,8 @@ import {
 
 const WINDOW_MS = 5 * 60 * 1000
 
-function isoBefore(ms: number, offsetMs: number): string {
-  return new Date(ms - offsetMs).toISOString()
+function isoBefore(ms: number, offsetMs: number): IsoInstantString {
+  return assertIsoInstant(new Date(ms - offsetMs).toISOString())
 }
 
 function primary(): StatusInboundLinkLookup {
@@ -44,7 +48,7 @@ function primary(): StatusInboundLinkLookup {
   }
 }
 
-function fallback(createdAtIso: string): StatusFallbackInboundLink {
+function fallback(createdAtIso: IsoInstantString): StatusFallbackInboundLink {
   return {
     externalMessageId: "om_fallback",
     endpointExternalId: "oc_chat",
@@ -57,7 +61,7 @@ function fallback(createdAtIso: string): StatusFallbackInboundLink {
 
 function turnWith(
   trigger_item_id: string | null,
-  started_at: string | null
+  started_at: IsoInstantString | null
 ): StatusRunningTurnRow {
   return { trigger_item_id, started_at }
 }
@@ -71,7 +75,7 @@ test("computeStatusFallbackCutoffIso: null runningTurn → now - windowMs", () =
 })
 
 test("computeStatusFallbackCutoffIso: running with started_at → uses started_at", () => {
-  const startedAt = "2026-05-24T12:00:00.000Z"
+  const startedAt = assertIsoInstant("2026-05-24T12:00:00.000Z")
   const cutoff = computeStatusFallbackCutoffIso(
     turnWith("item-1", startedAt),
     1_700_000_000_000

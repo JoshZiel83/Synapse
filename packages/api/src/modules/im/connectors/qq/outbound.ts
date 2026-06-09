@@ -48,6 +48,8 @@
  */
 
 import { redis } from "../../../../infrastructure/redis/index.js"
+import { nowIsoInstant } from "@synapse/shared/datetime"
+import type { Timestamp } from "@synapse/shared"
 import {
   PermanentTransportError,
   RetryableTransportError,
@@ -85,8 +87,8 @@ type AttemptOutcome =
 
 interface AttemptRecord {
   outcome: AttemptOutcome
-  startedAt?: string
-  completedAt?: string
+  startedAt?: Timestamp
+  completedAt?: Timestamp
   msgSeq?: number
   errorCode?: string
 }
@@ -203,7 +205,7 @@ export async function sendQqMessage(
       attempts: {
         [String(input.attemptNumber)]: {
           outcome: "in_flight",
-          startedAt: new Date().toISOString(),
+          startedAt: nowIsoInstant(),
           msgSeq: reservation.msgSeq,
         },
       },
@@ -237,7 +239,7 @@ export async function sendQqMessage(
         attempts: {
           [String(input.attemptNumber)]: {
             outcome: "unknown",
-            completedAt: new Date().toISOString(),
+            completedAt: nowIsoInstant(),
           },
         },
       },
@@ -283,7 +285,7 @@ async function onSendFailure(
           attempts: {
             [String(input.attemptNumber)]: {
               outcome: "duplicate_likely_success",
-              completedAt: new Date().toISOString(),
+              completedAt: nowIsoInstant(),
               errorCode: String(failure.code),
             },
           },
@@ -313,7 +315,7 @@ async function onSendFailure(
         attempts: {
           [String(input.attemptNumber)]: {
             outcome: "unknown",
-            completedAt: new Date().toISOString(),
+            completedAt: nowIsoInstant(),
             errorCode: failure.code ? String(failure.code) : undefined,
           },
         },
@@ -332,7 +334,7 @@ async function onSendFailure(
       attempts: {
         [String(input.attemptNumber)]: {
           outcome: "permanent_failure",
-          completedAt: new Date().toISOString(),
+          completedAt: nowIsoInstant(),
           errorCode: failure.code ? String(failure.code) : undefined,
         },
       },
@@ -370,7 +372,7 @@ async function onSendSuccess(
       attempts: {
         [String(input.attemptNumber)]: {
           outcome: "delivered",
-          completedAt: new Date().toISOString(),
+          completedAt: nowIsoInstant(),
         },
       },
     },
@@ -523,7 +525,7 @@ async function reclassifyStaleAttempts(
       patch[key] = {
         ...attempt,
         outcome: "unknown_assumed",
-        completedAt: new Date().toISOString(),
+        completedAt: nowIsoInstant(),
       }
     }
   }
@@ -545,7 +547,7 @@ async function acquireAnchor(
       anchorKind: meta.anchor.anchorKind,
       anchorId: meta.anchor.anchorId,
       msgSeq: meta.msgSeq,
-      reservedAt: meta.anchor.reservedAt ?? new Date(0).toISOString(),
+      reservedAt: meta.anchor.reservedAt ?? "1970-01-01T00:00:00.000Z",
       expiresAt: meta.anchor.expiresAt,
     }
   }

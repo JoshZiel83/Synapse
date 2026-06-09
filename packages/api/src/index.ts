@@ -4,6 +4,7 @@ import cookie from "@fastify/cookie"
 import websocket from "@fastify/websocket"
 import multipart from "@fastify/multipart"
 import { ZodError } from "zod"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import { config } from "./config/index.js"
 import { createLogger } from "./infrastructure/logger/index.js"
 import {
@@ -277,7 +278,7 @@ async function main() {
         redis: rds,
         memoryEmbeddings,
       },
-      timestamp: new Date().toISOString(),
+      timestamp: nowIsoInstant(),
     }
   })
 

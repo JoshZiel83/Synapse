@@ -5,6 +5,7 @@ import type {
   AutomationScheduleKind,
   AutomationSourceKind,
   AutomationTriggerKind,
+  Timestamp,
 } from "../types/index.js"
 
 export interface AutomationTriggerDisplayInput {
@@ -22,8 +23,8 @@ export interface AutomationTriggerDisplayInput {
   scheduleExpr?: string
   scheduleTimezone?: string
   intervalSeconds?: number
-  startsAt?: string
-  nextFireAt?: string
+  startsAt?: Timestamp
+  nextFireAt?: Timestamp
 }
 
 export interface AutomationTriggerDisplay {
@@ -34,7 +35,7 @@ export interface AutomationTriggerDisplay {
 }
 
 export interface AutomationTriggerDisplayOptions {
-  formatTimestamp?: (value: string) => string
+  formatTimestamp?: (value: Timestamp) => string
 }
 
 export interface AutomationTriggerDisplayDetail {
@@ -69,7 +70,7 @@ export function formatAutomationIntervalDuration(totalSeconds: number) {
 }
 
 function formatTimestamp(
-  value: string | undefined,
+  value: Timestamp | undefined,
   options?: AutomationTriggerDisplayOptions
 ) {
   if (!value) return null
@@ -127,13 +128,11 @@ function describeScheduleTrigger(
   const scheduleKind = input.scheduleKind || "cron"
 
   if (scheduleKind === "at") {
-    const scheduledAt = formatTimestamp(
-      readString(input.startsAt) ||
-        readString(input.nextFireAt) ||
-        readString(input.scheduleExpr) ||
-        undefined,
-      options
-    )
+    const scheduledAt =
+      formatTimestamp(
+        input.startsAt || input.nextFireAt || undefined,
+        options
+      ) || readString(input.scheduleExpr)
     const summary = scheduledAt ? `At ${scheduledAt}` : "Point-in-time schedule"
     return {
       title: "Point-in-time schedule",
@@ -153,10 +152,7 @@ function describeScheduleTrigger(
     const intervalLabel = formatAutomationIntervalDuration(
       input.intervalSeconds || 0
     )
-    const nextFireAt = formatTimestamp(
-      readString(input.nextFireAt) || undefined,
-      options
-    )
+    const nextFireAt = formatTimestamp(input.nextFireAt || undefined, options)
     const summary = `Every ${intervalLabel}`
     return {
       title: "Interval schedule",
@@ -175,10 +171,7 @@ function describeScheduleTrigger(
 
   const scheduleExpr = readString(input.scheduleExpr)
   const scheduleTimezone = readString(input.scheduleTimezone) || "UTC"
-  const nextFireAt = formatTimestamp(
-    readString(input.nextFireAt) || undefined,
-    options
-  )
+  const nextFireAt = formatTimestamp(input.nextFireAt || undefined, options)
   const summary = scheduleExpr
     ? `Cron ${scheduleExpr} (${scheduleTimezone})`
     : `Cron schedule (${scheduleTimezone})`

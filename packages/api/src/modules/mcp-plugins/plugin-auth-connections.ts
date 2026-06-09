@@ -7,6 +7,7 @@ import type {
   PluginAuthValueSource,
   PluginConfigFieldDefinition,
 } from "@synapse/shared"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import { CompiledQuery, sql } from "kysely"
 import { config } from "../../config/index.js"
 import {
@@ -19,6 +20,11 @@ import {
   encrypt,
 } from "../../infrastructure/crypto/index.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
+import {
+  parseInstantString,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import {
   normalizeMijiaLocale,
   progressMijiaQrLoginSession,
@@ -74,9 +80,9 @@ type PluginAuthSessionRow = {
   result_preview: unknown
   result_payload: unknown
   metadata: unknown
-  expires_at: string | Date
-  created_at: string | Date
-  updated_at: string | Date
+  expires_at: Date
+  created_at: Date
+  updated_at: Date
 }
 
 type PluginConnectionRow = {
@@ -93,11 +99,11 @@ type PluginConnectionRow = {
   display_name: string | null
   avatar_url: string | null
   status: string
-  expires_at: string | Date | null
+  expires_at: Date | null
   public_payload: unknown
   secret_payload: unknown
-  created_at: string | Date
-  updated_at: string | Date
+  created_at: Date
+  updated_at: Date
 }
 
 type PluginAuthSpec = {
@@ -265,14 +271,11 @@ function getAuthChallenge(
       challenge.openMode === "replace" || challenge.openMode === "popup"
         ? challenge.openMode
         : undefined,
-    expiresAt: asString(challenge.expiresAt) || undefined,
+    expiresAt: asString(challenge.expiresAt)
+      ? assertIsoInstant(asString(challenge.expiresAt)!)
+      : undefined,
     metadata: asObject(challenge.metadata),
   }
-}
-
-function normalizeTimestamp(value: string | Date | null | undefined) {
-  if (!value) return undefined
-  return value instanceof Date ? value.toISOString() : value
 }
 
 function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
@@ -288,10 +291,10 @@ function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
     displayName: row.display_name || undefined,
     avatarUrl: row.avatar_url || undefined,
     status: row.status as PluginAuthConnection["status"],
-    expiresAt: normalizeTimestamp(row.expires_at),
+    expiresAt: serializeOptionalInstant(row.expires_at),
     publicPayload: asObject(row.public_payload),
-    createdAt: normalizeTimestamp(row.created_at)!,
-    updatedAt: normalizeTimestamp(row.updated_at)!,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -317,9 +320,9 @@ function mapSessionRow(row: PluginAuthSessionRow): PluginAuthSession {
         ? metadata.consumedConnectionId
         : undefined,
     metadata,
-    expiresAt: normalizeTimestamp(row.expires_at)!,
-    createdAt: normalizeTimestamp(row.created_at)!,
-    updatedAt: normalizeTimestamp(row.updated_at)!,
+    expiresAt: serializeInstant(row.expires_at),
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -586,7 +589,7 @@ function buildMijiaResultPayload(authState: object) {
   const state = authState as JsonObject
   const expiresAt =
     typeof state.expireTime === "number"
-      ? new Date(state.expireTime).toISOString()
+      ? serializeInstant(new Date(state.expireTime))
       : null
   const preview = buildMijiaResultPreview(authState)
 
@@ -651,12 +654,12 @@ function buildFeishuResultPayload(input: {
   requestedFeatures: string[]
   appScopeStatus?: FeishuAppScopeInspection
 }) {
-  const expiresAt = new Date(
-    Date.now() + input.tokenData.expiresIn * 1000
-  ).toISOString()
-  const refreshExpiresAt = new Date(
-    Date.now() + input.tokenData.refreshExpiresIn * 1000
-  ).toISOString()
+  const expiresAt = serializeInstant(
+    new Date(Date.now() + input.tokenData.expiresIn * 1000)
+  )
+  const refreshExpiresAt = serializeInstant(
+    new Date(Date.now() + input.tokenData.refreshExpiresIn * 1000)
+  )
   const preview = buildFeishuResultPreview({
     brand: input.brand,
     tokenScope: input.tokenData.scope,
@@ -941,7 +944,10 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
             transient_payload: encryptDeep(
               nextTransient
             ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
-            expires_at: nextExpiresAt,
+            expires_at:
+              typeof nextExpiresAt === "string"
+                ? parseInstantString(nextExpiresAt)
+                : nextExpiresAt,
             updated_at: sql`NOW()`,
           })
           .where("id", "=", row.id)
@@ -1187,7 +1193,7 @@ async function refreshOAuthConnection(
 
   const expiresAt =
     typeof tokenResponse.expires_in === "number"
-      ? new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+      ? serializeInstant(new Date(Date.now() + tokenResponse.expires_in * 1000))
       : row.expires_at
 
   const publicPayload = {
@@ -1221,7 +1227,10 @@ async function refreshOAuthConnection(
       secret_payload:
         nextSecretPayload as TableInsert<"plugin_connections">["secret_payload"],
       status: "active",
-      expires_at: expiresAt,
+      expires_at:
+        typeof expiresAt === "string"
+          ? parseInstantString(expiresAt)
+          : expiresAt,
       updated_at: sql`NOW()`,
     })
     .where("id", "=", row.id)
@@ -1254,12 +1263,10 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
     refreshToken,
   })
 
-  const expiresAt = new Date(
-    Date.now() + tokenResponse.expiresIn * 1000
-  ).toISOString()
+  const expiresAt = new Date(Date.now() + tokenResponse.expiresIn * 1000)
   const refreshExpiresAt = new Date(
     Date.now() + tokenResponse.refreshExpiresIn * 1000
-  ).toISOString()
+  )
   const nextPublicPayload = {
     ...publicPayload,
     scopes: asStringArray(tokenResponse.scope),
@@ -1269,8 +1276,8 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
     accessToken: encrypt(tokenResponse.accessToken),
     refreshToken: encrypt(tokenResponse.refreshToken),
     tokenType: tokenResponse.tokenType,
-    expiresAt,
-    refreshExpiresAt,
+    expiresAt: serializeInstant(expiresAt),
+    refreshExpiresAt: serializeInstant(refreshExpiresAt),
   }
 
   await db
@@ -1522,7 +1529,7 @@ export async function startPluginAuthSession(input: {
           ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
           metadata: (input.metadata ||
             {}) as TableInsert<"plugin_auth_sessions">["metadata"],
-          expires_at: result.expiresAt,
+          expires_at: parseInstantString(result.expiresAt),
         })
         .returningAll()
         .executeTakeFirstOrThrow()
@@ -1588,7 +1595,7 @@ export async function startPluginAuthSession(input: {
           ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
           metadata: (input.metadata ||
             {}) as TableInsert<"plugin_auth_sessions">["metadata"],
-          expires_at: result.expiresAt,
+          expires_at: parseInstantString(result.expiresAt),
         })
         .returningAll()
         .executeTakeFirstOrThrow()
@@ -1782,7 +1789,9 @@ export async function handlePluginAuthCallback(input: {
           : []
       const expiresAt =
         typeof tokenResponse.expires_in === "number"
-          ? new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+          ? serializeInstant(
+              new Date(Date.now() + tokenResponse.expires_in * 1000)
+            )
           : null
 
       const resultPreview = {

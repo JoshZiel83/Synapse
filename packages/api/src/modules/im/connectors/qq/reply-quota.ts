@@ -28,6 +28,7 @@
  */
 
 import type { Redis } from "ioredis"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   QqAnchorKind,
   QqLatestInboundAnchor,
@@ -152,7 +153,7 @@ export async function reserveFirstSend(
     params.anchor.anchorId,
     String(QQ_PASSIVE_REPLY_QUOTA),
     String(ttl),
-    new Date().toISOString(),
+    nowIsoInstant(),
     String(expiresAtMs),
     String(quotaTtl)
   )) as [number, string]

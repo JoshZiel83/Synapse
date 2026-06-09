@@ -1,5 +1,6 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 import { z } from "zod"
 import { formatValidationDetails } from "../../infrastructure/validation-error.js"
 import {
@@ -65,7 +66,7 @@ const addMemberSchema = z.object({
 const createInviteSchema = z.object({
   trustLevel: z.enum(INVITE_TRUST_LEVELS).optional(),
   maxUses: z.number().int().positive().optional(),
-  expiresAt: z.string().optional(),
+  expiresAt: IsoInstantStringSchema.optional(),
 })
 
 const workspaceAccessSchema = z.object({

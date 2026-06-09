@@ -13,11 +13,16 @@ import type {
   ConversationReplyRef,
   TaskSummary,
   RemoteAgentRuntimeState,
+  Timestamp,
 } from "@synapse/shared"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
   TASK_REQUEST_KIND,
 } from "@synapse/shared"
+import {
+  assertIsoInstant,
+  type IsoInstantString,
+} from "@synapse/shared/datetime"
 import type {
   RuntimeAuthorizationGrantSpec,
   RuntimeAuthorizationPreset,
@@ -104,7 +109,7 @@ interface MessageBubbleProps {
   actorRole?: string
   actorRuntime?: ActorRuntimeState
   remoteAgentRuntime?: RemoteAgentRuntimeState
-  timestamp?: string
+  timestamp?: Timestamp
   isUser: boolean
   status?: "sending" | "retrying" | "sent"
   toolsUsed?: string[]
@@ -395,7 +400,7 @@ function buildMessageReplyRef(input: {
   author?: ConversationEntityRef
   content: string
   contentBlocks: CanonicalContentBlock[]
-  createdAt?: string
+  createdAt?: IsoInstantString
 }) {
   return {
     itemId: input.messageId,
@@ -2785,7 +2790,7 @@ export default function MessageBubble({
         author,
         content: textContent,
         contentBlocks,
-        createdAt: timestamp,
+        createdAt: timestamp ? assertIsoInstant(timestamp) : undefined,
       })
     )
 
@@ -2820,7 +2825,7 @@ export default function MessageBubble({
         author,
         content: textContent,
         contentBlocks,
-        createdAt: timestamp,
+        createdAt: timestamp ? assertIsoInstant(timestamp) : undefined,
       })
     )
     setContextMenu(null)

@@ -12,6 +12,7 @@ import {
   buildConversationMessageRef,
   isToolResultOrigin,
 } from "@synapse/shared"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import type {
   CanonicalContextAuthor,
   CanonicalContextItem,
@@ -398,7 +399,7 @@ export function conversationItemToContextItem(
       sessionId: sessionId || undefined,
       turnId: turnId || undefined,
       sequence: item.sequence,
-      createdAt: createdAt || undefined,
+      createdAt: createdAt ? assertIsoInstant(createdAt) : undefined,
       scope: item.scope || "shared",
       surface: item.surface || "visible",
       eventType: item.subtype || "event",
@@ -421,7 +422,7 @@ export function conversationItemToContextItem(
     sessionId: sessionId || undefined,
     turnId: turnId || undefined,
     sequence: item.sequence,
-    createdAt: createdAt || undefined,
+    createdAt: createdAt ? assertIsoInstant(createdAt) : undefined,
     scope: item.scope || "shared",
     surface: item.surface || "visible",
     messageType: item.subtype || "chat",
@@ -614,7 +615,7 @@ interface SessionMessageRow {
   sessionId: string
   conversationId?: string
   sequence?: number
-  createdAt?: string
+  createdAt?: import("@synapse/shared").Timestamp
   role: string
   contentBlocks: CanonicalContentBlock[]
   metadata: Record<string, unknown> | string

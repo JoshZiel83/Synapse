@@ -11,8 +11,10 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { dirname, relative, resolve, sep } from "node:path"
 import {
   filesystemPolicyAllows,
+  type Timestamp,
   type FilesystemPolicyShape,
 } from "@synapse/shared"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 
 export type VfsNodeKind = "directory" | "file" | "symlink" | "other"
 
@@ -50,7 +52,7 @@ export interface VfsSessionState {
   sessionId: string
   runtimeSessionId: string
   selectedPageId?: number
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface VfsBackend {
@@ -220,7 +222,7 @@ export class VfsService {
       exposureStableKey: input.exposureStableKey,
       sessionId: `vfs-${this.sessionSeq}`,
       runtimeSessionId: input.runtimeSessionId,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIsoInstant(),
     }
     this.sessions.set(state.sessionId, state)
     return state
@@ -916,7 +918,7 @@ export function createLocalFsBackend(
           kind: isSymlink ? "symlink" : e.isDirectory() ? "directory" : "file",
           size: !isSymlink && e.isFile() ? st.size : undefined,
           writable: true,
-          modTime: st.mtime.toISOString(),
+          modTime: dateToIsoInstant(st.mtime),
         })
       } catch {
         /* skip on per-entry stat failure */
@@ -943,7 +945,7 @@ export function createLocalFsBackend(
       kind: info.kind,
       size: info.kind === "file" ? info.size : undefined,
       writable: true,
-      modTime: new Date(info.mtimeMs).toISOString(),
+      modTime: dateToIsoInstant(new Date(info.mtimeMs)),
     }
   }
 

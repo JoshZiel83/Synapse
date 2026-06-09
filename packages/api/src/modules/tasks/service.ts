@@ -34,6 +34,7 @@ import type {
   RuntimeAuthorizationRequestMode,
   RuntimeAuthorizationRequestedAction,
   SessionCollaborationState,
+  Timestamp,
 } from "@synapse/shared/types"
 import {
   db,
@@ -43,6 +44,10 @@ import {
   type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import {
   deliverResolvedToolCallTask,
   recoverUndeliveredResolvedTask,
@@ -155,10 +160,10 @@ type RawTaskRow = {
   principal_remote_agent_id: string | null
   principal_subject_kind: string | null
   resolution_payload: unknown
-  resolved_at: string | Date | null
-  expires_at: string | Date | null
-  created_at: string | Date
-  updated_at: string | Date
+  resolved_at: Date | null
+  expires_at: Date | null
+  created_at: Date
+  updated_at: Date
   requester_participant_id: string | null
   requester_workspace_member_id: string | null
   requester_actor_id: string | null
@@ -213,13 +218,8 @@ type RawTaskCommandRow = {
   request_payload: unknown
   response_payload: unknown
   created_by_workspace_member_id: string | null
-  created_at: string | Date
-  updated_at: string | Date
-}
-
-function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return undefined
-  return value instanceof Date ? value.toISOString() : value
+  created_at: Date
+  updated_at: Date
 }
 
 function toRevisionNumber(
@@ -247,7 +247,7 @@ export interface CreateUserInputTaskParams {
   title: string
   instructions?: string
   questions: TaskInputQuestionDefinition[]
-  expiresAt?: string
+  expiresAt?: Timestamp
 }
 
 export interface CreateRemoteAgentUserInputTaskParams {
@@ -259,7 +259,7 @@ export interface CreateRemoteAgentUserInputTaskParams {
   title: string
   instructions?: string
   questions: TaskInputQuestionDefinition[]
-  expiresAt?: string
+  expiresAt?: Timestamp
 }
 
 export interface CreatePlanApprovalTaskParams {
@@ -274,7 +274,7 @@ export interface CreatePlanApprovalTaskParams {
   planMarkdown: string
   checklist?: PlanChecklistStep[]
   collaborationState: SessionCollaborationState
-  expiresAt?: string
+  expiresAt?: Timestamp
 }
 
 export interface CreateRemoteAgentPlanApprovalTaskParams {
@@ -289,7 +289,7 @@ export interface CreateRemoteAgentPlanApprovalTaskParams {
   checklist?: PlanChecklistStep[]
   collaborationMode?: string
   collaborationState?: Record<string, unknown>
-  expiresAt?: string
+  expiresAt?: Timestamp
 }
 
 export interface CreateRuntimeAuthorizationTaskParams {
@@ -316,7 +316,7 @@ export interface CreateRuntimeAuthorizationTaskParams {
   requestMode: RuntimeAuthorizationRequestMode
   sourceRetryNonce?: string
   sourceRequestArgs?: Record<string, unknown>
-  expiresAt?: string
+  expiresAt?: Timestamp
   /**
    * subject-scope-refactor: principalSubjectId (NOT NULL) — the
    * access_subjects row for the principal that triggered the dispatch.
@@ -437,17 +437,6 @@ function requireTrimmedString(value: unknown, label: string): string {
     throw new Error(`${label} is required`)
   }
   return value.trim()
-}
-
-function requireIsoString(
-  value: string | Date | null | undefined,
-  label: string
-): string {
-  const iso = toIsoString(value)
-  if (!iso) {
-    throw new Error(`${label} is required`)
-  }
-  return iso
 }
 
 function stableJsonStringify(value: unknown): string {
@@ -1070,10 +1059,10 @@ function buildTaskSummary(row: RawTaskRow): TaskSummary {
       typeof resolutionPayload.note === "string"
         ? resolutionPayload.note.trim() || undefined
         : undefined,
-    createdAt: requireIsoString(row.created_at, `Task ${row.id} created_at`),
-    updatedAt: requireIsoString(row.updated_at, `Task ${row.id} updated_at`),
-    resolvedAt: toIsoString(row.resolved_at),
-    expiresAt: toIsoString(row.expires_at),
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
+    resolvedAt: serializeOptionalInstant(row.resolved_at),
+    expiresAt: serializeOptionalInstant(row.expires_at),
     viewerCanResolve: false,
   }
 
@@ -1900,7 +1889,7 @@ async function insertTaskRequest(
     kind: TaskRequestKind
     requestKey: string
     targetParticipantId?: string
-    expiresAt?: string
+    expiresAt?: Timestamp
   }
 ): Promise<string | null> {
   // The caller already created the tool_call_tasks row with its request_key and

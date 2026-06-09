@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify"
 import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from "@synapse/shared"
+import { assertIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   ChatSocketEvent,
   ConversationFeedEventPayloadMap,
@@ -85,7 +86,7 @@ function mapInternalEventToSocketEvent(
         conversationId?: string
         fromWorkspaceMemberId?: string
         state?: "started" | "stopped"
-        occurredAt?: string
+        occurredAt?: import("@synapse/shared").Timestamp
       }
       if (
         !typingPayload.conversationId ||
@@ -100,7 +101,9 @@ function mapInternalEventToSocketEvent(
           conversationId: typingPayload.conversationId,
           fromWorkspaceMemberId: typingPayload.fromWorkspaceMemberId,
           state: typingPayload.state,
-          occurredAt: typingPayload.occurredAt ?? new Date().toISOString(),
+          occurredAt: typingPayload.occurredAt
+            ? assertIsoInstant(typingPayload.occurredAt)
+            : nowIsoInstant(),
         },
       }
     }
@@ -466,7 +469,7 @@ export function setupWebSocket(app: FastifyInstance) {
             if (socket.readyState === 1) {
               safeSendSocketEvent(clientId, {
                 type: "ping",
-                payload: { at: new Date().toISOString() },
+                payload: { at: nowIsoInstant() },
               })
               client.pongTimer = setTimeout(() => {
                 try {

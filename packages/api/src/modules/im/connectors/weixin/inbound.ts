@@ -4,6 +4,7 @@
  * runtime lease.
  */
 
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import type {
   AccountStartContext,
@@ -33,7 +34,7 @@ function envelopeFromNormalized(
       externalId: normalized.senderExternalId,
       metadata: { contextToken: normalized.contextToken },
     },
-    receivedAt: new Date().toISOString(),
+    receivedAt: nowIsoInstant(),
     message: normalized.message,
     raw: normalized.raw,
     endpointMetadata: { contextToken: normalized.contextToken },

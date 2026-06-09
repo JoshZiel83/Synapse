@@ -114,10 +114,11 @@ import type {
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
 import type { SubjectRef, ScopedSubjectTarget } from "../access/subject.js"
+import type { IsoInstantString } from "../datetime/instant.js"
 
 // ============ Common ============
 export type UUID = string
-export type Timestamp = string // ISO 8601
+export type Timestamp = IsoInstantString
 
 export interface PaginatedResult<T> {
   data: T[]
@@ -2154,7 +2155,7 @@ export interface CanonicalArchivePoint {
   coversUntilSequence: number
   frames: CanonicalArchiveFrame[]
   metadata?: Record<string, unknown>
-  createdAt?: string
+  createdAt?: Timestamp
 }
 
 export interface ProviderContextWindow {
@@ -2555,7 +2556,7 @@ export interface PluginAuthChallenge {
   url?: string
   qrUrl?: string
   openMode?: "popup" | "replace"
-  expiresAt?: string
+  expiresAt?: Timestamp
   metadata?: Record<string, unknown>
 }
 
@@ -2588,7 +2589,7 @@ export interface PluginConfigFieldState {
   maskedValue?: string
   authConnectionId?: string
   accountDisplayName?: string
-  updatedAt?: string
+  updatedAt?: Timestamp
 }
 
 export interface AccessPolicy {
@@ -2606,8 +2607,8 @@ export interface MarketplacePublisher {
   isBuiltin: boolean
   isVerified: boolean
   ownerUserId?: string
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface MarketplaceLineage {
@@ -2617,8 +2618,8 @@ export interface MarketplaceLineage {
   lineageKind: MarketplaceLineageKind
   syncMode: MarketplaceSyncMode
   metadata: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface MarketplaceCategory {
@@ -2634,8 +2635,8 @@ export interface MarketplaceCategory {
   sortOrder: number
   isBuiltin: boolean
   metadata: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface MarketplaceTool {
@@ -2654,7 +2655,7 @@ export interface MarketplaceAsset {
   sha256: string
   textContent?: string
   metadata: Record<string, unknown>
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface MarketplaceVersion {
@@ -2677,7 +2678,7 @@ export interface MarketplaceVersion {
   authBindings: PluginAuthBindingDefinition[]
   metadata: Record<string, unknown>
   createdByUserId?: string
-  createdAt: string
+  createdAt: Timestamp
   assets?: MarketplaceAsset[]
 }
 
@@ -2710,8 +2711,8 @@ export interface MarketplaceItem {
   defaultMaxAgeMs?: number
   requiresHandshake: boolean
   metadata: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
   categories?: MarketplaceCategory[]
   sourceLink?: MarketplaceLineage
   publisher?: MarketplacePublisher
@@ -2738,8 +2739,8 @@ export interface PluginInstallationView {
   configData: Record<string, unknown>
   configState: PluginConfigFieldState[]
   installedByWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
   package?: MarketplaceItem
   revision?: MarketplaceVersion
 }
@@ -2754,8 +2755,8 @@ export interface AccessGrant {
   reason?: string
   conversationTypeMaskOverride?: ConversationTypeMask | null
   effectiveConversationTypeMask?: ConversationTypeMask
-  createdAt: string
-  revokedAt?: string
+  createdAt: Timestamp
+  revokedAt?: Timestamp
 }
 
 export interface WorkspaceCapabilityConversationTypePolicy {
@@ -2786,9 +2787,9 @@ export interface PluginAuthSession {
   resultPreview: Record<string, unknown>
   authConnectionId?: string
   metadata: Record<string, unknown>
-  expiresAt: string
-  createdAt: string
-  updatedAt: string
+  expiresAt: Timestamp
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface PluginAuthConnection {
@@ -2803,10 +2804,10 @@ export interface PluginAuthConnection {
   displayName?: string
   avatarUrl?: string
   status: PluginAuthConnectionStatus
-  expiresAt?: string
+  expiresAt?: Timestamp
   publicPayload: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface MarketplaceRequirement {
@@ -2823,7 +2824,7 @@ export interface MarketplaceRequirement {
   description: string
   configPredicate: Record<string, unknown>
   metadata: Record<string, unknown>
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface MarketplaceRequirementCheck {
@@ -2967,9 +2968,9 @@ export interface SkillMirrorSourceSummary {
   lastSyncStatus: SkillMirrorSyncStatus
   sourceWarnings: string[]
   lastError?: string
-  lastSyncedAt?: string
-  createdAt: string
-  updatedAt: string
+  lastSyncedAt?: Timestamp
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface SkillAttachmentFile {
@@ -2977,8 +2978,8 @@ export interface SkillAttachmentFile {
   path: string
   mediaType?: string
   contentBlocks: CanonicalContentBlock[]
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface SkillMarketplaceVersion {
@@ -2996,7 +2997,7 @@ export interface SkillMarketplaceVersion {
   defaultConversationTypeMask?: ConversationTypeMask
   createdByUserId?: string
   createdByName?: string
-  createdAt: string
+  createdAt: Timestamp
   files?: SkillAttachmentFile[]
   attachmentFiles?: SkillAttachmentFile[]
 }
@@ -3019,8 +3020,8 @@ export interface SkillMarketplaceEntry {
   authorUserId?: string
   authorName?: string
   isActive: boolean
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
   defaultConversationTypeMask?: ConversationTypeMask
   latestVersionId?: string
   latestVersion?: SkillMarketplaceVersion
@@ -3049,8 +3050,8 @@ export interface InstalledSkill {
   effectiveConversationTypeMask: ConversationTypeMask
   isCustomized: boolean
   installedByWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
   sourceSkillId?: string
   sourceVersionId?: string
   sourceVersion?: string
@@ -3089,8 +3090,8 @@ export interface McpDeviceServer {
   envVars: Record<string, unknown>
   toolsManifest: McpPluginTool[]
   isEnabled: boolean
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface McpToolCallLog {
@@ -3109,7 +3110,7 @@ export interface McpToolCallLog {
   durationMs?: number
   transport?: string
   instanceKey?: string
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface McpEventLog {
@@ -3120,7 +3121,7 @@ export interface McpEventLog {
   deviceId?: string
   eventType: string
   eventData: Record<string, unknown>
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface McpValidationRule {
@@ -5464,8 +5465,8 @@ export interface CatalogPublisherRecord {
   workspaceId?: string
   isBuiltin: boolean
   isVerified: boolean
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface CatalogItemRecord {
@@ -5485,8 +5486,8 @@ export interface CatalogItemRecord {
   isActive: boolean
   downloadCount: number
   metadata: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface CatalogVersionRecord {
@@ -5497,7 +5498,7 @@ export interface CatalogVersionRecord {
   changelog: string
   metadata: Record<string, unknown>
   createdByUserId?: string
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface CatalogVersionFileRecord {
@@ -5510,7 +5511,7 @@ export interface CatalogVersionFileRecord {
   sha256: string
   sizeBytes: number
   metadata: Record<string, unknown>
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface ActorTemplateVersionSpecRecord {
@@ -5525,14 +5526,14 @@ export interface ActorTemplateVersionSpecRecord {
   specialties: string[]
   config: Record<string, unknown>
   metadata: Record<string, unknown>
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface SkillPackageVersionSpecRecord {
   catalogVersionId: string
   skillSnapshotId: string
   defaultConversationTypeMask: number
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface PluginRuntimePermissionRecord {
@@ -5541,7 +5542,7 @@ export interface PluginRuntimePermissionRecord {
   permissionKey: string
   isRequired: boolean
   rationale: string
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface PluginPackageVersionSpecRecord {
@@ -5558,7 +5559,7 @@ export interface PluginPackageVersionSpecRecord {
   supportedReuseScopes: PluginReuseScopeV2[]
   requiresHandshake: boolean
   metadata: Record<string, unknown>
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface InstalledSkillRecord {
@@ -5573,8 +5574,8 @@ export interface InstalledSkillRecord {
   currentSnapshotId: string
   conversationTypeMaskOverride?: number
   createdByWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface SkillVersionRecord {
@@ -5584,7 +5585,7 @@ export interface SkillVersionRecord {
   skillSnapshotId: string
   metadata: Record<string, unknown>
   createdByWorkspaceMemberId?: string
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface SkillSnapshotRecord {
@@ -5604,7 +5605,7 @@ export interface SkillSnapshotRecord {
   bodyBlocks: CanonicalContentBlock[]
   contentHash: string
   sourceWarnings: string[]
-  createdAt: string
+  createdAt: Timestamp
 }
 
 export interface SkillSnapshotFileRecord {
@@ -5615,8 +5616,8 @@ export interface SkillSnapshotFileRecord {
   contentBlocks: CanonicalContentBlock[]
   sha256: string
   sizeBytes: number
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface SkillMirrorSourceRecord {
@@ -5630,9 +5631,9 @@ export interface SkillMirrorSourceRecord {
   lastSyncStatus: SkillMirrorSyncStatus
   sourceWarnings: string[]
   lastError?: string
-  lastSyncedAt?: string
-  createdAt: string
-  updatedAt: string
+  lastSyncedAt?: Timestamp
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface SkillBindingRecord {
@@ -5645,8 +5646,8 @@ export interface SkillBindingRecord {
   status: "active" | "disabled" | "revoked"
   metadata: Record<string, unknown>
   createdByWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface PluginInstallationRecord {
@@ -5659,8 +5660,8 @@ export interface PluginInstallationRecord {
   approvedRuntimePermissions: string[]
   status: "active" | "disabled" | "error" | "archived"
   installedByWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export interface PluginMountRecord {
@@ -5675,8 +5676,8 @@ export interface PluginMountRecord {
   status: "active" | "disabled" | "revoked"
   metadata: Record<string, unknown>
   createdByWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 export function buildConversationMessageRef(sequence: number): string {

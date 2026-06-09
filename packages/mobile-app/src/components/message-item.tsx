@@ -34,8 +34,8 @@ import {
 } from "@shared"
 import { formatChatTimestamp } from "@shared/datetime"
 
-function formatTimestamp(timestamp: string) {
-  return formatChatTimestamp(timestamp, "time")
+function formatTimestamp(timeText: string) {
+  return formatChatTimestamp(timeText, "time")
 }
 
 function isMine(item: MobileChatItem, viewerParticipantId?: string) {

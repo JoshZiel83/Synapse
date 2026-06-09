@@ -7,7 +7,6 @@ import {
   actorRef,
   conversationRef,
   normalizeConversationTypeMask,
-  nowISO,
   REUSE_SCOPES,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
@@ -16,6 +15,7 @@ import {
   workspaceMemberRef,
   workspaceRef,
 } from "@synapse/shared"
+import { assertIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   AccessGrant,
   AttachmentTarget,
@@ -50,6 +50,7 @@ import {
   type Executor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
+import { serializeInstant } from "../../infrastructure/datetime.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
 import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
@@ -164,15 +165,15 @@ type PluginCatalogRow = {
   item_download_count: number
   item_icon_file_id: string | null
   item_metadata: unknown
-  item_created_at: string
-  item_updated_at: string
+  item_created_at: Date
+  item_updated_at: Date
   version_id: string | null
   version_value: string | null
   version_status: "draft" | "active" | "deprecated" | "archived" | null
   version_changelog: string | null
   version_metadata: unknown
   version_created_by_user_id: string | null
-  version_created_at: string | null
+  version_created_at: Date | null
   spec_transport: PluginSpecTransport | null
   spec_entry_point: string | null
   spec_tool_manifest: unknown
@@ -218,8 +219,8 @@ type PublisherRow = {
   workspace_id: string | null
   is_builtin: boolean
   is_verified: boolean
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
   plugin_count?: string | number | null
 }
 
@@ -239,8 +240,8 @@ type InstallationRow = {
   conversation_type_mask_override: number | null
   installation_status: "active" | "disabled" | "error" | "archived"
   installed_by_workspace_member_id: string | null
-  installation_created_at: string
-  installation_updated_at: string
+  installation_created_at: Date
+  installation_updated_at: Date
   source_catalog_item_id: string | null
   source_catalog_version_id: string | null
   source_sync_mode:
@@ -657,8 +658,8 @@ function mapPluginView(row: PluginCatalogRow) {
     is_active: row.item_is_active,
     is_builtin: row.item_source_kind === "builtin" || row.publisher_is_builtin,
     download_count: row.item_download_count || 0,
-    created_at: row.item_created_at,
-    updated_at: row.item_updated_at,
+    created_at: serializeInstant(row.item_created_at),
+    updated_at: serializeInstant(row.item_updated_at),
     org_slug: row.publisher_slug,
     org_display_name: row.publisher_display_name,
     publisher: {
@@ -688,8 +689,8 @@ function mapPublisherView(row: PublisherRow) {
       typeof row.plugin_count === "number"
         ? row.plugin_count
         : Number(row.plugin_count || 0),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    created_at: serializeInstant(row.created_at),
+    updated_at: serializeInstant(row.updated_at),
   }
 }
 
@@ -705,7 +706,7 @@ function isSecretConfigField(
 }
 
 function sanitizeInstallationConfig(
-  installation: { config_data: unknown; updated_at: string },
+  installation: { config_data: unknown; updated_at: Date },
   configSchema: Record<string, unknown>,
   configFields: PluginConfigFieldDefinition[],
   authBindings: PluginAuthBindingDefinition[]
@@ -740,8 +741,8 @@ function sanitizeInstallationConfig(
             : undefined,
         updatedAt:
           typeof ref.updatedAt === "string"
-            ? ref.updatedAt
-            : installation.updated_at,
+            ? assertIsoInstant(ref.updatedAt)
+            : serializeInstant(installation.updated_at),
       })
       sanitizedConfig[key] = {
         bindingKey:
@@ -771,7 +772,7 @@ function sanitizeInstallationConfig(
         key,
         isConfigured: value !== undefined && value !== null && value !== "",
         maskedValue: masked,
-        updatedAt: installation.updated_at,
+        updatedAt: serializeInstant(installation.updated_at),
       })
       continue
     }
@@ -780,7 +781,7 @@ function sanitizeInstallationConfig(
       configState.push({
         key,
         isConfigured: value !== undefined && value !== null && value !== "",
-        updatedAt: installation.updated_at,
+        updatedAt: serializeInstant(installation.updated_at),
       })
       continue
     }
@@ -1249,8 +1250,8 @@ function buildInstallationPayload(
     config_state: configState,
     approved_runtime_permissions: row.approved_runtime_permissions || [],
     installed_by_workspace_member_id: row.installed_by_workspace_member_id,
-    created_at: row.installation_created_at,
-    updated_at: row.installation_updated_at,
+    created_at: serializeInstant(row.installation_created_at),
+    updated_at: serializeInstant(row.installation_updated_at),
     source_catalog_item_id: row.source_catalog_item_id,
     source_catalog_version_id: row.source_catalog_version_id,
     source_sync_mode: row.source_sync_mode,
@@ -2378,7 +2379,7 @@ export async function updateInstallation(
       type: "mcp.config.changed",
       workspaceId,
       payload: { pluginId: row.catalog_item_id, workspaceId },
-      timestamp: nowISO(),
+      timestamp: nowIsoInstant(),
     })
   }
 

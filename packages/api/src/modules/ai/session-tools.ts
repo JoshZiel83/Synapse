@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { z } from "zod"
 import {
+  assertIsoInstant,
+  dateToIsoInstant,
+  nowIsoInstant,
+} from "@synapse/shared/datetime"
+import {
   CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_MASK_PRESETS,
   describeAutomationDelivery,
@@ -199,7 +204,7 @@ function normalizeRawSendToInput(input: Record<string, unknown>) {
 }
 
 function formatUtcTimestamp(date: Date) {
-  return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`
+  return `${dateToIsoInstant(date).slice(0, 19).replace("T", " ")} UTC`
 }
 
 async function requireCurrentAutomationParticipant(params: {
@@ -612,7 +617,7 @@ async function createGovernedToolCallTask(params: {
   executorKind: "user_input" | "plan_approval" | "runtime_authorization"
   requestPayload: Record<string, unknown>
   summary: string
-  expiresAt?: string
+  expiresAt?: import("@synapse/shared").Timestamp
   supportsCancel?: boolean
 }) {
   const { context } = params
@@ -1233,7 +1238,7 @@ export function registerCallableToolPlugins(): void {
         const weekday = formatWeekdayInZone(now, resolvedTimeZone)
         return textResult(
           JSON.stringify({
-            nowIso: now.toISOString(),
+            nowIso: dateToIsoInstant(now),
             utc: formatUtcTimestamp(now),
             unixMs: now.getTime(),
             timeZone: resolvedTimeZone,
@@ -1737,7 +1742,7 @@ export function registerCallableToolPlugins(): void {
           planDraft: buildSessionPlanDraftState({
             summary,
             checklist: [],
-            enteredAt: new Date().toISOString(),
+            enteredAt: nowIsoInstant(),
           }),
         },
         activePlanApprovalTaskId: null,
@@ -2948,10 +2953,14 @@ export function registerCallableToolPlugins(): void {
               scheduleTimezone: timezone || undefined,
               intervalSeconds,
               startsAt:
-                scheduleKind === "at" ? scheduleExpr || undefined : undefined,
+                scheduleKind === "at" && scheduleExpr
+                  ? assertIsoInstant(scheduleExpr)
+                  : undefined,
             },
             policy: {
-              activeUntil: activeUntil || undefined,
+              activeUntil: activeUntil
+                ? assertIsoInstant(activeUntil)
+                : undefined,
               maxTriggerCount:
                 Number.isInteger(maxTriggerCount) && (maxTriggerCount || 0) > 0
                   ? maxTriggerCount
@@ -3255,7 +3264,9 @@ export function registerCallableToolPlugins(): void {
               matcher,
             },
             policy: {
-              activeUntil: activeUntil || undefined,
+              activeUntil: activeUntil
+                ? assertIsoInstant(activeUntil)
+                : undefined,
               maxTriggerCount: once
                 ? 1
                 : Number.isInteger(maxTriggerCount) &&

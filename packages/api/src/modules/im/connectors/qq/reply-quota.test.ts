@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import {
   QQ_C2C_REPLY_WINDOW_SECONDS,
   QQ_GROUP_REPLY_WINDOW_SECONDS,
@@ -76,7 +77,7 @@ function makeAnchor(
     anchorKind: "msg_id",
     anchorId: "MSG-1",
     eventType: "C2C_MESSAGE_CREATE",
-    receivedAt: new Date().toISOString(),
+    receivedAt: assertIsoInstant(new Date().toISOString()),
     ...overrides,
   }
 }
@@ -85,7 +86,7 @@ test("reserveFirstSend: c2c expiresAt = receivedAt + 60min, not now() + 60min", 
   const redis = new FakeRedis() as unknown as import("ioredis").Redis
   const receivedAtMs = Date.now() - 30 * 60_000 // 30 minutes ago
   const anchor = makeAnchor({
-    receivedAt: new Date(receivedAtMs).toISOString(),
+    receivedAt: assertIsoInstant(new Date(receivedAtMs).toISOString()),
   })
   const result = await reserveFirstSend(redis, {
     linkId: "link-c2c",
@@ -112,7 +113,7 @@ test("reserveFirstSend: group expiresAt anchored at receivedAt + 5min (regressio
   const receivedAtMs = Date.now() - 4 * 60_000
   const anchor = makeAnchor({
     eventType: "GROUP_AT_MESSAGE_CREATE",
-    receivedAt: new Date(receivedAtMs).toISOString(),
+    receivedAt: assertIsoInstant(new Date(receivedAtMs).toISOString()),
   })
   const result = await reserveFirstSend(redis, {
     linkId: "link-grp",
@@ -142,7 +143,7 @@ test("reserveFirstSend: anchor already past its window → returns no_anchor", a
   const receivedAtMs = Date.now() - 10 * 60_000 // 10 min ago in group context
   const anchor = makeAnchor({
     eventType: "GROUP_AT_MESSAGE_CREATE",
-    receivedAt: new Date(receivedAtMs).toISOString(),
+    receivedAt: assertIsoInstant(new Date(receivedAtMs).toISOString()),
   })
   const result = await reserveFirstSend(redis, {
     linkId: "link-old",

@@ -30,6 +30,10 @@ import {
   type SkillMarketplaceVersion,
   textBlock,
 } from "@synapse/shared"
+import {
+  dateToIsoInstant,
+  type IsoInstantString,
+} from "@synapse/shared/datetime"
 import { lookupResources } from "../access/evaluator.js"
 import { ACCESS_ACTIONS } from "../access/actions.js"
 import { CompiledQuery, sql } from "kysely"
@@ -39,6 +43,10 @@ import {
   withDbTransaction,
   type Executor,
 } from "../../infrastructure/database/kysely.js"
+import {
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
 import {
   getWorkspaceCapabilityConversationTypeMask,
   getWorkspaceCapabilityConversationTypePolicyMap,
@@ -282,7 +290,7 @@ type SkillSnapshotJoinRow = {
   snapshot_content_hash: string | null
   snapshot_source_warnings: string[] | null
   snapshot_resolved_revision: string | null
-  snapshot_created_at: string | null
+  snapshot_created_at: Date | null
   mirror_source_id: string | null
   mirror_source_type: "github" | "clawhub" | null
   mirror_locator_key: string | null
@@ -293,9 +301,9 @@ type SkillSnapshotJoinRow = {
   mirror_last_sync_status: "pending" | "synced" | "error" | null
   mirror_source_warnings: string[] | null
   mirror_last_error: string | null
-  mirror_last_synced_at: string | null
-  mirror_created_at: string | null
-  mirror_updated_at: string | null
+  mirror_last_synced_at: Date | null
+  mirror_created_at: Date | null
+  mirror_updated_at: Date | null
 }
 
 type SkillPackageRow = {
@@ -309,13 +317,13 @@ type SkillPackageRow = {
   item_download_count: number
   item_icon_file_id: string | null
   item_metadata: unknown
-  item_created_at: string
-  item_updated_at: string
+  item_created_at: Date
+  item_updated_at: Date
   latest_version_id: string | null
   latest_version_value: string | null
   latest_version_changelog: string | null
   latest_version_created_by_user_id: string | null
-  latest_version_created_at: string | null
+  latest_version_created_at: Date | null
   spec_default_conversation_type_mask: number | null
   publisher_id: string
   publisher_slug: string
@@ -334,8 +342,8 @@ type InstalledSkillRow = {
   is_active: boolean
   conversation_type_mask_override: number | null
   created_by_workspace_member_id: string | null
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
   current_snapshot_id: string
   current_skill_version_id: string
   current_skill_snapshot_id: string
@@ -362,8 +370,8 @@ type SkillSnapshotFileRow = {
   path: string
   media_type: string | null
   content_blocks: unknown
-  created_at: string
-  updated_at: string
+  created_at: Date
+  updated_at: Date
 }
 
 export type SkillAccessRow = AccessBindingRow & {
@@ -394,7 +402,7 @@ type VisibleSkillRow = {
   description: string
   source_version_value: string | null
   conversation_type_mask_override: number | null
-  access_created_at: string
+  access_created_at: Date
 }
 
 type InstallationSummary = {
@@ -786,8 +794,8 @@ function buildSkillAttachmentFromCatalogFile(
     path: row.path,
     mediaType: row.media_type || undefined,
     contentBlocks: normalizeStoredBlocks(row.content_blocks),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
   }
 }
 
@@ -851,21 +859,21 @@ function buildMirrorSourceSummary(row: SkillSnapshotJoinRow) {
     lastSyncStatus: row.mirror_last_sync_status || "pending",
     sourceWarnings: row.mirror_source_warnings || [],
     lastError: row.mirror_last_error || undefined,
-    lastSyncedAt: row.mirror_last_synced_at || undefined,
+    lastSyncedAt: serializeOptionalInstant(row.mirror_last_synced_at),
     createdAt:
-      row.mirror_created_at ||
-      row.snapshot_created_at ||
-      new Date(0).toISOString(),
+      serializeOptionalInstant(row.mirror_created_at) ||
+      serializeOptionalInstant(row.snapshot_created_at) ||
+      dateToIsoInstant(new Date(0)),
     updatedAt:
-      row.mirror_updated_at ||
-      row.snapshot_created_at ||
-      new Date(0).toISOString(),
+      serializeOptionalInstant(row.mirror_updated_at) ||
+      serializeOptionalInstant(row.snapshot_created_at) ||
+      dateToIsoInstant(new Date(0)),
   }
 }
 
 function buildSyntheticEntryAttachment(
   row: SkillSnapshotJoinRow,
-  timestamp: string
+  timestamp: IsoInstantString
 ): SkillAttachmentFile {
   const synthetic = buildSyntheticEntryFile({
     frontmatter: frontmatterFromSnapshotRow(row),
@@ -884,7 +892,7 @@ function buildSyntheticEntryAttachment(
 
 function buildSnapshotAttachmentFiles(
   row: SkillSnapshotJoinRow,
-  timestamp: string,
+  timestamp: IsoInstantString,
   files?: SkillAttachmentFile[]
 ) {
   return [buildSyntheticEntryAttachment(row, timestamp), ...(files || [])]
@@ -931,9 +939,7 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
   if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
     return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope]
   }
-  return (
-    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
-  )
+  return right.created_at.getTime() - left.created_at.getTime()
 }
 
 function compareVisibleBindingPriority(
@@ -958,16 +964,13 @@ function compareVisibleBindingPriority(
   if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
     return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope]
   }
-  return (
-    new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
-  )
+  return right.created_at.getTime() - left.created_at.getTime()
 }
 
 function selectInitialSkillGrant(accessRows: SkillAccessRow[]) {
   const activeRows = accessRows.filter((row) => row.status === "active")
   return [...activeRows].sort(
-    (left, right) =>
-      new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
+    (left, right) => left.created_at.getTime() - right.created_at.getTime()
   )[0]
 }
 
@@ -1017,15 +1020,19 @@ function mapMarketplaceVersion(
     defaultConversationTypeMask:
       row.spec_default_conversation_type_mask || DEFAULT_CONVERSATION_TYPE_MASK,
     createdByUserId: row.latest_version_created_by_user_id || undefined,
-    createdAt: row.latest_version_created_at || row.item_updated_at,
+    createdAt:
+      serializeOptionalInstant(row.latest_version_created_at) ||
+      serializeInstant(row.item_updated_at),
     files: buildSnapshotAttachmentFiles(
       row,
-      row.latest_version_created_at || row.item_updated_at,
+      serializeOptionalInstant(row.latest_version_created_at) ||
+        serializeInstant(row.item_updated_at),
       files
     ),
     attachmentFiles: buildSnapshotAttachmentFiles(
       row,
-      row.latest_version_created_at || row.item_updated_at,
+      serializeOptionalInstant(row.latest_version_created_at) ||
+        serializeInstant(row.item_updated_at),
       files
     ),
   }
@@ -1078,8 +1085,8 @@ function mapMarketplaceEntry(
     authorUserId: row.publisher_owner_user_id || undefined,
     authorName: row.publisher_display_name || undefined,
     isActive: Boolean(row.item_is_active),
-    createdAt: row.item_created_at,
-    updatedAt: row.item_updated_at,
+    createdAt: serializeInstant(row.item_created_at),
+    updatedAt: serializeInstant(row.item_updated_at),
     defaultConversationTypeMask,
     latestVersionId: row.latest_version_id || undefined,
     latestVersion: mapMarketplaceVersion(row, files),
@@ -1131,8 +1138,8 @@ function buildInstalledSkillPayload(
     ),
     installedByWorkspaceMemberId:
       row.created_by_workspace_member_id || undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializeInstant(row.created_at),
+    updatedAt: serializeInstant(row.updated_at),
     sourceSkillId: row.source_catalog_item_id || undefined,
     sourceVersionId: row.source_catalog_version_id || undefined,
     sourceVersion: row.source_version_value || undefined,
@@ -1142,8 +1149,16 @@ function buildInstalledSkillPayload(
       Boolean(row.source_latest_version_id) &&
       row.source_catalog_version_id !== row.source_latest_version_id,
     latestSourceVersion: row.latest_source_version || undefined,
-    files: buildSnapshotAttachmentFiles(row, row.updated_at, files),
-    attachmentFiles: buildSnapshotAttachmentFiles(row, row.updated_at, files),
+    files: buildSnapshotAttachmentFiles(
+      row,
+      serializeInstant(row.updated_at),
+      files
+    ),
+    attachmentFiles: buildSnapshotAttachmentFiles(
+      row,
+      serializeInstant(row.updated_at),
+      files
+    ),
     mirrorSource: buildMirrorSourceSummary(row),
   }
 }

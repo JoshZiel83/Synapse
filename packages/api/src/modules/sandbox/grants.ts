@@ -238,7 +238,7 @@ export async function revokeSandboxGrants(params: {
     .updateTable("runtime_authorization_grants")
     .set({
       status: "revoked",
-      revoked_at: new Date().toISOString(),
+      revoked_at: new Date(),
     } as never)
     .where("device_id", "=", params.deviceId)
     .where("workspace_id", "=", params.workspaceId)

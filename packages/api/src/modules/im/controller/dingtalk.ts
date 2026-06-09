@@ -14,6 +14,10 @@
 
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
+import {
+  serializeInstant,
+  serializeNowInstant,
+} from "../../../infrastructure/datetime.js"
 import type {
   DingtalkDeviceFlowPollResponse,
   DingtalkDeviceFlowSessionSummary,
@@ -84,7 +88,7 @@ function nowMs(): number {
 }
 
 function nowIso(): string {
-  return new Date().toISOString()
+  return serializeNowInstant()
 }
 
 async function buildSummary(
@@ -108,9 +112,9 @@ async function buildSummary(
     userCode: session.userCode,
     expiresInSeconds: session.expiresInSeconds,
     intervalSeconds: session.intervalSeconds,
-    createdAt: new Date(session.createdAt).toISOString(),
-    updatedAt: new Date(session.updatedAt).toISOString(),
-    expiresAt: new Date(session.expiresAt).toISOString(),
+    createdAt: serializeInstant(new Date(session.createdAt)),
+    updatedAt: serializeInstant(new Date(session.updatedAt)),
+    expiresAt: serializeInstant(new Date(session.expiresAt)),
     transportAccount,
   }
 }

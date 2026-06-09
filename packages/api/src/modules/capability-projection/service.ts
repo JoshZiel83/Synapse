@@ -10,6 +10,7 @@
 // device_operation_attempts row pair (see devices/operations.ts).
 
 import { randomUUID } from "node:crypto"
+import { dateToIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import type {
   ToolDefinition,
   NormalizedMcpToolResult,
@@ -663,8 +664,8 @@ function unionWithDevice(
               ...(cuaFocusScopeId
                 ? { cua_focus_scope_id: cuaFocusScopeId }
                 : {}),
-              issued_at: new Date().toISOString(),
-              expires_at: new Date(Date.now() + 60_000).toISOString(),
+              issued_at: nowIsoInstant(),
+              expires_at: serializeGrantEnvelopeExpiresAt(),
             })
             return {
               ok: true,
@@ -861,6 +862,10 @@ function unionWithDevice(
     setTurnId: legacy.setTurnId,
     shutdown: legacy.shutdown,
   }
+}
+
+function serializeGrantEnvelopeExpiresAt() {
+  return dateToIsoInstant(new Date(Date.now() + 60_000))
 }
 
 function mcpErrorBlock(

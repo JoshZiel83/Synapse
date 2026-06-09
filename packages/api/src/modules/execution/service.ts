@@ -1,6 +1,7 @@
 import { createHash } from "crypto"
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type { PayloadBlobsRetentionClass } from "../../infrastructure/database/generated/db.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
@@ -661,7 +662,7 @@ export async function recoverInterruptedExecutions(params?: {
         activeTurnId: sessionInfo.turnId,
         lastError: {
           message: errorMessage,
-          at: new Date().toISOString(),
+          at: nowIsoInstant(),
         },
       }).catch(() => {})
     }

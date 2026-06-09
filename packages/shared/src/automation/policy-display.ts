@@ -1,19 +1,20 @@
 import type {
   AutomationCompletionStatus,
   AutomationPolicy,
+  Timestamp,
 } from "../types/index.js"
 
 export interface AutomationPolicyDisplayInput {
-  activeFrom?: string
-  activeUntil?: string
+  activeFrom?: Timestamp
+  activeUntil?: Timestamp
   maxTriggerCount?: number
   triggerCount?: number
   completionStatus?: AutomationCompletionStatus
-  completedAt?: string
+  completedAt?: Timestamp
 }
 
 export interface AutomationPolicyDisplayOptions {
-  formatTimestamp?: (value: string) => string
+  formatTimestamp?: (value: Timestamp) => string
 }
 
 export interface AutomationPolicyDisplayDetail {
@@ -29,7 +30,7 @@ export interface AutomationPolicyDisplay {
 }
 
 function formatTimestamp(
-  value: string | undefined,
+  value: Timestamp | undefined,
   options?: AutomationPolicyDisplayOptions
 ) {
   if (!value) return null

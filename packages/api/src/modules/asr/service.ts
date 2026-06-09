@@ -3,6 +3,7 @@ import type {
   RealtimeAsrSocketEvent,
   RealtimeAsrSocketEventPayloadMap,
 } from "@synapse/shared"
+import { nowIsoInstant } from "@synapse/shared/datetime"
 import type { IncomingMessage } from "node:http"
 import type { FastifyBaseLogger } from "fastify"
 import { z } from "zod"
@@ -584,7 +585,7 @@ export class VolcengineRealtimeAsrSession {
       return
     }
 
-    const receivedAt = new Date().toISOString()
+    const receivedAt = nowIsoInstant()
     const normalized = this.accumulator.ingest(
       decodedFrame.payload,
       receivedAt,

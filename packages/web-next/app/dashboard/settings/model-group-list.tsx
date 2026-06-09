@@ -7,6 +7,7 @@ import {
   MODEL_GROUP_OWNER_TYPE,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
+  type Timestamp,
 } from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -34,7 +35,7 @@ interface ModelGroup {
   routing_strategy: ModelGroupRoutingStrategy
   is_default: boolean
   is_active?: boolean
-  created_at: string
+  created_at: Timestamp
 }
 
 export default function ModelGroupList({

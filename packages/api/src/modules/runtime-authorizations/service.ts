@@ -15,6 +15,7 @@ import {
   actorRef,
   remoteAgentRef,
   conversationRef,
+  type Timestamp,
   type SubjectRef,
 } from "@synapse/shared"
 import { serializeCommandlinePolicyToWire } from "@synapse/shared/access/policies"
@@ -44,6 +45,11 @@ import {
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import {
+  requireInstantDate,
+  serializeInstant,
+  serializeOptionalInstant,
+} from "../../infrastructure/datetime.js"
+import {
   BrowserGrantPolicyError,
   normalizeBrowserGrantPolicy,
 } from "@synapse/shared/access/policies"
@@ -56,14 +62,10 @@ import {
 } from "../devices/operations.js"
 import type { RuntimePrincipalContext } from "../access/subject-resolution.js"
 
-function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return undefined
-  return value instanceof Date ? value.toISOString() : value
-}
-
 function normalizePathPrefix(value: unknown) {
   return sharedNormalizePathPrefix(value)
 }
+
 function normalizeCommandText(value: unknown) {
   return sharedNormalizeCommandText(value)
 }
@@ -108,11 +110,11 @@ export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizat
   sourceRequestArgs: Record<string, unknown>
   retention: RuntimeAuthorizationGrantRetention
   status: RuntimeAuthorizationGrantStatus
-  createdAt: string
-  updatedAt: string
-  consumedAt?: string
-  revokedAt?: string
-  supersededAt?: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  consumedAt?: Timestamp
+  revokedAt?: Timestamp
+  supersededAt?: Timestamp
 }
 
 /**
@@ -409,11 +411,21 @@ export function mapRuntimeAuthorizationGrantCandidate(
     retention: row.retention,
     status: row.status,
     ...(parsedPolicy as SharedRuntimeAuthorizationGrantSpec),
-    createdAt: toIsoString(row.created_at) || new Date().toISOString(),
-    updatedAt: toIsoString(row.updated_at) || new Date().toISOString(),
-    consumedAt: toIsoString(row.consumed_at),
-    revokedAt: toIsoString(row.revoked_at),
-    supersededAt: toIsoString(row.superseded_at),
+    createdAt: serializeInstant(
+      requireInstantDate(
+        row.created_at,
+        `runtime_authorization_grants.${row.id}.created_at`
+      )
+    ),
+    updatedAt: serializeInstant(
+      requireInstantDate(
+        row.updated_at,
+        `runtime_authorization_grants.${row.id}.updated_at`
+      )
+    ),
+    consumedAt: serializeOptionalInstant(row.consumed_at),
+    revokedAt: serializeOptionalInstant(row.revoked_at),
+    supersededAt: serializeOptionalInstant(row.superseded_at),
   }
 }
 

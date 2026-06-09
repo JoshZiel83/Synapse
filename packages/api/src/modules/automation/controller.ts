@@ -20,6 +20,7 @@ import {
   workspaceRef,
   type CapabilityAccessTarget,
 } from "@synapse/shared"
+import { IsoInstantStringSchema } from "@synapse/shared/schemas"
 import { z } from "zod"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
@@ -62,12 +63,12 @@ const triggerSchema = z.object({
   scheduleExpr: z.string().trim().min(1).max(255).optional(),
   scheduleTimezone: z.string().trim().min(1).max(64).optional(),
   intervalSeconds: z.number().int().positive().optional(),
-  startsAt: z.iso.datetime().optional(),
+  startsAt: IsoInstantStringSchema.optional(),
 })
 
 const policySchema = z.object({
-  activeFrom: z.iso.datetime().optional(),
-  activeUntil: z.iso.datetime().optional(),
+  activeFrom: IsoInstantStringSchema.optional(),
+  activeUntil: IsoInstantStringSchema.optional(),
   maxTriggerCount: z.number().int().positive().optional(),
   completionStatus: z.enum(AUTOMATION_COMPLETION_STATUSES).optional(),
 })
@@ -260,14 +261,14 @@ const ingestEventSchema = z.object({
   payload: z.record(z.string(), z.unknown()).optional(),
   sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
   dedupeKey: z.string().trim().min(1).max(255).optional(),
-  occurredAt: z.iso.datetime().optional(),
+  occurredAt: IsoInstantStringSchema.optional(),
 })
 
 const webhookIngressSchema = z.looseObject({
   payload: z.record(z.string(), z.unknown()).optional(),
   sourceSnapshot: z.record(z.string(), z.unknown()).optional(),
   dedupeKey: z.string().trim().min(1).max(255).optional(),
-  occurredAt: z.iso.datetime().optional(),
+  occurredAt: IsoInstantStringSchema.optional(),
 })
 
 function extractWebhookSecret(headers: Record<string, unknown>) {

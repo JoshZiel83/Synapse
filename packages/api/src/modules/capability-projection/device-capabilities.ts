@@ -251,7 +251,7 @@ export async function setActiveDeviceCapabilitiesForTarget(
       .updateTable("resource_access_bindings")
       .set({
         status: "revoked",
-        revoked_at: new Date().toISOString(),
+        revoked_at: new Date(),
       } as never)
       .where("subject_id", "=", subjectId)
       .where("workspace_id", "=", params.workspaceId)
@@ -369,7 +369,7 @@ export async function revokeDeviceCapabilitiesForTarget(
     .updateTable("resource_access_bindings")
     .set({
       status: "revoked",
-      revoked_at: new Date().toISOString(),
+      revoked_at: new Date(),
     } as never)
     .where("subject_id", "=", subjectId)
     .where("workspace_id", "=", params.workspaceId)

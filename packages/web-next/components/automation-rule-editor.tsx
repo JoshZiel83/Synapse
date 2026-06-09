@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
+import { dateToIsoInstant } from "@synapse/shared/datetime"
 import {
   buildAutomationRuleCreatePayloadFromDraft,
   describeAutomationDelivery,
@@ -56,6 +57,13 @@ type AutomationRuleEditorProps = {
 function formatDateTime(value?: string) {
   if (!value) return "Not scheduled"
   return new Date(value).toLocaleString()
+}
+
+function normalizeDraftInstant(value?: string) {
+  const trimmed = value?.trim()
+  if (!trimmed) return undefined
+  const parsed = new Date(trimmed)
+  return Number.isNaN(parsed.getTime()) ? undefined : dateToIsoInstant(parsed)
 }
 
 export function AutomationRuleEditor({
@@ -130,7 +138,7 @@ export function AutomationRuleEditor({
             : undefined,
         startsAt:
           formState.scheduleKind === "at"
-            ? formState.startsAt || undefined
+            ? normalizeDraftInstant(formState.startsAt)
             : undefined,
       },
       { formatTimestamp: formatDateTime }
@@ -152,8 +160,8 @@ export function AutomationRuleEditor({
     () =>
       describeAutomationPolicy(
         {
-          activeFrom: formState.activeFrom || undefined,
-          activeUntil: formState.activeUntil || undefined,
+          activeFrom: normalizeDraftInstant(formState.activeFrom),
+          activeUntil: normalizeDraftInstant(formState.activeUntil),
           maxTriggerCount:
             Number.parseInt(formState.maxTriggerCount, 10) || undefined,
           completionStatus: formState.completionStatus,
