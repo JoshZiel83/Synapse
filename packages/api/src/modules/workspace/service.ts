@@ -3,10 +3,7 @@ import {
   db,
   withDbTransaction,
   type Executor,
-  type TableInsert,
-  type TableRow,
 } from "../../infrastructure/database/kysely.js"
-import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
 import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js"
 import { getFileUrlById } from "../files/service.js"
 import {
@@ -22,10 +19,20 @@ import {
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
 import { markWorkspaceDeleted } from "../soft-delete/orchestration.js"
 import { insertWorkspaceAppRoot } from "../workspace-apps/root-storage.js"
+import {
+  deriveWorkspaceTrustLevel,
+  presentActorRow,
+  presentMemberRow,
+  presentWorkspaceChiefActorPreferenceRow,
+  presentWorkspaceRow,
+} from "./presenter.js"
 import type {
-  WorkspaceAccessBindingsAccessKey,
-  WorkspaceMembersTrustLevel,
-} from "../../infrastructure/database/generated/db.js"
+  ActorRecord,
+  ActorsConfig,
+  ActorVersionsConfig,
+  WorkspaceAccessKey,
+  WorkspaceTrustLevel,
+} from "./repo.types.js"
 import { sql } from "kysely"
 import { createLogger } from "../../infrastructure/logger/index.js"
 
@@ -40,53 +47,10 @@ export interface CreateWorkspaceInput {
 export interface AddMemberInput {
   workspaceId: string
   userId: string
-  trustLevel: WorkspaceMembersTrustLevel
+  trustLevel: WorkspaceTrustLevel
 }
 
-export type WorkspaceAccessKey = WorkspaceAccessBindingsAccessKey
-
-type WorkspaceViewRow = Pick<
-  TableRow<"workspaces">,
-  | "id"
-  | "name"
-  | "slug"
-  | "description"
-  | "ownerId"
-  | "isTrusted"
-  | "createdAt"
-  | "updatedAt"
->
-
-type WorkspaceMemberViewRow = Pick<
-  TableRow<"workspaceMembers">,
-  "id" | "workspaceId" | "userId" | "trustLevel" | "joinedAt"
-> & {
-  ownerId?: string | null
-  accessKeys?: string[] | null
-}
-
-type WorkspaceChiefActorPreferenceRow = {
-  workspaceId: string
-  workspaceMemberId: string
-  chiefActorId: string | null
-  createdAt: Date
-  updatedAt: Date
-  chiefActorDisplayName: string | null
-  chiefActorRole: string | null
-  chiefActorTitle: string | null
-  chiefActorAvatarFileId: string | null
-}
-
-function deriveWorkspaceTrustLevel(row: {
-  ownerId?: string | null
-  userId?: string | null
-  trustLevel?: string | null
-}) {
-  if (row.ownerId && row.userId && row.ownerId === row.userId) {
-    return "owner"
-  }
-  return row.trustLevel ?? null
-}
+export type { WorkspaceAccessKey }
 
 async function getWorkspaceMemberRowByUserId(
   workspaceId: string,
@@ -363,7 +327,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
     const officialActorTemplates = await loadOfficialActorTemplates(trx)
     const installedActors: Array<{
-      actorRow: TableRow<"actors">
+      actorRow: ActorRecord
       template: LoadedOfficialActorTemplate
     }> = []
 
@@ -388,7 +352,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           parentId: null,
           canRepresentUser: template.canRepresentUser,
           specialties: template.actorSpecialties,
-          config: template.actorConfig as TableInsert<"actors">["config"],
+          config: template.actorConfig as ActorsConfig,
           currentVersion: 1,
         })
         .returningAll()
@@ -408,8 +372,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           parentId: null,
           canRepresentUser: template.canRepresentUser,
           specialties: template.actorSpecialties,
-          config:
-            template.actorConfig as TableInsert<"actorVersions">["config"],
+          config: template.actorConfig as ActorVersionsConfig,
           createdByWorkspaceMemberId: String(creatorMember.id),
         })
         .returning("id")
@@ -468,8 +431,8 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
     )
 
     return {
-      workspace: mapWorkspaceRow(workspace),
-      secretary: mapActorRow({
+      workspace: presentWorkspaceRow(workspace),
+      secretary: presentActorRow({
         row: chiefActor.actorRow,
         workspaceId: String(workspace.id),
         displayName: chiefActor.template.actorDisplayName,
@@ -528,7 +491,7 @@ export async function listUserWorkspaces(userId: string) {
     .orderBy("w.createdAt", "desc")
     .execute()
   return rows.map((row) => ({
-    ...mapWorkspaceRow(row),
+    ...presentWorkspaceRow(row),
     currentWorkspaceMemberId: row.currentWorkspaceMemberId ?? undefined,
     trustLevel: deriveWorkspaceTrustLevel(row),
   }))
@@ -541,7 +504,7 @@ export async function getWorkspaceById(workspaceId: string) {
     .where("id", "=", workspaceId)
     .where("deletedAt", "is", null)
     .executeTakeFirst()
-  return row ? mapWorkspaceRow(row) : null
+  return row ? presentWorkspaceRow(row) : null
 }
 
 export async function getWorkspaceChiefActorPreference(
@@ -588,7 +551,7 @@ export async function getWorkspaceChiefActorPreference(
     }
   }
 
-  return mapWorkspaceChiefActorPreferenceRow(row)
+  return presentWorkspaceChiefActorPreferenceRow(row)
 }
 
 export async function updateWorkspaceChiefActorPreference(
@@ -661,7 +624,7 @@ export async function updateWorkspace(
     .where("id", "=", workspaceId)
     .returningAll()
     .executeTakeFirst()
-  return row ? mapWorkspaceRow(row) : null
+  return row ? presentWorkspaceRow(row) : null
 }
 
 /**
@@ -743,7 +706,7 @@ export async function addMember(input: AddMemberInput) {
     )
 
     return {
-      member: mapMemberRow(memberRow),
+      member: presentMemberRow(memberRow),
     }
   })
 
@@ -794,7 +757,7 @@ export async function listMembers(workspaceId: string) {
     .orderBy("wm.joinedAt", "asc")
     .execute()
   return rows.map((row) => ({
-    ...mapMemberRow(row),
+    ...presentMemberRow(row),
     userName: row.userName,
     userEmail: row.userEmail,
     avatarUrl: row.avatarFileId ? getFileUrlById(row.avatarFileId) : null,
@@ -928,91 +891,5 @@ export async function revokeWorkspaceAccess(
 
   if (!row) {
     throw new Error("Access grant not found")
-  }
-}
-
-// ── Row mappers ──
-
-function mapWorkspaceRow(row: WorkspaceViewRow) {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    description: row.description ?? null,
-    ownerId: row.ownerId,
-    isTrusted: Boolean(row.isTrusted),
-    createdAt: serializeOptionalInstant(row.createdAt),
-    updatedAt: serializeOptionalInstant(row.updatedAt),
-  }
-}
-
-function mapActorRow(params: {
-  row: TableRow<"actors">
-  workspaceId: string
-  displayName: string
-  docs: ActorDoc[]
-}) {
-  const { row, workspaceId, displayName, docs } = params
-  return {
-    id: row.id,
-    workspaceId,
-    definition: {
-      name: displayName,
-      role: row.role,
-      title: row.title,
-      avatarFileId: row.avatarFileId ?? undefined,
-      parentId: row.parentId ?? undefined,
-      canRepresentUser: Boolean(row.canRepresentUser),
-      docs,
-      specialties: Array.isArray(row.specialties) ? row.specialties : [],
-      config: row.config
-        ? typeof row.config === "string"
-          ? JSON.parse(row.config)
-          : row.config
-        : {},
-    },
-    currentVersion: Number(row.currentVersion || 1),
-    isActive: true,
-    isPublicShared: Boolean(row.isPublicShared),
-    createdAt: serializeOptionalInstant(row.createdAt),
-    updatedAt: serializeOptionalInstant(row.updatedAt),
-  }
-}
-
-function mapMemberRow(row: WorkspaceMemberViewRow) {
-  return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    userId: row.userId,
-    trustLevel: deriveWorkspaceTrustLevel(row),
-    accessKeys: Array.isArray(row.accessKeys) ? row.accessKeys : [],
-    joinedAt: serializeOptionalInstant(row.joinedAt),
-  }
-}
-
-function mapWorkspaceChiefActorPreferenceRow(
-  row: WorkspaceChiefActorPreferenceRow
-): WorkspaceChiefActorPreference {
-  const chiefActorId =
-    row.chiefActorId && row.chiefActorDisplayName ? row.chiefActorId : undefined
-
-  return {
-    workspaceId: row.workspaceId,
-    workspaceMemberId: row.workspaceMemberId,
-    chiefActorId,
-    chiefActor:
-      chiefActorId && row.chiefActorDisplayName
-        ? {
-            id: chiefActorId,
-            displayName: row.chiefActorDisplayName,
-            role: (row.chiefActorRole as ActorRole | null) || "assistant",
-            title: row.chiefActorTitle || row.chiefActorRole || "Actor",
-            avatarUrl: row.chiefActorAvatarFileId
-              ? getFileUrlById(row.chiefActorAvatarFileId)
-              : undefined,
-          }
-        : undefined,
-    createdAt: serializeOptionalInstant(row.createdAt),
-    updatedAt: serializeOptionalInstant(row.updatedAt),
   }
 }

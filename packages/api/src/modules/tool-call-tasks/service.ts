@@ -1,31 +1,38 @@
 import {
   extractText,
-  parseJsonObject,
   textBlocks,
   type CanonicalContentBlock,
   type Timestamp,
   type TaskNoticeStatus,
 } from "@synapse/shared"
-import type {
-  ToolCallTasksDeliveryKind,
-  ToolCallTasksExecutorKind,
-  ToolCallTasksHumanSurface,
-  ToolCallTasksLifecycleStatus,
-  ToolCallTasksOutcome,
-} from "../../infrastructure/database/generated/db.js"
 import {
   db,
   withDbTransaction,
   type Executor,
-  type TableInsert,
-  type TableRow,
 } from "../../infrastructure/database/kysely.js"
+import { serializeNowInstant } from "../../infrastructure/datetime.js"
 import {
-  requireInstantDate,
-  serializeInstant,
-  serializeNowInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+  presentToolCallTask,
+  presentToolCallTaskOutputChunk,
+  type ToolCallTaskOutputChunk,
+  type ToolCallTaskRecord,
+} from "./presenter.js"
+import type {
+  ToolCallTaskDeliveryKind,
+  ToolCallTaskExecutorKind,
+  ToolCallTaskFinalErrorPayload,
+  ToolCallTaskFinalResultPayload,
+  ToolCallTaskHumanSurface,
+  ToolCallTaskImmediateResultPayload,
+  ToolCallTaskInsert,
+  ToolCallTaskLifecycleStatus,
+  ToolCallTaskMetadata,
+  ToolCallTaskOutcome,
+  ToolCallTaskOutputChunkInsert,
+  ToolCallTaskOutputChunkMetadata,
+  ToolCallTaskOutputChunkRow,
+  ToolCallTaskRequestPayload,
+} from "./repo.types.js"
 import { sql } from "kysely"
 import {
   createConversationEvent,
@@ -40,70 +47,20 @@ import {
 } from "../session/runtime.js"
 import { getSession } from "../session/service.js"
 
-export type ToolCallTaskLifecycleStatus = ToolCallTasksLifecycleStatus
-export type ToolCallTaskOutcome = ToolCallTasksOutcome
-export type ToolCallTaskDeliveryKind = ToolCallTasksDeliveryKind
-export type ToolCallTaskHumanSurface = ToolCallTasksHumanSurface
-export type ToolCallTaskExecutorKind = ToolCallTasksExecutorKind
-
-type ToolCallTaskRow = TableRow<"toolCallTasks">
-type ToolCallTaskOutputChunkRow = Pick<
-  TableRow<"toolCallTaskOutputChunks">,
-  "createdAt" | "metadata" | "seq" | "stream" | "textValue"
->
-
-export interface ToolCallTaskRecord {
-  id: string
-  workspaceId: string
-  conversationId: string
-  /** Axis 1: where the result comes from. */
-  executorKind: ToolCallTaskExecutorKind
-  /** Axis 2: how the blocked waiter (agent) is woken. */
-  deliveryKind: ToolCallTaskDeliveryKind
-  /** Axis 3: does a human see/answer this? */
-  humanSurface: ToolCallTaskHumanSurface
-  /** THE delivery key (actor OR remote_agent subject). */
-  principalSubjectId: string
-  /** Present iff delivery_kind=session_wakeup. */
-  sessionId?: string
-  /** Optional associative col (ask/plan have it, runtime_auth doesn't). */
-  remoteAgentRunId?: string
-  turnId?: string
-  sourceToolCallId?: string
-  sourceToolName: string
-  /** Pure lifecycle state machine. */
-  lifecycleStatus: ToolCallTaskLifecycleStatus
-  /** Business verdict, set only when lifecycleStatus='completed'. */
-  outcome?: ToolCallTaskOutcome
-  statusMessage?: string
-  supportsCancel: boolean
-  supportsOutputTail: boolean
-  /** Optimistic-concurrency token for human resolution. */
-  revision: number
-  requestKey: string
-  requesterParticipantId?: string
-  targetParticipantId?: string
-  resolvedByParticipantId?: string
-  resolvedAt?: Timestamp
-  requestPayload: Record<string, unknown>
-  immediateResultPayload: Record<string, unknown>
-  finalResultPayload: Record<string, unknown>
-  finalErrorPayload: Record<string, unknown>
-  metadata: Record<string, unknown>
-  conversationItemId?: string
-  completionItemId?: string
-  deadlineAt?: Timestamp
-  expiresAt?: Timestamp
-  retentionTtlMs?: number
-  retainUntil?: Timestamp
-  cancelRequestedAt?: Timestamp
-  cancelReason?: string
-  lastOutputSeq: number
-  lastOutputAt?: Timestamp
-  completedAt?: Timestamp
-  createdAt: Timestamp
-  updatedAt: Timestamp
-}
+// Stable re-exports: external modules import these enum aliases + the DTO from
+// `tool-call-tasks/service.js`. DB-touching definitions now live in repo.types /
+// presenter (guard-layering r1/r2/r3/r4).
+export type {
+  ToolCallTaskDeliveryKind,
+  ToolCallTaskExecutorKind,
+  ToolCallTaskHumanSurface,
+  ToolCallTaskLifecycleStatus,
+  ToolCallTaskOutcome,
+} from "./repo.types.js"
+export type {
+  ToolCallTaskOutputChunk,
+  ToolCallTaskRecord,
+} from "./presenter.js"
 
 export interface CreateToolCallTaskParams {
   workspaceId: string
@@ -144,14 +101,6 @@ interface ToolCallTaskTerminalNoticeParams {
   notifyActor?: boolean
 }
 
-export interface ToolCallTaskOutputChunk {
-  seq: number
-  stream: "stdout" | "stderr" | "system"
-  text: string
-  createdAt: Timestamp
-  metadata: Record<string, unknown>
-}
-
 const TERMINAL_TOOL_CALL_TASK_STATUSES = new Set<ToolCallTaskLifecycleStatus>([
   "completed",
   "failed",
@@ -176,69 +125,6 @@ function noticeStatusToLifecycle(
 function toDate(value: string | null | undefined) {
   if (!value) return null
   return new Date(value)
-}
-
-function mapToolCallTaskRow(
-  row: ToolCallTaskRow | null
-): ToolCallTaskRecord | null {
-  if (!row) {
-    return null
-  }
-
-  return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    conversationId: row.conversationId,
-    executorKind: row.executorKind as ToolCallTaskExecutorKind,
-    deliveryKind: row.deliveryKind as ToolCallTaskDeliveryKind,
-    humanSurface: row.humanSurface as ToolCallTaskHumanSurface,
-    principalSubjectId: row.principalSubjectId,
-    sessionId: row.sessionId || undefined,
-    remoteAgentRunId: row.remoteAgentRunId || undefined,
-    turnId: row.turnId || undefined,
-    sourceToolCallId: row.sourceToolCallId || undefined,
-    sourceToolName: row.sourceToolName,
-    lifecycleStatus: row.lifecycleStatus as ToolCallTaskLifecycleStatus,
-    outcome: (row.outcome as ToolCallTaskOutcome | null) || undefined,
-    statusMessage: row.statusMessage || undefined,
-    supportsCancel: row.supportsCancel === true,
-    supportsOutputTail: row.supportsOutputTail === true,
-    revision:
-      typeof row.revision === "number"
-        ? row.revision
-        : Number(row.revision || 1),
-    requestKey: row.requestKey,
-    requesterParticipantId: row.requesterParticipantId || undefined,
-    targetParticipantId: row.targetParticipantId || undefined,
-    resolvedByParticipantId: row.resolvedByParticipantId || undefined,
-    resolvedAt: serializeOptionalInstant(row.resolvedAt),
-    requestPayload: parseJsonObject(row.requestPayload),
-    immediateResultPayload: parseJsonObject(row.immediateResultPayload),
-    finalResultPayload: parseJsonObject(row.finalResultPayload),
-    finalErrorPayload: parseJsonObject(row.finalErrorPayload),
-    metadata: parseJsonObject(row.metadata),
-    conversationItemId: row.conversationItemId || undefined,
-    completionItemId: row.completionItemId || undefined,
-    deadlineAt: serializeOptionalInstant(row.deadlineAt),
-    expiresAt: serializeOptionalInstant(row.expiresAt),
-    retentionTtlMs:
-      typeof row.retentionTtlMs === "number" ? row.retentionTtlMs : undefined,
-    retainUntil: serializeOptionalInstant(row.retainUntil),
-    cancelRequestedAt: serializeOptionalInstant(row.cancelRequestedAt),
-    cancelReason: row.cancelReason || undefined,
-    lastOutputSeq:
-      typeof row.lastOutputSeq === "number"
-        ? row.lastOutputSeq
-        : Number(row.lastOutputSeq || 0),
-    lastOutputAt: serializeOptionalInstant(row.lastOutputAt),
-    completedAt: serializeOptionalInstant(row.completedAt),
-    createdAt: serializeInstant(
-      requireInstantDate(row.createdAt, `Tool-call task ${row.id} created_at`)
-    ),
-    updatedAt: serializeInstant(
-      requireInstantDate(row.updatedAt, `Tool-call task ${row.id} updated_at`)
-    ),
-  } satisfies ToolCallTaskRecord
 }
 
 async function assertSessionAllowsToolCallTasks(
@@ -270,7 +156,7 @@ export async function insertToolCallTask(
     await assertSessionAllowsToolCallTasks(executor, params.sessionId)
   }
 
-  const row: TableInsert<"toolCallTasks"> = {
+  const row: ToolCallTaskInsert = {
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     executorKind: params.executorKind,
@@ -289,12 +175,10 @@ export async function insertToolCallTask(
     requestKey: params.requestKey,
     requesterParticipantId: params.requesterParticipantId || null,
     targetParticipantId: params.targetParticipantId || null,
-    requestPayload: (params.requestPayload ||
-      {}) as TableInsert<"toolCallTasks">["requestPayload"],
+    requestPayload: (params.requestPayload || {}) as ToolCallTaskRequestPayload,
     immediateResultPayload: (params.immediateResultPayload ||
-      {}) as TableInsert<"toolCallTasks">["immediateResultPayload"],
-    metadata: (params.metadata ||
-      {}) as TableInsert<"toolCallTasks">["metadata"],
+      {}) as ToolCallTaskImmediateResultPayload,
+    metadata: (params.metadata || {}) as ToolCallTaskMetadata,
     deadlineAt: toDate(params.deadlineAt),
     expiresAt: toDate(params.expiresAt),
     retentionTtlMs: params.retentionTtlMs ?? null,
@@ -307,7 +191,7 @@ export async function insertToolCallTask(
     .returningAll()
     .executeTakeFirst()
 
-  const record = mapToolCallTaskRow(createdRow ?? null)
+  const record = presentToolCallTask(createdRow ?? null)
   if (!record) {
     throw new Error("Failed to create tool-call task")
   }
@@ -354,11 +238,10 @@ export async function insertToolCallTaskDeduped(
       requesterParticipantId: params.requesterParticipantId || null,
       targetParticipantId: params.targetParticipantId || null,
       requestPayload: (params.requestPayload ||
-        {}) as TableInsert<"toolCallTasks">["requestPayload"],
+        {}) as ToolCallTaskRequestPayload,
       immediateResultPayload: (params.immediateResultPayload ||
-        {}) as TableInsert<"toolCallTasks">["immediateResultPayload"],
-      metadata: (params.metadata ||
-        {}) as TableInsert<"toolCallTasks">["metadata"],
+        {}) as ToolCallTaskImmediateResultPayload,
+      metadata: (params.metadata || {}) as ToolCallTaskMetadata,
       deadlineAt: toDate(params.deadlineAt),
       expiresAt: toDate(params.expiresAt),
       retentionTtlMs: params.retentionTtlMs ?? null,
@@ -378,7 +261,7 @@ export async function insertToolCallTaskDeduped(
     .returningAll()
     .executeTakeFirst()
 
-  return mapToolCallTaskRow(createdRow ?? null)
+  return presentToolCallTask(createdRow ?? null)
 }
 
 /**
@@ -402,7 +285,7 @@ export async function findLiveToolCallTaskByRequestKey(
     ])
     .limit(1)
     .executeTakeFirst()
-  return mapToolCallTaskRow(row || null)
+  return presentToolCallTask(row || null)
 }
 
 export async function createToolCallTask(params: CreateToolCallTaskParams) {
@@ -463,7 +346,7 @@ export async function getToolCallTask(taskId: string) {
     .limit(1)
     .executeTakeFirst()
 
-  return mapToolCallTaskRow(row || null)
+  return presentToolCallTask(row || null)
 }
 
 export async function appendToolCallTaskOutput(
@@ -485,13 +368,12 @@ export async function appendToolCallTaskOutput(
 
   let appendedSeq: number
   if (typeof chunk.seq === "number") {
-    const row: TableInsert<"toolCallTaskOutputChunks"> = {
+    const row: ToolCallTaskOutputChunkInsert = {
       taskId: taskId,
       seq: chunk.seq,
       stream: chunk.stream,
       textValue: text,
-      metadata: (chunk.metadata ||
-        {}) as TableInsert<"toolCallTaskOutputChunks">["metadata"],
+      metadata: (chunk.metadata || {}) as ToolCallTaskOutputChunkMetadata,
       createdAt: toDate(chunk.createdAt) ?? undefined,
     }
     await db
@@ -575,7 +457,7 @@ export async function getToolCallTaskForSession(
     .limit(1)
     .executeTakeFirst()
 
-  return mapToolCallTaskRow(row || null)
+  return presentToolCallTask(row || null)
 }
 
 export async function listToolCallTasksForSession(params: {
@@ -598,7 +480,7 @@ export async function listToolCallTasksForSession(params: {
     .execute()
 
   return result
-    .map((row) => mapToolCallTaskRow(row))
+    .map((row) => presentToolCallTask(row))
     .filter((row): row is ToolCallTaskRecord => row !== null)
 }
 
@@ -633,18 +515,9 @@ export async function getToolCallTaskOutput(params: {
   const orderedRows =
     afterSeq > 0 ? rows : ([...rows].reverse() as ToolCallTaskOutputChunkRow[])
 
-  return orderedRows.map((row) => ({
-    seq: typeof row.seq === "number" ? row.seq : Number(row.seq || 0),
-    stream: row.stream as ToolCallTaskOutputChunk["stream"],
-    text: row.textValue,
-    createdAt: serializeInstant(
-      requireInstantDate(
-        row.createdAt,
-        "Tool-call task output chunk created_at"
-      )
-    ),
-    metadata: parseJsonObject(row.metadata),
-  })) satisfies ToolCallTaskOutputChunk[]
+  return orderedRows.map((row) =>
+    presentToolCallTaskOutputChunk(row)
+  ) satisfies ToolCallTaskOutputChunk[]
 }
 
 async function updateToolCallTaskRecord(
@@ -713,14 +586,14 @@ async function updateToolCallTaskRecord(
         params.supportsOutputTail ?? existing.supportsOutputTail,
       immediateResultPayload: (params.immediateResultPayload ??
         existing.immediateResultPayload ??
-        {}) as TableInsert<"toolCallTasks">["immediateResultPayload"],
+        {}) as ToolCallTaskImmediateResultPayload,
       finalResultPayload: (params.finalResultPayload ??
         existing.finalResultPayload ??
-        {}) as TableInsert<"toolCallTasks">["finalResultPayload"],
+        {}) as ToolCallTaskFinalResultPayload,
       finalErrorPayload: (params.finalErrorPayload ??
         existing.finalErrorPayload ??
-        {}) as TableInsert<"toolCallTasks">["finalErrorPayload"],
-      metadata: nextMetadata as TableInsert<"toolCallTasks">["metadata"],
+        {}) as ToolCallTaskFinalErrorPayload,
+      metadata: nextMetadata as ToolCallTaskMetadata,
       conversationItemId:
         params.conversationItemId ?? existing.conversationItemId ?? null,
       completionItemId:
@@ -759,7 +632,7 @@ async function updateToolCallTaskRecord(
   const row = await update.returningAll().executeTakeFirst()
 
   // Zero rows = the guard rejected a terminal-row mutation; return current state.
-  const updated = mapToolCallTaskRow(row || null) ?? existing
+  const updated = presentToolCallTask(row || null) ?? existing
   if (!row) {
     return updated
   }
@@ -849,13 +722,13 @@ async function emitTaskNotice(
       statusMessage: params.summary ?? record.statusMessage ?? null,
       finalResultPayload: (params.finalResultPayload ??
         record.finalResultPayload ??
-        {}) as TableInsert<"toolCallTasks">["finalResultPayload"],
+        {}) as ToolCallTaskFinalResultPayload,
       finalErrorPayload: (params.finalErrorPayload ??
         record.finalErrorPayload ??
-        {}) as TableInsert<"toolCallTasks">["finalErrorPayload"],
+        {}) as ToolCallTaskFinalErrorPayload,
       metadata: (params.metadata
         ? { ...record.metadata, ...params.metadata }
-        : record.metadata) as TableInsert<"toolCallTasks">["metadata"],
+        : record.metadata) as ToolCallTaskMetadata,
       completedAt: new Date(),
       updatedAt: new Date(),
     })
@@ -868,7 +741,7 @@ async function emitTaskNotice(
   if (!flipRow) {
     return (await getToolCallTask(record.id)) ?? record
   }
-  const flipped = mapToolCallTaskRow(flipRow) ?? record
+  const flipped = presentToolCallTask(flipRow) ?? record
   if (flipped.sessionId) {
     await publishSessionRuntime(flipped.workspaceId, flipped.sessionId)
   }
@@ -999,7 +872,7 @@ async function deliverTaskNotice(
         // the row is already terminal so no terminal guard). On commit, marker
         // set ⟺ wakeup row durably present.
         const updatedRecord = completionItemId
-          ? (mapToolCallTaskRow(
+          ? (presentToolCallTask(
               (await trx
                 .updateTable("toolCallTasks")
                 .set({

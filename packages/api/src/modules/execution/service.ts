@@ -2,9 +2,19 @@ import { createHash } from "crypto"
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
 import { nowIsoInstant } from "@synapse/shared/datetime"
-import type { PayloadBlobsRetentionClass } from "../../infrastructure/database/generated/db.js"
-import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
+import { db } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
+import type {
+  PayloadBlobsJsonBody,
+  PayloadBlobsRetentionClass,
+  ProviderStepsCapabilitiesSnapshot,
+  RuntimeEventsPayload,
+  ToolCallsNormalizedInput,
+  ToolCallsSourceSnapshot,
+  ToolResultPartsMetadata,
+  ToolResultsMetadata,
+  TurnsMetadata,
+} from "./repo.types.js"
 import { updateSessionStatus } from "../session/service.js"
 import {
   markTurnWakeupsDropped,
@@ -110,7 +120,7 @@ async function storePayloadBlobInternal(
       contentType: contentType,
       jsonBody: (contentType === "json"
         ? (payload ?? {})
-        : null) as TableInsert<"payloadBlobs">["jsonBody"],
+        : null) as PayloadBlobsJsonBody,
       textBody: contentType === "text" ? String(payload ?? "") : null,
       byteSize: Buffer.byteLength(body, "utf8"),
       retentionClass: retentionClass,
@@ -158,7 +168,7 @@ export async function createTurn(params: {
       triggerItemId: params.triggerItemId || null,
       triggerType: params.triggerType,
       status: "running",
-      metadata: (params.metadata || {}) as TableInsert<"turns">["metadata"],
+      metadata: (params.metadata || {}) as TurnsMetadata,
       startedAt: sql`NOW()`,
     })
     .returningAll()
@@ -235,7 +245,7 @@ export async function logProviderStep(params: {
       modelBindingVersionId: asNullableUuid(params.modelBindingVersionId),
       modelName: params.modelName,
       capabilitiesSnapshot: (params.capabilitiesSnapshot ||
-        {}) as TableInsert<"providerSteps">["capabilitiesSnapshot"],
+        {}) as ProviderStepsCapabilitiesSnapshot,
       requestPayloadBlobId: requestPayloadBlobId,
       responsePayloadBlobId: responsePayloadBlobId,
       stopReason: params.stopReason || null,
@@ -256,7 +266,7 @@ export async function logProviderStep(params: {
         modelBindingVersionId: asNullableUuid(params.modelBindingVersionId),
         modelName: params.modelName,
         capabilitiesSnapshot: (params.capabilitiesSnapshot ||
-          {}) as TableInsert<"providerSteps">["capabilitiesSnapshot"],
+          {}) as ProviderStepsCapabilitiesSnapshot,
         requestPayloadBlobId: requestPayloadBlobId,
         responsePayloadBlobId: responsePayloadBlobId,
         stopReason: params.stopReason || null,
@@ -303,12 +313,10 @@ export async function createToolCall(params: {
       bundleId: params.bundleId,
       toolName: params.toolName,
       sourceKind: params.sourceKind,
-      sourceSnapshot:
-        params.sourceSnapshot as TableInsert<"toolCalls">["sourceSnapshot"],
+      sourceSnapshot: params.sourceSnapshot as ToolCallsSourceSnapshot,
       pluginInstallationId: params.pluginInstallationId || null,
       deviceToolId: params.deviceToolId || null,
-      normalizedInput:
-        params.normalizedInput as TableInsert<"toolCalls">["normalizedInput"],
+      normalizedInput: params.normalizedInput as ToolCallsNormalizedInput,
       status: "pending",
       createdAt: sql`NOW()`,
     })
@@ -426,8 +434,7 @@ export async function createToolResult(params: {
       resultIndex: params.resultIndex || 0,
       isError: params.isError || false,
       errorMessage: params.errorMessage || null,
-      metadata: (params.metadata ||
-        {}) as TableInsert<"toolResults">["metadata"],
+      metadata: (params.metadata || {}) as ToolResultsMetadata,
       createdAt: sql`NOW()`,
     })
     .returningAll()
@@ -455,8 +462,7 @@ export async function createToolResult(params: {
               : null,
           mimeType: part.mimeType || null,
           name: part.name || null,
-          metadata: (part.metadata ||
-            {}) as TableInsert<"toolResultParts">["metadata"],
+          metadata: (part.metadata || {}) as ToolResultPartsMetadata,
         }))
       )
       .execute()
@@ -545,8 +551,7 @@ export async function logRuntimeEvent(params: {
       source: params.source,
       level: params.level || "info",
       eventType: params.eventType,
-      payload: (params.payload ||
-        {}) as TableInsert<"runtimeEvents">["payload"],
+      payload: (params.payload || {}) as RuntimeEventsPayload,
       createdAt: sql`NOW()`,
     })
     .execute()

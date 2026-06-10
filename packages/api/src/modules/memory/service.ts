@@ -1,5 +1,4 @@
 import type {
-  CanonicalContentBlock,
   CanonicalContentBlockInput,
   CanonicalContextItem,
   Memory,
@@ -16,7 +15,6 @@ import {
   extractText,
   MEMORY_PERMISSION,
   normalizeCanonicalContentBlocks,
-  parseJsonObject,
   SUBJECT_KIND,
   textBlocks,
 } from "@synapse/shared"
@@ -28,13 +26,8 @@ import {
   db,
   withDbTransaction,
   type Executor,
-  type TableInsert,
 } from "../../infrastructure/database/kysely.js"
-import {
-  parseInstantString,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
@@ -65,6 +58,14 @@ import {
 import { hasMemorySpaceOwnerImplicitPermissionForTuple } from "../access/evaluator.js"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { listSpaceLevelGrantSpaceIds } from "./access-grant-storage.js"
+import { presentMemoryRow } from "./presenter.js"
+import type {
+  MemoryItemsMetadata,
+  MemoryItemPartsMetadata,
+  MemoryRecallRunResultsMatchedTerms,
+  MemoryRecallRunResultsMetadata,
+  MemoryRow,
+} from "./repo.types.js"
 
 const DEFAULT_NAMESPACE = "default"
 
@@ -89,45 +90,6 @@ export type MemoryPreset =
   | "actor_private"
   | "participant_private"
   | "user_private"
-
-type MemoryRow = {
-  id: string
-  workspace_id: string
-  memory_space_id: string
-  space_owner_subject_id: string
-  space_scope_subject_id: string | null
-  space_namespace_key: string
-  owner_kind: string
-  owner_workspace_id: string | null
-  owner_workspace_member_id: string | null
-  owner_actor_id: string | null
-  owner_remote_agent_id: string | null
-  owner_conversation_id: string | null
-  scope_kind: string | null
-  scope_workspace_id_via_join: string | null
-  scope_conversation_id_via_join: string | null
-  category: MemoryCategory
-  state: MemoryItemState
-  importance: number
-  confidence: number
-  tags: string[]
-  text_digest: string
-  search_text: string
-  index_status: "lexical_ready" | "ready" | "failed"
-  embedding_model: string
-  embedding_dim: number | null
-  indexed_at: Date | null
-  index_error: string | null
-  source_item_id: string | null
-  source_tool_call_id: string | null
-  source_turn_id: string | null
-  supersedes_item_id: string | null
-  metadata: Record<string, unknown> | string | null
-  created_at: Date
-  updated_at: Date
-  owner_label: string | null
-  scope_label: string | null
-}
 
 type MemorySpaceRow = {
   id: string
@@ -303,50 +265,6 @@ export function inferMemoryPreset(
   if (owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER && !scope)
     return "user_private"
   return null
-}
-
-function buildSubjectRefFromJoin(params: {
-  kind: string | null
-  workspaceId: string | null
-  workspaceMemberId: string | null
-  actorId: string | null
-  remoteAgentId: string | null
-  conversationId: string | null
-}): SubjectRef | undefined {
-  if (!params.kind) return undefined
-  switch (params.kind) {
-    case SUBJECT_KIND.WORKSPACE:
-      return params.workspaceId
-        ? { kind: SUBJECT_KIND.WORKSPACE, workspaceId: params.workspaceId }
-        : undefined
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return params.workspaceMemberId
-        ? {
-            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: params.workspaceMemberId,
-          }
-        : undefined
-    case SUBJECT_KIND.ACTOR:
-      return params.actorId
-        ? { kind: SUBJECT_KIND.ACTOR, actorId: params.actorId }
-        : undefined
-    case SUBJECT_KIND.REMOTE_AGENT:
-      return params.remoteAgentId
-        ? {
-            kind: SUBJECT_KIND.REMOTE_AGENT,
-            remoteAgentId: params.remoteAgentId,
-          }
-        : undefined
-    case SUBJECT_KIND.CONVERSATION:
-      return params.conversationId
-        ? {
-            kind: SUBJECT_KIND.CONVERSATION,
-            conversationId: params.conversationId,
-          }
-        : undefined
-    default:
-      return undefined
-  }
 }
 
 function buildMemoryOwnerLabel(memory: {
@@ -539,66 +457,6 @@ function applyMmrRerank<
   return [...selected, ...tail]
 }
 
-function mapMemoryRow(
-  row: MemoryRow,
-  contentBlocks: CanonicalContentBlock[]
-): Memory {
-  const owner = buildSubjectRefFromJoin({
-    kind: row.owner_kind,
-    workspaceId: row.owner_workspace_id,
-    workspaceMemberId: row.owner_workspace_member_id,
-    actorId: row.owner_actor_id,
-    remoteAgentId: row.owner_remote_agent_id,
-    conversationId: row.owner_conversation_id,
-  })
-  if (!owner) {
-    throw new Error(
-      `memory_items ${row.id}: could not decode owner subject (kind=${row.owner_kind})`
-    )
-  }
-  const scope = buildSubjectRefFromJoin({
-    kind: row.scope_kind,
-    workspaceId: row.scope_workspace_id_via_join,
-    workspaceMemberId: null,
-    actorId: null,
-    remoteAgentId: null,
-    conversationId: row.scope_conversation_id_via_join,
-  })
-  const state = row.state
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    spaceId: row.memory_space_id,
-    owner,
-    scope,
-    namespaceKey: row.space_namespace_key,
-    category: row.category,
-    state,
-    status: state,
-    stability: "durable",
-    importance: Number(row.importance ?? 0),
-    confidence: Number(row.confidence ?? 0),
-    tags: row.tags ?? [],
-    textDigest: row.text_digest || "",
-    searchText: row.search_text || "",
-    contentBlocks,
-    sourceItemId: row.source_item_id ?? undefined,
-    sourceToolCallId: row.source_tool_call_id ?? undefined,
-    sourceTurnId: row.source_turn_id ?? undefined,
-    supersedesMemoryId: row.supersedes_item_id ?? undefined,
-    metadata: parseJsonObject(row.metadata),
-    indexStatus: row.index_status,
-    embeddingModel: row.embedding_model || undefined,
-    embeddingDim: row.embedding_dim ?? undefined,
-    indexedAt: serializeOptionalInstant(row.indexed_at),
-    indexError: row.index_error ?? undefined,
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-    ownerLabel: row.owner_label ?? undefined,
-    scopeLabel: row.scope_label ?? undefined,
-  }
-}
-
 async function loadMemoryItemsFromRows(rows: MemoryRow[]) {
   if (rows.length === 0) return []
 
@@ -630,7 +488,7 @@ async function loadMemoryItemsFromRows(rows: MemoryRow[]) {
   }
 
   return rows.map((row) =>
-    mapMemoryRow(
+    presentMemoryRow(
       row,
       itemPartsToCanonicalContentBlocks(partsByMemoryId.get(row.id) || [])
     )
@@ -1009,8 +867,7 @@ async function insertMemoryParts(
             : null,
         mimeType: part.mimeType || null,
         name: part.name || null,
-        metadata: (part.metadata ||
-          {}) as TableInsert<"memoryItemParts">["metadata"],
+        metadata: (part.metadata || {}) as MemoryItemPartsMetadata,
       })
     )
   }
@@ -1642,14 +1499,14 @@ async function recordMemoryRecallRun(params: {
           textScore: result.textScore ?? null,
           similarityScore: result.similarityScore ?? null,
           matchedTerms: (result.matchedTerms ??
-            []) as TableInsert<"memoryRecallRunResults">["matchedTerms"],
+            []) as MemoryRecallRunResultsMatchedTerms,
           recallReason: result.recallReason || null,
           metadata: {
             ownerKind: result.owner.kind,
             scopeKind: result.scope?.kind,
             namespaceKey: result.namespaceKey,
             category: result.category,
-          } as TableInsert<"memoryRecallRunResults">["metadata"],
+          } as MemoryRecallRunResultsMetadata,
           createdAt: sql`NOW()`,
         })
       )
@@ -1730,8 +1587,7 @@ export async function createMemory(
         sourceToolCallId: input.sourceToolCallId || null,
         sourceTurnId: input.sourceTurnId || null,
         supersedesItemId: input.supersedesMemoryId || null,
-        metadata: (input.metadata ||
-          {}) as TableInsert<"memoryItems">["metadata"],
+        metadata: (input.metadata || {}) as MemoryItemsMetadata,
         createdAt: sql`NOW()`,
       })
     )
@@ -1830,7 +1686,7 @@ export async function updateMemory(
               : existing.supersedesMemoryId || null,
           metadata: (input.metadata ||
             existing.metadata ||
-            {}) as TableInsert<"memoryItems">["metadata"],
+            {}) as MemoryItemsMetadata,
         })
         .where("id", "=", memoryId)
         .where("workspaceId", "=", workspaceId)

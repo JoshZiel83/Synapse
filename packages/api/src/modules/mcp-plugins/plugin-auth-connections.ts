@@ -3,11 +3,9 @@ import type pg from "pg"
 import type {
   PluginAuthBindingDefinition,
   PluginAuthConnection,
-  PluginAuthSession,
   PluginAuthValueSource,
   PluginConfigFieldDefinition,
 } from "@synapse/shared"
-import { assertIsoInstant } from "@synapse/shared/datetime"
 import { CompiledQuery, sql } from "kysely"
 import { config } from "../../config/index.js"
 import {
@@ -27,7 +25,6 @@ import {
 import {
   parseInstantString,
   serializeInstant,
-  serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
 import {
   normalizeMijiaLocale,
@@ -49,6 +46,7 @@ import {
   resolveFeishuOpenBaseUrl,
 } from "./feishu/client.js"
 import { normalizeFeishuFeatureKeys } from "./feishu/features.js"
+import { presentAuthConnection, presentAuthSession } from "./presenter.js"
 
 type JsonObject = Record<string, unknown>
 type QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
@@ -65,9 +63,9 @@ const dbRunner: QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
     .executeQuery<T>(CompiledQuery.raw(text, params ?? []))
     .then((r) => ({ rows: r.rows as T[] }))
 
-type PluginAuthSessionRow = TableRow<"pluginAuthSessions">
+export type PluginAuthSessionRow = TableRow<"pluginAuthSessions">
 
-type PluginConnectionRow = TableRow<"pluginConnections"> & {
+export type PluginConnectionRow = TableRow<"pluginConnections"> & {
   catalogItemId: string
   catalogVersionId: string | null
 }
@@ -218,76 +216,6 @@ function encryptDeep(value: unknown): unknown {
     return result
   }
   return value
-}
-
-function getAuthChallenge(
-  row: PluginAuthSessionRow
-): PluginAuthSession["challenge"] | undefined {
-  const challenge = asObject(row.challengePayload)
-  const kind = asString(challenge.kind)
-  if (!kind) return undefined
-  if (kind !== "redirect" && kind !== "qr_code" && kind !== "none") {
-    return undefined
-  }
-  return {
-    kind: kind as NonNullable<PluginAuthSession["challenge"]>["kind"],
-    url: asString(challenge.url) || undefined,
-    qrUrl: asString(challenge.qrUrl) || undefined,
-    openMode:
-      challenge.openMode === "replace" || challenge.openMode === "popup"
-        ? challenge.openMode
-        : undefined,
-    expiresAt: asString(challenge.expiresAt)
-      ? assertIsoInstant(asString(challenge.expiresAt)!)
-      : undefined,
-    metadata: asObject(challenge.metadata),
-  }
-}
-
-function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
-  return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    packageId: row.catalogItemId,
-    bindingKey: row.bindingKey,
-    driver: row.driver as PluginAuthConnection["driver"],
-    externalAccountId: row.externalAccountId || undefined,
-    displayName: row.displayName || undefined,
-    avatarUrl: row.avatarUrl || undefined,
-    status: row.status as PluginAuthConnection["status"],
-    expiresAt: serializeOptionalInstant(row.expiresAt),
-    publicPayload: asObject(row.publicPayload),
-    createdAt: serializeInstant(row.createdAt),
-    updatedAt: serializeInstant(row.updatedAt),
-  }
-}
-
-function mapSessionRow(row: PluginAuthSessionRow): PluginAuthSession {
-  const metadata = asObject(row.metadata)
-  return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    packageId: row.catalogItemId,
-    revisionId: row.catalogVersionId || undefined,
-    bindingKey: row.bindingKey,
-    driver: row.driver as PluginAuthSession["driver"],
-    workspaceMemberId: row.workspaceMemberId,
-    status: row.status as PluginAuthSession["status"],
-    phase: (row.phase as PluginAuthSession["phase"] | null) || undefined,
-    state: row.state || undefined,
-    challenge: getAuthChallenge(row),
-    errorCode: row.errorCode || undefined,
-    errorMessage: row.errorMessage || undefined,
-    resultPreview: asObject(row.resultPreview),
-    authConnectionId:
-      typeof metadata.consumedConnectionId === "string"
-        ? metadata.consumedConnectionId
-        : undefined,
-    metadata,
-    expiresAt: serializeInstant(row.expiresAt),
-    createdAt: serializeInstant(row.createdAt),
-    updatedAt: serializeInstant(row.updatedAt),
-  }
 }
 
 async function getPluginAuthSpec(
@@ -1312,10 +1240,11 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
       })
       .where("id", "=", row.id)
       .execute()
-    return {
-      ...row,
-      status: "expired",
-    }
+    // Reflect the just-persisted status on the in-memory row without spreading
+    // the DB row outward (guard-layering r7); the caller reads named fields.
+    const expiredRow: PluginConnectionRow = { ...row }
+    expiredRow.status = "expired"
+    return expiredRow
   }
 }
 
@@ -1450,7 +1379,7 @@ export async function startPluginAuthSession(input: {
         .executeTakeFirstOrThrow()
 
       return {
-        session: mapSessionRow(inserted),
+        session: presentAuthSession(inserted),
       }
     }
     case "mijia_qr_login": {
@@ -1483,7 +1412,7 @@ export async function startPluginAuthSession(input: {
         .executeTakeFirstOrThrow()
 
       return {
-        session: mapSessionRow(inserted),
+        session: presentAuthSession(inserted),
       }
     }
     case "feishu_cli_setup": {
@@ -1549,7 +1478,7 @@ export async function startPluginAuthSession(input: {
         .executeTakeFirstOrThrow()
 
       return {
-        session: mapSessionRow(inserted),
+        session: presentAuthSession(inserted),
       }
     }
     default:
@@ -1576,7 +1505,7 @@ export async function getPluginAuthSession(
   ) {
     row = await expirePluginAuthSession(row.id)
   }
-  return mapSessionRow(row)
+  return presentAuthSession(row)
 }
 
 export async function inspectPluginAuthSession(input: {
@@ -1630,7 +1559,7 @@ export async function inspectPluginAuthSession(input: {
     .executeTakeFirstOrThrow()
 
   return {
-    session: mapSessionRow(updated),
+    session: presentAuthSession(updated),
   }
 }
 
@@ -1669,7 +1598,7 @@ export async function handlePluginAuthCallback(input: {
       .where("id", "=", session.id)
       .returningAll()
       .executeTakeFirstOrThrow()
-    return mapSessionRow(failed)
+    return presentAuthSession(failed)
   }
 
   switch (session.driver) {
@@ -1784,7 +1713,7 @@ export async function handlePluginAuthCallback(input: {
         .returningAll()
         .executeTakeFirstOrThrow()
 
-      return mapSessionRow(updated)
+      return presentAuthSession(updated)
     }
     default:
       throw new PluginAuthError(
@@ -1798,7 +1727,9 @@ export async function getAuthConnection(
   connectionId: string,
   workspaceId: string
 ) {
-  return mapConnectionRow(await getConnectionRow(connectionId, workspaceId))
+  return presentAuthConnection(
+    await getConnectionRow(connectionId, workspaceId)
+  )
 }
 
 export async function attachAuthConnectionsToConfig(input: {
@@ -1957,7 +1888,7 @@ export async function attachAuthConnectionsToConfig(input: {
         connectionRow = inserted.rows[0]!
       }
 
-      connection = mapConnectionRow(connectionRow)
+      connection = presentAuthConnection(connectionRow)
 
       await run(
         `UPDATE plugin_auth_sessions

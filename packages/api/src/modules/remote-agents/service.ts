@@ -16,9 +16,6 @@ import {
   type RemoteAgentRuntimeCatalogEntryView,
   type RemoteAgentRuntimeKind,
   type RemoteAgentRuntimeStateType,
-  type RemoteAgentRuntimeSummaryView,
-  type RemoteAgentRuntimeState,
-  type RemoteAgentView,
   type WorkspaceAppGrantPermission,
   type Timestamp,
 } from "@synapse/shared"
@@ -36,10 +33,17 @@ import {
   type Executor,
 } from "../../infrastructure/database/kysely.js"
 import {
-  requireInstantDate,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+  presentGroupTaskGrant,
+  presentMachineFromCamelRow,
+  presentMachineListItem,
+  presentMessageDelivery,
+  presentRemoteAgent,
+  presentRemoteAgentConversation,
+  presentRuntimeCatalogEntry,
+  presentRuntimeSnapshot,
+  presentRuntimeSummary,
+  type RemoteAgentRow,
+} from "./presenter.js"
 import {
   authorizeAction,
   listAuthorizedResourceIds,
@@ -1149,43 +1153,6 @@ async function loadConversationHostWorkspaceId(
   return result.rows[0]?.workspaceId ?? null
 }
 
-function mapRuntimeSummaryFromRow(row: {
-  runtime_kind: RemoteAgentRuntimeKind
-  runtime_state?: RemoteAgentRuntimeStateType | null
-  status_text?: string | null
-  latest_runtime_session_id?: string | null
-  latest_active_conversation_id?: string | null
-  latest_active_task_id?: string | null
-  last_activity_at?: Date | null
-  latest_last_run_started_at?: Date | null
-  latest_last_run_finished_at?: Date | null
-  last_error?: string | null
-  capabilities?: unknown
-  pending_conversation_count?: string | number | null
-  unread_delivery_count?: string | number | null
-}): RemoteAgentRuntimeSummaryView {
-  return {
-    runtimeKind: row.runtime_kind,
-    state: row.runtime_state ?? REMOTE_AGENT_RUNTIME_STATE.OFFLINE,
-    statusText: row.status_text ?? undefined,
-    sessionId: row.latest_runtime_session_id ?? undefined,
-    activeConversationId: row.latest_active_conversation_id ?? undefined,
-    activeTaskId: row.latest_active_task_id ?? undefined,
-    pendingConversationCount: Number(row.pending_conversation_count ?? 0),
-    unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
-    lastActivityAt: serializeOptionalInstant(row.last_activity_at),
-    lastRunStartedAt: serializeOptionalInstant(row.latest_last_run_started_at),
-    lastRunFinishedAt: serializeOptionalInstant(
-      row.latest_last_run_finished_at
-    ),
-    lastError: row.last_error ?? undefined,
-    capabilities:
-      row.capabilities && typeof row.capabilities === "object"
-        ? (row.capabilities as RuntimeCapabilities)
-        : {},
-  }
-}
-
 const LATEST_CONVERSATION_CONTEXT_LATERAL = `
   LEFT JOIN LATERAL (
     SELECT
@@ -1468,48 +1435,25 @@ export async function loadRemoteAgentRuntimeSnapshot(
     ? row.ctx_last_activity_at
     : row.last_activity_at
   const lastErrorActivityAt = lastActivityAt
-  const updatedAt = serializeInstant(
-    requireInstantDate(
-      row.updated_at,
-      `Remote agent ${row.remote_agent_id} updated_at`
-    )
-  )
-  const lastErrorAt =
-    serializeOptionalInstant(lastErrorActivityAt) ||
-    serializeInstant(
-      requireInstantDate(
-        row.updated_at,
-        `Remote agent ${row.remote_agent_id} updated_at`
-      )
-    )
-  return {
+  return presentRuntimeSnapshot({
     remoteAgentId: row.remote_agent_id,
     runtimeKind: row.runtime_kind,
     state: runtimeState,
-    statusText: statusText ?? undefined,
-    activeConversationId: row.latest_active_conversation_id ?? undefined,
-    activeTaskId: row.latest_active_task_id ?? undefined,
-    sessionId: row.latest_runtime_session_id ?? undefined,
-    pendingConversationCount: Number(row.pending_conversation_count ?? 0),
-    unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
-    lastActivityAt: serializeOptionalInstant(lastActivityAt),
-    lastRunStartedAt: serializeOptionalInstant(row.latest_last_run_started_at),
-    lastRunFinishedAt: serializeOptionalInstant(
-      row.latest_last_run_finished_at
-    ),
-    lastError:
-      lastErrorMessage && lastErrorAt
-        ? {
-            message: lastErrorMessage,
-            at: lastErrorAt,
-          }
-        : undefined,
-    updatedAt,
-    capabilities:
-      row.capabilities && typeof row.capabilities === "object"
-        ? (row.capabilities as RuntimeCapabilities)
-        : {},
-  }
+    statusText,
+    latestActiveConversationId: row.latest_active_conversation_id,
+    latestActiveTaskId: row.latest_active_task_id,
+    latestRuntimeSessionId: row.latest_runtime_session_id,
+    pendingConversationCount: row.pending_conversation_count,
+    unreadDeliveryCount: row.unread_delivery_count,
+    lastActivityAt,
+    latestLastRunStartedAt: row.latest_last_run_started_at,
+    latestLastRunFinishedAt: row.latest_last_run_finished_at,
+    lastErrorMessage,
+    lastErrorActivityAt,
+    updatedAtSource: row.updated_at,
+    updatedAtErrorLabel: `Remote agent ${row.remote_agent_id} updated_at`,
+    capabilities: row.capabilities,
+  })
 }
 
 async function emitRemoteAgentRuntimeUpdated(
@@ -1558,85 +1502,14 @@ async function emitRemoteAgentRuntimeUpdated(
   return snapshot
 }
 
-async function mapRemoteAgentRow(row: {
-  id: string
-  workspace_id: string
-  display_name: string
-  title: string
-  description: string | null
-  runtime_kind: RemoteAgentRuntimeKind
-  avatar_file_id: string | null
-  avatar_emoji: string | null
-  is_active: boolean
-  is_public_shared: boolean
-  metadata: unknown
-  owner_workspace_member_id: string | null
-  created_at: Date
-  updated_at: Date
-  machine_id?: string | null
-  machine_title?: string | null
-  binding_status?: string | null
-  runtime_path?: string | null
-  local_root_path?: string | null
-  machine_lifecycle_state?: string | null
-  runtime_state?: RemoteAgentRuntimeStateType | null
-  status_text?: string | null
-  latest_runtime_session_id?: string | null
-  latest_active_conversation_id?: string | null
-  latest_active_task_id?: string | null
-  last_activity_at?: Date | null
-  latest_last_run_started_at?: Date | null
-  latest_last_run_finished_at?: Date | null
-  last_error?: string | null
-  capabilities?: unknown
-  pending_conversation_count?: string | number | null
-  unread_delivery_count?: string | number | null
-}) {
-  const runtimeSummary = row.machine_id
-    ? mapRuntimeSummaryFromRow(row)
-    : undefined
+async function toRemoteAgentView(row: RemoteAgentRow) {
   const requiresContactApproval = await deriveRequiresContactApproval(
     db,
     "remote_agent",
     row.id,
     row.workspace_id
   )
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    displayName: row.display_name,
-    title: row.title,
-    description: row.description ?? undefined,
-    runtimeKind: row.runtime_kind,
-    avatarFileId: row.avatar_file_id ?? undefined,
-    avatarEmoji: row.avatar_emoji ?? undefined,
-    requiresContactApproval,
-    isActive: row.is_active,
-    isPublicShared: row.is_public_shared,
-    metadata:
-      row.metadata && typeof row.metadata === "object"
-        ? (row.metadata as Record<string, unknown>)
-        : {},
-    ownerWorkspaceMemberId: row.owner_workspace_member_id ?? undefined,
-    createdAt: serializeInstant(
-      requireInstantDate(row.created_at, `Remote agent ${row.id} created_at`)
-    ),
-    updatedAt: serializeInstant(
-      requireInstantDate(row.updated_at, `Remote agent ${row.id} updated_at`)
-    ),
-    runtimeSummary,
-    binding: row.machine_id
-      ? {
-          machineId: row.machine_id,
-          machineTitle: row.machine_title ?? undefined,
-          status: row.binding_status ?? "active",
-          runtimePath: row.runtime_path ?? undefined,
-          localRootPath: row.local_root_path ?? undefined,
-          machineLifecycleState: row.machine_lifecycle_state ?? undefined,
-          runtimeSummary,
-        }
-      : undefined,
-  }
+  return presentRemoteAgent(row, requiresContactApproval)
 }
 
 export async function listRemoteAgents(params: {
@@ -1709,7 +1582,7 @@ export async function listRemoteAgents(params: {
     [params.workspaceId, visibleIds]
   )
   return {
-    remoteAgents: await Promise.all(result.rows.map(mapRemoteAgentRow)),
+    remoteAgents: await Promise.all(result.rows.map(toRemoteAgentView)),
   }
 }
 
@@ -1789,7 +1662,7 @@ export async function getRemoteAgent(params: {
     throw new Error("Remote agent not found")
   }
   return {
-    remoteAgent: await mapRemoteAgentRow(row),
+    remoteAgent: await toRemoteAgentView(row),
   }
 }
 
@@ -1870,7 +1743,7 @@ export async function createRemoteAgent(params: {
     return row
   })
   return {
-    remoteAgent: await mapRemoteAgentRow({
+    remoteAgent: await toRemoteAgentView({
       ...insertedRow,
       workspace_id: params.workspaceId,
       display_name: params.displayName.trim(),
@@ -2000,17 +1873,7 @@ export async function createRemoteAgentMachinePairingSession(params: {
   )
 
   return {
-    machine: {
-      id: result.rows[0]!.id,
-      workspaceId: result.rows[0]!.workspaceId,
-      title: result.rows[0]!.title,
-      description: result.rows[0]!.description ?? undefined,
-      trustStatus: result.rows[0]!.trustStatus,
-      lifecycleState: result.rows[0]!.lifecycleState ?? undefined,
-      lastSeenAt: serializeOptionalInstant(result.rows[0]!.lastSeenAt),
-      createdAt: serializeOptionalInstant(result.rows[0]!.createdAt),
-      updatedAt: serializeOptionalInstant(result.rows[0]!.updatedAt),
-    },
+    machine: presentMachineFromCamelRow(result.rows[0]!),
     apiKey,
     daemonCommand: buildDaemonCommand(apiKey),
     oneClickCommands: buildDaemonOneClick(apiKey),
@@ -2039,18 +1902,7 @@ export async function listRemoteAgentMachines(params: {
     [params.workspaceId]
   )
   return {
-    machines: result.rows.map((row) => ({
-      id: row.id,
-      workspaceId: row.workspace_id,
-      title: row.title,
-      description: row.description ?? undefined,
-      trustStatus: row.trust_status,
-      lifecycleState: row.lifecycle_state ?? undefined,
-      bindingCount: Number(row.binding_count ?? 0),
-      lastSeenAt: serializeOptionalInstant(row.last_seen_at),
-      createdAt: serializeOptionalInstant(row.created_at),
-      updatedAt: serializeOptionalInstant(row.updated_at),
-    })),
+    machines: result.rows.map(presentMachineListItem),
   }
 }
 
@@ -2126,29 +1978,8 @@ export async function getRemoteAgentMachine(params: {
   }
 
   return {
-    machine: {
-      id: machine.id,
-      workspaceId: machine.workspaceId,
-      title: machine.title,
-      description: machine.description ?? undefined,
-      trustStatus: machine.trustStatus,
-      lifecycleState: machine.lifecycleState ?? undefined,
-      lastSeenAt: serializeOptionalInstant(machine.lastSeenAt),
-      createdAt: serializeOptionalInstant(machine.createdAt),
-      updatedAt: serializeOptionalInstant(machine.updatedAt),
-    },
-    runtimeCatalog: catalogResult.rows.map((row) => ({
-      runtimeKind: row.runtimeKind,
-      executablePath: row.executablePath ?? undefined,
-      status: row.status,
-      version: row.version ?? undefined,
-      metadata:
-        row.metadata && typeof row.metadata === "object"
-          ? (row.metadata as Record<string, unknown>)
-          : {},
-      lastError: row.lastError ?? undefined,
-      lastSeenAt: serializeOptionalInstant(row.lastSeenAt),
-    })),
+    machine: presentMachineFromCamelRow(machine),
+    runtimeCatalog: catalogResult.rows.map(presentRuntimeCatalogEntry),
     bindings: bindingResult.rows.map((row) => ({
       remoteAgentId: row.remote_agent_id,
       displayName: row.display_name,
@@ -2156,7 +1987,7 @@ export async function getRemoteAgentMachine(params: {
       runtimePath: row.runtime_path ?? undefined,
       localRootPath: row.local_root_path ?? undefined,
       status: row.status,
-      runtimeSummary: mapRuntimeSummaryFromRow(row),
+      runtimeSummary: presentRuntimeSummary(row),
     })),
   }
 }
@@ -2292,28 +2123,14 @@ export async function listRemoteAgentGroupTaskGrants(params: {
     [params.remoteAgentId]
   )
   return {
-    grants: result.rows.map((row) => ({
-      workspaceMemberId: row.workspace_member_id,
-      grantedByWorkspaceMemberId:
-        row.granted_by_workspace_member_id ?? undefined,
-      createdAt: serializeInstant(
-        requireInstantDate(
-          row.created_at,
-          "remote_agent_group_task_grants.created_at"
-        )
-      ),
-      updatedAt: serializeInstant(
-        requireInstantDate(
-          row.updated_at,
-          "remote_agent_group_task_grants.updated_at"
-        )
-      ),
-      userId: row.user_id,
-      name: row.user_name ?? "Unknown user",
-      avatarUrl: row.user_avatar_file_id
-        ? getFileUrlById(row.user_avatar_file_id)
-        : undefined,
-    })),
+    grants: result.rows.map((row) =>
+      presentGroupTaskGrant(
+        row,
+        row.user_avatar_file_id
+          ? getFileUrlById(row.user_avatar_file_id)
+          : undefined
+      )
+    ),
   }
 }
 
@@ -2596,14 +2413,7 @@ export async function listRemoteAgentConversations(params: {
     [params.remoteAgentId]
   )
   return {
-    conversations: result.rows.map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      isIm: Boolean(row.is_im),
-      title: row.title ?? undefined,
-      unreadCount: Number(row.unread_count ?? 0),
-      updatedAt: serializeOptionalInstant(row.updated_at),
-    })),
+    conversations: result.rows.map(presentRemoteAgentConversation),
   }
 }
 
@@ -2645,19 +2455,7 @@ export async function checkRemoteAgentMessages(params: {
   )
 
   return {
-    deliveries: result.rows.map((row) => ({
-      deliveryId: row.id,
-      conversationId: row.conversation_id,
-      itemId: row.item_id,
-      sequence: Number(row.sequence),
-      createdAt: serializeInstant(
-        requireInstantDate(
-          row.created_at,
-          "remote_agent_message_deliveries.created_at"
-        )
-      ),
-      status: row.status,
-    })),
+    deliveries: result.rows.map(presentMessageDelivery),
   }
 }
 

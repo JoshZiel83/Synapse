@@ -49,12 +49,13 @@ import {
   takeFirstOn,
   withDbTransaction,
   type Executor,
-  type TableInsert,
 } from "../../infrastructure/database/kysely.js"
-import {
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+import { presentInstant, presentOptionalInstant } from "./presenter.js"
+import type {
+  CatalogCategoriesMetadata,
+  PluginInstallationsConfigData,
+  PluginPackageVersionSpecsTransport,
+} from "./repo.types.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
 import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
@@ -602,8 +603,8 @@ function mapPluginView(row: PluginCatalogRow) {
     is_active: row.item_is_active,
     is_builtin: row.item_source_kind === "builtin" || row.publisher_is_builtin,
     download_count: row.item_download_count || 0,
-    created_at: serializeInstant(row.item_created_at),
-    updated_at: serializeInstant(row.item_updated_at),
+    created_at: presentInstant(row.item_created_at),
+    updated_at: presentInstant(row.item_updated_at),
     org_slug: row.publisher_slug,
     org_display_name: row.publisher_display_name,
     publisher: {
@@ -633,8 +634,8 @@ function mapPublisherView(row: PublisherRow) {
       typeof row.pluginCount === "number"
         ? row.pluginCount
         : Number(row.pluginCount || 0),
-    created_at: serializeInstant(row.createdAt),
-    updated_at: serializeInstant(row.updatedAt),
+    created_at: presentInstant(row.createdAt),
+    updated_at: presentInstant(row.updatedAt),
   }
 }
 
@@ -686,7 +687,7 @@ function sanitizeInstallationConfig(
         updatedAt:
           typeof ref.updatedAt === "string"
             ? assertIsoInstant(ref.updatedAt)
-            : serializeInstant(installation.updated_at),
+            : presentInstant(installation.updated_at),
       })
       sanitizedConfig[key] = {
         bindingKey:
@@ -716,7 +717,7 @@ function sanitizeInstallationConfig(
         key,
         isConfigured: value !== undefined && value !== null && value !== "",
         maskedValue: masked,
-        updatedAt: serializeInstant(installation.updated_at),
+        updatedAt: presentInstant(installation.updated_at),
       })
       continue
     }
@@ -725,7 +726,7 @@ function sanitizeInstallationConfig(
       configState.push({
         key,
         isConfigured: value !== undefined && value !== null && value !== "",
-        updatedAt: serializeInstant(installation.updated_at),
+        updatedAt: presentInstant(installation.updated_at),
       })
       continue
     }
@@ -1100,8 +1101,8 @@ function mapAccessRowToGrant(
     reason: mount.reason || undefined,
     conversationTypeMaskOverride: mount.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask,
-    createdAt: serializeInstant(mount.created_at),
-    revokedAt: serializeOptionalInstant(mount.revoked_at),
+    createdAt: presentInstant(mount.created_at),
+    revokedAt: presentOptionalInstant(mount.revoked_at),
   }
 }
 
@@ -1146,8 +1147,8 @@ function buildInstallationPayload(
     config_state: configState,
     approved_runtime_permissions: row.approved_runtime_permissions || [],
     ownerWorkspaceMemberId: row.root_owner_workspace_member_id,
-    created_at: serializeInstant(row.installation_created_at),
-    updated_at: serializeInstant(row.installation_updated_at),
+    created_at: presentInstant(row.installation_created_at),
+    updated_at: presentInstant(row.installation_updated_at),
     source_catalog_item_id: row.source_catalog_item_id,
     source_catalog_version_id: row.source_catalog_version_id,
     source_sync_mode: row.source_sync_mode,
@@ -1382,8 +1383,7 @@ async function upsertPluginVersion(
     .insertInto("pluginPackageVersionSpecs")
     .values({
       catalogVersionId: versionId,
-      transport:
-        input.transport as TableInsert<"pluginPackageVersionSpecs">["transport"],
+      transport: input.transport as PluginPackageVersionSpecsTransport,
       entryPoint: input.entryPoint || null,
       toolManifest: sql`${JSON.stringify(input.toolsManifest || [])}::jsonb`,
       configSchema: sql`${JSON.stringify(input.configSchema || {})}::jsonb`,
@@ -1829,7 +1829,7 @@ export async function installPluginUnified(data: {
           id: installationId,
           catalogItemId: plugin.id,
           catalogVersionId: catalogVersionId,
-          configData: {} as TableInsert<"pluginInstallations">["configData"],
+          configData: {} as PluginInstallationsConfigData,
           approvedRuntimePermissions: approvedRuntimePermissions,
           reuseScope: internalReuseScope(lifecycleScope),
         })
@@ -1872,8 +1872,7 @@ export async function installPluginUnified(data: {
       db
         .updateTable("pluginInstallations")
         .set({
-          configData:
-            encryptedConfig as TableInsert<"pluginInstallations">["configData"],
+          configData: encryptedConfig as PluginInstallationsConfigData,
         })
         .where("id", "=", installationId)
     )
@@ -2672,7 +2671,7 @@ export async function seedBuiltinPluginCategories() {
             en: category.description || "",
           },
           defaultLocale: category.defaultLocale || "en",
-        } as TableInsert<"catalogCategories">["metadata"],
+        } as CatalogCategoriesMetadata,
       })
       .onConflict((oc) =>
         oc.columns(["itemKind", "slug"]).doUpdateSet({
@@ -2687,7 +2686,7 @@ export async function seedBuiltinPluginCategories() {
               en: category.description || "",
             },
             defaultLocale: category.defaultLocale || "en",
-          } as TableInsert<"catalogCategories">["metadata"],
+          } as CatalogCategoriesMetadata,
         })
       )
       .execute()

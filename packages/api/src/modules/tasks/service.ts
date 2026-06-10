@@ -1,6 +1,5 @@
 import {
   CONVERSATION_PARTICIPANT_TYPE,
-  TASK_INPUT_QUESTION_TYPES,
   TASK_REQUEST_KIND,
   parseJsonObject,
   textBlocks,
@@ -17,19 +16,16 @@ import type {
   ChatTaskResolveOutcome,
   ConversationFeedItem,
   ConversationFeedEventPayloadMap,
-  ConversationEntityRef,
   TaskDecision,
   TaskInputAnswer,
   TaskInputOption,
   TaskInputQuestionDefinition,
-  TaskInputQuestionSummary,
   TaskRequestKind,
   TaskSummary,
   PlanApprovalDecision,
   PlanChecklistStep,
   RuntimeAuthorizationGrantOption,
   SharedRuntimeAuthorizationGrantSpec,
-  RuntimeAuthorizationTaskDetails,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
   RuntimeAuthorizationRequestedAction,
@@ -42,12 +38,7 @@ import {
   takeFirstOn,
   withDbTransaction,
   type Executor,
-  type TableInsert,
 } from "../../infrastructure/database/kysely.js"
-import {
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
 import {
   deliverResolvedToolCallTask,
   recoverUndeliveredResolvedTask,
@@ -69,7 +60,6 @@ import {
   listConversationRealtimeRecipients,
   updateConversationItemEventPayload,
 } from "../chat/service.js"
-import { getFileUrlById } from "../files/service.js"
 import { CompiledQuery, sql, type RawBuilder } from "kysely"
 import {
   createRuntimeAuthorizationGrant,
@@ -81,6 +71,26 @@ import {
   parseSessionCollaborationState,
 } from "../session/collaboration-state.js"
 import { upsertTaskTransportProjection } from "./transport-projections.js"
+import {
+  parseJsonArray,
+  parseUserInputQuestionDefinitions,
+  presentTaskSummary,
+  requireJsonObject,
+  requireTrimmedString,
+  toRevisionNumber,
+} from "./presenter.js"
+import type {
+  RawTaskCommandRow,
+  RawTaskRow,
+  ToolCallTaskResponseCommandsBaseRevision,
+  ToolCallTaskResponseCommandsRequestPayload,
+  ToolCallTaskResponseCommandsResponsePayload,
+  ToolCallTaskRuntimeAuthorizationAvailablePresets,
+  ToolCallTaskRuntimeAuthorizationGrantOptions,
+  ToolCallTaskRuntimeAuthorizationRequestedAction,
+  ToolCallTaskRuntimeAuthorizationSourceRequestArgs,
+  ToolCallTasksFinalResultPayload,
+} from "./repo.types.js"
 
 /** Run raw SQL (text+params) on db / trx. */
 async function runOn<T extends object = Record<string, unknown>>(
@@ -124,118 +134,6 @@ async function runCompiledOn<T = any>(
         ? null
         : Number(result.numAffectedRows),
   }
-}
-
-type RawTaskRow = {
-  id: string
-  workspace_id: string
-  conversation_id: string
-  // Task unification: the row IS the task. session_id lives on it (nullable for
-  // remote_agent_channel delivery). The legacy task_id pointer is gone.
-  session_id: string | null
-  remote_agent_run_id: string | null
-  conversation_item_id: string | null
-  kind: TaskRequestKind
-  lifecycle_status: ToolCallTaskLifecycleStatus
-  outcome: ToolCallTaskOutcome | null
-  revision: string | number
-  prompt_payload: unknown
-  plan_payload: unknown
-  requested_tool_name: string | null
-  reason: string | null
-  request_mode: string | null
-  requested_action: unknown
-  grant_options: unknown
-  available_presets: unknown
-  source_request_args: unknown
-  source_runtime_session_id: string | null
-  source_retry_nonce: string | null
-  // subject-scope-refactor: principal_remote_agent_id is derived from
-  // principal_subject_id rather than stored on the runtime authorization detail.
-  // principal_subject_id (NOT NULL) + principal_scope_subject_id (nullable),
-  // both FK to access_subjects with ON DELETE RESTRICT (durable audit).
-  principal_subject_id: string
-  principal_scope_subject_id: string | null
-  // Derived alias for dashboard consumers.
-  principal_remote_agent_id: string | null
-  principal_subject_kind: string | null
-  resolution_payload: unknown
-  resolved_at: Date | null
-  expires_at: Date | null
-  created_at: Date
-  updated_at: Date
-  requester_participant_id: string | null
-  requester_workspace_member_id: string | null
-  requester_actor_id: string | null
-  requester_remote_agent_id: string | null
-  target_actor_id: string | null
-  target_workspace_member_id: string | null
-  target_remote_agent_id: string | null
-  target_participant_id: string | null
-  resolved_by_actor_id: string | null
-  resolved_by_workspace_member_id: string | null
-  resolved_by_remote_agent_id: string | null
-  resolved_by_participant_id: string | null
-  device_capability_id: string | null
-  device_id: string | null
-  device_exposure_id: string | null
-  device_tool_stable_key: string | null
-  device_display_name: string | null
-  exposure_display_name: string | null
-  exposure_stable_key: string | null
-  requester_participant_type: string | null
-  requester_name: string | null
-  requester_title: string | null
-  requester_role: string | null
-  requester_actor_avatar_file_id: string | null
-  requester_user_avatar_file_id: string | null
-  requester_remote_agent_avatar_file_id: string | null
-  requester_avatar_emoji: string | null
-  target_participant_type: string | null
-  target_name: string | null
-  target_title: string | null
-  target_role: string | null
-  target_actor_avatar_file_id: string | null
-  target_user_avatar_file_id: string | null
-  target_remote_agent_avatar_file_id: string | null
-  target_avatar_emoji: string | null
-  resolved_by_participant_type: string | null
-  resolved_by_name: string | null
-  resolved_by_title: string | null
-  resolved_by_role: string | null
-  resolved_by_actor_avatar_file_id: string | null
-  resolved_by_user_avatar_file_id: string | null
-  resolved_by_remote_agent_avatar_file_id: string | null
-  resolved_by_avatar_emoji: string | null
-}
-
-type RawTaskCommandRow = {
-  id: string
-  task_id: string
-  command_id: string
-  base_revision: string | number
-  outcome: ChatTaskResolveOutcome
-  request_payload: unknown
-  response_payload: unknown
-  created_by_workspace_member_id: string | null
-  created_at: Date
-  updated_at: Date
-}
-
-function toRevisionNumber(
-  value: string | number | null | undefined,
-  label: string
-) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.trunc(value)
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) {
-      return Math.trunc(parsed)
-    }
-  }
-  throw new Error(`${label} must be a finite revision number`)
 }
 
 export interface CreateUserInputTaskParams {
@@ -372,73 +270,6 @@ export interface FindOpenRuntimeAuthorizationTaskParams {
   runtimeSessionId: string
 }
 
-function requireJsonObject(
-  value: unknown,
-  label: string
-): Record<string, unknown> {
-  if (value === null || value === undefined) {
-    throw new Error(`${label} is required`)
-  }
-  if (typeof value === "string") {
-    if (value.trim().length === 0) {
-      throw new Error(`${label} is required`)
-    }
-    try {
-      const parsed = JSON.parse(value)
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON object`)
-      }
-      return parsed as Record<string, unknown>
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === `${label} must be a JSON object`
-      ) {
-        throw error
-      }
-      throw new Error(`${label} must be a valid JSON object`)
-    }
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON object`)
-  }
-  return value as Record<string, unknown>
-}
-
-function parseJsonArray<T>(value: unknown, label: string): T[] {
-  if (value === null || value === undefined) {
-    return []
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      if (!Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON array`)
-      }
-      return parsed as T[]
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === `${label} must be a JSON array`
-      ) {
-        throw error
-      }
-      throw new Error(`${label} must be a valid JSON array`)
-    }
-  }
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON array`)
-  }
-  return value as T[]
-}
-
-function requireTrimmedString(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${label} is required`)
-  }
-  return value.trim()
-}
-
 function stableJsonStringify(value: unknown): string {
   if (value === null || value === undefined) {
     return "null"
@@ -531,349 +362,6 @@ export function buildRuntimeAuthorizationRequestKey(params: {
   })
 }
 
-function entityAvatarUrl(
-  primaryAvatarFileId?: string | null,
-  secondaryAvatarFileId?: string | null,
-  tertiaryAvatarFileId?: string | null
-) {
-  if (primaryAvatarFileId) return getFileUrlById(primaryAvatarFileId)
-  if (secondaryAvatarFileId) return getFileUrlById(secondaryAvatarFileId)
-  if (tertiaryAvatarFileId) return getFileUrlById(tertiaryAvatarFileId)
-  return undefined
-}
-
-function parseInputOptions(
-  value: unknown,
-  optionListLabel = "options"
-): TaskInputOption[] {
-  if (!Array.isArray(value)) {
-    return []
-  }
-
-  const options: TaskInputOption[] = []
-  const usedIds = new Set<string>()
-  for (const [index, item] of value.entries()) {
-    if (!item || typeof item !== "object") {
-      throw new Error(
-        `Option ${index + 1} in ${optionListLabel} must be an object`
-      )
-    }
-    const rawId = requireTrimmedString(
-      (item as { id?: unknown }).id,
-      `Option ${index + 1} id in ${optionListLabel}`
-    )
-    const optionLabel = requireTrimmedString(
-      (item as { label?: unknown }).label,
-      `Option ${index + 1} label in ${optionListLabel}`
-    )
-    const description =
-      typeof (item as { description?: unknown }).description === "string"
-        ? (item as { description: string }).description.trim()
-        : undefined
-    const preview =
-      typeof (item as { preview?: unknown }).preview === "string"
-        ? (item as { preview: string }).preview.trim()
-        : undefined
-    const id = rawId
-    if (usedIds.has(id)) {
-      throw new Error(`Duplicate option id "${id}" in ${optionListLabel}`)
-    }
-    usedIds.add(id)
-    options.push({
-      id,
-      label: optionLabel,
-      description: description || undefined,
-      preview: preview || undefined,
-    })
-  }
-  return options
-}
-
-function normalizeInputQuestionType(
-  value: unknown
-): TaskInputQuestionDefinition["type"] {
-  if (
-    typeof value === "string" &&
-    (TASK_INPUT_QUESTION_TYPES as readonly string[]).includes(value)
-  ) {
-    return value as TaskInputQuestionDefinition["type"]
-  }
-  throw new Error(`Unsupported user input question type: ${String(value)}`)
-}
-
-function parseUserInputQuestionDefinitions(
-  promptPayload: Record<string, unknown>
-): TaskInputQuestionDefinition[] {
-  const rawQuestions = promptPayload.questions
-  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
-    throw new Error(
-      "user_input prompt_payload.questions must be a non-empty array"
-    )
-  }
-  const definitions: TaskInputQuestionDefinition[] = []
-  const usedIds = new Set<string>()
-
-  for (const [index, question] of rawQuestions.entries()) {
-    if (!question || typeof question !== "object") {
-      throw new Error(`Question ${index + 1} must be an object`)
-    }
-    const id = requireTrimmedString(
-      (question as { id?: unknown }).id,
-      `Question ${index + 1} id`
-    )
-    if (usedIds.has(id)) {
-      throw new Error(`Duplicate question id "${id}"`)
-    }
-    usedIds.add(id)
-
-    const type = normalizeInputQuestionType(
-      (question as { type?: unknown }).type
-    )
-    const definition: TaskInputQuestionDefinition = {
-      id,
-      header: requireTrimmedString(
-        (question as { header?: unknown }).header,
-        `Question ${index + 1} header`
-      ),
-      type,
-      prompt: requireTrimmedString(
-        (question as { prompt?: unknown }).prompt,
-        `Question ${index + 1} prompt`
-      ),
-      description:
-        typeof (question as { description?: unknown }).description === "string"
-          ? (question as { description: string }).description.trim() ||
-            undefined
-          : undefined,
-      required: (() => {
-        if (
-          typeof (question as { required?: unknown }).required !== "boolean"
-        ) {
-          throw new Error(`Question "${id}" required must be a boolean`)
-        }
-        return Boolean((question as { required: boolean }).required)
-      })(),
-    }
-
-    if (type === "text") {
-      definition.placeholder =
-        typeof (question as { placeholder?: unknown }).placeholder === "string"
-          ? (question as { placeholder: string }).placeholder.trim() ||
-            undefined
-          : undefined
-      if (typeof (question as { secret?: unknown }).secret !== "boolean") {
-        throw new Error(`Question "${id}" secret must be a boolean`)
-      }
-      definition.secret = Boolean((question as { secret: boolean }).secret)
-    } else {
-      definition.options = parseInputOptions(
-        (question as { options?: unknown }).options,
-        `question "${id}" options`
-      )
-      if (definition.options.length === 0) {
-        throw new Error(`Question "${id}" requires at least one option`)
-      }
-      if (
-        typeof (question as { allowOther?: unknown }).allowOther !== "boolean"
-      ) {
-        throw new Error(`Question "${id}" allowOther must be a boolean`)
-      }
-      definition.allowOther = Boolean(
-        (question as { allowOther: boolean }).allowOther
-      )
-      if (
-        (question as { minSelections?: unknown }).minSelections !== undefined &&
-        (typeof (question as { minSelections?: unknown }).minSelections !==
-          "number" ||
-          !Number.isFinite(
-            (question as { minSelections: number }).minSelections
-          ))
-      ) {
-        throw new Error(
-          `Question "${id}" minSelections must be a finite number`
-        )
-      }
-      if (
-        (question as { maxSelections?: unknown }).maxSelections !== undefined &&
-        (typeof (question as { maxSelections?: unknown }).maxSelections !==
-          "number" ||
-          !Number.isFinite(
-            (question as { maxSelections: number }).maxSelections
-          ))
-      ) {
-        throw new Error(
-          `Question "${id}" maxSelections must be a finite number`
-        )
-      }
-      definition.minSelections =
-        typeof (question as { minSelections?: unknown }).minSelections ===
-        "number"
-          ? Math.max(
-              0,
-              Math.trunc((question as { minSelections: number }).minSelections)
-            )
-          : undefined
-      definition.maxSelections =
-        typeof (question as { maxSelections?: unknown }).maxSelections ===
-        "number"
-          ? Math.max(
-              1,
-              Math.trunc((question as { maxSelections: number }).maxSelections)
-            )
-          : undefined
-    }
-
-    definitions.push(definition)
-  }
-
-  return definitions
-}
-
-function parseUserInputAnswers(
-  resolutionPayload: Record<string, unknown>,
-  questions: TaskInputQuestionDefinition[]
-): TaskInputAnswer[] {
-  const answers: TaskInputAnswer[] = []
-  const seenQuestionIds = new Set<string>()
-
-  if (resolutionPayload.answers === undefined) {
-    return answers
-  }
-  if (!Array.isArray(resolutionPayload.answers)) {
-    throw new Error("task resolution_payload.answers must be an array")
-  }
-
-  for (const [index, answer] of resolutionPayload.answers.entries()) {
-    if (!answer || typeof answer !== "object") {
-      throw new Error(`Answer ${index + 1} must be an object`)
-    }
-    const questionId = requireTrimmedString(
-      (answer as { questionId?: unknown }).questionId,
-      `Answer ${index + 1} questionId`
-    )
-    if (!questions.some((question) => question.id === questionId)) {
-      throw new Error(`Answer references unknown question "${questionId}"`)
-    }
-    if (seenQuestionIds.has(questionId)) {
-      throw new Error(`Duplicate answer for question "${questionId}"`)
-    }
-    seenQuestionIds.add(questionId)
-    const selectedOptionIds = Array.isArray(
-      (answer as { selectedOptionIds?: unknown }).selectedOptionIds
-    )
-      ? Array.from(
-          new Set(
-            (
-              (answer as { selectedOptionIds: unknown[] }).selectedOptionIds ||
-              []
-            )
-              .map((optionId) =>
-                typeof optionId === "string" ? optionId.trim() : ""
-              )
-              .filter((optionId) => optionId.length > 0)
-          )
-        )
-      : undefined
-    if (
-      (answer as { selectedOptionIds?: unknown }).selectedOptionIds !==
-        undefined &&
-      !Array.isArray(
-        (answer as { selectedOptionIds?: unknown }).selectedOptionIds
-      )
-    ) {
-      throw new Error(
-        `Answer "${questionId}" selectedOptionIds must be an array`
-      )
-    }
-    const selectedOptionLabels = Array.isArray(
-      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels
-    )
-      ? (
-          (answer as { selectedOptionLabels: unknown[] })
-            .selectedOptionLabels || []
-        )
-          .map((label) => (typeof label === "string" ? label.trim() : ""))
-          .filter((label) => label.length > 0)
-      : undefined
-    if (
-      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels !==
-        undefined &&
-      !Array.isArray(
-        (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels
-      )
-    ) {
-      throw new Error(
-        `Answer "${questionId}" selectedOptionLabels must be an array`
-      )
-    }
-    const otherText =
-      typeof (answer as { otherText?: unknown }).otherText === "string"
-        ? (answer as { otherText: string }).otherText.trim() || undefined
-        : undefined
-    if (
-      (answer as { otherText?: unknown }).otherText !== undefined &&
-      typeof (answer as { otherText?: unknown }).otherText !== "string"
-    ) {
-      throw new Error(`Answer "${questionId}" otherText must be a string`)
-    }
-    const text =
-      typeof (answer as { text?: unknown }).text === "string"
-        ? (answer as { text: string }).text.trim() || undefined
-        : undefined
-    if (
-      (answer as { text?: unknown }).text !== undefined &&
-      typeof (answer as { text?: unknown }).text !== "string"
-    ) {
-      throw new Error(`Answer "${questionId}" text must be a string`)
-    }
-    answers.push({
-      questionId,
-      selectedOptionIds,
-      selectedOptionLabels,
-      otherText,
-      text,
-    })
-  }
-  return answers
-}
-
-function buildUserInputQuestionSummaries(
-  promptPayload: Record<string, unknown>,
-  resolutionPayload: Record<string, unknown>
-): TaskInputQuestionSummary[] {
-  const definitions = parseUserInputQuestionDefinitions(promptPayload)
-  const answers = parseUserInputAnswers(resolutionPayload, definitions)
-  const answerMap = new Map<string, TaskInputAnswer>()
-  for (const answer of answers) {
-    answerMap.set(answer.questionId, answer)
-  }
-
-  return definitions.map((question) => {
-    const answer = answerMap.get(question.id)
-    const labels =
-      answer?.selectedOptionIds?.map(
-        (selectedId: string) =>
-          (question.options || []).find(
-            (option: TaskInputOption) => option.id === selectedId
-          )?.label || selectedId
-      ) || undefined
-    return {
-      ...question,
-      required: question.required === true,
-      answer: answer
-        ? {
-            ...answer,
-            selectedOptionLabels:
-              answer.selectedOptionLabels &&
-              answer.selectedOptionLabels.length > 0
-                ? answer.selectedOptionLabels
-                : labels,
-          }
-        : undefined,
-    }
-  })
-}
-
 function summarizeUserInputAnswers(
   userInput: TaskSummary["userInput"]
 ): string {
@@ -909,78 +397,6 @@ function summarizeUserInputAnswers(
     return "a response"
   }
   return parts.join(" | ")
-}
-
-function mapEntityRefFromRow(
-  prefix: "requester" | "target" | "resolved_by",
-  row: RawTaskRow
-): ConversationEntityRef | undefined {
-  const participantType = row[`${prefix}_participant_type` as keyof RawTaskRow]
-  if (typeof participantType !== "string" || !participantType.trim()) {
-    return undefined
-  }
-  const participantId = row[`${prefix}_participant_id` as keyof RawTaskRow]
-  const workspaceMemberId =
-    prefix === "requester"
-      ? row.requester_workspace_member_id
-      : prefix === "target"
-        ? row.target_workspace_member_id
-        : row.resolved_by_workspace_member_id
-  const actorId =
-    prefix === "requester"
-      ? row.requester_actor_id
-      : prefix === "target"
-        ? row.target_actor_id
-        : row.resolved_by_actor_id
-  const remoteAgentId =
-    prefix === "requester"
-      ? row.requester_remote_agent_id
-      : prefix === "target"
-        ? row.target_remote_agent_id
-        : row.resolved_by_remote_agent_id
-  const name = row[`${prefix}_name` as keyof RawTaskRow]
-  const title = row[`${prefix}_title` as keyof RawTaskRow]
-  const role = row[`${prefix}_role` as keyof RawTaskRow]
-  const actorAvatarFileId =
-    row[`${prefix}_actor_avatar_file_id` as keyof RawTaskRow]
-  const userAvatarFileId =
-    row[`${prefix}_user_avatar_file_id` as keyof RawTaskRow]
-  const remoteAgentAvatarFileId =
-    row[`${prefix}_remote_agent_avatar_file_id` as keyof RawTaskRow]
-  const avatarEmoji = row[`${prefix}_avatar_emoji` as keyof RawTaskRow]
-
-  return {
-    participantId:
-      typeof participantId === "string" ? participantId : undefined,
-    participantType:
-      participantType as ConversationEntityRef["participantType"],
-    actorId: typeof actorId === "string" ? actorId : undefined,
-    remoteAgentId:
-      typeof remoteAgentId === "string" ? remoteAgentId : undefined,
-    workspaceMemberId:
-      typeof workspaceMemberId === "string" ? workspaceMemberId : undefined,
-    name: typeof name === "string" ? name : undefined,
-    title: typeof title === "string" ? title : undefined,
-    role: typeof role === "string" ? role : undefined,
-    avatarUrl: entityAvatarUrl(
-      typeof remoteAgentAvatarFileId === "string"
-        ? remoteAgentAvatarFileId
-        : null,
-      typeof actorAvatarFileId === "string" ? actorAvatarFileId : null,
-      typeof userAvatarFileId === "string" ? userAvatarFileId : null
-    ),
-    avatarEmoji: typeof avatarEmoji === "string" ? avatarEmoji : undefined,
-  }
-}
-
-function requireEntityRef(
-  entity: ConversationEntityRef | undefined,
-  label: string
-): ConversationEntityRef {
-  if (!entity?.participantId || !entity.participantType) {
-    throw new Error(`${label} is missing a participant entity`)
-  }
-  return entity
 }
 
 type TaskResolutionStatus =
@@ -1025,177 +441,6 @@ async function resolveParticipantSubjectId(
     throw new Error(`Participant ${participantId} has no subject`)
   }
   return row.subjectId
-}
-
-function buildTaskSummary(row: RawTaskRow): TaskSummary {
-  const requester = requireEntityRef(
-    mapEntityRefFromRow("requester", row),
-    `Task ${row.id} requester`
-  )
-  const target = mapEntityRefFromRow("target", row)
-  const resolvedBy = row.resolved_by_participant_id
-    ? requireEntityRef(
-        mapEntityRefFromRow("resolved_by", row),
-        `Task ${row.id} resolved_by`
-      )
-    : undefined
-  const resolutionPayload = requireJsonObject(
-    row.resolution_payload,
-    `Task ${row.id} resolution_payload`
-  )
-
-  const baseTask = {
-    id: row.id,
-    remoteAgentRunId: row.remote_agent_run_id || undefined,
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    itemId: row.conversation_item_id || undefined,
-    lifecycleStatus: row.lifecycle_status,
-    outcome: row.outcome || undefined,
-    revision: toRevisionNumber(row.revision, `Task ${row.id} revision`),
-    requester,
-    resolvedBy,
-    resolutionNote:
-      typeof resolutionPayload.note === "string"
-        ? resolutionPayload.note.trim() || undefined
-        : undefined,
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-    resolvedAt: serializeOptionalInstant(row.resolved_at),
-    expiresAt: serializeOptionalInstant(row.expires_at),
-    viewerCanResolve: false,
-  }
-
-  if (row.kind === TASK_REQUEST_KIND.USER_INPUT) {
-    const promptPayload = requireJsonObject(
-      row.prompt_payload,
-      `Task ${row.id} prompt_payload`
-    )
-    return {
-      ...baseTask,
-      kind: TASK_REQUEST_KIND.USER_INPUT,
-      target,
-      userInput: {
-        title: requireTrimmedString(
-          promptPayload.title,
-          `Task ${row.id} user_input.title`
-        ),
-        instructions:
-          typeof promptPayload.instructions === "string"
-            ? promptPayload.instructions.trim() || undefined
-            : undefined,
-        questions: buildUserInputQuestionSummaries(
-          promptPayload,
-          resolutionPayload
-        ),
-      },
-    }
-  }
-
-  if (row.kind === TASK_REQUEST_KIND.PLAN_APPROVAL) {
-    const planPayload = requireJsonObject(
-      row.plan_payload,
-      `Task ${row.id} plan_payload`
-    )
-    return {
-      ...baseTask,
-      kind: TASK_REQUEST_KIND.PLAN_APPROVAL,
-      target,
-      planApproval: {
-        title: requireTrimmedString(
-          planPayload.title,
-          `Task ${row.id} plan_approval.title`
-        ),
-        summary:
-          typeof planPayload.summary === "string"
-            ? planPayload.summary.trim() || undefined
-            : undefined,
-        planMarkdown: requireTrimmedString(
-          planPayload.planMarkdown,
-          `Task ${row.id} plan_approval.planMarkdown`
-        ),
-        checklist: Array.isArray(planPayload.checklist)
-          ? (planPayload.checklist as PlanChecklistStep[])
-          : undefined,
-      },
-    }
-  }
-
-  const requestedAction = requireJsonObject(
-    row.requested_action,
-    `Task ${row.id} requested_action`
-  ) as unknown as RuntimeAuthorizationRequestedAction
-  const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
-    row.grant_options,
-    `Task ${row.id} grant_options`
-  )
-  const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
-    row.available_presets,
-    `Task ${row.id} available_presets`
-  )
-  const runtimeAuthorization: RuntimeAuthorizationTaskDetails = {
-    requestedToolName: requireTrimmedString(
-      row.requested_tool_name,
-      `Task ${row.id} requested_tool_name`
-    ),
-    deviceToolStableKey: requireTrimmedString(
-      row.device_tool_stable_key,
-      `Task ${row.id} device_tool_stable_key`
-    ),
-    requestedAction,
-    reason: requireTrimmedString(
-      row.reason,
-      `Task ${row.id} runtime_authorization.reason`
-    ),
-    deviceId: requireTrimmedString(row.device_id, `Task ${row.id} device_id`),
-    deviceDisplayName: requireTrimmedString(
-      row.device_display_name,
-      `Task ${row.id} device_display_name`
-    ),
-    deviceCapabilityId: requireTrimmedString(
-      row.device_capability_id,
-      `Task ${row.id} device_capability_id`
-    ),
-    exposureId: requireTrimmedString(
-      row.device_exposure_id,
-      `Task ${row.id} device_exposure_id`
-    ),
-    exposureDisplayName: requireTrimmedString(
-      row.exposure_display_name,
-      `Task ${row.id} exposure_display_name`
-    ),
-    grantOptions,
-    availablePresets,
-    approvedPreset:
-      typeof resolutionPayload.approvedPreset === "string"
-        ? (resolutionPayload.approvedPreset as RuntimeAuthorizationPreset)
-        : undefined,
-    approvedGrant:
-      resolutionPayload.approvedGrant &&
-      typeof resolutionPayload.approvedGrant === "object" &&
-      !Array.isArray(resolutionPayload.approvedGrant)
-        ? (resolutionPayload.approvedGrant as RuntimeAuthorizationTaskDetails["approvedGrant"])
-        : undefined,
-    requestMode:
-      row.request_mode === "blocking" || row.request_mode === "background"
-        ? (row.request_mode as RuntimeAuthorizationRequestMode)
-        : (() => {
-            throw new Error(
-              `Task ${row.id} runtime_authorization.requestMode is invalid`
-            )
-          })(),
-    // Surface the persisted retry_nonce so the dedupe-reuse path in
-    // runtime-authorizations/requests.ts can return the row's actual nonce
-    // (the one that will match source_retry_nonce on the eventual grant)
-    // instead of the freshly-generated nonce that no grant will ever match.
-    sourceRetryNonce: row.source_retry_nonce ?? undefined,
-  }
-
-  return {
-    ...baseTask,
-    kind: TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION,
-    runtimeAuthorization,
-  }
 }
 
 async function getTaskRowById(taskId: string, queryable?: Executor) {
@@ -1511,14 +756,14 @@ async function insertTaskCommandRow(
       taskId: params.taskId,
       commandId: params.commandId,
       baseRevision:
-        params.baseRevision as unknown as TableInsert<"toolCallTaskResponseCommands">["baseRevision"],
+        params.baseRevision as unknown as ToolCallTaskResponseCommandsBaseRevision,
       outcome: params.outcome,
       requestPayload: jsonbValue(
         params.requestPayload
-      ) as unknown as TableInsert<"toolCallTaskResponseCommands">["requestPayload"],
+      ) as unknown as ToolCallTaskResponseCommandsRequestPayload,
       responsePayload: jsonbValue(
         params.responsePayload
-      ) as unknown as TableInsert<"toolCallTaskResponseCommands">["responsePayload"],
+      ) as unknown as ToolCallTaskResponseCommandsResponsePayload,
       createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
     })
   )
@@ -2072,18 +1317,18 @@ async function insertRuntimeAuthorizationTaskDetails(
       sourceRetryNonce: params.sourceRetryNonce || null,
       sourceRequestArgs: jsonbValue(
         params.sourceRequestArgs
-      ) as unknown as TableInsert<"toolCallTaskRuntimeAuthorization">["sourceRequestArgs"],
+      ) as unknown as ToolCallTaskRuntimeAuthorizationSourceRequestArgs,
       principalSubjectId: params.principalSubjectId,
       principalScopeSubjectId: params.principalScopeSubjectId || null,
       requestedAction: jsonbValue(
         params.requestedAction
-      ) as unknown as TableInsert<"toolCallTaskRuntimeAuthorization">["requestedAction"],
+      ) as unknown as ToolCallTaskRuntimeAuthorizationRequestedAction,
       grantOptions: jsonbValue(
         params.grantOptions
-      ) as unknown as TableInsert<"toolCallTaskRuntimeAuthorization">["grantOptions"],
+      ) as unknown as ToolCallTaskRuntimeAuthorizationGrantOptions,
       availablePresets: jsonbValue(
         params.availablePresets
-      ) as unknown as TableInsert<"toolCallTaskRuntimeAuthorization">["availablePresets"],
+      ) as unknown as ToolCallTaskRuntimeAuthorizationAvailablePresets,
       dedupeKey: params.dedupeKey,
     })
   )
@@ -2240,7 +1485,7 @@ async function updateTaskResolutionPayload(
       .set({
         finalResultPayload: jsonbValue(
           payload
-        ) as unknown as TableInsert<"toolCallTasks">["finalResultPayload"],
+        ) as unknown as ToolCallTasksFinalResultPayload,
       })
       .where("id", "=", taskId)
   )
@@ -2766,7 +2011,7 @@ export async function findOpenRuntimeAuthorizationTask(
 
 export async function getTaskSummary(taskId: string, queryable?: Executor) {
   const row = await getTaskRowById(taskId, queryable)
-  return row ? buildTaskSummary(row) : null
+  return row ? presentTaskSummary(row) : null
 }
 
 export async function getTaskSummaryByTaskId(taskId: string) {
@@ -3327,7 +2572,7 @@ export async function resolveTaskRequest(
       !isOpenTaskLifecycle(locked.lifecycle_status) ||
       lockedRevision !== params.baseRevision
     ) {
-      const currentTask = buildTaskSummary(locked)
+      const currentTask = presentTaskSummary(locked)
       const responsePayload: StoredTaskResolveResponse = {
         outcome: "conflict",
         task: currentTask,

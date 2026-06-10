@@ -3,24 +3,34 @@ import {
   isKnownModelVendor,
   validateModelProviderConfig,
 } from "@synapse/shared"
-import type {
-  ModelGroupsOwnerType,
-  ModelGroupsRoutingStrategy,
-} from "../../infrastructure/database/generated/db.js"
-import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
-import {
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+import { db } from "../../infrastructure/database/kysely.js"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
-import type { ModelGroupGrantScope } from "@synapse/shared/types"
+import type {
+  ModelGroupGrantScope,
+  ModelGroupOwnerType,
+  ModelGroupRoutingStrategy,
+} from "@synapse/shared/types"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { logProviderStep, logRuntimeEvent } from "../execution/service.js"
 import { sql } from "kysely"
+import type {
+  ModelBindingVersionsFeatures,
+  ModelBindingVersionsProviderOptions,
+  ModelGroupsAttemptPolicy,
+} from "./repo.types.js"
+import {
+  asObject,
+  dbRowToGrantRow,
+  presentGrantRow,
+  presentGroupItem,
+  presentGroupRow,
+  type ModelGroupGrantDbRow,
+  type ModelGroupItemRow,
+  type ModelGroupRow,
+} from "./presenter.js"
 
 type JsonMap = Record<string, unknown>
-type ModelGroupOwnerType = ModelGroupsOwnerType
 
 /**
  * P1b helpers: translate (grantScope, ids) ↔ SubjectRef. The dropped
@@ -58,118 +68,6 @@ function buildModelGroupGrantSubjectRef(input: {
   }
 }
 
-function subjectKindToModelGroupGrantScope(
-  kind: SubjectRef["kind"]
-): ModelGroupGrantScope {
-  switch (kind) {
-    case SUBJECT_KIND.PLATFORM:
-      return MODEL_GROUP_GRANT_SCOPE.PLATFORM
-    case SUBJECT_KIND.WORKSPACE:
-      return MODEL_GROUP_GRANT_SCOPE.WORKSPACE
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER
-    case SUBJECT_KIND.ACTOR:
-      return MODEL_GROUP_GRANT_SCOPE.ACTOR
-    default:
-      throw new Error(
-        `Unsupported subject kind for model_group_grants: ${kind}`
-      )
-  }
-}
-
-type ModelGroupRow = {
-  id: string
-  ownerType: ModelGroupOwnerType
-  ownerWorkspaceId: string | null
-  ownerWorkspaceMemberId: string | null
-  name: string
-  description: string | null
-  routingStrategy: ModelGroupsRoutingStrategy
-  attemptPolicy: Record<string, unknown> | null
-  isDefault: boolean
-  isEnabled: boolean
-  createdByWorkspaceMemberId: string | null
-  createdAt: Date | null
-  updatedAt: Date | null
-}
-
-type ModelGroupGrantRow = {
-  id?: string
-  group_id?: string
-  // P1b: derived from the joined access_subjects row, not a column.
-  grant_scope: ModelGroupGrantScope
-  workspace_id: string | null
-  workspace_member_id: string | null
-  actor_id: string | null
-  status: "active" | "revoked"
-  granted_by_workspace_member_id?: string | null
-  reason?: string | null
-  created_at?: Date
-  revoked_at?: Date | null
-}
-
-type ModelGroupGrantDbRow = {
-  id: string
-  groupId: string | null
-  status: "active" | "revoked"
-  reason: string | null
-  createdAt: Date | null
-  revokedAt: Date | null
-  subjectId: string
-  grantedByWorkspaceMemberId: string | null
-  // From joined access_subjects (aliased mgs)
-  mgsKind?: string | null
-  mgsWorkspaceId?: string | null
-  mgsWorkspaceMemberId?: string | null
-  mgsActorId?: string | null
-}
-
-type ModelGroupItemRow = {
-  id?: string | null
-  itemId?: string | null
-  groupId: string | null
-  bindingId?: string | null
-  currentVersionId?: string | null
-  displayName: string | null
-  priority: number | null
-  weight: number | null
-  itemEnabled?: boolean | null
-  isEnabled?: boolean | null
-  version?: number | null
-  providerKind?: string | null
-  vendor?: string | null
-  baseUrl?: string | null
-  modelName?: string | null
-  maxOutputTokens?: number | null
-  capabilityTags?: string[] | null
-  features?: unknown
-  providerOptions?: unknown
-  requestTimeoutMs?: number | null
-  maxRetries?: number | null
-  createdAt: Date | null
-  updatedAt: Date | null
-}
-
-function dbRowToGrantRow(
-  row: ModelGroupGrantDbRow
-): ModelGroupGrantRow & { id: string; group_id: string } {
-  return {
-    id: row.id,
-    group_id: row.groupId || "",
-    grant_scope: row.mgsKind
-      ? subjectKindToModelGroupGrantScope(row.mgsKind as SubjectRef["kind"])
-      : MODEL_GROUP_GRANT_SCOPE.PLATFORM,
-    workspace_id: row.mgsWorkspaceId ?? null,
-    workspace_member_id: row.mgsWorkspaceMemberId ?? null,
-    actor_id: row.mgsActorId ?? null,
-    status: row.status,
-    granted_by_workspace_member_id: row.grantedByWorkspaceMemberId,
-    reason: row.reason,
-    created_at: row.createdAt || undefined,
-    revoked_at: row.revokedAt,
-  }
-}
-
 export class ModelGroupError extends Error {
   constructor(
     public statusCode: number,
@@ -177,11 +75,6 @@ export class ModelGroupError extends Error {
   ) {
     super(message)
   }
-}
-
-function asObject(value: unknown): JsonMap {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
-  return value as JsonMap
 }
 
 function assertValidModelVersionInput(input: {
@@ -200,80 +93,6 @@ function assertValidModelVersionInput(input: {
 
   if (issues.length > 0) {
     throw new ModelGroupError(400, issues[0].message)
-  }
-}
-
-function mapGroupRow(row: ModelGroupRow) {
-  return {
-    id: row.id,
-    owner_type: row.ownerType,
-    owner_workspace_id: row.ownerWorkspaceId,
-    owner_workspace_member_id: row.ownerWorkspaceMemberId,
-    workspace_id: row.ownerWorkspaceId,
-    scope: row.ownerType,
-    name: row.name,
-    description: row.description || "",
-    routing_strategy: row.routingStrategy,
-    attempt_policy: asObject(row.attemptPolicy),
-    is_default: Boolean(row.isDefault),
-    is_active: Boolean(row.isEnabled),
-    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || null,
-    created_at:
-      serializeOptionalInstant(row.createdAt) ||
-      serializeOptionalInstant(row.updatedAt) ||
-      serializeInstant(new Date(0)),
-    updated_at:
-      serializeOptionalInstant(row.updatedAt) ||
-      serializeOptionalInstant(row.createdAt) ||
-      serializeInstant(new Date(0)),
-  }
-}
-
-function mapGroupItem(row: ModelGroupItemRow) {
-  const features = asObject(row.features)
-  const providerKind =
-    row.providerKind || getProviderKindForVendor(row.vendor || "anthropic")
-
-  return {
-    id: row.itemId ?? row.id ?? "",
-    group_id: row.groupId,
-    binding_id: row.bindingId ?? row.itemId ?? row.id ?? "",
-    current_version_id: row.currentVersionId || null,
-    display_name: row.displayName || "",
-    priority: row.priority ?? 0,
-    weight: row.weight ?? 1,
-    is_enabled: Boolean(row.itemEnabled ?? row.isEnabled),
-    version: row.version || null,
-    provider_kind: providerKind,
-    vendor: row.vendor || null,
-    base_url: row.baseUrl || null,
-    model_name: row.modelName || null,
-    max_output_tokens: row.maxOutputTokens || null,
-    capability_tags: row.capabilityTags || [],
-    features,
-    provider_options: asObject(row.providerOptions),
-    request_timeout_ms: row.requestTimeoutMs ?? null,
-    max_retries: row.maxRetries ?? null,
-    created_at: row.createdAt || undefined,
-    updated_at: row.updatedAt || undefined,
-  }
-}
-
-function mapGrantRow(
-  row: ModelGroupGrantRow & { id: string; group_id: string }
-) {
-  return {
-    id: row.id,
-    group_id: row.group_id,
-    grant_scope: row.grant_scope,
-    workspace_id: row.workspace_id,
-    workspace_member_id: row.workspace_member_id,
-    actor_id: row.actor_id,
-    status: row.status,
-    grantedByWorkspaceMemberId: row.granted_by_workspace_member_id || null,
-    reason: row.reason || null,
-    created_at: serializeOptionalInstant(row.created_at),
-    revoked_at: serializeOptionalInstant(row.revoked_at),
   }
 }
 
@@ -377,10 +196,9 @@ async function createBindingVersion(input: {
       modelName: input.modelName,
       maxOutputTokens: effectiveMaxTokens,
       capabilityTags: input.capabilityTags || [],
-      features: (input.features ||
-        {}) as TableInsert<"modelBindingVersions">["features"],
+      features: (input.features || {}) as ModelBindingVersionsFeatures,
       providerOptions: (input.providerOptions ||
-        {}) as TableInsert<"modelBindingVersions">["providerOptions"],
+        {}) as ModelBindingVersionsProviderOptions,
       requestTimeoutMs: input.requestTimeoutMs ?? null,
       maxRetries: input.maxRetries ?? null,
     })
@@ -546,7 +364,7 @@ export async function listPlatformModelGroups() {
     .orderBy("isDefault", "desc")
     .orderBy("name")
     .execute()
-  return result.map((row) => mapGroupRow(row as ModelGroupRow))
+  return result.map((row) => presentGroupRow(row as ModelGroupRow))
 }
 
 /**
@@ -555,7 +373,7 @@ export async function listPlatformModelGroups() {
  * dedupe table so it never recreates (or revives) a group an operator removed
  * in the UI.
  *
- * Deliberately does NOT reuse mapGroupRow: that mapper renames `is_enabled` to
+ * Deliberately does NOT reuse presentGroupRow: that mapper renames `is_enabled` to
  * `is_active`, which would make the importer's enabled-check read undefined.
  * Returns the raw columns the importer actually needs.
  */
@@ -623,7 +441,7 @@ export async function listWorkspaceModelGroups(workspaceId: string) {
     .orderBy("mg.isDefault", "desc")
     .orderBy("mg.name")
     .execute()
-  return result.map((row) => mapGroupRow(row as ModelGroupRow))
+  return result.map((row) => presentGroupRow(row as ModelGroupRow))
 }
 
 export async function listWorkspaceMemberOwnedModelGroups(
@@ -638,7 +456,7 @@ export async function listWorkspaceMemberOwnedModelGroups(
     .orderBy("isDefault", "desc")
     .orderBy("name")
     .execute()
-  return result.map((row) => mapGroupRow(row as ModelGroupRow))
+  return result.map((row) => presentGroupRow(row as ModelGroupRow))
 }
 
 export async function listModelGroups(workspaceId: string | null) {
@@ -705,11 +523,11 @@ export async function getModelGroup(groupId: string) {
   ])
 
   return {
-    ...mapGroupRow(group),
-    items: itemsResult.map(mapGroupItem),
+    ...presentGroupRow(group),
+    items: itemsResult.map(presentGroupItem),
     grants: (grantsResult as ModelGroupGrantDbRow[])
       .map(dbRowToGrantRow)
-      .map(mapGrantRow),
+      .map(presentGrantRow),
   }
 }
 
@@ -763,7 +581,7 @@ export async function createModelGroup(data: {
   ownerWorkspaceMemberId?: string
   name: string
   description?: string
-  routingStrategy?: ModelGroupsRoutingStrategy
+  routingStrategy?: ModelGroupRoutingStrategy
   attemptPolicy?: JsonMap
   isDefault?: boolean
   createdByWorkspaceMemberId?: string
@@ -810,8 +628,7 @@ export async function createModelGroup(data: {
       name: data.name,
       description: data.description || "",
       routingStrategy: data.routingStrategy || "priority_failover",
-      attemptPolicy: (data.attemptPolicy ||
-        {}) as TableInsert<"modelGroups">["attemptPolicy"],
+      attemptPolicy: (data.attemptPolicy || {}) as ModelGroupsAttemptPolicy,
       isDefault: data.isDefault || false,
       isEnabled: true,
       createdByWorkspaceMemberId: data.createdByWorkspaceMemberId || null,
@@ -826,7 +643,7 @@ export async function createModelGroup(data: {
     data.createdByWorkspaceMemberId || null
   )
 
-  return mapGroupRow(row)
+  return presentGroupRow(row)
 }
 
 export async function updateModelGroup(
@@ -834,7 +651,7 @@ export async function updateModelGroup(
   data: {
     name?: string
     description?: string
-    routingStrategy?: ModelGroupsRoutingStrategy
+    routingStrategy?: ModelGroupRoutingStrategy
     attemptPolicy?: JsonMap
     isDefault?: boolean
     isActive?: boolean
@@ -862,8 +679,7 @@ export async function updateModelGroup(
     updateData.routingStrategy = data.routingStrategy
   }
   if (data.attemptPolicy !== undefined) {
-    updateData.attemptPolicy =
-      data.attemptPolicy as TableInsert<"modelGroups">["attemptPolicy"]
+    updateData.attemptPolicy = data.attemptPolicy as ModelGroupsAttemptPolicy
   }
   if (data.isDefault !== undefined) {
     updateData.isDefault = data.isDefault
@@ -889,7 +705,7 @@ export async function updateModelGroup(
     throw new ModelGroupError(404, "Model group not found")
   }
 
-  return mapGroupRow(updatedRow)
+  return presentGroupRow(updatedRow)
 }
 
 export async function deleteModelGroup(groupId: string) {
@@ -977,7 +793,7 @@ export async function addModelItem(
     .where("id", "=", binding.id)
     .execute()
 
-  return mapGroupItem({
+  return presentGroupItem({
     itemId: binding.id,
     groupId: groupId,
     bindingId: binding.id,
@@ -1157,7 +973,7 @@ export async function updateModelItem(
     .limit(1)
     .executeTakeFirstOrThrow()
 
-  return mapGroupItem(updated)
+  return presentGroupItem(updated)
 }
 
 export async function deleteModelItem(groupId: string, itemId: string) {
@@ -1409,7 +1225,7 @@ export async function listVisibleActorModelGroups(
     .orderBy("mg.name")
     .execute()
 
-  return result.map((row) => mapGroupRow(row as ModelGroupRow))
+  return result.map((row) => presentGroupRow(row as ModelGroupRow))
 }
 
 export async function listModelGroupGrants(groupId: string) {
@@ -1436,7 +1252,7 @@ export async function listModelGroupGrants(groupId: string) {
     .execute()
   return (result as ModelGroupGrantDbRow[])
     .map(dbRowToGrantRow)
-    .map(mapGrantRow)
+    .map(presentGrantRow)
 }
 
 export async function issueModelGroupGrant(
@@ -1474,7 +1290,7 @@ export async function issueModelGroupGrant(
 
   // Re-fetch with the access_subjects JOIN to populate the derived
   // grant_scope / workspace_id / actor_id / workspace_member_id fields the
-  // mapGrantRow output shape exposes.
+  // presentGrantRow output shape exposes.
   const full = await db
     .selectFrom("modelGroupGrants as mgg")
     .leftJoin("accessSubjects as mgs", "mgs.id", "mgg.subjectId")
@@ -1494,7 +1310,7 @@ export async function issueModelGroupGrant(
     ])
     .where("mgg.id", "=", inserted.id)
     .executeTakeFirstOrThrow()
-  return mapGrantRow(dbRowToGrantRow(full as ModelGroupGrantDbRow))
+  return presentGrantRow(dbRowToGrantRow(full as ModelGroupGrantDbRow))
 }
 
 export async function revokeModelGroupGrant(groupId: string, grantId: string) {

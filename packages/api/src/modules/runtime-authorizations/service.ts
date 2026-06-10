@@ -30,9 +30,7 @@ import {
   GrantPolicySchema,
   validateGrantPolicyForCapability,
   type PolicyValidationFailure,
-  type GrantPolicy,
 } from "@synapse/shared/access/policies"
-import { subjectScopeLabel } from "@synapse/shared"
 import { sql, type Selectable } from "kysely"
 import type { ZodIssue } from "zod"
 import {
@@ -41,14 +39,7 @@ import {
   takeFirstOn,
   type Executor,
   type KyselyDb,
-  type TableInsert,
-  type TableRow,
 } from "../../infrastructure/database/kysely.js"
-import {
-  requireInstantDate,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
 import {
   BrowserGrantPolicyError,
   normalizeBrowserGrantPolicy,
@@ -118,37 +109,27 @@ export interface RuntimeAuthorizationGrantRecord extends SharedRuntimeAuthorizat
 }
 
 /**
- * Candidate row pulled by the canonical helper's list step. Carries the raw
- * grant row + already-joined subject/scope SubjectRef + safe-parse result so
- * the matcher (three-state) can distinguish parse_error /
- * missing_branch_payload / schema_mismatch from no_match — without exception
- * propagation that would mask corrupt rows as silent fallbacks.
+ * Candidate row + candidate row-with-joins types live in repo.types.ts (the
+ * DB-row layer that may reference Kysely TableRow). Re-exported here so the
+ * module barrel (index.ts `export * from "./service.js"`) keeps exposing
+ * RuntimeAuthorizationGrantCandidate to existing importers.
  */
-export interface RuntimeAuthorizationGrantCandidate {
-  rawRow: TableRow<"runtimeAuthorizationGrants">
-  rawPolicy: unknown
-  policyValidationResult:
-    | { ok: true; parsed: GrantPolicy }
-    | { ok: false; failure: PolicyValidationFailure }
-  subject: SubjectRef
-  scope?: SubjectRef
-  retention: RuntimeAuthorizationGrantRetention
-  retryNonceOnRow?: string
-  sourceTaskIdOnRow?: string
-}
+export type {
+  RuntimeAuthorizationGrantCandidate,
+  RuntimeAuthorizationGrantCandidateRow,
+} from "./repo.types.js"
+import type {
+  RuntimeAuthorizationGrantCandidate,
+  RuntimeAuthorizationGrantCandidateRow,
+  RuntimeAuthorizationGrantPolicyInsert,
+  RuntimeAuthorizationGrantSourceRequestArgsInsert,
+} from "./repo.types.js"
+import { mapRuntimeAuthorizationGrantCandidate } from "./presenter.js"
 
-type RuntimeAuthorizationGrantCandidateRow =
-  TableRow<"runtimeAuthorizationGrants"> & {
-    subjectKind: string
-    subjectWorkspaceId: string | null
-    subjectWorkspaceMemberId: string | null
-    subjectActorId: string | null
-    subjectRemoteAgentId: string | null
-    subjectConversationId: string | null
-    scopeKind: string | null
-    scopeWorkspaceId: string | null
-    scopeConversationId: string | null
-  }
+// mapRuntimeAuthorizationGrantCandidate moved to presenter.ts (it calls
+// serializeInstant — banned in service by guard r3). Re-exported here so the
+// module barrel keeps exposing it to existing importers.
+export { mapRuntimeAuthorizationGrantCandidate }
 
 /**
  * Helper: hydrate a candidate row's joined access_subjects view into a typed
@@ -392,55 +373,11 @@ function runtimeAuthorizationGrantSelectColumns() {
 }
 
 // ============================================================================
-// Mapping: candidate → record. Mapper is a pure function — caller must pass
-// parsedPolicy from a successful validateGrantPolicyForCapability call. The
-// canonical helper enforces this contract; sideways callers (dashboard list)
-// produce a parallel "{ valid, corrupt }" split (Batch 7 dashboard API).
+// Mapping: candidate → record. mapRuntimeAuthorizationGrantCandidate lives in
+// presenter.ts (it shapes the DTO + serializes instants). Imported + re-exported
+// above. Mapper is a pure function — caller must pass parsedPolicy from a
+// successful validateGrantPolicyForCapability call.
 // ============================================================================
-
-export function mapRuntimeAuthorizationGrantCandidate(
-  candidate: RuntimeAuthorizationGrantCandidate,
-  parsedPolicy: GrantPolicy
-): RuntimeAuthorizationGrantRecord {
-  const row = candidate.rawRow
-  const scopeLabel = subjectScopeLabel({
-    subject: candidate.subject,
-    scope: candidate.scope,
-  })
-  return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    deviceId: row.deviceId,
-    deviceCapabilityId: row.deviceCapabilityId,
-    deviceExposureId: row.deviceExposureId,
-    subject: candidate.subject,
-    scope: candidate.scope,
-    scopeLabel,
-    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
-    sourceTaskId: row.sourceTaskId || undefined,
-    sourceRetryNonce: row.sourceRetryNonce || undefined,
-    sourceRuntimeSessionId: row.sourceRuntimeSessionId || undefined,
-    sourceRequestArgs: parseJsonObject(row.sourceRequestArgs),
-    retention: row.retention,
-    status: row.status,
-    ...(parsedPolicy as SharedRuntimeAuthorizationGrantSpec),
-    createdAt: serializeInstant(
-      requireInstantDate(
-        row.createdAt,
-        `runtime_authorization_grants.${row.id}.created_at`
-      )
-    ),
-    updatedAt: serializeInstant(
-      requireInstantDate(
-        row.updatedAt,
-        `runtime_authorization_grants.${row.id}.updated_at`
-      )
-    ),
-    consumedAt: serializeOptionalInstant(row.consumedAt),
-    revokedAt: serializeOptionalInstant(row.revokedAt),
-    supersededAt: serializeOptionalInstant(row.supersededAt),
-  }
-}
 
 function rowToCandidate(
   row: RuntimeAuthorizationGrantCandidateRow
@@ -636,12 +573,11 @@ async function createGrantInKyselyTx(
       sourceTaskId: params.sourceTaskId || null,
       retention: params.retention,
       status: "active",
-      policy:
-        grantSpec as unknown as TableInsert<"runtimeAuthorizationGrants">["policy"],
+      policy: grantSpec as unknown as RuntimeAuthorizationGrantPolicyInsert,
       sourceRetryNonce: params.sourceRetryNonce || null,
       sourceRuntimeSessionId: params.sourceRuntimeSessionId || null,
       sourceRequestArgs: (params.sourceRequestArgs ||
-        {}) as TableInsert<"runtimeAuthorizationGrants">["sourceRequestArgs"],
+        {}) as RuntimeAuthorizationGrantSourceRequestArgsInsert,
     })
     .returning("id")
     .executeTakeFirst()

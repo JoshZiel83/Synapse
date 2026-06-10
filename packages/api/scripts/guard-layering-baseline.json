@@ -1,55 +1,11 @@
 {
-  "r1_generated_db_outside_repo": [
-    "packages/api/src/modules/chat/service.ts",
-    "packages/api/src/modules/execution/service.ts",
-    "packages/api/src/modules/model-groups/service.ts",
-    "packages/api/src/modules/tool-call-tasks/service.ts",
-    "packages/api/src/modules/workspace/service.ts"
-  ],
+  "r1_generated_db_outside_repo": [],
   "r2_tablerow_in_service_ctrl": [
-    "packages/api/src/modules/execution/service.ts",
-    "packages/api/src/modules/mcp-plugins/service.ts",
-    "packages/api/src/modules/memory/service.ts",
-    "packages/api/src/modules/model-groups/service.ts",
-    "packages/api/src/modules/runtime-authorizations/service.ts",
-    "packages/api/src/modules/session/service.ts",
-    "packages/api/src/modules/tasks/service.ts",
-    "packages/api/src/modules/tool-call-tasks/service.ts",
-    "packages/api/src/modules/workspace/service.ts"
+    "packages/api/src/modules/session/service.ts"
   ],
   "r3_serializeinstant_in_layer": [
-    "packages/api/src/modules/automation/service.ts",
-    "packages/api/src/modules/chat/service.ts",
-    "packages/api/src/modules/mcp-plugins/service.ts",
-    "packages/api/src/modules/memory/service.ts",
-    "packages/api/src/modules/model-groups/service.ts",
-    "packages/api/src/modules/remote-agents/service.ts",
-    "packages/api/src/modules/runtime-authorizations/service.ts",
-    "packages/api/src/modules/session/service.ts",
-    "packages/api/src/modules/skills/service.ts",
-    "packages/api/src/modules/tasks/service.ts",
-    "packages/api/src/modules/tool-call-tasks/service.ts",
-    "packages/api/src/modules/workspace-apps/service.ts",
-    "packages/api/src/modules/workspace/service.ts"
-  ],
-  "r4_maprow_outside_repo": [
-    "packages/api/src/modules/access/bindings.ts",
-    "packages/api/src/modules/automation/service.ts",
-    "packages/api/src/modules/chat/service.ts",
-    "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
-    "packages/api/src/modules/memory/service.ts",
-    "packages/api/src/modules/model-groups/service.ts",
-    "packages/api/src/modules/remote-agents/service.ts",
-    "packages/api/src/modules/session/service.ts",
-    "packages/api/src/modules/skills/service.ts",
-    "packages/api/src/modules/tasks/service.ts",
-    "packages/api/src/modules/tool-call-tasks/service.ts",
-    "packages/api/src/modules/workspace-apps/service.ts",
-    "packages/api/src/modules/workspace/service.ts"
-  ],
-  "r7_dual_naming": [
-    "packages/api/src/modules/access/bindings.ts",
-    "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
     "packages/api/src/modules/session/service.ts"
-  ]
+  ],
+  "r4_maprow_outside_repo": ["packages/api/src/modules/session/service.ts"],
+  "r7_dual_naming": ["packages/api/src/modules/session/service.ts"]
 }

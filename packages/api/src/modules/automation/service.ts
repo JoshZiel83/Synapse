@@ -6,11 +6,7 @@ import {
   dateToIsoInstant,
   nowIsoInstant,
 } from "@synapse/shared/datetime"
-import {
-  parseInstantString,
-  serializeInstant,
-  serializeOptionalInstant,
-} from "../../infrastructure/datetime.js"
+import { parseInstantString } from "../../infrastructure/datetime.js"
 import type {
   AutomationEventSourceAccessGrant,
   CapabilityAccessTarget,
@@ -44,9 +40,7 @@ import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   extractText,
   maskAllowsConversationType,
-  normalizeCanonicalContentBlocks,
   parseJsonObject,
-  resolveAutomationOccurrenceDisplay,
   resolveNarrowedConversationTypeMask,
   slugify,
   workspaceRef,
@@ -99,7 +93,7 @@ import {
   updateAutomationEventSourceAccessGrantConversationTypeMaskOverride,
 } from "../access/binding-storage.js"
 
-type AutomationRuleRow = {
+export type AutomationRuleRow = {
   id: string
   workspace_id: string
   conversation_id: string
@@ -117,7 +111,7 @@ type AutomationRuleRow = {
   updated_at: Date
 }
 
-type AutomationTriggerRow = {
+export type AutomationTriggerRow = {
   rule_id: string
   trigger_kind: AutomationTriggerKind
   source_kind: AutomationSourceKind
@@ -150,7 +144,7 @@ type AutomationTriggerRow = {
   metadata: Record<string, unknown> | string | null
 }
 
-type AutomationPolicyRow = {
+export type AutomationPolicyRow = {
   rule_id: string
   active_from: Date | null
   active_until: Date | null
@@ -161,7 +155,7 @@ type AutomationPolicyRow = {
   metadata: Record<string, unknown> | string | null
 }
 
-type AutomationDeliveryRow = {
+export type AutomationDeliveryRow = {
   rule_id: string
   message_text: string
   wake_reason_text: string | null
@@ -170,7 +164,7 @@ type AutomationDeliveryRow = {
   metadata: Record<string, unknown> | string | null
 }
 
-type AutomationEventSourceRow = {
+export type AutomationEventSourceRow = {
   id: string
   workspace_id: string
   provider_kind: AutomationEventProviderKind
@@ -202,7 +196,7 @@ type AutomationEventSourceRow = {
   updated_at: Date
 }
 
-type AutomationOccurrenceRow = {
+export type AutomationOccurrenceRow = {
   id: string
   workspace_id: string
   source_kind: AutomationSourceKind
@@ -229,7 +223,7 @@ type AutomationOccurrenceRow = {
   created_at: Date
 }
 
-type AutomationExecutionRow = {
+export type AutomationExecutionRow = {
   id: string
   workspace_id: string
   rule_id: string
@@ -277,7 +271,7 @@ type AutomationEventSourceAccessContext = {
   actorId?: string | null
 }
 
-type AutomationWebhookEndpointRow = {
+export type AutomationWebhookEndpointRow = {
   id: string
   workspace_id: string
   name: string
@@ -477,313 +471,20 @@ export interface ProcessAutomationExecutionResult {
 const AUTOMATION_SCHEDULER_INTERVAL_MS = 15_000
 const MAX_SCHEDULER_BATCH_SIZE = 50
 
-function normalizeContentBlocks(value: unknown): CanonicalContentBlock[] {
-  if (!Array.isArray(value)) return []
-  return normalizeCanonicalContentBlocks(value as any[])
-}
-
-function mapEventSourceIntegration(row: {
-  integration_binding_id?: string | null
-  integration_webhook_endpoint_id?: string | null
-  integration_installation_id?: string | null
-  integration_provider?: AutomationIntegrationProvider | null
-  integration_ingress_kind?: AutomationIntegrationIngressKind | null
-  integration_target_kind?: AutomationIntegrationTargetKind | null
-  integration_target_id?: string | null
-  integration_target_label?: string | null
-  integration_external_subscription_id?: string | null
-}): AutomationEventSourceIntegration | undefined {
-  if (
-    !row.integration_installation_id ||
-    !row.integration_provider ||
-    !row.integration_ingress_kind ||
-    !row.integration_target_kind ||
-    !row.integration_target_id ||
-    !row.integration_target_label
-  ) {
-    return undefined
-  }
-
-  return {
-    bindingId: row.integration_binding_id || undefined,
-    installationId: row.integration_installation_id,
-    provider: row.integration_provider,
-    ingressKind: row.integration_ingress_kind,
-    targetKind: row.integration_target_kind,
-    targetId: row.integration_target_id,
-    targetLabel: row.integration_target_label,
-    endpointId: row.integration_webhook_endpoint_id || undefined,
-    externalSubscriptionId:
-      row.integration_external_subscription_id || undefined,
-  }
-}
-
-function mapRuleRow(
-  row: AutomationRuleRow,
-  trigger: AutomationTrigger,
-  policy: AutomationPolicy,
-  delivery: AutomationDelivery
-): AutomationRule {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    authorityWorkspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    category: row.category,
-    status: row.status,
-    name: row.name,
-    description: row.description,
-    createdByParticipantId: row.created_by_participant_id,
-    createdBySessionId: row.created_by_session_id || undefined,
-    trigger,
-    policy,
-    delivery,
-    lastTriggeredAt: serializeOptionalInstant(row.last_triggered_at),
-    lastErrorAt: serializeOptionalInstant(row.last_error_at),
-    lastErrorMessage: row.last_error_message || undefined,
-    metadata: parseJsonObject(row.metadata),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
-function mapTriggerRow(row: AutomationTriggerRow): AutomationTrigger {
-  return {
-    ruleId: row.rule_id,
-    triggerKind: row.trigger_kind,
-    sourceKind: row.source_kind,
-    eventSourceId: row.event_source_id || undefined,
-    eventSourceKey:
-      (row as AutomationTriggerRow & { event_source_key?: string | null })
-        .event_source_key || undefined,
-    eventSourceName:
-      (row as AutomationTriggerRow & { event_source_name?: string | null })
-        .event_source_name || undefined,
-    eventProviderKind:
-      (
-        row as AutomationTriggerRow & {
-          event_provider_kind?: AutomationEventProviderKind | null
-        }
-      ).event_provider_kind || undefined,
-    eventProviderRef:
-      (row as AutomationTriggerRow & { event_provider_ref?: string | null })
-        .event_provider_ref || undefined,
-    eventSourceIntegration: mapEventSourceIntegration({
-      integration_binding_id: row.event_integration_binding_id,
-      integration_webhook_endpoint_id:
-        row.event_integration_webhook_endpoint_id,
-      integration_installation_id: row.event_integration_installation_id,
-      integration_provider: row.event_integration_provider,
-      integration_ingress_kind: row.event_integration_ingress_kind,
-      integration_target_kind: row.event_integration_target_kind,
-      integration_target_id: row.event_integration_target_id,
-      integration_target_label: row.event_integration_target_label,
-      integration_external_subscription_id: row.event_external_subscription_id,
-    }),
-    eventSourceStatus:
-      (
-        row as AutomationTriggerRow & {
-          event_source_status?: AutomationEventSourceStatus | null
-        }
-      ).event_source_status || undefined,
-    sourceLocator: row.source_locator || undefined,
-    matchKey: row.match_key || undefined,
-    matcher: parseJsonObject(row.matcher),
-    scheduleKind:
-      (row.schedule_kind as AutomationTrigger["scheduleKind"]) || undefined,
-    scheduleExpr: row.schedule_expr || undefined,
-    scheduleTimezone: row.schedule_timezone || undefined,
-    intervalSeconds: row.interval_seconds || undefined,
-    startsAt: serializeOptionalInstant(row.starts_at),
-    nextFireAt: serializeOptionalInstant(row.next_fire_at),
-    lastFiredAt: serializeOptionalInstant(row.last_fired_at),
-    metadata: parseJsonObject(row.metadata),
-  }
-}
-
-function mapPolicyRow(row: AutomationPolicyRow): AutomationPolicy {
-  return {
-    ruleId: row.rule_id,
-    activeFrom: serializeOptionalInstant(row.active_from),
-    activeUntil: serializeOptionalInstant(row.active_until),
-    maxTriggerCount: row.max_trigger_count || undefined,
-    triggerCount: row.trigger_count,
-    completionStatus: row.completion_status,
-    completedAt: serializeOptionalInstant(row.completed_at),
-    metadata: parseJsonObject(row.metadata),
-  }
-}
-
-function mapDeliveryRow(
-  row: AutomationDeliveryRow,
-  targetParticipantIds: string[]
-): AutomationDelivery {
-  return {
-    ruleId: row.rule_id,
-    messageText: row.message_text || "",
-    wakeReasonText: row.wake_reason_text || undefined,
-    messageBlocks: normalizeContentBlocks(row.message_blocks),
-    targetPolicy: row.target_policy,
-    targetParticipantIds,
-    metadata: parseJsonObject(row.metadata),
-  }
-}
-
-function mapEventSourceRow(
-  row: AutomationEventSourceRow
-): AutomationEventSource {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    providerKind: row.provider_kind,
-    providerRef: row.provider_ref || undefined,
-    integration: mapEventSourceIntegration(row),
-    sourceKey: row.source_key,
-    name: row.name,
-    description: row.description,
-    recommendedUsage: row.recommended_usage || undefined,
-    payloadSchema: parseJsonObject(row.payload_schema),
-    examplePayload: parseJsonObject(row.example_payload),
-    status: row.status,
-    createdByKind: row.created_by_kind,
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
-    createdByActorId: row.created_by_actor_id || undefined,
-    createdBySessionId: row.created_by_session_id || undefined,
-    lastTriggeredAt: serializeOptionalInstant(row.last_triggered_at),
-    metadata: parseJsonObject(row.metadata),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
-function defaultOccurrenceTitle(
-  occurrence: Pick<
-    AutomationOccurrence,
-    "eventSourceName" | "matchKey" | "sourceLocator" | "sourceKind"
-  >
-) {
-  return (
-    occurrence.eventSourceName ||
-    occurrence.matchKey ||
-    occurrence.sourceLocator ||
-    occurrence.sourceKind
-  )
-}
-
-function defaultOccurrenceSummary(payload: Record<string, unknown>) {
-  const payloadKeys = Object.keys(payload || {})
-  if (payloadKeys.length === 0) {
-    return "No payload fields"
-  }
-  return payloadKeys.slice(0, 6).join(", ")
-}
-
-function decorateOccurrenceDisplay(
-  occurrence: AutomationOccurrence,
-  options?: { eventProviderRef?: string }
-): AutomationOccurrence {
-  const display = resolveAutomationOccurrenceDisplay({
-    sourceKind: occurrence.sourceKind,
-    eventDefinitionKey: occurrence.eventSourceKey,
-    sourceName: occurrence.eventSourceName,
-    providerRef: options?.eventProviderRef,
-    sourceSnapshot: occurrence.sourceSnapshot,
-    payload: occurrence.payload,
-    occurredAt: occurrence.occurredAt,
-  })
-
-  return {
-    ...occurrence,
-    displayTitle: display?.title || defaultOccurrenceTitle(occurrence),
-    displaySummary:
-      display?.summary || defaultOccurrenceSummary(occurrence.payload),
-    displayDescription: display?.description || undefined,
-  }
-}
-
-function mapOccurrenceRow(row: AutomationOccurrenceRow): AutomationOccurrence {
-  return decorateOccurrenceDisplay(
-    {
-      id: row.id,
-      workspaceId: row.workspace_id,
-      sourceKind: row.source_kind,
-      eventSourceId: row.event_source_id || undefined,
-      eventSourceKey:
-        (row as AutomationOccurrenceRow & { event_source_key?: string | null })
-          .event_source_key || undefined,
-      eventSourceName:
-        (row as AutomationOccurrenceRow & { event_source_name?: string | null })
-          .event_source_name || undefined,
-      eventSourceIntegration: mapEventSourceIntegration({
-        integration_binding_id: row.event_integration_binding_id,
-        integration_webhook_endpoint_id:
-          row.event_integration_webhook_endpoint_id,
-        integration_installation_id: row.event_integration_installation_id,
-        integration_provider: row.event_integration_provider,
-        integration_ingress_kind: row.event_integration_ingress_kind,
-        integration_target_kind: row.event_integration_target_kind,
-        integration_target_id: row.event_integration_target_id,
-        integration_target_label: row.event_integration_target_label,
-        integration_external_subscription_id:
-          row.event_external_subscription_id,
-      }),
-      sourceLocator: row.source_locator || undefined,
-      matchKey: row.match_key || undefined,
-      dedupeKey: row.dedupe_key || undefined,
-      sourceSnapshot: parseJsonObject(row.source_snapshot),
-      payload: parseJsonObject(row.payload),
-      occurredAt: serializeInstant(row.occurred_at),
-      createdAt: serializeInstant(row.created_at),
-    },
-    {
-      eventProviderRef:
-        (
-          row as AutomationOccurrenceRow & {
-            event_provider_ref?: string | null
-          }
-        ).event_provider_ref || undefined,
-    }
-  )
-}
-
-function mapExecutionRow(row: AutomationExecutionRow): AutomationExecution {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    ruleId: row.rule_id,
-    occurrenceId: row.occurrence_id,
-    occurrenceOccurredAt: serializeOptionalInstant(row.occurrence_occurred_at),
-    occurrenceSourceKind: row.occurrence_source_kind || undefined,
-    occurrenceEventSourceName: row.occurrence_event_source_name || undefined,
-    occurrenceTitle: row.occurrence_display_title || undefined,
-    occurrenceSummary: row.occurrence_display_summary || undefined,
-    occurrenceDescription: row.occurrence_display_description || undefined,
-    status: row.status,
-    errorMessage: row.error_message || undefined,
-    startedAt: serializeOptionalInstant(row.started_at),
-    completedAt: serializeOptionalInstant(row.completed_at),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
-
-function mapWebhookEndpointRow(
-  row: AutomationWebhookEndpointRow
-): AutomationWebhookEndpoint {
-  return {
-    id: row.id,
-    workspaceId: row.workspace_id,
-    name: row.name,
-    status: row.status,
-    pathToken: row.path_token,
-    secretHint: row.secret_hint,
-    metadata: parseJsonObject(row.metadata),
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
-    lastReceivedAt: serializeOptionalInstant(row.last_received_at),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
-  }
-}
+// Row -> view presenters live in presenter.ts (guard-layering r3/r4). They
+// are imported here so existing call sites keep working with stable names.
+import {
+  decorateOccurrenceDisplay,
+  presentDelivery,
+  presentDueScheduleRowDates,
+  presentEventSource,
+  presentExecution,
+  presentOccurrence,
+  presentPolicy,
+  presentRule,
+  presentTrigger,
+  presentWebhookEndpoint,
+} from "./presenter.js"
 
 function automationEventSourceJoinClause(
   eventSourceAlias = "aes",
@@ -1163,15 +864,15 @@ async function loadAutomationRulesByIds(
   ])
 
   const triggerByRule = new Map(
-    triggersResult.rows.map((row) => [row.rule_id, mapTriggerRow(row)])
+    triggersResult.rows.map((row) => [row.rule_id, presentTrigger(row)])
   )
   const policyByRule = new Map(
-    policiesResult.rows.map((row) => [row.rule_id, mapPolicyRow(row)])
+    policiesResult.rows.map((row) => [row.rule_id, presentPolicy(row)])
   )
   const deliveryByRule = new Map(
     deliveriesResult.rows.map((row) => [
       row.rule_id,
-      mapDeliveryRow(row, targetsByRule.get(row.rule_id) || []),
+      presentDelivery(row, targetsByRule.get(row.rule_id) || []),
     ])
   )
 
@@ -1181,7 +882,7 @@ async function loadAutomationRulesByIds(
       const policy = policyByRule.get(row.id)
       const delivery = deliveryByRule.get(row.id)
       if (!trigger || !policy || !delivery) return null
-      return mapRuleRow(row, trigger, policy, delivery)
+      return presentRule(row, trigger, policy, delivery)
     })
     .filter((rule): rule is AutomationRule => Boolean(rule))
 }
@@ -1809,7 +1510,7 @@ export async function getAutomationEventSource(
      LIMIT 1`,
     [workspaceId, eventSourceId]
   )
-  return result.rows[0] ? mapEventSourceRow(result.rows[0]) : null
+  return result.rows[0] ? presentEventSource(result.rows[0]) : null
 }
 
 export async function listAutomationEventSources(
@@ -1850,7 +1551,7 @@ export async function listAutomationEventSources(
      ORDER BY aes.created_at DESC`,
     values
   )
-  const sources = result.rows.map(mapEventSourceRow)
+  const sources = result.rows.map(presentEventSource)
   if (!accessContext) {
     return sources
   }
@@ -1890,7 +1591,7 @@ async function loadAutomationWebhookEndpointSecret(endpointId: string) {
     throw new Error(`Webhook endpoint ${endpointId} secret was not found`)
   }
   return {
-    endpoint: mapWebhookEndpointRow(row),
+    endpoint: presentWebhookEndpoint(row),
     secret: decrypt(row.secret_ciphertext),
   }
 }
@@ -3049,7 +2750,7 @@ async function createAutomationOccurrence(params: {
       [params.workspaceId, params.eventSourceId || params.sourceKind, dedupeKey]
     )
     if (existing.rows[0]) {
-      return mapOccurrenceRow(existing.rows[0])
+      return presentOccurrence(existing.rows[0])
     }
   }
 
@@ -3072,7 +2773,7 @@ async function createAutomationOccurrence(params: {
     ]
   )
 
-  return mapOccurrenceRow(result.rows[0]!)
+  return presentOccurrence(result.rows[0]!)
 }
 
 async function createAutomationExecution(params: {
@@ -3092,7 +2793,7 @@ async function createAutomationExecution(params: {
   )
   if (existing.rows[0]) {
     return {
-      execution: mapExecutionRow(existing.rows[0]),
+      execution: presentExecution(existing.rows[0]),
       isNew: false,
     }
   }
@@ -3105,7 +2806,7 @@ async function createAutomationExecution(params: {
     [uuidv4(), params.workspaceId, params.ruleId, params.occurrenceId]
   )
   return {
-    execution: mapExecutionRow(result.rows[0]!),
+    execution: presentExecution(result.rows[0]!),
     isNew: true,
   }
 }
@@ -3838,7 +3539,7 @@ export async function createAutomationWebhookEndpoint(
   )
 
   return {
-    endpoint: mapWebhookEndpointRow(result.rows[0]!),
+    endpoint: presentWebhookEndpoint(result.rows[0]!),
     secret,
   }
 }
@@ -3852,7 +3553,7 @@ export async function listAutomationWebhookEndpoints(workspaceId: string) {
      ORDER BY created_at DESC`,
     [workspaceId]
   )
-  return result.rows.map(mapWebhookEndpointRow)
+  return result.rows.map(presentWebhookEndpoint)
 }
 
 export async function listAutomationOccurrences(
@@ -3895,7 +3596,7 @@ export async function listAutomationOccurrences(
     values
   )
 
-  return result.rows.map(mapOccurrenceRow)
+  return result.rows.map(presentOccurrence)
 }
 
 export async function ingestAutomationProviderEvent(params: {
@@ -4108,7 +3809,7 @@ export async function ingestIntegrationAutomationWebhookEvent(params: {
   }
 
   const endpointSecret = decrypt(sourceRow.endpoint_secret_ciphertext)
-  const source = mapEventSourceRow(sourceRow)
+  const source = presentEventSource(sourceRow)
   if (!source.integration) {
     throw new Error("Integration webhook ingress requires integration metadata")
   }
@@ -4218,6 +3919,7 @@ export async function scheduleDueAutomationExecutions(
     )
 
     for (const row of dueResult.rows) {
+      const rowDates = presentDueScheduleRowDates(row)
       const occurrence = await createAutomationOccurrence({
         workspaceId: row.workspace_id,
         sourceKind: "clock",
@@ -4230,13 +3932,13 @@ export async function scheduleDueAutomationExecutions(
           scheduleExpr: row.schedule_expr,
           scheduleTimezone: row.schedule_timezone,
           intervalSeconds: row.interval_seconds,
-          startsAt: serializeOptionalInstant(row.starts_at),
-          activeFrom: serializeOptionalInstant(row.active_from),
-          activeUntil: serializeOptionalInstant(row.active_until),
-          scheduledAt: serializeInstant(row.next_fire_at),
+          startsAt: rowDates.startsAt,
+          activeFrom: rowDates.activeFrom,
+          activeUntil: rowDates.activeUntil,
+          scheduledAt: rowDates.nextFireAt,
         },
         payload: {},
-        occurredAt: serializeInstant(row.next_fire_at),
+        occurredAt: rowDates.nextFireAt,
         client: trx,
       })
 
@@ -4252,11 +3954,11 @@ export async function scheduleDueAutomationExecutions(
         scheduleExpr: row.schedule_expr || undefined,
         scheduleTimezone: row.schedule_timezone || undefined,
         intervalSeconds: row.interval_seconds || undefined,
-        startsAt: serializeOptionalInstant(row.starts_at) ?? null,
-        activeFrom: serializeOptionalInstant(row.active_from) ?? null,
-        activeUntil: serializeOptionalInstant(row.active_until) ?? null,
+        startsAt: rowDates.startsAt ?? null,
+        activeFrom: rowDates.activeFrom ?? null,
+        activeUntil: rowDates.activeUntil ?? null,
         baseTime: row.next_fire_at,
-        lastFiredAt: serializeInstant(row.next_fire_at),
+        lastFiredAt: rowDates.nextFireAt,
       })
 
       await trx
@@ -4308,7 +4010,7 @@ export async function processAutomationExecution(
     }
   }
 
-  const execution = mapExecutionRow(executionRow)
+  const execution = presentExecution(executionRow)
   const occurrenceResult = await runQuery<AutomationOccurrenceRow>(
     `SELECT ao.*,
             aes.source_key AS event_source_key,
@@ -4322,7 +4024,7 @@ export async function processAutomationExecution(
     [execution.occurrenceId]
   )
   const occurrence = occurrenceResult.rows[0]
-    ? mapOccurrenceRow(occurrenceResult.rows[0])
+    ? presentOccurrence(occurrenceResult.rows[0])
     : null
   if (!occurrence) {
     throw new Error(`Automation occurrence ${execution.occurrenceId} not found`)
@@ -4494,7 +4196,7 @@ export async function listAutomationExecutions(
   )
 
   return result.rows.map((row) => {
-    const execution = mapExecutionRow(row)
+    const execution = presentExecution(row)
     if (!row.occurrence_id || !row.occurrence_occurred_at) {
       return execution
     }
@@ -4516,7 +4218,7 @@ export async function listAutomationExecutions(
         undefined,
     }
 
-    const occurrence = mapOccurrenceRow({
+    const occurrence = presentOccurrence({
       id: row.occurrence_id,
       workspace_id: row.workspace_id,
       source_kind: row.occurrence_source_kind || "internal",

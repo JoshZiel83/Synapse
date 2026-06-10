@@ -56,8 +56,7 @@ import type {
   TaskSummary,
   TransportKind,
 } from "@synapse/shared/types"
-import { CompiledQuery, sql, type RawBuilder } from "kysely"
-import type { JsonValue } from "../../infrastructure/database/generated/db.js"
+import { CompiledQuery, sql } from "kysely"
 import {
   db,
   runBuilder,
@@ -81,10 +80,12 @@ import {
 import {
   parseInstantString,
   requireInstantDate,
-  serializeInstant,
   serializeNowInstant,
-  serializeOptionalInstant,
 } from "../../infrastructure/datetime.js"
+import { jsonbValue, mapPushTokenRow, type ChatPushTokenRow } from "./repo.js"
+// Re-exported for existing consumers that import the row DTO from chat/service.
+export type { ChatPushTokenRow }
+import { presentInstant, presentOptionalInstant } from "./presenter.js"
 import {
   getConversationEventSpec,
   isConversationEventType,
@@ -701,11 +702,6 @@ async function runOnSnake<T extends object = Record<string, unknown>>(
   return { rows: result.rows.map((row) => snakeCaseRowKeys<T>(row)) }
 }
 
-/** Serialize a value into a jsonb-typed SQL fragment (matches `$N::jsonb`). */
-function jsonbValue(value: unknown): RawBuilder<JsonValue> {
-  return sql<JsonValue>`${JSON.stringify(value ?? null)}::jsonb`
-}
-
 async function getWorkspaceMemberIdentityOrThrow(
   workspaceId: string,
   userId: string
@@ -1235,7 +1231,7 @@ async function hydrateConversationItems(
       metadata: asJsonRecord(row.metadata),
       restrictedAudienceParticipantIds:
         restrictedAudienceByItem.get(row.id) ?? [],
-      createdAt: serializeInstant(row.created_at),
+      createdAt: presentInstant(row.created_at),
     })
   }
 
@@ -1335,10 +1331,10 @@ async function loadConversationViews(
       muted: Boolean(row.muted),
       archived: Boolean(row.archived),
       pinnedSortKey: row.pinned_sort_key
-        ? serializeInstant(row.pinned_sort_key)
+        ? presentInstant(row.pinned_sort_key)
         : undefined,
-      updatedAt: serializeInstant(row.updated_at),
-      createdAt: serializeInstant(row.created_at),
+      updatedAt: presentInstant(row.updated_at),
+      createdAt: presentInstant(row.created_at),
       participants: mappedParticipants,
       presentation,
       permissions: {
@@ -1629,7 +1625,7 @@ export async function appendWorkspaceMemberSyncEventInTransaction<
     itemId: params.itemId,
     eventType: params.eventType,
     payload: params.payload,
-    occurredAt: serializeInstant(
+    occurredAt: presentInstant(
       requireInstantDate(
         row?.occurredAt ?? null,
         "workspace_member_sync_events.occurred_at"
@@ -3783,7 +3779,7 @@ async function buildConversationItemDetails(
         : undefined,
       previewText: replyItem.content.trim(),
       previewBlocks: replyItem.contentBlocks,
-      createdAt: serializeInstant(replyRow.created_at),
+      createdAt: presentInstant(replyRow.created_at),
     })
   }
 
@@ -3832,7 +3828,7 @@ async function buildConversationItemDetails(
           })
         : undefined,
       causedByItemId: row.caused_by_item_id ?? undefined,
-      createdAt: serializeInstant(row.created_at),
+      createdAt: presentInstant(row.created_at),
       clientMessageId: row.client_message_id ?? undefined,
     } satisfies ConversationItemDetailBase
 
@@ -3928,8 +3924,8 @@ function participantRowToChatParticipantSummary(
     roleKey: participant.role_key,
     state: participant.state,
     metadata: asJsonRecord(participant.metadata),
-    joinedAt: serializeInstant(participant.joined_at),
-    leftAt: serializeOptionalInstant(participant.left_at),
+    joinedAt: presentInstant(participant.joined_at),
+    leftAt: presentOptionalInstant(participant.left_at),
     sessionId: participant.session_id ?? undefined,
     sessionStatus: participant.session_status ?? undefined,
   } satisfies ChatParticipantSummary
@@ -4144,7 +4140,7 @@ async function loadTransportDeliveriesForItems(
       endpointExternalId: row.endpoint_external_id ?? undefined,
       endpointDisplayName: row.endpoint_display_name ?? undefined,
       externalMessageId: row.external_message_id ?? undefined,
-      deliveredAt: serializeOptionalInstant(row.delivered_at),
+      deliveredAt: presentOptionalInstant(row.delivered_at),
       metadata: asJsonRecord(row.metadata),
     })
     byItem.set(row.item_id, current)
@@ -4772,7 +4768,7 @@ export async function getChatSync(params: {
         itemId: row.item_id ?? undefined,
         eventType,
         payload: enrichedPayload,
-        occurredAt: serializeInstant(row.occurred_at),
+        occurredAt: presentInstant(row.occurred_at),
       }
     })
   )
@@ -5046,7 +5042,7 @@ export async function getChatConversationMessages(params: {
         conversationId: row.conversation_id,
         lastVisibleSequence: toNumber(row.last_visible_sequence),
         lastInboxSeq: toNumber(row.last_inbox_seq),
-        lastOpenedAt: serializeOptionalInstant(row.last_opened_at),
+        lastOpenedAt: presentOptionalInstant(row.last_opened_at),
         draftPayload: asJsonRecord(row.draft_payload),
       }
     : {
@@ -5925,28 +5921,6 @@ export async function leaveChatConversation(params: {
 }
 
 // ============ Stage 7: push tokens + typing ============
-
-export interface ChatPushTokenRow {
-  id: string
-  workspaceMemberId: string
-  platform: "ios" | "android" | "web"
-  token: string
-  deviceLabel: string | null
-  createdAt: Timestamp
-  lastSeenAt: Timestamp
-}
-
-function mapPushTokenRow(row: Record<string, unknown>): ChatPushTokenRow {
-  return {
-    id: String(row.id),
-    workspaceMemberId: String(row.workspace_member_id),
-    platform: row.platform as "ios" | "android" | "web",
-    token: String(row.token),
-    deviceLabel: (row.device_label as string | null) ?? null,
-    createdAt: serializeInstant(row.created_at as Date),
-    lastSeenAt: serializeInstant(row.last_seen_at as Date),
-  }
-}
 
 export async function registerChatPushToken(params: {
   workspaceId: string

@@ -108,50 +108,11 @@ export function relationForAutomationEventSourceAccessBindingTarget(
   }
 }
 
-export function normalizeAutomationEventSourceAccessBindingRow<
-  T extends AutomationEventSourceBindingStorageRow & {
-    subjectId?: string | null
-    scopeSubjectId?: string | null
-    subjectKind?: string | null
-    subjectWorkspaceIdViaJoin?: string | null
-    subjectWorkspaceMemberIdViaJoin?: string | null
-    subjectActorIdViaJoin?: string | null
-    subjectRemoteAgentIdViaJoin?: string | null
-    subjectConversationIdViaJoin?: string | null
-    scopeKind?: string | null
-    scopeWorkspaceIdViaJoin?: string | null
-    scopeConversationIdViaJoin?: string | null
-  },
->(
-  row: T
-): T & { resourceId: string; relation: AutomationEventSourceBindingRelation } {
-  // Derive a relation string from subject kind; scope lives in scopeSubjectId.
-  let relation: AutomationEventSourceBindingRelation
-  switch (row.subjectKind) {
-    case SUBJECT_KIND.WORKSPACE:
-      relation = "use_workspace"
-      break
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      relation = "use_workspace_member"
-      break
-    case SUBJECT_KIND.CONVERSATION:
-      relation = "use_conversation"
-      break
-    case SUBJECT_KIND.ACTOR:
-      relation = "use_actor"
-      break
-    case SUBJECT_KIND.REMOTE_AGENT:
-      relation = "use_remote_agent"
-      break
-    default:
-      relation = "use_scoped"
-  }
-  return {
-    ...row,
-    resourceId: readAutomationEventSourceAccessBindingResourceId(row),
-    relation,
-  }
-}
+// `normalizeAutomationEventSourceAccessBindingRow` performs row normalization
+// (derives relation + resourceId from a DB row), so it lives in the access
+// data-access layer (`repo.ts`) per guard-layering r4/r7. Re-exported here so
+// existing importers of `./bindings.js` keep working unchanged.
+export { normalizeAutomationEventSourceAccessBindingRow } from "./repo.js"
 
 /**
  * D3: AutomationEventSourceBindingTarget is now the single `ScopedSubjectTarget` shape.
