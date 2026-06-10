@@ -29,7 +29,7 @@
 
   // node_modules/fast-deep-equal/index.js
   var require_fast_deep_equal = __commonJS({
-    "../../../../node_modules/fast-deep-equal/index.js"(exports, module) {
+    "../../node_modules/fast-deep-equal/index.js"(exports, module) {
       "use strict";
       module.exports = function equal(a, b) {
         if (a === b) return true;
@@ -2111,6 +2111,14 @@
     WORKSPACE_APP_GRANT_REQUEST_STATUS.APPROVED,
     WORKSPACE_APP_GRANT_REQUEST_STATUS.REJECTED,
     WORKSPACE_APP_GRANT_REQUEST_STATUS.CANCELLED
+  ];
+  var WORKSPACE_APP_GRANT_REQUEST_DIRECTION = {
+    INCOMING: "incoming",
+    OUTGOING: "outgoing"
+  };
+  var WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS = [
+    WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
+    WORKSPACE_APP_GRANT_REQUEST_DIRECTION.OUTGOING
   ];
   var ACCESS_RESOURCE_TYPE = {
     PLATFORM: "platform",
