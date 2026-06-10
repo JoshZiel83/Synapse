@@ -204,11 +204,13 @@ services:
     image: nginx:alpine
     container_name: synapse-nginx
     restart: unless-stopped
+    cpus: "1.0"
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     environment:
+      NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE: "1"
       SYNAPSE_PUBLIC_DOMAIN: ${SYNAPSE_PUBLIC_DOMAIN:?SYNAPSE_PUBLIC_DOMAIN is required. Run ./setup.sh first.}
       SYNAPSE_WWW_DOMAIN: ${SYNAPSE_WWW_DOMAIN:?SYNAPSE_WWW_DOMAIN is required. Run ./setup.sh first.}
       SYNAPSE_MOBILE_SHORT_DOMAIN: ${SYNAPSE_MOBILE_SHORT_DOMAIN:?SYNAPSE_MOBILE_SHORT_DOMAIN is required. Run ./setup.sh first.}
