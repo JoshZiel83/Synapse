@@ -1,11 +1,8 @@
 {
   "r1_generated_db_outside_repo": [
     "packages/api/src/modules/chat/service.ts",
-    "packages/api/src/modules/devices/catalog-sync.ts",
     "packages/api/src/modules/execution/service.ts",
-    "packages/api/src/modules/mcp-plugins/live-status.ts",
     "packages/api/src/modules/model-groups/service.ts",
-    "packages/api/src/modules/platform/admin-service.ts",
     "packages/api/src/modules/tool-call-tasks/service.ts",
     "packages/api/src/modules/workspace/service.ts"
   ],

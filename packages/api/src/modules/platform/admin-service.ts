@@ -1,10 +1,10 @@
 import { config } from "../../config/index.js"
-import type { PlatformAccessBindingsAccessKey } from "../../infrastructure/database/generated/db.js"
+import { PLATFORM_ACCESS_KEYS } from "@synapse/shared"
 import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
 import { getFileUrlById } from "../files/service.js"
 
-export type PlatformAccessKey = PlatformAccessBindingsAccessKey
+export type PlatformAccessKey = (typeof PLATFORM_ACCESS_KEYS)[number]
 
 type UserIdentity = {
   id: string

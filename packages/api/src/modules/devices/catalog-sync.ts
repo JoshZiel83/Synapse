@@ -17,13 +17,15 @@
 //    device_tools.latest_revision_id.
 
 import { createHash } from "node:crypto"
-import { sql, type Transaction } from "kysely"
+import { sql } from "kysely"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
 } from "@synapse/device-protocol"
-import { db } from "../../infrastructure/database/kysely.js"
-import type { DB } from "../../infrastructure/database/generated/db.js"
+import {
+  db,
+  type DatabaseTransaction,
+} from "../../infrastructure/database/kysely.js"
 import {
   insertWorkspaceAppRoot,
   updateWorkspaceAppRoot,
@@ -213,7 +215,7 @@ export async function persistCatalogSync(
 }
 
 async function upsertExposure(
-  trx: Transaction<DB>,
+  trx: DatabaseTransaction,
   args: {
     deviceId: string
     serviceId: string
@@ -266,7 +268,7 @@ async function upsertExposure(
 }
 
 async function ensureCapability(
-  trx: Transaction<DB>,
+  trx: DatabaseTransaction,
   args: { workspaceId: string; exposureId: string }
 ): Promise<void> {
   const capabilityOwner = await trx
@@ -311,7 +313,7 @@ async function ensureCapability(
 }
 
 async function ensureCatalogRevision(
-  trx: Transaction<DB>,
+  trx: DatabaseTransaction,
   args: { exposureId: string; schemaHash: string }
 ): Promise<{ revisionId: string; isNew: boolean }> {
   const latest = await trx
@@ -363,7 +365,7 @@ async function ensureCatalogRevision(
 }
 
 async function upsertTools(
-  trx: Transaction<DB>,
+  trx: DatabaseTransaction,
   args: {
     exposureId: string
     catalogRevisionId: string
