@@ -707,14 +707,16 @@ class ApiClient {
   }
 
   // Workspace Invites
-  getInviteInfo(token: string) {
-    return this.fetch(`/invites/${token}`)
+  async getInviteInfo(token: string) {
+    const res = await this.fetch(`/invites/${token}`)
+    return res?.data ?? res
   }
-  redeemInvite(token: string) {
-    return this.fetch(`/invites/${token}/redeem`, {
+  async redeemInvite(token: string) {
+    const res = await this.fetch(`/invites/${token}/redeem`, {
       method: "POST",
       body: "{}",
     })
+    return res?.data ?? res
   }
   createInvite(
     wsId: string,
