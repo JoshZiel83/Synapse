@@ -6,9 +6,15 @@ import {
 import { db } from "../../infrastructure/database/kysely.js"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
 import type {
+  ActorModelGroupAssignmentView,
+  ModelGroupDetailView,
   ModelGroupGrantScope,
+  ModelGroupGrantView,
+  ModelGroupItemVersionView,
+  ModelGroupItemView,
   ModelGroupOwnerType,
   ModelGroupRoutingStrategy,
+  ModelGroupView,
 } from "@synapse/shared/types"
 import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import { upsertAccessSubject } from "../access/subject-registry.js"
@@ -359,7 +365,7 @@ async function ensureNoDuplicateActiveGrant(
   }
 }
 
-export async function listPlatformModelGroups() {
+export async function listPlatformModelGroups(): Promise<ModelGroupView[]> {
   const result = await db
     .selectFrom("modelGroups")
     .selectAll()
@@ -398,7 +404,9 @@ export async function listPlatformModelGroupsForImport(): Promise<
   }))
 }
 
-export async function listWorkspaceModelGroups(workspaceId: string) {
+export async function listWorkspaceModelGroups(
+  workspaceId: string
+): Promise<ModelGroupView[]> {
   const result = await db
     .selectFrom("modelGroups as mg")
     .distinct()
@@ -450,7 +458,7 @@ export async function listWorkspaceModelGroups(workspaceId: string) {
 
 export async function listWorkspaceMemberOwnedModelGroups(
   workspaceMemberId: string
-) {
+): Promise<ModelGroupView[]> {
   const result = await db
     .selectFrom("modelGroups")
     .selectAll()
@@ -463,13 +471,17 @@ export async function listWorkspaceMemberOwnedModelGroups(
   return result.map((row) => presentGroupRow(row as ModelGroupRow))
 }
 
-export async function listModelGroups(workspaceId: string | null) {
+export async function listModelGroups(
+  workspaceId: string | null
+): Promise<ModelGroupView[]> {
   return workspaceId
     ? listWorkspaceModelGroups(workspaceId)
     : listPlatformModelGroups()
 }
 
-export async function getModelGroup(groupId: string) {
+export async function getModelGroup(
+  groupId: string
+): Promise<ModelGroupDetailView> {
   const group = await getGroupRow(groupId)
 
   const [itemsResult, grantsResult] = await Promise.all([
@@ -589,7 +601,7 @@ export async function createModelGroup(data: {
   attemptPolicy?: JsonMap
   isDefault?: boolean
   createdByWorkspaceMemberId?: string
-}) {
+}): Promise<ModelGroupView> {
   const ownerType =
     data.ownerType ||
     (data.workspaceId
@@ -660,7 +672,7 @@ export async function updateModelGroup(
     isDefault?: boolean
     isActive?: boolean
   }
-) {
+): Promise<ModelGroupDetailView | ModelGroupView> {
   const group = await getGroupRow(groupId)
 
   if (data.isDefault === true && data.isActive !== false) {
@@ -754,7 +766,7 @@ export async function addModelItem(
     maxRetries?: number
     installedByWorkspaceMemberId?: string
   }
-) {
+): Promise<ModelGroupItemView> {
   const group = await getGroupRow(groupId)
 
   const binding = await db
@@ -842,7 +854,7 @@ export async function updateModelItem(
     requestTimeoutMs?: number
     maxRetries?: number
   }
-) {
+): Promise<ModelGroupItemView> {
   // itemId IS the binding id (the M:N profile/group join is gone).
   const item = await db
     .selectFrom("modelBindingsLive as mb")
@@ -1059,7 +1071,10 @@ async function ensureAssignableModelGroups(
   }
 }
 
-export async function getItemVersions(itemId: string, groupId?: string) {
+export async function getItemVersions(
+  itemId: string,
+  groupId?: string
+): Promise<ModelGroupItemVersionView[]> {
   // itemId IS the binding id now; verify it exists (and belongs to the group).
   let bindingLookup = db
     .selectFrom("modelBindingsLive")
@@ -1101,7 +1116,7 @@ export async function getItemVersions(itemId: string, groupId?: string) {
 export async function getActorModelGroups(
   actorId: string,
   workspaceId?: string
-) {
+): Promise<ActorModelGroupAssignmentView[]> {
   if (workspaceId) {
     await ensureActorInWorkspace(actorId, workspaceId)
   }
@@ -1166,7 +1181,7 @@ export async function setActorModelGroups(
   actorId: string,
   workspaceId: string,
   groups: { groupId: string; priority: number }[]
-) {
+): Promise<ActorModelGroupAssignmentView[]> {
   await ensureActorInWorkspace(actorId, workspaceId)
   await ensureAssignableModelGroups(
     workspaceId,
@@ -1191,7 +1206,7 @@ export async function setActorModelGroups(
 export async function listVisibleActorModelGroups(
   actorId: string,
   workspaceId: string
-) {
+): Promise<ModelGroupView[]> {
   await ensureActorInWorkspace(actorId, workspaceId)
 
   const result = await db
@@ -1236,7 +1251,9 @@ export async function listVisibleActorModelGroups(
   return result.map((row) => presentGroupRow(row as ModelGroupRow))
 }
 
-export async function listModelGroupGrants(groupId: string) {
+export async function listModelGroupGrants(
+  groupId: string
+): Promise<ModelGroupGrantView[]> {
   await getGroupRow(groupId)
   const result = await db
     .selectFrom("modelGroupGrants as mgg")
@@ -1273,7 +1290,7 @@ export async function issueModelGroupGrant(
     grantedByWorkspaceMemberId?: string
     reason?: string
   }
-) {
+): Promise<ModelGroupGrantView> {
   await validateGrantTarget(input)
   await ensureNoDuplicateActiveGrant(groupId, input)
 

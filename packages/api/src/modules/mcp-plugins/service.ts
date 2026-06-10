@@ -1510,7 +1510,7 @@ export async function createOrganization(data: {
   isBuiltin?: boolean
   isVerified?: boolean
   ownerUserId?: string
-}) {
+}): Promise<MarketplacePublisherView> {
   const normalizedSlug = sanitizeSlug(data.slug)
   const row = await db
     .insertInto("publishers")
@@ -1543,7 +1543,7 @@ export async function createOrganization(data: {
   return mapPublisherView(row)
 }
 
-export async function listOrganizations() {
+export async function listOrganizations(): Promise<MarketplacePublisherView[]> {
   const rows = await db
     .selectFrom("publishers as publisher")
     .leftJoin("catalogItems as item", (join) =>
@@ -1563,7 +1563,9 @@ export async function listOrganizations() {
   return rows.map((row) => mapPublisherView(row))
 }
 
-export async function getOrganization(id: string) {
+export async function getOrganization(
+  id: string
+): Promise<MarketplacePublisherView | null> {
   const row = await db
     .selectFrom("publishers")
     .selectAll()
@@ -1578,7 +1580,9 @@ export async function getOrganization(id: string) {
   return mapPublisherView(row)
 }
 
-export async function getOrganizationBySlug(slug: string) {
+export async function getOrganizationBySlug(
+  slug: string
+): Promise<MarketplacePublisherView | null> {
   const row = await db
     .selectFrom("publishers")
     .selectAll()
@@ -1624,7 +1628,7 @@ export async function createPlugin(data: {
     requiredPermissions?: string[]
     reason?: string
   }
-}) {
+}): Promise<MarketplacePluginView> {
   const itemId = await withDbTransaction(async (client) => {
     const catalogItemId = await ensureCatalogItem(client, data)
     await upsertPluginVersion(client, catalogItemId, data)
@@ -1645,7 +1649,7 @@ export async function listPlugins(filters?: {
   search?: string
   tags?: string[]
   categorySlugs?: string[]
-}) {
+}): Promise<MarketplacePluginView[]> {
   const conditions: RawBuilder<unknown>[] = [
     sql`version.id = item.latest_version_id`,
     sql`item.is_active = TRUE`,
@@ -1729,7 +1733,7 @@ export async function listPluginCategories() {
   })
 }
 
-export async function getPlugin(id: string) {
+export async function getPlugin(id: string): Promise<MarketplacePluginView> {
   const row = await getPluginCatalogRowByItemId(id)
   if (!row) {
     throw new McpPluginError(404, "Plugin not found")
@@ -1758,7 +1762,7 @@ export async function installPluginUnified(data: {
     conversationTypeMaskOverride?: number | null
     reason?: string
   }>
-}) {
+}): Promise<PluginInstallationDetailView> {
   const plugin = await getPlugin(data.pluginId)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
     plugin.supportedReuseScopes,
@@ -2026,7 +2030,7 @@ export async function getInstallations(
     installationIds?: string[]
     pluginId?: string
   }
-) {
+): Promise<PluginInstallationDetailView[]> {
   const rows = await loadInstallationRows(workspaceId, filters)
   const pluginsByVersionId = await loadPluginCatalogMapByVersionIds(
     Array.from(new Set(rows.map((row) => row.catalog_version_id)))
@@ -2044,10 +2048,13 @@ export async function getInstallations(
         ? buildInstallationPayload(row, plugin, workspaceConversationTypeMask)
         : null
     })
-    .filter(Boolean)
+    .filter((view): view is PluginInstallationDetailView => view !== null)
 }
 
-export async function getInstallation(workspaceId: string, installId: string) {
+export async function getInstallation(
+  workspaceId: string,
+  installId: string
+): Promise<PluginInstallationDetailView> {
   const { installation } = await getInstallationPayload(workspaceId, installId)
   return installation
 }
@@ -2062,7 +2069,7 @@ export async function updateInstallation(
     conversationTypeMaskOverride?: number | null
     updatedByWorkspaceMemberId?: string
   }
-) {
+): Promise<PluginInstallationDetailView> {
   const currentRow = await db
     .selectFrom("pluginInstallations as installation")
     .innerJoin("workspaceApps as app", "app.id", "installation.id")
