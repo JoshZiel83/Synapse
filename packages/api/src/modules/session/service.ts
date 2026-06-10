@@ -6,6 +6,7 @@ import {
   type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
+import { serializeInstant } from "../../infrastructure/datetime.js"
 import { queueConversationTransportProjection } from "../im/service.js"
 import {
   createConversationItem,
@@ -611,7 +612,7 @@ export async function getSessionMessages(
       fromActorId: row.fromActorId || undefined,
       fromWorkspaceMemberId: row.fromWorkspaceMemberId || undefined,
       metadata: buildMetadataFromItem(item),
-      createdAt: row.createdAt.toISOString() as SessionMessage["createdAt"],
+      createdAt: serializeInstant(row.createdAt) as SessionMessage["createdAt"],
     }
   })
 }

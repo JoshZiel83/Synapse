@@ -311,7 +311,7 @@ export function WorkspaceEntityPickerScreen({
     if (mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR) {
       return actors.map((actor) => ({
         key: actor.id,
-        title: actor.definition.name,
+        title: actor.definition.displayName,
         subtitle:
           actor.definition.role || actor.definition.title || "工作区 Actor",
         avatarUrl: actor.avatarUrl || null,

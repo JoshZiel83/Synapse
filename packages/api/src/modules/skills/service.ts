@@ -210,7 +210,28 @@ function runnerFn(executor: Executor): QueryRunner {
   return <T extends QueryRow>(text: string, params?: unknown[]) =>
     executor
       .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
-      .then((r) => ({ rows: r.rows as T[] })) as Promise<QueryResultLike<T>>
+      .then((r) => ({
+        // The Kysely instance carries CamelCasePlugin, whose transformResult
+        // camelCases the TOP-LEVEL keys of EVERY result row — including these
+        // raw CompiledQuery.raw rows. This module's SQL aliases + row types +
+        // ~246 reads are all snake_case, so re-snake the top-level keys here to
+        // keep the raw-SQL boundary snake (JSONB values are untouched).
+        rows: r.rows.map((row) => snakeCaseTopLevelKeys(row)) as T[],
+      })) as Promise<QueryResultLike<T>>
+}
+
+/**
+ * Invert CamelCasePlugin's top-level key transform for a single raw-SQL result
+ * row. Only the row's OWN keys are mapped back to snake_case; nested object
+ * values (JSONB columns like body_blocks / metadata) are left intact.
+ */
+function snakeCaseTopLevelKeys<T>(row: T): T {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return row
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
+    out[k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] = v
+  }
+  return out as T
 }
 
 /** Run raw SQL on an explicit executor (db / trx). */

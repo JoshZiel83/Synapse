@@ -130,7 +130,7 @@ export function HomeQuickComposer({
         >
           <View style={styles.actorAvatarWrap}>
             <Avatar
-              name={actor?.definition.name || "?"}
+              name={actor?.definition.displayName || "?"}
               uri={actor?.avatarUrl}
               icon="cpu"
               size={42}
@@ -146,7 +146,9 @@ export function HomeQuickComposer({
             value={draft}
             onChangeText={setDraft}
             placeholder={
-              actor ? `给 ${actor.definition.name} 发消息` : "先选择一个角色"
+              actor
+                ? `给 ${actor.definition.displayName} 发消息`
+                : "先选择一个角色"
             }
             placeholderTextColor={theme.colors.textSoft}
             multiline

@@ -2,6 +2,7 @@ import {
   CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
+import type { Timestamp } from "@synapse/shared"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import { getFileUrlById } from "../files/service.js"
 import { listConversationParticipants } from "./service.js"
@@ -21,9 +22,9 @@ type ConversationSummaryRow = {
   last_message?: string | null
   last_message_sender_type?: string | null
   last_message_sender_name?: string | null
-  last_message_at?: string | null
+  lastMessageAt?: Timestamp | null
   unread_count?: number | null
-  created_at: string
+  createdAt: Timestamp
 }
 
 export function mapConversationParticipant(row: ConversationParticipantRow) {
@@ -228,7 +229,7 @@ export async function mapConversationSummaryView(
     members: mappedParticipants,
     actorParticipants,
     lastMessage:
-      row.last_message && row.last_message_at
+      row.last_message && row.lastMessageAt
         ? {
             content: row.last_message,
             role:
@@ -236,11 +237,11 @@ export async function mapConversationSummaryView(
                 ? ("user" as const)
                 : ("assistant" as const),
             actorName: row.last_message_sender_name || undefined,
-            createdAt: assertIsoInstant(row.last_message_at),
+            createdAt: assertIsoInstant(row.lastMessageAt),
           }
         : undefined,
     unreadCount: row.unread_count || 0,
-    createdAt: assertIsoInstant(row.created_at),
+    createdAt: assertIsoInstant(row.createdAt),
     title: presentation.title,
     name: presentation.title,
     avatarUrl: presentation.avatarUrl,

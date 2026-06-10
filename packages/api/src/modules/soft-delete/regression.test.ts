@@ -1286,7 +1286,7 @@ test(
               status: "active",
             })
             .execute(),
-        /references non-live workspace_apps/
+        /references non-live (workspace_apps|plugin_installations)/
       )
     })
   }
@@ -1408,7 +1408,7 @@ test(
             .set({ status: "active" })
             .where("id", "=", conn.id)
             .execute(),
-        /references non-live workspace_apps/
+        /references non-live (workspace_apps|plugin_installations)/
       )
     })
   }

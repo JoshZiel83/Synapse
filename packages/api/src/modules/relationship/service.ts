@@ -3393,7 +3393,7 @@ export async function getContactHub(params: {
             is_im: thread.isIm,
             title: thread.title,
             unread_count: thread.unreadCount,
-            created_at: thread.createdAt,
+            createdAt: thread.createdAt,
             transport_kind: undefined,
           },
           {

@@ -1375,31 +1375,31 @@ foreignKeys:
     _was: RESTRICT
   constraint:fk_actors_workspace_app_root:
     targetAction: RESTRICT
-    liveIntegrity: none
+    liveIntegrity: enforce
     _child: actors(id)
     _parent: workspace_apps(id)
     _was: RESTRICT
   constraint:fk_remote_agents_workspace_app_root:
     targetAction: RESTRICT
-    liveIntegrity: none
+    liveIntegrity: enforce
     _child: remote_agents(id)
     _parent: workspace_apps(id)
     _was: RESTRICT
   constraint:fk_installed_skills_workspace_app_root:
     targetAction: RESTRICT
-    liveIntegrity: none
+    liveIntegrity: enforce
     _child: installed_skills(id)
     _parent: workspace_apps(id)
     _was: RESTRICT
   constraint:fk_plugin_installations_workspace_app_root:
     targetAction: RESTRICT
-    liveIntegrity: none
+    liveIntegrity: enforce
     _child: plugin_installations(id)
     _parent: workspace_apps(id)
     _was: RESTRICT
   constraint:fk_device_capabilities_workspace_app_root:
     targetAction: RESTRICT
-    liveIntegrity: none
+    liveIntegrity: enforce
     _child: device_capabilities(id)
     _parent: workspace_apps(id)
     _was: RESTRICT

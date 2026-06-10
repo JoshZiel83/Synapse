@@ -229,7 +229,7 @@ export function ActorActivityBubble({
   return (
     <View style={styles.row}>
       <Avatar
-        name={runtime.actorName}
+        name={runtime.actorDisplayName}
         uri={participant?.avatarUrl}
         size={38}
         status={getAvatarStatus(runtime)}
@@ -246,7 +246,7 @@ export function ActorActivityBubble({
           <View style={styles.summaryHeader}>
             <View style={styles.summaryText}>
               <Text numberOfLines={1} style={styles.actorName}>
-                {runtime.actorName}
+                {runtime.actorDisplayName}
               </Text>
               <Text style={styles.summaryLine}>
                 {formatTargetsLabel(runtime)}

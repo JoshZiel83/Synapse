@@ -3,7 +3,7 @@ import type {
   CanonicalContextItem,
   ConversationMessage,
 } from "@synapse/shared"
-import { assertIsoInstant } from "@synapse/shared/datetime"
+import { serializeInstant } from "../../infrastructure/datetime.js"
 import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import type {
   CanonicalArchiveFrame,
@@ -36,7 +36,7 @@ type ArchivePointRow = {
   parent_archive_point_id: string | null
   covers_until_sequence: number | string | null
   metadata: unknown
-  created_at: Date | string
+  created_at: Date
 }
 
 type ArchiveFrameQueryRow = {
@@ -182,10 +182,7 @@ async function loadArchivePoint(
     coversUntilSequence: Number(point.covers_until_sequence || 0),
     frames,
     metadata: parseJsonObject(point.metadata),
-    createdAt:
-      point.created_at instanceof Date
-        ? assertIsoInstant(point.created_at.toISOString())
-        : assertIsoInstant(point.created_at),
+    createdAt: serializeInstant(point.created_at),
   }
 }
 

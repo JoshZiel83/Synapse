@@ -129,7 +129,7 @@ export default function HomeTabScreen() {
       const response = await createConversation({
         kind: "group",
         actorIds: [selectedActor.id],
-        title: selectedActor.definition.name,
+        title: selectedActor.definition.displayName,
       })
       const conversationId = response.conversation.conversationId
 

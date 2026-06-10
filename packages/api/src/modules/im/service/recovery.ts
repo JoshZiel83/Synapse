@@ -123,6 +123,8 @@ export function buildReEnableAutoDisabledBindingsSql(params: {
     .updateTable("conversationTransportBindings")
     .set({
       outboundEnabled: true,
+      updatedAt:
+        sql`NOW()` as unknown as TableUpdate<"conversationTransportBindings">["updatedAt"],
       metadata:
         sql`metadata - 'autoDisabledReason'` as unknown as TableUpdate<"conversationTransportBindings">["metadata"],
     })

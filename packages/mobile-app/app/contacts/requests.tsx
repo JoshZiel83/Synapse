@@ -150,7 +150,7 @@ export default function ContactRequestsScreen() {
                       </Text>
                       <Text style={styles.rowSubtitle}>
                         {request.targetType === CONTACT_TARGET_TYPE.ACTOR
-                          ? `申请添加 Actor：${request.targetActor?.name || "未知 Actor"}`
+                          ? `申请添加 Actor：${request.targetActor?.displayName || "未知 Actor"}`
                           : `申请添加好友 · ${request.requester?.workspace.name || ""}`}
                       </Text>
                     </View>
@@ -194,10 +194,13 @@ export default function ContactRequestsScreen() {
               <View style={styles.listShell}>
                 {actorIncoming.map((request) => (
                   <View key={request.id} style={styles.rowCard}>
-                    <Avatar name={request.actor?.name || "Actor"} icon="cpu" />
+                    <Avatar
+                      name={request.actor?.displayName || "Actor"}
+                      icon="cpu"
+                    />
                     <View style={styles.rowBody}>
                       <Text style={styles.rowTitle}>
-                        {request.actor?.name || "未知 Actor"}
+                        {request.actor?.displayName || "未知 Actor"}
                       </Text>
                       <Text style={styles.rowSubtitle}>
                         {request.requester?.name || "某位用户"} 想发起私聊
@@ -247,7 +250,7 @@ export default function ContactRequestsScreen() {
                   <View key={request.id} style={styles.outgoingRow}>
                     <Text style={styles.rowTitle}>
                       {request.targetType === CONTACT_TARGET_TYPE.ACTOR
-                        ? request.targetActor?.name || "未知 Actor"
+                        ? request.targetActor?.displayName || "未知 Actor"
                         : request.targetMember?.name ||
                           request.targetMember?.email ||
                           "未知成员"}
@@ -258,7 +261,7 @@ export default function ContactRequestsScreen() {
                 {actorOutgoing.map((request) => (
                   <View key={request.id} style={styles.outgoingRow}>
                     <Text style={styles.rowTitle}>
-                      {request.actor?.name || "未知 Actor"}
+                      {request.actor?.displayName || "未知 Actor"}
                     </Text>
                     <Pill label="访问申请中" tone="accent" />
                   </View>
