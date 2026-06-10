@@ -1,11 +1,7 @@
 {
   "r1_generated_db_outside_repo": [],
-  "r2_tablerow_in_service_ctrl": [
-    "packages/api/src/modules/session/service.ts"
-  ],
-  "r3_serializeinstant_in_layer": [
-    "packages/api/src/modules/session/service.ts"
-  ],
-  "r4_maprow_outside_repo": ["packages/api/src/modules/session/service.ts"],
-  "r7_dual_naming": ["packages/api/src/modules/session/service.ts"]
+  "r2_tablerow_in_service_ctrl": [],
+  "r3_serializeinstant_in_layer": [],
+  "r4_maprow_outside_repo": [],
+  "r7_dual_naming": []
 }

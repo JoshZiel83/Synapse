@@ -3,19 +3,14 @@ import {
   runBuilder,
   takeFirstOn,
   type Executor,
-  type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import { serializeInstant } from "../../infrastructure/datetime.js"
 import { queueConversationTransportProjection } from "../im/service.js"
 import {
   createConversationItem,
   ensureConversationParticipant,
 } from "../chat/service.js"
-import {
-  buildNormalizedMessageContent,
-  itemPartsToCanonicalContentBlocks,
-} from "../chat/message-content.js"
+import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import type {
   UUID,
   ConversationMessageSubtype,
@@ -31,7 +26,6 @@ import {
   type SessionStatus,
   type SessionTrigger,
   isGroupConversationKind,
-  isThreadConversationKind,
 } from "@synapse/shared"
 import { sql } from "kysely"
 import { SUBJECT_KIND } from "@synapse/shared"
@@ -40,6 +34,12 @@ import {
   upsertAccessSubject,
   upsertAccessSubjectOn,
 } from "../access/subject-registry.js"
+import type {
+  ConversationItemPartRow,
+  SessionMessageItemRow,
+  SessionRow,
+} from "./repo.types.js"
+import { presentSession, presentSessionMessage } from "./presenter.js"
 
 type SessionConversationMessageRole =
   | "user"
@@ -55,75 +55,8 @@ import { v4 as uuidv4 } from "uuid"
 
 const log = createLogger("session")
 
-type SessionRow = TableRow<"sessions"> & {
-  actorDisplayName?: string | null
-  conversationKind?: string | null
-  conversationIsIm?: unknown
-  conversationTitle?: string | null
-}
-
-type SessionMessageItemRow = {
-  id: string
-  sessionId: string | null
-  conversationId: string
-  sequence: number | string
-  workspaceId: string
-  subtype: string
-  role: TableRow<"conversationItems">["role"]
-  fromActorId: string | null
-  fromWorkspaceMemberId: string | null
-  createdAt: Date
-  metadata: unknown
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {}
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value)
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("collaboration_state must be a JSON object")
-      }
-      return parsed as Record<string, unknown>
-    } catch (error) {
-      throw new Error(
-        `collaboration_state must be valid JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      )
-    }
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("collaboration_state must be an object")
-  }
-  return value as Record<string, unknown>
-}
-
-function normalizeSessionRow(row: SessionRow | null) {
-  if (!row) return null
-  return {
-    ...row,
-    conversationId: row.conversationId,
-    conversationKind: row.conversationKind,
-    isImConversation: Boolean(row.conversationIsIm),
-    conversationTitle: row.conversationTitle,
-    collaborationMode: row.collaborationMode || "default",
-    activePlanApprovalTaskId: row.activePlanApprovalTaskId || undefined,
-    collaborationState: parseSessionCollaborationState(
-      parseJsonObject(row.collaborationState)
-    ),
-    isGroupConversation: isGroupConversationKind(row.conversationKind),
-    hasThreadContext: isThreadConversationKind(row.conversationKind),
-  }
-}
-
-function normalizeSessionMessageRole(
-  row: Pick<SessionMessageItemRow, "role" | "subtype">
-): SessionMessage["role"] {
-  if (row.subtype === "tool_result" || row.role === "tool") {
-    return "tool_result"
-  }
-  return row.role
+function toSessionRecord(row: SessionRow | null) {
+  return presentSession(row)
 }
 
 async function getActorJoinVersionId(actorId: UUID) {
@@ -145,7 +78,7 @@ async function getActorJoinVersionId(actorId: UUID) {
 
 async function loadSession(
   sessionId: UUID
-): Promise<ReturnType<typeof normalizeSessionRow>> {
+): Promise<ReturnType<typeof toSessionRecord>> {
   const row = await db
     .selectFrom("sessions as s")
     .innerJoin("actors as a", "a.id", "s.actorId")
@@ -167,7 +100,7 @@ async function loadSession(
     ])
     .where("s.id", "=", sessionId)
     .executeTakeFirst()
-  return normalizeSessionRow(row ?? null)
+  return toSessionRecord(row ?? null)
 }
 
 async function getConversationActorSessionRow(
@@ -322,12 +255,6 @@ function getSurfaceForSessionMessage(
   }
 
   return { scope: "shared" as const, surface: "visible" as const }
-}
-
-function buildMetadataFromItem(item: any) {
-  return typeof item.metadata === "string"
-    ? JSON.parse(item.metadata)
-    : { ...(item.metadata || {}) }
 }
 
 // ============ Session CRUD ============
@@ -593,28 +520,15 @@ export async function getSessionMessages(
     .orderBy("cip.ordinal", "asc")
     .execute()
 
-  const partsByItem = new Map<string, TableRow<"conversationItemParts">[]>()
+  const partsByItem = new Map<string, ConversationItemPartRow[]>()
   for (const row of partRows) {
     if (!partsByItem.has(row.itemId)) partsByItem.set(row.itemId, [])
     partsByItem.get(row.itemId)!.push(row)
   }
 
-  return items.map((row: SessionMessageItemRow) => {
-    const item = { ...row, parts: partsByItem.get(row.id) || [] }
-    return {
-      id: row.id,
-      sessionId,
-      conversationId: row.conversationId,
-      sequence: row.sequence,
-      workspaceId: row.workspaceId,
-      role: normalizeSessionMessageRole(row),
-      contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
-      fromActorId: row.fromActorId || undefined,
-      fromWorkspaceMemberId: row.fromWorkspaceMemberId || undefined,
-      metadata: buildMetadataFromItem(item),
-      createdAt: serializeInstant(row.createdAt) as SessionMessage["createdAt"],
-    }
-  })
+  return items.map((row: SessionMessageItemRow) =>
+    presentSessionMessage(row, sessionId, partsByItem.get(row.id) || [])
+  )
 }
 
 // ============ Session Interrupts ============
