@@ -4,16 +4,12 @@ import { fromNodeHeaders } from "better-auth/node"
 import type { User } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import {
-  requireInstantDate,
-  serializeInstant,
-} from "../../infrastructure/datetime.js"
-import {
   canUserAccessFileWorkspace,
   getFileAccessInfo,
-  getFileUrlById,
 } from "../files/service.js"
 import { sql } from "kysely"
 import { auth } from "./better-auth.js"
+import { presentUser, type UserRow } from "./presenter.js"
 
 /**
  * Auth service — Better Auth edition.
@@ -43,15 +39,6 @@ export class AuthError extends Error {
   }
 }
 
-type UserRow = {
-  id: string
-  email: string
-  name: string
-  avatarFileId: string | null
-  createdAt: Date | null
-  updatedAt: Date | null
-}
-
 const userSelection = [
   "id",
   "email",
@@ -60,21 +47,6 @@ const userSelection = [
   "createdAt",
   "updatedAt",
 ] as const
-
-function mapUserRow(row: UserRow): User {
-  return {
-    id: row.id,
-    email: row.email,
-    name: row.name,
-    avatarUrl: row.avatarFileId ? getFileUrlById(row.avatarFileId) : undefined,
-    createdAt: serializeInstant(
-      requireInstantDate(row.createdAt, "user.created_at")
-    ),
-    updatedAt: serializeInstant(
-      requireInstantDate(row.updatedAt, "user.updated_at")
-    ),
-  }
-}
 
 async function getUserById(userId: string): Promise<UserRow | null> {
   const row = await db
@@ -90,7 +62,7 @@ export async function getProfile(userId: string): Promise<User> {
   if (!row) {
     throw new AuthError("User not found", 404, "USER_NOT_FOUND")
   }
-  return mapUserRow(row)
+  return presentUser(row)
 }
 
 export async function updateProfile(
@@ -139,7 +111,7 @@ export async function updateProfile(
   if (!row) {
     throw new AuthError("User not found", 404, "USER_NOT_FOUND")
   }
-  return mapUserRow(row as UserRow)
+  return presentUser(row as UserRow)
 }
 
 /**

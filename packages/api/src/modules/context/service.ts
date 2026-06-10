@@ -3,7 +3,6 @@ import type {
   CanonicalContextItem,
   ConversationMessage,
 } from "@synapse/shared"
-import { serializeInstant } from "../../infrastructure/datetime.js"
 import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import type {
   CanonicalArchiveFrame,
@@ -20,6 +19,7 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import { itemPartsToCanonicalBlocks } from "../ai/context-builder.js"
 import { compileContextItemsToConversationMessages } from "../ai/context-compiler.js"
+import { presentArchivePoint } from "./presenter.js"
 import { sql } from "kysely"
 
 const MIN_COMPACTION_ITEMS = 12
@@ -173,17 +173,7 @@ async function loadArchivePoint(
     })
   )
 
-  return {
-    archivePointId: point.id,
-    chainScope: point.chain_scope,
-    conversationId: point.conversation_id,
-    sessionId: point.session_id || undefined,
-    parentArchivePointId: point.parent_archive_point_id || undefined,
-    coversUntilSequence: Number(point.covers_until_sequence || 0),
-    frames,
-    metadata: parseJsonObject(point.metadata),
-    createdAt: serializeInstant(point.created_at),
-  }
+  return presentArchivePoint(point, frames)
 }
 
 function isUuid(value: string | undefined) {

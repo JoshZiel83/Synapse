@@ -19,7 +19,7 @@ type WorkspaceCapabilityConversationTypePolicyRow = {
   default_conversation_type_mask: number
 }
 
-function normalizeWorkspacePolicyRow(
+function presentWorkspacePolicy(
   workspaceId: string,
   resourceFamily: CapabilityConversationTypePolicyResourceFamily,
   row?: WorkspaceCapabilityConversationTypePolicyRow
@@ -45,7 +45,7 @@ function buildWorkspacePoliciesView(
     workspaceId,
     policies: CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES.map(
       (resourceFamily) =>
-        normalizeWorkspacePolicyRow(
+        presentWorkspacePolicy(
           workspaceId,
           resourceFamily,
           rowsByFamily.get(resourceFamily)

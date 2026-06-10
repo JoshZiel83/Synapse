@@ -18,16 +18,11 @@
     "packages/api/src/modules/workspace/service.ts"
   ],
   "r3_serializeinstant_in_layer": [
-    "packages/api/src/modules/auth/service.ts",
     "packages/api/src/modules/automation/service.ts",
     "packages/api/src/modules/chat/service.ts",
-    "packages/api/src/modules/context/service.ts",
-    "packages/api/src/modules/files/service.ts",
     "packages/api/src/modules/mcp-plugins/service.ts",
     "packages/api/src/modules/memory/service.ts",
     "packages/api/src/modules/model-groups/service.ts",
-    "packages/api/src/modules/organization/service.ts",
-    "packages/api/src/modules/relationship/service.ts",
     "packages/api/src/modules/remote-agents/service.ts",
     "packages/api/src/modules/runtime-authorizations/service.ts",
     "packages/api/src/modules/session/service.ts",
@@ -39,18 +34,12 @@
   ],
   "r4_maprow_outside_repo": [
     "packages/api/src/modules/access/bindings.ts",
-    "packages/api/src/modules/auth/service.ts",
     "packages/api/src/modules/automation/service.ts",
-    "packages/api/src/modules/capabilities/conversation-type-policies.ts",
     "packages/api/src/modules/chat/service.ts",
-    "packages/api/src/modules/files/parse-service.ts",
-    "packages/api/src/modules/im/service/_helpers.ts",
     "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
     "packages/api/src/modules/memory/service.ts",
     "packages/api/src/modules/model-groups/service.ts",
-    "packages/api/src/modules/organization/service.ts",
     "packages/api/src/modules/remote-agents/service.ts",
-    "packages/api/src/modules/session/runtime.ts",
     "packages/api/src/modules/session/service.ts",
     "packages/api/src/modules/skills/service.ts",
     "packages/api/src/modules/tasks/service.ts",
@@ -60,7 +49,6 @@
   ],
   "r7_dual_naming": [
     "packages/api/src/modules/access/bindings.ts",
-    "packages/api/src/modules/mcp-plugins/feishu/tools.ts",
     "packages/api/src/modules/mcp-plugins/plugin-auth-connections.ts",
     "packages/api/src/modules/session/service.ts"
   ]

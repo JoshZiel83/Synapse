@@ -1,6 +1,10 @@
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
+import {
+  presentActorAccessRequest,
+  presentFriendRequest,
+  presentRemoteAgentAccessRequest,
+} from "./presenter.js"
 import {
   CONTACT_DIRECT_STATE,
   CONTACT_HUB_KIND,
@@ -2894,16 +2898,18 @@ export async function listFriendRequests(params: {
       row.targetKind === "remote_agent" && row.targetRemoteAgentId
         ? await getRemoteAgentSummary(row.targetRemoteAgentId)
         : null
-    incoming.push({
-      id: row.id,
-      status: row.status,
-      createdAt: serializeOptionalInstant(row.createdAt),
-      requester,
-      targetType: subjectKindToRelationshipPeerType(row.targetKind),
-      targetMember,
-      targetActor,
-      targetRemoteAgent,
-    })
+    incoming.push(
+      presentFriendRequest({
+        id: row.id,
+        status: row.status,
+        createdAt: row.createdAt,
+        requester,
+        targetType: subjectKindToRelationshipPeerType(row.targetKind),
+        targetMember,
+        targetActor,
+        targetRemoteAgent,
+      })
+    )
   }
 
   const outgoing = []
@@ -2920,15 +2926,17 @@ export async function listFriendRequests(params: {
       row.targetKind === "remote_agent" && row.targetRemoteAgentId
         ? await getRemoteAgentSummary(row.targetRemoteAgentId)
         : null
-    outgoing.push({
-      id: row.id,
-      status: row.status,
-      createdAt: serializeOptionalInstant(row.createdAt),
-      targetType: subjectKindToRelationshipPeerType(row.targetKind),
-      targetMember,
-      targetActor,
-      targetRemoteAgent,
-    })
+    outgoing.push(
+      presentFriendRequest({
+        id: row.id,
+        status: row.status,
+        createdAt: row.createdAt,
+        targetType: subjectKindToRelationshipPeerType(row.targetKind),
+        targetMember,
+        targetActor,
+        targetRemoteAgent,
+      })
+    )
   }
 
   return { incoming, outgoing }
@@ -3122,26 +3130,30 @@ export async function listActorAccessRequests(params: {
       resourceId: row.actorId,
     })
     if (!canApprove) continue
-    incoming.push({
-      id: row.id,
-      status: row.status,
-      createdAt: serializeOptionalInstant(row.createdAt),
-      requester: await getWorkspaceMemberSummaryById(
-        row.requesterWorkspaceMemberId
-      ),
-      actor: await getActorSummary(row.actorId),
-    })
+    incoming.push(
+      presentActorAccessRequest({
+        id: row.id,
+        status: row.status,
+        createdAt: row.createdAt,
+        requester: await getWorkspaceMemberSummaryById(
+          row.requesterWorkspaceMemberId
+        ),
+        actor: await getActorSummary(row.actorId),
+      })
+    )
   }
 
   const outgoing = []
   for (const row of outgoingRows) {
     if (!row.actorId) continue
-    outgoing.push({
-      id: row.id,
-      status: row.status,
-      createdAt: serializeOptionalInstant(row.createdAt),
-      actor: await getActorSummary(row.actorId),
-    })
+    outgoing.push(
+      presentActorAccessRequest({
+        id: row.id,
+        status: row.status,
+        createdAt: row.createdAt,
+        actor: await getActorSummary(row.actorId),
+      })
+    )
   }
 
   return { incoming, outgoing }
@@ -3205,26 +3217,30 @@ export async function listRemoteAgentAccessRequests(params: {
       resourceId: remoteAgentId,
     })
     if (!canApprove) continue
-    incoming.push({
-      id: row.id,
-      status: row.status,
-      createdAt: serializeOptionalInstant(row.createdAt),
-      requester: await getWorkspaceMemberSummaryById(
-        row.requesterWorkspaceMemberId
-      ),
-      remoteAgent: await getRemoteAgentSummary(remoteAgentId),
-    })
+    incoming.push(
+      presentRemoteAgentAccessRequest({
+        id: row.id,
+        status: row.status,
+        createdAt: row.createdAt,
+        requester: await getWorkspaceMemberSummaryById(
+          row.requesterWorkspaceMemberId
+        ),
+        remoteAgent: await getRemoteAgentSummary(remoteAgentId),
+      })
+    )
   }
 
   const outgoing = []
   for (const row of outgoingRows) {
     if (!row.remoteAgentId) continue
-    outgoing.push({
-      id: row.id,
-      status: row.status,
-      createdAt: serializeOptionalInstant(row.createdAt),
-      remoteAgent: await getRemoteAgentSummary(row.remoteAgentId),
-    })
+    outgoing.push(
+      presentRemoteAgentAccessRequest({
+        id: row.id,
+        status: row.status,
+        createdAt: row.createdAt,
+        remoteAgent: await getRemoteAgentSummary(row.remoteAgentId),
+      })
+    )
   }
 
   return { incoming, outgoing }

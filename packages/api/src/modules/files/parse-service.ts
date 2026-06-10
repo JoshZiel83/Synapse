@@ -268,7 +268,7 @@ async function listParseOutputsForRuns(
   return grouped
 }
 
-async function mapRunRow(row: ParseRunRow): Promise<FileParseRunView> {
+async function presentParseRun(row: ParseRunRow): Promise<FileParseRunView> {
   const outputsByRunId = await listParseOutputsForRuns([row.id])
   return {
     id: row.id,
@@ -470,7 +470,7 @@ export async function getLatestSuccessfulFileParse(
     .limit(1)
     .executeTakeFirst()) as ParseRunRow | undefined
 
-  return row ? mapRunRow(row) : null
+  return row ? presentParseRun(row) : null
 }
 
 export async function getLatestAvailableFileParse(
@@ -491,5 +491,5 @@ export async function getLatestAvailableFileParse(
     .limit(1)
     .executeTakeFirst()) as ParseRunRow | undefined
 
-  return row ? mapRunRow(row) : null
+  return row ? presentParseRun(row) : null
 }

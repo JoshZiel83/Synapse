@@ -373,18 +373,15 @@ function serializeUnixTimestampToInstant(value: unknown) {
 
 function addIsoTimeFieldsToDocSearchResults(results: unknown[]) {
   return results.map((item) => {
-    const row = asObject(item)
-    const resultMeta = { ...asObject(row.result_meta) }
+    const unit = asObject(item)
+    const resultMeta = { ...asObject(unit.result_meta) }
     for (const field of ["create_time", "open_time", "update_time"] as const) {
       const iso = serializeUnixTimestampToInstant(resultMeta[field])
       if (iso) {
         resultMeta[`${field}_iso`] = iso
       }
     }
-    return {
-      ...row,
-      result_meta: resultMeta,
-    }
+    return Object.assign({}, unit, { result_meta: resultMeta })
   })
 }
 

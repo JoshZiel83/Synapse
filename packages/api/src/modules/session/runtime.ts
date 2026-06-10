@@ -84,7 +84,7 @@ function mapWakeupSourceTypeToTrigger(
   return sourceType
 }
 
-function mapWakeupRow(row: TableRow<"sessionWakeups">): ActorRuntimeWakeup {
+function presentWakeup(row: TableRow<"sessionWakeups">): ActorRuntimeWakeup {
   const metadata = parseMetadata(row.metadata)
   return {
     wakeupId: row.id,
@@ -120,7 +120,7 @@ async function loadRuntimeWakeups(
     .orderBy("createdAt", "asc")
     .execute()
 
-  return rows.map(mapWakeupRow)
+  return rows.map(presentWakeup)
 }
 
 function parseJsonValue(value: unknown): unknown {
@@ -1188,7 +1188,7 @@ export async function attachPendingWakeupsToTurn(
     .returningAll()
     .execute()
 
-  return rows.map(mapWakeupRow)
+  return rows.map(presentWakeup)
 }
 
 export async function markTurnWakeupsProcessed(turnId: string) {
@@ -1263,5 +1263,5 @@ export async function getPendingWakeups(sessionId: string) {
     .orderBy("createdAt", "asc")
     .execute()
 
-  return rows.map(mapWakeupRow)
+  return rows.map(presentWakeup)
 }

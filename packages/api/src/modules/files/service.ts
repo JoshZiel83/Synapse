@@ -1,11 +1,6 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import {
-  requireInstantDate,
-  serializeInstant,
-} from "../../infrastructure/datetime.js"
-import {
   fileRefBlock,
-  parseJsonObject,
   type CanonicalFileRefBlock,
   type FileRecordView,
 } from "@synapse/shared"
@@ -34,10 +29,10 @@ import {
   buildUserUploadOrigin,
   mimeToFileContentKind,
   mimeToCanonicalFileCategory,
-  toFileOriginSummary,
   type FileOriginInput,
   type StoredFileRecord,
 } from "./model.js"
+import { presentFileAsset, type FileJoinRow } from "./presenter.js"
 
 export type { FileOriginInput, StoredFileRecord }
 export {
@@ -58,52 +53,6 @@ export type FileAccessInfo = Pick<
   FileRecordView,
   "id" | "workspaceId" | "mimeType" | "originalName" | "contentKind"
 >
-
-type FileJoinRow = {
-  id: string
-  workspaceId: string | null
-  uploaderUserId: string | null
-  originalName: string
-  mimeType: string
-  contentKind: FileRecordView["contentKind"]
-  sizeBytes: string | number
-  contentSha256: string
-  createdAt: Date | null
-  sourceFamily: FileRecordView["originSummary"]["family"]
-  sourceSystem: FileRecordView["originSummary"]["system"]
-  initiatorActorId: string | null
-  parentAssetId: string | null
-  detailsJson: unknown
-}
-
-function mapStoredFileRecord(row: FileJoinRow): StoredFileRecord {
-  const origin = {
-    family: row.sourceFamily,
-    system: row.sourceSystem,
-    initiatorActorId: row.initiatorActorId,
-    parentFileId: row.parentAssetId,
-    details: parseJsonObject(row.detailsJson),
-  } satisfies FileOriginInput
-
-  return {
-    id: row.id,
-    assetId: row.id,
-    workspaceId: row.workspaceId,
-    uploaderUserId: row.uploaderUserId,
-    originalName: row.originalName,
-    url: getStableFileUrl(row.id),
-    fullUrl: getStableFullFileUrl(row.id),
-    mimeType: row.mimeType,
-    contentKind: row.contentKind,
-    sizeBytes: Number(row.sizeBytes),
-    sha256: row.contentSha256,
-    storageBackend: "local_cas",
-    originSummary: toFileOriginSummary(origin),
-    createdAt: serializeInstant(
-      requireInstantDate(row.createdAt, `file_assets.${row.id}.created_at`)
-    ),
-  }
-}
 
 async function getJoinedFileRow(
   fileId: string,
@@ -185,14 +134,14 @@ export async function getFileRecord(
   fileId: string
 ): Promise<StoredFileRecord | null> {
   const row = await getJoinedFileRow(fileId)
-  return row ? mapStoredFileRecord(row) : null
+  return row ? presentFileAsset(row) : null
 }
 
 export async function getFileDetail(
   fileId: string
 ): Promise<FileRecordView | null> {
   const row = await getJoinedFileRow(fileId)
-  return row ? mapStoredFileRecord(row) : null
+  return row ? presentFileAsset(row) : null
 }
 
 export async function getFileAccessInfo(
@@ -216,7 +165,7 @@ export async function getWorkspaceFileDetail(
   workspaceId: string
 ): Promise<FileRecordView | null> {
   const row = await getJoinedFileRow(fileId, workspaceId)
-  return row ? mapStoredFileRecord(row) : null
+  return row ? presentFileAsset(row) : null
 }
 
 export async function duplicateFileRecord(
