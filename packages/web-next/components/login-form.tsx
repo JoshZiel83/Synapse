@@ -36,8 +36,8 @@ import { PasswordInput } from "@/components/ui/password-input"
 import { WebQrLoginPanel } from "@/components/web-qr-login-panel"
 
 const loginSchema = z.object({
-  email: z.email("Enter a valid email address"),
-  password: z.string().min(1, "Password is required"),
+  email: z.email("请输入有效的邮箱地址"),
+  password: z.string().min(1, "请输入密码"),
   temporaryLogin: z.boolean(),
 })
 
@@ -60,10 +60,8 @@ function CornerSwitch({
     <button
       type="button"
       onClick={onToggle}
-      aria-label={
-        showingQr ? "Switch to password sign-in" : "Sign in with QR code"
-      }
-      title={showingQr ? "Password sign-in" : "Scan QR to sign in"}
+      aria-label={showingQr ? "切换为密码登录" : "切换为扫码登录"}
+      title={showingQr ? "密码登录" : "扫码登录"}
       className="group/corner absolute end-0 top-0 z-10 size-14 outline-none"
     >
       <span
@@ -84,7 +82,7 @@ export function LoginForm() {
   // (the full-page fallback path; the popup path reports inline instead).
   const [submitError, setSubmitError] = useState(() => {
     const oauthError = searchParams.get("error")
-    return oauthError ? getOAuthErrorMessage(oauthError) : ""
+    return oauthError ? getOAuthErrorMessage(oauthError, "登录") : ""
   })
   const [showingQr, setShowingQr] = useState(false)
 
@@ -106,7 +104,7 @@ export function LoginForm() {
 
       router.push(await resolveDestination(redirect))
     } catch (err) {
-      setSubmitError(getAuthErrorMessage(err))
+      setSubmitError(getAuthErrorMessage(err, "登录"))
     }
   })
 
@@ -118,11 +116,11 @@ export function LoginForm() {
           onToggle={() => setShowingQr((value) => !value)}
         />
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Welcome back</CardTitle>
+          <CardTitle className="text-xl">登录</CardTitle>
           <CardDescription>
             {showingQr
-              ? "Scan the QR code with the Synapse app"
-              : "Sign in to your Synapse workspace"}
+              ? "请使用 Synapse App 扫码登录"
+              : "使用飞书、邮箱或扫码登录"}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -133,14 +131,15 @@ export function LoginForm() {
               <FieldGroup>
                 <Field>
                   <FeishuSignInButton
+                    actionLabel="登录"
                     redirect={redirect}
                     disabled={isSubmitting}
                     onError={setSubmitError}
                   />
                 </Field>
-                <FieldSeparator>Or continue with email</FieldSeparator>
+                <FieldSeparator>或使用邮箱登录</FieldSeparator>
                 <Field data-invalid={Boolean(errors.email) || undefined}>
-                  <FieldLabel htmlFor="email">Email</FieldLabel>
+                  <FieldLabel htmlFor="email">邮箱</FieldLabel>
                   <Controller
                     control={control}
                     name="email"
@@ -164,15 +163,7 @@ export function LoginForm() {
                   />
                 </Field>
                 <Field data-invalid={Boolean(errors.password) || undefined}>
-                  <div className="flex items-center">
-                    <FieldLabel htmlFor="password">Password</FieldLabel>
-                    <Link
-                      href="/login"
-                      className="ms-auto text-sm underline-offset-2 hover:underline"
-                    >
-                      Forgot your password?
-                    </Link>
-                  </div>
+                  <FieldLabel htmlFor="password">密码</FieldLabel>
                   <Controller
                     control={control}
                     name="password"
@@ -210,7 +201,7 @@ export function LoginForm() {
                       )}
                     />
                     <span className="text-sm font-medium text-foreground">
-                      Temporary login
+                      仅在当前设备临时登录
                     </span>
                   </label>
                 </Field>
@@ -223,15 +214,15 @@ export function LoginForm() {
                     {isSubmitting ? (
                       <>
                         <Loader2 className="size-4 animate-spin" aria-hidden />
-                        Signing in...
+                        正在登录
                       </>
                     ) : (
-                      "Sign in"
+                      "登录"
                     )}
                   </Button>
                 </Field>
                 <FieldDescription className="text-center">
-                  Don&apos;t have an account?{" "}
+                  还没有账号？{" "}
                   <Link
                     href={
                       redirect
@@ -240,7 +231,7 @@ export function LoginForm() {
                     }
                     className="underline-offset-2 hover:underline"
                   >
-                    Sign up
+                    去注册
                   </Link>
                 </FieldDescription>
               </FieldGroup>

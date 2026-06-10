@@ -35,13 +35,13 @@ import { PasswordInput } from "@/components/ui/password-input"
 
 const signupSchema = z
   .object({
-    name: z.string().min(1, "Full name is required"),
-    email: z.email("Enter a valid email address"),
-    password: z.string().min(8, "Password must be at least 8 characters"),
-    confirmPassword: z.string().min(1, "Please confirm your password"),
+    name: z.string().min(1, "请输入姓名"),
+    email: z.email("请输入有效的邮箱地址"),
+    password: z.string().min(8, "密码至少需要 8 个字符"),
+    confirmPassword: z.string().min(1, "请再次输入密码"),
   })
   .refine((data) => data.password === data.confirmPassword, {
-    message: "Passwords do not match",
+    message: "两次输入的密码不一致",
     path: ["confirmPassword"],
   })
 
@@ -74,7 +74,7 @@ export function SignupForm() {
       await register(values.email, values.password, values.name)
       router.push(redirect ?? "/welcome")
     } catch (err) {
-      setSubmitError(getAuthErrorMessage(err))
+      setSubmitError(getAuthErrorMessage(err, "注册"))
     }
   })
 
@@ -82,24 +82,23 @@ export function SignupForm() {
     <AuthShell>
       <Card>
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Create your account</CardTitle>
-          <CardDescription>
-            Start collaborating in your Synapse workspace
-          </CardDescription>
+          <CardTitle className="text-xl">注册</CardTitle>
+          <CardDescription>创建 Synapse 账号</CardDescription>
         </CardHeader>
         <CardContent>
           <form method="post" onSubmit={onSubmit} noValidate>
             <FieldGroup>
               <Field>
                 <FeishuSignInButton
+                  actionLabel="注册"
                   redirect={redirect}
                   disabled={isSubmitting}
                   onError={setSubmitError}
                 />
               </Field>
-              <FieldSeparator>Or sign up with email</FieldSeparator>
+              <FieldSeparator>或使用邮箱注册</FieldSeparator>
               <Field data-invalid={Boolean(errors.name) || undefined}>
-                <FieldLabel htmlFor="name">Full name</FieldLabel>
+                <FieldLabel htmlFor="name">姓名</FieldLabel>
                 <Controller
                   control={control}
                   name="name"
@@ -108,7 +107,7 @@ export function SignupForm() {
                       {...field}
                       id="name"
                       type="text"
-                      placeholder="Jane Doe"
+                      placeholder="例如：张三"
                       autoComplete="name"
                       autoFocus
                       aria-invalid={Boolean(errors.name) || undefined}
@@ -122,7 +121,7 @@ export function SignupForm() {
                 />
               </Field>
               <Field data-invalid={Boolean(errors.email) || undefined}>
-                <FieldLabel htmlFor="email">Email</FieldLabel>
+                <FieldLabel htmlFor="email">邮箱</FieldLabel>
                 <Controller
                   control={control}
                   name="email"
@@ -147,7 +146,7 @@ export function SignupForm() {
               <Field>
                 <Field className="grid grid-cols-2 gap-4">
                   <Field data-invalid={Boolean(errors.password) || undefined}>
-                    <FieldLabel htmlFor="password">Password</FieldLabel>
+                    <FieldLabel htmlFor="password">密码</FieldLabel>
                     <Controller
                       control={control}
                       name="password"
@@ -164,9 +163,7 @@ export function SignupForm() {
                   <Field
                     data-invalid={Boolean(errors.confirmPassword) || undefined}
                   >
-                    <FieldLabel htmlFor="confirm-password">
-                      Confirm Password
-                    </FieldLabel>
+                    <FieldLabel htmlFor="confirm-password">确认密码</FieldLabel>
                     <Controller
                       control={control}
                       name="confirmPassword"
@@ -204,15 +201,15 @@ export function SignupForm() {
                   {isSubmitting ? (
                     <>
                       <Loader2 className="size-4 animate-spin" aria-hidden />
-                      Creating account...
+                      正在创建账号
                     </>
                   ) : (
-                    "Create account"
+                    "创建账号"
                   )}
                 </Button>
               </Field>
               <FieldDescription className="text-center">
-                Already have an account?{" "}
+                已有账号？{" "}
                 <Link
                   href={
                     redirect
@@ -221,7 +218,7 @@ export function SignupForm() {
                   }
                   className="underline-offset-2 hover:underline"
                 >
-                  Sign in
+                  去登录
                 </Link>
               </FieldDescription>
             </FieldGroup>

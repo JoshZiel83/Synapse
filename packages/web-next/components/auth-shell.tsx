@@ -1,12 +1,9 @@
 import Image from "next/image"
 import Link from "next/link"
 
-import { FieldDescription } from "@/components/ui/field"
-
 /**
- * Shared chrome for the login and signup pages: brand lockup on top, the form
- * card in the middle, legal links at the bottom. Keeping both auth surfaces on
- * one shell is what makes them feel like one standardized flow.
+ * Shared chrome for the login and signup pages: brand lockup on top and the
+ * form card below, so both auth surfaces stay in one consistent flow.
  */
 export function AuthShell({ children }: { children: React.ReactNode }) {
   return (
@@ -27,17 +24,6 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
         Synapse
       </Link>
       {children}
-      <FieldDescription className="px-6 text-center">
-        By continuing, you agree to our{" "}
-        <Link href="/login" className="underline-offset-2 hover:underline">
-          Terms of Service
-        </Link>{" "}
-        and{" "}
-        <Link href="/login" className="underline-offset-2 hover:underline">
-          Privacy Policy
-        </Link>
-        .
-      </FieldDescription>
     </div>
   )
 }

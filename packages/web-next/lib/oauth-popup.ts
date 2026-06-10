@@ -43,6 +43,7 @@ function buildCallbackUrl(providerId: string, finalDestination: string) {
 
 type SignInOptions = {
   providerId: string
+  actionLabel?: "登录" | "注册"
   /** Where the opener should navigate on success (already-normalized path). */
   finalDestination: string
   onSuccess: () => void
@@ -65,6 +66,7 @@ type SignInOptions = {
  */
 export function signInWithOAuthPopup({
   providerId,
+  actionLabel = "登录",
   finalDestination,
   onSuccess,
   onCancel,
@@ -129,7 +131,7 @@ export function signInWithOAuthPopup({
       if (cancelled) return
       window.location.href = url
     } catch (err) {
-      settle(() => onError(getAuthErrorMessage(err)))
+      settle(() => onError(getAuthErrorMessage(err, actionLabel)))
     }
   }
 
@@ -159,7 +161,7 @@ export function signInWithOAuthPopup({
         return
       }
       popup?.close()
-      settle(() => onError(getOAuthErrorMessage(data.error)))
+      settle(() => onError(getOAuthErrorMessage(data.error, actionLabel)))
     }
   }
 

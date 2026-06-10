@@ -16,10 +16,12 @@ import { Button } from "@/components/ui/button"
  * same button fits both surfaces.
  */
 export function FeishuSignInButton({
+  actionLabel,
   redirect,
   disabled,
   onError,
 }: {
+  actionLabel: "登录" | "注册"
   redirect: string | null
   disabled?: boolean
   onError: (message: string) => void
@@ -36,6 +38,7 @@ export function FeishuSignInButton({
     onError("")
     cleanupRef.current = signInWithOAuthPopup({
       providerId: "feishu",
+      actionLabel,
       finalDestination: redirect ?? "/dashboard",
       onSuccess: () => {
         // Cookie is set; route to the resolved destination. (On the redirect
@@ -65,7 +68,7 @@ export function FeishuSignInButton({
       ) : (
         <FeishuIcon className="size-4" />
       )}
-      Continue with Feishu
+      {`使用飞书${actionLabel}`}
     </Button>
   )
 }
