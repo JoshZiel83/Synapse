@@ -1,10 +1,7 @@
 {
   "modules/access/evaluator.ts": {
     "conversations": 1,
-    "devices": 1,
-    "memory_items": 1,
-    "memory_spaces": 1,
-    "model_groups": 3
+    "devices": 1
   },
   "modules/access/policy.ts": {
     "conversations": 1
@@ -19,10 +16,10 @@
     "users": 2
   },
   "modules/automation/service.ts": {
-    "automation_event_sources": 13,
+    "automation_event_sources": 8,
     "automation_integration_bindings": 6,
     "automation_rules": 6,
-    "automation_webhook_endpoints": 5,
+    "automation_webhook_endpoints": 4,
     "workspaces": 1
   },
   "modules/chat/service.ts": {
@@ -42,18 +39,10 @@
     "devices": 1
   },
   "modules/devices/service.ts": {
-    "devices": 3,
-    "remote_agent_machines": 1
-  },
-  "modules/files/content-access.ts": {
-    "file_assets": 1
+    "devices": 3
   },
   "modules/files/service.ts": {
-    "file_assets": 2,
     "workspaces": 1
-  },
-  "modules/im/service/accounts.ts": {
-    "transport_accounts": 6
   },
   "modules/im/service/bindings.ts": {
     "conversations": 1
@@ -61,34 +50,21 @@
   "modules/im/service/ingest.ts": {
     "workspaces": 1
   },
-  "modules/im/service/weixin-binding.ts": {
-    "transport_accounts": 1
-  },
   "modules/mcp-plugins/plugin-auth-connections.ts": {
     "catalog_items": 1,
-    "plugin_connections": 2
+    "plugin_connections": 1
   },
   "modules/mcp-plugins/service.ts": {
-    "catalog_items": 2,
-    "file_assets": 1,
-    "plugin_connections": 2,
+    "catalog_items": 1,
     "publishers": 4
-  },
-  "modules/memory/controller.ts": {
-    "memory_items": 2,
-    "memory_spaces": 1
-  },
-  "modules/memory/indexing.ts": {
-    "memory_items": 2
   },
   "modules/memory/service.ts": {
     "conversations": 2,
-    "memory_items": 5,
-    "memory_spaces": 3,
+    "memory_items": 4,
+    "memory_spaces": 1,
     "users": 1
   },
   "modules/model-groups/service.ts": {
-    "model_groups": 8,
     "workspaces": 1
   },
   "modules/organization/service.ts": {
@@ -103,7 +79,7 @@
   },
   "modules/remote-agents/service.ts": {
     "conversations": 2,
-    "remote_agent_machines": 6,
+    "remote_agent_machines": 3,
     "users": 1
   },
   "modules/runtime-authorizations/requests.ts": {
@@ -120,11 +96,10 @@
     "devices": 2,
     "users": 6
   },
-  "modules/workspace/invite-service.ts": {
+  "modules/workspace/invite/repo.ts": {
     "workspaces": 1
   },
   "modules/workspace/service.ts": {
-    "catalog_items": 1,
     "workspaces": 3
   }
 }
