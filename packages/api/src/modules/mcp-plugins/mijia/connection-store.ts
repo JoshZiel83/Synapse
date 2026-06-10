@@ -28,12 +28,12 @@ export async function persistMijiaConnectionState(
   authState: MijiaAuthState
 ) {
   await db
-    .updateTable("plugin_connections")
+    .updateTable("pluginConnections")
     .set({
-      secret_payload: encryptDeep(
+      secretPayload: encryptDeep(
         authState
-      ) as TableInsert<"plugin_connections">["secret_payload"],
-      expires_at:
+      ) as TableInsert<"pluginConnections">["secretPayload"],
+      expiresAt:
         typeof authState.expireTime === "number"
           ? new Date(authState.expireTime)
           : null,
@@ -45,7 +45,7 @@ export async function persistMijiaConnectionState(
 
 export async function markMijiaConnectionExpired(connectionId: string) {
   await db
-    .updateTable("plugin_connections")
+    .updateTable("pluginConnections")
     .set({
       status: "expired",
     })

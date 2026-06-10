@@ -668,6 +668,39 @@ function runOnDb<T extends object = Record<string, unknown>>(
   return runOn<T>(db, text, params)
 }
 
+// The Kysely executor's CamelCasePlugin (maintainNestedObjectKeys: true)
+// camelCases the top-level keys of EVERY result row — including the raw
+// `runOn`/`CompiledQuery.raw` path. `ParticipantRow` is a wide (~32 field)
+// snake_case shape read in dozens of places across this module, so rather than
+// churn every reader we invert the plugin's transform on the boundary: snake
+// back the top-level keys so the returned rows match the declared snake_case
+// `ParticipantRow` type at runtime. `metadata`/`actor_*` JSONB *values* are not
+// touched (only the row's own top-level keys).
+const camelToSnakeKey = (key: string): string =>
+  key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)
+
+function snakeCaseRowKeys<T extends object>(row: Record<string, unknown>): T {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(row)) {
+    out[camelToSnakeKey(key)] = value
+  }
+  return out as T
+}
+
+/**
+ * `runOn` for raw queries whose declared `<RowType>` is snake_case and is read
+ * with snake_case keys throughout the module. Re-snakes the camelCased keys the
+ * Kysely executor produces so the runtime rows match the type.
+ */
+async function runOnSnake<T extends object = Record<string, unknown>>(
+  executor: Executor,
+  text: string,
+  params: readonly unknown[] = []
+): Promise<{ rows: T[]; rowCount?: number | null }> {
+  const result = await runOn<Record<string, unknown>>(executor, text, params)
+  return { rows: result.rows.map((row) => snakeCaseRowKeys<T>(row)) }
+}
+
 /** Serialize a value into a jsonb-typed SQL fragment (matches `$N::jsonb`). */
 function jsonbValue(value: unknown): RawBuilder<JsonValue> {
   return sql<JsonValue>`${JSON.stringify(value ?? null)}::jsonb`
@@ -695,8 +728,8 @@ async function ensureClientInstance(
   const existing = await runBuilder(
     queryable,
     queryable
-      .selectFrom("chat_client_instances")
-      .select(["workspace_id", "workspace_member_id"])
+      .selectFrom("chatClientInstances")
+      .select(["workspaceId", "workspaceMemberId"])
       .where("id", "=", input.clientInstanceId)
       .limit(1)
   )
@@ -709,8 +742,8 @@ async function ensureClientInstance(
     )
   }
   if (
-    owner.workspace_id !== input.workspaceId ||
-    owner.workspace_member_id !== input.workspaceMemberId
+    owner.workspaceId !== input.workspaceId ||
+    owner.workspaceMemberId !== input.workspaceMemberId
   ) {
     throw createChatError(
       403,
@@ -726,17 +759,17 @@ async function createClientInstance(
 ) {
   const clientInstanceId = randomUUID()
   await queryable
-    .insertInto("chat_client_instances")
+    .insertInto("chatClientInstances")
     .values({
       id: clientInstanceId,
-      workspace_id: input.workspaceId,
-      workspace_member_id: input.workspaceMemberId,
+      workspaceId: input.workspaceId,
+      workspaceMemberId: input.workspaceMemberId,
       platform: input.platform ?? null,
-      device_label: input.deviceLabel ?? null,
+      deviceLabel: input.deviceLabel ?? null,
       status: "active",
       metadata: jsonbValue(input.metadata ?? {}),
-      last_seen_at: sql`NOW()`,
-      created_at: sql`NOW()`,
+      lastSeenAt: sql`NOW()`,
+      createdAt: sql`NOW()`,
     })
     .execute()
 
@@ -750,15 +783,15 @@ async function touchClientInstance(
   await ensureClientInstance(queryable, input)
 
   await queryable
-    .updateTable("chat_client_instances")
+    .updateTable("chatClientInstances")
     .set({
       platform: sql`COALESCE(${input.platform ?? null}, platform)`,
-      device_label: sql`COALESCE(${input.deviceLabel ?? null}, device_label)`,
+      deviceLabel: sql`COALESCE(${input.deviceLabel ?? null}, device_label)`,
       metadata: sql`COALESCE(metadata, '{}'::jsonb) || ${jsonbValue(
         input.metadata ?? {}
       )}`,
       status: "active",
-      last_seen_at: sql`NOW()`,
+      lastSeenAt: sql`NOW()`,
     })
     .where("id", "=", input.clientInstanceId)
     .execute()
@@ -798,7 +831,7 @@ async function listConversationParticipantRows(
     ? "COALESCE(cp.actor_join_version_id, current_version.id)"
     : "current_version.id"
 
-  const result = await runOn<ParticipantRow>(
+  const result = await runOnSnake<ParticipantRow>(
     queryable,
     `
       SELECT
@@ -909,7 +942,7 @@ async function getWorkspaceMemberConversationParticipantRow(
   conversationId: string,
   workspaceMemberId: string
 ) {
-  const result = await runOn<ParticipantRow>(
+  const result = await runOnSnake<ParticipantRow>(
     queryable,
     `
       SELECT
@@ -1369,7 +1402,7 @@ async function countUnreadVisibleMessages(
   conversationId: string,
   participantId: string
 ) {
-  const result = await runOn<{ unread_count: string | number }>(
+  const result = await runOnSnake<{ unread_count: string | number }>(
     queryable,
     `
       SELECT COUNT(*)::int AS unread_count
@@ -1489,25 +1522,25 @@ async function upsertConversationView(
   }
 ) {
   await queryable
-    .insertInto("workspace_member_conversation_views")
+    .insertInto("workspaceMemberConversationViews")
     .values({
-      workspace_member_id: params.workspaceMemberId,
-      conversation_id: params.conversationId,
-      last_visible_item_id: params.lastVisibleItemId ?? null,
-      last_visible_sequence: params.lastVisibleSequence ?? 0,
-      last_visible_at: params.lastVisibleAt
+      workspaceMemberId: params.workspaceMemberId,
+      conversationId: params.conversationId,
+      lastVisibleItemId: params.lastVisibleItemId ?? null,
+      lastVisibleSequence: params.lastVisibleSequence ?? 0,
+      lastVisibleAt: params.lastVisibleAt
         ? parseInstantString(params.lastVisibleAt)
         : null,
-      unread_count: params.unreadCount,
+      unreadCount: params.unreadCount,
       summary: jsonbValue(params.summary ?? {}),
-      created_at: sql`NOW()`,
+      createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
-      oc.columns(["workspace_member_id", "conversation_id"]).doUpdateSet({
-        last_visible_item_id: sql`COALESCE(EXCLUDED.last_visible_item_id, workspace_member_conversation_views.last_visible_item_id)`,
-        last_visible_sequence: sql`GREATEST(workspace_member_conversation_views.last_visible_sequence, EXCLUDED.last_visible_sequence)`,
-        last_visible_at: sql`COALESCE(EXCLUDED.last_visible_at, workspace_member_conversation_views.last_visible_at)`,
-        unread_count: sql`EXCLUDED.unread_count`,
+      oc.columns(["workspaceMemberId", "conversationId"]).doUpdateSet({
+        lastVisibleItemId: sql`COALESCE(EXCLUDED.last_visible_item_id, workspace_member_conversation_views.last_visible_item_id)`,
+        lastVisibleSequence: sql`GREATEST(workspace_member_conversation_views.last_visible_sequence, EXCLUDED.last_visible_sequence)`,
+        lastVisibleAt: sql`COALESCE(EXCLUDED.last_visible_at, workspace_member_conversation_views.last_visible_at)`,
+        unreadCount: sql`EXCLUDED.unread_count`,
         summary: sql`COALESCE(workspace_member_conversation_views.summary, '{}'::jsonb) || EXCLUDED.summary`,
       })
     )
@@ -1565,31 +1598,31 @@ export async function appendWorkspaceMemberSyncEventInTransaction<
   const inserted = await runBuilder(
     trx,
     trx
-      .insertInto("workspace_member_sync_events")
+      .insertInto("workspaceMemberSyncEvents")
       .values({
         // member_seq = (current max for this member) + 1, computed under the
         // advisory lock above so it is contiguous and commit-ordered.
-        member_seq: sql<number>`(
+        memberSeq: sql<number>`(
           SELECT COALESCE(MAX(member_seq), 0) + 1
           FROM workspace_member_sync_events
           WHERE workspace_member_id = ${params.workspaceMemberId}
         )`,
-        workspace_id: params.workspaceId,
-        workspace_member_id: params.workspaceMemberId,
-        conversation_id: params.conversationId ?? null,
-        item_id: params.itemId ?? null,
-        event_type: params.eventType,
+        workspaceId: params.workspaceId,
+        workspaceMemberId: params.workspaceMemberId,
+        conversationId: params.conversationId ?? null,
+        itemId: params.itemId ?? null,
+        eventType: params.eventType,
         payload: jsonbValue(params.payload),
-        occurred_at: sql`NOW()`,
-        created_at: sql`NOW()`,
+        occurredAt: sql`NOW()`,
+        createdAt: sql`NOW()`,
       })
-      .returning(["sync_seq", "member_seq", "occurred_at"])
+      .returning(["syncSeq", "memberSeq", "occurredAt"])
   )
 
   const row = inserted.rows[0]
   const envelope: ChatSyncEvent<T> = {
-    syncSeq: toNumber(row?.sync_seq),
-    memberSeq: toNumber(row?.member_seq),
+    syncSeq: toNumber(row?.syncSeq),
+    memberSeq: toNumber(row?.memberSeq),
     workspaceId: params.workspaceId,
     workspaceMemberId: params.workspaceMemberId,
     conversationId: params.conversationId,
@@ -1598,7 +1631,7 @@ export async function appendWorkspaceMemberSyncEventInTransaction<
     payload: params.payload,
     occurredAt: serializeInstant(
       requireInstantDate(
-        row?.occurred_at ?? null,
+        row?.occurredAt ?? null,
         "workspace_member_sync_events.occurred_at"
       )
     ),
@@ -1651,12 +1684,12 @@ async function getConversationSequenceMax(
   const result = await runBuilder(
     queryable,
     queryable
-      .selectFrom("conversation_items")
-      .select((eb) => eb.fn.max("sequence").as("max_sequence"))
-      .where("conversation_id", "=", conversationId)
+      .selectFrom("conversationItems")
+      .select((eb) => eb.fn.max("sequence").as("maxSequence"))
+      .where("conversationId", "=", conversationId)
   )
 
-  return toNumber(result.rows[0]?.max_sequence)
+  return toNumber(result.rows[0]?.maxSequence)
 }
 
 async function getLastItemAtOrBeforeSequence(
@@ -1667,9 +1700,9 @@ async function getLastItemAtOrBeforeSequence(
   const result = await runBuilder(
     queryable,
     queryable
-      .selectFrom("conversation_items")
+      .selectFrom("conversationItems")
       .select("id")
-      .where("conversation_id", "=", conversationId)
+      .where("conversationId", "=", conversationId)
       .where("sequence", "<=", String(sequence))
       .orderBy("sequence", "desc")
       .limit(1)
@@ -2128,7 +2161,7 @@ async function listMentionedParticipantIdsForItem(
   queryable: Executor,
   itemId: string
 ) {
-  const result = await runOn<{ mentioned_participant_id: string }>(
+  const result = await runOnSnake<{ mentioned_participant_id: string }>(
     queryable,
     `
       SELECT mentioned_participant_id
@@ -2444,10 +2477,13 @@ async function resolveParticipantSubjectId(
   // address here, so a future caller of ensureConversationParticipant can't
   // attach a bot/system or member-linked address as an external participant —
   // even if it skips the higher-level validateTransportAddresses gate.
+  // NOTE: runOn routes through the Kysely executor, whose CamelCasePlugin
+  // camelCases the top-level result keys — so the runtime row keys are
+  // camelCase even though the SQL selects snake_case columns.
   const addr = await runOn<{
-    workspace_id: string
-    address_type: string
-    workspace_member_id: string | null
+    workspaceId: string
+    addressType: string
+    workspaceMemberId: string | null
   }>(
     queryable,
     `SELECT workspace_id, address_type, workspace_member_id
@@ -2459,19 +2495,19 @@ async function resolveParticipantSubjectId(
       `resolveParticipantSubjectId: transport_addresses(${params.transportAddressId}) not found`
     )
   }
-  if (addr.rows[0].address_type !== "user") {
+  if (addr.rows[0].addressType !== "user") {
     throw new Error(
       `resolveParticipantSubjectId: address ${params.transportAddressId} is not a user address`
     )
   }
-  if (addr.rows[0].workspace_member_id) {
+  if (addr.rows[0].workspaceMemberId) {
     throw new Error(
       `resolveParticipantSubjectId: address ${params.transportAddressId} is linked to a workspace member; add it as a member, not an external participant`
     )
   }
   return upsertAccessSubjectOn(queryable, {
     kind: SUBJECT_KIND.EXTERNAL,
-    workspaceId: addr.rows[0].workspace_id,
+    workspaceId: addr.rows[0].workspaceId,
     transportAddressId: params.transportAddressId,
   })
 }
@@ -2506,46 +2542,46 @@ async function insertParticipant(
   const participantSubjectId =
     params.subjectId ?? (await resolveParticipantSubjectId(queryable, params))
   await queryable
-    .insertInto("conversation_participants")
+    .insertInto("conversationParticipants")
     .values({
       id: participantId,
-      conversation_id: params.conversationId,
-      subject_id: participantSubjectId,
-      actor_join_version_id: params.actorJoinVersionId ?? null,
-      display_name: params.displayName ?? null,
-      role_key: params.roleKey,
+      conversationId: params.conversationId,
+      subjectId: participantSubjectId,
+      actorJoinVersionId: params.actorJoinVersionId ?? null,
+      displayName: params.displayName ?? null,
+      roleKey: params.roleKey,
       state: "active",
       metadata: jsonbValue(params.metadata ?? {}),
-      joined_at: sql`NOW()`,
+      joinedAt: sql`NOW()`,
     })
     .execute()
 
   await queryable
-    .insertInto("conversation_participant_states")
+    .insertInto("conversationParticipantStates")
     .values({
-      conversation_id: params.conversationId,
-      participant_id: participantId,
-      read_watermark_sequence: 0,
-      created_at: sql`NOW()`,
+      conversationId: params.conversationId,
+      participantId: participantId,
+      readWatermarkSequence: 0,
+      createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
-      oc.columns(["conversation_id", "participant_id"]).doNothing()
+      oc.columns(["conversationId", "participantId"]).doNothing()
     )
     .execute()
 
   if (params.transportAddressId) {
     await queryable
-      .insertInto("conversation_participant_addresses")
+      .insertInto("conversationParticipantAddresses")
       .values({
-        conversation_participant_id: participantId,
-        transport_address_id: params.transportAddressId,
-        is_primary: true,
+        conversationParticipantId: participantId,
+        transportAddressId: params.transportAddressId,
+        isPrimary: true,
         metadata: jsonbValue({}),
-        created_at: sql`NOW()`,
+        createdAt: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc
-          .columns(["conversation_participant_id", "transport_address_id"])
+          .columns(["conversationParticipantId", "transportAddressId"])
           .doNothing()
       )
       .execute()
@@ -2564,7 +2600,7 @@ async function loadWorkspaceMembersByIds(
   if (workspaceMemberIds.length === 0) {
     return [] as Array<{ id: string; user_name: string }>
   }
-  const result = await runOn<{ id: string; user_name: string }>(
+  const result = await runOnSnake<{ id: string; user_name: string }>(
     queryable,
     `
       SELECT wm.id, u.name AS user_name
@@ -2586,7 +2622,7 @@ async function loadActorsByIds(
   if (actorIds.length === 0) {
     return [] as Array<{ id: string; display_name: string }>
   }
-  const result = await runOn<{ id: string; display_name: string }>(
+  const result = await runOnSnake<{ id: string; display_name: string }>(
     queryable,
     `
       SELECT actor.id, app.display_name
@@ -2611,7 +2647,7 @@ async function loadRemoteAgentsByIds(
   if (remoteAgentIds.length === 0) {
     return [] as Array<{ id: string; display_name: string }>
   }
-  const result = await runOn<{ id: string; display_name: string }>(
+  const result = await runOnSnake<{ id: string; display_name: string }>(
     queryable,
     `
       SELECT agent.id, app.display_name
@@ -2943,10 +2979,10 @@ export async function ensureConversationParticipant(params: {
   const existing = await runBuilder(
     queryable,
     queryable
-      .selectFrom("conversation_participants")
+      .selectFrom("conversationParticipants")
       .select(["id", "state"])
-      .where("conversation_id", "=", params.conversationId)
-      .where("subject_id", "=", targetSubjectId)
+      .where("conversationId", "=", params.conversationId)
+      .where("subjectId", "=", targetSubjectId)
       .limit(1)
   )
 
@@ -2956,17 +2992,15 @@ export async function ensureConversationParticipant(params: {
     // only refreshes presentation/state fields; the workspace_member_id /
     // actor_id / remote_agent_id columns no longer exist on this table.
     await queryable
-      .updateTable("conversation_participants")
+      .updateTable("conversationParticipants")
       .set({
-        actor_join_version_id: sql`COALESCE(${
+        actorJoinVersionId: sql`COALESCE(${
           params.actorJoinVersionId ?? null
         }, actor_join_version_id)`,
-        display_name: sql`COALESCE(${
-          params.displayName ?? null
-        }, display_name)`,
-        role_key: sql`COALESCE(${params.roleKey ?? "member"}, role_key)`,
+        displayName: sql`COALESCE(${params.displayName ?? null}, display_name)`,
+        roleKey: sql`COALESCE(${params.roleKey ?? "member"}, role_key)`,
         state: "active",
-        left_at: null,
+        leftAt: null,
         metadata: sql`COALESCE(conversation_participants.metadata, '{}'::jsonb) || ${jsonbValue(
           params.metadata ?? {}
         )}`,
@@ -2976,19 +3010,19 @@ export async function ensureConversationParticipant(params: {
 
     if (params.transportAddressId) {
       await queryable
-        .insertInto("conversation_participant_addresses")
+        .insertInto("conversationParticipantAddresses")
         .values({
-          conversation_participant_id: existingId,
-          transport_address_id: params.transportAddressId,
-          is_primary: true,
+          conversationParticipantId: existingId,
+          transportAddressId: params.transportAddressId,
+          isPrimary: true,
           metadata: jsonbValue({}),
-          created_at: sql`NOW()`,
+          createdAt: sql`NOW()`,
         })
         .onConflict((oc) =>
           oc
-            .columns(["conversation_participant_id", "transport_address_id"])
+            .columns(["conversationParticipantId", "transportAddressId"])
             .doUpdateSet({
-              is_primary: sql`EXCLUDED.is_primary`,
+              isPrimary: sql`EXCLUDED.is_primary`,
             })
         )
         .execute()
@@ -3035,7 +3069,10 @@ async function loadParticipantStatesByMember(
   workspaceMemberIds: string[]
 ): Promise<Map<string, string>> {
   if (workspaceMemberIds.length === 0) return new Map()
-  const result = await runOn<{ workspace_member_id: string; state: string }>(
+  const result = await runOnSnake<{
+    workspace_member_id: string
+    state: string
+  }>(
     queryable,
     `
       SELECT cps.workspace_member_id, cp.state
@@ -3391,18 +3428,17 @@ export async function createConversationItem(params: {
 
     for (const [ordinal, part] of prepared.parts.entries()) {
       await queryable
-        .insertInto("conversation_item_parts")
+        .insertInto("conversationItemParts")
         .values({
           id: crypto.randomUUID(),
-          item_id: insertedItem.id,
+          itemId: insertedItem.id,
           ordinal,
-          part_type: part.type,
-          text_value: part.type === "text" ? (part.text ?? "") : null,
-          ref_path: part.type === "file_ref" ? (part.refPath ?? null) : null,
-          ref_sha256:
-            part.type === "file_ref" ? (part.refSha256 ?? null) : null,
-          json_value: part.type === "json" ? jsonbValue(part.json ?? {}) : null,
-          mime_type: part.mimeType ?? null,
+          partType: part.type,
+          textValue: part.type === "text" ? (part.text ?? "") : null,
+          refPath: part.type === "file_ref" ? (part.refPath ?? null) : null,
+          refSha256: part.type === "file_ref" ? (part.refSha256 ?? null) : null,
+          jsonValue: part.type === "json" ? jsonbValue(part.json ?? {}) : null,
+          mimeType: part.mimeType ?? null,
           name: part.name ?? null,
           metadata: jsonbValue(part.metadata ?? {}),
         })
@@ -3412,11 +3448,11 @@ export async function createConversationItem(params: {
     if (prepared.mentionedParticipants.length > 0) {
       for (const mention of prepared.mentionedParticipants) {
         await queryable
-          .insertInto("conversation_item_mentions")
+          .insertInto("conversationItemMentions")
           .values({
-            item_id: insertedItem.id,
+            itemId: insertedItem.id,
             ordinal: mention.ordinal,
-            mentioned_participant_id: mention.participantId,
+            mentionedParticipantId: mention.participantId,
           })
           .execute()
       }
@@ -3424,21 +3460,21 @@ export async function createConversationItem(params: {
 
     for (const participantId of params.restrictedAudienceParticipantIds ?? []) {
       await queryable
-        .insertInto("conversation_item_targets")
+        .insertInto("conversationItemTargets")
         .values({
-          item_id: insertedItem.id,
-          target_participant_id: participantId,
-          target_kind: "to",
+          itemId: insertedItem.id,
+          targetParticipantId: participantId,
+          targetKind: "to",
         })
         .execute()
     }
 
     for (const participantId of params.contextTargetParticipantIds ?? []) {
       await queryable
-        .insertInto("conversation_item_context_targets")
+        .insertInto("conversationItemContextTargets")
         .values({
-          item_id: insertedItem.id,
-          target_participant_id: participantId,
+          itemId: insertedItem.id,
+          targetParticipantId: participantId,
         })
         .execute()
     }
@@ -3447,7 +3483,7 @@ export async function createConversationItem(params: {
       .updateTable("conversations")
       // Conversation items are appended in child tables; touching the parent
       // conversation preserves "last activity" semantics for list ordering.
-      .set({ updated_at: sql`NOW()` })
+      .set({ updatedAt: sql`NOW()` })
       .where("id", "=", params.conversationId)
       .execute()
 
@@ -3662,8 +3698,8 @@ export async function updateConversationItemEventPayload<
   queryable: Executor = rootQueryable()
 ) {
   await queryable
-    .updateTable("conversation_items")
-    .set({ event_payload: jsonbValue(payload) })
+    .updateTable("conversationItems")
+    .set({ eventPayload: jsonbValue(payload) })
     .where("id", "=", itemId)
     .execute()
 }
@@ -3695,17 +3731,17 @@ async function buildConversationItemDetails(
   const contextTargetsResult = await runBuilder(
     queryable,
     queryable
-      .selectFrom("conversation_item_context_targets")
-      .select(["item_id", "target_participant_id"])
-      .where("item_id", "in", itemIds)
-      .orderBy("item_id", "asc")
-      .orderBy("target_participant_id", "asc")
+      .selectFrom("conversationItemContextTargets")
+      .select(["itemId", "targetParticipantId"])
+      .where("itemId", "in", itemIds)
+      .orderBy("itemId", "asc")
+      .orderBy("targetParticipantId", "asc")
   )
   const contextTargetIdsByItem = new Map<string, string[]>()
   for (const row of contextTargetsResult.rows) {
-    const current = contextTargetIdsByItem.get(row.item_id) ?? []
-    current.push(row.target_participant_id)
-    contextTargetIdsByItem.set(row.item_id, current)
+    const current = contextTargetIdsByItem.get(row.itemId) ?? []
+    current.push(row.targetParticipantId)
+    contextTargetIdsByItem.set(row.itemId, current)
   }
   const replyToIds = [
     ...new Set(
@@ -4480,7 +4516,7 @@ export async function createChatConversation(params: {
   // minted only by the IM ingest path (syncTransportAddressConversationParticipant).
 
   const conversationId = await withDbTransaction(async (client) => {
-    const existingRequest = await runOn<{ conversation_id: string }>(
+    const existingRequest = await runOnSnake<{ conversation_id: string }>(
       client,
       `
         SELECT conversation_id
@@ -4540,11 +4576,11 @@ export async function createChatConversation(params: {
       .values({
         id: newConversationId,
         kind: params.kind,
-        workspace_id: params.workspaceId,
+        workspaceId: params.workspaceId,
         title: params.title?.trim() || null,
-        created_by_workspace_member_id: creator.workspaceMemberId,
+        createdByWorkspaceMemberId: creator.workspaceMemberId,
         metadata: jsonbValue(params.metadata ?? {}),
-        created_at: sql`NOW()`,
+        createdAt: sql`NOW()`,
       })
       .execute()
 
@@ -4587,13 +4623,13 @@ export async function createChatConversation(params: {
     }
 
     await client
-      .insertInto("chat_conversation_create_requests")
+      .insertInto("chatConversationCreateRequests")
       .values({
-        workspace_member_id: creator.workspaceMemberId,
-        client_request_id: params.clientRequestId,
-        workspace_id: params.workspaceId,
-        conversation_id: newConversationId,
-        created_at: sql`NOW()`,
+        workspaceMemberId: creator.workspaceMemberId,
+        clientRequestId: params.clientRequestId,
+        workspaceId: params.workspaceId,
+        conversationId: newConversationId,
+        createdAt: sql`NOW()`,
       })
       .execute()
 
@@ -5404,20 +5440,20 @@ export async function updateChatConversationReadWatermark(
     )
 
     await client
-      .insertInto("conversation_participant_states")
+      .insertInto("conversationParticipantStates")
       .values({
-        conversation_id: params.conversationId,
-        participant_id: access.participant.id,
-        read_watermark_sequence: nextSequence,
-        last_read_item_id: lastReadItemId,
-        last_read_at: sql`NOW()`,
-        created_at: sql`NOW()`,
+        conversationId: params.conversationId,
+        participantId: access.participant.id,
+        readWatermarkSequence: nextSequence,
+        lastReadItemId: lastReadItemId,
+        lastReadAt: sql`NOW()`,
+        createdAt: sql`NOW()`,
       })
       .onConflict((oc) =>
-        oc.columns(["conversation_id", "participant_id"]).doUpdateSet({
-          read_watermark_sequence: sql`GREATEST(conversation_participant_states.read_watermark_sequence, EXCLUDED.read_watermark_sequence)`,
-          last_read_item_id: sql`EXCLUDED.last_read_item_id`,
-          last_read_at: sql`NOW()`,
+        oc.columns(["conversationId", "participantId"]).doUpdateSet({
+          readWatermarkSequence: sql`GREATEST(conversation_participant_states.read_watermark_sequence, EXCLUDED.read_watermark_sequence)`,
+          lastReadItemId: sql`EXCLUDED.last_read_item_id`,
+          lastReadAt: sql`NOW()`,
         })
       )
       .execute()
@@ -5428,20 +5464,20 @@ export async function updateChatConversationReadWatermark(
         Math.max(params.lastVisibleSequence ?? nextSequence, nextSequence)
       )
       await client
-        .insertInto("conversation_device_states")
+        .insertInto("conversationDeviceStates")
         .values({
-          conversation_id: params.conversationId,
-          client_instance_id: params.clientInstanceId,
-          last_visible_sequence: lastVisibleSequence,
-          last_opened_at: sql`NOW()`,
-          last_inbox_seq: 0,
-          draft_payload: jsonbValue({}),
-          created_at: sql`NOW()`,
+          conversationId: params.conversationId,
+          clientInstanceId: params.clientInstanceId,
+          lastVisibleSequence: lastVisibleSequence,
+          lastOpenedAt: sql`NOW()`,
+          lastInboxSeq: 0,
+          draftPayload: jsonbValue({}),
+          createdAt: sql`NOW()`,
         })
         .onConflict((oc) =>
-          oc.columns(["conversation_id", "client_instance_id"]).doUpdateSet({
-            last_visible_sequence: sql`GREATEST(conversation_device_states.last_visible_sequence, EXCLUDED.last_visible_sequence)`,
-            last_opened_at: sql`NOW()`,
+          oc.columns(["conversationId", "clientInstanceId"]).doUpdateSet({
+            lastVisibleSequence: sql`GREATEST(conversation_device_states.last_visible_sequence, EXCLUDED.last_visible_sequence)`,
+            lastOpenedAt: sql`NOW()`,
           })
         )
         .execute()
@@ -5680,10 +5716,10 @@ async function setParticipantState(
   state: "removed" | "left"
 ) {
   await queryable
-    .updateTable("conversation_participants")
+    .updateTable("conversationParticipants")
     .set({
       state,
-      left_at: sql`COALESCE(left_at, NOW())`,
+      leftAt: sql`COALESCE(left_at, NOW())`,
     })
     .where("id", "=", participantId)
     .execute()
@@ -5700,7 +5736,7 @@ export async function loadParticipantById(
   conversationId: string,
   participantId: string
 ) {
-  const result = await runOn<{
+  const result = await runOnSnake<{
     id: string
     conversation_id: string
     participant_type: ParticipantKind

@@ -15,51 +15,49 @@ import type { Executor } from "../../infrastructure/database/kysely.js"
 /**
  * Live workspaces (not soft-deleted). Prefer over `selectFrom("workspaces")`.
  */
-export const liveWorkspaces = (db: Executor) => db.selectFrom("workspaces_live")
-export const liveUsers = (db: Executor) => db.selectFrom("users_live")
-export const liveActors = (db: Executor) => db.selectFrom("actors_live")
+export const liveWorkspaces = (db: Executor) => db.selectFrom("workspacesLive")
+export const liveUsers = (db: Executor) => db.selectFrom("usersLive")
+export const liveActors = (db: Executor) => db.selectFrom("actorsLive")
 export const liveRemoteAgents = (db: Executor) =>
-  db.selectFrom("remote_agents_live")
+  db.selectFrom("remoteAgentsLive")
 export const liveConversations = (db: Executor) =>
-  db.selectFrom("conversations_live")
+  db.selectFrom("conversationsLive")
 export const liveConversationParticipants = (db: Executor) =>
-  db.selectFrom("conversation_participants_live")
-export const liveDevices = (db: Executor) => db.selectFrom("devices_live")
+  db.selectFrom("conversationParticipantsLive")
+export const liveDevices = (db: Executor) => db.selectFrom("devicesLive")
 export const livePluginInstallations = (db: Executor) =>
-  db.selectFrom("plugin_installations_live")
+  db.selectFrom("pluginInstallationsLive")
 export const liveInstalledSkills = (db: Executor) =>
-  db.selectFrom("installed_skills_live")
+  db.selectFrom("installedSkillsLive")
 export const liveMemorySpaces = (db: Executor) =>
-  db.selectFrom("memory_spaces_live")
+  db.selectFrom("memorySpacesLive")
 export const liveMemoryItems = (db: Executor) =>
-  db.selectFrom("memory_items_live")
-export const liveFileSpaces = (db: Executor) =>
-  db.selectFrom("file_spaces_live")
-export const liveFileAssets = (db: Executor) =>
-  db.selectFrom("file_assets_live")
+  db.selectFrom("memoryItemsLive")
+export const liveFileSpaces = (db: Executor) => db.selectFrom("fileSpacesLive")
+export const liveFileAssets = (db: Executor) => db.selectFrom("fileAssetsLive")
 export const liveModelGroups = (db: Executor) =>
-  db.selectFrom("model_groups_live")
+  db.selectFrom("modelGroupsLive")
 export const liveModelBindings = (db: Executor) =>
-  db.selectFrom("model_bindings_live")
+  db.selectFrom("modelBindingsLive")
 export const liveCatalogItems = (db: Executor) =>
-  db.selectFrom("catalog_items_live")
-export const livePublishers = (db: Executor) => db.selectFrom("publishers_live")
+  db.selectFrom("catalogItemsLive")
+export const livePublishers = (db: Executor) => db.selectFrom("publishersLive")
 export const liveTransportAccounts = (db: Executor) =>
-  db.selectFrom("transport_accounts_live")
+  db.selectFrom("transportAccountsLive")
 
 /** Live (active) workspace members. status ∈ {active}; excludes left/removed. */
 export const liveWorkspaceMembers = (db: Executor) =>
-  db.selectFrom("workspace_members_live")
+  db.selectFrom("workspaceMembersLive")
 
 /** Device child live views (§8.6) — hide children of soft-closed devices. */
 export const liveDeviceServices = (db: Executor) =>
-  db.selectFrom("device_services_live")
+  db.selectFrom("deviceServicesLive")
 export const liveDeviceExposures = (db: Executor) =>
-  db.selectFrom("device_exposures_live")
+  db.selectFrom("deviceExposuresLive")
 export const liveDeviceCapabilities = (db: Executor) =>
-  db.selectFrom("device_capabilities_live")
+  db.selectFrom("deviceCapabilitiesLive")
 export const liveDeviceTools = (db: Executor) =>
-  db.selectFrom("device_tools_live")
+  db.selectFrom("deviceToolsLive")
 
 /**
  * SQL predicate fragment for "user is live" — for raw/compiled queries that

@@ -58,16 +58,16 @@ export async function markLinkSkipped(params: {
 }): Promise<void> {
   const exec = params.tx ?? db
   await exec
-    .updateTable("transport_message_links")
+    .updateTable("transportMessageLinks")
     .set({
-      delivery_status: "skipped",
+      deliveryStatus: "skipped",
       // jsonb merge with the existing metadata so we don't clobber
       // delivery.* / per-connector fields. Postgres `||` does a
       // SHALLOW merge — the top-level `skippedReason` key is what
       // the sweeper / recovery match on, so a shallow merge is the
       // right tool here.
       metadata:
-        sql`metadata || ${JSON.stringify({ skippedReason: params.reason })}::jsonb` as unknown as TableUpdate<"transport_message_links">["metadata"],
+        sql`metadata || ${JSON.stringify({ skippedReason: params.reason })}::jsonb` as unknown as TableUpdate<"transportMessageLinks">["metadata"],
     })
     .where("id", "=", params.linkId)
     .execute()
@@ -120,13 +120,13 @@ export function buildReEnableAutoDisabledBindingsSql(params: {
   reason: string
 }) {
   return db
-    .updateTable("conversation_transport_bindings")
+    .updateTable("conversationTransportBindings")
     .set({
-      outbound_enabled: true,
+      outboundEnabled: true,
       metadata:
-        sql`metadata - 'autoDisabledReason'` as unknown as TableUpdate<"conversation_transport_bindings">["metadata"],
+        sql`metadata - 'autoDisabledReason'` as unknown as TableUpdate<"conversationTransportBindings">["metadata"],
     })
-    .where("workspace_id", "=", params.workspaceId)
+    .where("workspaceId", "=", params.workspaceId)
     .where(
       sql`(metadata->>'autoDisabledReason') IS NOT DISTINCT FROM ${params.reason}` as unknown as never
     )
@@ -187,12 +187,12 @@ export async function recoverSkippedDisabledLink(
 ): Promise<void> {
   await db.transaction().execute(async (tx) => {
     await tx
-      .updateTable("transport_message_links")
+      .updateTable("transportMessageLinks")
       .set({
-        delivery_status: "pending",
+        deliveryStatus: "pending",
       })
       .where("id", "=", linkId)
-      .where("delivery_status", "=", "skipped")
+      .where("deliveryStatus", "=", "skipped")
       .execute()
     await removeTransportMessageLinkMetadataKey(tx, linkId, "skippedReason")
   })

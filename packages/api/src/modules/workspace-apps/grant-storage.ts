@@ -28,34 +28,34 @@ type ScopedTarget = {
 
 export type WorkspaceAppGrantRow = {
   id: string
-  workspace_id: string
-  workspace_app_id: string
-  subject_id: string
-  scope_subject_id: string | null
+  workspaceId: string
+  workspaceAppId: string
+  subjectId: string
+  scopeSubjectId: string | null
   permissions: WorkspaceAppGrantPermission[]
-  conversation_type_mask_override: number | null
+  conversationTypeMaskOverride: number | null
   status: "active" | "revoked"
   source: "manual" | "approval" | "system"
-  created_by_workspace_member_id: string | null
+  createdByWorkspaceMemberId: string | null
   reason: string | null
-  created_at: Date | null
-  revoked_at: Date | null
+  createdAt: Date | null
+  revokedAt: Date | null
 }
 
 export type WorkspaceAppGrantRequestRow = {
   id: string
-  workspace_id: string
-  workspace_app_id: string
-  grantee_subject_id: string
-  grantee_scope_subject_id: string | null
-  requested_permissions: WorkspaceAppGrantPermission[]
-  requester_workspace_member_id: string
+  workspaceId: string
+  workspaceAppId: string
+  granteeSubjectId: string
+  granteeScopeSubjectId: string | null
+  requestedPermissions: WorkspaceAppGrantPermission[]
+  requesterWorkspaceMemberId: string
   status: "pending" | "approved" | "rejected" | "cancelled"
-  resolved_by_workspace_member_id: string | null
-  resolved_at: Date | null
+  resolvedByWorkspaceMemberId: string | null
+  resolvedAt: Date | null
   reason: string | null
-  created_at: Date | null
-  updated_at: Date | null
+  createdAt: Date | null
+  updatedAt: Date | null
 }
 
 export type InsertWorkspaceAppGrantInput = {
@@ -120,8 +120,8 @@ async function loadWorkspaceAppOwner(
   workspaceAppId: string
 ) {
   const row = await run
-    .selectFrom("workspace_apps_live")
-    .select(["workspace_id", "kind", "owner_workspace_member_id"])
+    .selectFrom("workspaceAppsLive")
+    .select(["workspaceId", "kind", "ownerWorkspaceMemberId"])
     .where("id", "=", workspaceAppId)
     .executeTakeFirst()
   return row
@@ -137,18 +137,17 @@ export async function insertWorkspaceAppGrant(
     input.target
   )
   const inserted = await run
-    .insertInto("workspace_app_grants")
+    .insertInto("workspaceAppGrants")
     .values({
-      workspace_id: input.workspaceId,
-      workspace_app_id: input.workspaceAppId,
-      subject_id: subjectId,
-      scope_subject_id: scopeSubjectId,
+      workspaceId: input.workspaceId,
+      workspaceAppId: input.workspaceAppId,
+      subjectId: subjectId,
+      scopeSubjectId: scopeSubjectId,
       permissions: normalizePermissions(input.permissions) as any,
-      conversation_type_mask_override:
-        input.conversationTypeMaskOverride ?? null,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
       status: WORKSPACE_APP_GRANT_STATUS.ACTIVE,
       source: input.source ?? WORKSPACE_APP_GRANT_SOURCE.MANUAL,
-      created_by_workspace_member_id: input.createdByWorkspaceMemberId ?? null,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId ?? null,
       reason: input.reason ?? null,
     } as any)
     .returningAll()
@@ -161,10 +160,10 @@ export async function revokeWorkspaceAppGrant(
   grantId: string
 ): Promise<boolean> {
   const updated = await run
-    .updateTable("workspace_app_grants")
+    .updateTable("workspaceAppGrants")
     .set({
       status: WORKSPACE_APP_GRANT_STATUS.REVOKED,
-      revoked_at: sql`NOW()`,
+      revokedAt: sql`NOW()`,
     } as any)
     .where("id", "=", grantId)
     .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
@@ -178,12 +177,12 @@ export async function revokeWorkspaceAppGrantsForApp(
   workspaceAppId: string
 ): Promise<number> {
   const updated = await run
-    .updateTable("workspace_app_grants")
+    .updateTable("workspaceAppGrants")
     .set({
       status: WORKSPACE_APP_GRANT_STATUS.REVOKED,
-      revoked_at: sql`NOW()`,
+      revokedAt: sql`NOW()`,
     } as any)
-    .where("workspace_app_id", "=", workspaceAppId)
+    .where("workspaceAppId", "=", workspaceAppId)
     .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
     .returning("id")
     .execute()
@@ -195,11 +194,11 @@ export async function listActiveWorkspaceAppGrants(
   workspaceAppId: string
 ): Promise<WorkspaceAppGrantRow[]> {
   const rows = await run
-    .selectFrom("workspace_app_grants")
+    .selectFrom("workspaceAppGrants")
     .selectAll()
-    .where("workspace_app_id", "=", workspaceAppId)
+    .where("workspaceAppId", "=", workspaceAppId)
     .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
-    .orderBy("created_at", "desc")
+    .orderBy("createdAt", "desc")
     .execute()
   return rows
 }
@@ -223,10 +222,10 @@ export async function insertWorkspaceAppGrantRequest(
     app.kind === WORKSPACE_APP_KIND.ACTOR ||
     app.kind === WORKSPACE_APP_KIND.REMOTE_AGENT
       ? await (async () => {
-          if (!app.owner_workspace_member_id) return false
+          if (!app.ownerWorkspaceMemberId) return false
           const ownerSubjectId = await upsertAccessSubject(run, {
             kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-            memberId: app.owner_workspace_member_id,
+            memberId: app.ownerWorkspaceMemberId,
           })
           return ownerSubjectId === subjectId
         })()
@@ -236,14 +235,14 @@ export async function insertWorkspaceAppGrantRequest(
   }
 
   const existingGrant = await run
-    .selectFrom("workspace_app_grants")
+    .selectFrom("workspaceAppGrants")
     .select("id")
-    .where("workspace_app_id", "=", input.workspaceAppId)
-    .where("subject_id", "=", subjectId)
+    .where("workspaceAppId", "=", input.workspaceAppId)
+    .where("subjectId", "=", subjectId)
     .where((eb) =>
       scopeSubjectId
-        ? eb("scope_subject_id", "=", scopeSubjectId)
-        : eb("scope_subject_id", "is", null)
+        ? eb("scopeSubjectId", "=", scopeSubjectId)
+        : eb("scopeSubjectId", "is", null)
     )
     .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
     .where(
@@ -255,20 +254,16 @@ export async function insertWorkspaceAppGrantRequest(
   }
 
   const existing = await run
-    .selectFrom("workspace_app_grant_requests")
+    .selectFrom("workspaceAppGrantRequests")
     .selectAll()
-    .where("workspace_app_id", "=", input.workspaceAppId)
-    .where(
-      "requester_workspace_member_id",
-      "=",
-      input.requesterWorkspaceMemberId
-    )
-    .where("grantee_subject_id", "=", subjectId)
+    .where("workspaceAppId", "=", input.workspaceAppId)
+    .where("requesterWorkspaceMemberId", "=", input.requesterWorkspaceMemberId)
+    .where("granteeSubjectId", "=", subjectId)
     .where("status", "=", WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING)
     .where((eb) =>
       scopeSubjectId
-        ? eb("grantee_scope_subject_id", "=", scopeSubjectId)
-        : eb("grantee_scope_subject_id", "is", null)
+        ? eb("granteeScopeSubjectId", "=", scopeSubjectId)
+        : eb("granteeScopeSubjectId", "is", null)
     )
     .executeTakeFirst()
   if (existing) {
@@ -276,14 +271,14 @@ export async function insertWorkspaceAppGrantRequest(
   }
 
   const inserted = await run
-    .insertInto("workspace_app_grant_requests")
+    .insertInto("workspaceAppGrantRequests")
     .values({
-      workspace_id: input.workspaceId,
-      workspace_app_id: input.workspaceAppId,
-      grantee_subject_id: subjectId,
-      grantee_scope_subject_id: scopeSubjectId,
-      requested_permissions: requestedPermissions as any,
-      requester_workspace_member_id: input.requesterWorkspaceMemberId,
+      workspaceId: input.workspaceId,
+      workspaceAppId: input.workspaceAppId,
+      granteeSubjectId: subjectId,
+      granteeScopeSubjectId: scopeSubjectId,
+      requestedPermissions: requestedPermissions as any,
+      requesterWorkspaceMemberId: input.requesterWorkspaceMemberId,
       status: WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
       reason: input.reason ?? null,
     } as any)
@@ -302,19 +297,15 @@ export async function cancelWorkspaceAppGrantRequest(
   }
 ): Promise<boolean> {
   const updated = await run
-    .updateTable("workspace_app_grant_requests")
+    .updateTable("workspaceAppGrantRequests")
     .set({
       status: WORKSPACE_APP_GRANT_REQUEST_STATUS.CANCELLED,
-      updated_at: sql`NOW()`,
+      updatedAt: sql`NOW()`,
     } as any)
     .where("id", "=", params.requestId)
-    .where("workspace_id", "=", params.workspaceId)
-    .where("workspace_app_id", "=", params.workspaceAppId)
-    .where(
-      "requester_workspace_member_id",
-      "=",
-      params.requesterWorkspaceMemberId
-    )
+    .where("workspaceId", "=", params.workspaceId)
+    .where("workspaceAppId", "=", params.workspaceAppId)
+    .where("requesterWorkspaceMemberId", "=", params.requesterWorkspaceMemberId)
     .where("status", "=", WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING)
     .returning("id")
     .execute()
@@ -330,16 +321,16 @@ export async function listWorkspaceAppGrantRequests(
   }
 ): Promise<WorkspaceAppGrantRequestRow[]> {
   let query = run
-    .selectFrom("workspace_app_grant_requests")
+    .selectFrom("workspaceAppGrantRequests")
     .selectAll()
-    .where("workspace_app_id", "=", params.workspaceAppId)
-    .orderBy("created_at", "desc")
+    .where("workspaceAppId", "=", params.workspaceAppId)
+    .orderBy("createdAt", "desc")
   if (
     params.direction === WORKSPACE_APP_GRANT_REQUEST_DIRECTION.OUTGOING &&
     params.requesterWorkspaceMemberId
   ) {
     query = query.where(
-      "requester_workspace_member_id",
+      "requesterWorkspaceMemberId",
       "=",
       params.requesterWorkspaceMemberId
     )
@@ -358,7 +349,7 @@ export async function resolveWorkspaceAppGrantRequest(params: {
 }): Promise<WorkspaceAppGrantRequestRow> {
   const executeResolution = async (trx: Executor) => {
     const request = await trx
-      .selectFrom("workspace_app_grant_requests")
+      .selectFrom("workspaceAppGrantRequests")
       .selectAll()
       .where("id", "=", params.requestId)
       .forUpdate()
@@ -368,8 +359,8 @@ export async function resolveWorkspaceAppGrantRequest(params: {
       throw new Error("workspace app grant request not found")
     }
     if (
-      request.workspace_id !== params.workspaceId ||
-      request.workspace_app_id !== params.workspaceAppId
+      request.workspaceId !== params.workspaceId ||
+      request.workspaceAppId !== params.workspaceAppId
     ) {
       throw new Error("workspace app grant request does not belong to this app")
     }
@@ -378,7 +369,7 @@ export async function resolveWorkspaceAppGrantRequest(params: {
     }
 
     if (params.decision === "approve") {
-      const app = await loadWorkspaceAppOwner(trx, request.workspace_app_id)
+      const app = await loadWorkspaceAppOwner(trx, request.workspaceAppId)
       if (!app) {
         throw new Error("workspace app not found")
       }
@@ -387,44 +378,44 @@ export async function resolveWorkspaceAppGrantRequest(params: {
         app.kind === WORKSPACE_APP_KIND.ACTOR ||
         app.kind === WORKSPACE_APP_KIND.REMOTE_AGENT
           ? await (async () => {
-              if (!app.owner_workspace_member_id) return false
+              if (!app.ownerWorkspaceMemberId) return false
               const ownerSubjectId = await upsertAccessSubjectOn(trx, {
                 kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-                memberId: app.owner_workspace_member_id,
+                memberId: app.ownerWorkspaceMemberId,
               })
-              return ownerSubjectId === request.grantee_subject_id
+              return ownerSubjectId === request.granteeSubjectId
             })()
           : false
 
       if (!ownerImplicitContactVisible) {
         const existingGrant = await trx
-          .selectFrom("workspace_app_grants")
+          .selectFrom("workspaceAppGrants")
           .select(["id", "permissions"])
-          .where("workspace_app_id", "=", request.workspace_app_id)
-          .where("subject_id", "=", request.grantee_subject_id)
+          .where("workspaceAppId", "=", request.workspaceAppId)
+          .where("subjectId", "=", request.granteeSubjectId)
           .where((eb) =>
-            request.grantee_scope_subject_id
-              ? eb("scope_subject_id", "=", request.grantee_scope_subject_id)
-              : eb("scope_subject_id", "is", null)
+            request.granteeScopeSubjectId
+              ? eb("scopeSubjectId", "=", request.granteeScopeSubjectId)
+              : eb("scopeSubjectId", "is", null)
           )
           .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
           .executeTakeFirst()
 
         if (!existingGrant) {
           await trx
-            .insertInto("workspace_app_grants")
+            .insertInto("workspaceAppGrants")
             .values({
-              workspace_id: request.workspace_id,
-              workspace_app_id: request.workspace_app_id,
-              subject_id: request.grantee_subject_id,
-              scope_subject_id: request.grantee_scope_subject_id,
+              workspaceId: request.workspaceId,
+              workspaceAppId: request.workspaceAppId,
+              subjectId: request.granteeSubjectId,
+              scopeSubjectId: request.granteeScopeSubjectId,
               permissions: [
                 WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE,
               ] as any,
-              conversation_type_mask_override: null,
+              conversationTypeMaskOverride: null,
               status: WORKSPACE_APP_GRANT_STATUS.ACTIVE,
               source: WORKSPACE_APP_GRANT_SOURCE.APPROVAL,
-              created_by_workspace_member_id: params.approverWorkspaceMemberId,
+              createdByWorkspaceMemberId: params.approverWorkspaceMemberId,
               reason: request.reason ?? null,
             } as any)
             .execute()
@@ -451,12 +442,12 @@ export async function resolveWorkspaceAppGrantRequest(params: {
         : WORKSPACE_APP_GRANT_REQUEST_STATUS.REJECTED
 
     const updated = await trx
-      .updateTable("workspace_app_grant_requests")
+      .updateTable("workspaceAppGrantRequests")
       .set({
         status: nextStatus,
-        resolved_by_workspace_member_id: params.approverWorkspaceMemberId,
-        resolved_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
+        resolvedByWorkspaceMemberId: params.approverWorkspaceMemberId,
+        resolvedAt: sql`NOW()`,
+        updatedAt: sql`NOW()`,
       } as any)
       .where("id", "=", params.requestId)
       .returningAll()

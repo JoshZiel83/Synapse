@@ -25,20 +25,20 @@ import { upsertAccessSubject } from "../access/subject-registry.js"
 
 export type MemoryAccessGrantRow = {
   id: string
-  workspace_id: string
-  memory_space_id: string
-  memory_item_id: string | null
-  subject_id: string
-  scope_subject_id: string | null
+  workspaceId: string
+  memorySpaceId: string
+  memoryItemId: string | null
+  subjectId: string
+  scopeSubjectId: string | null
   permissions: MemoryPermission[]
   status: MemoryAccessGrantStatus
   source: string | null
-  created_by_workspace_member_id: string | null
-  source_task_id: string | null
-  revoked_at: Date | null
-  superseded_at: Date | null
-  created_at: Date
-  updated_at: Date
+  createdByWorkspaceMemberId: string | null
+  sourceTaskId: string | null
+  revokedAt: Date | null
+  supersededAt: Date | null
+  createdAt: Date
+  updatedAt: Date
 }
 
 export type InsertMemoryAccessGrantInput = {
@@ -73,18 +73,18 @@ export async function insertMemoryAccessGrant(
     : null
 
   const result = await db
-    .insertInto("memory_access_grants")
+    .insertInto("memoryAccessGrants")
     .values({
-      workspace_id: input.workspaceId,
-      memory_space_id: input.memorySpaceId,
-      memory_item_id: input.memoryItemId ?? null,
-      subject_id: subjectId,
-      scope_subject_id: scopeSubjectId,
+      workspaceId: input.workspaceId,
+      memorySpaceId: input.memorySpaceId,
+      memoryItemId: input.memoryItemId ?? null,
+      subjectId: subjectId,
+      scopeSubjectId: scopeSubjectId,
       permissions: input.permissions as any,
       status: MEMORY_ACCESS_GRANT_STATUS.ACTIVE,
       source: input.source ?? null,
-      created_by_workspace_member_id: input.createdByWorkspaceMemberId ?? null,
-      source_task_id: input.sourceTaskId ?? null,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId ?? null,
+      sourceTaskId: input.sourceTaskId ?? null,
     } as any)
     .returningAll()
     .executeTakeFirstOrThrow()
@@ -99,10 +99,10 @@ export async function revokeMemoryAccessGrant(
   grantId: string
 ): Promise<boolean> {
   const updated = await db
-    .updateTable("memory_access_grants")
+    .updateTable("memoryAccessGrants")
     .set({
       status: MEMORY_ACCESS_GRANT_STATUS.REVOKED,
-      revoked_at: sql`NOW()`,
+      revokedAt: sql`NOW()`,
     } as any)
     .where("id", "=", grantId)
     .where("status", "=", MEMORY_ACCESS_GRANT_STATUS.ACTIVE)
@@ -116,11 +116,11 @@ export async function listActiveMemoryAccessGrants(
   memorySpaceId: string
 ): Promise<MemoryAccessGrantRow[]> {
   const rows = await db
-    .selectFrom("memory_access_grants")
+    .selectFrom("memoryAccessGrants")
     .selectAll()
-    .where("memory_space_id", "=", memorySpaceId)
+    .where("memorySpaceId", "=", memorySpaceId)
     .where("status", "=", MEMORY_ACCESS_GRANT_STATUS.ACTIVE)
-    .orderBy("created_at", "desc")
+    .orderBy("createdAt", "desc")
     .execute()
   return rows
 }
@@ -152,11 +152,11 @@ export async function memoryGrantMatches(
 ): Promise<boolean> {
   if (params.runtimeSubjectIds.length === 0) return false
   let query = db
-    .selectFrom("memory_access_grants")
+    .selectFrom("memoryAccessGrants")
     .select(["id"])
-    .where("memory_space_id", "=", params.memorySpaceId)
+    .where("memorySpaceId", "=", params.memorySpaceId)
     .where("status", "=", MEMORY_ACCESS_GRANT_STATUS.ACTIVE)
-    .where("subject_id", "in", [...params.runtimeSubjectIds])
+    .where("subjectId", "in", [...params.runtimeSubjectIds])
     .where(
       sql<boolean>`${params.permission}::memory_permission = ANY(permissions)`
     )
@@ -166,28 +166,25 @@ export async function memoryGrantMatches(
     const scopes = [...params.runtimeScopeSubjectIds]
     query = query.where((eb) =>
       eb.or([
-        eb("scope_subject_id", "is", null),
-        eb("scope_subject_id", "in", scopes),
+        eb("scopeSubjectId", "is", null),
+        eb("scopeSubjectId", "in", scopes),
       ])
     )
   } else {
-    query = query.where("scope_subject_id", "is", null)
+    query = query.where("scopeSubjectId", "is", null)
   }
 
   if (params.mode === "space-only") {
-    query = query.where("memory_item_id", "is", null)
+    query = query.where("memoryItemId", "is", null)
   } else {
     // with-item: either a space-level grant OR an item-level grant for the
     // specific memory_item_id.
     if (params.memoryItemId == null) {
-      query = query.where("memory_item_id", "is", null)
+      query = query.where("memoryItemId", "is", null)
     } else {
       const itemId = params.memoryItemId
       query = query.where((eb) =>
-        eb.or([
-          eb("memory_item_id", "is", null),
-          eb("memory_item_id", "=", itemId),
-        ])
+        eb.or([eb("memoryItemId", "is", null), eb("memoryItemId", "=", itemId)])
       )
     }
   }
@@ -218,13 +215,13 @@ export async function listSpaceLevelGrantSpaceIds(
 ): Promise<string[]> {
   if (params.runtimeSubjectIds.length === 0) return []
   let query = db
-    .selectFrom("memory_access_grants as g")
-    .select(["g.memory_space_id"])
+    .selectFrom("memoryAccessGrants as g")
+    .select(["g.memorySpaceId"])
     .distinct()
-    .where("g.workspace_id", "=", params.workspaceId)
+    .where("g.workspaceId", "=", params.workspaceId)
     .where("g.status", "=", MEMORY_ACCESS_GRANT_STATUS.ACTIVE)
-    .where("g.subject_id", "in", [...params.runtimeSubjectIds])
-    .where("g.memory_item_id", "is", null) // space-level only
+    .where("g.subjectId", "in", [...params.runtimeSubjectIds])
+    .where("g.memoryItemId", "is", null) // space-level only
     .where(
       sql<boolean>`${params.permission}::memory_permission = ANY(g.permissions)`
     )
@@ -233,14 +230,14 @@ export async function listSpaceLevelGrantSpaceIds(
     const scopes = [...params.runtimeScopeSubjectIds]
     query = query.where((eb) =>
       eb.or([
-        eb("g.scope_subject_id", "is", null),
-        eb("g.scope_subject_id", "in", scopes),
+        eb("g.scopeSubjectId", "is", null),
+        eb("g.scopeSubjectId", "in", scopes),
       ])
     )
   } else {
-    query = query.where("g.scope_subject_id", "is", null)
+    query = query.where("g.scopeSubjectId", "is", null)
   }
 
   const rows = await query.execute()
-  return rows.map((row) => row.memory_space_id)
+  return rows.map((row) => row.memorySpaceId)
 }

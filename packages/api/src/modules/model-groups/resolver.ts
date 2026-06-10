@@ -17,41 +17,41 @@ type RoutingStrategy = "weighted_random" | "priority_failover"
 
 type GroupRow = {
   id: string
-  owner_type: "platform" | "workspace" | "workspace_member"
-  owner_workspace_id: string | null
-  owner_workspace_member_id: string | null
+  ownerType: "platform" | "workspace" | "workspace_member"
+  ownerWorkspaceId: string | null
+  ownerWorkspaceMemberId: string | null
   name: string
-  routing_strategy: RoutingStrategy
-  attempt_policy: Record<string, unknown> | null
-  is_default: boolean
-  is_enabled: boolean
-  created_at: Date
-  updated_at: Date
+  routingStrategy: RoutingStrategy
+  attemptPolicy: Record<string, unknown> | null
+  isDefault: boolean
+  isEnabled: boolean
+  createdAt: Date
+  updatedAt: Date
 }
 
 type GroupItemRow = {
-  group_id: string
-  group_name: string
-  routing_strategy: RoutingStrategy
-  attempt_policy: Record<string, unknown> | null
-  item_id: string
+  groupId: string
+  groupName: string
+  routingStrategy: RoutingStrategy
+  attemptPolicy: Record<string, unknown> | null
+  itemId: string
   priority: number
   weight: number
-  item_enabled: boolean
-  binding_id: string
-  display_name: string
-  current_version_id: string | null
-  provider_kind: string | null
+  itemEnabled: boolean
+  bindingId: string
+  displayName: string
+  currentVersionId: string | null
+  providerKind: string | null
   vendor: string | null
-  api_key: string | null
-  base_url: string | null
-  model_name: string | null
-  max_output_tokens: number | null
-  capability_tags: string[] | null
+  apiKey: string | null
+  baseUrl: string | null
+  modelName: string | null
+  maxOutputTokens: number | null
+  capabilityTags: string[] | null
   features: Record<string, unknown> | null
-  provider_options: Record<string, unknown> | null
-  request_timeout_ms: number | null
-  max_retries: number | null
+  providerOptions: Record<string, unknown> | null
+  requestTimeoutMs: number | null
+  maxRetries: number | null
 }
 
 type ResolveContext = {
@@ -136,12 +136,12 @@ function orderGroupItems(strategy: RoutingStrategy, items: GroupItemRow[]) {
   const sorted = [...items].sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority
     if (a.weight !== b.weight) return b.weight - a.weight
-    return a.display_name.localeCompare(b.display_name)
+    return a.displayName.localeCompare(b.displayName)
   })
 
   if (strategy === "weighted_random" && sorted.length > 1) {
     const first = weightedPick(sorted)
-    return [first, ...sorted.filter((item) => item.item_id !== first.item_id)]
+    return [first, ...sorted.filter((item) => item.itemId !== first.itemId)]
   }
 
   return sorted
@@ -149,17 +149,17 @@ function orderGroupItems(strategy: RoutingStrategy, items: GroupItemRow[]) {
 
 function ownerRank(group: GroupRow, current: ResolveContext) {
   if (
-    group.owner_type === "workspace_member" &&
-    group.owner_workspace_member_id === current.workspaceMemberId
+    group.ownerType === "workspace_member" &&
+    group.ownerWorkspaceMemberId === current.workspaceMemberId
   ) {
     return 0
   }
   if (
-    group.owner_type === "workspace" &&
-    group.owner_workspace_id === current.workspaceId
+    group.ownerType === "workspace" &&
+    group.ownerWorkspaceId === current.workspaceId
   )
     return 1
-  if (group.owner_type === "platform") return 2
+  if (group.ownerType === "platform") return 2
   return 3
 }
 
@@ -200,51 +200,51 @@ async function listCandidateGroups(
   ] = await Promise.all([
     authorizedGroupIds.size > 0
       ? db
-          .selectFrom("model_groups_live")
+          .selectFrom("modelGroupsLive")
           .selectAll()
-          .where("is_enabled", "=", true)
+          .where("isEnabled", "=", true)
           .where("id", "in", Array.from(authorizedGroupIds))
           .execute()
       : Promise.resolve([] as GroupRow[]),
     db
-      .selectFrom("actor_model_group_assignments")
-      .select(["group_id", "priority"])
-      .where("actor_id", "=", current.actorId)
+      .selectFrom("actorModelGroupAssignments")
+      .select(["groupId", "priority"])
+      .where("actorId", "=", current.actorId)
       .orderBy("priority", "asc")
       .execute(),
     db
-      .selectFrom("model_groups_live")
+      .selectFrom("modelGroupsLive")
       .select("id")
-      .where("owner_type", "=", "workspace")
-      .where("owner_workspace_id", "=", current.workspaceId)
-      .where("is_default", "=", true)
-      .where("is_enabled", "=", true)
+      .where("ownerType", "=", "workspace")
+      .where("ownerWorkspaceId", "=", current.workspaceId)
+      .where("isDefault", "=", true)
+      .where("isEnabled", "=", true)
       .executeTakeFirst(),
     db
-      .selectFrom("model_groups_live")
+      .selectFrom("modelGroupsLive")
       .select("id")
-      .where("owner_type", "=", "platform")
-      .where("is_default", "=", true)
-      .where("is_enabled", "=", true)
+      .where("ownerType", "=", "platform")
+      .where("isDefault", "=", true)
+      .where("isEnabled", "=", true)
       .executeTakeFirst(),
     current.workspaceMemberId
       ? db
-          .selectFrom("model_groups_live")
+          .selectFrom("modelGroupsLive")
           .select("id")
-          .where("owner_type", "=", "workspace_member")
-          .where("owner_workspace_member_id", "=", current.workspaceMemberId)
-          .where("is_default", "=", true)
-          .where("is_enabled", "=", true)
+          .where("ownerType", "=", "workspace_member")
+          .where("ownerWorkspaceMemberId", "=", current.workspaceMemberId)
+          .where("isDefault", "=", true)
+          .where("isEnabled", "=", true)
           .executeTakeFirst()
       : Promise.resolve(undefined),
   ])
 
   const assignedPriority = new Map<string, number>()
   for (const row of assignmentsResult as Array<{
-    group_id: string
+    groupId: string
     priority: number
   }>) {
-    assignedPriority.set(row.group_id, row.priority)
+    assignedPriority.set(row.groupId, row.priority)
   }
 
   const workspaceDefaultGroupId = workspaceDefaultResult?.id || undefined
@@ -283,7 +283,7 @@ async function listCandidateGroups(
     const bOwnerRank = ownerRank(b, current)
     if (aOwnerRank !== bOwnerRank) return aOwnerRank - bOwnerRank
 
-    return b.updated_at.getTime() - a.updated_at.getTime()
+    return b.updatedAt.getTime() - a.updatedAt.getTime()
   })
 }
 
@@ -291,62 +291,62 @@ async function listGroupItems(groupId: string): Promise<GroupItemRow[]> {
   // Flat read: model_bindings (the item) joined to its current version row.
   // Reads go through the soft-delete _live view so deleted bindings are excluded.
   const result = await db
-    .selectFrom("model_bindings_live as mb")
-    .innerJoin("model_groups_live as mg", "mg.id", "mb.group_id")
-    .leftJoin("model_binding_versions as v", "v.id", "mb.current_version_id")
+    .selectFrom("modelBindingsLive as mb")
+    .innerJoin("modelGroupsLive as mg", "mg.id", "mb.groupId")
+    .leftJoin("modelBindingVersions as v", "v.id", "mb.currentVersionId")
     .select([
-      "mg.id as group_id",
-      "mg.name as group_name",
-      "mg.routing_strategy",
-      "mg.attempt_policy",
-      "mb.id as item_id",
+      "mg.id as groupId",
+      "mg.name as groupName",
+      "mg.routingStrategy",
+      "mg.attemptPolicy",
+      "mb.id as itemId",
       "mb.priority",
       "mb.weight",
-      "mb.is_enabled as item_enabled",
-      "mb.id as binding_id",
-      "mb.display_name",
-      "mb.current_version_id",
-      "v.provider_kind",
+      "mb.isEnabled as itemEnabled",
+      "mb.id as bindingId",
+      "mb.displayName",
+      "mb.currentVersionId",
+      "v.providerKind",
       "v.vendor",
-      "v.api_key",
-      "v.base_url",
-      "v.model_name",
-      "v.max_output_tokens",
-      "v.capability_tags",
+      "v.apiKey",
+      "v.baseUrl",
+      "v.modelName",
+      "v.maxOutputTokens",
+      "v.capabilityTags",
       "v.features",
-      "v.provider_options",
-      "v.request_timeout_ms",
-      "v.max_retries",
+      "v.providerOptions",
+      "v.requestTimeoutMs",
+      "v.maxRetries",
     ])
-    .where("mb.group_id", "=", groupId)
-    .where("mb.is_enabled", "=", true)
-    .where("mb.current_version_id", "is not", null)
+    .where("mb.groupId", "=", groupId)
+    .where("mb.isEnabled", "=", true)
+    .where("mb.currentVersionId", "is not", null)
     .execute()
   return result.map((row) => ({
-    group_id: row.group_id || "",
-    group_name: row.group_name || "",
-    routing_strategy: row.routing_strategy || "priority_failover",
-    attempt_policy:
-      row.attempt_policy &&
-      typeof row.attempt_policy === "object" &&
-      !Array.isArray(row.attempt_policy)
-        ? (row.attempt_policy as Record<string, unknown>)
+    groupId: row.groupId || "",
+    groupName: row.groupName || "",
+    routingStrategy: row.routingStrategy || "priority_failover",
+    attemptPolicy:
+      row.attemptPolicy &&
+      typeof row.attemptPolicy === "object" &&
+      !Array.isArray(row.attemptPolicy)
+        ? (row.attemptPolicy as Record<string, unknown>)
         : null,
-    item_id: row.item_id || "",
+    itemId: row.itemId || "",
     priority: row.priority ?? 0,
     weight: row.weight ?? 1,
-    item_enabled: row.item_enabled ?? false,
-    binding_id: row.binding_id || row.item_id || "",
-    display_name: row.display_name || "",
-    current_version_id: row.current_version_id,
-    provider_kind: row.provider_kind,
+    itemEnabled: row.itemEnabled ?? false,
+    bindingId: row.bindingId || row.itemId || "",
+    displayName: row.displayName || "",
+    currentVersionId: row.currentVersionId,
+    providerKind: row.providerKind,
     vendor: row.vendor,
-    api_key: row.api_key,
-    base_url: row.base_url,
-    model_name: row.model_name,
-    max_output_tokens: row.max_output_tokens,
-    capability_tags: Array.isArray(row.capability_tags)
-      ? row.capability_tags.filter(
+    apiKey: row.apiKey,
+    baseUrl: row.baseUrl,
+    modelName: row.modelName,
+    maxOutputTokens: row.maxOutputTokens,
+    capabilityTags: Array.isArray(row.capabilityTags)
+      ? row.capabilityTags.filter(
           (item): item is string => typeof item === "string"
         )
       : null,
@@ -356,25 +356,25 @@ async function listGroupItems(groupId: string): Promise<GroupItemRow[]> {
       !Array.isArray(row.features)
         ? (row.features as Record<string, unknown>)
         : null,
-    provider_options:
-      row.provider_options &&
-      typeof row.provider_options === "object" &&
-      !Array.isArray(row.provider_options)
-        ? (row.provider_options as Record<string, unknown>)
+    providerOptions:
+      row.providerOptions &&
+      typeof row.providerOptions === "object" &&
+      !Array.isArray(row.providerOptions)
+        ? (row.providerOptions as Record<string, unknown>)
         : null,
-    request_timeout_ms: row.request_timeout_ms,
-    max_retries: row.max_retries,
+    requestTimeoutMs: row.requestTimeoutMs,
+    maxRetries: row.maxRetries,
   }))
 }
 
 function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
   if (
-    !row.current_version_id ||
-    !row.provider_kind ||
+    !row.currentVersionId ||
+    !row.providerKind ||
     !row.vendor ||
-    !row.api_key ||
-    !row.base_url ||
-    !row.model_name
+    !row.apiKey ||
+    !row.baseUrl ||
+    !row.modelName
   ) {
     return null
   }
@@ -398,29 +398,29 @@ function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {
       : undefined
 
   return {
-    groupId: row.group_id,
-    bindingId: row.binding_id,
-    bindingVersionId: row.current_version_id,
-    providerKind: row.provider_kind as ProviderKind,
+    groupId: row.groupId,
+    bindingId: row.bindingId,
+    bindingVersionId: row.currentVersionId,
+    providerKind: row.providerKind as ProviderKind,
     vendor: row.vendor,
     apiStyle,
-    apiKey: row.api_key,
-    baseUrl: row.base_url,
-    modelName: row.model_name,
-    maxOutputTokens: row.max_output_tokens || DEFAULT_MAX_TOKENS,
+    apiKey: row.apiKey,
+    baseUrl: row.baseUrl,
+    modelName: row.modelName,
+    maxOutputTokens: row.maxOutputTokens || DEFAULT_MAX_TOKENS,
     serverTools: Array.isArray(features.serverTools)
       ? (features.serverTools as ResolvedModelConfig["serverTools"])
       : undefined,
     multimodal,
     crossTurnToolHistory:
       features.crossTurnToolHistory === true ? true : undefined,
-    providerOptions: row.provider_options
-      ? asObject(row.provider_options)
+    providerOptions: row.providerOptions
+      ? asObject(row.providerOptions)
       : undefined,
     priority: row.priority,
     weight: row.weight,
-    requestTimeoutMs: row.request_timeout_ms ?? undefined,
-    maxRetries: row.max_retries ?? undefined,
+    requestTimeoutMs: row.requestTimeoutMs ?? undefined,
+    maxRetries: row.maxRetries ?? undefined,
   }
 }
 
@@ -446,7 +446,7 @@ export async function resolveModelPlan(
     const items = await listGroupItems(group.id)
     if (items.length === 0) continue
 
-    const orderedItems = orderGroupItems(group.routing_strategy, items)
+    const orderedItems = orderGroupItems(group.routingStrategy, items)
     const candidates = orderedItems
       .map(toResolvedModelConfig)
       .filter(
@@ -458,8 +458,8 @@ export async function resolveModelPlan(
     return {
       groupId: group.id,
       groupName: group.name,
-      routingStrategy: group.routing_strategy,
-      attemptPolicy: finalizeAttemptPolicy(group.attempt_policy),
+      routingStrategy: group.routingStrategy,
+      attemptPolicy: finalizeAttemptPolicy(group.attemptPolicy),
       candidates,
     }
   }

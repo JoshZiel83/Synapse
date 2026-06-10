@@ -1,5 +1,12 @@
 export * from "./types/index.js"
 export * from "./constants/index.js"
+// Runtime helpers migrated out of types/index.ts (§2.2.1). types/* is now a
+// pure type surface; these subpaths own the runtime and are re-exported here so
+// existing `@synapse/shared` value imports keep working unchanged.
+export * from "./content/index.js"
+export * from "./actor/index.js"
+export * from "./conversation/index.js"
+export * from "./work-item/index.js"
 // Re-export only the bundle-safe matcher helpers (no zod, no node imports).
 // The zod-backed Schema objects stay accessible via `@synapse/shared/schemas`
 // or `@synapse/shared/access/policies`.

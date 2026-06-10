@@ -18,16 +18,15 @@ export async function insertWorkspaceAppRoot(
   }
 ) {
   await run
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: input.id,
-      workspace_id: input.workspaceId,
+      workspaceId: input.workspaceId,
       kind: input.kind,
-      display_name: input.displayName,
-      owner_workspace_member_id: input.ownerWorkspaceMemberId ?? null,
+      displayName: input.displayName,
+      ownerWorkspaceMemberId: input.ownerWorkspaceMemberId ?? null,
       status: input.status ?? "active",
-      conversation_type_mask_override:
-        input.conversationTypeMaskOverride ?? null,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
     } as any)
     .execute()
 }
@@ -44,26 +43,26 @@ export async function updateWorkspaceAppRoot(
   }
 ) {
   const patch: Record<string, unknown> = {
-    updated_at: sql`NOW()`,
+    updatedAt: sql`NOW()`,
   }
   if (input.displayName !== undefined) {
-    patch.display_name = input.displayName
+    patch.displayName = input.displayName
   }
   if (input.ownerWorkspaceMemberId !== undefined) {
-    patch.owner_workspace_member_id = input.ownerWorkspaceMemberId
+    patch.ownerWorkspaceMemberId = input.ownerWorkspaceMemberId
   }
   if (input.status !== undefined) {
     patch.status = input.status
   }
   if (input.conversationTypeMaskOverride !== undefined) {
-    patch.conversation_type_mask_override = input.conversationTypeMaskOverride
+    patch.conversationTypeMaskOverride = input.conversationTypeMaskOverride
   }
   if (input.deletedAt !== undefined) {
-    patch.deleted_at = input.deletedAt
+    patch.deletedAt = input.deletedAt
   }
 
   await run
-    .updateTable("workspace_apps")
+    .updateTable("workspaceApps")
     .set(patch as any)
     .where("id", "=", input.id)
     .execute()

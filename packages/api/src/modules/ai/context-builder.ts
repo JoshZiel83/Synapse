@@ -51,15 +51,15 @@ export async function loadExecutionToolResultsForSession(
   if (!sessionId) return out
 
   const toolCalls = await db
-    .selectFrom("tool_calls")
-    .select(["id", "provider_call_id", "tool_name"])
-    .where("session_id", "=", sessionId)
+    .selectFrom("toolCalls")
+    .select(["id", "providerCallId", "toolName"])
+    .where("sessionId", "=", sessionId)
     .execute()
   if (toolCalls.length === 0) return out
 
   const callsById = new Map<
     string,
-    { id: string; provider_call_id: string | null; tool_name: string }
+    { id: string; providerCallId: string | null; toolName: string }
   >()
   for (const row of toolCalls) {
     callsById.set(row.id, row)
@@ -68,32 +68,31 @@ export async function loadExecutionToolResultsForSession(
 
   // Take the latest tool_results row per tool_call (highest result_index).
   const results = await db
-    .selectFrom("tool_results")
+    .selectFrom("toolResults")
     .selectAll()
-    .where("tool_call_id", "in", toolCallIds)
-    .orderBy("tool_call_id", "asc")
-    .orderBy("result_index", "desc")
+    .where("toolCallId", "in", toolCallIds)
+    .orderBy("toolCallId", "asc")
+    .orderBy("resultIndex", "desc")
     .execute()
   const latestByCall = new Map<string, (typeof results)[number]>()
   for (const row of results) {
-    if (!latestByCall.has(row.tool_call_id))
-      latestByCall.set(row.tool_call_id, row)
+    if (!latestByCall.has(row.toolCallId)) latestByCall.set(row.toolCallId, row)
   }
   if (latestByCall.size === 0) return out
 
   const resultIds = [...latestByCall.values()].map((r) => r.id)
   const parts = await db
-    .selectFrom("tool_result_parts")
+    .selectFrom("toolResultParts")
     .selectAll()
-    .where("tool_result_id", "in", resultIds)
-    .orderBy("tool_result_id", "asc")
+    .where("toolResultId", "in", resultIds)
+    .orderBy("toolResultId", "asc")
     .orderBy("ordinal", "asc")
     .execute()
   const partsByResult = new Map<string, any[]>()
   for (const row of parts) {
-    const arr = partsByResult.get(row.tool_result_id) || []
+    const arr = partsByResult.get(row.toolResultId) || []
     arr.push(row)
-    partsByResult.set(row.tool_result_id, arr)
+    partsByResult.set(row.toolResultId, arr)
   }
 
   for (const [toolCallId, resultRow] of latestByCall.entries()) {
@@ -105,7 +104,7 @@ export async function loadExecutionToolResultsForSession(
     )
     const origin: ToolResultOrigin = isToolResultOrigin(meta.origin)
       ? meta.origin
-      : { kind: "system", registryKey: call.tool_name }
+      : { kind: "system", registryKey: call.toolName }
     const structuredContent =
       meta.structuredContent && typeof meta.structuredContent === "object"
         ? (meta.structuredContent as Record<string, unknown>)
@@ -119,13 +118,11 @@ export async function loadExecutionToolResultsForSession(
       // the provider-native id on the result while the assistant tool-call uses
       // the UUID, breaking reconcileToolPairing's exact match.
       toolCallId: call.id,
-      toolName: call.tool_name,
+      toolName: call.toolName,
       content: contentBlocks,
-      ...(call.provider_call_id
-        ? { providerCallId: call.provider_call_id }
-        : {}),
-      ...(resultRow.is_error !== null && resultRow.is_error !== undefined
-        ? { isError: resultRow.is_error }
+      ...(call.providerCallId ? { providerCallId: call.providerCallId } : {}),
+      ...(resultRow.isError !== null && resultRow.isError !== undefined
+        ? { isError: resultRow.isError }
         : {}),
       ...(structuredContent !== undefined ? { structuredContent } : {}),
       origin,
@@ -134,7 +131,7 @@ export async function loadExecutionToolResultsForSession(
 
     // Index by BOTH provider_call_id and the DB row id so callers that
     // wrote either to session_message.metadata.toolCallId can hit.
-    if (call.provider_call_id) out.set(call.provider_call_id, canonical)
+    if (call.providerCallId) out.set(call.providerCallId, canonical)
     out.set(call.id, canonical)
   }
 

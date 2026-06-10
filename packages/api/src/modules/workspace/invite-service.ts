@@ -18,25 +18,25 @@ export function generateInviteToken(): string {
 
 // ── Row mapper ──
 
-type InviteRow = TableRow<"workspace_invites"> & {
-  workspace_name?: string | null
+type InviteRow = TableRow<"workspaceInvites"> & {
+  workspaceName?: string | null
 }
 
 function mapInviteRow(row: InviteRow | undefined | null) {
   if (!row) return null
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
+    workspaceId: row.workspaceId,
     token: row.token,
-    createdByWorkspaceMemberId: row.created_by_workspace_member_id,
-    trustLevel: row.trust_level,
-    maxUses: row.max_uses ?? null,
-    useCount: row.use_count,
-    expiresAt: row.expires_at ?? null,
-    isRevoked: row.is_revoked,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    workspaceName: row.workspace_name ?? undefined,
+    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId,
+    trustLevel: row.trustLevel,
+    maxUses: row.maxUses ?? null,
+    useCount: row.useCount,
+    expiresAt: row.expiresAt ?? null,
+    isRevoked: row.isRevoked,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    workspaceName: row.workspaceName ?? undefined,
   }
 }
 
@@ -51,14 +51,14 @@ export async function createInvite(input: {
 }) {
   const token = generateInviteToken()
   const row = await db
-    .insertInto("workspace_invites")
+    .insertInto("workspaceInvites")
     .values({
-      workspace_id: input.workspaceId,
+      workspaceId: input.workspaceId,
       token,
-      created_by_workspace_member_id: input.createdByWorkspaceMemberId,
-      trust_level: input.trustLevel || "member",
-      max_uses: input.maxUses ?? null,
-      expires_at: input.expiresAt ? parseInstantString(input.expiresAt) : null,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId,
+      trustLevel: input.trustLevel || "member",
+      maxUses: input.maxUses ?? null,
+      expiresAt: input.expiresAt ? parseInstantString(input.expiresAt) : null,
     })
     .returningAll()
     .executeTakeFirst()
@@ -67,10 +67,10 @@ export async function createInvite(input: {
 
 export async function getInviteByToken(token: string) {
   const row = await db
-    .selectFrom("workspace_invites as wi")
-    .innerJoin("workspaces as w", "w.id", "wi.workspace_id")
+    .selectFrom("workspaceInvites as wi")
+    .innerJoin("workspaces as w", "w.id", "wi.workspaceId")
     .selectAll("wi")
-    .select("w.name as workspace_name")
+    .select("w.name as workspaceName")
     .where("wi.token", "=", token)
     .executeTakeFirst()
   return row ? mapInviteRow(row) : null
@@ -80,7 +80,7 @@ export async function redeemInvite(token: string, userId: string) {
   const result = await withDbTransaction(async (trx) => {
     // Lock the invite row
     const invite = await trx
-      .selectFrom("workspace_invites")
+      .selectFrom("workspaceInvites")
       .selectAll()
       .where("token", "=", token)
       .forUpdate()
@@ -92,25 +92,25 @@ export async function redeemInvite(token: string, userId: string) {
     const workspace = await trx
       .selectFrom("workspaces")
       .select("name")
-      .where("id", "=", invite.workspace_id)
+      .where("id", "=", invite.workspaceId)
       .executeTakeFirst()
 
-    if (invite.is_revoked) {
+    if (invite.isRevoked) {
       throw new Error("Invite has been revoked")
     }
-    if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
+    if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
       throw new Error("Invite has expired")
     }
-    if (invite.max_uses !== null && invite.use_count >= invite.max_uses) {
+    if (invite.maxUses !== null && invite.useCount >= invite.maxUses) {
       throw new Error("Invite has reached maximum uses")
     }
 
     // Check if already a member
     const memberCheck = await trx
-      .selectFrom("workspace_members")
+      .selectFrom("workspaceMembers")
       .select("id")
-      .where("workspace_id", "=", invite.workspace_id)
-      .where("user_id", "=", userId)
+      .where("workspaceId", "=", invite.workspaceId)
+      .where("userId", "=", userId)
       .executeTakeFirst()
     if (memberCheck) {
       throw new Error("Already a member of this workspace")
@@ -118,11 +118,11 @@ export async function redeemInvite(token: string, userId: string) {
 
     // Add as member
     const memberRow = await trx
-      .insertInto("workspace_members")
+      .insertInto("workspaceMembers")
       .values({
-        workspace_id: invite.workspace_id,
-        user_id: userId,
-        trust_level: invite.trust_level,
+        workspaceId: invite.workspaceId,
+        userId: userId,
+        trustLevel: invite.trustLevel,
       })
       .returning("id")
       .executeTakeFirst()
@@ -132,23 +132,23 @@ export async function redeemInvite(token: string, userId: string) {
 
     await assignOfficialChiefActorPreference(
       trx,
-      invite.workspace_id,
+      invite.workspaceId,
       memberRow.id
     )
 
     // Increment use count
     await trx
-      .updateTable("workspace_invites")
+      .updateTable("workspaceInvites")
       .set({
-        use_count: sql`use_count + 1`,
+        useCount: sql`use_count + 1`,
       })
       .where("id", "=", invite.id)
       .execute()
 
     return {
-      workspaceId: invite.workspace_id,
+      workspaceId: invite.workspaceId,
       workspaceName: workspace?.name,
-      trustLevel: invite.trust_level,
+      trustLevel: invite.trustLevel,
     }
   })
 
@@ -161,23 +161,23 @@ export async function redeemInvite(token: string, userId: string) {
 
 export async function listWorkspaceInvites(workspaceId: string) {
   const rows = await db
-    .selectFrom("workspace_invites")
+    .selectFrom("workspaceInvites")
     .selectAll()
-    .where("workspace_id", "=", workspaceId)
-    .where("is_revoked", "=", false)
-    .orderBy("created_at", "desc")
+    .where("workspaceId", "=", workspaceId)
+    .where("isRevoked", "=", false)
+    .orderBy("createdAt", "desc")
     .execute()
   return rows.map((row) => mapInviteRow(row)!)
 }
 
 export async function revokeInvite(inviteId: string, workspaceId: string) {
   const row = await db
-    .updateTable("workspace_invites")
+    .updateTable("workspaceInvites")
     .set({
-      is_revoked: true,
+      isRevoked: true,
     })
     .where("id", "=", inviteId)
-    .where("workspace_id", "=", workspaceId)
+    .where("workspaceId", "=", workspaceId)
     .returningAll()
     .executeTakeFirst()
   return mapInviteRow(row)

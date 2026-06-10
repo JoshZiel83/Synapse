@@ -76,21 +76,21 @@ function parseJsonArray<T>(value: unknown): T[] | undefined {
 
 async function ensureConversationContextState(conversationId: string) {
   await db
-    .insertInto("conversation_context_states")
+    .insertInto("conversationContextStates")
     .values({
-      conversation_id: conversationId,
+      conversationId: conversationId,
     })
-    .onConflict((oc) => oc.columns(["conversation_id"]).doNothing())
+    .onConflict((oc) => oc.columns(["conversationId"]).doNothing())
     .execute()
 }
 
 async function ensureSessionContextState(sessionId: string) {
   await db
-    .insertInto("session_context_states")
+    .insertInto("sessionContextStates")
     .values({
-      session_id: sessionId,
+      sessionId: sessionId,
     })
-    .onConflict((oc) => oc.columns(["session_id"]).doNothing())
+    .onConflict((oc) => oc.columns(["sessionId"]).doNothing())
     .execute()
 }
 
@@ -427,13 +427,13 @@ async function maybeCompactChain(params: {
   }
 
   await withDbTransaction(async (trx) => {
-    const stateResult = await sql<{ archive_point_id: string | null }>`
+    const stateResult = await sql<{ archivePointId: string | null }>`
       SELECT ${sql.ref(archiveIdColumn)} AS archive_point_id
       FROM ${sql.table(stateTable)}
       WHERE ${sql.ref(stateIdColumn)} = ${stateIdValue}
       FOR UPDATE`.execute(trx)
 
-    const activeArchivePointId = stateResult.rows[0]?.archive_point_id || null
+    const activeArchivePointId = stateResult.rows[0]?.archivePointId || null
     const activeArchivePoint = activeArchivePointId
       ? await loadArchivePoint(activeArchivePointId, trx)
       : null
@@ -543,11 +543,11 @@ async function loadActiveSharedArchivePoint(
 ): Promise<CanonicalArchivePoint | null> {
   await ensureConversationContextState(conversationId)
   const row = await db
-    .selectFrom("conversation_context_states")
-    .select("active_shared_archive_point_id")
-    .where("conversation_id", "=", conversationId)
+    .selectFrom("conversationContextStates")
+    .select("activeSharedArchivePointId")
+    .where("conversationId", "=", conversationId)
     .executeTakeFirst()
-  const archivePointId = row?.active_shared_archive_point_id
+  const archivePointId = row?.activeSharedArchivePointId
   return archivePointId ? loadArchivePoint(archivePointId) : null
 }
 
@@ -557,11 +557,11 @@ async function loadActivePrivateArchivePoint(
   if (!sessionId) return null
   await ensureSessionContextState(sessionId)
   const row = await db
-    .selectFrom("session_context_states")
-    .select("active_private_archive_point_id")
-    .where("session_id", "=", sessionId)
+    .selectFrom("sessionContextStates")
+    .select("activePrivateArchivePointId")
+    .where("sessionId", "=", sessionId)
     .executeTakeFirst()
-  const archivePointId = row?.active_private_archive_point_id
+  const archivePointId = row?.activePrivateArchivePointId
   return archivePointId ? loadArchivePoint(archivePointId) : null
 }
 

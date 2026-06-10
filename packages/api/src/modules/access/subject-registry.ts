@@ -20,7 +20,7 @@ import type {
   TableRow,
 } from "../../infrastructure/database/kysely.js"
 
-export type AccessSubjectRow = TableRow<"access_subjects">
+export type AccessSubjectRow = TableRow<"accessSubjects">
 
 /**
  * Maps an access_subjects.kind to the conversation participant_type semantic.
@@ -48,59 +48,59 @@ export function subjectKindToParticipantType(
 
 function subjectColumns(ref: SubjectRef): {
   kind: AccessSubjectRow["kind"]
-  workspace_id: string | null
-  workspace_member_id: string | null
-  actor_id: string | null
-  remote_agent_id: string | null
-  conversation_id: string | null
-  user_id: string | null
-  transport_address_id: string | null
+  workspaceId: string | null
+  workspaceMemberId: string | null
+  actorId: string | null
+  remoteAgentId: string | null
+  conversationId: string | null
+  userId: string | null
+  transportAddressId: string | null
 } {
   const base = {
-    workspace_id: null,
-    workspace_member_id: null,
-    actor_id: null,
-    remote_agent_id: null,
-    conversation_id: null,
-    user_id: null,
-    transport_address_id: null,
+    workspaceId: null,
+    workspaceMemberId: null,
+    actorId: null,
+    remoteAgentId: null,
+    conversationId: null,
+    userId: null,
+    transportAddressId: null,
   }
   switch (ref.kind) {
     case SUBJECT_KIND.WORKSPACE:
-      return { ...base, kind: "workspace", workspace_id: ref.workspaceId }
+      return { ...base, kind: "workspace", workspaceId: ref.workspaceId }
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      // workspace_id is auto-populated from workspace_members at insert time
+      // workspaceId is auto-populated from workspaceMembers at insert time
       // by upsertAccessSubject's SELECT subquery; callers don't pass it.
       return {
         ...base,
         kind: "workspace_member",
-        workspace_member_id: ref.memberId,
+        workspaceMemberId: ref.memberId,
       }
     case SUBJECT_KIND.ACTOR:
-      return { ...base, kind: "actor", actor_id: ref.actorId }
+      return { ...base, kind: "actor", actorId: ref.actorId }
     case SUBJECT_KIND.REMOTE_AGENT:
       return {
         ...base,
         kind: "remote_agent",
-        remote_agent_id: ref.remoteAgentId,
+        remoteAgentId: ref.remoteAgentId,
       }
     case SUBJECT_KIND.CONVERSATION:
       return {
         ...base,
         kind: "conversation",
-        conversation_id: ref.conversationId,
+        conversationId: ref.conversationId,
       }
     case SUBJECT_KIND.USER:
-      return { ...base, kind: "user", user_id: ref.userId }
+      return { ...base, kind: "user", userId: ref.userId }
     case SUBJECT_KIND.EXTERNAL:
       // external is workspace-rooted and identified by its transport_address.
-      // workspace_id is carried on the ref (validated against the address by the
+      // workspaceId is carried on the ref (validated against the address by the
       // composite FK), so unlike other workspace-bound kinds it is set here.
       return {
         ...base,
         kind: "external",
-        workspace_id: ref.workspaceId,
-        transport_address_id: ref.transportAddressId,
+        workspaceId: ref.workspaceId,
+        transportAddressId: ref.transportAddressId,
       }
     case SUBJECT_KIND.PLATFORM:
       return { ...base, kind: "platform" }
@@ -123,8 +123,8 @@ async function resolveOwningWorkspaceId(
       return ref.workspaceId
     case SUBJECT_KIND.WORKSPACE_MEMBER: {
       const row = await db
-        .selectFrom("workspace_members")
-        .select("workspace_id")
+        .selectFrom("workspaceMembers")
+        .select("workspaceId")
         .where("id", "=", ref.memberId)
         .executeTakeFirst()
       if (!row) {
@@ -132,35 +132,35 @@ async function resolveOwningWorkspaceId(
           `upsertAccessSubject: workspace_members(${ref.memberId}) not found`
         )
       }
-      return row.workspace_id
+      return row.workspaceId
     }
     case SUBJECT_KIND.ACTOR: {
       const row = await db
         .selectFrom("actors as actor")
-        .innerJoin("workspace_apps as app", "app.id", "actor.id")
-        .select("app.workspace_id")
+        .innerJoin("workspaceApps as app", "app.id", "actor.id")
+        .select("app.workspaceId")
         .where("actor.id", "=", ref.actorId)
-        .where("app.deleted_at", "is", null)
+        .where("app.deletedAt", "is", null)
         .executeTakeFirst()
       if (!row) {
         throw new Error(`upsertAccessSubject: actors(${ref.actorId}) not found`)
       }
-      return row.workspace_id
+      return row.workspaceId
     }
     case SUBJECT_KIND.REMOTE_AGENT: {
       const row = await db
-        .selectFrom("remote_agents as agent")
-        .innerJoin("workspace_apps as app", "app.id", "agent.id")
-        .select("app.workspace_id")
+        .selectFrom("remoteAgents as agent")
+        .innerJoin("workspaceApps as app", "app.id", "agent.id")
+        .select("app.workspaceId")
         .where("agent.id", "=", ref.remoteAgentId)
-        .where("app.deleted_at", "is", null)
+        .where("app.deletedAt", "is", null)
         .executeTakeFirst()
       if (!row) {
         throw new Error(
           `upsertAccessSubject: remote_agents(${ref.remoteAgentId}) not found`
         )
       }
-      return row.workspace_id
+      return row.workspaceId
     }
     case SUBJECT_KIND.CONVERSATION: {
       // Every conversation is workspace-scoped (conversations.workspace_id is
@@ -168,7 +168,7 @@ async function resolveOwningWorkspaceId(
       // axis. Read the workspace directly — no creator-member fallback.
       const row = await db
         .selectFrom("conversations as c")
-        .select("c.workspace_id as workspace_id")
+        .select("c.workspaceId as workspaceId")
         .where("c.id", "=", ref.conversationId)
         .executeTakeFirst()
       if (!row) {
@@ -176,7 +176,7 @@ async function resolveOwningWorkspaceId(
           `upsertAccessSubject: conversations(${ref.conversationId}) not found`
         )
       }
-      return row.workspace_id
+      return row.workspaceId
     }
     case SUBJECT_KIND.EXTERNAL:
       // external carries its workspace_id on the ref; the composite FK ensures
@@ -191,31 +191,31 @@ async function resolveOwningWorkspaceId(
 export function rowToSubjectRef(row: AccessSubjectRow): SubjectRef {
   switch (row.kind) {
     case "workspace":
-      return { kind: SUBJECT_KIND.WORKSPACE, workspaceId: row.workspace_id! }
+      return { kind: SUBJECT_KIND.WORKSPACE, workspaceId: row.workspaceId! }
     case "workspace_member":
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: row.workspace_member_id!,
+        memberId: row.workspaceMemberId!,
       }
     case "actor":
-      return { kind: SUBJECT_KIND.ACTOR, actorId: row.actor_id! }
+      return { kind: SUBJECT_KIND.ACTOR, actorId: row.actorId! }
     case "remote_agent":
       return {
         kind: SUBJECT_KIND.REMOTE_AGENT,
-        remoteAgentId: row.remote_agent_id!,
+        remoteAgentId: row.remoteAgentId!,
       }
     case "conversation":
       return {
         kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: row.conversation_id!,
+        conversationId: row.conversationId!,
       }
     case "user":
-      return { kind: SUBJECT_KIND.USER, userId: row.user_id! }
+      return { kind: SUBJECT_KIND.USER, userId: row.userId! }
     case "external":
       return {
         kind: SUBJECT_KIND.EXTERNAL,
-        workspaceId: row.workspace_id!,
-        transportAddressId: row.transport_address_id!,
+        workspaceId: row.workspaceId!,
+        transportAddressId: row.transportAddressId!,
       }
     case "platform":
       return { kind: SUBJECT_KIND.PLATFORM }
@@ -236,36 +236,36 @@ export async function upsertAccessSubject(
 
   // Try fast-path: select the matching row first.
   let lookup = db
-    .selectFrom("access_subjects")
+    .selectFrom("accessSubjects")
     .select("id")
     .where("kind", "=", columns.kind)
     .limit(1)
 
   switch (ref.kind) {
     case SUBJECT_KIND.WORKSPACE:
-      lookup = lookup.where("workspace_id", "=", ref.workspaceId)
+      lookup = lookup.where("workspaceId", "=", ref.workspaceId)
       break
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      lookup = lookup.where("workspace_member_id", "=", ref.memberId)
+      lookup = lookup.where("workspaceMemberId", "=", ref.memberId)
       break
     case SUBJECT_KIND.ACTOR:
-      lookup = lookup.where("actor_id", "=", ref.actorId)
+      lookup = lookup.where("actorId", "=", ref.actorId)
       break
     case SUBJECT_KIND.REMOTE_AGENT:
-      lookup = lookup.where("remote_agent_id", "=", ref.remoteAgentId)
+      lookup = lookup.where("remoteAgentId", "=", ref.remoteAgentId)
       break
     case SUBJECT_KIND.CONVERSATION:
-      lookup = lookup.where("conversation_id", "=", ref.conversationId)
+      lookup = lookup.where("conversationId", "=", ref.conversationId)
       break
     case SUBJECT_KIND.USER:
-      lookup = lookup.where("user_id", "=", ref.userId)
+      lookup = lookup.where("userId", "=", ref.userId)
       break
     case SUBJECT_KIND.EXTERNAL:
       // P2#4: match on transport_address_id AND workspace_id so a ref carrying
       // the wrong workspace can never resolve to another workspace's subject.
       lookup = lookup
-        .where("transport_address_id", "=", ref.transportAddressId)
-        .where("workspace_id", "=", ref.workspaceId)
+        .where("transportAddressId", "=", ref.transportAddressId)
+        .where("workspaceId", "=", ref.workspaceId)
       break
     case SUBJECT_KIND.PLATFORM:
       // Platform subject is a singleton — the partial-unique index on
@@ -285,10 +285,10 @@ export async function upsertAccessSubject(
   const ownerWorkspaceId = await resolveOwningWorkspaceId(db, ref)
   const valuesWithWorkspace = {
     ...columns,
-    workspace_id: columns.workspace_id ?? ownerWorkspaceId,
+    workspaceId: columns.workspaceId ?? ownerWorkspaceId,
   }
   const inserted = await db
-    .insertInto("access_subjects")
+    .insertInto("accessSubjects")
     .values(valuesWithWorkspace)
     .onConflict((oc) => oc.doNothing())
     .returning("id")
@@ -307,7 +307,7 @@ export async function loadAccessSubject(
   subjectId: string
 ): Promise<SubjectRef | null> {
   const row = await db
-    .selectFrom("access_subjects")
+    .selectFrom("accessSubjects")
     .selectAll()
     .where("id", "=", subjectId)
     .executeTakeFirst()
@@ -334,7 +334,7 @@ export async function loadAccessSubjectMany(
 ): Promise<Map<string, SubjectRef>> {
   if (subjectIds.length === 0) return new Map()
   const rows = await db
-    .selectFrom("access_subjects")
+    .selectFrom("accessSubjects")
     .selectAll()
     .where("id", "in", [...subjectIds])
     .execute()
@@ -358,33 +358,33 @@ export async function findAccessSubjectId(
   // This duplicates the WHERE clause logic from upsertAccessSubject; consider
   // collapsing them if a third reader appears.
   let lookup = db
-    .selectFrom("access_subjects")
+    .selectFrom("accessSubjects")
     .select("id")
     .where("kind", "=", subjectColumns(ref).kind)
     .limit(1)
   switch (ref.kind) {
     case SUBJECT_KIND.WORKSPACE:
-      lookup = lookup.where("workspace_id", "=", ref.workspaceId)
+      lookup = lookup.where("workspaceId", "=", ref.workspaceId)
       break
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      lookup = lookup.where("workspace_member_id", "=", ref.memberId)
+      lookup = lookup.where("workspaceMemberId", "=", ref.memberId)
       break
     case SUBJECT_KIND.ACTOR:
-      lookup = lookup.where("actor_id", "=", ref.actorId)
+      lookup = lookup.where("actorId", "=", ref.actorId)
       break
     case SUBJECT_KIND.REMOTE_AGENT:
-      lookup = lookup.where("remote_agent_id", "=", ref.remoteAgentId)
+      lookup = lookup.where("remoteAgentId", "=", ref.remoteAgentId)
       break
     case SUBJECT_KIND.CONVERSATION:
-      lookup = lookup.where("conversation_id", "=", ref.conversationId)
+      lookup = lookup.where("conversationId", "=", ref.conversationId)
       break
     case SUBJECT_KIND.USER:
-      lookup = lookup.where("user_id", "=", ref.userId)
+      lookup = lookup.where("userId", "=", ref.userId)
       break
     case SUBJECT_KIND.EXTERNAL:
       lookup = lookup
-        .where("transport_address_id", "=", ref.transportAddressId)
-        .where("workspace_id", "=", ref.workspaceId)
+        .where("transportAddressId", "=", ref.transportAddressId)
+        .where("workspaceId", "=", ref.workspaceId)
       break
     case SUBJECT_KIND.PLATFORM:
       break

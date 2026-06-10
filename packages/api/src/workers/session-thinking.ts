@@ -658,7 +658,7 @@ export function startSessionThinkingWorker() {
           await db
             .updateTable("sessions")
             .set({
-              memory_bootstrap_completed: true,
+              memoryBootstrapCompleted: true,
             })
             .where("id", "=", sessionId)
             .execute()
@@ -1397,20 +1397,20 @@ export function startSessionThinkingWorker() {
         await updateTurnStatus(turn.id, "completed")
 
         await db
-          .insertInto("audit_logs")
+          .insertInto("auditLogs")
           .values({
-            workspace_id: workspaceId,
-            actor_id: actorId,
+            workspaceId: workspaceId,
+            actorId: actorId,
             action: "ai.think",
-            resource_type: "session",
-            resource_id: sessionId,
+            resourceType: "session",
+            resourceId: sessionId,
             details: {
               trigger,
               tokensUsed: result.tokensUsed,
               actionsCount: result.actions.length,
               reasoning: result.reasoning,
               turnId: turn.id,
-            } as TableInsert<"audit_logs">["details"],
+            } as TableInsert<"auditLogs">["details"],
           })
           .execute()
 

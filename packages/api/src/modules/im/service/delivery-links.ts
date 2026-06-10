@@ -94,37 +94,35 @@ export async function queueConversationTransportProjection(params: {
   }
 
   const link = await db
-    .insertInto("transport_message_links")
+    .insertInto("transportMessageLinks")
     .values({
       id: uuidv4(),
-      workspace_id: params.workspaceId,
-      conversation_id: params.conversationId,
-      item_id: params.itemId,
-      transport_account_id: binding.account.id,
-      transport_endpoint_id: binding.endpoint.id,
-      transport_kind: binding.transportKind,
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      itemId: params.itemId,
+      transportAccountId: binding.account.id,
+      transportEndpointId: binding.endpoint.id,
+      transportKind: binding.transportKind,
       direction,
-      delivery_status: "pending",
-      external_message_id: params.externalMessageId || null,
-      external_reply_to_id: params.externalReplyToId || null,
-      external_thread_id: params.externalThreadId || null,
+      deliveryStatus: "pending",
+      externalMessageId: params.externalMessageId || null,
+      externalReplyToId: params.externalReplyToId || null,
+      externalThreadId: params.externalThreadId || null,
       metadata: {
         bindingId: binding.id,
         endpointType: binding.endpoint.endpointType,
         endpointExternalId: binding.endpoint.externalId,
         ...(params.metadata || {}),
-      } as TableInsert<"transport_message_links">["metadata"],
-      created_at: sql`NOW()`,
+      } as TableInsert<"transportMessageLinks">["metadata"],
+      createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
-      oc
-        .columns(["item_id", "transport_endpoint_id", "direction"])
-        .doUpdateSet({
-          external_message_id: sql`COALESCE(excluded.external_message_id, transport_message_links.external_message_id)`,
-          external_reply_to_id: sql`COALESCE(excluded.external_reply_to_id, transport_message_links.external_reply_to_id)`,
-          external_thread_id: sql`COALESCE(excluded.external_thread_id, transport_message_links.external_thread_id)`,
-          metadata: sql`transport_message_links.metadata || excluded.metadata`,
-        })
+      oc.columns(["itemId", "transportEndpointId", "direction"]).doUpdateSet({
+        externalMessageId: sql`COALESCE(excluded.external_message_id, transport_message_links.external_message_id)`,
+        externalReplyToId: sql`COALESCE(excluded.external_reply_to_id, transport_message_links.external_reply_to_id)`,
+        externalThreadId: sql`COALESCE(excluded.external_thread_id, transport_message_links.external_thread_id)`,
+        metadata: sql`transport_message_links.metadata || excluded.metadata`,
+      })
     )
     .returningAll()
     .executeTakeFirst()
@@ -147,15 +145,15 @@ export async function findTransportMessageLinkByExternalMessage(params: {
   direction: "inbound" | "outbound"
 }) {
   let builder = db
-    .selectFrom("transport_message_links")
+    .selectFrom("transportMessageLinks")
     .selectAll()
-    .where("transport_account_id", "=", params.transportAccountId)
-    .where("external_message_id", "=", params.externalMessageId.trim())
+    .where("transportAccountId", "=", params.transportAccountId)
+    .where("externalMessageId", "=", params.externalMessageId.trim())
     .where("direction", "=", params.direction)
 
   if (params.transportEndpointId) {
     builder = builder.where(
-      "transport_endpoint_id",
+      "transportEndpointId",
       "=",
       params.transportEndpointId
     )
@@ -184,7 +182,7 @@ export async function updateTransportMessageLinkStatus(params: {
   // application code) to keep everything that shares a namespace.
   return await runWithTransaction(params.tx, async (tx) => {
     const existing = await tx
-      .selectFrom("transport_message_links")
+      .selectFrom("transportMessageLinks")
       .select("metadata")
       .where("id", "=", params.linkId)
       .forUpdate()
@@ -192,15 +190,15 @@ export async function updateTransportMessageLinkStatus(params: {
     const current = parseJsonObject(existing?.metadata)
     const merged = deepMergeJsonObjects(current, extraMetadata)
     const row = await tx
-      .updateTable("transport_message_links")
+      .updateTable("transportMessageLinks")
       .set({
-        delivery_status: params.status,
+        deliveryStatus: params.status,
         ...(params.externalMessageId
-          ? { external_message_id: params.externalMessageId }
+          ? { externalMessageId: params.externalMessageId }
           : {}),
-        metadata: merged as TableInsert<"transport_message_links">["metadata"],
+        metadata: merged as TableInsert<"transportMessageLinks">["metadata"],
         ...(params.status === "sent"
-          ? { delivered_at: sql`COALESCE(delivered_at, NOW())` }
+          ? { deliveredAt: sql`COALESCE(delivered_at, NOW())` }
           : {}),
       })
       .where("id", "=", params.linkId)
@@ -237,7 +235,7 @@ export async function patchTransportMessageLinkMetadata(params: {
   if (!params.patch || Object.keys(params.patch).length === 0) return
   await runWithTransaction(params.tx, async (tx) => {
     const existing = await tx
-      .selectFrom("transport_message_links")
+      .selectFrom("transportMessageLinks")
       .select("metadata")
       .where("id", "=", params.linkId)
       .forUpdate()
@@ -245,9 +243,9 @@ export async function patchTransportMessageLinkMetadata(params: {
     const current = parseJsonObject(existing?.metadata)
     const merged = deepMergeJsonObjects(current, params.patch)
     await tx
-      .updateTable("transport_message_links")
+      .updateTable("transportMessageLinks")
       .set({
-        metadata: merged as TableInsert<"transport_message_links">["metadata"],
+        metadata: merged as TableInsert<"transportMessageLinks">["metadata"],
       })
       .where("id", "=", params.linkId)
       .execute()
@@ -264,49 +262,45 @@ async function runWithTransaction<T>(
 
 export async function loadTransportMessageLinkForDelivery(linkId: string) {
   const row = await db
-    .selectFrom("transport_message_links as tml")
-    .innerJoin("transport_accounts as ta", "ta.id", "tml.transport_account_id")
-    .innerJoin(
-      "transport_endpoints as te",
-      "te.id",
-      "tml.transport_endpoint_id"
-    )
-    .innerJoin("conversation_items as ci", "ci.id", "tml.item_id")
+    .selectFrom("transportMessageLinks as tml")
+    .innerJoin("transportAccounts as ta", "ta.id", "tml.transportAccountId")
+    .innerJoin("transportEndpoints as te", "te.id", "tml.transportEndpointId")
+    .innerJoin("conversationItems as ci", "ci.id", "tml.itemId")
     .select([
       "tml.id",
-      "tml.workspace_id",
-      "tml.conversation_id",
-      "tml.item_id",
-      "tml.transport_account_id",
-      "tml.transport_endpoint_id",
-      "tml.transport_kind",
+      "tml.workspaceId",
+      "tml.conversationId",
+      "tml.itemId",
+      "tml.transportAccountId",
+      "tml.transportEndpointId",
+      "tml.transportKind",
       "tml.direction",
-      "tml.delivery_status",
-      "tml.external_message_id",
+      "tml.deliveryStatus",
+      "tml.externalMessageId",
       "tml.metadata",
-      "tml.delivered_at",
-      "tml.created_at",
-      "tml.updated_at",
-      "ta.workspace_id as account_workspace_id",
-      "ta.account_key",
-      "ta.display_name as account_display_name",
-      "ta.owner_scope",
-      "ta.owner_workspace_member_id",
-      "ta.connection_mode",
-      "ta.status as account_status",
+      "tml.deliveredAt",
+      "tml.createdAt",
+      "tml.updatedAt",
+      "ta.workspaceId as accountWorkspaceId",
+      "ta.accountKey",
+      "ta.displayName as accountDisplayName",
+      "ta.ownerScope",
+      "ta.ownerWorkspaceMemberId",
+      "ta.connectionMode",
+      "ta.status as accountStatus",
       "ta.credentials",
       "ta.config",
-      "ta.metadata as account_metadata",
-      "ta.created_at as account_created_at",
-      "ta.updated_at as account_updated_at",
-      "te.endpoint_type",
-      "te.external_id as endpoint_external_id",
-      "te.parent_external_id",
-      "te.display_name as endpoint_display_name",
-      "te.metadata as endpoint_metadata",
-      "te.created_at as endpoint_created_at",
-      "te.updated_at as endpoint_updated_at",
-      "ci.metadata as item_metadata",
+      "ta.metadata as accountMetadata",
+      "ta.createdAt as accountCreatedAt",
+      "ta.updatedAt as accountUpdatedAt",
+      "te.endpointType",
+      "te.externalId as endpointExternalId",
+      "te.parentExternalId",
+      "te.displayName as endpointDisplayName",
+      "te.metadata as endpointMetadata",
+      "te.createdAt as endpointCreatedAt",
+      "te.updatedAt as endpointUpdatedAt",
+      "ci.metadata as itemMetadata",
     ])
     .where("tml.id", "=", linkId)
     .limit(1)
@@ -316,36 +310,36 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
   return {
     ...normalizeTransportMessageLinkRow(row),
     account: normalizeAccountRow({
-      id: row.transport_account_id,
-      workspace_id: row.account_workspace_id,
-      transport_kind: row.transport_kind,
-      account_key: row.account_key,
-      display_name: row.account_display_name,
-      owner_scope: row.owner_scope,
-      owner_workspace_member_id: row.owner_workspace_member_id,
-      connection_mode: row.connection_mode,
-      status: row.account_status,
+      id: row.transportAccountId,
+      workspaceId: row.accountWorkspaceId,
+      transportKind: row.transportKind,
+      accountKey: row.accountKey,
+      displayName: row.accountDisplayName,
+      ownerScope: row.ownerScope,
+      ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
+      connectionMode: row.connectionMode,
+      status: row.accountStatus,
       credentials: row.credentials,
       config: row.config,
-      metadata: row.account_metadata,
-      created_at: row.account_created_at,
-      updated_at: row.account_updated_at,
+      metadata: row.accountMetadata,
+      createdAt: row.accountCreatedAt,
+      updatedAt: row.accountUpdatedAt,
     }),
     endpoint: normalizeEndpointRow(
       {
-        endpoint_id: row.transport_endpoint_id,
-        transport_account_id: row.transport_account_id,
-        endpoint_type: row.endpoint_type,
-        endpoint_external_id: row.endpoint_external_id,
-        parent_external_id: row.parent_external_id,
-        endpoint_display_name: row.endpoint_display_name,
-        endpoint_metadata: row.endpoint_metadata,
-        endpoint_created_at: row.endpoint_created_at,
-        endpoint_updated_at: row.endpoint_updated_at,
+        endpointId: row.transportEndpointId,
+        transportAccountId: row.transportAccountId,
+        endpointType: row.endpointType,
+        endpointExternalId: row.endpointExternalId,
+        parentExternalId: row.parentExternalId,
+        endpointDisplayName: row.endpointDisplayName,
+        endpointMetadata: row.endpointMetadata,
+        endpointCreatedAt: row.endpointCreatedAt,
+        endpointUpdatedAt: row.endpointUpdatedAt,
       },
-      row.transport_kind as TransportKind
+      row.transportKind as TransportKind
     ),
-    itemMetadata: parseJsonObject(row.item_metadata),
+    itemMetadata: parseJsonObject(row.itemMetadata),
   }
 }
 
@@ -362,10 +356,10 @@ export async function removeTransportMessageLinkMetadataKey(
   key: string
 ): Promise<void> {
   await tx
-    .updateTable("transport_message_links")
+    .updateTable("transportMessageLinks")
     .set({
       metadata:
-        sql`metadata - ${key}` as unknown as TableInsert<"transport_message_links">["metadata"],
+        sql`metadata - ${key}` as unknown as TableInsert<"transportMessageLinks">["metadata"],
     })
     .where("id", "=", linkId)
     .execute()
@@ -387,23 +381,23 @@ export async function persistOutboundLinkRowRaw(params: {
   metadata?: Record<string, unknown>
 }): Promise<{ id: string }> {
   const row = await db
-    .insertInto("transport_message_links")
+    .insertInto("transportMessageLinks")
     .values({
       id: uuidv4(),
-      workspace_id: params.workspaceId,
-      conversation_id: params.conversationId,
-      item_id: params.itemId,
-      transport_account_id: params.transportAccountId,
-      transport_endpoint_id: params.transportEndpointId,
-      transport_kind: params.transportKind,
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      itemId: params.itemId,
+      transportAccountId: params.transportAccountId,
+      transportEndpointId: params.transportEndpointId,
+      transportKind: params.transportKind,
       direction: "outbound",
-      delivery_status: "pending",
-      external_message_id: null,
-      external_reply_to_id: null,
-      external_thread_id: null,
+      deliveryStatus: "pending",
+      externalMessageId: null,
+      externalReplyToId: null,
+      externalThreadId: null,
       metadata: (params.metadata ||
-        {}) as TableInsert<"transport_message_links">["metadata"],
-      created_at: sql`NOW()`,
+        {}) as TableInsert<"transportMessageLinks">["metadata"],
+      createdAt: sql`NOW()`,
     })
     .returning("id")
     .executeTakeFirstOrThrow()

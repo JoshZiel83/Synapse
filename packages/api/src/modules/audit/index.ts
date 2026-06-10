@@ -36,46 +36,46 @@ export default async function auditModule(app: FastifyInstance) {
 
       const offset = (qs.page - 1) * qs.pageSize
       let countQuery = db
-        .selectFrom("audit_logs as al")
+        .selectFrom("auditLogs as al")
         .select(({ fn }) => fn.countAll<string>().as("count"))
-        .where("al.workspace_id", "=", workspaceId)
+        .where("al.workspaceId", "=", workspaceId)
       let dataQuery = db
-        .selectFrom("audit_logs as al")
-        .leftJoin("users as u", "u.id", "al.user_id")
-        .leftJoin("actors as a", "a.id", "al.actor_id")
-        .leftJoin("workspace_apps as actor_app", "actor_app.id", "a.id")
+        .selectFrom("auditLogs as al")
+        .leftJoin("users as u", "u.id", "al.userId")
+        .leftJoin("actors as a", "a.id", "al.actorId")
+        .leftJoin("workspaceApps as actor_app", "actor_app.id", "a.id")
         .select([
           "al.id",
           "al.action",
-          "al.resource_type as resourceType",
-          "al.resource_id as resourceId",
-          "al.user_id as userId",
-          "al.actor_id as actorId",
+          "al.resourceType as resourceType",
+          "al.resourceId as resourceId",
+          "al.userId as userId",
+          "al.actorId as actorId",
           "al.details",
-          "al.ip_address as ipAddress",
-          "al.created_at as createdAt",
+          "al.ipAddress as ipAddress",
+          "al.createdAt as createdAt",
           "u.email as userName",
-          "actor_app.display_name as actorName",
+          "actor_app.displayName as actorName",
         ])
-        .where("al.workspace_id", "=", workspaceId)
+        .where("al.workspaceId", "=", workspaceId)
 
       if (qs.action) {
         countQuery = countQuery.where("al.action", "=", qs.action)
         dataQuery = dataQuery.where("al.action", "=", qs.action)
       }
       if (qs.resourceType) {
-        countQuery = countQuery.where("al.resource_type", "=", qs.resourceType)
-        dataQuery = dataQuery.where("al.resource_type", "=", qs.resourceType)
+        countQuery = countQuery.where("al.resourceType", "=", qs.resourceType)
+        dataQuery = dataQuery.where("al.resourceType", "=", qs.resourceType)
       }
       if (qs.resourceId) {
-        countQuery = countQuery.where("al.resource_id", "=", qs.resourceId)
-        dataQuery = dataQuery.where("al.resource_id", "=", qs.resourceId)
+        countQuery = countQuery.where("al.resourceId", "=", qs.resourceId)
+        dataQuery = dataQuery.where("al.resourceId", "=", qs.resourceId)
       }
 
       const [countResult, items] = await Promise.all([
         countQuery.executeTakeFirst(),
         dataQuery
-          .orderBy("al.created_at", "desc")
+          .orderBy("al.createdAt", "desc")
           .limit(qs.pageSize)
           .offset(offset)
           .execute(),

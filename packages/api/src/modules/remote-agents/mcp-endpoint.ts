@@ -187,7 +187,7 @@ function buildImTools(params: {
         beforeSequence,
         limit,
       })
-      const deliveryRows = await sql<{ id: string; item_id: string }>`
+      const deliveryRows = await sql<{ id: string; itemId: string }>`
           SELECT delivery.id, delivery.item_id
           FROM remote_agent_message_deliveries delivery
           WHERE delivery.remote_agent_id = ${params.remoteAgentId}
@@ -206,7 +206,7 @@ function buildImTools(params: {
           .filter((value): value is string => Boolean(value))
       )
       const completedDeliveryIds = deliveryRows.rows
-        .filter((row) => itemIds.has(row.item_id))
+        .filter((row) => itemIds.has(row.itemId))
         .map((row) => row.id)
       if (completedDeliveryIds.length > 0) {
         await completeRemoteAgentDeliveries({

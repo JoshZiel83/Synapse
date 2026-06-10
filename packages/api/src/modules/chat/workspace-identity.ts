@@ -14,21 +14,21 @@ export async function getWorkspaceMemberIdentity(
   userId: string
 ): Promise<WorkspaceMemberIdentity | null> {
   const row = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("users as u", "u.id", "wm.user_id")
+    .selectFrom("workspaceMembers as wm")
+    .innerJoin("users as u", "u.id", "wm.userId")
     .select([
-      "wm.id as workspace_member_id",
-      "wm.workspace_id",
-      "wm.user_id",
-      "wm.trust_level",
-      "u.name as user_name",
-      "u.avatar_file_id",
+      "wm.id as workspaceMemberId",
+      "wm.workspaceId",
+      "wm.userId",
+      "wm.trustLevel",
+      "u.name as userName",
+      "u.avatarFileId",
     ])
-    .where("wm.workspace_id", "=", workspaceId)
-    .where("wm.user_id", "=", userId)
+    .where("wm.workspaceId", "=", workspaceId)
+    .where("wm.userId", "=", userId)
     // Soft delete (§8.4): only an active member + live user resolves to an identity.
     .where("wm.status", "=", "active")
-    .where("u.deleted_at", "is", null)
+    .where("u.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
 
@@ -37,12 +37,12 @@ export async function getWorkspaceMemberIdentity(
   }
 
   return {
-    workspaceMemberId: row.workspace_member_id,
-    workspaceId: row.workspace_id,
-    userId: row.user_id,
-    userName: row.user_name,
-    avatarFileId: row.avatar_file_id,
-    trustLevel: row.trust_level,
+    workspaceMemberId: row.workspaceMemberId,
+    workspaceId: row.workspaceId,
+    userId: row.userId,
+    userName: row.userName,
+    avatarFileId: row.avatarFileId,
+    trustLevel: row.trustLevel,
   }
 }
 
@@ -61,15 +61,15 @@ export async function getWorkspaceMemberIdentityById(
   workspaceMemberId: string
 ): Promise<WorkspaceMemberIdentity | null> {
   const row = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("users as u", "u.id", "wm.user_id")
+    .selectFrom("workspaceMembers as wm")
+    .innerJoin("users as u", "u.id", "wm.userId")
     .select([
-      "wm.id as workspace_member_id",
-      "wm.workspace_id",
-      "wm.user_id",
-      "wm.trust_level",
-      "u.name as user_name",
-      "u.avatar_file_id",
+      "wm.id as workspaceMemberId",
+      "wm.workspaceId",
+      "wm.userId",
+      "wm.trustLevel",
+      "u.name as userName",
+      "u.avatarFileId",
     ])
     .where("wm.id", "=", workspaceMemberId)
     .limit(1)
@@ -80,11 +80,11 @@ export async function getWorkspaceMemberIdentityById(
   }
 
   return {
-    workspaceMemberId: row.workspace_member_id,
-    workspaceId: row.workspace_id,
-    userId: row.user_id,
-    userName: row.user_name,
-    avatarFileId: row.avatar_file_id,
-    trustLevel: row.trust_level,
+    workspaceMemberId: row.workspaceMemberId,
+    workspaceId: row.workspaceId,
+    userId: row.userId,
+    userName: row.userName,
+    avatarFileId: row.avatarFileId,
+    trustLevel: row.trustLevel,
   }
 }

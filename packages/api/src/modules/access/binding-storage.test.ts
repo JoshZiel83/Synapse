@@ -49,9 +49,9 @@ test(
         }
       )
 
-      assert.ok(insert.subject_id, "subject_id should be populated")
-      assert.equal(insert.workspace_id, workspaceId)
-      assert.equal(insert.resource_type, "automation_event_source")
+      assert.ok(insert.subjectId, "subject_id should be populated")
+      assert.equal(insert.workspaceId, workspaceId)
+      assert.equal(insert.resourceType, "automation_event_source")
       assert.equal(insert.source, "manual")
       assert.equal(
         (insert as Record<string, unknown>).target_type,
@@ -64,7 +64,7 @@ test(
         "legacy subject_workspace_id column should not be in insert payload"
       )
 
-      const ref = await loadAccessSubject(db, insert.subject_id as string)
+      const ref = await loadAccessSubject(db, insert.subjectId as string)
       assert.deepEqual(ref, {
         kind: SUBJECT_KIND.WORKSPACE,
         workspaceId,
@@ -100,8 +100,8 @@ test(
         }
       )
       assert.equal(
-        first.subject_id,
-        second.subject_id,
+        first.subjectId,
+        second.subjectId,
         "second upsert for the same workspace subject must reuse the row"
       )
     })
@@ -136,7 +136,7 @@ async function insertWorkspace(
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: userId,
+      ownerId: userId,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "test workspace",
     })
@@ -152,14 +152,14 @@ async function insertAutomationEventSource(
   const userId = await insertUser(db, "source-owner@example.test")
   const memberId = await insertWorkspaceMember(db, workspaceId, userId)
   const row = await db
-    .insertInto("automation_event_sources")
+    .insertInto("automationEventSources")
     .values({
-      workspace_id: workspaceId,
-      provider_kind: "internal",
-      source_key: `src-${Math.random().toString(36).slice(2, 10)}`,
+      workspaceId: workspaceId,
+      providerKind: "internal",
+      sourceKey: `src-${Math.random().toString(36).slice(2, 10)}`,
       name: "test source",
-      created_by_kind: "workspace_member",
-      created_by_workspace_member_id: memberId,
+      createdByKind: "workspace_member",
+      createdByWorkspaceMemberId: memberId,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -184,7 +184,7 @@ test(
           target: { subject: actorRef(grantedActorId) },
         }
       )
-      await db.insertInto("resource_access_bindings").values(insert).execute()
+      await db.insertInto("resourceAccessBindings").values(insert).execute()
 
       const grants = await listAutomationEventSourceAccessGrants(db, {
         resourceType: "automation_event_source",
@@ -210,7 +210,7 @@ test(
       const workspaceRow = await db
         .insertInto("workspaces")
         .values({
-          owner_id: ownerId,
+          ownerId: ownerId,
           slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
           name: "test workspace",
         })
@@ -233,7 +233,7 @@ test(
           target: { subject: workspaceMemberRef(memberId) },
         }
       )
-      await db.insertInto("resource_access_bindings").values(insert).execute()
+      await db.insertInto("resourceAccessBindings").values(insert).execute()
 
       const grants = await listAutomationEventSourceAccessGrants(db, {
         resourceType: "automation_event_source",
@@ -261,7 +261,7 @@ test(
         .insertInto("conversations")
         .values({
           kind: "group",
-          workspace_id: workspaceId,
+          workspaceId: workspaceId,
           title: "test conversation",
         })
         .returning("id")
@@ -280,7 +280,7 @@ test(
           },
         }
       )
-      await db.insertInto("resource_access_bindings").values(insert).execute()
+      await db.insertInto("resourceAccessBindings").values(insert).execute()
 
       const grants = await listAutomationEventSourceAccessGrants(db, {
         resourceType: "automation_event_source",
@@ -322,11 +322,11 @@ async function insertWorkspaceMember(
   userId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspaceId,
-      user_id: userId,
-      trust_level: "member",
+      workspaceId: workspaceId,
+      userId: userId,
+      trustLevel: "member",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -339,12 +339,12 @@ async function insertActor(
 ): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: actorId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "actor",
-      display_name: "test actor",
+      displayName: "test actor",
       status: "active",
     } as any)
     .execute()
@@ -354,7 +354,7 @@ async function insertActor(
       id: actorId,
       role: "assistant",
       title: "test",
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -368,15 +368,15 @@ async function insertActor(
     eventSourceUserId
   )
   await db
-    .insertInto("automation_event_sources")
+    .insertInto("automationEventSources")
     .values({
       id: row.id as string,
-      workspace_id: workspaceId,
-      provider_kind: "internal",
-      source_key: `src-${Math.random().toString(36).slice(2, 10)}`,
+      workspaceId: workspaceId,
+      providerKind: "internal",
+      sourceKey: `src-${Math.random().toString(36).slice(2, 10)}`,
       name: "test source",
-      created_by_kind: "workspace_member",
-      created_by_workspace_member_id: eventSourceMemberId,
+      createdByKind: "workspace_member",
+      createdByWorkspaceMemberId: eventSourceMemberId,
     } as any)
     .execute()
   return row.id as string
@@ -393,7 +393,7 @@ test(
       const workspaceRow = await db
         .insertInto("workspaces")
         .values({
-          owner_id: ownerId,
+          ownerId: ownerId,
           slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
           name: "test workspace",
         })
@@ -420,19 +420,19 @@ test(
             resourceId: actorId,
             target: { subject: workspaceMemberRef(memberId) },
           })
-        await db.insertInto("resource_access_bindings").values(insert).execute()
+        await db.insertInto("resourceAccessBindings").values(insert).execute()
       }
 
       const rows = await db
-        .selectFrom("resource_access_bindings as binding")
-        .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
-        .select(["binding.id", "subj.kind", "subj.workspace_member_id"])
-        .where("binding.automation_event_source_id", "=", actorId)
+        .selectFrom("resourceAccessBindings as binding")
+        .innerJoin("accessSubjects as subj", "subj.id", "binding.subjectId")
+        .select(["binding.id", "subj.kind", "subj.workspaceMemberId"])
+        .where("binding.automationEventSourceId", "=", actorId)
         .where("binding.status", "=", "active")
         .execute()
 
       assert.equal(rows.length, 2, "two member grants must produce two rows")
-      const memberIds = rows.map((r) => r.workspace_member_id).sort()
+      const memberIds = rows.map((r) => r.workspaceMemberId).sort()
       assert.deepEqual(memberIds, [memberA, memberB].sort())
     })
   }
@@ -440,12 +440,12 @@ test(
 
 test("augmentInsertedBindingRowWithTarget copies the subject shape onto the raw row", () => {
   const augmented = augmentInsertedBindingRowWithTarget(
-    { subject_id: "subj-1", extra: "passthrough" } as any,
+    { subjectId: "subj-1", extra: "passthrough" } as any,
     { subject: workspaceMemberRef("m-1") }
   )
-  assert.equal(augmented.subject_kind, "workspace_member")
-  assert.equal(augmented.subject_workspace_member_id_via_join, "m-1")
-  assert.equal(augmented.subject_actor_id_via_join, null)
+  assert.equal(augmented.subjectKind, "workspace_member")
+  assert.equal(augmented.subjectWorkspaceMemberIdViaJoin, "m-1")
+  assert.equal(augmented.subjectActorIdViaJoin, null)
   assert.equal((augmented as any).extra, "passthrough")
 })
 
@@ -466,7 +466,7 @@ test(
         }
       )
       const inserted = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -480,7 +480,7 @@ test(
       })
       assert.equal(second, false, "second revoke is a no-op")
       const row = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select(["status"])
         .where("id", "=", inserted.id as string)
         .executeTakeFirstOrThrow()
@@ -499,7 +499,7 @@ test(
       const workspaceRow = await db
         .insertInto("workspaces")
         .values({
-          owner_id: ownerId,
+          ownerId: ownerId,
           slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
           name: "test workspace",
         })
@@ -522,7 +522,7 @@ test(
         }
       )
       const inserted = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(initial)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -533,11 +533,11 @@ test(
       })
 
       const row = await db
-        .selectFrom("resource_access_bindings")
-        .select("subject_id")
+        .selectFrom("resourceAccessBindings")
+        .select("subjectId")
         .where("id", "=", inserted.id as string)
         .executeTakeFirstOrThrow()
-      const ref = await loadAccessSubject(db, row.subject_id as string)
+      const ref = await loadAccessSubject(db, row.subjectId as string)
       assert.deepEqual(ref, {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
         memberId: guestMemberId,
@@ -566,7 +566,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            workspace_id: workspaceId,
+            workspaceId: workspaceId,
             title: "conv A",
           })
           .returning("id")
@@ -577,7 +577,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            workspace_id: workspaceId,
+            workspaceId: workspaceId,
             title: "conv B",
           })
           .returning("id")
@@ -598,7 +598,7 @@ test(
         }
       )
       const inserted = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(initial)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -612,17 +612,17 @@ test(
         },
       })
       const afterMoveScope = await db
-        .selectFrom("resource_access_bindings as binding")
+        .selectFrom("resourceAccessBindings as binding")
         .innerJoin(
-          "access_subjects as scope_subj",
+          "accessSubjects as scope_subj",
           "scope_subj.id",
-          "binding.scope_subject_id"
+          "binding.scopeSubjectId"
         )
-        .select("scope_subj.conversation_id as conversation_id")
+        .select("scope_subj.conversationId as conversationId")
         .where("binding.id", "=", inserted.id as string)
         .executeTakeFirstOrThrow()
       assert.equal(
-        afterMoveScope.conversation_id,
+        afterMoveScope.conversationId,
         convB,
         "scope_subject_id must follow the new target's scope (convB)"
       )
@@ -633,12 +633,12 @@ test(
         newTarget: { subject: actorRef(grantedActorId) },
       })
       const afterUnscoped = await db
-        .selectFrom("resource_access_bindings")
-        .select("scope_subject_id")
+        .selectFrom("resourceAccessBindings")
+        .select("scopeSubjectId")
         .where("id", "=", inserted.id as string)
         .executeTakeFirstOrThrow()
       assert.equal(
-        afterUnscoped.scope_subject_id,
+        afterUnscoped.scopeSubjectId,
         null,
         "scope_subject_id must be cleared when the new target has no scope"
       )
@@ -662,7 +662,7 @@ test(
           target: { subject: workspaceRef(workspaceId) },
         }
       )
-      await db.insertInto("resource_access_bindings").values(values).execute()
+      await db.insertInto("resourceAccessBindings").values(values).execute()
       const result = await describeAutomationEventSourceAccessGrants(db, {
         resourceType: "automation_event_source",
         resourceId: actorId,
@@ -706,7 +706,7 @@ test(
           target: { subject: workspaceRef(workspaceId) },
         }
       )
-      await db.insertInto("resource_access_bindings").values(values).execute()
+      await db.insertInto("resourceAccessBindings").values(values).execute()
       const rows = await loadAutomationEventSourceAccessBindingRowsForSources(
         db,
         {
@@ -715,8 +715,8 @@ test(
         }
       )
       assert.equal(rows.length, 1)
-      assert.equal(rows[0].resource_id, actorId)
-      assert.equal((rows[0] as any).subject_kind, "workspace")
+      assert.equal(rows[0].resourceId, actorId)
+      assert.equal((rows[0] as any).subjectKind, "workspace")
     })
   }
 )
@@ -743,12 +743,12 @@ test(
             resourceId: aId,
             target: { subject: workspaceRef(wsId) },
           })
-        await db.insertInto("resource_access_bindings").values(values).execute()
+        await db.insertInto("resourceAccessBindings").values(values).execute()
       }
       const inserted = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select("id")
-        .where("automation_event_source_id", "=", actor1)
+        .where("automationEventSourceId", "=", actor1)
         .executeTakeFirstOrThrow()
       await revokeAutomationEventSourceAccessBinding(db, {
         bindingId: inserted.id as string,
@@ -761,7 +761,7 @@ test(
           workspaceId,
         })
       assert.equal(activeOnly.length, 1)
-      assert.equal(activeOnly[0].resource_id, actor2)
+      assert.equal(activeOnly[0].resourceId, actor2)
 
       const includingRevoked =
         await loadAutomationEventSourceAccessBindingRowsForSources(db, {
@@ -771,7 +771,7 @@ test(
           includeRevoked: true,
         })
       assert.equal(includingRevoked.length, 2)
-      const ids = includingRevoked.map((row) => row.resource_id).sort()
+      const ids = includingRevoked.map((row) => row.resourceId).sort()
       assert.deepEqual(ids, [actor1, actor2].sort())
     })
   }
@@ -793,7 +793,7 @@ test(
           target: { subject: workspaceRef(workspaceId) },
         }
       )
-      await db.insertInto("resource_access_bindings").values(values).execute()
+      await db.insertInto("resourceAccessBindings").values(values).execute()
       const rows = await loadAutomationEventSourceAccessBindingRowsForSource(
         db,
         {
@@ -803,7 +803,7 @@ test(
         }
       )
       assert.equal(rows.length, 1)
-      assert.equal(rows[0].resource_id, actorId)
+      assert.equal(rows[0].resourceId, actorId)
     })
   }
 )
@@ -827,7 +827,7 @@ test(
           resourceId: actorId,
           target: { subject: workspaceRef(workspaceId) },
         })
-      await db.insertInto("resource_access_bindings").values(values).execute()
+      await db.insertInto("resourceAccessBindings").values(values).execute()
       const after = await hasAnyAutomationEventSourceAccessBindingOn(db, {
         resourceType: "automation_event_source",
         resourceId: actorId,
@@ -854,7 +854,7 @@ test(
         }
       )
       const inserted = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -898,7 +898,7 @@ test(
         }
       )
       const inserted = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -964,7 +964,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            workspace_id: workspaceId,
+            workspaceId: workspaceId,
             title: "scope-vs-unscoped",
           })
           .returning("id")
@@ -980,7 +980,7 @@ test(
           target: { subject: actorRef(grantedActorId) },
         })
       const unscoped = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(unscopedValues)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -1040,7 +1040,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            workspace_id: workspaceId,
+            workspaceId: workspaceId,
             title: "conv A",
           })
           .returning("id")
@@ -1051,7 +1051,7 @@ test(
           .insertInto("conversations")
           .values({
             kind: "group",
-            workspace_id: workspaceId,
+            workspaceId: workspaceId,
             title: "conv B",
           })
           .returning("id")
@@ -1072,7 +1072,7 @@ test(
               scope: conversationRef(convId),
             },
           })
-        await db.insertInto("resource_access_bindings").values(values).execute()
+        await db.insertInto("resourceAccessBindings").values(values).execute()
       }
       await insertScoped(targetActorA, convA)
       await insertScoped(targetActorB, convB)
@@ -1125,7 +1125,7 @@ test(
         }
       )
       const inserted = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -1139,11 +1139,11 @@ test(
         }
       )
       const after = await db
-        .selectFrom("resource_access_bindings")
-        .select("conversation_type_mask_override")
+        .selectFrom("resourceAccessBindings")
+        .select("conversationTypeMaskOverride")
         .where("id", "=", inserted.id as string)
         .executeTakeFirstOrThrow()
-      assert.equal(after.conversation_type_mask_override, 7)
+      assert.equal(after.conversationTypeMaskOverride, 7)
 
       await updateAutomationEventSourceAccessGrantConversationTypeMaskOverride(
         db,
@@ -1153,11 +1153,11 @@ test(
         }
       )
       const cleared = await db
-        .selectFrom("resource_access_bindings")
-        .select("conversation_type_mask_override")
+        .selectFrom("resourceAccessBindings")
+        .select("conversationTypeMaskOverride")
         .where("id", "=", inserted.id as string)
         .executeTakeFirstOrThrow()
-      assert.equal(cleared.conversation_type_mask_override, null)
+      assert.equal(cleared.conversationTypeMaskOverride, null)
     })
   }
 )
@@ -1180,7 +1180,7 @@ test(
             target: { subject: workspaceRef(workspaceId) },
           })
         const inserted = await db
-          .insertInto("resource_access_bindings")
+          .insertInto("resourceAccessBindings")
           .values(values)
           .returning("id")
           .executeTakeFirstOrThrow()
@@ -1188,7 +1188,7 @@ test(
       }
       await revokeAutomationEventSourceAccessBindingsByIdsOn(db, ids)
       const rows = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select(["id", "status"])
         .where("id", "in", ids)
         .execute()
@@ -1197,7 +1197,7 @@ test(
 
       await revokeAutomationEventSourceAccessBindingsByIdsOn(db, ids)
       const stillRevoked = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select("status")
         .where("id", "in", ids)
         .execute()
@@ -1224,11 +1224,11 @@ test(
           target: { subject: workspaceRef(workspaceId) },
         }
       )
-      await db.insertInto("resource_access_bindings").values(values).execute()
+      await db.insertInto("resourceAccessBindings").values(values).execute()
       const before = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select("id")
-        .where("automation_event_source_id", "=", actorId)
+        .where("automationEventSourceId", "=", actorId)
         .where("status", "=", "active")
         .execute()
       assert.equal(before.length, 1)
@@ -1239,16 +1239,16 @@ test(
       })
       // Soft-delete world (design §7.4): the binding is REVOKED, not removed.
       const active = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select("id")
-        .where("automation_event_source_id", "=", actorId)
+        .where("automationEventSourceId", "=", actorId)
         .where("status", "=", "active")
         .execute()
       assert.equal(active.length, 0, "no active bindings remain")
       const revoked = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select(["id", "status"])
-        .where("automation_event_source_id", "=", actorId)
+        .where("automationEventSourceId", "=", actorId)
         .execute()
       assert.equal(revoked.length, 1, "the row is preserved")
       assert.equal(revoked[0]!.status, "revoked")
@@ -1264,7 +1264,7 @@ test(
       const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
       await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(
           await buildAutomationEventSourceAccessBindingInsertValues(db, {
             workspaceId,
@@ -1314,7 +1314,7 @@ test(
         workspaceId,
       })
       await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(
           await buildAutomationEventSourceAccessBindingInsertValues(db, {
             workspaceId,
@@ -1366,7 +1366,7 @@ test(
         }
       )
       const inserted = await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(values)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -1379,8 +1379,8 @@ test(
       })
       assert.ok(matchAll)
       assert.equal(matchAll!.id, inserted.id)
-      assert.equal(matchAll!.resource_id, actorId)
-      assert.equal((matchAll as any).subject_kind, "workspace")
+      assert.equal(matchAll!.resourceId, actorId)
+      assert.equal((matchAll as any).subjectKind, "workspace")
 
       const matchByType = await getAutomationEventSourceAccessBindingRowById(
         db,
@@ -1417,7 +1417,7 @@ async function insertWorkspaceWithOwner(
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: ownerId,
+      ownerId: ownerId,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "test workspace",
     })
@@ -1446,20 +1446,20 @@ test(
       )
       assert.ok(id, "returned id should be non-empty")
       const persisted = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select([
           "id",
-          "workspace_id",
-          "automation_event_source_id",
-          "subject_id",
+          "workspaceId",
+          "automationEventSourceId",
+          "subjectId",
           "source",
         ])
         .where("id", "=", id)
         .executeTakeFirstOrThrow()
-      assert.equal(persisted.workspace_id, workspaceId)
-      assert.equal(persisted.automation_event_source_id, actorId)
+      assert.equal(persisted.workspaceId, workspaceId)
+      assert.equal(persisted.automationEventSourceId, actorId)
       assert.equal(persisted.source, "manual")
-      assert.ok(persisted.subject_id, "subject_id must be populated")
+      assert.ok(persisted.subjectId, "subject_id must be populated")
     })
   }
 )
@@ -1480,14 +1480,14 @@ test(
           target: { subject: workspaceRef(workspaceId) },
         }
       )
-      assert.equal(row.workspace_id, workspaceId)
-      assert.equal(row.automation_event_source_id, actorId)
-      assert.equal((row as any).subject_kind, "workspace")
-      assert.equal((row as any).subject_workspace_id_via_join, workspaceId)
-      assert.ok(row.subject_id, "subject_id must be populated")
+      assert.equal(row.workspaceId, workspaceId)
+      assert.equal(row.automationEventSourceId, actorId)
+      assert.equal((row as any).subjectKind, "workspace")
+      assert.equal((row as any).subjectWorkspaceIdViaJoin, workspaceId)
+      assert.ok(row.subjectId, "subject_id must be populated")
 
       const persisted = await db
-        .selectFrom("resource_access_bindings")
+        .selectFrom("resourceAccessBindings")
         .select("id")
         .where("id", "=", row.id)
         .executeTakeFirstOrThrow()

@@ -131,23 +131,23 @@ type MemoryRow = {
 
 type MemorySpaceRow = {
   id: string
-  workspace_id: string
-  owner_subject_id: string
-  scope_subject_id: string | null
-  namespace_key: string
+  workspaceId: string
+  ownerSubjectId: string
+  scopeSubjectId: string | null
+  namespaceKey: string
 }
 
 type MemoryPartRow = {
-  memory_item_id: string
-  part_type: string
-  text_value?: string | null
-  ref_path?: string | null
-  ref_sha256?: string | null
-  json_value?: unknown
-  mime_type?: string | null
+  memoryItemId: string
+  partType: string
+  textValue?: string | null
+  refPath?: string | null
+  refSha256?: string | null
+  jsonValue?: unknown
+  mimeType?: string | null
   name?: string | null
   metadata?: Record<string, unknown> | string | null
-  size_bytes?: number | null
+  sizeBytes?: number | null
 }
 
 type SearchCandidateRow = MemoryRow & {
@@ -604,29 +604,29 @@ async function loadMemoryItemsFromRows(rows: MemoryRow[]) {
 
   const memoryIds = rows.map((row) => row.id)
   const partsResult = await db
-    .selectFrom("memory_item_parts as mip")
+    .selectFrom("memoryItemParts as mip")
     .select([
-      "mip.memory_item_id",
-      "mip.part_type",
-      "mip.text_value",
-      "mip.ref_path",
-      "mip.ref_sha256",
-      "mip.json_value",
-      "mip.mime_type",
+      "mip.memoryItemId",
+      "mip.partType",
+      "mip.textValue",
+      "mip.refPath",
+      "mip.refSha256",
+      "mip.jsonValue",
+      "mip.mimeType",
       "mip.name",
       "mip.metadata",
     ])
-    .where("mip.memory_item_id", "in", memoryIds)
-    .orderBy("mip.memory_item_id", "asc")
+    .where("mip.memoryItemId", "in", memoryIds)
+    .orderBy("mip.memoryItemId", "asc")
     .orderBy("mip.ordinal", "asc")
     .execute()
 
   const partsByMemoryId = new Map<string, MemoryPartRow[]>()
   for (const row of partsResult as MemoryPartRow[]) {
-    if (!partsByMemoryId.has(row.memory_item_id)) {
-      partsByMemoryId.set(row.memory_item_id, [])
+    if (!partsByMemoryId.has(row.memoryItemId)) {
+      partsByMemoryId.set(row.memoryItemId, [])
     }
-    partsByMemoryId.get(row.memory_item_id)!.push(row)
+    partsByMemoryId.get(row.memoryItemId)!.push(row)
   }
 
   return rows.map((row) =>
@@ -793,8 +793,8 @@ export async function validateMemorySpaceTuple(
   const scopeSubjectId = scope ? await safeUpsert(scope, "scope") : null
 
   const subjectRows = await db
-    .selectFrom("access_subjects")
-    .select(["id", "workspace_id", "kind"])
+    .selectFrom("accessSubjects")
+    .select(["id", "workspaceId", "kind"])
     .where(
       "id",
       "in",
@@ -807,8 +807,8 @@ export async function validateMemorySpaceTuple(
 
   if (
     !ownerRow ||
-    !ownerRow.workspace_id ||
-    ownerRow.workspace_id !== workspaceId
+    !ownerRow.workspaceId ||
+    ownerRow.workspaceId !== workspaceId
   ) {
     throw new MemoryError(
       `Memory space owner does not belong to workspace ${workspaceId}`,
@@ -817,7 +817,7 @@ export async function validateMemorySpaceTuple(
   }
   if (
     scopeRow &&
-    (!scopeRow.workspace_id || scopeRow.workspace_id !== workspaceId)
+    (!scopeRow.workspaceId || scopeRow.workspaceId !== workspaceId)
   ) {
     throw new MemoryError(
       `Memory space scope does not belong to workspace ${workspaceId}`,
@@ -844,14 +844,14 @@ export async function findExistingMemorySpace(input: {
   const namespaceKey =
     (input.namespaceKey || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
   let query = db
-    .selectFrom("memory_spaces")
+    .selectFrom("memorySpaces")
     .selectAll()
-    .where("workspace_id", "=", input.workspaceId)
-    .where("owner_subject_id", "=", input.ownerSubjectId)
-    .where("namespace_key", "=", namespaceKey)
+    .where("workspaceId", "=", input.workspaceId)
+    .where("ownerSubjectId", "=", input.ownerSubjectId)
+    .where("namespaceKey", "=", namespaceKey)
   query = input.scopeSubjectId
-    ? query.where("scope_subject_id", "=", input.scopeSubjectId)
-    : query.where("scope_subject_id", "is", null)
+    ? query.where("scopeSubjectId", "=", input.scopeSubjectId)
+    : query.where("scopeSubjectId", "is", null)
   const row = (await query.limit(1).executeTakeFirst()) as
     | MemorySpaceRow
     | undefined
@@ -995,22 +995,22 @@ async function insertMemoryParts(
   for (let ordinal = 0; ordinal < parts.length; ordinal += 1) {
     const part = parts[ordinal]
     await executor.executeQuery(
-      db.insertInto("memory_item_parts").values({
+      db.insertInto("memoryItemParts").values({
         id: uuidv4(),
-        memory_item_id: memoryItemId,
+        memoryItemId,
         ordinal,
-        part_type: part.type,
-        text_value: part.type === "text" ? part.text || "" : null,
-        ref_path: part.type === "file_ref" ? (part.refPath ?? null) : null,
-        ref_sha256: part.type === "file_ref" ? (part.refSha256 ?? null) : null,
-        json_value:
+        partType: part.type,
+        textValue: part.type === "text" ? part.text || "" : null,
+        refPath: part.type === "file_ref" ? (part.refPath ?? null) : null,
+        refSha256: part.type === "file_ref" ? (part.refSha256 ?? null) : null,
+        jsonValue:
           part.type === "json"
             ? sql`${JSON.stringify(part.json ?? {})}::jsonb`
             : null,
-        mime_type: part.mimeType || null,
+        mimeType: part.mimeType || null,
         name: part.name || null,
         metadata: (part.metadata ||
-          {}) as TableInsert<"memory_item_parts">["metadata"],
+          {}) as TableInsert<"memoryItemParts">["metadata"],
       })
     )
   }
@@ -1020,7 +1020,7 @@ async function maybeMarkSuperseded(executor: Executor, memoryItemId?: string) {
   if (!memoryItemId) return
   await executor.executeQuery(
     db
-      .updateTable("memory_items")
+      .updateTable("memoryItems")
       .set({
         state: "superseded",
       })
@@ -1467,20 +1467,20 @@ async function loadOwnerImplicitSpaceIds(
 ): Promise<string[]> {
   if (ctx.runtimeSubjectIds.length === 0) return []
   let query = db
-    .selectFrom("memory_spaces")
+    .selectFrom("memorySpaces")
     .select("id")
-    .where("workspace_id", "=", workspaceId)
-    .where("owner_subject_id", "in", [...ctx.runtimeSubjectIds])
+    .where("workspaceId", "=", workspaceId)
+    .where("ownerSubjectId", "in", [...ctx.runtimeSubjectIds])
   if (ctx.runtimeScopeSubjectIds.length > 0) {
     const scopes = [...ctx.runtimeScopeSubjectIds]
     query = query.where((eb) =>
       eb.or([
-        eb("scope_subject_id", "is", null),
-        eb("scope_subject_id", "in", scopes),
+        eb("scopeSubjectId", "is", null),
+        eb("scopeSubjectId", "in", scopes),
       ])
     )
   } else {
-    query = query.where("scope_subject_id", "is", null)
+    query = query.where("scopeSubjectId", "is", null)
   }
   const rows = await query.execute()
   return rows.map((row) => row.id)
@@ -1631,26 +1631,26 @@ async function recordMemoryRecallRun(params: {
 
     for (const result of params.results) {
       await trx.executeQuery(
-        db.insertInto("memory_recall_run_results").values({
+        db.insertInto("memoryRecallRunResults").values({
           id: uuidv4(),
-          run_id: runId,
-          memory_item_id: result.id,
-          matched_chunk_id: result.matchedChunkId || null,
+          runId,
+          memoryItemId: result.id,
+          matchedChunkId: result.matchedChunkId || null,
           rank: result.rank,
-          final_score: result.finalScore,
-          vector_score: result.vectorScore ?? null,
-          text_score: result.textScore ?? null,
-          similarity_score: result.similarityScore ?? null,
-          matched_terms: (result.matchedTerms ??
-            []) as TableInsert<"memory_recall_run_results">["matched_terms"],
-          recall_reason: result.recallReason || null,
+          finalScore: result.finalScore,
+          vectorScore: result.vectorScore ?? null,
+          textScore: result.textScore ?? null,
+          similarityScore: result.similarityScore ?? null,
+          matchedTerms: (result.matchedTerms ??
+            []) as TableInsert<"memoryRecallRunResults">["matchedTerms"],
+          recallReason: result.recallReason || null,
           metadata: {
             ownerKind: result.owner.kind,
             scopeKind: result.scope?.kind,
             namespaceKey: result.namespaceKey,
             category: result.category,
-          } as TableInsert<"memory_recall_run_results">["metadata"],
-          created_at: sql`NOW()`,
+          } as TableInsert<"memoryRecallRunResults">["metadata"],
+          createdAt: sql`NOW()`,
         })
       )
     }
@@ -1707,32 +1707,32 @@ export async function createMemory(
       namespaceKey: input.namespaceKey,
     })
     await trx.executeQuery(
-      db.insertInto("memory_items").values({
+      db.insertInto("memoryItems").values({
         id: memoryItemId,
-        workspace_id: workspaceId,
-        memory_space_id: space.id,
+        workspaceId: workspaceId,
+        memorySpaceId: space.id,
         category: input.category,
         state: input.state || input.status || "active",
         importance: input.importance ?? 0.5,
         confidence: input.confidence ?? 0.8,
         tags: input.tags || [],
-        text_digest: normalizedContent.textDigest,
-        search_text: normalizedContent.searchText,
-        index_status: "lexical_ready",
-        active_index_version: 0,
-        staged_index_version: null,
-        embedding_model: "",
-        embedding_dim: null,
-        indexed_at: null,
-        index_error: null,
-        source_kind: "manual",
-        source_item_id: input.sourceItemId || null,
-        source_tool_call_id: input.sourceToolCallId || null,
-        source_turn_id: input.sourceTurnId || null,
-        supersedes_item_id: input.supersedesMemoryId || null,
+        textDigest: normalizedContent.textDigest,
+        searchText: normalizedContent.searchText,
+        indexStatus: "lexical_ready",
+        activeIndexVersion: 0,
+        stagedIndexVersion: null,
+        embeddingModel: "",
+        embeddingDim: null,
+        indexedAt: null,
+        indexError: null,
+        sourceKind: "manual",
+        sourceItemId: input.sourceItemId || null,
+        sourceToolCallId: input.sourceToolCallId || null,
+        sourceTurnId: input.sourceTurnId || null,
+        supersedesItemId: input.supersedesMemoryId || null,
         metadata: (input.metadata ||
-          {}) as TableInsert<"memory_items">["metadata"],
-        created_at: sql`NOW()`,
+          {}) as TableInsert<"memoryItems">["metadata"],
+        createdAt: sql`NOW()`,
       })
     )
     await insertMemoryParts(trx, memoryItemId, normalizedContent.parts)
@@ -1803,37 +1803,37 @@ export async function updateMemory(
   await withDbTransaction(async (trx) => {
     await trx.executeQuery(
       db
-        .updateTable("memory_items")
+        .updateTable("memoryItems")
         .set({
           category: input.category || existing.category,
           state: input.state || input.status || existing.state,
           importance: input.importance ?? existing.importance,
           confidence: input.confidence ?? existing.confidence,
           tags: input.tags || existing.tags,
-          text_digest: normalizedContent.textDigest,
-          search_text: normalizedContent.searchText,
-          source_item_id:
+          textDigest: normalizedContent.textDigest,
+          searchText: normalizedContent.searchText,
+          sourceItemId:
             input.sourceItemId !== undefined
               ? input.sourceItemId
               : existing.sourceItemId || null,
-          source_tool_call_id:
+          sourceToolCallId:
             input.sourceToolCallId !== undefined
               ? input.sourceToolCallId
               : existing.sourceToolCallId || null,
-          source_turn_id:
+          sourceTurnId:
             input.sourceTurnId !== undefined
               ? input.sourceTurnId
               : existing.sourceTurnId || null,
-          supersedes_item_id:
+          supersedesItemId:
             input.supersedesMemoryId !== undefined
               ? input.supersedesMemoryId
               : existing.supersedesMemoryId || null,
           metadata: (input.metadata ||
             existing.metadata ||
-            {}) as TableInsert<"memory_items">["metadata"],
+            {}) as TableInsert<"memoryItems">["metadata"],
         })
         .where("id", "=", memoryId)
-        .where("workspace_id", "=", workspaceId)
+        .where("workspaceId", "=", workspaceId)
     )
 
     // Content set-replace: memory_item_parts is aggregate-internal detail; the
@@ -1864,11 +1864,11 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
     // as aggregate-internal detail until offline purge; hard delete is forbidden
     // by sd_reject_delete.
     const deleted = await trx
-      .updateTable("memory_items")
-      .set({ deleted_at: new Date() })
-      .where("workspace_id", "=", workspaceId)
+      .updateTable("memoryItems")
+      .set({ deletedAt: new Date() })
+      .where("workspaceId", "=", workspaceId)
       .where("id", "=", memoryId)
-      .where("deleted_at", "is", null)
+      .where("deletedAt", "is", null)
       .executeTakeFirst()
     if (!deleted.numUpdatedRows) {
       throw new MemoryError("Memory not found", 404)
@@ -2001,10 +2001,10 @@ export async function moveMemoryToSpace(
   // clean 404 instead of a silent 0-row UPDATE.
   await withDbTransaction(async (trx) => {
     const stillThere = await trx
-      .selectFrom("memory_items")
+      .selectFrom("memoryItems")
       .select("id")
       .where("id", "=", memoryId)
-      .where("workspace_id", "=", workspaceId)
+      .where("workspaceId", "=", workspaceId)
       .limit(1)
       .executeTakeFirst()
     if (!stillThere) {
@@ -2021,12 +2021,12 @@ export async function moveMemoryToSpace(
     }
     await trx.executeQuery(
       db
-        .updateTable("memory_items")
+        .updateTable("memoryItems")
         .set({
-          memory_space_id: targetSpace.id,
+          memorySpaceId: targetSpace.id,
         })
         .where("id", "=", memoryId)
-        .where("workspace_id", "=", workspaceId)
+        .where("workspaceId", "=", workspaceId)
     )
   })
   const moved = await getMemory(workspaceId, memoryId)

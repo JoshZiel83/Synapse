@@ -73,10 +73,10 @@ export async function resolveActorCapabilitySurface(
   }
   if (!resolved.workspaceMemberId && resolved.userId) {
     const member = await db
-      .selectFrom("workspace_members")
+      .selectFrom("workspaceMembers")
       .select("id")
-      .where("workspace_id", "=", resolved.workspaceId)
-      .where("user_id", "=", resolved.userId)
+      .where("workspaceId", "=", resolved.workspaceId)
+      .where("userId", "=", resolved.userId)
       .limit(1)
       .executeTakeFirst()
     if (member) {

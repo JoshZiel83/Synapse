@@ -18,8 +18,8 @@ import {
 export type AutomationEventSourceBindingResourceType = "automation_event_source"
 
 export type AutomationEventSourceBindingStorageRow = {
-  resource_type: AutomationEventSourceBindingResourceType
-  automation_event_source_id: string | null
+  resourceType: AutomationEventSourceBindingResourceType
+  automationEventSourceId: string | null
 }
 
 export type AutomationEventSourceBindingRelation =
@@ -33,45 +33,45 @@ export type AutomationEventSourceBindingRelation =
 export type AutomationEventSourceBindingRow =
   AutomationEventSourceBindingStorageRow & {
     id: string
-    workspace_id: string
-    resource_id: string
+    workspaceId: string
+    resourceId: string
     relation: AutomationEventSourceBindingRelation
-    subject_id: string | null
-    scope_subject_id: string | null
-    conversation_type_mask_override: number | null
+    subjectId: string | null
+    scopeSubjectId: string | null
+    conversationTypeMaskOverride: number | null
     status: "active" | "revoked"
     source: "manual" | "default_open" | "approval" | "system"
-    created_by_workspace_member_id: string | null
+    createdByWorkspaceMemberId: string | null
     reason: string | null
-    created_at: Date
-    revoked_at: Date | null
+    createdAt: Date
+    revokedAt: Date | null
   }
 
 export type AutomationEventSourceBindingJoinedRow =
   AutomationEventSourceBindingRow & {
-    subject_kind?: string | null
-    subject_workspace_id_via_join?: string | null
-    subject_workspace_member_id_via_join?: string | null
-    subject_actor_id_via_join?: string | null
-    subject_remote_agent_id_via_join?: string | null
-    subject_conversation_id_via_join?: string | null
-    scope_kind?: string | null
-    scope_workspace_id_via_join?: string | null
-    scope_conversation_id_via_join?: string | null
+    subjectKind?: string | null
+    subjectWorkspaceIdViaJoin?: string | null
+    subjectWorkspaceMemberIdViaJoin?: string | null
+    subjectActorIdViaJoin?: string | null
+    subjectRemoteAgentIdViaJoin?: string | null
+    subjectConversationIdViaJoin?: string | null
+    scopeKind?: string | null
+    scopeWorkspaceIdViaJoin?: string | null
+    scopeConversationIdViaJoin?: string | null
   }
 
 export function readAutomationEventSourceAccessBindingResourceId(
   row: Pick<
     AutomationEventSourceBindingStorageRow,
-    "resource_type" | "automation_event_source_id"
+    "resourceType" | "automationEventSourceId"
   >
 ) {
-  if (!row.automation_event_source_id) {
+  if (!row.automationEventSourceId) {
     throw new Error(
       "automation_event_source_id is required for automation event source bindings"
     )
   }
-  return row.automation_event_source_id
+  return row.automationEventSourceId
 }
 
 export function buildAutomationEventSourceAccessBindingRef(input: {
@@ -79,8 +79,8 @@ export function buildAutomationEventSourceAccessBindingRef(input: {
   resourceId: string
 }): AutomationEventSourceBindingStorageRow {
   return {
-    resource_type: input.resourceType,
-    automation_event_source_id: input.resourceId,
+    resourceType: input.resourceType,
+    automationEventSourceId: input.resourceId,
   }
 }
 
@@ -110,24 +110,24 @@ export function relationForAutomationEventSourceAccessBindingTarget(
 
 export function normalizeAutomationEventSourceAccessBindingRow<
   T extends AutomationEventSourceBindingStorageRow & {
-    subject_id?: string | null
-    scope_subject_id?: string | null
-    subject_kind?: string | null
-    subject_workspace_id_via_join?: string | null
-    subject_workspace_member_id_via_join?: string | null
-    subject_actor_id_via_join?: string | null
-    subject_remote_agent_id_via_join?: string | null
-    subject_conversation_id_via_join?: string | null
-    scope_kind?: string | null
-    scope_workspace_id_via_join?: string | null
-    scope_conversation_id_via_join?: string | null
+    subjectId?: string | null
+    scopeSubjectId?: string | null
+    subjectKind?: string | null
+    subjectWorkspaceIdViaJoin?: string | null
+    subjectWorkspaceMemberIdViaJoin?: string | null
+    subjectActorIdViaJoin?: string | null
+    subjectRemoteAgentIdViaJoin?: string | null
+    subjectConversationIdViaJoin?: string | null
+    scopeKind?: string | null
+    scopeWorkspaceIdViaJoin?: string | null
+    scopeConversationIdViaJoin?: string | null
   },
 >(
   row: T
-): T & { resource_id: string; relation: AutomationEventSourceBindingRelation } {
-  // Derive a relation string from subject kind; scope lives in scope_subject_id.
+): T & { resourceId: string; relation: AutomationEventSourceBindingRelation } {
+  // Derive a relation string from subject kind; scope lives in scopeSubjectId.
   let relation: AutomationEventSourceBindingRelation
-  switch (row.subject_kind) {
+  switch (row.subjectKind) {
     case SUBJECT_KIND.WORKSPACE:
       relation = "use_workspace"
       break
@@ -148,7 +148,7 @@ export function normalizeAutomationEventSourceAccessBindingRow<
   }
   return {
     ...row,
-    resource_id: readAutomationEventSourceAccessBindingResourceId(row),
+    resourceId: readAutomationEventSourceAccessBindingResourceId(row),
     relation,
   }
 }
@@ -188,15 +188,15 @@ export function accessGrantTargetScopeRef(
 }
 
 export function readAutomationEventSourceAccessBindingTarget(row: {
-  subject_kind?: string | null
-  subject_workspace_id_via_join?: string | null
-  subject_workspace_member_id_via_join?: string | null
-  subject_actor_id_via_join?: string | null
-  subject_remote_agent_id_via_join?: string | null
-  subject_conversation_id_via_join?: string | null
-  scope_kind?: string | null
-  scope_workspace_id_via_join?: string | null
-  scope_conversation_id_via_join?: string | null
+  subjectKind?: string | null
+  subjectWorkspaceIdViaJoin?: string | null
+  subjectWorkspaceMemberIdViaJoin?: string | null
+  subjectActorIdViaJoin?: string | null
+  subjectRemoteAgentIdViaJoin?: string | null
+  subjectConversationIdViaJoin?: string | null
+  scopeKind?: string | null
+  scopeWorkspaceIdViaJoin?: string | null
+  scopeConversationIdViaJoin?: string | null
 }): AutomationEventSourceBindingTarget {
   const subject = subjectRefFromRow(row)
   const scope = scopeSubjectRefFromRow(row)
@@ -204,95 +204,92 @@ export function readAutomationEventSourceAccessBindingTarget(row: {
 }
 
 function subjectRefFromRow(row: {
-  subject_kind?: string | null
-  subject_workspace_id_via_join?: string | null
-  subject_workspace_member_id_via_join?: string | null
-  subject_actor_id_via_join?: string | null
-  subject_remote_agent_id_via_join?: string | null
-  subject_conversation_id_via_join?: string | null
+  subjectKind?: string | null
+  subjectWorkspaceIdViaJoin?: string | null
+  subjectWorkspaceMemberIdViaJoin?: string | null
+  subjectActorIdViaJoin?: string | null
+  subjectRemoteAgentIdViaJoin?: string | null
+  subjectConversationIdViaJoin?: string | null
 }): SubjectRef {
-  switch (row.subject_kind) {
+  switch (row.subjectKind) {
     case "workspace":
-      if (!row.subject_workspace_id_via_join)
+      if (!row.subjectWorkspaceIdViaJoin)
         throw new Error("workspace subject missing workspace_id")
       return {
         kind: SUBJECT_KIND.WORKSPACE,
-        workspaceId: row.subject_workspace_id_via_join,
+        workspaceId: row.subjectWorkspaceIdViaJoin,
       }
     case "workspace_member":
-      if (!row.subject_workspace_member_id_via_join)
+      if (!row.subjectWorkspaceMemberIdViaJoin)
         throw new Error("workspace_member subject missing workspace_member_id")
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: row.subject_workspace_member_id_via_join,
+        memberId: row.subjectWorkspaceMemberIdViaJoin,
       }
     case "actor":
-      if (!row.subject_actor_id_via_join)
+      if (!row.subjectActorIdViaJoin)
         throw new Error("actor subject missing actor_id")
       return {
         kind: SUBJECT_KIND.ACTOR,
-        actorId: row.subject_actor_id_via_join,
+        actorId: row.subjectActorIdViaJoin,
       }
     case "remote_agent":
-      if (!row.subject_remote_agent_id_via_join)
+      if (!row.subjectRemoteAgentIdViaJoin)
         throw new Error("remote_agent subject missing remote_agent_id")
-      return remoteAgentRef(row.subject_remote_agent_id_via_join)
+      return remoteAgentRef(row.subjectRemoteAgentIdViaJoin)
     case "conversation":
-      if (!row.subject_conversation_id_via_join)
+      if (!row.subjectConversationIdViaJoin)
         throw new Error("conversation subject missing conversation_id")
       return {
         kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: row.subject_conversation_id_via_join,
+        conversationId: row.subjectConversationIdViaJoin,
       }
     default:
       throw new Error(
-        `Unsupported subject_kind for scoped-subject decode: ${String(row.subject_kind)}`
+        `Unsupported subject_kind for scoped-subject decode: ${String(row.subjectKind)}`
       )
   }
 }
 
 function scopeSubjectRefFromRow(row: {
-  scope_kind?: string | null
-  scope_workspace_id_via_join?: string | null
-  scope_conversation_id_via_join?: string | null
+  scopeKind?: string | null
+  scopeWorkspaceIdViaJoin?: string | null
+  scopeConversationIdViaJoin?: string | null
 }): SubjectRef | undefined {
-  if (!row.scope_kind) return undefined
-  switch (row.scope_kind) {
+  if (!row.scopeKind) return undefined
+  switch (row.scopeKind) {
     case "workspace":
-      if (!row.scope_workspace_id_via_join)
+      if (!row.scopeWorkspaceIdViaJoin)
         throw new Error("scope workspace subject missing workspace_id")
       return {
         kind: SUBJECT_KIND.WORKSPACE,
-        workspaceId: row.scope_workspace_id_via_join,
+        workspaceId: row.scopeWorkspaceIdViaJoin,
       }
     case "conversation":
-      if (!row.scope_conversation_id_via_join)
+      if (!row.scopeConversationIdViaJoin)
         throw new Error("scope conversation subject missing conversation_id")
       return {
         kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: row.scope_conversation_id_via_join,
+        conversationId: row.scopeConversationIdViaJoin,
       }
     default:
       throw new Error(
-        `Unsupported scope subject kind: ${String(row.scope_kind)}`
+        `Unsupported scope subject kind: ${String(row.scopeKind)}`
       )
   }
 }
 
 export function automationEventSourceAccessBindingHasTarget(
-  row: Pick<
-    AutomationEventSourceBindingRow,
-    "subject_id" | "scope_subject_id"
-  > & {
-    subject_kind?: string | null
-    subject_workspace_id_via_join?: string | null
-    subject_workspace_member_id_via_join?: string | null
-    subject_actor_id_via_join?: string | null
-    subject_remote_agent_id_via_join?: string | null
-    subject_conversation_id_via_join?: string | null
-    scope_kind?: string | null
-    scope_workspace_id_via_join?: string | null
-    scope_conversation_id_via_join?: string | null
+  row: Pick<AutomationEventSourceBindingRow, "subjectId" | "scopeSubjectId"> & {
+    subjectKind?: string | null
+    subjectWorkspaceIdViaJoin?: string | null
+    subjectWorkspaceMemberIdViaJoin?: string | null
+    subjectActorIdViaJoin?: string | null
+    subjectRemoteAgentIdViaJoin?: string | null
+    subjectConversationIdViaJoin?: string | null
+    scopeKind?: string | null
+    scopeWorkspaceIdViaJoin?: string | null
+    scopeConversationIdViaJoin?: string | null
   },
   target: AutomationEventSourceBindingTarget
 ) {
@@ -460,16 +457,16 @@ export function mapAutomationEventSourceAccessBindingToGrant(
 
   return {
     id: row.id,
-    resourceId: row.resource_id,
-    workspaceId: row.workspace_id || "",
+    resourceId: row.resourceId,
+    workspaceId: row.workspaceId || "",
     target: capabilityTarget,
     status: row.status,
-    grantedByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
+    grantedByWorkspaceMemberId: row.createdByWorkspaceMemberId || undefined,
     reason: row.reason || fallbackReason,
-    conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
+    conversationTypeMaskOverride: row.conversationTypeMaskOverride ?? null,
     effectiveConversationTypeMask: options?.effectiveConversationTypeMask,
-    createdAt: serializeInstant(row.created_at),
-    revokedAt: serializeOptionalInstant(row.revoked_at),
+    createdAt: serializeInstant(row.createdAt),
+    revokedAt: serializeOptionalInstant(row.revokedAt),
   }
 }
 

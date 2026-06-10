@@ -23,14 +23,14 @@ export async function loadTransportEmojiReactions(input: {
   externalMessageId: string
 }): Promise<Record<string, string>> {
   const row = await db
-    .selectFrom("transport_message_links")
-    .select("external_emoji_reactions")
-    .where("transport_account_id", "=", input.transportAccountId)
-    .where("external_message_id", "=", input.externalMessageId)
+    .selectFrom("transportMessageLinks")
+    .select("externalEmojiReactions")
+    .where("transportAccountId", "=", input.transportAccountId)
+    .where("externalMessageId", "=", input.externalMessageId)
     .where("direction", "=", "inbound")
     .limit(1)
     .executeTakeFirst()
-  const raw = row?.external_emoji_reactions
+  const raw = row?.externalEmojiReactions
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
@@ -50,12 +50,12 @@ export async function saveTransportEmojiReactions(input: {
   reactionIdsByEmoji: Record<string, string>
 }): Promise<void> {
   await db
-    .updateTable("transport_message_links")
+    .updateTable("transportMessageLinks")
     .set({
-      external_emoji_reactions: sql`${JSON.stringify(input.reactionIdsByEmoji)}::jsonb`,
+      externalEmojiReactions: sql`${JSON.stringify(input.reactionIdsByEmoji)}::jsonb`,
     })
-    .where("transport_account_id", "=", input.transportAccountId)
-    .where("external_message_id", "=", input.externalMessageId)
+    .where("transportAccountId", "=", input.transportAccountId)
+    .where("externalMessageId", "=", input.externalMessageId)
     .where("direction", "=", "inbound")
     .execute()
 }
@@ -71,12 +71,12 @@ export async function findExternalMessageIdForItem(input: {
   transportEndpointId: string
 }): Promise<string | null> {
   const row = await db
-    .selectFrom("transport_message_links")
-    .select(["external_message_id"])
-    .where("item_id", "=", input.itemId)
-    .where("transport_endpoint_id", "=", input.transportEndpointId)
+    .selectFrom("transportMessageLinks")
+    .select(["externalMessageId"])
+    .where("itemId", "=", input.itemId)
+    .where("transportEndpointId", "=", input.transportEndpointId)
     .where("direction", "=", "inbound")
     .limit(1)
     .executeTakeFirst()
-  return row?.external_message_id || null
+  return row?.externalMessageId || null
 }

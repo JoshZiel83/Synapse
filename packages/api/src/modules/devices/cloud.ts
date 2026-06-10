@@ -47,19 +47,18 @@ export async function createCloudDevicePairing(
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
 
   await db
-    .insertInto("device_pairing_sessions")
+    .insertInto("devicePairingSessions")
     .values({
       id: sessionId,
-      workspace_id: input.workspaceId,
-      requested_by_workspace_member_id:
-        input.requestedByWorkspaceMemberId ?? null,
-      device_id: null,
+      workspaceId: input.workspaceId,
+      requestedByWorkspaceMemberId: input.requestedByWorkspaceMemberId ?? null,
+      deviceId: null,
       mode: "cloud_bootstrap",
-      server_base_url: "",
-      requested_title: input.title,
-      bootstrap_token_hash: bootstrapTokenHash,
-      pairing_code: null,
-      expires_at: expiresAt,
+      serverBaseUrl: "",
+      requestedTitle: input.title,
+      bootstrapTokenHash: bootstrapTokenHash,
+      pairingCode: null,
+      expiresAt: expiresAt,
       status: "pending",
       context: sql`${JSON.stringify({
         pending_device_id: pendingDeviceId,
@@ -110,25 +109,25 @@ export async function consumeCloudBootstrap(
     // session is still pending + matching mode + not expired. Two concurrent
     // sandbox boots can no longer both succeed and double-insert a device.
     const claimedRows = await trx
-      .updateTable("device_pairing_sessions")
+      .updateTable("devicePairingSessions")
       .set({
         status: "consumed",
-        confirmed_at: sql`NOW()`,
-        consumed_at: sql`NOW()`,
+        confirmedAt: sql`NOW()`,
+        consumedAt: sql`NOW()`,
       } as never)
-      .where("bootstrap_token_hash", "=", tokenHash)
+      .where("bootstrapTokenHash", "=", tokenHash)
       .where("status", "=", "pending")
       .where("mode", "=", "cloud_bootstrap")
-      .where("expires_at", ">", sql<Date>`NOW()`)
+      .where("expiresAt", ">", sql<Date>`NOW()`)
       .returningAll()
       .execute()
     const session = claimedRows[0]
     if (!session) {
       // Diagnose which precondition failed for a sharper error code.
       const existing = await trx
-        .selectFrom("device_pairing_sessions")
+        .selectFrom("devicePairingSessions")
         .selectAll()
-        .where("bootstrap_token_hash", "=", tokenHash)
+        .where("bootstrapTokenHash", "=", tokenHash)
         .where("mode", "=", "cloud_bootstrap")
         .executeTakeFirst()
       if (!existing) {
@@ -146,7 +145,7 @@ export async function consumeCloudBootstrap(
         })
       }
       const existingExpiresAt = new Date(
-        existing.expires_at as unknown as string
+        existing.expiresAt as unknown as string
       ).getTime()
       if (
         Number.isFinite(existingExpiresAt) &&
@@ -189,50 +188,49 @@ export async function consumeCloudBootstrap(
       .insertInto("devices")
       .values({
         id: pendingDeviceId,
-        workspace_id: session.workspace_id as string,
-        owner_workspace_member_id:
-          session.requested_by_workspace_member_id ?? null,
-        title: (session.requested_title as string | null) ?? "Cloud Device",
+        workspaceId: session.workspaceId as string,
+        ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
+        title: (session.requestedTitle as string | null) ?? "Cloud Device",
         description: null,
-        host_kind: "cloud",
-        host_provider: hostProvider,
-        device_type: "cloud_sandbox",
+        hostKind: "cloud",
+        hostProvider: hostProvider,
+        deviceType: "cloud_sandbox",
         platform: input.platform ?? "linux",
         arch: input.arch ?? "x64",
-        public_key: input.devicePubkey,
-        public_key_fingerprint: pubkeyFingerprint,
-        trust_status: "trusted",
+        publicKey: input.devicePubkey,
+        publicKeyFingerprint: pubkeyFingerprint,
+        trustStatus: "trusted",
       } as never)
       .execute()
 
     const serviceId = randomUUID()
     const serviceKeyId = randomUUID()
     await trx
-      .insertInto("device_services")
+      .insertInto("deviceServices")
       .values({
         id: serviceId,
-        device_id: pendingDeviceId,
-        service_kind: "device_runtime",
+        deviceId: pendingDeviceId,
+        serviceKind: "device_runtime",
         version: input.clientVersion ?? null,
         status: "starting",
         metadata: sql`'{}'::jsonb`,
       } as never)
       .execute()
     await trx
-      .insertInto("device_service_keys")
+      .insertInto("deviceServiceKeys")
       .values({
         id: serviceKeyId,
-        service_id: serviceId,
+        serviceId: serviceId,
         pubkey: input.servicePubkey,
-        pubkey_fingerprint: serviceFingerprint,
+        pubkeyFingerprint: serviceFingerprint,
       } as never)
       .execute()
     // Atomic UPDATE above already flipped status/timestamps. Just backfill
     // the device_id FK now that the device row exists.
     await trx
-      .updateTable("device_pairing_sessions")
+      .updateTable("devicePairingSessions")
       .set({
-        device_id: pendingDeviceId,
+        deviceId: pendingDeviceId,
       } as never)
       .where("id", "=", session.id as string)
       .execute()

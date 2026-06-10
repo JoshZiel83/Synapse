@@ -127,8 +127,8 @@ export async function assertNoDeviceToolRevisionDrift(
   expectedRevisionId: string
 ): Promise<void> {
   const tool = await dbOrTrx
-    .selectFrom("device_tools")
-    .select(["latest_revision_id"])
+    .selectFrom("deviceTools")
+    .select(["latestRevisionId"])
     .where("id", "=", toolId)
     .executeTakeFirst()
   if (!tool) {
@@ -136,9 +136,9 @@ export async function assertNoDeviceToolRevisionDrift(
       `device_tool ${toolId} not found (catalog may have been re-synced and removed the tool)`
     )
   }
-  if ((tool.latest_revision_id as string | null) !== expectedRevisionId) {
+  if ((tool.latestRevisionId as string | null) !== expectedRevisionId) {
     throw new RevisionDriftError(
-      `device_tool ${toolId} revision drifted: envelope expected ${expectedRevisionId}, current latest is ${tool.latest_revision_id ?? "null"}`
+      `device_tool ${toolId} revision drifted: envelope expected ${expectedRevisionId}, current latest is ${tool.latestRevisionId ?? "null"}`
     )
   }
 }
@@ -162,53 +162,53 @@ export async function beginDeviceOperationOn(
   const operationId = input.envelope.operation_id
   const attemptId = input.envelope.attempt_id
   await trx
-    .insertInto("device_operations")
+    .insertInto("deviceOperations")
     .values({
       id: operationId,
-      workspace_id: input.workspaceId,
-      conversation_id: input.conversationId,
-      principal_kind: input.principalKind,
-      principal_subject_id: input.principalSubjectId,
-      initiated_by_workspace_member_id: input.initiatedByWorkspaceMemberId,
-      initiated_by_session_id: input.initiatedBySessionId,
-      device_id: input.deviceId,
-      device_exposure_id: input.envelope.device_exposure_id,
-      device_capability_id: input.envelope.device_capability_id,
-      catalog_revision_id: await getCatalogRevisionForToolRevision(
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      principalKind: input.principalKind,
+      principalSubjectId: input.principalSubjectId,
+      initiatedByWorkspaceMemberId: input.initiatedByWorkspaceMemberId,
+      initiatedBySessionId: input.initiatedBySessionId,
+      deviceId: input.deviceId,
+      deviceExposureId: input.envelope.device_exposure_id,
+      deviceCapabilityId: input.envelope.device_capability_id,
+      catalogRevisionId: await getCatalogRevisionForToolRevision(
         trx,
         input.envelope.device_tool_revision_id
       ),
-      tool_id: input.envelope.device_tool_id,
-      tool_revision_id: input.envelope.device_tool_revision_id,
-      visible_tool_name: input.toolName,
-      task_mode: input.envelope.task_mode,
+      toolId: input.envelope.device_tool_id,
+      toolRevisionId: input.envelope.device_tool_revision_id,
+      visibleToolName: input.toolName,
+      taskMode: input.envelope.task_mode,
       status: "dispatched",
-      input_payload: sql`${JSON.stringify(input.args)}::jsonb`,
-      authorization_payload: sql`${JSON.stringify(
+      inputPayload: sql`${JSON.stringify(input.args)}::jsonb`,
+      authorizationPayload: sql`${JSON.stringify(
         input.envelope.runtime_authorization ?? {}
       )}::jsonb`,
-      input_hash: input.envelope.input_hash,
-      expires_at: parseInstantString(input.envelope.expires_at),
+      inputHash: input.envelope.input_hash,
+      expiresAt: parseInstantString(input.envelope.expires_at),
     })
     .execute()
 
   await trx
-    .insertInto("device_operation_attempts")
+    .insertInto("deviceOperationAttempts")
     .values({
       id: attemptId,
-      operation_id: operationId,
-      attempt_seq: 1n,
+      operationId: operationId,
+      attemptSeq: 1n,
       // Schema's device_operation_attempts_transport enum is
       // {mcp_http, control_plane_task}. The MCP-over-frp path is
       // mcp_http — control_plane_task is reserved for the async
       // task path (PR follow-up).
       transport: "mcp_http",
-      device_service_id: input.deviceServiceId,
-      tunnel_internal_url: input.tunnelInternalUrl,
-      mcp_request_id: attemptId,
-      envelope_signature_kid: input.envelope.signature_kid,
+      deviceServiceId: input.deviceServiceId,
+      tunnelInternalUrl: input.tunnelInternalUrl,
+      mcpRequestId: attemptId,
+      envelopeSignatureKid: input.envelope.signature_kid,
       status: "issued",
-      started_at: sql`NOW()`,
+      startedAt: sql`NOW()`,
     })
     .execute()
 
@@ -257,11 +257,11 @@ export async function completeDeviceOperation(
 ): Promise<void> {
   await db.transaction().execute(async (trx) => {
     await trx
-      .updateTable("device_operation_attempts")
+      .updateTable("deviceOperationAttempts")
       .set({
         status: input.ok ? "acknowledged" : "failed",
-        response_at: sql`NOW()`,
-        acknowledged_at: input.ok ? sql`NOW()` : null,
+        responseAt: sql`NOW()`,
+        acknowledgedAt: input.ok ? sql`NOW()` : null,
         metadata: input.error
           ? sql`${JSON.stringify({ error: input.error })}::jsonb`
           : sql`'{}'::jsonb`,
@@ -269,15 +269,15 @@ export async function completeDeviceOperation(
       .where("id", "=", input.attemptId)
       .execute()
     await trx
-      .updateTable("device_operations")
+      .updateTable("deviceOperations")
       .set({
         // Schema's device_operations_status terminal enum value is
         // 'succeeded' (not 'completed'). Failed dispatches use 'failed'.
         status: input.ok ? "succeeded" : "failed",
-        result_hash: input.resultHash ?? null,
-        error_code: input.error?.code ?? null,
-        error_message: input.error?.message ?? null,
-        completed_at: sql`NOW()`,
+        resultHash: input.resultHash ?? null,
+        errorCode: input.error?.code ?? null,
+        errorMessage: input.error?.message ?? null,
+        completedAt: sql`NOW()`,
       })
       .where("id", "=", input.operationId)
       .execute()
@@ -293,8 +293,8 @@ async function getCatalogRevisionForToolRevision(
   toolRevisionId: string
 ): Promise<string> {
   const row = await trx
-    .selectFrom("device_tool_revisions")
-    .select(["catalog_revision_id"])
+    .selectFrom("deviceToolRevisions")
+    .select(["catalogRevisionId"])
     .where("id", "=", toolRevisionId)
     .executeTakeFirst()
   if (!row) {
@@ -302,7 +302,7 @@ async function getCatalogRevisionForToolRevision(
       `device_tool_revision ${toolRevisionId} not found — envelope is stale`
     )
   }
-  return row.catalog_revision_id as string
+  return row.catalogRevisionId as string
 }
 
 export class RevisionDriftError extends Error {

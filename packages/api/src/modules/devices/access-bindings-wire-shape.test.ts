@@ -227,7 +227,10 @@ test(
         })
         .returning("id")
         .executeTakeFirstOrThrow()
-      const remoteAgentId = rid()
+      // workspace_apps.id / remote_agents.id are UUID columns, so the shared
+      // primary key must be a real UUID — rid() (base36) is only valid for the
+      // text email/slug/display_name fields below.
+      const remoteAgentId = crypto.randomUUID()
       await db
         .insertInto("workspace_apps")
         .values({
@@ -272,21 +275,24 @@ test(
         resolved.scopeSubjectId,
         "resolver returned no scopeSubjectId — the scope-narrowed branch is missing"
       )
-      // Sanity-check the subjects are the right kinds.
+      // Sanity-check the subjects are the right kinds. These selects run
+      // through the CamelCasePlugin-enabled Kysely instance, so columns are
+      // referenced + read in camelCase (db is typed Kysely<any> here, which
+      // hid the casing from the compiler).
       const subjectRow = await db
         .selectFrom("access_subjects")
-        .select(["kind", "remote_agent_id"])
+        .select(["kind", "remoteAgentId"])
         .where("id", "=", resolved.subjectId)
         .executeTakeFirstOrThrow()
       assert.equal(subjectRow.kind, "remote_agent")
-      assert.equal(subjectRow.remote_agent_id, agent.id)
+      assert.equal(subjectRow.remoteAgentId, agent.id)
       const scopeRow = await db
         .selectFrom("access_subjects")
-        .select(["kind", "conversation_id"])
+        .select(["kind", "conversationId"])
         .where("id", "=", resolved.scopeSubjectId as string)
         .executeTakeFirstOrThrow()
       assert.equal(scopeRow.kind, "conversation")
-      assert.equal(scopeRow.conversation_id, conv.id)
+      assert.equal(scopeRow.conversationId, conv.id)
     })
   }
 )

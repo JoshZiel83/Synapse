@@ -51,41 +51,41 @@ type WorkspaceViewRow = Pick<
   | "name"
   | "slug"
   | "description"
-  | "owner_id"
-  | "is_trusted"
-  | "created_at"
-  | "updated_at"
+  | "ownerId"
+  | "isTrusted"
+  | "createdAt"
+  | "updatedAt"
 >
 
 type WorkspaceMemberViewRow = Pick<
-  TableRow<"workspace_members">,
-  "id" | "workspace_id" | "user_id" | "trust_level" | "joined_at"
+  TableRow<"workspaceMembers">,
+  "id" | "workspaceId" | "userId" | "trustLevel" | "joinedAt"
 > & {
-  owner_id?: string | null
-  access_keys?: string[] | null
+  ownerId?: string | null
+  accessKeys?: string[] | null
 }
 
 type WorkspaceChiefActorPreferenceRow = {
-  workspace_id: string
-  workspace_member_id: string
-  chief_actor_id: string | null
-  created_at: Date
-  updated_at: Date
-  chief_actor_display_name: string | null
-  chief_actor_role: string | null
-  chief_actor_title: string | null
-  chief_actor_avatar_file_id: string | null
+  workspaceId: string
+  workspaceMemberId: string
+  chiefActorId: string | null
+  createdAt: Date
+  updatedAt: Date
+  chiefActorDisplayName: string | null
+  chiefActorRole: string | null
+  chiefActorTitle: string | null
+  chiefActorAvatarFileId: string | null
 }
 
 function deriveWorkspaceTrustLevel(row: {
-  owner_id?: string | null
-  user_id?: string | null
-  trust_level?: string | null
+  ownerId?: string | null
+  userId?: string | null
+  trustLevel?: string | null
 }) {
-  if (row.owner_id && row.user_id && row.owner_id === row.user_id) {
+  if (row.ownerId && row.userId && row.ownerId === row.userId) {
     return "owner"
   }
-  return row.trust_level ?? null
+  return row.trustLevel ?? null
 }
 
 async function getWorkspaceMemberRowByUserId(
@@ -94,10 +94,10 @@ async function getWorkspaceMemberRowByUserId(
 ) {
   return (
     db
-      .selectFrom("workspace_members")
-      .select(["id", "workspace_id", "user_id", "trust_level", "joined_at"])
-      .where("workspace_id", "=", workspaceId)
-      .where("user_id", "=", userId)
+      .selectFrom("workspaceMembers")
+      .select(["id", "workspaceId", "userId", "trustLevel", "joinedAt"])
+      .where("workspaceId", "=", workspaceId)
+      .where("userId", "=", userId)
       // Soft delete (§8.4): resolve only active memberships.
       .where("status", "=", "active")
       .limit(1)
@@ -118,8 +118,8 @@ async function requireWorkspaceMemberRowByUserId(
 
 async function getWorkspaceMemberRowById(workspaceMemberId: string) {
   return db
-    .selectFrom("workspace_members")
-    .select(["id", "workspace_id", "user_id", "trust_level", "joined_at"])
+    .selectFrom("workspaceMembers")
+    .select(["id", "workspaceId", "userId", "trustLevel", "joinedAt"])
     .where("id", "=", workspaceMemberId)
     .limit(1)
     .executeTakeFirst()
@@ -171,23 +171,23 @@ async function findOfficialChiefActorId(
 ) {
   const result = await executor
     .selectFrom("actors as a")
-    .innerJoin("workspace_apps as app", "app.id", "a.id")
-    .leftJoin("actor_source_refs as source_ref", "source_ref.actor_id", "a.id")
+    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .leftJoin("actorSourceRefs as source_ref", "source_ref.actorId", "a.id")
     .leftJoin(
-      "catalog_items as item",
+      "catalogItems as item",
       "item.id",
-      "source_ref.source_catalog_item_id"
+      "source_ref.sourceCatalogItemId"
     )
     .select("a.id")
-    .where("app.workspace_id", "=", workspaceId)
-    .where("app.deleted_at", "is", null)
+    .where("app.workspaceId", "=", workspaceId)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "=", "active")
     .where((eb) =>
       eb.or([
         sql<boolean>`a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb`,
         eb.and([
-          eb("item.workspace_id", "is", null),
-          eb("item.item_kind", "=", "actor_template"),
+          eb("item.workspaceId", "is", null),
+          eb("item.itemKind", "=", "actor_template"),
           eb("item.slug", "=", DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG),
         ]),
       ])
@@ -195,7 +195,7 @@ async function findOfficialChiefActorId(
     .orderBy(
       sql`case when a.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb then 0 else 1 end`
     )
-    .orderBy("a.created_at", "asc")
+    .orderBy("a.createdAt", "asc")
     .limit(1)
     .executeTakeFirst()
 
@@ -218,15 +218,15 @@ export async function assignOfficialChiefActorPreference(
   }
 
   await executor
-    .insertInto("workspace_member_preferences")
+    .insertInto("workspaceMemberPreferences")
     .values({
-      workspace_member_id: workspaceMemberId,
-      chief_actor_id: chiefActorId,
-      created_at: sql`NOW()`,
+      workspaceMemberId: workspaceMemberId,
+      chiefActorId: chiefActorId,
+      createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
-      oc.column("workspace_member_id").doUpdateSet({
-        chief_actor_id: chiefActorId,
+      oc.column("workspaceMemberId").doUpdateSet({
+        chiefActorId: chiefActorId,
       })
     )
     .execute()
@@ -243,13 +243,13 @@ function parseStoredActorDocs(value: unknown) {
 }
 
 function isOfficialChiefTemplate(row: {
-  package_slug: string
-  actor_config: unknown
+  packageSlug: string
+  actorConfig: unknown
 }) {
-  const config = parseJsonObject(row.actor_config)
+  const config = parseJsonObject(row.actorConfig)
   return (
     config.is_chief_actor === true ||
-    row.package_slug === DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG
+    row.packageSlug === DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG
   )
 }
 
@@ -257,40 +257,40 @@ async function loadOfficialActorTemplates(
   executor: Executor
 ): Promise<LoadedOfficialActorTemplate[]> {
   const rows = await executor
-    .selectFrom("catalog_items as item")
-    .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
+    .selectFrom("catalogItems as item")
+    .innerJoin("publishers as publisher", "publisher.id", "item.publisherId")
     .innerJoin(
-      "catalog_versions as version",
+      "catalogVersions as version",
       "version.id",
-      "item.latest_version_id"
+      "item.latestVersionId"
     )
     .innerJoin(
-      "actor_template_version_specs as spec",
-      "spec.catalog_version_id",
+      "actorTemplateVersionSpecs as spec",
+      "spec.catalogVersionId",
       "version.id"
     )
     .select([
-      "item.id as package_id",
-      "item.slug as package_slug",
-      "version.id as version_id",
-      "spec.role as actor_role",
-      "spec.display_name as actor_template_display_name",
-      "spec.avatar_file_id as actor_avatar_file_id",
-      "spec.avatar_emoji as actor_avatar_emoji",
-      "spec.title as actor_title",
-      "spec.can_represent_user as actor_can_represent_user",
-      "spec.docs as actor_docs",
-      "spec.specialties as actor_specialties",
-      "spec.config as actor_config",
+      "item.id as packageId",
+      "item.slug as packageSlug",
+      "version.id as versionId",
+      "spec.role as actorRole",
+      "spec.displayName as actorTemplateDisplayName",
+      "spec.avatarFileId as actorAvatarFileId",
+      "spec.avatarEmoji as actorAvatarEmoji",
+      "spec.title as actorTitle",
+      "spec.canRepresentUser as actorCanRepresentUser",
+      "spec.docs as actorDocs",
+      "spec.specialties as actorSpecialties",
+      "spec.config as actorConfig",
     ])
     .where("publisher.slug", "=", OFFICIAL_ACTOR_PUBLISHER_SLUG)
-    .where("item.workspace_id", "is", null)
-    .where("item.item_kind", "=", "actor_template")
-    .where("item.is_active", "=", true)
+    .where("item.workspaceId", "is", null)
+    .where("item.itemKind", "=", "actor_template")
+    .where("item.isActive", "=", true)
     .orderBy(
       sql`case when spec.config @> ${OFFICIAL_CHIEF_ACTOR_CONFIG_JSON}::jsonb or item.slug = ${DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG} then 0 else 1 end`
     )
-    .orderBy("item.created_at", "asc")
+    .orderBy("item.createdAt", "asc")
     .orderBy("item.slug", "asc")
     .execute()
 
@@ -301,21 +301,21 @@ async function loadOfficialActorTemplates(
   return rows.map((row) => {
     const isChiefActor = isOfficialChiefTemplate(row)
     return {
-      packageId: row.package_id,
-      packageSlug: row.package_slug,
-      versionId: row.version_id,
-      actorDisplayName: row.actor_template_display_name,
-      actorRole: row.actor_role,
-      actorAvatarFileId: row.actor_avatar_file_id || undefined,
-      actorAvatarEmoji: row.actor_avatar_emoji || undefined,
-      actorTitle: row.actor_title,
-      canRepresentUser: Boolean(row.actor_can_represent_user),
-      actorDocs: parseStoredActorDocs(row.actor_docs),
-      actorSpecialties: Array.isArray(row.actor_specialties)
-        ? row.actor_specialties
+      packageId: row.packageId,
+      packageSlug: row.packageSlug,
+      versionId: row.versionId,
+      actorDisplayName: row.actorTemplateDisplayName,
+      actorRole: row.actorRole,
+      actorAvatarFileId: row.actorAvatarFileId || undefined,
+      actorAvatarEmoji: row.actorAvatarEmoji || undefined,
+      actorTitle: row.actorTitle,
+      canRepresentUser: Boolean(row.actorCanRepresentUser),
+      actorDocs: parseStoredActorDocs(row.actorDocs),
+      actorSpecialties: Array.isArray(row.actorSpecialties)
+        ? row.actorSpecialties
         : [],
       actorConfig: withOfficialChiefActorConfig(
-        parseJsonObject(row.actor_config),
+        parseJsonObject(row.actorConfig),
         isChiefActor
       ),
       isChiefActor,
@@ -334,7 +334,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
         name: input.name,
         slug,
         description: input.description ?? null,
-        owner_id: input.userId,
+        ownerId: input.userId,
       })
       .returningAll()
       .executeTakeFirst()
@@ -344,11 +344,11 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
     // 2. Add creator as admin member; owner is derived from workspaces.owner_id.
     const creatorMember = await trx
-      .insertInto("workspace_members")
+      .insertInto("workspaceMembers")
       .values({
-        workspace_id: String(workspace.id),
-        user_id: input.userId,
-        trust_level: "admin",
+        workspaceId: String(workspace.id),
+        userId: input.userId,
+        trustLevel: "admin",
       })
       .returningAll()
       .executeTakeFirst()
@@ -383,13 +383,13 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
           id: actorId,
           role: template.actorRole,
           title: template.actorTitle,
-          avatar_file_id: template.actorAvatarFileId || null,
-          avatar_emoji: template.actorAvatarEmoji || null,
-          parent_id: null,
-          can_represent_user: template.canRepresentUser,
+          avatarFileId: template.actorAvatarFileId || null,
+          avatarEmoji: template.actorAvatarEmoji || null,
+          parentId: null,
+          canRepresentUser: template.canRepresentUser,
           specialties: template.actorSpecialties,
           config: template.actorConfig as TableInsert<"actors">["config"],
-          current_version: 1,
+          currentVersion: 1,
         })
         .returningAll()
         .executeTakeFirst()
@@ -398,19 +398,19 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       }
 
       const actorVersionResult = await trx
-        .insertInto("actor_versions")
+        .insertInto("actorVersions")
         .values({
-          actor_id: String(actorRow.id),
+          actorId: String(actorRow.id),
           version: 1,
-          display_name: template.actorDisplayName,
+          displayName: template.actorDisplayName,
           role: template.actorRole,
           title: template.actorTitle,
-          parent_id: null,
-          can_represent_user: template.canRepresentUser,
+          parentId: null,
+          canRepresentUser: template.canRepresentUser,
           specialties: template.actorSpecialties,
           config:
-            template.actorConfig as TableInsert<"actor_versions">["config"],
-          created_by_workspace_member_id: String(creatorMember.id),
+            template.actorConfig as TableInsert<"actorVersions">["config"],
+          createdByWorkspaceMemberId: String(creatorMember.id),
         })
         .returning("id")
         .executeTakeFirst()
@@ -423,26 +423,26 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
       for (const doc of template.actorDocs) {
         await trx
-          .insertInto("actor_version_docs")
+          .insertInto("actorVersionDocs")
           .values({
-            actor_version_id: actorVersionId,
-            doc_key: doc.key,
+            actorVersionId: actorVersionId,
+            docKey: doc.key,
             title: doc.title,
             visibility: doc.visibility,
             priority: doc.priority,
-            content_blocks: sql`${JSON.stringify(doc.content)}::jsonb`,
+            contentBlocks: sql`${JSON.stringify(doc.content)}::jsonb`,
           })
           .execute()
       }
 
       await trx
-        .insertInto("actor_source_refs")
+        .insertInto("actorSourceRefs")
         .values({
-          actor_id: String(actorRow.id),
-          source_catalog_item_id: template.packageId,
-          source_catalog_version_id: template.versionId,
-          sync_mode: "notify",
-          baseline_actor_version: 1,
+          actorId: String(actorRow.id),
+          sourceCatalogItemId: template.packageId,
+          sourceCatalogVersionId: template.versionId,
+          syncMode: "notify",
+          baselineActorVersion: 1,
         })
         .execute()
 
@@ -517,19 +517,19 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
 export async function listUserWorkspaces(userId: string) {
   const rows = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
+    .selectFrom("workspaceMembers as wm")
+    .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
     .selectAll("w")
-    .select(["wm.id as current_workspace_member_id", "wm.trust_level"])
-    .where("wm.user_id", "=", userId)
+    .select(["wm.id as currentWorkspaceMemberId", "wm.trustLevel"])
+    .where("wm.userId", "=", userId)
     // Soft delete (§8.4): only active memberships of live workspaces are listed.
     .where("wm.status", "=", "active")
-    .where("w.deleted_at", "is", null)
-    .orderBy("w.created_at", "desc")
+    .where("w.deletedAt", "is", null)
+    .orderBy("w.createdAt", "desc")
     .execute()
   return rows.map((row) => ({
     ...mapWorkspaceRow(row),
-    currentWorkspaceMemberId: row.current_workspace_member_id ?? undefined,
+    currentWorkspaceMemberId: row.currentWorkspaceMemberId ?? undefined,
     trustLevel: deriveWorkspaceTrustLevel(row),
   }))
 }
@@ -539,7 +539,7 @@ export async function getWorkspaceById(workspaceId: string) {
     .selectFrom("workspaces")
     .selectAll()
     .where("id", "=", workspaceId)
-    .where("deleted_at", "is", null)
+    .where("deletedAt", "is", null)
     .executeTakeFirst()
   return row ? mapWorkspaceRow(row) : null
 }
@@ -550,10 +550,10 @@ export async function getWorkspaceChiefActorPreference(
 ): Promise<WorkspaceChiefActorPreference> {
   const member = await requireWorkspaceMemberRowByUserId(workspaceId, userId)
   const row = await db
-    .selectFrom("workspace_member_preferences as pref")
-    .innerJoin("workspace_members as wm", "wm.id", "pref.workspace_member_id")
+    .selectFrom("workspaceMemberPreferences as pref")
+    .innerJoin("workspaceMembers as wm", "wm.id", "pref.workspaceMemberId")
     .leftJoin("actors as a", (join) =>
-      join.onRef("a.id", "=", "pref.chief_actor_id").on(
+      join.onRef("a.id", "=", "pref.chiefActorId").on(
         sql<boolean>`EXISTS (
             SELECT 1
             FROM workspace_apps_live app
@@ -564,25 +564,21 @@ export async function getWorkspaceChiefActorPreference(
           )`
       )
     )
-    .leftJoin("workspace_apps as chief_actor_app", "chief_actor_app.id", "a.id")
-    .leftJoin(
-      "file_assets as avatar_file",
-      "avatar_file.id",
-      "a.avatar_file_id"
-    )
+    .leftJoin("workspaceApps as chief_actor_app", "chief_actor_app.id", "a.id")
+    .leftJoin("fileAssets as avatar_file", "avatar_file.id", "a.avatarFileId")
     .select([
-      "wm.workspace_id",
-      "wm.user_id",
-      "wm.id as workspace_member_id",
-      "pref.chief_actor_id",
-      "pref.created_at",
-      "pref.updated_at",
-      "chief_actor_app.display_name as chief_actor_display_name",
-      "a.role as chief_actor_role",
-      "a.title as chief_actor_title",
-      "avatar_file.id as chief_actor_avatar_file_id",
+      "wm.workspaceId",
+      "wm.userId",
+      "wm.id as workspaceMemberId",
+      "pref.chiefActorId",
+      "pref.createdAt",
+      "pref.updatedAt",
+      "chief_actor_app.displayName as chiefActorDisplayName",
+      "a.role as chiefActorRole",
+      "a.title as chiefActorTitle",
+      "avatar_file.id as chiefActorAvatarFileId",
     ])
-    .where("pref.workspace_member_id", "=", member.id)
+    .where("pref.workspaceMemberId", "=", member.id)
     .limit(1)
     .executeTakeFirst()
   if (!row) {
@@ -616,11 +612,11 @@ export async function updateWorkspaceChiefActorPreference(
 
   const actorRow = await db
     .selectFrom("actors as actor")
-    .innerJoin("workspace_apps as app", "app.id", "actor.id")
+    .innerJoin("workspaceApps as app", "app.id", "actor.id")
     .select("actor.id")
     .where("actor.id", "=", chiefActorId)
-    .where("app.workspace_id", "=", workspaceId)
-    .where("app.deleted_at", "is", null)
+    .where("app.workspaceId", "=", workspaceId)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "=", "active")
     .limit(1)
     .executeTakeFirst()
@@ -630,15 +626,15 @@ export async function updateWorkspaceChiefActorPreference(
   }
 
   await db
-    .insertInto("workspace_member_preferences")
+    .insertInto("workspaceMemberPreferences")
     .values({
-      workspace_member_id: member.id,
-      chief_actor_id: chiefActorId,
-      created_at: sql`NOW()`,
+      workspaceMemberId: member.id,
+      chiefActorId: chiefActorId,
+      createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
-      oc.column("workspace_member_id").doUpdateSet({
-        chief_actor_id: chiefActorId,
+      oc.column("workspaceMemberId").doUpdateSet({
+        chiefActorId: chiefActorId,
       })
     )
     .execute()
@@ -679,7 +675,7 @@ export async function deleteWorkspace(workspaceId: string): Promise<boolean> {
     .selectFrom("workspaces")
     .select("id")
     .where("id", "=", workspaceId)
-    .where("deleted_at", "is", null)
+    .where("deletedAt", "is", null)
     .executeTakeFirst()
   if (!live) return false
   await withDbTransaction((trx) => markWorkspaceDeleted(trx, workspaceId))
@@ -689,16 +685,16 @@ export async function deleteWorkspace(workspaceId: string): Promise<boolean> {
 export async function checkMembership(workspaceId: string, userId: string) {
   const row = await db
     .selectFrom("workspaces as w")
-    .leftJoin("workspace_members as wm", (join) =>
+    .leftJoin("workspaceMembers as wm", (join) =>
       join
-        .onRef("wm.workspace_id", "=", "w.id")
-        .on("wm.user_id", "=", userId)
+        .onRef("wm.workspaceId", "=", "w.id")
+        .on("wm.userId", "=", userId)
         // Soft delete (§8.4): only an active membership counts.
         .on("wm.status", "=", "active")
     )
-    .select(["w.owner_id", "wm.user_id", "wm.trust_level"])
+    .select(["w.ownerId", "wm.userId", "wm.trustLevel"])
     .where("w.id", "=", workspaceId)
-    .where("w.deleted_at", "is", null)
+    .where("w.deletedAt", "is", null)
     .executeTakeFirst()
   return row ? deriveWorkspaceTrustLevel(row) : null
 }
@@ -709,28 +705,28 @@ export async function addMember(input: AddMemberInput) {
     // left/removed member REVIVES the row (status→active) rather than failing.
     // "already an active member" is detected via the pre-existing status.
     const existing = await trx
-      .selectFrom("workspace_members")
+      .selectFrom("workspaceMembers")
       .select(["id", "status"])
-      .where("workspace_id", "=", input.workspaceId)
-      .where("user_id", "=", input.userId)
+      .where("workspaceId", "=", input.workspaceId)
+      .where("userId", "=", input.userId)
       .executeTakeFirst()
     if (existing?.status === "active") {
       return null
     }
 
     const memberRow = await trx
-      .insertInto("workspace_members")
+      .insertInto("workspaceMembers")
       .values({
-        workspace_id: input.workspaceId,
-        user_id: input.userId,
-        trust_level: input.trustLevel,
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+        trustLevel: input.trustLevel,
       })
       .onConflict((oc) =>
-        oc.columns(["workspace_id", "user_id"]).doUpdateSet({
+        oc.columns(["workspaceId", "userId"]).doUpdateSet({
           status: "active",
-          trust_level: input.trustLevel,
-          left_at: null,
-          removed_at: null,
+          trustLevel: input.trustLevel,
+          leftAt: null,
+          removedAt: null,
         })
       )
       .returningAll()
@@ -760,90 +756,90 @@ export async function addMember(input: AddMemberInput) {
 
 export async function listMembers(workspaceId: string) {
   const accessMap = db
-    .selectFrom("workspace_access_bindings")
+    .selectFrom("workspaceAccessBindings")
     .select([
-      "workspace_member_id",
+      "workspaceMemberId",
       sql<string[]>`array_agg(access_key order by access_key)`.as(
         "access_keys"
       ),
     ])
     .where("status", "=", "active")
-    .groupBy(["workspace_member_id"])
+    .groupBy(["workspaceMemberId"])
     .as("access_map")
 
   const rows = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
-    .innerJoin("users as u", "u.id", "wm.user_id")
+    .selectFrom("workspaceMembers as wm")
+    .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
+    .innerJoin("users as u", "u.id", "wm.userId")
     .leftJoin(accessMap, (join) =>
-      join.onRef("access_map.workspace_member_id", "=", "wm.id")
+      join.onRef("access_map.workspaceMemberId", "=", "wm.id")
     )
     .select([
       "wm.id",
-      "wm.workspace_id",
-      "wm.user_id",
-      "wm.trust_level",
-      "w.owner_id",
-      "wm.joined_at",
-      "u.name as user_name",
-      "u.email as user_email",
-      "u.avatar_file_id",
+      "wm.workspaceId",
+      "wm.userId",
+      "wm.trustLevel",
+      "w.ownerId",
+      "wm.joinedAt",
+      "u.name as userName",
+      "u.email as userEmail",
+      "u.avatarFileId",
       sql<
         string[]
       >`COALESCE(access_map.access_keys, ARRAY[]::workspace_access_bindings_access_key[])`.as(
-        "access_keys"
+        "accessKeys"
       ),
     ])
-    .where("wm.workspace_id", "=", workspaceId)
-    .orderBy("wm.joined_at", "asc")
+    .where("wm.workspaceId", "=", workspaceId)
+    .orderBy("wm.joinedAt", "asc")
     .execute()
   return rows.map((row) => ({
     ...mapMemberRow(row),
-    userName: row.user_name,
-    userEmail: row.user_email,
-    avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : null,
-    accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
+    userName: row.userName,
+    userEmail: row.userEmail,
+    avatarUrl: row.avatarFileId ? getFileUrlById(row.avatarFileId) : null,
+    accessKeys: Array.isArray(row.accessKeys) ? row.accessKeys : [],
   }))
 }
 
 export async function listWorkspaceAccessBindings(workspaceId: string) {
   const rows = await db
-    .selectFrom("workspace_access_bindings as wab")
-    .innerJoin("workspace_members as wm", "wm.id", "wab.workspace_member_id")
-    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
-    .innerJoin("users as u", "u.id", "wm.user_id")
+    .selectFrom("workspaceAccessBindings as wab")
+    .innerJoin("workspaceMembers as wm", "wm.id", "wab.workspaceMemberId")
+    .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
+    .innerJoin("users as u", "u.id", "wm.userId")
     .select([
-      "wab.workspace_member_id",
-      "wab.access_key",
-      "wab.assigned_by_workspace_member_id",
-      "wab.created_at",
-      "wab.updated_at",
+      "wab.workspaceMemberId",
+      "wab.accessKey",
+      "wab.assignedByWorkspaceMemberId",
+      "wab.createdAt",
+      "wab.updatedAt",
       "wm.id",
-      "wm.workspace_id",
-      "wm.user_id",
-      "u.name as user_name",
-      "u.email as user_email",
-      "u.avatar_file_id",
-      "w.owner_id",
-      "wm.trust_level",
+      "wm.workspaceId",
+      "wm.userId",
+      "u.name as userName",
+      "u.email as userEmail",
+      "u.avatarFileId",
+      "w.ownerId",
+      "wm.trustLevel",
     ])
-    .where("wm.workspace_id", "=", workspaceId)
-    .orderBy("wab.access_key", "asc")
-    .orderBy("wab.created_at", "asc")
+    .where("wm.workspaceId", "=", workspaceId)
+    .orderBy("wab.accessKey", "asc")
+    .orderBy("wab.createdAt", "asc")
     .execute()
 
   return rows.map((row) => ({
-    workspaceId: row.workspace_id,
-    workspaceMemberId: row.workspace_member_id,
-    userId: row.user_id,
-    accessKey: row.access_key as WorkspaceAccessKey,
-    assignedByWorkspaceMemberId: row.assigned_by_workspace_member_id ?? null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    workspaceId: row.workspaceId,
+    workspaceMemberId: row.workspaceMemberId,
+    userId: row.userId,
+    accessKey: row.accessKey as WorkspaceAccessKey,
+    assignedByWorkspaceMemberId: row.assignedByWorkspaceMemberId ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
     trustLevel: deriveWorkspaceTrustLevel(row),
-    userName: row.user_name,
-    userEmail: row.user_email,
-    avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : null,
+    userName: row.userName,
+    userEmail: row.userEmail,
+    avatarUrl: row.avatarFileId ? getFileUrlById(row.avatarFileId) : null,
   }))
 }
 
@@ -855,7 +851,7 @@ export async function grantWorkspaceAccess(input: {
 }) {
   const membership = await getWorkspaceMemberRowById(input.workspaceMemberId)
 
-  if (!membership || membership.workspace_id !== input.workspaceId) {
+  if (!membership || membership.workspaceId !== input.workspaceId) {
     throw new Error("Workspace member is not part of this workspace")
   }
 
@@ -864,27 +860,27 @@ export async function grantWorkspaceAccess(input: {
   // doNothing (which would let a revoked row permanently block re-granting).
   // "Already granted" is now detected by checking the pre-existing active state.
   const existing = await db
-    .selectFrom("workspace_access_bindings")
+    .selectFrom("workspaceAccessBindings")
     .select(["status"])
-    .where("workspace_member_id", "=", input.workspaceMemberId)
-    .where("access_key", "=", input.accessKey)
+    .where("workspaceMemberId", "=", input.workspaceMemberId)
+    .where("accessKey", "=", input.accessKey)
     .executeTakeFirst()
   if (existing?.status === "active") {
     throw new Error("Access already granted")
   }
 
   const row = await db
-    .insertInto("workspace_access_bindings")
+    .insertInto("workspaceAccessBindings")
     .values({
-      workspace_member_id: input.workspaceMemberId,
-      access_key: input.accessKey,
-      assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
+      workspaceMemberId: input.workspaceMemberId,
+      accessKey: input.accessKey,
+      assignedByWorkspaceMemberId: input.assignedByWorkspaceMemberId,
     })
     .onConflict((oc) =>
-      oc.columns(["workspace_member_id", "access_key"]).doUpdateSet({
+      oc.columns(["workspaceMemberId", "accessKey"]).doUpdateSet({
         status: "active",
-        revoked_at: null,
-        assigned_by_workspace_member_id: input.assignedByWorkspaceMemberId,
+        revokedAt: null,
+        assignedByWorkspaceMemberId: input.assignedByWorkspaceMemberId,
       })
     )
     .returningAll()
@@ -895,13 +891,13 @@ export async function grantWorkspaceAccess(input: {
   }
 
   return {
-    workspaceId: membership.workspace_id,
-    workspaceMemberId: row.workspace_member_id,
-    userId: membership.user_id,
-    accessKey: row.access_key as WorkspaceAccessKey,
-    assignedByWorkspaceMemberId: row.assigned_by_workspace_member_id ?? null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    workspaceId: membership.workspaceId,
+    workspaceMemberId: row.workspaceMemberId,
+    userId: membership.userId,
+    accessKey: row.accessKey as WorkspaceAccessKey,
+    assignedByWorkspaceMemberId: row.assignedByWorkspaceMemberId ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   }
 }
 
@@ -911,7 +907,7 @@ export async function revokeWorkspaceAccess(
   accessKey: WorkspaceAccessKey
 ) {
   const membership = await getWorkspaceMemberRowById(workspaceMemberId)
-  if (!membership || membership.workspace_id !== workspaceId) {
+  if (!membership || membership.workspaceId !== workspaceId) {
     throw new Error("Access grant not found")
   }
 
@@ -919,15 +915,15 @@ export async function revokeWorkspaceAccess(
   // row (which sd_reject_delete forbids). Re-granting revives the row. The
   // revoker identity is not threaded to this layer; audit_logs records the actor.
   const row = await db
-    .updateTable("workspace_access_bindings")
+    .updateTable("workspaceAccessBindings")
     .set({
       status: "revoked",
-      revoked_at: sql`NOW()`,
+      revokedAt: sql`NOW()`,
     })
-    .where("workspace_member_id", "=", workspaceMemberId)
-    .where("access_key", "=", accessKey)
+    .where("workspaceMemberId", "=", workspaceMemberId)
+    .where("accessKey", "=", accessKey)
     .where("status", "=", "active")
-    .returning(["workspace_member_id", "access_key"])
+    .returning(["workspaceMemberId", "accessKey"])
     .executeTakeFirst()
 
   if (!row) {
@@ -943,10 +939,10 @@ function mapWorkspaceRow(row: WorkspaceViewRow) {
     name: row.name,
     slug: row.slug,
     description: row.description ?? null,
-    ownerId: row.owner_id,
-    isTrusted: Boolean(row.is_trusted),
-    createdAt: serializeOptionalInstant(row.created_at),
-    updatedAt: serializeOptionalInstant(row.updated_at),
+    ownerId: row.ownerId,
+    isTrusted: Boolean(row.isTrusted),
+    createdAt: serializeOptionalInstant(row.createdAt),
+    updatedAt: serializeOptionalInstant(row.updatedAt),
   }
 }
 
@@ -964,9 +960,9 @@ function mapActorRow(params: {
       name: displayName,
       role: row.role,
       title: row.title,
-      avatarFileId: row.avatar_file_id ?? undefined,
-      parentId: row.parent_id ?? undefined,
-      canRepresentUser: Boolean(row.can_represent_user),
+      avatarFileId: row.avatarFileId ?? undefined,
+      parentId: row.parentId ?? undefined,
+      canRepresentUser: Boolean(row.canRepresentUser),
       docs,
       specialties: Array.isArray(row.specialties) ? row.specialties : [],
       config: row.config
@@ -975,22 +971,22 @@ function mapActorRow(params: {
           : row.config
         : {},
     },
-    currentVersion: Number(row.current_version || 1),
+    currentVersion: Number(row.currentVersion || 1),
     isActive: true,
-    isPublicShared: Boolean(row.is_public_shared),
-    createdAt: serializeOptionalInstant(row.created_at),
-    updatedAt: serializeOptionalInstant(row.updated_at),
+    isPublicShared: Boolean(row.isPublicShared),
+    createdAt: serializeOptionalInstant(row.createdAt),
+    updatedAt: serializeOptionalInstant(row.updatedAt),
   }
 }
 
 function mapMemberRow(row: WorkspaceMemberViewRow) {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    userId: row.user_id,
+    workspaceId: row.workspaceId,
+    userId: row.userId,
     trustLevel: deriveWorkspaceTrustLevel(row),
-    accessKeys: Array.isArray(row.access_keys) ? row.access_keys : [],
-    joinedAt: serializeOptionalInstant(row.joined_at),
+    accessKeys: Array.isArray(row.accessKeys) ? row.accessKeys : [],
+    joinedAt: serializeOptionalInstant(row.joinedAt),
   }
 }
 
@@ -998,27 +994,25 @@ function mapWorkspaceChiefActorPreferenceRow(
   row: WorkspaceChiefActorPreferenceRow
 ): WorkspaceChiefActorPreference {
   const chiefActorId =
-    row.chief_actor_id && row.chief_actor_display_name
-      ? row.chief_actor_id
-      : undefined
+    row.chiefActorId && row.chiefActorDisplayName ? row.chiefActorId : undefined
 
   return {
-    workspaceId: row.workspace_id,
-    workspaceMemberId: row.workspace_member_id,
+    workspaceId: row.workspaceId,
+    workspaceMemberId: row.workspaceMemberId,
     chiefActorId,
     chiefActor:
-      chiefActorId && row.chief_actor_display_name
+      chiefActorId && row.chiefActorDisplayName
         ? {
             id: chiefActorId,
-            displayName: row.chief_actor_display_name,
-            role: (row.chief_actor_role as ActorRole | null) || "assistant",
-            title: row.chief_actor_title || row.chief_actor_role || "Actor",
-            avatarUrl: row.chief_actor_avatar_file_id
-              ? getFileUrlById(row.chief_actor_avatar_file_id)
+            displayName: row.chiefActorDisplayName,
+            role: (row.chiefActorRole as ActorRole | null) || "assistant",
+            title: row.chiefActorTitle || row.chiefActorRole || "Actor",
+            avatarUrl: row.chiefActorAvatarFileId
+              ? getFileUrlById(row.chiefActorAvatarFileId)
               : undefined,
           }
         : undefined,
-    createdAt: serializeOptionalInstant(row.created_at),
-    updatedAt: serializeOptionalInstant(row.updated_at),
+    createdAt: serializeOptionalInstant(row.createdAt),
+    updatedAt: serializeOptionalInstant(row.updatedAt),
   }
 }

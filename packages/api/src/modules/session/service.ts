@@ -55,23 +55,23 @@ import { v4 as uuidv4 } from "uuid"
 const log = createLogger("session")
 
 type SessionRow = TableRow<"sessions"> & {
-  actor_display_name?: string | null
-  conversation_kind?: string | null
-  conversation_is_im?: unknown
-  conversation_title?: string | null
+  actorDisplayName?: string | null
+  conversationKind?: string | null
+  conversationIsIm?: unknown
+  conversationTitle?: string | null
 }
 
 type SessionMessageItemRow = {
   id: string
-  session_id: string | null
-  conversation_id: string
+  sessionId: string | null
+  conversationId: string
   sequence: number | string
-  workspace_id: string
+  workspaceId: string
   subtype: string
-  role: TableRow<"conversation_items">["role"]
-  from_actor_id: string | null
-  from_workspace_member_id: string | null
-  created_at: Date
+  role: TableRow<"conversationItems">["role"]
+  fromActorId: string | null
+  fromWorkspaceMemberId: string | null
+  createdAt: Date
   metadata: unknown
 }
 
@@ -102,17 +102,17 @@ function normalizeSessionRow(row: SessionRow | null) {
   if (!row) return null
   return {
     ...row,
-    conversationId: row.conversation_id,
-    conversationKind: row.conversation_kind,
-    isImConversation: Boolean(row.conversation_is_im),
-    conversationTitle: row.conversation_title,
-    collaborationMode: row.collaboration_mode || "default",
-    activePlanApprovalTaskId: row.active_plan_approval_task_id || undefined,
+    conversationId: row.conversationId,
+    conversationKind: row.conversationKind,
+    isImConversation: Boolean(row.conversationIsIm),
+    conversationTitle: row.conversationTitle,
+    collaborationMode: row.collaborationMode || "default",
+    activePlanApprovalTaskId: row.activePlanApprovalTaskId || undefined,
     collaborationState: parseSessionCollaborationState(
-      parseJsonObject(row.collaboration_state)
+      parseJsonObject(row.collaborationState)
     ),
-    isGroupConversation: isGroupConversationKind(row.conversation_kind),
-    hasThreadContext: isThreadConversationKind(row.conversation_kind),
+    isGroupConversation: isGroupConversationKind(row.conversationKind),
+    hasThreadContext: isThreadConversationKind(row.conversationKind),
   }
 }
 
@@ -128,18 +128,18 @@ function normalizeSessionMessageRole(
 async function getActorJoinVersionId(actorId: UUID) {
   const row = await db
     .selectFrom("actors as a")
-    .innerJoin("workspace_apps as app", "app.id", "a.id")
-    .innerJoin("actor_versions as current_version", (join) =>
+    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .innerJoin("actorVersions as current_version", (join) =>
       join
-        .onRef("current_version.actor_id", "=", "a.id")
-        .onRef("current_version.version", "=", "a.current_version")
+        .onRef("current_version.actorId", "=", "a.id")
+        .onRef("current_version.version", "=", "a.currentVersion")
     )
-    .select("current_version.id as actor_version_id")
+    .select("current_version.id as actorVersionId")
     .where("a.id", "=", actorId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
-  return row?.actor_version_id || undefined
+  return row?.actorVersionId || undefined
 }
 
 async function loadSession(
@@ -147,22 +147,22 @@ async function loadSession(
 ): Promise<ReturnType<typeof normalizeSessionRow>> {
   const row = await db
     .selectFrom("sessions as s")
-    .innerJoin("actors as a", "a.id", "s.actor_id")
-    .innerJoin("workspace_apps as app", "app.id", "a.id")
-    .innerJoin("conversations as c", "c.id", "s.conversation_id")
+    .innerJoin("actors as a", "a.id", "s.actorId")
+    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .innerJoin("conversations as c", "c.id", "s.conversationId")
     .selectAll("s")
     .select((eb) => [
-      "app.display_name as actor_display_name",
-      "c.kind as conversation_kind",
+      "app.displayName as actorDisplayName",
+      "c.kind as conversationKind",
       eb
         .exists(
           eb
-            .selectFrom("conversation_transport_bindings as b")
+            .selectFrom("conversationTransportBindings as b")
             .select("b.id")
-            .whereRef("b.conversation_id", "=", "c.id")
+            .whereRef("b.conversationId", "=", "c.id")
         )
-        .as("conversation_is_im"),
-      "c.title as conversation_title",
+        .as("conversationIsIm"),
+      "c.title as conversationTitle",
     ])
     .where("s.id", "=", sessionId)
     .executeTakeFirst()
@@ -179,8 +179,8 @@ async function getConversationActorSessionRow(
     db
       .selectFrom("sessions")
       .selectAll()
-      .where("conversation_id", "=", conversationId)
-      .where("actor_id", "=", actorId)
+      .where("conversationId", "=", conversationId)
+      .where("actorId", "=", actorId)
       .limit(1)
   )
 }
@@ -199,10 +199,10 @@ async function requireActiveActorConversationParticipant(
   const participant = await takeFirstOn(
     queryable,
     db
-      .selectFrom("conversation_participants")
+      .selectFrom("conversationParticipants")
       .select("id")
-      .where("conversation_id", "=", conversationId)
-      .where("subject_id", "=", actorSubjectId)
+      .where("conversationId", "=", conversationId)
+      .where("subjectId", "=", actorSubjectId)
       .where("state", "=", "active")
       .limit(1)
   )
@@ -249,14 +249,14 @@ export async function ensureConversationActorSessionContext(
         .insertInto("sessions")
         .values({
           id: uuidv4(),
-          workspace_id: params.workspaceId,
-          actor_id: params.actorId,
-          conversation_id: params.conversationId,
+          workspaceId: params.workspaceId,
+          actorId: params.actorId,
+          conversationId: params.conversationId,
           trigger: params.trigger || "user_message",
           status: "idle",
         })
         .onConflict((oc) =>
-          oc.columns(["conversation_id", "actor_id"]).doNothing()
+          oc.columns(["conversationId", "actorId"]).doNothing()
         )
         .returning("id")
     )
@@ -344,9 +344,9 @@ export async function updateSessionStatus(
     .updateTable("sessions")
     .set({
       status,
-      completed_at: status === "closed" ? sql`NOW()` : null,
+      completedAt: status === "closed" ? sql`NOW()` : null,
       ...(extra?.errorMessage !== undefined
-        ? { error_message: extra.errorMessage }
+        ? { errorMessage: extra.errorMessage }
         : {}),
     })
     .where("id", "=", sessionId)
@@ -365,16 +365,15 @@ export async function updateSessionCollaboration(
   const values: Record<string, unknown> = {}
 
   if (params.collaborationMode) {
-    values.collaboration_mode = params.collaborationMode
+    values.collaborationMode = params.collaborationMode
   }
   if (params.collaborationState) {
-    values.collaboration_state = parseSessionCollaborationState(
+    values.collaborationState = parseSessionCollaborationState(
       params.collaborationState
     ) as Record<string, unknown>
   }
   if ("activePlanApprovalTaskId" in params) {
-    values.active_plan_approval_task_id =
-      params.activePlanApprovalTaskId ?? null
+    values.activePlanApprovalTaskId = params.activePlanApprovalTaskId ?? null
   }
 
   await runBuilder(
@@ -425,7 +424,7 @@ export async function addSessionMessage(params: {
   })
 
   const authorMember = await resolveSessionMessageAuthor({
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     workspaceId,
     fromActorId,
     fromWorkspaceMemberId,
@@ -433,13 +432,13 @@ export async function addSessionMessage(params: {
   const { scope, surface } =
     visibility === "shared_visible"
       ? { scope: "shared" as const, surface: "visible" as const }
-      : getSurfaceForSessionMessage(session.conversation_kind, role)
+      : getSurfaceForSessionMessage(session.conversationKind, role)
   const itemType = role === "tool_result" ? "control" : "message"
   const resolvedSubtype = subtype || role
 
   const item = await createConversationItem({
     workspaceId,
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     sessionId,
     scope,
     surface,
@@ -463,7 +462,7 @@ export async function addSessionMessage(params: {
   if (projectTransportOutbound && scope === "shared" && surface === "visible") {
     await queueConversationTransportProjection({
       workspaceId,
-      conversationId: session.conversation_id,
+      conversationId: session.conversationId,
       itemId: item.id,
       direction: "outbound",
       metadata: {
@@ -487,13 +486,13 @@ export async function addSessionMessage(params: {
   if (scope === "shared" && surface === "visible") {
     const { notifyRemoteAgentDeliveriesForConversation } =
       await import("../remote-agents/service.js")
-    await notifyRemoteAgentDeliveriesForConversation(session.conversation_id)
+    await notifyRemoteAgentDeliveriesForConversation(session.conversationId)
   }
 
   if (
     scope === "shared" &&
     surface === "visible" &&
-    !isGroupConversationKind(session.conversation_kind) &&
+    !isGroupConversationKind(session.conversationKind) &&
     (role === "user" || role === "assistant")
   ) {
     let actorDisplayName: string | undefined
@@ -501,12 +500,12 @@ export async function addSessionMessage(params: {
       actorDisplayName = (
         await db
           .selectFrom("actors as actor")
-          .innerJoin("workspace_apps as app", "app.id", "actor.id")
-          .select("app.display_name as display_name")
+          .innerJoin("workspaceApps as app", "app.id", "actor.id")
+          .select("app.displayName as displayName")
           .where("actor.id", "=", fromActorId)
-          .where("app.deleted_at", "is", null)
+          .where("app.deletedAt", "is", null)
           .executeTakeFirst()
-      )?.display_name
+      )?.displayName
     }
     // session.message.new event emit removed (S13): no subscribers remain.
     void normalizedMessage
@@ -533,40 +532,40 @@ export async function getSessionMessages(
   sessionId: UUID
 ): Promise<SessionMessage[]> {
   const items = await db
-    .selectFrom("conversation_items as ci")
-    .innerJoin("sessions as s", "s.id", "ci.session_id")
+    .selectFrom("conversationItems as ci")
+    .innerJoin("sessions as s", "s.id", "ci.sessionId")
     .leftJoin(
-      "conversation_participants as cp",
+      "conversationParticipants as cp",
       "cp.id",
-      "ci.author_participant_id"
+      "ci.authorParticipantId"
     )
-    .leftJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
-    .leftJoin("actors as a", "a.id", "cpsubj.actor_id")
-    .leftJoin("workspace_apps as actor_app", "actor_app.id", "a.id")
-    .leftJoin("workspace_members as wm", "wm.id", "cpsubj.workspace_member_id")
-    .leftJoin("users as u", "u.id", "wm.user_id")
+    .leftJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
+    .leftJoin("actors as a", "a.id", "cpsubj.actorId")
+    .leftJoin("workspaceApps as actor_app", "actor_app.id", "a.id")
+    .leftJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
+    .leftJoin("users as u", "u.id", "wm.userId")
     .select([
       "ci.id",
-      "ci.session_id",
-      "ci.conversation_id",
+      "ci.sessionId",
+      "ci.conversationId",
       "ci.sequence",
       "ci.role",
       "ci.subtype",
       "ci.metadata",
-      "ci.event_payload",
-      "ci.author_participant_id",
-      "ci.created_at",
-      "s.workspace_id",
-      "cpsubj.actor_id as from_actor_id",
-      "cpsubj.workspace_member_id as from_workspace_member_id",
+      "ci.eventPayload",
+      "ci.authorParticipantId",
+      "ci.createdAt",
+      "s.workspaceId",
+      "cpsubj.actorId as fromActorId",
+      "cpsubj.workspaceMemberId as fromWorkspaceMemberId",
       sql<
         string | null
       >`COALESCE(actor_app.display_name, u.name, cp.display_name)`.as(
-        "author_name"
+        "authorName"
       ),
     ])
-    .where("ci.session_id", "=", sessionId)
-    .orderBy("ci.created_at", "asc")
+    .where("ci.sessionId", "=", sessionId)
+    .orderBy("ci.createdAt", "asc")
     .orderBy("ci.sequence", "asc")
     .execute()
 
@@ -574,29 +573,29 @@ export async function getSessionMessages(
 
   const itemIds = items.map((row) => row.id)
   const partRows = await db
-    .selectFrom("conversation_item_parts as cip")
+    .selectFrom("conversationItemParts as cip")
     .select([
       "cip.id",
-      "cip.item_id",
+      "cip.itemId",
       "cip.ordinal",
-      "cip.part_type",
-      "cip.mime_type",
-      "cip.text_value",
-      "cip.json_value",
-      "cip.ref_path",
-      "cip.ref_sha256",
+      "cip.partType",
+      "cip.mimeType",
+      "cip.textValue",
+      "cip.jsonValue",
+      "cip.refPath",
+      "cip.refSha256",
       "cip.name",
       "cip.metadata",
     ])
-    .where("cip.item_id", "in", itemIds)
-    .orderBy("cip.item_id", "asc")
+    .where("cip.itemId", "in", itemIds)
+    .orderBy("cip.itemId", "asc")
     .orderBy("cip.ordinal", "asc")
     .execute()
 
-  const partsByItem = new Map<string, TableRow<"conversation_item_parts">[]>()
+  const partsByItem = new Map<string, TableRow<"conversationItemParts">[]>()
   for (const row of partRows) {
-    if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, [])
-    partsByItem.get(row.item_id)!.push(row)
+    if (!partsByItem.has(row.itemId)) partsByItem.set(row.itemId, [])
+    partsByItem.get(row.itemId)!.push(row)
   }
 
   return items.map((row: SessionMessageItemRow) => {
@@ -604,15 +603,15 @@ export async function getSessionMessages(
     return {
       id: row.id,
       sessionId,
-      conversationId: row.conversation_id,
+      conversationId: row.conversationId,
       sequence: row.sequence,
-      workspaceId: row.workspace_id,
+      workspaceId: row.workspaceId,
       role: normalizeSessionMessageRole(row),
       contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
-      fromActorId: row.from_actor_id || undefined,
-      fromWorkspaceMemberId: row.from_workspace_member_id || undefined,
+      fromActorId: row.fromActorId || undefined,
+      fromWorkspaceMemberId: row.fromWorkspaceMemberId || undefined,
       metadata: buildMetadataFromItem(item),
-      createdAt: row.created_at.toISOString() as SessionMessage["createdAt"],
+      createdAt: row.createdAt.toISOString() as SessionMessage["createdAt"],
     }
   })
 }
@@ -621,12 +620,12 @@ export async function getSessionMessages(
 
 export async function consumeInterrupts(sessionId: UUID): Promise<any[]> {
   return db
-    .updateTable("session_interrupts")
+    .updateTable("sessionInterrupts")
     .set({
-      is_consumed: true,
+      isConsumed: true,
     })
-    .where("target_session_id", "=", sessionId)
-    .where("is_consumed", "=", false)
+    .where("targetSessionId", "=", sessionId)
+    .where("isConsumed", "=", false)
     .returningAll()
     .execute()
 }
@@ -636,10 +635,10 @@ export async function hasPendingInterrupt(
   type?: SessionInterruptType
 ): Promise<boolean> {
   let query = db
-    .selectFrom("session_interrupts")
+    .selectFrom("sessionInterrupts")
     .select("id")
-    .where("target_session_id", "=", sessionId)
-    .where("is_consumed", "=", false)
+    .where("targetSessionId", "=", sessionId)
+    .where("isConsumed", "=", false)
 
   if (type) {
     query = query.where("type", "=", type)

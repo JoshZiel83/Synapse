@@ -378,10 +378,10 @@ export const auth = betterAuth({
           try {
             const existing = await db
               .selectFrom("users")
-              .select("avatar_file_id")
+              .select("avatarFileId")
               .where("id", "=", user.id)
               .executeTakeFirst()
-            if (existing?.avatar_file_id) return
+            if (existing?.avatarFileId) return
             const avatar = await createGeneratedUserAvatarFile(db, {
               userId: user.id,
               name: user.name,
@@ -389,7 +389,7 @@ export const auth = betterAuth({
             })
             await db
               .updateTable("users")
-              .set({ avatar_file_id: avatar.fileId })
+              .set({ avatarFileId: avatar.fileId })
               .where("id", "=", user.id)
               .execute()
           } catch (error) {
@@ -418,10 +418,10 @@ export const auth = betterAuth({
           if (!userId) return undefined
           const userRow = await db
             .selectFrom("users")
-            .select(["id", "deleted_at"])
+            .select(["id", "deletedAt"])
             .where("id", "=", userId)
             .executeTakeFirst()
-          if (userRow && userRow.deleted_at !== null) {
+          if (userRow && userRow.deletedAt !== null) {
             throw new Error("Cannot create a session for a deleted user")
           }
           return undefined

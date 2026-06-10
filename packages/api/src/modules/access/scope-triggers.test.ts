@@ -35,7 +35,7 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
   const ws = await db
     .insertInto("workspaces")
     .values({
-      owner_id: user.id as string,
+      ownerId: user.id as string,
       slug: `ws-${rid()}`,
       name: `${NS} ws`,
     })
@@ -47,12 +47,12 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 async function newActor(db: Kysely<any>, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: actorId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "actor",
-      display_name: `${NS} actor`,
+      displayName: `${NS} actor`,
       status: "active",
     } as any)
     .execute()
@@ -62,7 +62,7 @@ async function newActor(db: Kysely<any>, workspaceId: string): Promise<string> {
       id: actorId,
       role: "assistant",
       title: `${NS} actor`,
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -75,21 +75,21 @@ async function newRemoteAgent(
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: remoteAgentId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "remote_agent",
-      display_name: `${NS} agent`,
+      displayName: `${NS} agent`,
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: remoteAgentId,
       title: `${NS} agent`,
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -104,7 +104,7 @@ async function newConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       title: `${NS} conv`,
     })
     .returning("id")
@@ -126,11 +126,11 @@ async function newWorkspaceMember(
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspaceId,
-      user_id: user.id as string,
-      trust_level: "member",
+      workspaceId: workspaceId,
+      userId: user.id as string,
+      trustLevel: "member",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -143,14 +143,14 @@ async function newAutomationEventSource(
 ): Promise<string> {
   const memberId = await newWorkspaceMember(db, workspaceId, "creator")
   const row = await db
-    .insertInto("automation_event_sources")
+    .insertInto("automationEventSources")
     .values({
-      workspace_id: workspaceId,
-      provider_kind: "internal",
-      source_key: `src-${rid()}`,
+      workspaceId: workspaceId,
+      providerKind: "internal",
+      sourceKey: `src-${rid()}`,
       name: "source",
-      created_by_kind: "workspace_member",
-      created_by_workspace_member_id: memberId,
+      createdByKind: "workspace_member",
+      createdByWorkspaceMemberId: memberId,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -265,13 +265,13 @@ test(
 
       await expectReject(
         db
-          .insertInto("resource_access_bindings")
+          .insertInto("resourceAccessBindings")
           .values({
-            workspace_id: wsId,
-            resource_type: "automation_event_source",
-            automation_event_source_id: eventSourceId,
-            subject_id: subjectSubj,
-            scope_subject_id: subjectSubj, // actor is NOT scope-eligible
+            workspaceId: wsId,
+            resourceType: "automation_event_source",
+            automationEventSourceId: eventSourceId,
+            subjectId: subjectSubj,
+            scopeSubjectId: subjectSubj, // actor is NOT scope-eligible
           })
           .execute(),
         /scope_subject_id .* workspace\|conversation/
@@ -301,13 +301,13 @@ test(
 
       await expectReject(
         db
-          .insertInto("resource_access_bindings")
+          .insertInto("resourceAccessBindings")
           .values({
-            workspace_id: wsId,
-            resource_type: "automation_event_source",
-            automation_event_source_id: eventSourceId,
-            subject_id: subjectSubj,
-            scope_subject_id: otherConvSubj,
+            workspaceId: wsId,
+            resourceType: "automation_event_source",
+            automationEventSourceId: eventSourceId,
+            subjectId: subjectSubj,
+            scopeSubjectId: otherConvSubj,
           })
           .execute(),
         /scope_subject_id .* workspace/
@@ -330,12 +330,12 @@ test(
       })
 
       await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values({
-          workspace_id: wsId,
-          resource_type: "automation_event_source",
-          automation_event_source_id: eventSourceId,
-          subject_id: subjectSubj,
+          workspaceId: wsId,
+          resourceType: "automation_event_source",
+          automationEventSourceId: eventSourceId,
+          subjectId: subjectSubj,
           // scope_subject_id omitted → NULL
         })
         .execute()
@@ -362,13 +362,13 @@ test(
       })
 
       await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values({
-          workspace_id: wsId,
-          resource_type: "automation_event_source",
-          automation_event_source_id: eventSourceId,
-          subject_id: subjectSubj,
-          scope_subject_id: convSubj,
+          workspaceId: wsId,
+          resourceType: "automation_event_source",
+          automationEventSourceId: eventSourceId,
+          subjectId: subjectSubj,
+          scopeSubjectId: convSubj,
         })
         .execute()
     })
@@ -397,12 +397,12 @@ test(
 
       await expectReject(
         db
-          .insertInto("resource_access_bindings")
+          .insertInto("resourceAccessBindings")
           .values({
-            workspace_id: wsId,
-            resource_type: "automation_event_source",
-            automation_event_source_id: eventSourceId,
-            subject_id: userSubj,
+            workspaceId: wsId,
+            resourceType: "automation_event_source",
+            automationEventSourceId: eventSourceId,
+            subjectId: userSubj,
           })
           .execute(),
         /not workspace-bound/
@@ -427,12 +427,12 @@ test(
 
       await expectReject(
         db
-          .insertInto("resource_access_bindings")
+          .insertInto("resourceAccessBindings")
           .values({
-            workspace_id: wsA,
-            resource_type: "automation_event_source",
-            automation_event_source_id: eventSourceId,
-            subject_id: actorBSubj,
+            workspaceId: wsA,
+            resourceType: "automation_event_source",
+            automationEventSourceId: eventSourceId,
+            subjectId: actorBSubj,
           })
           .execute(),
         /subject_id .* workspace .* does not match/
@@ -457,12 +457,12 @@ test(
 
       await expectReject(
         db
-          .insertInto("resource_access_bindings")
+          .insertInto("resourceAccessBindings")
           .values({
-            workspace_id: wsA,
-            resource_type: "automation_event_source",
-            automation_event_source_id: eventSourceB,
-            subject_id: actorASubj,
+            workspaceId: wsA,
+            resourceType: "automation_event_source",
+            automationEventSourceId: eventSourceB,
+            subjectId: actorASubj,
           })
           .execute(),
         /resource.*workspace mismatch|missing or workspace mismatch/
@@ -484,49 +484,49 @@ async function newDevice(
   const dev = await db
     .insertInto("devices")
     .values({
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       title: `${NS} device`,
-      public_key: `pk-${rid()}`,
-      public_key_fingerprint: `fp-${rid()}-${rid()}`,
-      trust_status: "trusted",
+      publicKey: `pk-${rid()}`,
+      publicKeyFingerprint: `fp-${rid()}-${rid()}`,
+      trustStatus: "trusted",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const svc = await db
-    .insertInto("device_services")
+    .insertInto("deviceServices")
     .values({
-      device_id: dev.id as string,
-      service_kind: "device_runtime",
+      deviceId: dev.id as string,
+      serviceKind: "device_runtime",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exp = await db
-    .insertInto("device_exposures")
+    .insertInto("deviceExposures")
     .values({
-      device_id: dev.id as string,
-      service_id: svc.id as string,
-      stable_key: `exp-${rid()}`,
-      display_name: `${NS} exposure`,
+      deviceId: dev.id as string,
+      serviceId: svc.id as string,
+      stableKey: `exp-${rid()}`,
+      displayName: `${NS} exposure`,
       transport: "stdio",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const capabilityId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: capabilityId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "device_capability",
-      display_name: `${NS} capability`,
+      displayName: `${NS} capability`,
       status: "active",
     } as any)
     .execute()
   const cap = await db
-    .insertInto("device_capabilities")
+    .insertInto("deviceCapabilities")
     .values({
       id: capabilityId,
-      exposure_id: exp.id as string,
+      exposureId: exp.id as string,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -547,13 +547,13 @@ test(
 
       await expectReject(
         db
-          .insertInto("runtime_authorization_grants")
+          .insertInto("runtimeAuthorizationGrants")
           .values({
-            workspace_id: wsId,
-            device_id: deviceId,
-            device_capability_id: capabilityId,
-            device_exposure_id: exposureId,
-            subject_id: null,
+            workspaceId: wsId,
+            deviceId: deviceId,
+            deviceCapabilityId: capabilityId,
+            deviceExposureId: exposureId,
+            subjectId: null,
             retention: "consume_once",
           } as any)
           .execute(),
@@ -582,14 +582,14 @@ test(
 
       await expectReject(
         db
-          .insertInto("runtime_authorization_grants")
+          .insertInto("runtimeAuthorizationGrants")
           .values({
-            workspace_id: wsId,
-            device_id: deviceId,
-            device_capability_id: capabilityId,
-            device_exposure_id: exposureId,
-            subject_id: workspaceSubj,
-            scope_subject_id: actorSubj,
+            workspaceId: wsId,
+            deviceId: deviceId,
+            deviceCapabilityId: capabilityId,
+            deviceExposureId: exposureId,
+            subjectId: workspaceSubj,
+            scopeSubjectId: actorSubj,
             retention: "consume_once",
           } as any)
           .execute(),
@@ -618,13 +618,13 @@ test(
       // membership check or the workspace alignment.
       await expectReject(
         db
-          .insertInto("runtime_authorization_grants")
+          .insertInto("runtimeAuthorizationGrants")
           .values({
-            workspace_id: wsA,
-            device_id: a.deviceId,
-            device_capability_id: b.capabilityId,
-            device_exposure_id: a.exposureId,
-            subject_id: wsASubj,
+            workspaceId: wsA,
+            deviceId: a.deviceId,
+            deviceCapabilityId: b.capabilityId,
+            deviceExposureId: a.exposureId,
+            subjectId: wsASubj,
             retention: "until_revoked",
           } as any)
           .execute(),
@@ -656,13 +656,13 @@ test(
 
       await expectReject(
         db
-          .insertInto("runtime_authorization_grants")
+          .insertInto("runtimeAuthorizationGrants")
           .values({
-            workspace_id: wsId,
-            device_id: deviceId,
-            device_capability_id: capabilityId,
-            device_exposure_id: exposureId,
-            subject_id: userSubj,
+            workspaceId: wsId,
+            deviceId: deviceId,
+            deviceCapabilityId: capabilityId,
+            deviceExposureId: exposureId,
+            subjectId: userSubj,
             retention: "until_revoked",
           } as any)
           .execute(),
@@ -686,11 +686,11 @@ async function newLegacyMemorySpace(
     actorId,
   })
   const row = await db
-    .insertInto("memory_spaces")
+    .insertInto("memorySpaces")
     .values({
-      workspace_id: workspaceId,
-      owner_subject_id: ownerSubjectId,
-      namespace_key: "default",
+      workspaceId: workspaceId,
+      ownerSubjectId: ownerSubjectId,
+      namespaceKey: "default",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -703,13 +703,13 @@ async function newLegacyMemoryItem(
   spaceId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("memory_items")
+    .insertInto("memoryItems")
     .values({
-      workspace_id: workspaceId,
-      memory_space_id: spaceId,
+      workspaceId: workspaceId,
+      memorySpaceId: spaceId,
       category: "fact",
-      text_digest: "x",
-      search_text: "x",
+      textDigest: "x",
+      searchText: "x",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -738,12 +738,12 @@ test(
 
       await expectReject(
         db
-          .insertInto("memory_access_grants")
+          .insertInto("memoryAccessGrants")
           .values({
-            workspace_id: wsId,
-            memory_space_id: space1,
-            memory_item_id: item2,
-            subject_id: actorSubj,
+            workspaceId: wsId,
+            memorySpaceId: space1,
+            memoryItemId: item2,
+            subjectId: actorSubj,
             permissions: [MEMORY_PERMISSION.READ],
           } as any)
           .execute(),
@@ -768,12 +768,12 @@ test(
       })
 
       await db
-        .insertInto("memory_access_grants")
+        .insertInto("memoryAccessGrants")
         .values({
-          workspace_id: wsId,
-          memory_space_id: spaceId,
-          memory_item_id: itemId,
-          subject_id: actorSubj,
+          workspaceId: wsId,
+          memorySpaceId: spaceId,
+          memoryItemId: itemId,
+          subjectId: actorSubj,
           permissions: [MEMORY_PERMISSION.READ, MEMORY_PERMISSION.RECALL],
         } as any)
         .execute()
@@ -796,12 +796,12 @@ test(
 
       await expectReject(
         db
-          .insertInto("memory_access_grants")
+          .insertInto("memoryAccessGrants")
           .values({
-            workspace_id: wsId,
-            memory_space_id: spaceId,
-            subject_id: actorSubj,
-            scope_subject_id: actorSubj,
+            workspaceId: wsId,
+            memorySpaceId: spaceId,
+            subjectId: actorSubj,
+            scopeSubjectId: actorSubj,
             permissions: [MEMORY_PERMISSION.READ],
           } as any)
           .execute(),

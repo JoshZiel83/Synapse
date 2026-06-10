@@ -8,7 +8,7 @@ test(
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const result = await sql<{ table_name: string }>`
+      const result = await sql<{ tableName: string }>`
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = 'public'
@@ -17,7 +17,7 @@ test(
         ORDER BY table_name
       `.execute(db)
 
-      const tableNames = result.rows.map((row) => row.table_name)
+      const tableNames = result.rows.map((row) => row.tableName)
       assert.deepEqual(tableNames, [
         "resource_access_bindings",
         "workspace_members",

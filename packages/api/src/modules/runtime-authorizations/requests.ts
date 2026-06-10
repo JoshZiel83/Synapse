@@ -203,29 +203,29 @@ async function loadConversationKindAndBoundary(
 
 async function loadDeviceCapabilityRequestState(capabilityId: string) {
   return db
-    .selectFrom("device_capabilities as capability")
-    .innerJoin("workspace_apps as app", "app.id", "capability.id")
+    .selectFrom("deviceCapabilities as capability")
+    .innerJoin("workspaceApps as app", "app.id", "capability.id")
     .innerJoin(
-      "device_exposures as exposure",
+      "deviceExposures as exposure",
       "exposure.id",
-      "capability.exposure_id"
+      "capability.exposureId"
     )
-    .innerJoin("devices as device", "device.id", "exposure.device_id")
+    .innerJoin("devices as device", "device.id", "exposure.deviceId")
     .select([
-      "capability.id as capability_id",
-      "app.status as capability_status",
-      "exposure.id as exposure_id",
-      "exposure.runtime_status as exposure_runtime_status",
-      "device.workspace_id as owner_workspace_id",
+      "capability.id as capabilityId",
+      "app.status as capabilityStatus",
+      "exposure.id as exposureId",
+      "exposure.runtimeStatus as exposureRuntimeStatus",
+      "device.workspaceId as ownerWorkspaceId",
       sql<boolean>`EXISTS (
         SELECT 1
         FROM device_control_plane_sessions session_row
         WHERE session_row.device_id = device.id
           AND session_row.status = 'active'
-      )`.as("has_active_device_session"),
+      )`.as("hasActiveDeviceSession"),
     ])
     .where("capability.id", "=", capabilityId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
 }
@@ -246,9 +246,9 @@ async function canActorRequestRuntimeAuthorization(
   )
   if (
     !capabilityState ||
-    capabilityState.capability_status !== "active" ||
-    capabilityState.exposure_runtime_status !== "healthy" ||
-    !capabilityState.has_active_device_session
+    capabilityState.capabilityStatus !== "active" ||
+    capabilityState.exposureRuntimeStatus !== "healthy" ||
+    !capabilityState.hasActiveDeviceSession
   ) {
     return false
   }
@@ -264,17 +264,17 @@ async function hasNewUserFacingConversationMessage(
   afterIso: string
 ) {
   const row = await db
-    .selectFrom("conversation_items as ci")
+    .selectFrom("conversationItems as ci")
     .leftJoin(
-      "conversation_participants as cp",
+      "conversationParticipants as cp",
       "cp.id",
-      "ci.author_participant_id"
+      "ci.authorParticipantId"
     )
-    .leftJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
+    .leftJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
     .select("ci.id")
-    .where("ci.conversation_id", "=", conversationId)
-    .where("ci.item_type", "=", "message")
-    .where("ci.created_at", ">", new Date(afterIso))
+    .where("ci.conversationId", "=", conversationId)
+    .where("ci.itemType", "=", "message")
+    .where("ci.createdAt", ">", new Date(afterIso))
     .where((eb) =>
       eb.or([
         eb("ci.role", "=", "user"),

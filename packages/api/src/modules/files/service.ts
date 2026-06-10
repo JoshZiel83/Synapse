@@ -61,46 +61,46 @@ export type FileAccessInfo = Pick<
 
 type FileJoinRow = {
   id: string
-  workspace_id: string | null
-  uploader_user_id: string | null
-  original_name: string
-  mime_type: string
-  content_kind: FileRecordView["contentKind"]
-  size_bytes: string | number
-  content_sha256: string
-  created_at: Date | null
-  source_family: FileRecordView["originSummary"]["family"]
-  source_system: FileRecordView["originSummary"]["system"]
-  initiator_actor_id: string | null
-  parent_asset_id: string | null
-  details_json: unknown
+  workspaceId: string | null
+  uploaderUserId: string | null
+  originalName: string
+  mimeType: string
+  contentKind: FileRecordView["contentKind"]
+  sizeBytes: string | number
+  contentSha256: string
+  createdAt: Date | null
+  sourceFamily: FileRecordView["originSummary"]["family"]
+  sourceSystem: FileRecordView["originSummary"]["system"]
+  initiatorActorId: string | null
+  parentAssetId: string | null
+  detailsJson: unknown
 }
 
 function mapStoredFileRecord(row: FileJoinRow): StoredFileRecord {
   const origin = {
-    family: row.source_family,
-    system: row.source_system,
-    initiatorActorId: row.initiator_actor_id,
-    parentFileId: row.parent_asset_id,
-    details: parseJsonObject(row.details_json),
+    family: row.sourceFamily,
+    system: row.sourceSystem,
+    initiatorActorId: row.initiatorActorId,
+    parentFileId: row.parentAssetId,
+    details: parseJsonObject(row.detailsJson),
   } satisfies FileOriginInput
 
   return {
     id: row.id,
     assetId: row.id,
-    workspaceId: row.workspace_id,
-    uploaderUserId: row.uploader_user_id,
-    originalName: row.original_name,
+    workspaceId: row.workspaceId,
+    uploaderUserId: row.uploaderUserId,
+    originalName: row.originalName,
     url: getStableFileUrl(row.id),
     fullUrl: getStableFullFileUrl(row.id),
-    mimeType: row.mime_type,
-    contentKind: row.content_kind,
-    sizeBytes: Number(row.size_bytes),
-    sha256: row.content_sha256,
+    mimeType: row.mimeType,
+    contentKind: row.contentKind,
+    sizeBytes: Number(row.sizeBytes),
+    sha256: row.contentSha256,
     storageBackend: "local_cas",
     originSummary: toFileOriginSummary(origin),
     createdAt: serializeInstant(
-      requireInstantDate(row.created_at, `file_assets.${row.id}.created_at`)
+      requireInstantDate(row.createdAt, `file_assets.${row.id}.created_at`)
     ),
   }
 }
@@ -111,27 +111,27 @@ async function getJoinedFileRow(
 ): Promise<FileJoinRow | null> {
   // file_assets folds in the old file_origins columns, so no join needed.
   let query = db
-    .selectFrom("file_assets as f")
+    .selectFrom("fileAssets as f")
     .select([
       "f.id",
-      "f.workspace_id",
-      "f.uploader_user_id",
-      "f.original_name",
-      "f.mime_type",
-      "f.content_kind",
-      "f.size_bytes",
-      "f.content_sha256",
-      "f.created_at",
-      "f.source_family",
-      "f.source_system",
-      "f.initiator_actor_id",
-      "f.parent_asset_id",
-      "f.details_json",
+      "f.workspaceId",
+      "f.uploaderUserId",
+      "f.originalName",
+      "f.mimeType",
+      "f.contentKind",
+      "f.sizeBytes",
+      "f.contentSha256",
+      "f.createdAt",
+      "f.sourceFamily",
+      "f.sourceSystem",
+      "f.initiatorActorId",
+      "f.parentAssetId",
+      "f.detailsJson",
     ])
     .where("f.id", "=", fileId)
 
   if (workspaceId) {
-    query = query.where("f.workspace_id", "=", workspaceId)
+    query = query.where("f.workspaceId", "=", workspaceId)
   }
 
   return (await query.executeTakeFirst()) as FileJoinRow | null
@@ -204,10 +204,10 @@ export async function getFileAccessInfo(
   }
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    mimeType: row.mime_type,
-    originalName: row.original_name,
-    contentKind: row.content_kind,
+    workspaceId: row.workspaceId,
+    mimeType: row.mimeType,
+    originalName: row.originalName,
+    contentKind: row.contentKind,
   }
 }
 
@@ -279,30 +279,30 @@ export async function readContentBufferBySha(
  */
 export async function getContentMimeBySha(sha256: string): Promise<string> {
   const asset = await db
-    .selectFrom("file_assets")
-    .select("mime_type")
-    .where("content_sha256", "=", sha256)
+    .selectFrom("fileAssets")
+    .select("mimeType")
+    .where("contentSha256", "=", sha256)
     .limit(1)
     .executeTakeFirst()
-  if (asset?.mime_type) return asset.mime_type
+  if (asset?.mimeType) return asset.mimeType
 
   const part = await db
-    .selectFrom("conversation_item_parts")
-    .select("mime_type")
-    .where("ref_sha256", "=", sha256)
-    .where("mime_type", "is not", null)
+    .selectFrom("conversationItemParts")
+    .select("mimeType")
+    .where("refSha256", "=", sha256)
+    .where("mimeType", "is not", null)
     .limit(1)
     .executeTakeFirst()
-  if (part?.mime_type) return part.mime_type
+  if (part?.mimeType) return part.mimeType
 
   const toolPart = await db
-    .selectFrom("tool_result_parts")
-    .select("mime_type")
-    .where("ref_sha256", "=", sha256)
-    .where("mime_type", "is not", null)
+    .selectFrom("toolResultParts")
+    .select("mimeType")
+    .where("refSha256", "=", sha256)
+    .where("mimeType", "is not", null)
     .limit(1)
     .executeTakeFirst()
-  if (toolPart?.mime_type) return toolPart.mime_type
+  if (toolPart?.mimeType) return toolPart.mimeType
 
   return "application/octet-stream"
 }
@@ -340,13 +340,13 @@ export async function canUserAccessFileWorkspace(
 
   const row = await db
     .selectFrom("workspaces as w")
-    .leftJoin("workspace_members as wm", (join) =>
-      join.onRef("wm.workspace_id", "=", "w.id").on("wm.user_id", "=", userId)
+    .leftJoin("workspaceMembers as wm", (join) =>
+      join.onRef("wm.workspaceId", "=", "w.id").on("wm.userId", "=", userId)
     )
     .select("w.id")
     .where("w.id", "=", workspaceId)
     .where((eb) =>
-      eb.or([eb("w.owner_id", "=", userId), eb("wm.user_id", "is not", null)])
+      eb.or([eb("w.ownerId", "=", userId), eb("wm.userId", "is not", null)])
     )
     .limit(1)
     .executeTakeFirst()

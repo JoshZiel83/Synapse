@@ -182,11 +182,14 @@ export async function markUserDeleted(
   `.execute(db)
 
   // 1. owned workspaces: transfer to a surviving admin member, else soft-delete.
+  // NOTE: `sql`...`.execute(db) routes through the Kysely executor, whose
+  // CamelCasePlugin camelCases the top-level result keys — so the runtime row
+  // keys are camelCase even though the SQL selects snake_case columns.
   const owned = await sql<{ id: string }>`
     SELECT id FROM workspaces WHERE owner_id = ${userId} AND deleted_at IS NULL
   `.execute(db)
   for (const ws of owned.rows) {
-    const successor = await sql<{ user_id: string }>`
+    const successor = await sql<{ userId: string }>`
       SELECT wm.user_id
       FROM workspace_members wm
       JOIN users u ON u.id = wm.user_id
@@ -198,7 +201,7 @@ export async function markUserDeleted(
       ORDER BY wm.joined_at ASC
       LIMIT 1
     `.execute(db)
-    const next = successor.rows[0]?.user_id
+    const next = successor.rows[0]?.userId
     if (next) {
       await sql`UPDATE workspaces SET owner_id = ${next} WHERE id = ${ws.id}`.execute(
         db
@@ -329,13 +332,16 @@ export async function markAccountUnlinked(
   providerId: string,
   accountId: string
 ): Promise<boolean> {
-  const live = await sql<{ id: string; is_target: boolean }>`
+  // NOTE: `sql`...`.execute(db) routes through the Kysely executor, whose
+  // CamelCasePlugin camelCases the top-level result keys — so `is_target` is
+  // returned as `isTarget` at runtime.
+  const live = await sql<{ id: string; isTarget: boolean }>`
     SELECT id,
            (provider_id = ${providerId} AND account_id = ${accountId}) AS is_target
     FROM account
     WHERE user_id = ${userId} AND deleted_at IS NULL
   `.execute(db)
-  const target = live.rows.find((r) => r.is_target)
+  const target = live.rows.find((r) => r.isTarget)
   if (!target) return false // not found / already unlinked
   if (live.rows.length <= 1) {
     // would leave the user with no live login method

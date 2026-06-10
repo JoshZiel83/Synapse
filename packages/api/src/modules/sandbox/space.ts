@@ -36,44 +36,50 @@ export const MOUNT_SUBPATHS: readonly MountSubpath[] = [
   "actor-conversation",
 ]
 
+// NOTE: these row shapes describe what the Kysely executor RETURNS at runtime.
+// The CamelCasePlugin (maintainNestedObjectKeys: true) camelCases the top-level
+// keys of every result row — including raw sql`...`.execute() — so the physical
+// snake_case columns surface here as camelCase. The SQL bodies below keep the
+// snake_case column names (that's the physical schema); only the read keys are
+// camelCase.
 export interface FileSpaceRow {
   id: string
-  workspace_id: string
-  owner_subject_id: string
-  scope_subject_id: string | null
-  namespace_key: string
-  current_snapshot_id: string | null
+  workspaceId: string
+  ownerSubjectId: string
+  scopeSubjectId: string | null
+  namespaceKey: string
+  currentSnapshotId: string | null
 }
 
 export interface FileMountRow {
   id: string
-  workspace_id: string
-  session_id: string
-  file_space_id: string
-  mount_subpath: MountSubpath
-  device_id: string | null
-  pairing_session_id: string | null
-  base_snapshot_id: string | null
-  result_snapshot_id: string | null
-  refresh_policy: "per_turn" | "on_teardown"
+  workspaceId: string
+  sessionId: string
+  fileSpaceId: string
+  mountSubpath: MountSubpath
+  deviceId: string | null
+  pairingSessionId: string | null
+  baseSnapshotId: string | null
+  resultSnapshotId: string | null
+  refreshPolicy: "per_turn" | "on_teardown"
   status: "provisioning" | "active" | "committing" | "closed" | "failed"
-  materialized_dir: string | null
-  host_pid: number | null
-  sandbox_backend: "local" | "docker" | null
-  sandbox_resource_id: string | null
-  error_message: string | null
+  materializedDir: string | null
+  hostPid: number | null
+  sandboxBackend: "local" | "docker" | null
+  sandboxResourceId: string | null
+  errorMessage: string | null
 }
 
 export interface FileSnapshotRow {
   id: string
-  workspace_id: string
-  file_space_id: string
-  parent_snapshot_id: string | null
+  workspaceId: string
+  fileSpaceId: string
+  parentSnapshotId: string | null
   version: string
-  manifest_sha256: string
+  manifestSha256: string
   reason: string
-  entry_count: number
-  total_bytes: string
+  entryCount: number
+  totalBytes: string
 }
 
 /**
@@ -303,7 +309,7 @@ export async function appendSnapshot(
   }
 ): Promise<FileSnapshotRow> {
   // Serialize per-space version assignment.
-  const locked = await sql<{ current_snapshot_id: string | null }>`
+  const locked = await sql<{ currentSnapshotId: string | null }>`
     SELECT current_snapshot_id FROM file_spaces WHERE id = ${input.fileSpaceId} FOR UPDATE`.execute(
     client
   )
@@ -313,7 +319,7 @@ export async function appendSnapshot(
       404
     )
   }
-  const head = locked.rows[0].current_snapshot_id
+  const head = locked.rows[0].currentSnapshotId
   if (head !== input.expectedParentSnapshotId) {
     throw new SandboxSpaceError(
       `file_space ${input.fileSpaceId} head moved during commit (expected ${input.expectedParentSnapshotId}, now ${head})`,
@@ -364,9 +370,9 @@ export async function getSnapshotManifestSha(
   client: Executor,
   snapshotId: string
 ): Promise<string | null> {
-  const result = await sql<{ manifest_sha256: string }>`
+  const result = await sql<{ manifestSha256: string }>`
     SELECT manifest_sha256 FROM file_snapshots WHERE id = ${snapshotId} LIMIT 1`.execute(
     client
   )
-  return result.rows[0]?.manifest_sha256 ?? null
+  return result.rows[0]?.manifestSha256 ?? null
 }

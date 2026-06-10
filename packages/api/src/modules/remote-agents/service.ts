@@ -227,9 +227,9 @@ async function loadMachineByApiKey(apiKey: string) {
   const result = await runBuilder(
     db,
     db
-      .selectFrom("remote_agent_machines")
-      .select(["id", "workspace_id", "trust_status"])
-      .where("api_key_hash", "=", hashMachineApiKey(apiKey))
+      .selectFrom("remoteAgentMachines")
+      .select(["id", "workspaceId", "trustStatus"])
+      .where("apiKeyHash", "=", hashMachineApiKey(apiKey))
       .limit(1)
   )
   return result.rows[0] ?? null
@@ -272,24 +272,24 @@ async function getOrInitConversationContext(
   const result = await runBuilder(
     queryable,
     queryable
-      .insertInto("remote_agent_conversation_contexts")
+      .insertInto("remoteAgentConversationContexts")
       .values({
-        remote_agent_id: remoteAgentId,
-        conversation_id: conversationId,
-        runtime_kind: runtimeKind,
-        created_at: sql`NOW()`,
+        remoteAgentId: remoteAgentId,
+        conversationId: conversationId,
+        runtimeKind: runtimeKind,
+        createdAt: sql`NOW()`,
       })
       .onConflict((oc) =>
-        oc.columns(["remote_agent_id", "conversation_id"]).doUpdateSet({
-          runtime_kind: sql`COALESCE(remote_agent_conversation_contexts.runtime_kind, EXCLUDED.runtime_kind)`,
+        oc.columns(["remoteAgentId", "conversationId"]).doUpdateSet({
+          runtimeKind: sql`COALESCE(remote_agent_conversation_contexts.runtime_kind, EXCLUDED.runtime_kind)`,
         })
       )
       .returning([
-        "runtime_kind",
-        "runtime_session_id",
-        "runtime_state",
-        "status_text",
-        "active_task_id",
+        "runtimeKind",
+        "runtimeSessionId",
+        "runtimeState",
+        "statusText",
+        "activeTaskId",
       ])
   )
   return result.rows[0] ?? null
@@ -455,10 +455,10 @@ async function setMachineLifecycleState(
   queryable: Executor = db
 ) {
   await queryable
-    .updateTable("remote_agent_machines")
+    .updateTable("remoteAgentMachines")
     .set({
-      lifecycle_state: state,
-      last_seen_at: sql`NOW()`,
+      lifecycleState: state,
+      lastSeenAt: sql`NOW()`,
     })
     .where("id", "=", machineId)
     .execute()
@@ -471,26 +471,26 @@ async function upsertRuntimeCatalog(
 ) {
   for (const entry of entries) {
     await queryable
-      .insertInto("remote_agent_runtime_catalog")
+      .insertInto("remoteAgentRuntimeCatalog")
       .values({
-        machine_id: machineId,
-        runtime_kind: entry.runtimeKind,
-        executable_path: entry.executablePath ?? null,
+        machineId: machineId,
+        runtimeKind: entry.runtimeKind,
+        executablePath: entry.executablePath ?? null,
         status: entry.status,
         version: entry.version ?? null,
         metadata: sql`${JSON.stringify(entry.metadata ?? {})}::jsonb`,
-        last_seen_at: sql`NOW()`,
-        last_error: entry.lastError ?? null,
-        created_at: sql`NOW()`,
+        lastSeenAt: sql`NOW()`,
+        lastError: entry.lastError ?? null,
+        createdAt: sql`NOW()`,
       })
       .onConflict((oc) =>
-        oc.columns(["machine_id", "runtime_kind"]).doUpdateSet({
-          executable_path: sql`EXCLUDED.executable_path`,
+        oc.columns(["machineId", "runtimeKind"]).doUpdateSet({
+          executablePath: sql`EXCLUDED.executable_path`,
           status: sql`EXCLUDED.status`,
           version: sql`EXCLUDED.version`,
           metadata: sql`EXCLUDED.metadata`,
-          last_seen_at: sql`NOW()`,
-          last_error: sql`EXCLUDED.last_error`,
+          lastSeenAt: sql`NOW()`,
+          lastError: sql`EXCLUDED.last_error`,
         })
       )
       .execute()
@@ -623,17 +623,17 @@ async function updateRemoteAgentRuntimeStatus(
     const bindingRuntimeKind = await runBuilder(
       queryable,
       queryable
-        .selectFrom("remote_agent_bindings")
-        .select("runtime_kind")
-        .where("remote_agent_id", "=", message.remoteAgentId)
-        .where("machine_id", "=", machineId)
+        .selectFrom("remoteAgentBindings")
+        .select("runtimeKind")
+        .where("remoteAgentId", "=", message.remoteAgentId)
+        .where("machineId", "=", machineId)
         .limit(1)
     )
     await updateConversationRuntimeStatus(
       {
         remoteAgentId: message.remoteAgentId,
         conversationId: message.conversationId,
-        runtimeKind: bindingRuntimeKind.rows[0]?.runtime_kind ?? null,
+        runtimeKind: bindingRuntimeKind.rows[0]?.runtimeKind ?? null,
         state: message.state,
         statusText: message.statusText,
         sessionId: message.sessionId ?? null,
@@ -655,15 +655,15 @@ async function updateRemoteAgentRuntimeStatus(
     // line ~2829), which still drives bindings to offline directly. This
     // branch covers the in-process stop where the daemon stays connected.
     await queryable
-      .updateTable("remote_agent_conversation_contexts")
+      .updateTable("remoteAgentConversationContexts")
       .set({
-        runtime_state: "offline",
-        status_text: message.statusText ?? null,
-        last_activity_at: sql`NOW()`,
-        last_run_finished_at: sql`COALESCE(last_run_finished_at, NOW())`,
+        runtimeState: "offline",
+        statusText: message.statusText ?? null,
+        lastActivityAt: sql`NOW()`,
+        lastRunFinishedAt: sql`COALESCE(last_run_finished_at, NOW())`,
       })
-      .where("remote_agent_id", "=", message.remoteAgentId)
-      .where("runtime_state", "!=", "offline")
+      .where("remoteAgentId", "=", message.remoteAgentId)
+      .where("runtimeState", "!=", "offline")
       .execute()
   }
 
@@ -743,9 +743,9 @@ async function updateRemoteAgentRuntimeStatus(
 
   if (runId && message.taskId) {
     await queryable
-      .updateTable("remote_agent_runs")
+      .updateTable("remoteAgentRuns")
       .set({
-        task_id: message.taskId,
+        taskId: message.taskId,
       })
       .where("id", "=", runId)
       .execute()
@@ -830,34 +830,29 @@ async function sendAgentStartPrefix(
   const bindingsResult = await runBuilder(
     db,
     db
-      .selectFrom("remote_agent_bindings")
-      .select([
-        "remote_agent_id",
-        "runtime_kind",
-        "runtime_path",
-        "local_root_path",
-      ])
-      .where("machine_id", "=", machineId)
+      .selectFrom("remoteAgentBindings")
+      .select(["remoteAgentId", "runtimeKind", "runtimePath", "localRootPath"])
+      .where("machineId", "=", machineId)
       .where("status", "=", "active")
-      .where("remote_agent_id", "in", remoteAgentIds)
+      .where("remoteAgentId", "in", remoteAgentIds)
   )
   const bindingByAgent = new Map(
-    bindingsResult.rows.map((row) => [row.remote_agent_id, row])
+    bindingsResult.rows.map((row) => [row.remoteAgentId, row])
   )
   const sessionResult = await runBuilder(
     db,
     db
-      .selectFrom("remote_agent_conversation_contexts")
-      .select(["remote_agent_id", "conversation_id", "runtime_session_id"])
-      .where("remote_agent_id", "in", remoteAgentIds)
-      .where("conversation_id", "in", [
+      .selectFrom("remoteAgentConversationContexts")
+      .select(["remoteAgentId", "conversationId", "runtimeSessionId"])
+      .where("remoteAgentId", "in", remoteAgentIds)
+      .where("conversationId", "in", [
         ...new Set([...pairs.values()].map((pair) => pair.conversationId)),
       ])
   )
   const sessionByPair = new Map(
     sessionResult.rows.map((row) => [
-      `${row.remote_agent_id}:${row.conversation_id}`,
-      row.runtime_session_id,
+      `${row.remoteAgentId}:${row.conversationId}`,
+      row.runtimeSessionId,
     ])
   )
   for (const pair of pairs.values()) {
@@ -867,9 +862,9 @@ async function sendAgentStartPrefix(
       type: "agent:start",
       remoteAgentId: pair.remoteAgentId,
       conversationId: pair.conversationId,
-      runtimeKind: binding.runtime_kind,
-      runtimePath: binding.runtime_path,
-      localRootPath: binding.local_root_path,
+      runtimeKind: binding.runtimeKind,
+      runtimePath: binding.runtimePath,
+      localRootPath: binding.localRootPath,
       sessionId:
         sessionByPair.get(`${pair.remoteAgentId}:${pair.conversationId}`) ??
         null,
@@ -959,10 +954,10 @@ async function scheduleDeliveryRetry(
   const updated = await runBuilder(
     queryable,
     queryable
-      .updateTable("remote_agent_message_deliveries")
+      .updateTable("remoteAgentMessageDeliveries")
       .set({
         attempts: sql`attempts + 1`,
-        last_failure_reason: reason,
+        lastFailureReason: reason,
       })
       .where("id", "in", deliveryIds)
       .where("status", "=", "pending")
@@ -972,10 +967,10 @@ async function scheduleDeliveryRetry(
   for (const row of updated.rows) {
     if (shouldFailDelivery(row.attempts)) {
       await queryable
-        .updateTable("remote_agent_message_deliveries")
+        .updateTable("remoteAgentMessageDeliveries")
         .set({
           status: "failed",
-          next_attempt_at: null,
+          nextAttemptAt: null,
         })
         .where("id", "=", row.id)
         .execute()
@@ -983,9 +978,9 @@ async function scheduleDeliveryRetry(
     }
     const scheduled = nextAttemptAt(now, row.attempts)
     await queryable
-      .updateTable("remote_agent_message_deliveries")
+      .updateTable("remoteAgentMessageDeliveries")
       .set({
-        next_attempt_at: scheduled,
+        nextAttemptAt: scheduled,
       })
       .where("id", "=", row.id)
       .execute()
@@ -1006,9 +1001,9 @@ export async function failRemoteAgentDeliveries(params: {
   const owned = await runBuilder(
     db,
     db
-      .selectFrom("remote_agent_message_deliveries")
+      .selectFrom("remoteAgentMessageDeliveries")
       .select("id")
-      .where("remote_agent_id", "=", params.remoteAgentId)
+      .where("remoteAgentId", "=", params.remoteAgentId)
       .where("id", "in", uniqueIds)
       .where("status", "=", "pending")
   )
@@ -1096,7 +1091,7 @@ export async function authenticateMachineForRemoteAgent(params: {
   const machine = await loadMachineByApiKey(params.machineKey)
   if (
     !machine ||
-    machine.trust_status !== REMOTE_AGENT_MACHINE_TRUST_STATUS.ACTIVE
+    machine.trustStatus !== REMOTE_AGENT_MACHINE_TRUST_STATUS.ACTIVE
   ) {
     throw new Error("Machine authentication failed")
   }
@@ -1147,11 +1142,11 @@ async function loadConversationHostWorkspaceId(
     queryable,
     queryable
       .selectFrom("conversations")
-      .select("workspace_id")
+      .select("workspaceId")
       .where("id", "=", conversationId)
       .limit(1)
   )
-  return result.rows[0]?.workspace_id ?? null
+  return result.rows[0]?.workspaceId ?? null
 }
 
 function mapRuntimeSummaryFromRow(row: {
@@ -1230,9 +1225,9 @@ async function ensureRemoteAgentRun(params: {
   const existing = await runBuilder(
     queryable,
     queryable
-      .selectFrom("remote_agent_runs")
+      .selectFrom("remoteAgentRuns")
       .select("id")
-      .where("run_key", "=", params.runKey)
+      .where("runKey", "=", params.runKey)
       .limit(1)
   )
   if (existing.rows[0]?.id) {
@@ -1991,15 +1986,15 @@ export async function createRemoteAgentMachinePairingSession(params: {
   const result = await runBuilder(
     db,
     db
-      .insertInto("remote_agent_machines")
+      .insertInto("remoteAgentMachines")
       .values({
-        workspace_id: params.workspaceId,
+        workspaceId: params.workspaceId,
         title: params.title?.trim() || "Remote Agent Machine",
         description: params.description?.trim() || null,
-        api_key_hash: hashMachineApiKey(apiKey),
-        trust_status: "active",
-        created_by_workspace_member_id: identity.workspaceMemberId,
-        created_at: sql`NOW()`,
+        apiKeyHash: hashMachineApiKey(apiKey),
+        trustStatus: "active",
+        createdByWorkspaceMemberId: identity.workspaceMemberId,
+        createdAt: sql`NOW()`,
       })
       .returningAll()
   )
@@ -2007,14 +2002,14 @@ export async function createRemoteAgentMachinePairingSession(params: {
   return {
     machine: {
       id: result.rows[0]!.id,
-      workspaceId: result.rows[0]!.workspace_id,
+      workspaceId: result.rows[0]!.workspaceId,
       title: result.rows[0]!.title,
       description: result.rows[0]!.description ?? undefined,
-      trustStatus: result.rows[0]!.trust_status,
-      lifecycleState: result.rows[0]!.lifecycle_state ?? undefined,
-      lastSeenAt: serializeOptionalInstant(result.rows[0]!.last_seen_at),
-      createdAt: serializeOptionalInstant(result.rows[0]!.created_at),
-      updatedAt: serializeOptionalInstant(result.rows[0]!.updated_at),
+      trustStatus: result.rows[0]!.trustStatus,
+      lifecycleState: result.rows[0]!.lifecycleState ?? undefined,
+      lastSeenAt: serializeOptionalInstant(result.rows[0]!.lastSeenAt),
+      createdAt: serializeOptionalInstant(result.rows[0]!.createdAt),
+      updatedAt: serializeOptionalInstant(result.rows[0]!.updatedAt),
     },
     apiKey,
     daemonCommand: buildDaemonCommand(apiKey),
@@ -2069,19 +2064,19 @@ export async function getRemoteAgentMachine(params: {
     runBuilder(
       db,
       db
-        .selectFrom("remote_agent_machines")
+        .selectFrom("remoteAgentMachines")
         .selectAll()
-        .where("workspace_id", "=", params.workspaceId)
+        .where("workspaceId", "=", params.workspaceId)
         .where("id", "=", params.machineId)
         .limit(1)
     ),
     runBuilder(
       db,
       db
-        .selectFrom("remote_agent_runtime_catalog")
+        .selectFrom("remoteAgentRuntimeCatalog")
         .selectAll()
-        .where("machine_id", "=", params.machineId)
-        .orderBy("runtime_kind", "asc")
+        .where("machineId", "=", params.machineId)
+        .orderBy("runtimeKind", "asc")
     ),
     runOnDb<any>(
       `
@@ -2133,26 +2128,26 @@ export async function getRemoteAgentMachine(params: {
   return {
     machine: {
       id: machine.id,
-      workspaceId: machine.workspace_id,
+      workspaceId: machine.workspaceId,
       title: machine.title,
       description: machine.description ?? undefined,
-      trustStatus: machine.trust_status,
-      lifecycleState: machine.lifecycle_state ?? undefined,
-      lastSeenAt: serializeOptionalInstant(machine.last_seen_at),
-      createdAt: serializeOptionalInstant(machine.created_at),
-      updatedAt: serializeOptionalInstant(machine.updated_at),
+      trustStatus: machine.trustStatus,
+      lifecycleState: machine.lifecycleState ?? undefined,
+      lastSeenAt: serializeOptionalInstant(machine.lastSeenAt),
+      createdAt: serializeOptionalInstant(machine.createdAt),
+      updatedAt: serializeOptionalInstant(machine.updatedAt),
     },
     runtimeCatalog: catalogResult.rows.map((row) => ({
-      runtimeKind: row.runtime_kind,
-      executablePath: row.executable_path ?? undefined,
+      runtimeKind: row.runtimeKind,
+      executablePath: row.executablePath ?? undefined,
       status: row.status,
       version: row.version ?? undefined,
       metadata:
         row.metadata && typeof row.metadata === "object"
           ? (row.metadata as Record<string, unknown>)
           : {},
-      lastError: row.last_error ?? undefined,
-      lastSeenAt: serializeOptionalInstant(row.last_seen_at),
+      lastError: row.lastError ?? undefined,
+      lastSeenAt: serializeOptionalInstant(row.lastSeenAt),
     })),
     bindings: bindingResult.rows.map((row) => ({
       remoteAgentId: row.remote_agent_id,
@@ -2191,9 +2186,9 @@ export async function bindRemoteAgent(params: {
   const machineResult = await runBuilder(
     db,
     db
-      .selectFrom("remote_agent_machines")
+      .selectFrom("remoteAgentMachines")
       .select("id")
-      .where("workspace_id", "=", params.workspaceId)
+      .where("workspaceId", "=", params.workspaceId)
       .where("id", "=", params.machineId)
       .limit(1)
   )
@@ -2204,10 +2199,10 @@ export async function bindRemoteAgent(params: {
   const catalogResult = await runBuilder(
     db,
     db
-      .selectFrom("remote_agent_runtime_catalog")
-      .select(["executable_path", "status", "last_error"])
-      .where("machine_id", "=", params.machineId)
-      .where("runtime_kind", "=", params.runtimeKind)
+      .selectFrom("remoteAgentRuntimeCatalog")
+      .select(["executablePath", "status", "lastError"])
+      .where("machineId", "=", params.machineId)
+      .where("runtimeKind", "=", params.runtimeKind)
       .limit(1)
   )
 
@@ -2217,8 +2212,8 @@ export async function bindRemoteAgent(params: {
       throw new Error("Machine has not reported runtime availability yet")
     }
     if (catalogEntry.status !== REMOTE_AGENT_RUNTIME_CATALOG_STATUS.AVAILABLE) {
-      const detail = catalogEntry.last_error?.trim()
-        ? `: ${catalogEntry.last_error.trim()}`
+      const detail = catalogEntry.lastError?.trim()
+        ? `: ${catalogEntry.lastError.trim()}`
         : ""
       throw new Error(
         `Runtime ${params.runtimeKind} is not available on this machine (${catalogEntry.status})${detail}`
@@ -2227,25 +2222,25 @@ export async function bindRemoteAgent(params: {
   }
 
   const effectiveRuntimePath =
-    params.runtimePath ?? catalogEntry?.executable_path ?? null
+    params.runtimePath ?? catalogEntry?.executablePath ?? null
 
   await db
-    .insertInto("remote_agent_bindings")
+    .insertInto("remoteAgentBindings")
     .values({
-      remote_agent_id: params.remoteAgentId,
-      machine_id: params.machineId,
-      runtime_kind: params.runtimeKind,
-      runtime_path: effectiveRuntimePath,
-      local_root_path: params.localRootPath ?? null,
+      remoteAgentId: params.remoteAgentId,
+      machineId: params.machineId,
+      runtimeKind: params.runtimeKind,
+      runtimePath: effectiveRuntimePath,
+      localRootPath: params.localRootPath ?? null,
       status: "active",
-      created_at: sql`NOW()`,
+      createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
-      oc.column("remote_agent_id").doUpdateSet({
-        machine_id: sql`EXCLUDED.machine_id`,
-        runtime_kind: sql`EXCLUDED.runtime_kind`,
-        runtime_path: sql`EXCLUDED.runtime_path`,
-        local_root_path: sql`EXCLUDED.local_root_path`,
+      oc.column("remoteAgentId").doUpdateSet({
+        machineId: sql`EXCLUDED.machine_id`,
+        runtimeKind: sql`EXCLUDED.runtime_kind`,
+        runtimePath: sql`EXCLUDED.runtime_path`,
+        localRootPath: sql`EXCLUDED.local_root_path`,
         status: "active",
       })
     )
@@ -2342,9 +2337,9 @@ export async function updateRemoteAgentGroupTaskGrants(params: {
     const membership = await runBuilder(
       db,
       db
-        .selectFrom("workspace_members")
+        .selectFrom("workspaceMembers")
         .select("id")
-        .where("workspace_id", "=", params.workspaceId)
+        .where("workspaceId", "=", params.workspaceId)
         .where("id", "in", nextIds)
     )
     if (membership.rows.length !== nextIds.length) {
@@ -2359,12 +2354,12 @@ export async function updateRemoteAgentGroupTaskGrants(params: {
     )
     for (const workspaceMemberId of nextIds) {
       await client
-        .insertInto("remote_agent_group_task_grants")
+        .insertInto("remoteAgentGroupTaskGrants")
         .values({
-          remote_agent_id: params.remoteAgentId,
-          workspace_member_id: workspaceMemberId,
-          granted_by_workspace_member_id: identity.workspaceMemberId,
-          created_at: sql`NOW()`,
+          remoteAgentId: params.remoteAgentId,
+          workspaceMemberId: workspaceMemberId,
+          grantedByWorkspaceMemberId: identity.workspaceMemberId,
+          createdAt: sql`NOW()`,
         })
         .execute()
     }
@@ -2528,36 +2523,34 @@ export async function createRemoteAgentDeliveriesForItem(params: {
     const inserted = await runBuilder(
       executor,
       executor
-        .insertInto("remote_agent_message_deliveries")
+        .insertInto("remoteAgentMessageDeliveries")
         .values({
-          remote_agent_id: participant.remote_agent_id,
-          conversation_id: params.conversationId,
-          item_id: params.itemId,
+          remoteAgentId: participant.remote_agent_id,
+          conversationId: params.conversationId,
+          itemId: params.itemId,
           status: "pending",
           attempts: 0,
-          created_at: sql`NOW()`,
+          createdAt: sql`NOW()`,
         })
-        .onConflict((oc) =>
-          oc.columns(["remote_agent_id", "item_id"]).doNothing()
-        )
+        .onConflict((oc) => oc.columns(["remoteAgentId", "itemId"]).doNothing())
     )
 
     if ((inserted.rowCount ?? 0) > 0) {
       await executor
-        .insertInto("remote_agent_conversation_views")
+        .insertInto("remoteAgentConversationViews")
         .values({
-          remote_agent_id: participant.remote_agent_id,
-          conversation_id: params.conversationId,
-          unread_count: 1,
-          last_delivery_item_id: params.itemId,
-          last_delivery_at: sql`NOW()`,
-          created_at: sql`NOW()`,
+          remoteAgentId: participant.remote_agent_id,
+          conversationId: params.conversationId,
+          unreadCount: 1,
+          lastDeliveryItemId: params.itemId,
+          lastDeliveryAt: sql`NOW()`,
+          createdAt: sql`NOW()`,
         })
         .onConflict((oc) =>
-          oc.columns(["remote_agent_id", "conversation_id"]).doUpdateSet({
-            unread_count: sql`remote_agent_conversation_views.unread_count + 1`,
-            last_delivery_item_id: sql`EXCLUDED.last_delivery_item_id`,
-            last_delivery_at: sql`NOW()`,
+          oc.columns(["remoteAgentId", "conversationId"]).doUpdateSet({
+            unreadCount: sql`remote_agent_conversation_views.unread_count + 1`,
+            lastDeliveryItemId: sql`EXCLUDED.last_delivery_item_id`,
+            lastDeliveryAt: sql`NOW()`,
           })
         )
         .execute()
@@ -2700,12 +2693,12 @@ export async function completeRemoteAgentDeliveries(params: {
   )
 
   await db
-    .updateTable("remote_agent_message_deliveries")
+    .updateTable("remoteAgentMessageDeliveries")
     .set({
       status: "completed",
-      last_acked_at: sql`NOW()`,
+      lastAckedAt: sql`NOW()`,
     })
-    .where("remote_agent_id", "=", params.remoteAgentId)
+    .where("remoteAgentId", "=", params.remoteAgentId)
     .where("id", "in", uniqueIds)
     .execute()
   clearInFlightDeliveries(
@@ -2905,13 +2898,13 @@ export async function notifyRemoteAgentTaskResolved(taskId: string) {
   const binding = await runBuilder(
     db,
     db
-      .selectFrom("remote_agent_bindings")
-      .select("machine_id")
-      .where("remote_agent_id", "=", task.requester.remoteAgentId)
+      .selectFrom("remoteAgentBindings")
+      .select("machineId")
+      .where("remoteAgentId", "=", task.requester.remoteAgentId)
       .where("status", "=", "active")
       .limit(1)
   )
-  const machineId = binding.rows[0]?.machine_id
+  const machineId = binding.rows[0]?.machineId
   if (!machineId) {
     return false
   }
@@ -2952,11 +2945,11 @@ async function finalizeMachineSession(
     deliveryInFlightByMachine.delete(connection.machineId)
   }
   await db
-    .updateTable("remote_agent_machine_sessions")
+    .updateTable("remoteAgentMachineSessions")
     .set({
       status: "closed",
-      close_reason: sql`COALESCE(${closeReason ?? null}, close_reason)`,
-      ended_at: sql`NOW()`,
+      closeReason: sql`COALESCE(${closeReason ?? null}, close_reason)`,
+      endedAt: sql`NOW()`,
     })
     .where("id", "=", connection.sessionId)
     .where("status", "!=", "closed")
@@ -2971,22 +2964,22 @@ async function finalizeMachineSession(
   const bindings = await loadBoundRemoteAgentsForMachine(connection.machineId)
   for (const binding of bindings) {
     await db
-      .updateTable("remote_agent_bindings")
+      .updateTable("remoteAgentBindings")
       .set({
-        runtime_state: "offline",
-        status_text: closeReason ?? "Daemon disconnected",
+        runtimeState: "offline",
+        statusText: closeReason ?? "Daemon disconnected",
       })
-      .where("remote_agent_id", "=", binding.remote_agent_id)
+      .where("remoteAgentId", "=", binding.remote_agent_id)
       .execute()
     await db
-      .updateTable("remote_agent_conversation_contexts")
+      .updateTable("remoteAgentConversationContexts")
       .set({
-        runtime_state: "offline",
-        status_text: closeReason ?? "Daemon disconnected",
-        last_run_finished_at: sql`COALESCE(last_run_finished_at, NOW())`,
+        runtimeState: "offline",
+        statusText: closeReason ?? "Daemon disconnected",
+        lastRunFinishedAt: sql`COALESCE(last_run_finished_at, NOW())`,
       })
-      .where("remote_agent_id", "=", binding.remote_agent_id)
-      .where("runtime_state", "in", [
+      .where("remoteAgentId", "=", binding.remote_agent_id)
+      .where("runtimeState", "in", [
         "running",
         "waiting_user_input",
         "plan_drafting",
@@ -3007,7 +3000,7 @@ export async function handleRemoteAgentDaemonConnection(
   const machine = await loadMachineByApiKey(apiKey)
   if (
     !machine ||
-    machine.trust_status !== REMOTE_AGENT_MACHINE_TRUST_STATUS.ACTIVE
+    machine.trustStatus !== REMOTE_AGENT_MACHINE_TRUST_STATUS.ACTIVE
   ) {
     try {
       socket.send(
@@ -3038,11 +3031,11 @@ export async function handleRemoteAgentDaemonConnection(
     } catch {}
     machineConnections.delete(machine.id)
     await db
-      .updateTable("remote_agent_machine_sessions")
+      .updateTable("remoteAgentMachineSessions")
       .set({
         status: "closed",
-        close_reason: "superseded by newer connection",
-        ended_at: sql`NOW()`,
+        closeReason: "superseded by newer connection",
+        endedAt: sql`NOW()`,
       })
       .where("id", "=", existing.sessionId)
       .where("status", "!=", "closed")
@@ -3050,37 +3043,37 @@ export async function handleRemoteAgentDaemonConnection(
   }
 
   await db
-    .updateTable("remote_agent_machine_sessions")
+    .updateTable("remoteAgentMachineSessions")
     .set({
       status: "closed",
-      close_reason: sql`COALESCE(close_reason, 'superseded by newer connection')`,
-      ended_at: sql`NOW()`,
+      closeReason: sql`COALESCE(close_reason, 'superseded by newer connection')`,
+      endedAt: sql`NOW()`,
     })
-    .where("machine_id", "=", machine.id)
+    .where("machineId", "=", machine.id)
     .where("status", "in", ["connecting", "active"])
     .execute()
 
   const sessionResult = await runBuilder(
     db,
     db
-      .insertInto("remote_agent_machine_sessions")
+      .insertInto("remoteAgentMachineSessions")
       .values({
-        machine_id: machine.id,
+        machineId: machine.id,
         status: "connecting",
         transport: "websocket",
-        remote_addr: req.socket?.remoteAddress ?? null,
-        last_heartbeat_at: sql`NOW()`,
-        started_at: sql`NOW()`,
-        created_at: sql`NOW()`,
+        remoteAddr: req.socket?.remoteAddress ?? null,
+        lastHeartbeatAt: sql`NOW()`,
+        startedAt: sql`NOW()`,
+        createdAt: sql`NOW()`,
       })
-      .returning(["id", "fencing_token"])
+      .returning(["id", "fencingToken"])
   )
   const sessionId = sessionResult.rows[0]!.id
-  const fencingToken = sessionResult.rows[0]!.fencing_token
+  const fencingToken = sessionResult.rows[0]!.fencingToken
 
   const connection: MachineConnection = {
     machineId: machine.id,
-    workspaceId: machine.workspace_id,
+    workspaceId: machine.workspaceId,
     sessionId,
     fencingToken,
     socket,
@@ -3124,9 +3117,9 @@ export async function handleRemoteAgentDaemonConnection(
 
     if (message?.type === "heartbeat") {
       await db
-        .updateTable("remote_agent_machine_sessions")
+        .updateTable("remoteAgentMachineSessions")
         .set({
-          last_heartbeat_at: sql`NOW()`,
+          lastHeartbeatAt: sql`NOW()`,
         })
         .where("id", "=", sessionId)
         .execute()
@@ -3139,10 +3132,10 @@ export async function handleRemoteAgentDaemonConnection(
     if (message?.type === "ready") {
       connection.ready = true
       await db
-        .updateTable("remote_agent_machine_sessions")
+        .updateTable("remoteAgentMachineSessions")
         .set({
           status: "active",
-          last_heartbeat_at: sql`NOW()`,
+          lastHeartbeatAt: sql`NOW()`,
         })
         .where("id", "=", sessionId)
         .execute()
@@ -3166,16 +3159,16 @@ export async function handleRemoteAgentDaemonConnection(
       const bindingRow = await runBuilder(
         db,
         db
-          .selectFrom("remote_agent_bindings")
-          .select("runtime_kind")
-          .where("remote_agent_id", "=", message.remoteAgentId)
-          .where("machine_id", "=", machine.id)
+          .selectFrom("remoteAgentBindings")
+          .select("runtimeKind")
+          .where("remoteAgentId", "=", message.remoteAgentId)
+          .where("machineId", "=", machine.id)
           .limit(1)
       )
       await updateConversationRuntimeStatus({
         remoteAgentId: message.remoteAgentId,
         conversationId: message.conversationId,
-        runtimeKind: bindingRow.rows[0]?.runtime_kind ?? null,
+        runtimeKind: bindingRow.rows[0]?.runtimeKind ?? null,
         state:
           typeof message.state === "string"
             ? (message.state as RemoteAgentRuntimeStateType)

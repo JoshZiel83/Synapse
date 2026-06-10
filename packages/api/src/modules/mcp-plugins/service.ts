@@ -163,16 +163,16 @@ type PluginCategoryRow = {
 type PublisherRow = {
   id: string
   slug: string
-  display_name: string
+  displayName: string
   description: string | null
-  logo_file_id: string | null
-  owner_user_id: string | null
-  workspace_id: string | null
-  is_builtin: boolean | null
-  is_verified: boolean | null
-  created_at: Date
-  updated_at: Date
-  plugin_count?: string | number | null
+  logoFileId: string | null
+  ownerUserId: string | null
+  workspaceId: string | null
+  isBuiltin: boolean | null
+  isVerified: boolean | null
+  createdAt: Date
+  updatedAt: Date
+  pluginCount?: string | number | null
 }
 
 type InstallationRow = {
@@ -458,13 +458,13 @@ async function ensureBuiltinPluginIcon(
   const key = `${seedSlug}/${pluginSlug}`
 
   const existing = await db
-    .selectFrom("file_assets as f")
+    .selectFrom("fileAssets as f")
     .select("f.id")
-    .where("f.workspace_id", "is", null)
-    .where("f.source_family", "=", "platform_asset")
-    .where("f.source_system", "=", FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON)
+    .where("f.workspaceId", "is", null)
+    .where("f.sourceFamily", "=", "platform_asset")
+    .where("f.sourceSystem", "=", FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON)
     .where(sql<boolean>`f.details_json->>'builtinPluginIconKey' = ${key}`)
-    .where("f.content_sha256", "=", sha256)
+    .where("f.contentSha256", "=", sha256)
     .limit(1)
     .executeTakeFirst()
 
@@ -615,19 +615,19 @@ function mapPublisherView(row: PublisherRow) {
   return {
     id: row.id,
     slug: row.slug,
-    display_name: row.display_name,
+    display_name: row.displayName,
     description: row.description || "",
-    logo_url: row.logo_file_id ? getFileUrlById(row.logo_file_id) : null,
-    is_builtin: Boolean(row.is_builtin),
-    is_verified: Boolean(row.is_verified),
-    owner_user_id: row.owner_user_id,
-    workspace_id: row.workspace_id,
+    logo_url: row.logoFileId ? getFileUrlById(row.logoFileId) : null,
+    is_builtin: Boolean(row.isBuiltin),
+    is_verified: Boolean(row.isVerified),
+    owner_user_id: row.ownerUserId,
+    workspace_id: row.workspaceId,
     plugin_count:
-      typeof row.plugin_count === "number"
-        ? row.plugin_count
-        : Number(row.plugin_count || 0),
-    created_at: serializeInstant(row.created_at),
-    updated_at: serializeInstant(row.updated_at),
+      typeof row.pluginCount === "number"
+        ? row.pluginCount
+        : Number(row.pluginCount || 0),
+    created_at: serializeInstant(row.createdAt),
+    updated_at: serializeInstant(row.updatedAt),
   }
 }
 
@@ -978,17 +978,13 @@ async function loadInstallationRows(
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
   let query = db
-    .selectFrom("workspace_app_grants as app_grant")
-    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
-    .leftJoin(
-      "access_subjects as scope",
-      "scope.id",
-      "app_grant.scope_subject_id"
-    )
+    .selectFrom("workspaceAppGrants as app_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
+    .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
     .select([
       "app_grant.id",
-      "app_grant.workspace_id",
-      "app_grant.workspace_app_id as installation_id",
+      "app_grant.workspaceId as workspace_id",
+      "app_grant.workspaceAppId as installation_id",
       sql<RuntimeBindingScope>`
         CASE subj.kind
           WHEN 'workspace' THEN 'workspace'
@@ -998,23 +994,23 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
           WHEN 'remote_agent' THEN 'remote_agent'
         END
       `.as("access_target_type"),
-      "subj.actor_id as actor_id",
-      "subj.remote_agent_id as remote_agent_id",
-      "subj.workspace_member_id as workspace_member_id",
-      "scope.conversation_id as conversation_id",
-      "app_grant.conversation_type_mask_override",
+      "subj.actorId as actor_id",
+      "subj.remoteAgentId as remote_agent_id",
+      "subj.workspaceMemberId as workspace_member_id",
+      "scope.conversationId as conversation_id",
+      "app_grant.conversationTypeMaskOverride as conversation_type_mask_override",
       "app_grant.status",
       "app_grant.source",
-      "app_grant.created_by_workspace_member_id",
+      "app_grant.createdByWorkspaceMemberId as created_by_workspace_member_id",
       "app_grant.reason",
-      "app_grant.created_at",
-      "app_grant.revoked_at",
+      "app_grant.createdAt as created_at",
+      "app_grant.revokedAt as revoked_at",
     ])
-    .where("app_grant.workspace_app_id", "=", installationId)
+    .where("app_grant.workspaceAppId", "=", installationId)
     .where(
       sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
     )
-    .orderBy("app_grant.created_at", "desc")
+    .orderBy("app_grant.createdAt", "desc")
 
   if (!includeRevoked) {
     query = query.where("app_grant.status", "=", "active")
@@ -1240,13 +1236,13 @@ async function ensureCatalogItem(
   const existing = await runBuilder(
     ex,
     ex
-      .selectFrom("catalog_items")
+      .selectFrom("catalogItems")
       .select("id")
-      .where("publisher_id", "=", input.orgId)
-      .where("item_kind", "=", "plugin_package")
+      .where("publisherId", "=", input.orgId)
+      .where("itemKind", "=", "plugin_package")
       .where("slug", "=", normalizedSlug)
       .where(
-        sql<SqlBool>`${sql.ref("workspace_id")} is not distinct from ${
+        sql<SqlBool>`${sql.ref("workspaceId")} is not distinct from ${
           input.workspaceId || null
         }`
       )
@@ -1266,16 +1262,16 @@ async function ensureCatalogItem(
   if (existing.rows.length > 0) {
     const itemId = existing.rows[0]!.id
     await ex
-      .updateTable("catalog_items")
+      .updateTable("catalogItems")
       .set({
-        display_name: input.displayName,
+        displayName: input.displayName,
         summary: input.description || "",
-        long_description: input.longDescription || "",
-        source_kind: input.isBuiltin ? "builtin" : "official",
+        longDescription: input.longDescription || "",
+        sourceKind: input.isBuiltin ? "builtin" : "official",
         visibility: "public",
         tags: input.tags || [],
-        is_active: true,
-        icon_file_id: input.iconFileId || null,
+        isActive: true,
+        iconFileId: input.iconFileId || null,
         metadata: sql`${JSON.stringify(metadata)}::jsonb`,
       })
       .where("id", "=", itemId)
@@ -1286,20 +1282,20 @@ async function ensureCatalogItem(
   const inserted = await runBuilder(
     ex,
     ex
-      .insertInto("catalog_items")
+      .insertInto("catalogItems")
       .values({
-        publisher_id: input.orgId,
-        workspace_id: input.workspaceId || null,
-        item_kind: "plugin_package",
+        publisherId: input.orgId,
+        workspaceId: input.workspaceId || null,
+        itemKind: "plugin_package",
         slug: normalizedSlug,
-        display_name: input.displayName,
+        displayName: input.displayName,
         summary: input.description || "",
-        long_description: input.longDescription || "",
-        icon_file_id: input.iconFileId || null,
-        source_kind: input.isBuiltin ? "builtin" : "official",
+        longDescription: input.longDescription || "",
+        iconFileId: input.iconFileId || null,
+        sourceKind: input.isBuiltin ? "builtin" : "official",
         visibility: "public",
         tags: input.tags || [],
-        is_active: true,
+        isActive: true,
         metadata: sql`${JSON.stringify(metadata)}::jsonb`,
       })
       .returning("id")
@@ -1337,16 +1333,16 @@ async function upsertPluginVersion(
   const upsertedVersion = await runBuilder(
     ex,
     ex
-      .insertInto("catalog_versions")
+      .insertInto("catalogVersions")
       .values({
-        catalog_item_id: itemId,
+        catalogItemId: itemId,
         version: versionValue,
         status: "active",
         changelog: "",
         metadata: sql`'{}'::jsonb`,
       })
       .onConflict((oc) =>
-        oc.columns(["catalog_item_id", "version"]).doUpdateSet({
+        oc.columns(["catalogItemId", "version"]).doUpdateSet({
           status: "active",
         })
       )
@@ -1373,41 +1369,41 @@ async function upsertPluginVersion(
   )
 
   await ex
-    .insertInto("plugin_package_version_specs")
+    .insertInto("pluginPackageVersionSpecs")
     .values({
-      catalog_version_id: versionId,
+      catalogVersionId: versionId,
       transport:
-        input.transport as TableInsert<"plugin_package_version_specs">["transport"],
-      entry_point: input.entryPoint || null,
-      tool_manifest: sql`${JSON.stringify(input.toolsManifest || [])}::jsonb`,
-      config_schema: sql`${JSON.stringify(input.configSchema || {})}::jsonb`,
-      default_config: sql`${JSON.stringify(input.defaultConfig || {})}::jsonb`,
-      install_flow: sql`${JSON.stringify(
+        input.transport as TableInsert<"pluginPackageVersionSpecs">["transport"],
+      entryPoint: input.entryPoint || null,
+      toolManifest: sql`${JSON.stringify(input.toolsManifest || [])}::jsonb`,
+      configSchema: sql`${JSON.stringify(input.configSchema || {})}::jsonb`,
+      defaultConfig: sql`${JSON.stringify(input.defaultConfig || {})}::jsonb`,
+      installFlow: sql`${JSON.stringify(
         input.installFlow || { steps: input.setupSteps || [] }
       )}::jsonb`,
-      auth_bindings: sql`${JSON.stringify(input.authBindings || [])}::jsonb`,
-      default_reuse_scope: internalReuseScope(defaultReuseScope),
-      default_conversation_type_mask: defaultConversationTypeMask,
-      supported_reuse_scopes: supportedReuseScopes.map((scope) =>
+      authBindings: sql`${JSON.stringify(input.authBindings || [])}::jsonb`,
+      defaultReuseScope: internalReuseScope(defaultReuseScope),
+      defaultConversationTypeMask: defaultConversationTypeMask,
+      supportedReuseScopes: supportedReuseScopes.map((scope) =>
         internalReuseScope(scope)
       ),
-      requires_handshake:
+      requiresHandshake:
         input.requiresHandshake ?? input.transport !== "builtin",
       metadata: sql`${JSON.stringify(metadata)}::jsonb`,
     })
     .onConflict((oc) =>
-      oc.column("catalog_version_id").doUpdateSet({
+      oc.column("catalogVersionId").doUpdateSet({
         transport: sql`excluded.transport`,
-        entry_point: sql`excluded.entry_point`,
-        tool_manifest: sql`excluded.tool_manifest`,
-        config_schema: sql`excluded.config_schema`,
-        default_config: sql`excluded.default_config`,
-        install_flow: sql`excluded.install_flow`,
-        auth_bindings: sql`excluded.auth_bindings`,
-        default_reuse_scope: sql`excluded.default_reuse_scope`,
-        default_conversation_type_mask: sql`excluded.default_conversation_type_mask`,
-        supported_reuse_scopes: sql`excluded.supported_reuse_scopes`,
-        requires_handshake: sql`excluded.requires_handshake`,
+        entryPoint: sql`excluded.entry_point`,
+        toolManifest: sql`excluded.tool_manifest`,
+        configSchema: sql`excluded.config_schema`,
+        defaultConfig: sql`excluded.default_config`,
+        installFlow: sql`excluded.install_flow`,
+        authBindings: sql`excluded.auth_bindings`,
+        defaultReuseScope: sql`excluded.default_reuse_scope`,
+        defaultConversationTypeMask: sql`excluded.default_conversation_type_mask`,
+        supportedReuseScopes: sql`excluded.supported_reuse_scopes`,
+        requiresHandshake: sql`excluded.requires_handshake`,
         metadata: sql`excluded.metadata`,
       })
     )
@@ -1421,20 +1417,20 @@ async function upsertPluginVersion(
 
   for (const permissionKey of input.authorization?.requiredPermissions || []) {
     await ex
-      .insertInto("plugin_version_runtime_permissions")
+      .insertInto("pluginVersionRuntimePermissions")
       .values({
-        catalog_version_id: versionId,
-        permission_key: permissionKey,
-        is_required: true,
+        catalogVersionId: versionId,
+        permissionKey: permissionKey,
+        isRequired: true,
         rationale: "",
       })
       .execute()
   }
 
   await ex
-    .updateTable("catalog_items")
+    .updateTable("catalogItems")
     .set({
-      latest_version_id: versionId,
+      latestVersionId: versionId,
     })
     .where("id", "=", itemId)
     .execute()
@@ -1457,18 +1453,18 @@ async function assignPluginCategories(
   const result = await runBuilder(
     ex,
     ex
-      .selectFrom("catalog_categories")
+      .selectFrom("catalogCategories")
       .select("id")
-      .where("item_kind", "=", "plugin_package")
+      .where("itemKind", "=", "plugin_package")
       .where("slug", "in", categorySlugs)
   )
 
   for (const row of result.rows) {
     await ex
-      .insertInto("catalog_item_categories")
+      .insertInto("catalogItemCategories")
       .values({
-        catalog_item_id: itemId,
-        category_id: row.id,
+        catalogItemId: itemId,
+        categoryId: row.id,
       })
       .onConflict((oc) => oc.doNothing())
       .execute()
@@ -1489,25 +1485,25 @@ export async function createOrganization(data: {
     .insertInto("publishers")
     .values({
       slug: normalizedSlug,
-      display_name: data.displayName,
+      displayName: data.displayName,
       description: data.description || "",
-      logo_file_id: data.logoFileId || null,
-      owner_user_id: data.ownerUserId || null,
-      workspace_id: null,
-      is_builtin: data.isBuiltin === true,
-      is_verified: data.isVerified === true,
+      logoFileId: data.logoFileId || null,
+      ownerUserId: data.ownerUserId || null,
+      workspaceId: null,
+      isBuiltin: data.isBuiltin === true,
+      isVerified: data.isVerified === true,
     })
     .onConflict((oc) =>
       oc
         .column("slug")
-        .where("deleted_at", "is", null)
+        .where("deletedAt", "is", null)
         .doUpdateSet({
-          display_name: data.displayName,
+          displayName: data.displayName,
           description: data.description || "",
-          logo_file_id: data.logoFileId || null,
-          owner_user_id: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
-          is_builtin: data.isBuiltin === true,
-          is_verified: data.isVerified === true,
+          logoFileId: data.logoFileId || null,
+          ownerUserId: sql`COALESCE(publishers.owner_user_id, excluded.owner_user_id)`,
+          isBuiltin: data.isBuiltin === true,
+          isVerified: data.isVerified === true,
         })
     )
     .returningAll()
@@ -1519,18 +1515,18 @@ export async function createOrganization(data: {
 export async function listOrganizations() {
   const rows = await db
     .selectFrom("publishers as publisher")
-    .leftJoin("catalog_items as item", (join) =>
+    .leftJoin("catalogItems as item", (join) =>
       join
-        .onRef("item.publisher_id", "=", "publisher.id")
-        .on("item.item_kind", "=", "plugin_package")
-        .on("item.is_active", "=", true)
-        .on("item.workspace_id", "is", null)
+        .onRef("item.publisherId", "=", "publisher.id")
+        .on("item.itemKind", "=", "plugin_package")
+        .on("item.isActive", "=", true)
+        .on("item.workspaceId", "is", null)
     )
     .selectAll("publisher")
-    .select(sql<number>`COUNT(item.id)::int`.as("plugin_count"))
+    .select(sql<number>`COUNT(item.id)::int`.as("pluginCount"))
     .groupBy("publisher.id")
-    .orderBy("publisher.is_verified", "desc")
-    .orderBy("publisher.display_name", "asc")
+    .orderBy("publisher.isVerified", "desc")
+    .orderBy("publisher.displayName", "asc")
     .execute()
 
   return rows.map((row) => mapPublisherView(row))
@@ -1540,8 +1536,7 @@ export async function getOrganization(id: string) {
   const row = await db
     .selectFrom("publishers")
     .selectAll()
-    .select(sql<number>`0::int`.as("plugin_count"))
-    .where("id", "=", id)
+    .select(sql<number>`0::int`.as("pluginCount"))
     .limit(1)
     .executeTakeFirst()
 
@@ -1556,7 +1551,7 @@ export async function getOrganizationBySlug(slug: string) {
   const row = await db
     .selectFrom("publishers")
     .selectAll()
-    .select(sql<number>`0::int`.as("plugin_count"))
+    .select(sql<number>`0::int`.as("pluginCount"))
     .where("slug", "=", sanitizeSlug(slug))
     .limit(1)
     .executeTakeFirst()
@@ -1672,11 +1667,11 @@ export async function listPlugins(filters?: {
 
 export async function listPluginCategories() {
   const rows = await db
-    .selectFrom("catalog_categories")
+    .selectFrom("catalogCategories")
     .selectAll()
-    .where("item_kind", "=", "plugin_package")
-    .orderBy("sort_order", "asc")
-    .orderBy("display_name", "asc")
+    .where("itemKind", "=", "plugin_package")
+    .orderBy("sortOrder", "asc")
+    .orderBy("displayName", "asc")
     .execute()
 
   return rows.map((row) => {
@@ -1684,7 +1679,7 @@ export async function listPluginCategories() {
     return {
       id: row.id,
       slug: row.slug,
-      display_name: row.display_name,
+      display_name: row.displayName,
       description: row.description,
       display_name_i18n: asObject(metadata.displayNameI18n),
       description_i18n: asObject(metadata.descriptionI18n),
@@ -1692,7 +1687,7 @@ export async function listPluginCategories() {
         typeof metadata.defaultLocale === "string"
           ? metadata.defaultLocale
           : "en",
-      sort_order: row.sort_order,
+      sort_order: row.sortOrder,
     }
   })
 }
@@ -1769,10 +1764,10 @@ export async function installPluginUnified(data: {
     const connectionResult = await runBuilder(
       ex,
       ex
-        .selectFrom("plugin_connections")
-        .select("public_payload")
+        .selectFrom("pluginConnections")
+        .select("publicPayload")
         .where("id", "=", rawConnection.connectionId)
-        .where("deleted_at", "is", null)
+        .where("deletedAt", "is", null)
         .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
         .limit(1)
     )
@@ -1783,7 +1778,7 @@ export async function installPluginUnified(data: {
     try {
       assertFeishuScopesForFeatures(
         features,
-        asObject(connectionResult.rows[0]!.public_payload).scopes
+        asObject(connectionResult.rows[0]!.publicPayload).scopes
       )
     } catch (error) {
       throw new McpPluginError(
@@ -1819,14 +1814,14 @@ export async function installPluginUnified(data: {
     const insertedInstallation = await takeFirstOn<{ id: string }>(
       client,
       db
-        .insertInto("plugin_installations")
+        .insertInto("pluginInstallations")
         .values({
           id: installationId,
-          catalog_item_id: plugin.id,
-          catalog_version_id: catalogVersionId,
-          config_data: {} as TableInsert<"plugin_installations">["config_data"],
-          approved_runtime_permissions: approvedRuntimePermissions,
-          reuse_scope: internalReuseScope(lifecycleScope),
+          catalogItemId: plugin.id,
+          catalogVersionId: catalogVersionId,
+          configData: {} as TableInsert<"pluginInstallations">["configData"],
+          approvedRuntimePermissions: approvedRuntimePermissions,
+          reuseScope: internalReuseScope(lifecycleScope),
         })
         .returning("id")
     )
@@ -1865,30 +1860,30 @@ export async function installPluginUnified(data: {
     await runBuilder(
       client,
       db
-        .updateTable("plugin_installations")
+        .updateTable("pluginInstallations")
         .set({
-          config_data:
-            encryptedConfig as TableInsert<"plugin_installations">["config_data"],
+          configData:
+            encryptedConfig as TableInsert<"pluginInstallations">["configData"],
         })
         .where("id", "=", installationId)
     )
 
     await runBuilder(
       client,
-      db.insertInto("plugin_source_refs").values({
-        installation_id: installationId,
-        source_catalog_item_id: plugin.id,
-        source_catalog_version_id: catalogVersionId,
-        sync_mode: "manual_merge",
+      db.insertInto("pluginSourceRefs").values({
+        installationId: installationId,
+        sourceCatalogItemId: plugin.id,
+        sourceCatalogVersionId: catalogVersionId,
+        syncMode: "manual_merge",
       })
     )
 
     await runBuilder(
       client,
       db
-        .updateTable("catalog_items")
+        .updateTable("catalogItems")
         .set({
-          download_count: sql`download_count + 1`,
+          downloadCount: sql`download_count + 1`,
         })
         .where("id", "=", plugin.id)
     )
@@ -1946,13 +1941,13 @@ export async function tearDownPluginInstallationOn(
   await runBuilder(
     client,
     db
-      .updateTable("plugin_connections")
+      .updateTable("pluginConnections")
       .set({
-        deleted_at: sql`NOW()`,
+        deletedAt: sql`NOW()`,
         status: "revoked",
       })
-      .where("installation_id", "=", installId)
-      .where("deleted_at", "is", null)
+      .where("installationId", "=", installId)
+      .where("deletedAt", "is", null)
   )
   await updateWorkspaceAppRoot(client, {
     id: installId,
@@ -1965,14 +1960,14 @@ export async function tearDownPluginInstallationOn(
 
 export async function uninstallPluginUnified(installId: string) {
   const installation = await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
     .select([
       "installation.id as installation_id",
-      "app.workspace_id as workspace_id",
+      "app.workspaceId as workspace_id",
     ])
     .where("installation.id", "=", installId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!installation) {
@@ -2034,11 +2029,11 @@ export async function updateInstallation(
   }
 ) {
   const currentRow = await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
-    .select("app.workspace_id as workspace_id")
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .select("app.workspaceId as workspace_id")
     .where("installation.id", "=", installId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!currentRow) {
@@ -2120,10 +2115,10 @@ export async function updateInstallation(
     const connectionResult = await runBuilder(
       ex,
       ex
-        .selectFrom("plugin_connections")
-        .select("public_payload")
+        .selectFrom("pluginConnections")
+        .select("publicPayload")
         .where("id", "=", rawConnection.connectionId)
-        .where("deleted_at", "is", null)
+        .where("deletedAt", "is", null)
         .where("status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
         .limit(1)
     )
@@ -2134,7 +2129,7 @@ export async function updateInstallation(
     try {
       assertFeishuScopesForFeatures(
         features,
-        asObject(connectionResult.rows[0]!.public_payload).scopes
+        asObject(connectionResult.rows[0]!.publicPayload).scopes
       )
     } catch (error) {
       throw new McpPluginError(
@@ -2189,9 +2184,9 @@ export async function updateInstallation(
         plugin.config_schema || {}
       )
       await client
-        .updateTable("plugin_installations")
+        .updateTable("pluginInstallations")
         .set({
-          config_data: sql`${JSON.stringify(encryptedConfig)}::jsonb`,
+          configData: sql`${JSON.stringify(encryptedConfig)}::jsonb`,
         })
         .where("id", "=", installId)
         .execute()
@@ -2203,9 +2198,9 @@ export async function updateInstallation(
 
     if (data.lifecycleScope) {
       await client
-        .updateTable("plugin_installations")
+        .updateTable("pluginInstallations")
         .set({
-          reuse_scope: internalReuseScope(nextLifecycleScope),
+          reuseScope: internalReuseScope(nextLifecycleScope),
         })
         .where("id", "=", installId)
         .execute()
@@ -2383,16 +2378,16 @@ export async function createPluginInstallationGrant(input: {
 
     const accessRow = buildInstallationAccessRow({
       id: inserted.id,
-      workspaceId: inserted.workspace_id,
-      installationId: inserted.workspace_app_id,
+      workspaceId: inserted.workspaceId,
+      installationId: inserted.workspaceAppId,
       target: accessTarget,
-      conversationTypeMaskOverride: inserted.conversation_type_mask_override,
+      conversationTypeMaskOverride: inserted.conversationTypeMaskOverride,
       status: inserted.status,
       source: inserted.source,
-      createdByWorkspaceMemberId: inserted.created_by_workspace_member_id,
+      createdByWorkspaceMemberId: inserted.createdByWorkspaceMemberId,
       reason: inserted.reason,
-      createdAt: inserted.created_at || new Date(0),
-      revokedAt: inserted.revoked_at,
+      createdAt: inserted.createdAt || new Date(0),
+      revokedAt: inserted.revokedAt,
     })
     return {
       accessRow,
@@ -2458,13 +2453,12 @@ export async function updatePluginInstallationGrant(input: {
   })
 
   await db
-    .updateTable("workspace_app_grants")
+    .updateTable("workspaceAppGrants")
     .set({
-      conversation_type_mask_override:
-        input.conversationTypeMaskOverride ?? null,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
     } as any)
     .where("id", "=", input.grantId)
-    .where("workspace_id", "=", input.workspaceId)
+    .where("workspaceId", "=", input.workspaceId)
     .execute()
 
   const updatedAccessRows = await listAccessRows(input.installationId)
@@ -2653,13 +2647,13 @@ export async function seedBuiltinPluginCategories() {
   for (const category of builtinCapabilityCategories) {
     if (category.targetKind !== "plugin") continue
     await db
-      .insertInto("catalog_categories")
+      .insertInto("catalogCategories")
       .values({
         slug: category.slug,
-        item_kind: "plugin_package",
-        display_name: category.displayName,
+        itemKind: "plugin_package",
+        displayName: category.displayName,
         description: category.description || "",
-        sort_order: category.sortOrder,
+        sortOrder: category.sortOrder,
         metadata: {
           displayNameI18n: category.displayNameI18n || {
             en: category.displayName,
@@ -2668,13 +2662,13 @@ export async function seedBuiltinPluginCategories() {
             en: category.description || "",
           },
           defaultLocale: category.defaultLocale || "en",
-        } as TableInsert<"catalog_categories">["metadata"],
+        } as TableInsert<"catalogCategories">["metadata"],
       })
       .onConflict((oc) =>
-        oc.columns(["item_kind", "slug"]).doUpdateSet({
-          display_name: category.displayName,
+        oc.columns(["itemKind", "slug"]).doUpdateSet({
+          displayName: category.displayName,
           description: category.description || "",
-          sort_order: category.sortOrder,
+          sortOrder: category.sortOrder,
           metadata: {
             displayNameI18n: category.displayNameI18n || {
               en: category.displayName,
@@ -2683,7 +2677,7 @@ export async function seedBuiltinPluginCategories() {
               en: category.description || "",
             },
             defaultLocale: category.defaultLocale || "en",
-          } as TableInsert<"catalog_categories">["metadata"],
+          } as TableInsert<"catalogCategories">["metadata"],
         })
       )
       .execute()

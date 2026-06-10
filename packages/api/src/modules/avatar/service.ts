@@ -297,31 +297,31 @@ async function saveSvgAvatarFile(
   })
 
   await executor
-    .insertInto("content_blobs")
+    .insertInto("contentBlobs")
     .values({
       sha256: blobRef.sha256,
-      size_bytes: String(blobRef.sizeBytes),
+      sizeBytes: String(blobRef.sizeBytes),
       backend: "local_cas",
-      locator_json: {} as any,
+      locatorJson: {} as any,
     })
     .onConflict((oc) => oc.column("sha256").doNothing())
     .execute()
 
   const row = await executor
-    .insertInto("file_assets")
+    .insertInto("fileAssets")
     .values({
-      workspace_id: params.workspaceId,
-      content_sha256: blobRef.sha256,
-      original_name: normalizedOriginalName,
-      mime_type: SVG_MIME_TYPE,
-      content_kind: mimeToFileContentKind(SVG_MIME_TYPE),
-      size_bytes: String(blobRef.sizeBytes),
-      uploader_user_id: params.uploaderUserId,
-      initiator_actor_id: origin.initiatorActorId ?? null,
-      source_family: origin.family,
-      source_system: origin.system,
-      parent_asset_id: origin.parentFileId ?? null,
-      details_json: (origin.details || {}) as any,
+      workspaceId: params.workspaceId,
+      contentSha256: blobRef.sha256,
+      originalName: normalizedOriginalName,
+      mimeType: SVG_MIME_TYPE,
+      contentKind: mimeToFileContentKind(SVG_MIME_TYPE),
+      sizeBytes: String(blobRef.sizeBytes),
+      uploaderUserId: params.uploaderUserId,
+      initiatorActorId: origin.initiatorActorId ?? null,
+      sourceFamily: origin.family,
+      sourceSystem: origin.system,
+      parentAssetId: origin.parentFileId ?? null,
+      detailsJson: (origin.details || {}) as any,
     })
     .returning("id")
     .executeTakeFirst()

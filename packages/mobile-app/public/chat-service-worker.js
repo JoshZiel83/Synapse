@@ -590,14 +590,6 @@
     RELATIONSHIP_APPROVAL_MODE.AUTO,
     RELATIONSHIP_APPROVAL_MODE.MANUAL
   ];
-  var RELATIONSHIP_ACCESS_POLICY = {
-    WORKSPACE_OPEN: "workspace_open",
-    APPROVAL_REQUIRED: "approval_required"
-  };
-  var RELATIONSHIP_ACCESS_POLICIES = [
-    RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
-    RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED
-  ];
   var RELATIONSHIP_REQUEST_STATUS = {
     PENDING: "pending",
     APPROVED: "approved",
@@ -1003,8 +995,96 @@
     "dingtalk",
     "qq"
   ];
+  function isTransportKind(value) {
+    return typeof value === "string" && TRANSPORT_KINDS.includes(value);
+  }
 
-  // ../shared/dist/types/index.js
+  // ../shared/dist/content/index.js
+  function createCanonicalContentBlockId(_prefix = "block") {
+    return globalThis.crypto.randomUUID();
+  }
+  function textBlock(text, id) {
+    return {
+      id: typeof id === "string" && id.trim().length > 0 ? id : createCanonicalContentBlockId("text"),
+      type: "text",
+      text
+    };
+  }
+  function fileRefBlock(input) {
+    return {
+      id: typeof input.id === "string" && input.id.trim().length > 0 ? input.id : createCanonicalContentBlockId("file"),
+      type: "file_ref",
+      sha256: input.sha256,
+      ...input.path !== void 0 ? { path: input.path } : {},
+      mimeType: input.mimeType,
+      name: input.name,
+      sizeBytes: input.sizeBytes,
+      category: input.category
+    };
+  }
+  function mentionBlock(input) {
+    return {
+      id: typeof input.id === "string" && input.id.trim().length > 0 ? input.id : createCanonicalContentBlockId("mention"),
+      type: "mention",
+      mention: input.mention
+    };
+  }
+  function normalizeContentBlockSizeBytes(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+  function isConversationEntityRef(value) {
+    if (!value || typeof value !== "object")
+      return false;
+    const entity = value;
+    return typeof entity.participantType === "string" && entity.participantType.trim().length > 0 && (entity.participantId === void 0 || typeof entity.participantId === "string") && (entity.workspaceMemberId === void 0 || typeof entity.workspaceMemberId === "string") && (entity.actorId === void 0 || typeof entity.actorId === "string") && (entity.userId === void 0 || typeof entity.userId === "string") && (entity.externalUserKey === void 0 || typeof entity.externalUserKey === "string") && (entity.transportAddressId === void 0 || typeof entity.transportAddressId === "string") && (entity.transportKind === void 0 || isTransportKind(entity.transportKind)) && (entity.name === void 0 || typeof entity.name === "string") && (entity.title === void 0 || typeof entity.title === "string") && (entity.role === void 0 || typeof entity.role === "string") && (entity.avatarUrl === void 0 || typeof entity.avatarUrl === "string") && (entity.avatarEmoji === void 0 || typeof entity.avatarEmoji === "string");
+  }
+  function normalizeCanonicalContentBlocks(blocks) {
+    const normalized = [];
+    for (const block of blocks || []) {
+      if (!block || typeof block !== "object")
+        continue;
+      if (block.type === "text") {
+        if (typeof block.text !== "string")
+          continue;
+        normalized.push(textBlock(block.text, block.id));
+        continue;
+      }
+      if (block.type === "file_ref") {
+        const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes);
+        if (typeof block.sha256 !== "string" || block.path !== void 0 && typeof block.path !== "string" || typeof block.mimeType !== "string" || typeof block.name !== "string" || sizeBytes === null || block.category !== "image" && block.category !== "audio" && block.category !== "video" && block.category !== "document") {
+          continue;
+        }
+        normalized.push(fileRefBlock({
+          ...block,
+          sizeBytes
+        }));
+        continue;
+      }
+      if (block.type === "mention") {
+        if (!isConversationEntityRef(block.mention))
+          continue;
+        normalized.push(mentionBlock({
+          id: block.id,
+          mention: block.mention
+        }));
+      }
+    }
+    return normalized;
+  }
+  function textBlocks(s) {
+    return [textBlock(s)];
+  }
+
+  // ../shared/dist/actor/templates.js
   var ACTOR_DOC_TEMPLATES = [
     {
       key: "identity_card",
@@ -1120,92 +1200,19 @@
     }
   ];
   var ACTOR_DOC_TEMPLATE_MAP = Object.fromEntries(ACTOR_DOC_TEMPLATES.map((template) => [template.key, template]));
-  function isTransportKind(value) {
-    return typeof value === "string" && TRANSPORT_KINDS.includes(value);
-  }
-  function createCanonicalContentBlockId(_prefix = "block") {
-    return globalThis.crypto.randomUUID();
-  }
-  function textBlock(text, id) {
-    return {
-      id: typeof id === "string" && id.trim().length > 0 ? id : createCanonicalContentBlockId("text"),
-      type: "text",
-      text
-    };
-  }
-  function fileRefBlock(input) {
-    return {
-      id: typeof input.id === "string" && input.id.trim().length > 0 ? input.id : createCanonicalContentBlockId("file"),
-      type: "file_ref",
-      sha256: input.sha256,
-      ...input.path !== void 0 ? { path: input.path } : {},
-      mimeType: input.mimeType,
-      name: input.name,
-      sizeBytes: input.sizeBytes,
-      category: input.category
-    };
-  }
-  function mentionBlock(input) {
-    return {
-      id: typeof input.id === "string" && input.id.trim().length > 0 ? input.id : createCanonicalContentBlockId("mention"),
-      type: "mention",
-      mention: input.mention
-    };
-  }
-  function normalizeContentBlockSizeBytes(value) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string" && value.trim().length > 0) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-    return null;
-  }
-  function isConversationEntityRef(value) {
-    if (!value || typeof value !== "object")
-      return false;
-    const entity = value;
-    return typeof entity.participantType === "string" && entity.participantType.trim().length > 0 && (entity.participantId === void 0 || typeof entity.participantId === "string") && (entity.workspaceMemberId === void 0 || typeof entity.workspaceMemberId === "string") && (entity.actorId === void 0 || typeof entity.actorId === "string") && (entity.userId === void 0 || typeof entity.userId === "string") && (entity.externalUserKey === void 0 || typeof entity.externalUserKey === "string") && (entity.transportAddressId === void 0 || typeof entity.transportAddressId === "string") && (entity.transportKind === void 0 || isTransportKind(entity.transportKind)) && (entity.name === void 0 || typeof entity.name === "string") && (entity.title === void 0 || typeof entity.title === "string") && (entity.role === void 0 || typeof entity.role === "string") && (entity.avatarUrl === void 0 || typeof entity.avatarUrl === "string") && (entity.avatarEmoji === void 0 || typeof entity.avatarEmoji === "string");
-  }
-  function normalizeCanonicalContentBlocks(blocks) {
-    const normalized = [];
-    for (const block of blocks || []) {
-      if (!block || typeof block !== "object")
-        continue;
-      if (block.type === "text") {
-        if (typeof block.text !== "string")
-          continue;
-        normalized.push(textBlock(block.text, block.id));
-        continue;
-      }
-      if (block.type === "file_ref") {
-        const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes);
-        if (typeof block.sha256 !== "string" || block.path !== void 0 && typeof block.path !== "string" || typeof block.mimeType !== "string" || typeof block.name !== "string" || sizeBytes === null || block.category !== "image" && block.category !== "audio" && block.category !== "video" && block.category !== "document") {
-          continue;
-        }
-        normalized.push(fileRefBlock({
-          ...block,
-          sizeBytes
-        }));
-        continue;
-      }
-      if (block.type === "mention") {
-        if (!isConversationEntityRef(block.mention))
-          continue;
-        normalized.push(mentionBlock({
-          id: block.id,
-          mention: block.mention
-        }));
-      }
-    }
-    return normalized;
-  }
-  function textBlocks(s) {
-    return [textBlock(s)];
-  }
+
+  // ../shared/dist/constants/index.js
+  var API_VERSION = "v1";
+  var API_PREFIX = `/api/${API_VERSION}`;
+  var AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+  var MCP_INSTANCE_TTL = {
+    actor: 30 * 60 * 1e3,
+    // 30 minutes
+    workspace: 60 * 60 * 1e3
+    // 60 minutes
+  };
+
+  // ../shared/dist/actor/index.js
   function createActorDocId() {
     return globalThis.crypto.randomUUID();
   }
@@ -1385,17 +1392,6 @@
       return left.title.localeCompare(right.title);
     });
   }
-
-  // ../shared/dist/constants/index.js
-  var API_VERSION = "v1";
-  var API_PREFIX = `/api/${API_VERSION}`;
-  var AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
-  var MCP_INSTANCE_TTL = {
-    actor: 30 * 60 * 1e3,
-    // 30 minutes
-    workspace: 60 * 60 * 1e3
-    // 60 minutes
-  };
 
   // ../shared/dist/access/policies/commandline-normalize.js
   var BUNDLE_ELIGIBLE_PROGRAMS = [
@@ -1885,6 +1881,82 @@
     SUBJECT_KIND.EXTERNAL,
     SUBJECT_KIND.PLATFORM
   ];
+  var WORKSPACE_APP_KIND = {
+    PLUGIN_INSTALLATION: "plugin_installation",
+    INSTALLED_SKILL: "installed_skill",
+    ACTOR: "actor",
+    REMOTE_AGENT: "remote_agent",
+    DEVICE_CAPABILITY: "device_capability"
+  };
+  var WORKSPACE_APP_KINDS = [
+    WORKSPACE_APP_KIND.PLUGIN_INSTALLATION,
+    WORKSPACE_APP_KIND.INSTALLED_SKILL,
+    WORKSPACE_APP_KIND.ACTOR,
+    WORKSPACE_APP_KIND.REMOTE_AGENT,
+    WORKSPACE_APP_KIND.DEVICE_CAPABILITY
+  ];
+  var WORKSPACE_APP_STATUS = {
+    ACTIVE: "active",
+    DISABLED: "disabled",
+    ERROR: "error",
+    DEPRECATED: "deprecated",
+    ARCHIVED: "archived"
+  };
+  var WORKSPACE_APP_STATUSES = [
+    WORKSPACE_APP_STATUS.ACTIVE,
+    WORKSPACE_APP_STATUS.DISABLED,
+    WORKSPACE_APP_STATUS.ERROR,
+    WORKSPACE_APP_STATUS.DEPRECATED,
+    WORKSPACE_APP_STATUS.ARCHIVED
+  ];
+  var WORKSPACE_APP_GRANT_PERMISSION = {
+    USE: "use",
+    MANAGE: "manage",
+    CONTACT_VISIBLE: "contact_visible"
+  };
+  var WORKSPACE_APP_GRANT_PERMISSIONS = [
+    WORKSPACE_APP_GRANT_PERMISSION.USE,
+    WORKSPACE_APP_GRANT_PERMISSION.MANAGE,
+    WORKSPACE_APP_GRANT_PERMISSION.CONTACT_VISIBLE
+  ];
+  var WORKSPACE_APP_GRANT_STATUS = {
+    ACTIVE: "active",
+    REVOKED: "revoked"
+  };
+  var WORKSPACE_APP_GRANT_STATUSES = [
+    WORKSPACE_APP_GRANT_STATUS.ACTIVE,
+    WORKSPACE_APP_GRANT_STATUS.REVOKED
+  ];
+  var WORKSPACE_APP_GRANT_SOURCE = {
+    MANUAL: "manual",
+    APPROVAL: "approval",
+    SYSTEM: "system"
+  };
+  var WORKSPACE_APP_GRANT_SOURCES = [
+    WORKSPACE_APP_GRANT_SOURCE.MANUAL,
+    WORKSPACE_APP_GRANT_SOURCE.APPROVAL,
+    WORKSPACE_APP_GRANT_SOURCE.SYSTEM
+  ];
+  var WORKSPACE_APP_GRANT_REQUEST_STATUS = {
+    PENDING: "pending",
+    APPROVED: "approved",
+    REJECTED: "rejected",
+    CANCELLED: "cancelled"
+  };
+  var WORKSPACE_APP_GRANT_REQUEST_STATUSES = [
+    WORKSPACE_APP_GRANT_REQUEST_STATUS.PENDING,
+    WORKSPACE_APP_GRANT_REQUEST_STATUS.APPROVED,
+    WORKSPACE_APP_GRANT_REQUEST_STATUS.REJECTED,
+    WORKSPACE_APP_GRANT_REQUEST_STATUS.CANCELLED
+  ];
+  var WORKSPACE_APP_GRANT_REQUEST_DIRECTION = {
+    INCOMING: "incoming",
+    OUTGOING: "outgoing"
+  };
+  var WORKSPACE_APP_GRANT_REQUEST_DIRECTIONS = [
+    WORKSPACE_APP_GRANT_REQUEST_DIRECTION.INCOMING,
+    WORKSPACE_APP_GRANT_REQUEST_DIRECTION.OUTGOING
+  ];
   var ACCESS_RESOURCE_TYPE = {
     PLATFORM: "platform",
     WORKSPACE: "workspace",
@@ -1922,20 +1994,10 @@
     ACCESS_RESOURCE_TYPE.MODEL_GROUP
   ];
   var ACCESS_BINDABLE_RESOURCE_TYPE = {
-    INSTALLED_SKILL: "installed_skill",
-    PLUGIN_INSTALLATION: "plugin_installation",
-    DEVICE_CAPABILITY: "device_capability",
-    AUTOMATION_EVENT_SOURCE: "automation_event_source",
-    ACTOR: "actor",
-    REMOTE_AGENT: "remote_agent"
+    AUTOMATION_EVENT_SOURCE: "automation_event_source"
   };
   var ACCESS_BINDABLE_RESOURCE_TYPES = [
-    ACCESS_BINDABLE_RESOURCE_TYPE.INSTALLED_SKILL,
-    ACCESS_BINDABLE_RESOURCE_TYPE.PLUGIN_INSTALLATION,
-    ACCESS_BINDABLE_RESOURCE_TYPE.DEVICE_CAPABILITY,
-    ACCESS_BINDABLE_RESOURCE_TYPE.AUTOMATION_EVENT_SOURCE,
-    ACCESS_BINDABLE_RESOURCE_TYPE.ACTOR,
-    ACCESS_BINDABLE_RESOURCE_TYPE.REMOTE_AGENT
+    ACCESS_BINDABLE_RESOURCE_TYPE.AUTOMATION_EVENT_SOURCE
   ];
   var ACCESS_BINDING_STATUS = {
     ACTIVE: "active",

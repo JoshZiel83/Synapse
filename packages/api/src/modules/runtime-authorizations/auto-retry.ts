@@ -85,39 +85,35 @@ async function resolveAutoRetryTarget(args: {
   deviceToolRevisionId: string
 } | null> {
   const row = await db
-    .selectFrom("device_capabilities as dc")
-    .innerJoin("workspace_apps as app", "app.id", "dc.id")
-    .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
-    .innerJoin("devices as d", "d.id", "dx.device_id")
-    .innerJoin("device_tools as dt", "dt.exposure_id", "dx.id")
-    .innerJoin(
-      "device_tool_revisions as dtr",
-      "dtr.id",
-      "dt.latest_revision_id"
-    )
+    .selectFrom("deviceCapabilities as dc")
+    .innerJoin("workspaceApps as app", "app.id", "dc.id")
+    .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
+    .innerJoin("devices as d", "d.id", "dx.deviceId")
+    .innerJoin("deviceTools as dt", "dt.exposureId", "dx.id")
+    .innerJoin("deviceToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
     .select([
-      "d.id as device_id",
-      "dx.service_id as device_service_id",
-      "dx.id as device_exposure_id",
-      "dt.id as device_tool_id",
-      "dtr.id as device_tool_revision_id",
+      "d.id as deviceId",
+      "dx.serviceId as deviceServiceId",
+      "dx.id as deviceExposureId",
+      "dt.id as deviceToolId",
+      "dtr.id as deviceToolRevisionId",
     ])
     .where("dc.id", "=", args.deviceCapabilityId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "=", "active")
-    .where("dt.current_name", "=", args.visibleToolName)
+    .where("dt.currentName", "=", args.visibleToolName)
     .where("dt.status", "=", "active")
     // Soft-delete (§8.6): never auto-retry against a soft-closed device's tool.
-    .where("d.deleted_at", "is", null)
+    .where("d.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) return null
   return {
-    deviceId: row.device_id as string,
-    deviceServiceId: row.device_service_id as string,
-    deviceExposureId: row.device_exposure_id as string,
-    deviceToolId: row.device_tool_id as string,
-    deviceToolRevisionId: row.device_tool_revision_id as string,
+    deviceId: row.deviceId as string,
+    deviceServiceId: row.deviceServiceId as string,
+    deviceExposureId: row.deviceExposureId as string,
+    deviceToolId: row.deviceToolId as string,
+    deviceToolRevisionId: row.deviceToolRevisionId as string,
   }
 }
 

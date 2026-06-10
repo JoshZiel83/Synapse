@@ -202,12 +202,12 @@ async function assertTargetInWorkspace(
       if (!target.actorId) return { ok: false, reason: "actorId required" }
       const row = await db
         .selectFrom("actors as actor")
-        .innerJoin("workspace_apps as app", "app.id", "actor.id")
-        .select("app.workspace_id as workspace_id")
+        .innerJoin("workspaceApps as app", "app.id", "actor.id")
+        .select("app.workspaceId as workspaceId")
         .where("actor.id", "=", target.actorId)
-        .where("app.deleted_at", "is", null)
+        .where("app.deletedAt", "is", null)
         .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      if (!row || row.workspaceId !== workspaceId) {
         return {
           ok: false,
           reason: "actor not found in this workspace",
@@ -216,10 +216,10 @@ async function assertTargetInWorkspace(
       if (target.conversationId) {
         const conversation = await db
           .selectFrom("conversations")
-          .select("workspace_id")
+          .select("workspaceId")
           .where("id", "=", target.conversationId)
           .executeTakeFirst()
-        if (!conversation || conversation.workspace_id !== workspaceId) {
+        if (!conversation || conversation.workspaceId !== workspaceId) {
           return {
             ok: false,
             reason: "conversation not found in this workspace",
@@ -233,10 +233,10 @@ async function assertTargetInWorkspace(
         return { ok: false, reason: "conversationId required" }
       const row = await db
         .selectFrom("conversations")
-        .select("workspace_id")
+        .select("workspaceId")
         .where("id", "=", target.conversationId)
         .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      if (!row || row.workspaceId !== workspaceId) {
         return {
           ok: false,
           reason: "conversation not found in this workspace",
@@ -248,13 +248,13 @@ async function assertTargetInWorkspace(
       if (!target.remoteAgentId)
         return { ok: false, reason: "remoteAgentId required" }
       const row = await db
-        .selectFrom("remote_agents as agent")
-        .innerJoin("workspace_apps as app", "app.id", "agent.id")
-        .select("app.workspace_id as workspace_id")
+        .selectFrom("remoteAgents as agent")
+        .innerJoin("workspaceApps as app", "app.id", "agent.id")
+        .select("app.workspaceId as workspaceId")
         .where("agent.id", "=", target.remoteAgentId)
-        .where("app.deleted_at", "is", null)
+        .where("app.deletedAt", "is", null)
         .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      if (!row || row.workspaceId !== workspaceId) {
         return {
           ok: false,
           reason: "remote_agent not found in this workspace",
@@ -263,10 +263,10 @@ async function assertTargetInWorkspace(
       if (target.conversationId) {
         const conversation = await db
           .selectFrom("conversations")
-          .select("workspace_id")
+          .select("workspaceId")
           .where("id", "=", target.conversationId)
           .executeTakeFirst()
-        if (!conversation || conversation.workspace_id !== workspaceId) {
+        if (!conversation || conversation.workspaceId !== workspaceId) {
           return {
             ok: false,
             reason: "conversation not found in this workspace",
@@ -284,16 +284,14 @@ async function assertCapabilitiesInWorkspace(
 ): Promise<{ ok: true } | { ok: false; missing: string[] }> {
   if (capabilityIds.length === 0) return { ok: true }
   const rows = await db
-    .selectFrom("device_capabilities as capability")
-    .innerJoin("workspace_apps as app", "app.id", "capability.id")
-    .select(["capability.id as id", "app.workspace_id as workspace_id"])
+    .selectFrom("deviceCapabilities as capability")
+    .innerJoin("workspaceApps as app", "app.id", "capability.id")
+    .select(["capability.id as id", "app.workspaceId as workspaceId"])
     .where("capability.id", "in", capabilityIds)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .execute()
   const ownedIds = new Set(
-    rows
-      .filter((r) => r.workspace_id === workspaceId)
-      .map((r) => r.id as string)
+    rows.filter((r) => r.workspaceId === workspaceId).map((r) => r.id as string)
   )
   const missing = capabilityIds.filter((id) => !ownedIds.has(id))
   if (missing.length > 0) return { ok: false, missing }

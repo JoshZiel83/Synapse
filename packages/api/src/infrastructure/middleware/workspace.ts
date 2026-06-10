@@ -17,10 +17,10 @@ export async function workspaceMiddleware(
   }
 
   const member = await db
-    .selectFrom("workspace_members")
-    .select(["id", "workspace_id", "user_id", "trust_level"])
-    .where("workspace_id", "=", workspaceId)
-    .where("user_id", "=", user.userId)
+    .selectFrom("workspaceMembers")
+    .select(["id", "workspaceId", "userId", "trustLevel"])
+    .where("workspaceId", "=", workspaceId)
+    .where("userId", "=", user.userId)
     // Soft delete (design §8.4): a left/removed member must lose workspace access.
     .where("status", "=", "active")
     .executeTakeFirst()

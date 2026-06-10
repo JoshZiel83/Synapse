@@ -67,27 +67,27 @@ function toIsoInstant(value: Date | null | undefined): IsoInstantString | null {
 
 function serializeDeviceSummary(row: {
   id: string
-  workspace_id: string
+  workspaceId: string
   title: string
-  host_kind: HostKind
-  host_provider: string | null
-  device_type: DeviceType
+  hostKind: HostKind
+  hostProvider: string | null
+  deviceType: DeviceType
   platform: string | null
-  trust_status: "pending" | "trusted" | "revoked"
-  last_seen_at: Date | null
-  last_connected_at: Date | null
+  trustStatus: "pending" | "trusted" | "revoked"
+  lastSeenAt: Date | null
+  lastConnectedAt: Date | null
 }): DeviceSummary {
   return {
     id: row.id,
-    workspace_id: row.workspace_id,
+    workspace_id: row.workspaceId,
     title: row.title,
-    host_kind: row.host_kind,
-    host_provider: row.host_provider,
-    device_type: row.device_type,
+    host_kind: row.hostKind,
+    host_provider: row.hostProvider,
+    device_type: row.deviceType,
     platform: row.platform,
-    trust_status: row.trust_status,
-    last_seen_at: toIsoInstant(row.last_seen_at),
-    last_connected_at: toIsoInstant(row.last_connected_at),
+    trust_status: row.trustStatus,
+    last_seen_at: toIsoInstant(row.lastSeenAt),
+    last_connected_at: toIsoInstant(row.lastConnectedAt),
   }
 }
 
@@ -97,22 +97,22 @@ export async function listDevices(
   const rows = await db
     .selectFrom("devices")
     .selectAll()
-    .where("workspace_id", "=", workspaceId)
-    .where("deleted_at", "is", null)
-    .orderBy("created_at", "desc")
+    .where("workspaceId", "=", workspaceId)
+    .where("deletedAt", "is", null)
+    .orderBy("createdAt", "desc")
     .execute()
   return rows.map((row) =>
     serializeDeviceSummary({
       id: row.id as string,
-      workspace_id: row.workspace_id as string,
+      workspaceId: row.workspaceId as string,
       title: row.title as string,
-      host_kind: row.host_kind as HostKind,
-      host_provider: row.host_provider as string | null,
-      device_type: row.device_type as DeviceType,
+      hostKind: row.hostKind as HostKind,
+      hostProvider: row.hostProvider as string | null,
+      deviceType: row.deviceType as DeviceType,
       platform: row.platform as string | null,
-      trust_status: row.trust_status as "pending" | "trusted" | "revoked",
-      last_seen_at: row.last_seen_at as Date | null,
-      last_connected_at: row.last_connected_at as Date | null,
+      trustStatus: row.trustStatus as "pending" | "trusted" | "revoked",
+      lastSeenAt: row.lastSeenAt as Date | null,
+      lastConnectedAt: row.lastConnectedAt as Date | null,
     })
   )
 }
@@ -124,9 +124,9 @@ export async function getDevice(
   const deviceRow = await db
     .selectFrom("devices")
     .selectAll()
-    .where("workspace_id", "=", workspaceId)
+    .where("workspaceId", "=", workspaceId)
     .where("id", "=", deviceId)
-    .where("deleted_at", "is", null)
+    .where("deletedAt", "is", null)
     .executeTakeFirst()
   if (!deviceRow) {
     throw new DeviceModuleError({
@@ -137,71 +137,71 @@ export async function getDevice(
   }
 
   const serviceRows = await db
-    .selectFrom("device_services")
+    .selectFrom("deviceServices")
     .selectAll()
-    .where("device_id", "=", deviceId)
-    .orderBy("created_at", "asc")
+    .where("deviceId", "=", deviceId)
+    .orderBy("createdAt", "asc")
     .execute()
   const services: DeviceServiceSummary[] = serviceRows.map((row) => ({
     id: row.id as string,
-    device_id: row.device_id as string,
-    service_kind: row.service_kind as DeviceServiceKind,
+    device_id: row.deviceId as string,
+    service_kind: row.serviceKind as DeviceServiceKind,
     version: (row.version as string | null) ?? null,
     status: row.status as "starting" | "online" | "degraded" | "offline",
-    last_seen_at: toIsoInstant(row.last_seen_at as Date | null),
+    last_seen_at: toIsoInstant(row.lastSeenAt as Date | null),
     remote_agent_machine_id:
-      (row.remote_agent_machine_id as string | null) ?? null,
+      (row.remoteAgentMachineId as string | null) ?? null,
   }))
 
   const capabilityRows = await db
-    .selectFrom("device_capabilities as dc")
-    .innerJoin("workspace_apps as app", "app.id", "dc.id")
-    .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
+    .selectFrom("deviceCapabilities as dc")
+    .innerJoin("workspaceApps as app", "app.id", "dc.id")
+    .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
     .select([
       "dc.id as id",
-      "app.workspace_id as workspace_id",
-      "dc.exposure_id as exposure_id",
-      "dx.stable_key as exposure_stable_key",
-      "app.display_name as display_name",
+      "app.workspaceId as workspaceId",
+      "dc.exposureId as exposureId",
+      "dx.stableKey as exposureStableKey",
+      "app.displayName as displayName",
       "dx.transport as transport",
-      "dx.builtin_kind as builtin_kind",
-      "dx.runtime_status as runtime_status",
-      "dx.metadata as exposure_metadata",
+      "dx.builtinKind as builtinKind",
+      "dx.runtimeStatus as runtimeStatus",
+      "dx.metadata as exposureMetadata",
     ])
-    .where("dx.device_id", "=", deviceId)
-    .where("app.deleted_at", "is", null)
+    .where("dx.deviceId", "=", deviceId)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "=", "active")
     .execute()
   const capabilities: DeviceCapabilitySummary[] = capabilityRows.map((row) => ({
     id: row.id as string,
-    workspace_id: row.workspace_id as string,
-    exposure_id: row.exposure_id as string,
-    exposure_stable_key: row.exposure_stable_key as string,
-    display_name: row.display_name as string,
+    workspace_id: row.workspaceId as string,
+    exposure_id: row.exposureId as string,
+    exposure_stable_key: row.exposureStableKey as string,
+    display_name: row.displayName as string,
     transport: row.transport as DeviceCapabilitySummary["transport"],
     builtin_kind:
-      (row.builtin_kind as DeviceCapabilitySummary["builtin_kind"]) ?? null,
+      (row.builtinKind as DeviceCapabilitySummary["builtin_kind"]) ?? null,
     runtime_status:
-      row.runtime_status as DeviceCapabilitySummary["runtime_status"],
-    metadata: (row.exposure_metadata as Record<string, unknown> | null) ?? null,
+      row.runtimeStatus as DeviceCapabilitySummary["runtime_status"],
+    metadata: (row.exposureMetadata as Record<string, unknown> | null) ?? null,
   }))
 
   return {
     ...serializeDeviceSummary({
       id: deviceRow.id as string,
-      workspace_id: deviceRow.workspace_id as string,
+      workspaceId: deviceRow.workspaceId as string,
       title: deviceRow.title as string,
-      host_kind: deviceRow.host_kind as HostKind,
-      host_provider: deviceRow.host_provider as string | null,
-      device_type: deviceRow.device_type as DeviceType,
+      hostKind: deviceRow.hostKind as HostKind,
+      hostProvider: deviceRow.hostProvider as string | null,
+      deviceType: deviceRow.deviceType as DeviceType,
       platform: deviceRow.platform as string | null,
-      trust_status: deviceRow.trust_status as "pending" | "trusted" | "revoked",
-      last_seen_at: deviceRow.last_seen_at as Date | null,
-      last_connected_at: deviceRow.last_connected_at as Date | null,
+      trustStatus: deviceRow.trustStatus as "pending" | "trusted" | "revoked",
+      lastSeenAt: deviceRow.lastSeenAt as Date | null,
+      lastConnectedAt: deviceRow.lastConnectedAt as Date | null,
     }),
     description: (deviceRow.description as string | null) ?? null,
     owner_workspace_member_id:
-      (deviceRow.owner_workspace_member_id as string | null) ?? null,
+      (deviceRow.ownerWorkspaceMemberId as string | null) ?? null,
     services,
     capabilities,
   }
@@ -219,10 +219,10 @@ export async function deleteDevice(
   // physical removal happens only via offline purge.
   const result = await db
     .updateTable("devices")
-    .set({ deleted_at: new Date() })
-    .where("workspace_id", "=", workspaceId)
+    .set({ deletedAt: new Date() })
+    .where("workspaceId", "=", workspaceId)
     .where("id", "=", deviceId)
-    .where("deleted_at", "is", null)
+    .where("deletedAt", "is", null)
     .executeTakeFirst()
   if (Number(result.numUpdatedRows ?? 0) === 0) {
     throw new DeviceModuleError({
@@ -324,23 +324,22 @@ export async function startPairing(
 
   const sessionId = randomUUID()
   await db
-    .insertInto("device_pairing_sessions")
+    .insertInto("devicePairingSessions")
     .values({
       id: sessionId,
-      workspace_id: input.workspaceId,
-      requested_by_workspace_member_id:
-        input.requestedByWorkspaceMemberId ?? null,
-      device_id: input.deviceId ?? null,
+      workspaceId: input.workspaceId,
+      requestedByWorkspaceMemberId: input.requestedByWorkspaceMemberId ?? null,
+      deviceId: input.deviceId ?? null,
       mode: input.mode,
-      server_base_url: input.serverBaseUrl,
-      requested_title: input.title ?? null,
-      requested_description: input.description ?? null,
-      requested_device_type: input.deviceType ?? null,
-      pairing_code: pairingCode,
-      bootstrap_token_hash: bootstrapTokenHash,
-      verification_uri: null,
-      verification_uri_complete: null,
-      expires_at: expiresAt,
+      serverBaseUrl: input.serverBaseUrl,
+      requestedTitle: input.title ?? null,
+      requestedDescription: input.description ?? null,
+      requestedDeviceType: input.deviceType ?? null,
+      pairingCode: pairingCode,
+      bootstrapTokenHash: bootstrapTokenHash,
+      verificationUri: null,
+      verificationUriComplete: null,
+      expiresAt: expiresAt,
       status: "pending",
       context: sql`${JSON.stringify(input.context ?? {})}::jsonb`,
     } as never)
@@ -429,16 +428,16 @@ export async function consumePairing(
     // race-loss or invalid state. Two concurrent claim attempts can no
     // longer both produce a trusted device.
     const claimedRows = await trx
-      .updateTable("device_pairing_sessions")
+      .updateTable("devicePairingSessions")
       .set({
         status: "consumed",
-        confirmed_at: sql`NOW()`,
-        consumed_at: sql`NOW()`,
+        confirmedAt: sql`NOW()`,
+        consumedAt: sql`NOW()`,
       } as never)
-      .where("pairing_code", "=", input.pairingCode)
+      .where("pairingCode", "=", input.pairingCode)
       .where("status", "=", "pending")
       .where("mode", "=", "local_qr")
-      .where("expires_at", ">", sql<Date>`NOW()`)
+      .where("expiresAt", ">", sql<Date>`NOW()`)
       .returningAll()
       .execute()
     const session = claimedRows[0]
@@ -447,9 +446,9 @@ export async function consumePairing(
       // operator/runtime can react. We do a follow-up SELECT (still inside
       // the transaction) to figure out which precondition failed.
       const existing = await trx
-        .selectFrom("device_pairing_sessions")
+        .selectFrom("devicePairingSessions")
         .selectAll()
-        .where("pairing_code", "=", input.pairingCode)
+        .where("pairingCode", "=", input.pairingCode)
         .executeTakeFirst()
       if (!existing) {
         throw new DeviceModuleError({
@@ -466,7 +465,7 @@ export async function consumePairing(
         })
       }
       const expiresAt = new Date(
-        existing.expires_at as unknown as string
+        existing.expiresAt as unknown as string
       ).getTime()
       if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
         throw new DeviceModuleError({
@@ -495,38 +494,37 @@ export async function consumePairing(
     const deviceId = randomUUID()
     const serviceId = randomUUID()
     const serviceKeyId = randomUUID()
-    const title = input.title ?? session.requested_title ?? "Device"
+    const title = input.title ?? session.requestedTitle ?? "Device"
     const deviceType =
       input.deviceType ??
-      (session.requested_device_type as DeviceType | null) ??
+      (session.requestedDeviceType as DeviceType | null) ??
       ("desktop_computer" as DeviceType)
 
     await trx
       .insertInto("devices")
       .values({
         id: deviceId,
-        workspace_id: session.workspace_id as string,
-        owner_workspace_member_id:
-          session.requested_by_workspace_member_id ?? null,
+        workspaceId: session.workspaceId as string,
+        ownerWorkspaceMemberId: session.requestedByWorkspaceMemberId ?? null,
         title,
-        description: (session.requested_description as string | null) ?? null,
-        host_kind: "local",
-        host_provider: null,
-        device_type: deviceType,
+        description: (session.requestedDescription as string | null) ?? null,
+        hostKind: "local",
+        hostProvider: null,
+        deviceType: deviceType,
         platform: input.platform ?? null,
         arch: input.arch ?? null,
-        public_key: input.devicePubkey,
-        public_key_fingerprint: pubkeyFingerprint,
-        trust_status: "trusted",
+        publicKey: input.devicePubkey,
+        publicKeyFingerprint: pubkeyFingerprint,
+        trustStatus: "trusted",
       } as never)
       .execute()
 
     await trx
-      .insertInto("device_services")
+      .insertInto("deviceServices")
       .values({
         id: serviceId,
-        device_id: deviceId,
-        service_kind: "device_runtime",
+        deviceId: deviceId,
+        serviceKind: "device_runtime",
         version: input.clientVersion ?? null,
         status: "starting",
         metadata: sql`'{}'::jsonb`,
@@ -534,12 +532,12 @@ export async function consumePairing(
       .execute()
 
     await trx
-      .insertInto("device_service_keys")
+      .insertInto("deviceServiceKeys")
       .values({
         id: serviceKeyId,
-        service_id: serviceId,
+        serviceId: serviceId,
         pubkey: input.servicePubkey,
-        pubkey_fingerprint: serviceFingerprint,
+        pubkeyFingerprint: serviceFingerprint,
       } as never)
       .execute()
 
@@ -547,9 +545,9 @@ export async function consumePairing(
     // earlier atomic UPDATE flipped status/timestamps; we just need the FK
     // wired now that the device row exists.
     await trx
-      .updateTable("device_pairing_sessions")
+      .updateTable("devicePairingSessions")
       .set({
-        device_id: deviceId,
+        deviceId: deviceId,
       } as never)
       .where("id", "=", session.id as string)
       .execute()
@@ -578,7 +576,7 @@ export async function claimRemoteAgentDaemon(
     const device = await trx
       .selectFrom("devices")
       .selectAll()
-      .where("workspace_id", "=", input.workspaceId)
+      .where("workspaceId", "=", input.workspaceId)
       .where("id", "=", input.deviceId)
       .executeTakeFirst()
     if (!device) {
@@ -590,8 +588,8 @@ export async function claimRemoteAgentDaemon(
     }
 
     const machine = await trx
-      .selectFrom("remote_agent_machines")
-      .select(["id", "workspace_id"])
+      .selectFrom("remoteAgentMachines")
+      .select(["id", "workspaceId"])
       .where("id", "=", input.remoteAgentMachineId)
       .executeTakeFirst()
     if (!machine) {
@@ -601,7 +599,7 @@ export async function claimRemoteAgentDaemon(
         message: `remote agent machine ${input.remoteAgentMachineId} not found`,
       })
     }
-    if (machine.workspace_id !== input.workspaceId) {
+    if (machine.workspaceId !== input.workspaceId) {
       throw new DeviceModuleError({
         statusCode: 400,
         code: "remote_agent_machine_workspace_mismatch",
@@ -611,10 +609,10 @@ export async function claimRemoteAgentDaemon(
     }
 
     const existing = await trx
-      .selectFrom("device_services")
+      .selectFrom("deviceServices")
       .selectAll()
-      .where("remote_agent_machine_id", "=", input.remoteAgentMachineId)
-      .where("service_kind", "=", "remote_agent_daemon")
+      .where("remoteAgentMachineId", "=", input.remoteAgentMachineId)
+      .where("serviceKind", "=", "remote_agent_daemon")
       .executeTakeFirst()
     if (existing) {
       throw new DeviceModuleError({
@@ -626,33 +624,33 @@ export async function claimRemoteAgentDaemon(
 
     const serviceId = randomUUID()
     await trx
-      .insertInto("device_services")
+      .insertInto("deviceServices")
       .values({
         id: serviceId,
-        device_id: input.deviceId,
-        service_kind: "remote_agent_daemon",
+        deviceId: input.deviceId,
+        serviceKind: "remote_agent_daemon",
         version: null,
         status: "online",
         metadata: sql`'{}'::jsonb`,
-        remote_agent_machine_id: input.remoteAgentMachineId,
+        remoteAgentMachineId: input.remoteAgentMachineId,
       } as never)
       .execute()
 
     const row = await trx
-      .selectFrom("device_services")
+      .selectFrom("deviceServices")
       .selectAll()
       .where("id", "=", serviceId)
       .executeTakeFirstOrThrow()
 
     return {
       id: row.id as string,
-      device_id: row.device_id as string,
-      service_kind: row.service_kind as DeviceServiceKind,
+      device_id: row.deviceId as string,
+      service_kind: row.serviceKind as DeviceServiceKind,
       version: (row.version as string | null) ?? null,
       status: row.status as "starting" | "online" | "degraded" | "offline",
-      last_seen_at: toIsoInstant(row.last_seen_at as Date | null),
+      last_seen_at: toIsoInstant(row.lastSeenAt as Date | null),
       remote_agent_machine_id:
-        (row.remote_agent_machine_id as string | null) ?? null,
+        (row.remoteAgentMachineId as string | null) ?? null,
     }
   })
 }
@@ -664,12 +662,12 @@ export async function detachDeviceService(
 ): Promise<void> {
   // Verify the service belongs to a device in this workspace before detaching.
   const owned = await db
-    .selectFrom("device_services as ds")
-    .innerJoin("devices as d", "d.id", "ds.device_id")
+    .selectFrom("deviceServices as ds")
+    .innerJoin("devices as d", "d.id", "ds.deviceId")
     .select("ds.id")
     .where("ds.id", "=", serviceId)
-    .where("ds.device_id", "=", deviceId)
-    .where("d.workspace_id", "=", workspaceId)
+    .where("ds.deviceId", "=", deviceId)
+    .where("d.workspaceId", "=", workspaceId)
     .executeTakeFirst()
   if (!owned) {
     throw new DeviceModuleError({

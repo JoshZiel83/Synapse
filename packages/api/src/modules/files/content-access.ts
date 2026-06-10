@@ -66,10 +66,10 @@ async function resolveUserGrantContext(
 ): Promise<{ subjectIds: string[]; scopeIds: string[] } | null> {
   // The user's workspace_member row in THIS workspace (membership gate).
   const member = await dbh
-    .selectFrom("workspace_members")
+    .selectFrom("workspaceMembers")
     .select("id")
-    .where("workspace_id", "=", workspaceId)
-    .where("user_id", "=", userId)
+    .where("workspaceId", "=", workspaceId)
+    .where("userId", "=", userId)
     .limit(1)
     .executeTakeFirst()
   if (!member) return null
@@ -79,20 +79,20 @@ async function resolveUserGrantContext(
 
   // workspace_member subject.
   const wmSubject = await dbh
-    .selectFrom("access_subjects")
+    .selectFrom("accessSubjects")
     .select("id")
     .where("kind", "=", "workspace_member")
-    .where("workspace_member_id", "=", member.id)
+    .where("workspaceMemberId", "=", member.id)
     .limit(1)
     .executeTakeFirst()
   if (wmSubject) subjectIds.push(wmSubject.id)
 
   // workspace subject (workspace-level grants + workspace scope).
   const wsSubject = await dbh
-    .selectFrom("access_subjects")
+    .selectFrom("accessSubjects")
     .select("id")
     .where("kind", "=", "workspace")
-    .where("workspace_id", "=", workspaceId)
+    .where("workspaceId", "=", workspaceId)
     .limit(1)
     .executeTakeFirst()
   if (wsSubject) {
@@ -106,23 +106,19 @@ async function resolveUserGrantContext(
   // conversation scope is added (conversation-scoped grants don't apply).
   if (currentConversationId) {
     const convSubject = await dbh
-      .selectFrom("conversation_participants as cp")
-      .innerJoin("conversations as c", "c.id", "cp.conversation_id")
-      .innerJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
-      .innerJoin(
-        "workspace_members as wm",
-        "wm.id",
-        "cpsubj.workspace_member_id"
-      )
-      .innerJoin("access_subjects as convsubj", (join) =>
+      .selectFrom("conversationParticipants as cp")
+      .innerJoin("conversations as c", "c.id", "cp.conversationId")
+      .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
+      .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
+      .innerJoin("accessSubjects as convsubj", (join) =>
         join
-          .onRef("convsubj.conversation_id", "=", "c.id")
+          .onRef("convsubj.conversationId", "=", "c.id")
           .on("convsubj.kind", "=", "conversation")
       )
       .select("convsubj.id as id")
       .where("c.id", "=", currentConversationId)
-      .where("c.workspace_id", "=", workspaceId)
-      .where("wm.user_id", "=", userId)
+      .where("c.workspaceId", "=", workspaceId)
+      .where("wm.userId", "=", userId)
       .where("cp.state", "=", "active")
       .limit(1)
       .executeTakeFirst()
@@ -203,18 +199,18 @@ async function hasVisibleMessageRef(
   // mirroring getChatConversationMessages so a non-targeted participant can't
   // fetch an attachment the chat read path would hide from them.
   const itemRef = await dbh
-    .selectFrom("conversation_item_parts as cip")
-    .innerJoin("conversation_items as ci", "ci.id", "cip.item_id")
+    .selectFrom("conversationItemParts as cip")
+    .innerJoin("conversationItems as ci", "ci.id", "cip.itemId")
     .innerJoin(
-      "conversation_participants as cp",
-      "cp.conversation_id",
-      "ci.conversation_id"
+      "conversationParticipants as cp",
+      "cp.conversationId",
+      "ci.conversationId"
     )
-    .innerJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
-    .innerJoin("workspace_members as wm", "wm.id", "cpsubj.workspace_member_id")
+    .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
+    .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
     .select("cip.id")
-    .where("cip.ref_sha256", "=", sha256)
-    .where("wm.user_id", "=", userId)
+    .where("cip.refSha256", "=", sha256)
+    .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
     .where("ci.scope", "=", "shared")
     .where("ci.surface", "=", "visible")
@@ -224,25 +220,25 @@ async function hasVisibleMessageRef(
         eb.not(
           eb.exists(
             eb
-              .selectFrom("conversation_item_targets as cit0")
-              .select("cit0.item_id")
-              .whereRef("cit0.item_id", "=", "ci.id")
+              .selectFrom("conversationItemTargets as cit0")
+              .select("cit0.itemId")
+              .whereRef("cit0.itemId", "=", "ci.id")
           )
         ),
         // The caller's participant authored it.
-        eb("ci.author_participant_id", "=", eb.ref("cp.id")),
+        eb("ci.authorParticipantId", "=", eb.ref("cp.id")),
         // The caller's participant is an explicit target.
         eb.exists(
           eb
-            .selectFrom("conversation_item_targets as cit")
-            .select("cit.item_id")
-            .whereRef("cit.item_id", "=", "ci.id")
-            .whereRef("cit.target_participant_id", "=", "cp.id")
+            .selectFrom("conversationItemTargets as cit")
+            .select("cit.itemId")
+            .whereRef("cit.itemId", "=", "ci.id")
+            .whereRef("cit.targetParticipantId", "=", "cp.id")
         ),
       ])
     )
     .$if(Boolean(conversationId), (qb) =>
-      qb.where("ci.conversation_id", "=", conversationId as string)
+      qb.where("ci.conversationId", "=", conversationId as string)
     )
     .limit(1)
     .executeTakeFirst()
@@ -262,22 +258,22 @@ async function hasVisibleMessageRef(
   // hides specific tool results from some participants, this branch must gain
   // the same per-item audience filter as branch (a).
   const toolRef = await dbh
-    .selectFrom("tool_result_parts as trp")
-    .innerJoin("tool_results as tr", "tr.id", "trp.tool_result_id")
-    .innerJoin("tool_calls as tc", "tc.id", "tr.tool_call_id")
+    .selectFrom("toolResultParts as trp")
+    .innerJoin("toolResults as tr", "tr.id", "trp.toolResultId")
+    .innerJoin("toolCalls as tc", "tc.id", "tr.toolCallId")
     .innerJoin(
-      "conversation_participants as cp",
-      "cp.conversation_id",
-      "tc.conversation_id"
+      "conversationParticipants as cp",
+      "cp.conversationId",
+      "tc.conversationId"
     )
-    .innerJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
-    .innerJoin("workspace_members as wm", "wm.id", "cpsubj.workspace_member_id")
+    .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
+    .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
     .select("trp.id")
-    .where("trp.ref_sha256", "=", sha256)
-    .where("wm.user_id", "=", userId)
+    .where("trp.refSha256", "=", sha256)
+    .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
     .$if(Boolean(conversationId), (qb) =>
-      qb.where("tc.conversation_id", "=", conversationId as string)
+      qb.where("tc.conversationId", "=", conversationId as string)
     )
     .limit(1)
     .executeTakeFirst()
@@ -314,17 +310,17 @@ async function hasReadableMemoryRef(
   // (space-level or item-level for this item). Matches the memory evaluator
   // (loadOwnerImplicitSpaceIds + memoryGrantMatches), unlike a bare owner match.
   const memCandidates = await dbh
-    .selectFrom("memory_item_parts as mip")
-    .innerJoin("memory_items as mi", "mi.id", "mip.memory_item_id")
-    .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
+    .selectFrom("memoryItemParts as mip")
+    .innerJoin("memoryItems as mi", "mi.id", "mip.memoryItemId")
+    .innerJoin("memorySpaces as ms", "ms.id", "mi.memorySpaceId")
     .select([
-      "mi.id as item_id",
-      "ms.id as space_id",
-      "ms.workspace_id as workspace_id",
-      "ms.owner_subject_id as owner_subject_id",
-      "ms.scope_subject_id as space_scope_subject_id",
+      "mi.id as itemId",
+      "ms.id as spaceId",
+      "ms.workspaceId as workspaceId",
+      "ms.ownerSubjectId as ownerSubjectId",
+      "ms.scopeSubjectId as spaceScopeSubjectId",
     ])
-    .where("mip.ref_sha256", "=", sha256)
+    .where("mip.refSha256", "=", sha256)
     .execute()
 
   if (memCandidates.length > 0) {
@@ -333,14 +329,14 @@ async function hasReadableMemoryRef(
       { subjectIds: Set<string>; scopeIds: Set<string> } | null
     >()
     for (const cand of memCandidates) {
-      let ctx = ctxByWorkspace.get(cand.workspace_id) as
+      let ctx = ctxByWorkspace.get(cand.workspaceId) as
         | { subjectIds: Set<string>; scopeIds: Set<string> }
         | null
         | undefined
       if (ctx === undefined) {
         const resolved = await resolveUserGrantContext(
           dbh,
-          cand.workspace_id,
+          cand.workspaceId,
           userId,
           currentConversationId
         )
@@ -350,30 +346,30 @@ async function hasReadableMemoryRef(
               scopeIds: new Set(resolved.scopeIds),
             }
           : null
-        ctxByWorkspace.set(cand.workspace_id, ctx)
+        ctxByWorkspace.set(cand.workspaceId, ctx)
       }
       if (!ctx) continue
       // owner-implicit: the space owner is one of the user's grant subjects AND
       // the space's own scope is NULL or in the user's scope set (a scope=conv-A
       // space is NOT owner-readable from a conv-B request).
       if (
-        ctx.subjectIds.has(cand.owner_subject_id) &&
-        (cand.space_scope_subject_id === null ||
-          ctx.scopeIds.has(cand.space_scope_subject_id))
+        ctx.subjectIds.has(cand.ownerSubjectId) &&
+        (cand.spaceScopeSubjectId === null ||
+          ctx.scopeIds.has(cand.spaceScopeSubjectId))
       ) {
         return true
       }
       // active read/recall grant honoring subject + scope.
       const grant = await dbh
-        .selectFrom("memory_access_grants as g")
-        .select(["g.scope_subject_id"])
-        .where("g.memory_space_id", "=", cand.space_id)
+        .selectFrom("memoryAccessGrants as g")
+        .select(["g.scopeSubjectId"])
+        .where("g.memorySpaceId", "=", cand.spaceId)
         .where("g.status", "=", "active")
-        .where("g.subject_id", "in", Array.from(ctx.subjectIds))
+        .where("g.subjectId", "in", Array.from(ctx.subjectIds))
         .where((geb) =>
           geb.or([
-            geb("g.memory_item_id", "is", null),
-            geb("g.memory_item_id", "=", cand.item_id),
+            geb("g.memoryItemId", "is", null),
+            geb("g.memoryItemId", "=", cand.itemId),
           ])
         )
         .where(
@@ -381,10 +377,7 @@ async function hasReadableMemoryRef(
         )
         .execute()
       for (const g of grant) {
-        if (
-          g.scope_subject_id === null ||
-          ctx.scopeIds.has(g.scope_subject_id)
-        ) {
+        if (g.scopeSubjectId === null || ctx.scopeIds.has(g.scopeSubjectId)) {
           return true
         }
       }
@@ -399,30 +392,22 @@ async function hasReadableMemoryRef(
   // can't be authorized through a request bound to conversation B. Without
   // ?conv= we fall back to any-active-participant (e.g. a direct content link).
   const archiveRef = await dbh
-    .selectFrom("context_archive_frame_parts as cap")
+    .selectFrom("contextArchiveFrameParts as cap")
+    .innerJoin("contextArchiveFrames as caf", "caf.id", "cap.archiveFrameId")
+    .innerJoin("contextArchivePoints as cpt", "cpt.id", "caf.archivePointId")
     .innerJoin(
-      "context_archive_frames as caf",
-      "caf.id",
-      "cap.archive_frame_id"
+      "conversationParticipants as cp",
+      "cp.conversationId",
+      "cpt.conversationId"
     )
-    .innerJoin(
-      "context_archive_points as cpt",
-      "cpt.id",
-      "caf.archive_point_id"
-    )
-    .innerJoin(
-      "conversation_participants as cp",
-      "cp.conversation_id",
-      "cpt.conversation_id"
-    )
-    .innerJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
-    .innerJoin("workspace_members as wm", "wm.id", "cpsubj.workspace_member_id")
+    .innerJoin("accessSubjects as cpsubj", "cpsubj.id", "cp.subjectId")
+    .innerJoin("workspaceMembers as wm", "wm.id", "cpsubj.workspaceMemberId")
     .select("cap.id")
-    .where("cap.ref_sha256", "=", sha256)
-    .where("wm.user_id", "=", userId)
+    .where("cap.refSha256", "=", sha256)
+    .where("wm.userId", "=", userId)
     .where("cp.state", "=", "active")
     .$if(Boolean(currentConversationId), (qb) =>
-      qb.where("cpt.conversation_id", "=", currentConversationId as string)
+      qb.where("cpt.conversationId", "=", currentConversationId as string)
     )
     .limit(1)
     .executeTakeFirst()
@@ -450,14 +435,14 @@ async function hasFileSpaceGrantReach(
   // active grant on. We resolve the user's grant subject/scope sets PER the
   // grant's workspace and apply the full permission+scope predicate.
   let grantsQ = dbh
-    .selectFrom("file_access_grants as g")
-    .innerJoin("file_spaces as fs", "fs.id", "g.file_space_id")
+    .selectFrom("fileAccessGrants as g")
+    .innerJoin("fileSpaces as fs", "fs.id", "g.fileSpaceId")
     .select([
-      "fs.id as space_id",
-      "fs.workspace_id as workspace_id",
-      "fs.current_snapshot_id as current_snapshot_id",
-      "g.subject_id as subject_id",
-      "g.scope_subject_id as scope_subject_id",
+      "fs.id as spaceId",
+      "fs.workspaceId as workspaceId",
+      "fs.currentSnapshotId as currentSnapshotId",
+      "g.subjectId as subjectId",
+      "g.scopeSubjectId as scopeSubjectId",
     ])
     .where("g.status", "=", "active")
     .where(
@@ -475,14 +460,14 @@ async function hasFileSpaceGrantReach(
   const authorizedSpaceIds = new Set<string>()
   const spaceHeadSnapshot = new Map<string, string | null>()
   for (const row of grantRows) {
-    let ctx = ctxByWorkspace.get(row.workspace_id) as
+    let ctx = ctxByWorkspace.get(row.workspaceId) as
       | { subjectIds: Set<string>; scopeIds: Set<string> }
       | null
       | undefined
     if (ctx === undefined) {
       const resolved = await resolveUserGrantContext(
         dbh,
-        row.workspace_id,
+        row.workspaceId,
         userId,
         currentConversationId
       )
@@ -492,18 +477,15 @@ async function hasFileSpaceGrantReach(
             scopeIds: new Set(resolved.scopeIds),
           }
         : null
-      ctxByWorkspace.set(row.workspace_id, ctx)
+      ctxByWorkspace.set(row.workspaceId, ctx)
     }
     if (!ctx) continue
-    if (!ctx.subjectIds.has(row.subject_id)) continue
-    if (
-      row.scope_subject_id !== null &&
-      !ctx.scopeIds.has(row.scope_subject_id)
-    ) {
+    if (!ctx.subjectIds.has(row.subjectId)) continue
+    if (row.scopeSubjectId !== null && !ctx.scopeIds.has(row.scopeSubjectId)) {
       continue
     }
-    authorizedSpaceIds.add(row.space_id)
-    spaceHeadSnapshot.set(row.space_id, row.current_snapshot_id)
+    authorizedSpaceIds.add(row.spaceId)
+    spaceHeadSnapshot.set(row.spaceId, row.currentSnapshotId)
   }
   if (authorizedSpaceIds.size === 0) return false
 
@@ -516,31 +498,31 @@ async function hasFileSpaceGrantReach(
     if (head) snapshotIds.add(head)
   }
   const mountSnaps = await dbh
-    .selectFrom("file_mounts as m")
-    .select(["m.base_snapshot_id", "m.result_snapshot_id"])
-    .where("m.file_space_id", "in", spaceIds)
+    .selectFrom("fileMounts as m")
+    .select(["m.baseSnapshotId", "m.resultSnapshotId"])
+    .where("m.fileSpaceId", "in", spaceIds)
     .where("m.status", "in", ["provisioning", "active", "committing"])
     .execute()
   for (const m of mountSnaps) {
-    if (m.base_snapshot_id) snapshotIds.add(m.base_snapshot_id)
-    if (m.result_snapshot_id) snapshotIds.add(m.result_snapshot_id)
+    if (m.baseSnapshotId) snapshotIds.add(m.baseSnapshotId)
+    if (m.resultSnapshotId) snapshotIds.add(m.resultSnapshotId)
   }
   if (snapshotIds.size === 0) return false
 
   // The blob is reachable if it is a manifest blob of one of these snapshots,
   // or appears as a file entry inside one of those manifests.
   const snaps = await dbh
-    .selectFrom("file_snapshots")
-    .select(["id", "manifest_sha256"])
+    .selectFrom("fileSnapshots")
+    .select(["id", "manifestSha256"])
     .where("id", "in", Array.from(snapshotIds))
     .execute()
 
   for (const snap of snaps) {
-    if (snap.manifest_sha256 === sha256) return true
+    if (snap.manifestSha256 === sha256) return true
   }
   for (const snap of snaps) {
     try {
-      const bytes = await readCasBlob(snap.manifest_sha256)
+      const bytes = await readCasBlob(snap.manifestSha256)
       if (parseManifestShas(bytes).has(sha256)) return true
     } catch {
       // Missing/unreadable manifest blob — treat as no-reach for this snapshot.
@@ -561,22 +543,22 @@ async function hasAssetInUserWorkspace(
   userId: string
 ): Promise<boolean> {
   const row = await dbh
-    .selectFrom("file_assets as fa")
-    .leftJoin("workspaces as w", "w.id", "fa.workspace_id")
-    .leftJoin("workspace_members as wm", (join) =>
+    .selectFrom("fileAssets as fa")
+    .leftJoin("workspaces as w", "w.id", "fa.workspaceId")
+    .leftJoin("workspaceMembers as wm", (join) =>
       join
-        .onRef("wm.workspace_id", "=", "fa.workspace_id")
-        .on("wm.user_id", "=", userId)
+        .onRef("wm.workspaceId", "=", "fa.workspaceId")
+        .on("wm.userId", "=", userId)
     )
     .select("fa.id")
-    .where("fa.content_sha256", "=", sha256)
+    .where("fa.contentSha256", "=", sha256)
     .where((eb) =>
       eb.or([
         // Library-global asset (no workspace) → readable by any authenticated.
-        eb("fa.workspace_id", "is", null),
+        eb("fa.workspaceId", "is", null),
         // Workspace-scoped → owner or member of that workspace.
-        eb("w.owner_id", "=", userId),
-        eb("wm.user_id", "is not", null),
+        eb("w.ownerId", "=", userId),
+        eb("wm.userId", "is not", null),
       ])
     )
     .limit(1)

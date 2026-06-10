@@ -20,7 +20,7 @@ async function insertWorkspace(db: AnyDb, ownerId: string): Promise<string> {
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: ownerId,
+      ownerId: ownerId,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "test workspace",
     })
@@ -35,11 +35,11 @@ async function insertWorkspaceMember(
   userId: string
 ): Promise<string> {
   const row = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspaceId,
-      user_id: userId,
-      trust_level: "member",
+      workspaceId: workspaceId,
+      userId: userId,
+      trustLevel: "member",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -49,12 +49,12 @@ async function insertWorkspaceMember(
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: actorId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "actor",
-      display_name: "test actor",
+      displayName: "test actor",
       status: "active",
     } as any)
     .execute()
@@ -64,7 +64,7 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
       id: actorId,
       role: "assistant",
       title: "test",
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -80,7 +80,7 @@ async function insertConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       title: "test conversation",
     })
     .returning("id")
@@ -99,14 +99,14 @@ async function insertTransportAccount(
   workspaceId: string
 ): Promise<string> {
   const account = await db
-    .insertInto("transport_accounts")
+    .insertInto("transportAccounts")
     .values({
-      workspace_id: workspaceId,
-      transport_kind: "qq",
-      account_key: `acct-${Math.random().toString(36).slice(2, 8)}`,
-      display_name: "Test account",
-      connection_mode: "webhook",
-      owner_scope: "workspace",
+      workspaceId: workspaceId,
+      transportKind: "qq",
+      accountKey: `acct-${Math.random().toString(36).slice(2, 8)}`,
+      displayName: "Test account",
+      connectionMode: "webhook",
+      ownerScope: "workspace",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -121,12 +121,12 @@ async function insertImConversation(
   const transportAccountId =
     opts.transportAccountId ?? (await insertTransportAccount(db, workspaceId))
   const endpoint = await db
-    .insertInto("transport_endpoints")
+    .insertInto("transportEndpoints")
     .values({
-      transport_account_id: transportAccountId,
-      endpoint_type: "group",
-      external_id: `ep-${Math.random().toString(36).slice(2, 8)}`,
-      display_name: "Test endpoint",
+      transportAccountId: transportAccountId,
+      endpointType: "group",
+      externalId: `ep-${Math.random().toString(36).slice(2, 8)}`,
+      displayName: "Test endpoint",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -134,20 +134,20 @@ async function insertImConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       title: "im conversation",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   await db
-    .insertInto("conversation_transport_bindings")
+    .insertInto("conversationTransportBindings")
     .values({
-      workspace_id: workspaceId,
-      conversation_id: conv.id as string,
-      transport_account_id: transportAccountId,
-      transport_endpoint_id: endpoint.id as string,
-      outbound_enabled: true,
-      inbound_actor_mode: "inherit_account",
+      workspaceId: workspaceId,
+      conversationId: conv.id as string,
+      transportAccountId: transportAccountId,
+      transportEndpointId: endpoint.id as string,
+      outboundEnabled: true,
+      inboundActorMode: "inherit_account",
     })
     .execute()
   return {
@@ -196,14 +196,14 @@ test(
       assert.equal(againId, firstId)
 
       const row = await db
-        .selectFrom("conversation_participants")
+        .selectFrom("conversationParticipants")
         .selectAll()
         .where("id", "=", firstId)
         .executeTakeFirstOrThrow()
-      assert.equal(row.role_key, "owner")
-      assert.equal(row.display_name, "second display")
+      assert.equal(row.roleKey, "owner")
+      assert.equal(row.displayName, "second display")
       assert.equal(row.state, "active")
-      assert.ok(row.subject_id)
+      assert.ok(row.subjectId)
     })
   }
 )
@@ -232,7 +232,7 @@ test(
       // Soft-leave the participant directly so we can verify the UPDATE
       // reactivates it (the COALESCE in the UPDATE keeps display_name etc).
       await db
-        .updateTable("conversation_participants")
+        .updateTable("conversationParticipants")
         .set({ state: "left" })
         .where("id", "=", firstId)
         .execute()
@@ -247,12 +247,12 @@ test(
       assert.equal(againId, firstId)
 
       const row = await db
-        .selectFrom("conversation_participants")
+        .selectFrom("conversationParticipants")
         .selectAll()
         .where("id", "=", firstId)
         .executeTakeFirstOrThrow()
       assert.equal(row.state, "active")
-      assert.equal(row.left_at, null)
+      assert.equal(row.leftAt, null)
     })
   }
 )
@@ -273,14 +273,14 @@ async function insertTransportAddress(
   const accountId =
     opts.transportAccountId ?? (await insertTransportAccount(db, workspaceId))
   const addr = await db
-    .insertInto("transport_addresses")
+    .insertInto("transportAddresses")
     .values({
-      workspace_id: workspaceId,
-      transport_account_id: accountId,
-      transport_kind: "qq",
-      address_type: opts.addressType ?? "user",
-      external_id: `ext-${Math.random().toString(36).slice(2, 8)}`,
-      workspace_member_id: opts.workspaceMemberId ?? null,
+      workspaceId: workspaceId,
+      transportAccountId: accountId,
+      transportKind: "qq",
+      addressType: opts.addressType ?? "user",
+      externalId: `ext-${Math.random().toString(36).slice(2, 8)}`,
+      workspaceMemberId: opts.workspaceMemberId ?? null,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -340,11 +340,11 @@ test(
       })) as { id: string }
 
       const rows = await db
-        .selectFrom("conversation_participants")
-        .select(["id", "subject_id"])
+        .selectFrom("conversationParticipants")
+        .select(["id", "subjectId"])
         .where("id", "in", [a1.id, b1.id, a2.id])
         .execute()
-      const byId = new Map(rows.map((r) => [r.id, r.subject_id]))
+      const byId = new Map(rows.map((r) => [r.id, r.subjectId]))
       // Same address in two conversations → same subject (cross-conversation identity).
       assert.equal(byId.get(a1.id), byId.get(b1.id))
       // Different address → different subject.
@@ -352,13 +352,13 @@ test(
 
       // The reused subject is a real first-class external subject (workspace + address).
       const subj = await db
-        .selectFrom("access_subjects")
-        .select(["kind", "workspace_id", "transport_address_id"])
+        .selectFrom("accessSubjects")
+        .select(["kind", "workspaceId", "transportAddressId"])
         .where("id", "=", byId.get(a1.id)!)
         .executeTakeFirstOrThrow()
       assert.equal(subj.kind, "external")
-      assert.equal(subj.workspace_id, workspaceId)
-      assert.equal(subj.transport_address_id, addr1)
+      assert.equal(subj.workspaceId, workspaceId)
+      assert.equal(subj.transportAddressId, addr1)
     })
   }
 )
@@ -397,9 +397,9 @@ test(
       assert.equal(renamed.id, first.id)
 
       const count = await db
-        .selectFrom("conversation_participants")
+        .selectFrom("conversationParticipants")
         .select((eb) => eb.fn.countAll<string>().as("n"))
-        .where("conversation_id", "=", conversationId)
+        .where("conversationId", "=", conversationId)
         .executeTakeFirstOrThrow()
       assert.equal(Number(count.n), 1)
     })
@@ -611,15 +611,15 @@ test(
       assert.ok(participant.id)
 
       const parts = await db
-        .selectFrom("conversation_participants as cp")
-        .innerJoin("access_subjects as s", "s.id", "cp.subject_id")
-        .select(["s.kind", "s.transport_address_id", "s.workspace_id"])
-        .where("cp.conversation_id", "=", conversationId)
+        .selectFrom("conversationParticipants as cp")
+        .innerJoin("accessSubjects as s", "s.id", "cp.subjectId")
+        .select(["s.kind", "s.transportAddressId", "s.workspaceId"])
+        .where("cp.conversationId", "=", conversationId)
         .execute()
       assert.equal(parts.length, 1)
       assert.equal(parts[0].kind, "external")
-      assert.equal(parts[0].transport_address_id, addrOk)
-      assert.equal(parts[0].workspace_id, workspaceId)
+      assert.equal(parts[0].transportAddressId, addrOk)
+      assert.equal(parts[0].workspaceId, workspaceId)
     })
   }
 )
@@ -630,21 +630,21 @@ async function insertRemoteAgent(
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: remoteAgentId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "remote_agent",
-      display_name: "Test agent",
+      displayName: "Test agent",
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: remoteAgentId,
       title: "Test agent",
-      runtime_kind: "codex",
+      runtimeKind: "codex",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -684,14 +684,14 @@ test(
         queryable: db,
       })
       const rows = await db
-        .selectFrom("conversation_participants as cp")
-        .innerJoin("access_subjects as s", "s.id", "cp.subject_id")
-        .select("s.remote_agent_id")
-        .where("cp.conversation_id", "=", conversationId)
+        .selectFrom("conversationParticipants as cp")
+        .innerJoin("accessSubjects as s", "s.id", "cp.subjectId")
+        .select("s.remoteAgentId")
+        .where("cp.conversationId", "=", conversationId)
         .where("s.kind", "=", "remote_agent")
         .execute()
       assert.equal(rows.length, 1)
-      assert.equal(rows[0].remote_agent_id, localAgentId)
+      assert.equal(rows[0].remoteAgentId, localAgentId)
     })
   }
 )

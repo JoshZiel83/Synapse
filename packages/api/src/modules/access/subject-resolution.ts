@@ -33,10 +33,10 @@ export async function isActorActiveConversationParticipant(
     actorId,
   })
   const row = await db
-    .selectFrom("conversation_participants")
+    .selectFrom("conversationParticipants")
     .select("id")
-    .where("conversation_id", "=", conversationId)
-    .where("subject_id", "=", actorSubjectId)
+    .where("conversationId", "=", conversationId)
+    .where("subjectId", "=", actorSubjectId)
     .where("state", "=", "active")
     .limit(1)
     .executeTakeFirst()
@@ -53,10 +53,10 @@ export async function isRemoteAgentActiveConversationParticipant(
     remoteAgentId,
   })
   const row = await db
-    .selectFrom("conversation_participants")
+    .selectFrom("conversationParticipants")
     .select("id")
-    .where("conversation_id", "=", conversationId)
-    .where("subject_id", "=", remoteAgentSubjectId)
+    .where("conversationId", "=", conversationId)
+    .where("subjectId", "=", remoteAgentSubjectId)
     .where("state", "=", "active")
     .limit(1)
     .executeTakeFirst()
@@ -79,10 +79,10 @@ export async function isSubjectActiveConversationParticipant(
   subjectId: string
 ): Promise<boolean> {
   const row = await db
-    .selectFrom("conversation_participants")
+    .selectFrom("conversationParticipants")
     .select("id")
-    .where("conversation_id", "=", conversationId)
-    .where("subject_id", "=", subjectId)
+    .where("conversationId", "=", conversationId)
+    .where("subjectId", "=", subjectId)
     .where("state", "=", "active")
     .limit(1)
     .executeTakeFirst()
@@ -168,12 +168,12 @@ async function assertPrincipalBelongsToWorkspace(
       return
     case SUBJECT_KIND.WORKSPACE_MEMBER: {
       const row = await db
-        .selectFrom("workspace_members")
-        .select(["id", "workspace_id"])
+        .selectFrom("workspaceMembers")
+        .select(["id", "workspaceId"])
         .where("id", "=", principal.memberId)
         .limit(1)
         .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      if (!row || row.workspaceId !== workspaceId) {
         throw new Error(
           `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
         )
@@ -183,13 +183,13 @@ async function assertPrincipalBelongsToWorkspace(
     case SUBJECT_KIND.ACTOR: {
       const row = await db
         .selectFrom("actors as actor")
-        .innerJoin("workspace_apps as app", "app.id", "actor.id")
-        .select(["actor.id", "app.workspace_id"])
+        .innerJoin("workspaceApps as app", "app.id", "actor.id")
+        .select(["actor.id", "app.workspaceId"])
         .where("actor.id", "=", principal.actorId)
-        .where("app.deleted_at", "is", null)
+        .where("app.deletedAt", "is", null)
         .limit(1)
         .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      if (!row || row.workspaceId !== workspaceId) {
         throw new Error(
           `actor ${principal.actorId} does not belong to workspace ${workspaceId}`
         )
@@ -198,14 +198,14 @@ async function assertPrincipalBelongsToWorkspace(
     }
     case SUBJECT_KIND.REMOTE_AGENT: {
       const row = await db
-        .selectFrom("remote_agents as agent")
-        .innerJoin("workspace_apps as app", "app.id", "agent.id")
-        .select(["agent.id", "app.workspace_id"])
+        .selectFrom("remoteAgents as agent")
+        .innerJoin("workspaceApps as app", "app.id", "agent.id")
+        .select(["agent.id", "app.workspaceId"])
         .where("agent.id", "=", principal.remoteAgentId)
-        .where("app.deleted_at", "is", null)
+        .where("app.deletedAt", "is", null)
         .limit(1)
         .executeTakeFirst()
-      if (!row || row.workspace_id !== workspaceId) {
+      if (!row || row.workspaceId !== workspaceId) {
         throw new Error(
           `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
         )
@@ -379,12 +379,12 @@ export async function buildRuntimePrincipalContext(
         ),
       lookupMemberWorkspaceId: async (memberId) => {
         const member = await db
-          .selectFrom("workspace_members")
-          .select(["id", "workspace_id"])
+          .selectFrom("workspaceMembers")
+          .select(["id", "workspaceId"])
           .where("id", "=", memberId)
           .limit(1)
           .executeTakeFirst()
-        return member?.workspace_id ?? null
+        return member?.workspaceId ?? null
       },
     },
     params
@@ -427,12 +427,14 @@ export async function buildRuntimePrincipalContextOn(
         return activeRow.rows.length > 0
       },
       lookupMemberWorkspaceId: async (memberId) => {
+        // runCompilable runs through the Kysely executor, so CamelCasePlugin
+        // camelCases the top-level result key: `workspace_id` -> `workspaceId`.
         const memberRow = await runCompilable(
           executor,
-          sql<{ workspace_id: string }>`
+          sql<{ workspaceId: string }>`
             SELECT workspace_id FROM workspace_members WHERE id = ${memberId} LIMIT 1`
         )
-        return memberRow.rows[0]?.workspace_id ?? null
+        return memberRow.rows[0]?.workspaceId ?? null
       },
     },
     params
@@ -453,12 +455,14 @@ async function assertPrincipalBelongsToWorkspaceOn(
       }
       return
     case SUBJECT_KIND.WORKSPACE_MEMBER: {
+      // runCompilable runs through the Kysely executor: CamelCasePlugin
+      // camelCases the top-level result key `workspace_id` -> `workspaceId`.
       const row = await runCompilable(
         executor,
-        sql<{ workspace_id: string }>`
+        sql<{ workspaceId: string }>`
           SELECT workspace_id FROM workspace_members WHERE id = ${principal.memberId} LIMIT 1`
       )
-      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+      if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
         throw new Error(
           `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
         )
@@ -468,7 +472,7 @@ async function assertPrincipalBelongsToWorkspaceOn(
     case SUBJECT_KIND.ACTOR: {
       const row = await runCompilable(
         executor,
-        sql<{ workspace_id: string }>`
+        sql<{ workspaceId: string }>`
           SELECT app.workspace_id
           FROM actors actor
           INNER JOIN workspace_apps_live app
@@ -477,7 +481,7 @@ async function assertPrincipalBelongsToWorkspaceOn(
             AND app.deleted_at IS NULL
           LIMIT 1`
       )
-      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+      if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
         throw new Error(
           `actor ${principal.actorId} does not belong to workspace ${workspaceId}`
         )
@@ -487,7 +491,7 @@ async function assertPrincipalBelongsToWorkspaceOn(
     case SUBJECT_KIND.REMOTE_AGENT: {
       const row = await runCompilable(
         executor,
-        sql<{ workspace_id: string }>`
+        sql<{ workspaceId: string }>`
           SELECT app.workspace_id
           FROM remote_agents agent
           INNER JOIN workspace_apps_live app
@@ -496,7 +500,7 @@ async function assertPrincipalBelongsToWorkspaceOn(
             AND app.deleted_at IS NULL
           LIMIT 1`
       )
-      if (row.rows.length === 0 || row.rows[0].workspace_id !== workspaceId) {
+      if (row.rows.length === 0 || row.rows[0].workspaceId !== workspaceId) {
         throw new Error(
           `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
         )
@@ -548,12 +552,12 @@ async function assertVisibilityPrincipalsBelongToWorkspace(
 ): Promise<void> {
   if (params.workspaceMemberId) {
     const row = await db
-      .selectFrom("workspace_members")
-      .select(["id", "workspace_id"])
+      .selectFrom("workspaceMembers")
+      .select(["id", "workspaceId"])
       .where("id", "=", params.workspaceMemberId)
       .limit(1)
       .executeTakeFirst()
-    if (!row || row.workspace_id !== params.workspaceId) {
+    if (!row || row.workspaceId !== params.workspaceId) {
       throw new Error(
         `workspace_member ${params.workspaceMemberId} does not belong to workspace ${params.workspaceId}`
       )
@@ -562,13 +566,13 @@ async function assertVisibilityPrincipalsBelongToWorkspace(
   if (params.actorId) {
     const row = await db
       .selectFrom("actors as actor")
-      .innerJoin("workspace_apps as app", "app.id", "actor.id")
-      .select(["actor.id", "app.workspace_id"])
+      .innerJoin("workspaceApps as app", "app.id", "actor.id")
+      .select(["actor.id", "app.workspaceId"])
       .where("actor.id", "=", params.actorId)
-      .where("app.deleted_at", "is", null)
+      .where("app.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()
-    if (!row || row.workspace_id !== params.workspaceId) {
+    if (!row || row.workspaceId !== params.workspaceId) {
       throw new Error(
         `actor ${params.actorId} does not belong to workspace ${params.workspaceId}`
       )
@@ -576,14 +580,14 @@ async function assertVisibilityPrincipalsBelongToWorkspace(
   }
   if (params.remoteAgentId) {
     const row = await db
-      .selectFrom("remote_agents as agent")
-      .innerJoin("workspace_apps as app", "app.id", "agent.id")
-      .select(["agent.id", "app.workspace_id"])
+      .selectFrom("remoteAgents as agent")
+      .innerJoin("workspaceApps as app", "app.id", "agent.id")
+      .select(["agent.id", "app.workspaceId"])
       .where("agent.id", "=", params.remoteAgentId)
-      .where("app.deleted_at", "is", null)
+      .where("app.deletedAt", "is", null)
       .limit(1)
       .executeTakeFirst()
-    if (!row || row.workspace_id !== params.workspaceId) {
+    if (!row || row.workspaceId !== params.workspaceId) {
       throw new Error(
         `remote_agent ${params.remoteAgentId} does not belong to workspace ${params.workspaceId}`
       )

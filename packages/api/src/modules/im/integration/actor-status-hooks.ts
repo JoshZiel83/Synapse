@@ -137,11 +137,11 @@ async function resolveConversationIdForSession(
 ): Promise<string | null> {
   const row = await db
     .selectFrom("sessions")
-    .select("conversation_id")
+    .select("conversationId")
     .where("id", "=", sessionId)
     .limit(1)
     .executeTakeFirst()
-  return row?.conversation_id || null
+  return row?.conversationId || null
 }
 
 /**
@@ -165,8 +165,8 @@ export async function loadCurrentRunningTurnRow(
 ): Promise<RunningTurnRow | null> {
   const row = await db
     .selectFrom("turns")
-    .select(["trigger_item_id", "started_at", "id"])
-    .where("session_id", "=", sessionId)
+    .select(["triggerItemId", "startedAt", "id"])
+    .where("sessionId", "=", sessionId)
     .where("status", "=", "running")
     .orderBy(sql`started_at DESC NULLS LAST`)
     .orderBy("id", "desc")
@@ -174,8 +174,8 @@ export async function loadCurrentRunningTurnRow(
     .executeTakeFirst()
   if (!row) return null
   return {
-    trigger_item_id: row.trigger_item_id,
-    started_at: serializeOptionalInstant(row.started_at) ?? null,
+    trigger_item_id: row.triggerItemId,
+    started_at: serializeOptionalInstant(row.startedAt) ?? null,
   }
 }
 
@@ -196,26 +196,26 @@ export async function findInboundLinkForTriggerItem(
   itemId: string
 ): Promise<InboundLinkLookup | null> {
   const row = await db
-    .selectFrom("transport_message_links")
+    .selectFrom("transportMessageLinks")
     .innerJoin(
-      "transport_endpoints",
-      "transport_endpoints.id",
-      "transport_message_links.transport_endpoint_id"
+      "transportEndpoints",
+      "transportEndpoints.id",
+      "transportMessageLinks.transportEndpointId"
     )
     .innerJoin(
-      "transport_accounts",
-      "transport_accounts.id",
-      "transport_message_links.transport_account_id"
+      "transportAccounts",
+      "transportAccounts.id",
+      "transportMessageLinks.transportAccountId"
     )
     .select([
-      "transport_message_links.external_message_id as externalMessageId",
-      "transport_endpoints.external_id as endpointExternalId",
-      "transport_endpoints.endpoint_type as endpointType",
-      "transport_accounts.transport_kind as transportKind",
-      "transport_accounts.id as transportAccountId",
+      "transportMessageLinks.externalMessageId as externalMessageId",
+      "transportEndpoints.externalId as endpointExternalId",
+      "transportEndpoints.endpointType as endpointType",
+      "transportAccounts.transportKind as transportKind",
+      "transportAccounts.id as transportAccountId",
     ])
-    .where("transport_message_links.item_id", "=", itemId)
-    .where("transport_message_links.direction", "=", "inbound")
+    .where("transportMessageLinks.itemId", "=", itemId)
+    .where("transportMessageLinks.direction", "=", "inbound")
     .where(
       sql<SqlBool>`NULLIF(BTRIM(transport_message_links.external_message_id), '') IS NOT NULL`
     )
@@ -250,32 +250,32 @@ export async function findRecentInboundLinkForConversation(
   cutoffIso: string
 ): Promise<InboundLinkLookupWithCreatedAt | null> {
   const row = await db
-    .selectFrom("transport_message_links")
+    .selectFrom("transportMessageLinks")
     .innerJoin(
-      "transport_endpoints",
-      "transport_endpoints.id",
-      "transport_message_links.transport_endpoint_id"
+      "transportEndpoints",
+      "transportEndpoints.id",
+      "transportMessageLinks.transportEndpointId"
     )
     .innerJoin(
-      "transport_accounts",
-      "transport_accounts.id",
-      "transport_message_links.transport_account_id"
+      "transportAccounts",
+      "transportAccounts.id",
+      "transportMessageLinks.transportAccountId"
     )
     .select([
-      "transport_message_links.external_message_id as externalMessageId",
-      "transport_endpoints.external_id as endpointExternalId",
-      "transport_endpoints.endpoint_type as endpointType",
-      "transport_accounts.transport_kind as transportKind",
-      "transport_accounts.id as transportAccountId",
-      "transport_message_links.created_at as createdAt",
+      "transportMessageLinks.externalMessageId as externalMessageId",
+      "transportEndpoints.externalId as endpointExternalId",
+      "transportEndpoints.endpointType as endpointType",
+      "transportAccounts.transportKind as transportKind",
+      "transportAccounts.id as transportAccountId",
+      "transportMessageLinks.createdAt as createdAt",
     ])
-    .where("transport_message_links.conversation_id", "=", conversationId)
-    .where("transport_message_links.direction", "=", "inbound")
+    .where("transportMessageLinks.conversationId", "=", conversationId)
+    .where("transportMessageLinks.direction", "=", "inbound")
     .where(
       sql<SqlBool>`NULLIF(BTRIM(transport_message_links.external_message_id), '') IS NOT NULL`
     )
-    .where("transport_message_links.created_at", ">=", cutoffIso as any)
-    .orderBy("transport_message_links.created_at", "desc")
+    .where("transportMessageLinks.createdAt", ">=", cutoffIso as any)
+    .orderBy("transportMessageLinks.createdAt", "desc")
     .limit(1)
     .executeTakeFirst()
   if (!row || !row.externalMessageId) return null

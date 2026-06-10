@@ -26,26 +26,26 @@ export async function ensureTransportAddress(params: {
   metadata?: Record<string, unknown>
 }) {
   return db
-    .insertInto("transport_addresses")
+    .insertInto("transportAddresses")
     .values({
       id: uuidv4(),
-      workspace_id: params.workspaceId,
-      transport_account_id: params.transportAccountId,
-      transport_kind: params.transportKind,
-      address_type: params.addressType || "user",
-      external_id: params.externalId.trim(),
-      display_name: params.displayName?.trim() || null,
-      workspace_member_id: params.workspaceMemberId || null,
+      workspaceId: params.workspaceId,
+      transportAccountId: params.transportAccountId,
+      transportKind: params.transportKind,
+      addressType: params.addressType || "user",
+      externalId: params.externalId.trim(),
+      displayName: params.displayName?.trim() || null,
+      workspaceMemberId: params.workspaceMemberId || null,
       metadata: (params.metadata ||
-        {}) as TableInsert<"transport_addresses">["metadata"],
-      created_at: sql`NOW()`,
+        {}) as TableInsert<"transportAddresses">["metadata"],
+      createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc
-        .columns(["transport_account_id", "address_type", "external_id"])
+        .columns(["transportAccountId", "addressType", "externalId"])
         .doUpdateSet({
-          display_name: sql`COALESCE(excluded.display_name, transport_addresses.display_name)`,
-          workspace_member_id: sql`COALESCE(excluded.workspace_member_id, transport_addresses.workspace_member_id)`,
+          displayName: sql`COALESCE(excluded.display_name, transport_addresses.display_name)`,
+          workspaceMemberId: sql`COALESCE(excluded.workspace_member_id, transport_addresses.workspace_member_id)`,
           metadata: sql`transport_addresses.metadata || excluded.metadata`,
         })
     )
@@ -59,18 +59,18 @@ export async function getTransportAddressByExternalId(params: {
   addressType?: "user" | "bot" | "system"
 }) {
   return db
-    .selectFrom("transport_addresses")
+    .selectFrom("transportAddresses")
     .selectAll()
-    .where("transport_account_id", "=", params.transportAccountId)
-    .where("address_type", "=", params.addressType || "user")
-    .where("external_id", "=", params.externalId.trim())
+    .where("transportAccountId", "=", params.transportAccountId)
+    .where("addressType", "=", params.addressType || "user")
+    .where("externalId", "=", params.externalId.trim())
     .limit(1)
     .executeTakeFirst()
 }
 
 export async function getTransportAddressById(transportAddressId: string) {
   return db
-    .selectFrom("transport_addresses")
+    .selectFrom("transportAddresses")
     .selectAll()
     .where("id", "=", transportAddressId)
     .limit(1)
@@ -82,26 +82,26 @@ export async function getPrimaryTransportAddressForParticipant(params: {
   transportAccountId?: string
 }) {
   let builder = db
-    .selectFrom("conversation_participant_addresses as cpa")
-    .innerJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
+    .selectFrom("conversationParticipantAddresses as cpa")
+    .innerJoin("transportAddresses as ta", "ta.id", "cpa.transportAddressId")
     .selectAll("ta")
     .where(
-      "cpa.conversation_participant_id",
+      "cpa.conversationParticipantId",
       "=",
       params.conversationParticipantId
     )
 
   if (params.transportAccountId) {
     builder = builder.where(
-      "ta.transport_account_id",
+      "ta.transportAccountId",
       "=",
       params.transportAccountId
     )
   }
 
   return builder
-    .orderBy("cpa.is_primary", "desc")
-    .orderBy("cpa.created_at", "asc")
+    .orderBy("cpa.isPrimary", "desc")
+    .orderBy("cpa.createdAt", "asc")
     .limit(1)
     .executeTakeFirst()
 }
@@ -160,34 +160,34 @@ async function archiveConversationParticipantIfOrphaned(
   conversationParticipantId: string
 ) {
   const row = await db
-    .selectFrom("conversation_participants as cm")
-    .leftJoin("access_subjects as cmsubj", "cmsubj.id", "cm.subject_id")
+    .selectFrom("conversationParticipants as cm")
+    .leftJoin("accessSubjects as cmsubj", "cmsubj.id", "cm.subjectId")
     .select([
-      "cmsubj.kind as subject_kind",
+      "cmsubj.kind as subjectKind",
       "cm.state",
       sql<boolean>`EXISTS (
         SELECT 1
         FROM conversation_participant_addresses cpa
         WHERE cpa.conversation_participant_id = cm.id
-      )`.as("has_addresses"),
+      )`.as("hasAddresses"),
     ])
     .where("cm.id", "=", conversationParticipantId)
     .limit(1)
     .executeTakeFirst()
   if (!row) return
   if (
-    row.subject_kind !== "external" ||
+    row.subjectKind !== "external" ||
     row.state !== "active" ||
-    row.has_addresses
+    row.hasAddresses
   ) {
     return
   }
 
   await db
-    .updateTable("conversation_participants")
+    .updateTable("conversationParticipants")
     .set({
       state: "left",
-      left_at: sql`COALESCE(left_at, NOW())`,
+      leftAt: sql`COALESCE(left_at, NOW())`,
       metadata: sql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({ retiredByTransportLink: true })}::jsonb`,
     })
     .where("id", "=", conversationParticipantId)
@@ -215,9 +215,9 @@ export async function syncTransportAddressConversationParticipant(params: {
   // write. participant addresses are IM-only: the conversation MUST be bound,
   // and the address MUST belong to the binding's account in the same workspace.
   const binding = await db
-    .selectFrom("conversation_transport_bindings")
-    .select(["workspace_id", "transport_account_id"])
-    .where("conversation_id", "=", params.conversationId)
+    .selectFrom("conversationTransportBindings")
+    .select(["workspaceId", "transportAccountId"])
+    .where("conversationId", "=", params.conversationId)
     .limit(1)
     .executeTakeFirst()
   if (!binding) {
@@ -225,23 +225,23 @@ export async function syncTransportAddressConversationParticipant(params: {
       `syncTransportAddressConversationParticipant: conversation ${params.conversationId} has no transport binding (participant addresses are IM-only)`
     )
   }
-  if (binding.workspace_id !== address.workspace_id) {
+  if (binding.workspaceId !== address.workspaceId) {
     throw new Error(
-      `syncTransportAddressConversationParticipant: address ${address.id} workspace ${address.workspace_id} does not match conversation binding workspace ${binding.workspace_id}`
+      `syncTransportAddressConversationParticipant: address ${address.id} workspace ${address.workspaceId} does not match conversation binding workspace ${binding.workspaceId}`
     )
   }
-  if (binding.transport_account_id !== address.transport_account_id) {
+  if (binding.transportAccountId !== address.transportAccountId) {
     throw new Error(
-      `syncTransportAddressConversationParticipant: address ${address.id} account ${address.transport_account_id} does not match conversation binding account ${binding.transport_account_id}`
+      `syncTransportAddressConversationParticipant: address ${address.id} account ${address.transportAccountId} does not match conversation binding account ${binding.transportAccountId}`
     )
   }
 
   // F6 defence-in-depth (both branches): only a 'user' transport address ever
   // becomes a conversation participant — never a bot/system endpoint. Asserted
   // here so future callers of this exported helper can't bypass it.
-  if (address.address_type !== "user") {
+  if (address.addressType !== "user") {
     throw new Error(
-      `syncTransportAddressConversationParticipant: address ${address.id} is not a user address (${address.address_type})`
+      `syncTransportAddressConversationParticipant: address ${address.id} is not a user address (${address.addressType})`
     )
   }
 
@@ -255,16 +255,16 @@ export async function syncTransportAddressConversationParticipant(params: {
         // updates transport_addresses.workspace_member_id before we re-read it
         // here). This keeps transport_addresses.workspace_member_id the single
         // source of truth for member↔address binding.
-        if (address.workspace_member_id !== linkedMemberId) {
+        if (address.workspaceMemberId !== linkedMemberId) {
           throw new Error(
-            address.workspace_member_id
+            address.workspaceMemberId
               ? `syncTransportAddressConversationParticipant: address ${address.id} is linked to a different workspace member`
               : `syncTransportAddressConversationParticipant: address ${address.id} is not linked to workspace member ${linkedMemberId}; link it first`
           )
         }
         return (
           await activateConversationParticipant({
-            workspaceId: address.workspace_id,
+            workspaceId: address.workspaceId,
             conversationId: params.conversationId,
             participantType: "workspace_member",
             workspaceMemberId: linkedMemberId,
@@ -276,23 +276,23 @@ export async function syncTransportAddressConversationParticipant(params: {
         // An external participant must be an UNLINKED user address. A linked
         // address belongs to an internal member (caller should have passed
         // workspaceMemberId).
-        if (address.workspace_member_id) {
+        if (address.workspaceMemberId) {
           throw new Error(
             `syncTransportAddressConversationParticipant: address ${address.id} is linked to a workspace member; pass workspaceMemberId to add as a member`
           )
         }
         return (
           await activateConversationParticipant({
-            workspaceId: address.workspace_id,
+            workspaceId: address.workspaceId,
             conversationId: params.conversationId,
             participantType: "external",
             displayName:
               params.displayName ||
-              address.display_name ||
-              address.external_id ||
+              address.displayName ||
+              address.externalId ||
               "External user",
             metadata: {
-              externalUserKey: `${address.transport_kind}:${address.external_id}`,
+              externalUserKey: `${address.transportKind}:${address.externalId}`,
             },
             // First-class external subject is keyed by this transport address.
             transportAddressId: address.id,
@@ -308,15 +308,15 @@ export async function syncTransportAddressConversationParticipant(params: {
   })
 
   const attachedMembers = await db
-    .selectFrom("conversation_participant_addresses as cpa")
+    .selectFrom("conversationParticipantAddresses as cpa")
     .innerJoin(
-      "conversation_participants as cm",
+      "conversationParticipants as cm",
       "cm.id",
-      "cpa.conversation_participant_id"
+      "cpa.conversationParticipantId"
     )
     .select(["cm.id"])
-    .where("cpa.transport_address_id", "=", address.id)
-    .where("cm.conversation_id", "=", params.conversationId)
+    .where("cpa.transportAddressId", "=", address.id)
+    .where("cm.conversationId", "=", params.conversationId)
     .where("cm.id", "<>", desiredMember.id)
     .execute()
 
@@ -335,17 +335,17 @@ async function listConversationIdsForTransportAddress(
   transportAddressId: string
 ) {
   const rows = await db
-    .selectFrom("conversation_participant_addresses as cpa")
+    .selectFrom("conversationParticipantAddresses as cpa")
     .innerJoin(
-      "conversation_participants as cm",
+      "conversationParticipants as cm",
       "cm.id",
-      "cpa.conversation_participant_id"
+      "cpa.conversationParticipantId"
     )
-    .select("cm.conversation_id")
+    .select("cm.conversationId")
     .distinct()
-    .where("cpa.transport_address_id", "=", transportAddressId)
+    .where("cpa.transportAddressId", "=", transportAddressId)
     .execute()
-  return rows.map((row) => row.conversation_id as string).filter(Boolean)
+  return rows.map((row) => row.conversationId as string).filter(Boolean)
 }
 
 async function syncTransportAddressLinkedUserMemberships(params: {
@@ -371,24 +371,24 @@ async function loadConversationExternalParticipantPrimaryAddress(params: {
   conversationParticipantId: string
 }) {
   return db
-    .selectFrom("conversation_participants as cm")
+    .selectFrom("conversationParticipants as cm")
     .leftJoin(
-      "conversation_participant_addresses as cpa",
-      "cpa.conversation_participant_id",
+      "conversationParticipantAddresses as cpa",
+      "cpa.conversationParticipantId",
       "cm.id"
     )
-    .leftJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
-    .leftJoin("access_subjects as cmsubj", "cmsubj.id", "cm.subject_id")
+    .leftJoin("transportAddresses as ta", "ta.id", "cpa.transportAddressId")
+    .leftJoin("accessSubjects as cmsubj", "cmsubj.id", "cm.subjectId")
     .select([
-      "cm.id as conversation_participant_id",
-      "ta.id as transport_address_id",
+      "cm.id as conversationParticipantId",
+      "ta.id as transportAddressId",
     ])
-    .where("cm.conversation_id", "=", params.conversationId)
+    .where("cm.conversationId", "=", params.conversationId)
     .where("cm.id", "=", params.conversationParticipantId)
     .where("cmsubj.kind", "=", "external")
-    .where("ta.workspace_id", "=", params.workspaceId)
-    .orderBy("cpa.is_primary", "desc")
-    .orderBy("cpa.created_at", "asc")
+    .where("ta.workspaceId", "=", params.workspaceId)
+    .orderBy("cpa.isPrimary", "desc")
+    .orderBy("cpa.createdAt", "asc")
     .limit(1)
     .executeTakeFirst()
 }
@@ -398,9 +398,9 @@ export async function assertWorkspaceMember(params: {
   workspaceMemberId: string
 }) {
   const row = await db
-    .selectFrom("workspace_members")
-    .select("workspace_id")
-    .where("workspace_id", "=", params.workspaceId)
+    .selectFrom("workspaceMembers")
+    .select("workspaceId")
+    .where("workspaceId", "=", params.workspaceId)
     .where("id", "=", params.workspaceMemberId)
     .limit(1)
     .executeTakeFirst()
@@ -422,13 +422,13 @@ export async function setConversationExternalParticipantLinkedUser(params: {
   if (!participantAddress) {
     throw new Error("External participant not found in this conversation")
   }
-  if (!participantAddress.transport_address_id) {
+  if (!participantAddress.transportAddressId) {
     throw new Error("External participant does not have a transport address")
   }
 
   return setTransportAddressLinkedUser({
     workspaceId: params.workspaceId,
-    transportAddressId: participantAddress.transport_address_id as string,
+    transportAddressId: participantAddress.transportAddressId as string,
     workspaceMemberId: params.workspaceMemberId,
   })
 }
@@ -450,13 +450,13 @@ export async function setTransportAddressLinkedUser(params: {
   }
 
   const row = await db
-    .updateTable("transport_addresses")
+    .updateTable("transportAddresses")
     .set({
-      workspace_member_id: nextWorkspaceMemberId,
+      workspaceMemberId: nextWorkspaceMemberId,
     })
-    .where("workspace_id", "=", params.workspaceId)
+    .where("workspaceId", "=", params.workspaceId)
     .where("id", "=", params.transportAddressId)
-    .where("address_type", "=", "user")
+    .where("addressType", "=", "user")
     .returningAll()
     .executeTakeFirst()
   if (!row) {
@@ -479,33 +479,29 @@ export async function ensureConversationParticipantTransportAddress(params: {
 }) {
   if (params.isPrimary) {
     await db
-      .updateTable("conversation_participant_addresses")
+      .updateTable("conversationParticipantAddresses")
       .set({
-        is_primary: false,
+        isPrimary: false,
       })
-      .where(
-        "conversation_participant_id",
-        "=",
-        params.conversationParticipantId
-      )
+      .where("conversationParticipantId", "=", params.conversationParticipantId)
       .execute()
   }
 
   return db
-    .insertInto("conversation_participant_addresses")
+    .insertInto("conversationParticipantAddresses")
     .values({
-      conversation_participant_id: params.conversationParticipantId,
-      transport_address_id: params.transportAddressId,
-      is_primary: params.isPrimary ?? false,
+      conversationParticipantId: params.conversationParticipantId,
+      transportAddressId: params.transportAddressId,
+      isPrimary: params.isPrimary ?? false,
       metadata: (params.metadata ||
-        {}) as TableInsert<"conversation_participant_addresses">["metadata"],
-      created_at: sql`NOW()`,
+        {}) as TableInsert<"conversationParticipantAddresses">["metadata"],
+      createdAt: sql`NOW()`,
     })
     .onConflict((oc) =>
       oc
-        .columns(["conversation_participant_id", "transport_address_id"])
+        .columns(["conversationParticipantId", "transportAddressId"])
         .doUpdateSet({
-          is_primary: sql`CASE
+          isPrimary: sql`CASE
             WHEN excluded.is_primary THEN TRUE
             ELSE conversation_participant_addresses.is_primary
           END`,
@@ -521,7 +517,7 @@ export async function updateTransportAddressMetadata(params: {
   metadata: Record<string, unknown>
 }) {
   return db
-    .updateTable("transport_addresses")
+    .updateTable("transportAddresses")
     .set({
       metadata: sql`transport_addresses.metadata || ${JSON.stringify(params.metadata || {})}::jsonb`,
     })
@@ -535,7 +531,7 @@ export async function updateTransportEndpointMetadata(params: {
   metadata: Record<string, unknown>
 }) {
   return db
-    .updateTable("transport_endpoints")
+    .updateTable("transportEndpoints")
     .set({
       metadata: sql`transport_endpoints.metadata || ${JSON.stringify(params.metadata || {})}::jsonb`,
     })

@@ -506,6 +506,123 @@
     return dateToIsoInstant(/* @__PURE__ */ new Date());
   }
 
+  // ../shared/dist/actor/templates.js
+  var ACTOR_DOC_TEMPLATES = [
+    {
+      key: "identity_card",
+      title: "Identity Card",
+      description: "How this actor introduces themselves in public.",
+      defaultVisibility: "always",
+      defaultPriority: 120
+    },
+    {
+      key: "public_persona",
+      title: "Public Persona",
+      description: "Voice, tone, and how this actor appears to others.",
+      defaultVisibility: "always",
+      defaultPriority: 115
+    },
+    {
+      key: "soul",
+      title: "Soul",
+      description: "Values, principles, taboos, and emotional core.",
+      defaultVisibility: "always",
+      defaultPriority: 110
+    },
+    {
+      key: "self_narrative",
+      title: "Self Narrative",
+      description: "How this actor understands themselves.",
+      defaultVisibility: "always",
+      defaultPriority: 105
+    },
+    {
+      key: "origin_story",
+      title: "Origin Story",
+      description: "Where this actor comes from and what shaped them.",
+      defaultVisibility: "internal_only",
+      defaultPriority: 100
+    },
+    {
+      key: "relationship_with_user",
+      title: "Relationship With User",
+      description: "How this actor relates to the human user.",
+      defaultVisibility: "always",
+      defaultPriority: 98
+    },
+    {
+      key: "relationship_with_team",
+      title: "Relationship With Team",
+      description: "How this actor views and works with other actors.",
+      defaultVisibility: "multi_member_only",
+      defaultPriority: 96
+    },
+    {
+      key: "representation_guidelines",
+      title: "Representation Guidelines",
+      description: "How to speak or act when representing the user.",
+      defaultVisibility: "internal_only",
+      defaultPriority: 94
+    },
+    {
+      key: "social_protocol",
+      title: "Social Protocol",
+      description: "When to speak, when to stay quiet, and what not to share.",
+      defaultVisibility: "multi_member_only",
+      defaultPriority: 92
+    },
+    {
+      key: "role_charter",
+      title: "Role Charter",
+      description: "Organizational responsibilities and scope.",
+      defaultVisibility: "always",
+      defaultPriority: 90
+    },
+    {
+      key: "mission",
+      title: "Mission",
+      description: "Long-term aim, current mission, and success criteria.",
+      defaultVisibility: "always",
+      defaultPriority: 88
+    },
+    {
+      key: "work_doctrine",
+      title: "Work Doctrine",
+      description: "How this actor approaches work, evidence, and communication.",
+      defaultVisibility: "always",
+      defaultPriority: 86
+    },
+    {
+      key: "limitations_and_escalation",
+      title: "Limitations And Escalation",
+      description: "Blind spots, refusal zones, and when to ask for help.",
+      defaultVisibility: "always",
+      defaultPriority: 84
+    },
+    {
+      key: "quirks_and_signatures",
+      title: "Quirks And Signatures",
+      description: "Habits, running jokes, signatures, and expressive details.",
+      defaultVisibility: "always",
+      defaultPriority: 82
+    },
+    {
+      key: "routines",
+      title: "Routines",
+      description: "Recurring habits, checks, and proactive rhythms.",
+      defaultVisibility: "internal_only",
+      defaultPriority: 80
+    },
+    {
+      key: "conversation_examples",
+      title: "Conversation Examples",
+      description: "Examples of how this actor speaks, declines, or collaborates.",
+      defaultVisibility: "internal_only",
+      defaultPriority: 78
+    }
+  ];
+  var ACTOR_DOC_TEMPLATE_MAP = Object.fromEntries(ACTOR_DOC_TEMPLATES.map((template) => [template.key, template]));
+
   // ../device-protocol/dist/enums.js
   var DEVICE_MCP_ERROR_CODES = [
     "tool_definition_changed",
@@ -1162,126 +1279,22 @@
     "dingtalk",
     "qq"
   ];
-
-  // ../shared/dist/types/index.js
-  var ACTOR_DOC_TEMPLATES = [
-    {
-      key: "identity_card",
-      title: "Identity Card",
-      description: "How this actor introduces themselves in public.",
-      defaultVisibility: "always",
-      defaultPriority: 120
-    },
-    {
-      key: "public_persona",
-      title: "Public Persona",
-      description: "Voice, tone, and how this actor appears to others.",
-      defaultVisibility: "always",
-      defaultPriority: 115
-    },
-    {
-      key: "soul",
-      title: "Soul",
-      description: "Values, principles, taboos, and emotional core.",
-      defaultVisibility: "always",
-      defaultPriority: 110
-    },
-    {
-      key: "self_narrative",
-      title: "Self Narrative",
-      description: "How this actor understands themselves.",
-      defaultVisibility: "always",
-      defaultPriority: 105
-    },
-    {
-      key: "origin_story",
-      title: "Origin Story",
-      description: "Where this actor comes from and what shaped them.",
-      defaultVisibility: "internal_only",
-      defaultPriority: 100
-    },
-    {
-      key: "relationship_with_user",
-      title: "Relationship With User",
-      description: "How this actor relates to the human user.",
-      defaultVisibility: "always",
-      defaultPriority: 98
-    },
-    {
-      key: "relationship_with_team",
-      title: "Relationship With Team",
-      description: "How this actor views and works with other actors.",
-      defaultVisibility: "multi_member_only",
-      defaultPriority: 96
-    },
-    {
-      key: "representation_guidelines",
-      title: "Representation Guidelines",
-      description: "How to speak or act when representing the user.",
-      defaultVisibility: "internal_only",
-      defaultPriority: 94
-    },
-    {
-      key: "social_protocol",
-      title: "Social Protocol",
-      description: "When to speak, when to stay quiet, and what not to share.",
-      defaultVisibility: "multi_member_only",
-      defaultPriority: 92
-    },
-    {
-      key: "role_charter",
-      title: "Role Charter",
-      description: "Organizational responsibilities and scope.",
-      defaultVisibility: "always",
-      defaultPriority: 90
-    },
-    {
-      key: "mission",
-      title: "Mission",
-      description: "Long-term aim, current mission, and success criteria.",
-      defaultVisibility: "always",
-      defaultPriority: 88
-    },
-    {
-      key: "work_doctrine",
-      title: "Work Doctrine",
-      description: "How this actor approaches work, evidence, and communication.",
-      defaultVisibility: "always",
-      defaultPriority: 86
-    },
-    {
-      key: "limitations_and_escalation",
-      title: "Limitations And Escalation",
-      description: "Blind spots, refusal zones, and when to ask for help.",
-      defaultVisibility: "always",
-      defaultPriority: 84
-    },
-    {
-      key: "quirks_and_signatures",
-      title: "Quirks And Signatures",
-      description: "Habits, running jokes, signatures, and expressive details.",
-      defaultVisibility: "always",
-      defaultPriority: 82
-    },
-    {
-      key: "routines",
-      title: "Routines",
-      description: "Recurring habits, checks, and proactive rhythms.",
-      defaultVisibility: "internal_only",
-      defaultPriority: 80
-    },
-    {
-      key: "conversation_examples",
-      title: "Conversation Examples",
-      description: "Examples of how this actor speaks, declines, or collaborates.",
-      defaultVisibility: "internal_only",
-      defaultPriority: 78
-    }
-  ];
-  var ACTOR_DOC_TEMPLATE_MAP = Object.fromEntries(ACTOR_DOC_TEMPLATES.map((template) => [template.key, template]));
   function isTransportKind(value) {
     return typeof value === "string" && TRANSPORT_KINDS.includes(value);
   }
+
+  // ../shared/dist/constants/index.js
+  var API_VERSION = "v1";
+  var API_PREFIX = `/api/${API_VERSION}`;
+  var AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+  var MCP_INSTANCE_TTL = {
+    actor: 30 * 60 * 1e3,
+    // 30 minutes
+    workspace: 60 * 60 * 1e3
+    // 60 minutes
+  };
+
+  // ../shared/dist/content/index.js
   function createCanonicalContentBlockId(_prefix = "block") {
     return globalThis.crypto.randomUUID();
   }
@@ -1365,6 +1378,8 @@
   function textBlocks(s) {
     return [textBlock(s)];
   }
+
+  // ../shared/dist/actor/index.js
   function createActorDocId() {
     return globalThis.crypto.randomUUID();
   }
@@ -1544,17 +1559,6 @@
       return left.title.localeCompare(right.title);
     });
   }
-
-  // ../shared/dist/constants/index.js
-  var API_VERSION = "v1";
-  var API_PREFIX = `/api/${API_VERSION}`;
-  var AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
-  var MCP_INSTANCE_TTL = {
-    actor: 30 * 60 * 1e3,
-    // 30 minutes
-    workspace: 60 * 60 * 1e3
-    // 60 minutes
-  };
 
   // ../shared/dist/access/policies/commandline-normalize.js
   var BUNDLE_ELIGIBLE_PROGRAMS = [

@@ -34,7 +34,7 @@ async function buildSessionFixture(db: Kysely<any>) {
   const ws = await db
     .insertInto("workspaces")
     .values({
-      owner_id: user.id as string,
+      ownerId: user.id as string,
       slug: `ws-${rid()}`,
       name: `${NS} ws`,
     })
@@ -42,16 +42,16 @@ async function buildSessionFixture(db: Kysely<any>) {
     .executeTakeFirstOrThrow()
   const conv = await db
     .insertInto("conversations")
-    .values({ kind: "group", workspace_id: ws.id as string, title: `${NS} c` })
+    .values({ kind: "group", workspaceId: ws.id as string, title: `${NS} c` })
     .returning("id")
     .executeTakeFirstOrThrow()
   const actorRoot = await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: crypto.randomUUID(),
-      workspace_id: ws.id as string,
+      workspaceId: ws.id as string,
       kind: "actor",
-      display_name: `${NS} actor`,
+      displayName: `${NS} actor`,
       status: "active",
     } as any)
     .returning("id")
@@ -62,16 +62,16 @@ async function buildSessionFixture(db: Kysely<any>) {
       id: actorRoot.id as string,
       role: "assistant",
       title: `${NS} actor`,
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const session = await db
     .insertInto("sessions")
     .values({
-      workspace_id: ws.id as string,
-      actor_id: actor.id as string,
-      conversation_id: conv.id as string,
+      workspaceId: ws.id as string,
+      actorId: actor.id as string,
+      conversationId: conv.id as string,
       status: "idle",
     } as any)
     .returning("id")
@@ -93,13 +93,13 @@ async function newConversationItem(
   fx: { conversationId: string; sessionId: string }
 ): Promise<string> {
   const row = await db
-    .insertInto("conversation_items")
+    .insertInto("conversationItems")
     .values({
-      conversation_id: fx.conversationId,
-      session_id: fx.sessionId,
+      conversationId: fx.conversationId,
+      sessionId: fx.sessionId,
       scope: "shared",
       surface: "internal",
-      item_type: "event",
+      itemType: "event",
       subtype: "task_notice",
       role: "system",
     } as any)
@@ -141,14 +141,14 @@ test(
 
       assert.equal(reusedExistingWakeup, false, "first insert is not a reuse")
       assert.equal(created.status, "pending")
-      assert.equal(created.source_item_id, sourceItemId)
+      assert.equal(created.sourceItemId, sourceItemId)
 
       // The row is visible within the same transaction (the durability anchor).
       const found = await db
-        .selectFrom("session_wakeups")
+        .selectFrom("sessionWakeups")
         .select(["id", "status"])
-        .where("session_id", "=", fx.sessionId)
-        .where("source_item_id", "=", sourceItemId)
+        .where("sessionId", "=", fx.sessionId)
+        .where("sourceItemId", "=", sourceItemId)
         .executeTakeFirst()
       assert.ok(found, "wakeup row is present in the transaction")
       assert.equal(found?.status, "pending")
@@ -186,10 +186,10 @@ test(
       )
 
       const count = await db
-        .selectFrom("session_wakeups")
+        .selectFrom("sessionWakeups")
         .select(({ fn }) => fn.count<number>("id").as("count"))
-        .where("session_id", "=", fx.sessionId)
-        .where("source_item_id", "=", sourceItemId)
+        .where("sessionId", "=", fx.sessionId)
+        .where("sourceItemId", "=", sourceItemId)
         .executeTakeFirst()
       assert.equal(Number(count?.count), 1, "exactly one wakeup row exists")
     })
@@ -220,7 +220,7 @@ test(
 
     await withTestDb(async (db) => {
       const found = await db
-        .selectFrom("session_wakeups")
+        .selectFrom("sessionWakeups")
         .select("id")
         .where("id", "=", insertedId!)
         .executeTakeFirst()

@@ -1016,15 +1016,15 @@ async function resolveParticipantSubjectId(
   participantId: string
 ): Promise<string> {
   const row = await client
-    .selectFrom("conversation_participants")
-    .select("subject_id")
+    .selectFrom("conversationParticipants")
+    .select("subjectId")
     .where("id", "=", participantId)
     .limit(1)
     .executeTakeFirst()
-  if (!row?.subject_id) {
+  if (!row?.subjectId) {
     throw new Error(`Participant ${participantId} has no subject`)
   }
-  return row.subject_id
+  return row.subjectId
 }
 
 function buildTaskSummary(row: RawTaskRow): TaskSummary {
@@ -1358,10 +1358,10 @@ async function getTaskCommandRow(
   queryable?: Executor
 ) {
   const compiled = db
-    .selectFrom("tool_call_task_response_commands")
+    .selectFrom("toolCallTaskResponseCommands")
     .selectAll()
-    .where("task_id", "=", taskId)
-    .where("command_id", "=", commandId)
+    .where("taskId", "=", taskId)
+    .where("commandId", "=", commandId)
     .limit(1)
     .compile()
   const result = await runCompiledOn<RawTaskCommandRow>(queryable, compiled)
@@ -1507,19 +1507,19 @@ async function insertTaskCommandRow(
 ) {
   await runBuilder(
     client,
-    db.insertInto("tool_call_task_response_commands").values({
-      task_id: params.taskId,
-      command_id: params.commandId,
-      base_revision:
-        params.baseRevision as unknown as TableInsert<"tool_call_task_response_commands">["base_revision"],
+    db.insertInto("toolCallTaskResponseCommands").values({
+      taskId: params.taskId,
+      commandId: params.commandId,
+      baseRevision:
+        params.baseRevision as unknown as TableInsert<"toolCallTaskResponseCommands">["baseRevision"],
       outcome: params.outcome,
-      request_payload: jsonbValue(
+      requestPayload: jsonbValue(
         params.requestPayload
-      ) as unknown as TableInsert<"tool_call_task_response_commands">["request_payload"],
-      response_payload: jsonbValue(
+      ) as unknown as TableInsert<"toolCallTaskResponseCommands">["requestPayload"],
+      responsePayload: jsonbValue(
         params.responsePayload
-      ) as unknown as TableInsert<"tool_call_task_response_commands">["response_payload"],
-      created_by_workspace_member_id: params.createdByWorkspaceMemberId,
+      ) as unknown as TableInsert<"toolCallTaskResponseCommands">["responsePayload"],
+      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId,
     })
   )
 }
@@ -1970,7 +1970,7 @@ async function findTaskIdByTaskId(taskId: string, queryable?: Executor) {
   // Confirm the task exists and is non-terminal so dedupe-reuse only returns a
   // live row.
   const compiled = db
-    .selectFrom("tool_call_tasks")
+    .selectFrom("toolCallTasks")
     .select("id")
     .where("id", "=", taskId)
     .limit(1)
@@ -1985,11 +1985,11 @@ async function findPendingTaskIdByRequestKey(
   queryable?: Executor
 ) {
   const compiled = db
-    .selectFrom("tool_call_tasks")
+    .selectFrom("toolCallTasks")
     .select("id")
-    .where("workspace_id", "=", workspaceId)
-    .where("request_key", "=", requestKey)
-    .where("lifecycle_status", "in", [
+    .where("workspaceId", "=", workspaceId)
+    .where("requestKey", "=", requestKey)
+    .where("lifecycleStatus", "in", [
       "submitted",
       "working",
       "input_required",
@@ -2059,32 +2059,32 @@ async function insertRuntimeAuthorizationTaskDetails(
 ) {
   await runBuilder(
     client,
-    db.insertInto("tool_call_task_runtime_authorization").values({
-      task_id: params.taskId,
-      device_id: params.deviceId,
-      device_capability_id: params.deviceCapabilityId,
-      device_exposure_id: params.deviceExposureId,
-      requested_tool_name: params.requestedToolName,
-      device_tool_stable_key: params.deviceToolStableKey,
+    db.insertInto("toolCallTaskRuntimeAuthorization").values({
+      taskId: params.taskId,
+      deviceId: params.deviceId,
+      deviceCapabilityId: params.deviceCapabilityId,
+      deviceExposureId: params.deviceExposureId,
+      requestedToolName: params.requestedToolName,
+      deviceToolStableKey: params.deviceToolStableKey,
       reason: params.reason,
-      request_mode: params.requestMode,
-      source_runtime_session_id: params.sourceRuntimeSessionId || null,
-      source_retry_nonce: params.sourceRetryNonce || null,
-      source_request_args: jsonbValue(
+      requestMode: params.requestMode,
+      sourceRuntimeSessionId: params.sourceRuntimeSessionId || null,
+      sourceRetryNonce: params.sourceRetryNonce || null,
+      sourceRequestArgs: jsonbValue(
         params.sourceRequestArgs
-      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["source_request_args"],
-      principal_subject_id: params.principalSubjectId,
-      principal_scope_subject_id: params.principalScopeSubjectId || null,
-      requested_action: jsonbValue(
+      ) as unknown as TableInsert<"toolCallTaskRuntimeAuthorization">["sourceRequestArgs"],
+      principalSubjectId: params.principalSubjectId,
+      principalScopeSubjectId: params.principalScopeSubjectId || null,
+      requestedAction: jsonbValue(
         params.requestedAction
-      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["requested_action"],
-      grant_options: jsonbValue(
+      ) as unknown as TableInsert<"toolCallTaskRuntimeAuthorization">["requestedAction"],
+      grantOptions: jsonbValue(
         params.grantOptions
-      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["grant_options"],
-      available_presets: jsonbValue(
+      ) as unknown as TableInsert<"toolCallTaskRuntimeAuthorization">["grantOptions"],
+      availablePresets: jsonbValue(
         params.availablePresets
-      ) as unknown as TableInsert<"tool_call_task_runtime_authorization">["available_presets"],
-      dedupe_key: params.dedupeKey,
+      ) as unknown as TableInsert<"toolCallTaskRuntimeAuthorization">["availablePresets"],
+      dedupeKey: params.dedupeKey,
     })
   )
 }
@@ -2158,9 +2158,9 @@ async function updateTaskConversationItemId(
   const result = await runBuilder(
     client,
     db
-      .updateTable("tool_call_tasks")
+      .updateTable("toolCallTasks")
       .set({
-        conversation_item_id: conversationItemId,
+        conversationItemId: conversationItemId,
       })
       .where("id", "=", taskId)
   )
@@ -2179,15 +2179,15 @@ function taskResolutionStatusToFields(
   status: TaskResolutionStatus,
   kind: TaskRequestKind
 ): {
-  lifecycle_status: ToolCallTaskLifecycleStatus
+  lifecycleStatus: ToolCallTaskLifecycleStatus
   outcome: ToolCallTaskOutcome | null
 } {
   switch (status) {
     case "answered":
-      return { lifecycle_status: "completed", outcome: "answered" }
+      return { lifecycleStatus: "completed", outcome: "answered" }
     case "approved":
       return {
-        lifecycle_status: "completed",
+        lifecycleStatus: "completed",
         outcome:
           kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION
             ? "granted"
@@ -2195,18 +2195,18 @@ function taskResolutionStatusToFields(
       }
     case "rejected":
       return {
-        lifecycle_status: "completed",
+        lifecycleStatus: "completed",
         outcome:
           kind === TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION
             ? "denied"
             : "revision_requested",
       }
     case "cancelled":
-      return { lifecycle_status: "cancelled", outcome: null }
+      return { lifecycleStatus: "cancelled", outcome: null }
     case "superseded":
-      return { lifecycle_status: "cancelled", outcome: null }
+      return { lifecycleStatus: "cancelled", outcome: null }
     case "expired":
-      return { lifecycle_status: "expired", outcome: null }
+      return { lifecycleStatus: "expired", outcome: null }
   }
 }
 
@@ -2217,7 +2217,7 @@ async function updateTaskRequestRow(
 ) {
   const result = await runBuilder(
     client,
-    db.updateTable("tool_call_tasks").set(values).where("id", "=", taskId)
+    db.updateTable("toolCallTasks").set(values).where("id", "=", taskId)
   )
   if (result.rowCount !== 1) {
     throw new Error(
@@ -2236,11 +2236,11 @@ async function updateTaskResolutionPayload(
   const result = await runBuilder(
     client,
     db
-      .updateTable("tool_call_tasks")
+      .updateTable("toolCallTasks")
       .set({
-        final_result_payload: jsonbValue(
+        finalResultPayload: jsonbValue(
           payload
-        ) as unknown as TableInsert<"tool_call_tasks">["final_result_payload"],
+        ) as unknown as TableInsert<"toolCallTasks">["finalResultPayload"],
       })
       .where("id", "=", taskId)
   )
@@ -2582,7 +2582,7 @@ export async function createRemoteAgentPlanApprovalTaskRequest(
     })
 
     await updateTaskConversationItemId(client, taskId, created.item.id)
-    const contextUpsert = await runOn<{ remote_agent_id: string }>(
+    const contextUpsert = await runOn<{ remoteAgentId: string }>(
       client,
       `
         INSERT INTO remote_agent_conversation_contexts (
@@ -2616,7 +2616,7 @@ export async function createRemoteAgentPlanApprovalTaskRequest(
         params.requesterParticipantId,
       ]
     )
-    if (!contextUpsert.rows[0]?.remote_agent_id) {
+    if (!contextUpsert.rows[0]?.remoteAgentId) {
       throw new Error("Remote agent requester participant is invalid")
     }
 
@@ -2719,20 +2719,20 @@ export async function findOpenRuntimeAuthorizationTask(
     runtimeSessionId: params.runtimeSessionId,
   })
   const row = await db
-    .selectFrom("tool_call_tasks as ir")
+    .selectFrom("toolCallTasks as ir")
     .innerJoin(
-      "tool_call_task_runtime_authorization as auth",
-      "auth.task_id",
+      "toolCallTaskRuntimeAuthorization as auth",
+      "auth.taskId",
       "ir.id"
     )
     .select("ir.id")
-    .where("ir.workspace_id", "=", params.workspaceId)
-    .where("ir.conversation_id", "=", params.conversationId)
+    .where("ir.workspaceId", "=", params.workspaceId)
+    .where("ir.conversationId", "=", params.conversationId)
     .where(
       sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`
     )
-    .where("ir.executor_kind", "=", "runtime_authorization")
-    .where("ir.lifecycle_status", "in", [
+    .where("ir.executorKind", "=", "runtime_authorization")
+    .where("ir.lifecycleStatus", "in", [
       "submitted",
       "working",
       "input_required",
@@ -2740,20 +2740,20 @@ export async function findOpenRuntimeAuthorizationTask(
     ])
     .where((eb) =>
       eb.or([
-        eb("ir.expires_at", "is", null),
-        eb("ir.expires_at", ">", new Date()),
+        eb("ir.expiresAt", "is", null),
+        eb("ir.expiresAt", ">", new Date()),
       ])
     )
-    .where("auth.device_id", "=", params.deviceId)
-    .where("auth.device_capability_id", "=", params.deviceCapabilityId)
-    .where("auth.device_exposure_id", "=", params.deviceExposureId)
-    .where("auth.requested_tool_name", "=", params.requestedToolName)
+    .where("auth.deviceId", "=", params.deviceId)
+    .where("auth.deviceCapabilityId", "=", params.deviceCapabilityId)
+    .where("auth.deviceExposureId", "=", params.deviceExposureId)
+    .where("auth.requestedToolName", "=", params.requestedToolName)
     .where(
       sql<boolean>`auth.device_tool_stable_key = ${params.deviceToolStableKey}`
     )
-    .where("auth.request_mode", "=", params.requestMode)
-    .where("auth.dedupe_key", "=", dedupeKey)
-    .orderBy("ir.updated_at", "desc")
+    .where("auth.requestMode", "=", params.requestMode)
+    .where("auth.dedupeKey", "=", dedupeKey)
+    .orderBy("ir.updatedAt", "desc")
     .limit(1)
     .executeTakeFirst()
 
@@ -2798,9 +2798,9 @@ export async function cancelTaskRequest(taskId: string, note?: string) {
   const resolutionPayload = parseJsonObject(existing.resolution_payload)
   const task = await withDbTransaction(async (client) => {
     await updateTaskRequestRow(client, taskId, {
-      lifecycle_status: "cancelled",
+      lifecycleStatus: "cancelled",
       revision: sql`revision + 1`,
-      resolved_at: sql`NOW()`,
+      resolvedAt: sql`NOW()`,
     })
 
     const payload = {
@@ -2827,7 +2827,7 @@ export async function canUserViewTask(params: {
   userId: string
 }) {
   const row = await db
-    .selectFrom("tool_call_tasks as ir")
+    .selectFrom("toolCallTasks as ir")
     .select("ir.id")
     .where("ir.id", "=", params.taskId)
     .where((eb) =>
@@ -2842,7 +2842,7 @@ export async function canUserViewTask(params: {
             AND wm.user_id = ${params.userId}
         )`,
         eb.and([
-          eb("ir.executor_kind", "in", [
+          eb("ir.executorKind", "in", [
             "user_input",
             "plan_approval",
           ] satisfies ToolCallTaskExecutorKind[]),
@@ -2874,7 +2874,7 @@ export async function canUserViewTask(params: {
           ]),
         ]),
         eb.and([
-          eb("ir.executor_kind", "=", TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION),
+          eb("ir.executorKind", "=", TASK_REQUEST_KIND.RUNTIME_AUTHORIZATION),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM conversation_participants cm
@@ -2908,13 +2908,13 @@ export async function canUserResolveTask(params: {
   ) {
     const targetParticipantId = task.target?.participantId
     const viewerParticipant = await db
-      .selectFrom("conversation_participants as cp")
-      .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
-      .innerJoin("workspace_members as wm", "wm.id", "subj.workspace_member_id")
+      .selectFrom("conversationParticipants as cp")
+      .innerJoin("accessSubjects as subj", "subj.id", "cp.subjectId")
+      .innerJoin("workspaceMembers as wm", "wm.id", "subj.workspaceMemberId")
       .select("cp.id")
       .where("cp.id", "=", targetParticipantId)
       .where("cp.state", "=", "active")
-      .where("wm.user_id", "=", userId)
+      .where("wm.userId", "=", userId)
       .limit(1)
       .executeTakeFirst()
 
@@ -2928,39 +2928,39 @@ export async function canUserResolveTask(params: {
     task.requester.remoteAgentId
   ) {
     const viewerMembership = await db
-      .selectFrom("conversation_participants as cp")
-      .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
-      .innerJoin("workspace_members as wm", "wm.id", "subj.workspace_member_id")
-      .innerJoin("conversations as c", "c.id", "cp.conversation_id")
+      .selectFrom("conversationParticipants as cp")
+      .innerJoin("accessSubjects as subj", "subj.id", "cp.subjectId")
+      .innerJoin("workspaceMembers as wm", "wm.id", "subj.workspaceMemberId")
+      .innerJoin("conversations as c", "c.id", "cp.conversationId")
       .select([
-        "subj.workspace_member_id as workspace_member_id",
-        "c.kind as conversation_kind",
+        "subj.workspaceMemberId as workspaceMemberId",
+        "c.kind as conversationKind",
       ])
-      .where("cp.conversation_id", "=", task.conversationId)
+      .where("cp.conversationId", "=", task.conversationId)
       .where("cp.state", "=", "active")
-      .where("wm.user_id", "=", userId)
+      .where("wm.userId", "=", userId)
       .limit(1)
       .executeTakeFirst()
 
-    if (!viewerMembership?.workspace_member_id) {
+    if (!viewerMembership?.workspaceMemberId) {
       return false
     }
 
-    if (viewerMembership.conversation_kind === "direct") {
+    if (viewerMembership.conversationKind === "direct") {
       return true
     }
 
     const grant = await runBuilder(
       db,
       db
-        .selectFrom("remote_agent_group_task_grants")
-        .select("workspace_member_id")
-        .where("remote_agent_id", "=", task.requester.remoteAgentId)
-        .where("workspace_member_id", "=", viewerMembership.workspace_member_id)
+        .selectFrom("remoteAgentGroupTaskGrants")
+        .select("workspaceMemberId")
+        .where("remoteAgentId", "=", task.requester.remoteAgentId)
+        .where("workspaceMemberId", "=", viewerMembership.workspaceMemberId)
         .limit(1)
     )
 
-    return Boolean(grant.rows[0]?.workspace_member_id)
+    return Boolean(grant.rows[0]?.workspaceMemberId)
   }
 
   const deviceId = task.runtimeAuthorization?.deviceId
@@ -3284,13 +3284,13 @@ export async function resolveTaskRequest(
         const grantRow = await runBuilder(
           client,
           db
-            .selectFrom("remote_agent_group_task_grants")
-            .select("workspace_member_id")
-            .where("remote_agent_id", "=", locked.requester_remote_agent_id)
-            .where("workspace_member_id", "=", params.resolverWorkspaceMemberId)
+            .selectFrom("remoteAgentGroupTaskGrants")
+            .select("workspaceMemberId")
+            .where("remoteAgentId", "=", locked.requester_remote_agent_id)
+            .where("workspaceMemberId", "=", params.resolverWorkspaceMemberId)
             .limit(1)
         )
-        if (!grantRow.rows[0]?.workspace_member_id) {
+        if (!grantRow.rows[0]?.workspaceMemberId) {
           throw new Error(
             "You are not allowed to resolve this remote agent task"
           )
@@ -3383,15 +3383,15 @@ export async function resolveTaskRequest(
 
       if (locked.remote_agent_run_id && locked.requester_remote_agent_id) {
         await client
-          .updateTable("remote_agent_conversation_contexts")
+          .updateTable("remoteAgentConversationContexts")
           .set({
-            collaboration_mode:
+            collaborationMode:
               nextStatus === "approved" ? "default" : "plan_drafting",
-            collaboration_state: jsonbValue({}),
-            active_plan_approval_task_id: null,
+            collaborationState: jsonbValue({}),
+            activePlanApprovalTaskId: null,
           })
-          .where("remote_agent_id", "=", locked.requester_remote_agent_id)
-          .where("conversation_id", "=", locked.conversation_id)
+          .where("remoteAgentId", "=", locked.requester_remote_agent_id)
+          .where("conversationId", "=", locked.conversation_id)
           .execute()
       } else {
         // Task unification: locked IS the task row, so session_id is on it.
@@ -3403,12 +3403,12 @@ export async function resolveTaskRequest(
           client,
           db
             .selectFrom("sessions as s")
-            .innerJoin("conversations as c", "c.id", "s.conversation_id")
+            .innerJoin("conversations as c", "c.id", "s.conversationId")
             .select([
-              "s.collaboration_state",
-              "s.collaboration_mode",
-              "s.active_plan_approval_task_id",
-              "c.kind as conversation_kind",
+              "s.collaborationState",
+              "s.collaborationMode",
+              "s.activePlanApprovalTaskId",
+              "c.kind as conversationKind",
             ])
             .where("s.id", "=", taskRow.session_id)
             .limit(1)
@@ -3416,36 +3416,34 @@ export async function resolveTaskRequest(
         if (!sessionRow) {
           throw new Error(`Session ${taskRow.session_id} not found`)
         }
-        if (isGroupConversationKind(sessionRow.conversation_kind)) {
+        if (isGroupConversationKind(sessionRow.conversationKind)) {
           throw new Error(
             "Plan mode is only available in direct conversations."
           )
         }
         if (
-          !isPlanAwaitingApprovalCollaborationMode(
-            sessionRow.collaboration_mode
-          )
+          !isPlanAwaitingApprovalCollaborationMode(sessionRow.collaborationMode)
         ) {
           throw new Error(
             `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`
           )
         }
-        if (!sessionRow.active_plan_approval_task_id) {
+        if (!sessionRow.activePlanApprovalTaskId) {
           throw new Error(
             `Session ${taskRow.session_id} is missing active_plan_approval_task_id`
           )
         }
-        if (sessionRow.active_plan_approval_task_id !== locked.id) {
+        if (sessionRow.activePlanApprovalTaskId !== locked.id) {
           throw new Error(
-            `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_task_id}, not ${locked.id}`
+            `Session ${taskRow.session_id} points to ${sessionRow.activePlanApprovalTaskId}, not ${locked.id}`
           )
         }
 
         const collaborationState = parseSessionCollaborationState(
-          sessionRow.collaboration_state == null
+          sessionRow.collaborationState == null
             ? {}
             : requireJsonObject(
-                sessionRow.collaboration_state,
+                sessionRow.collaborationState,
                 `Session ${taskRow.session_id} collaboration_state`
               )
         )
@@ -3633,11 +3631,11 @@ export async function resolveTaskRequest(
     // guarded, so it lands on the already-terminal row).
     const taskFields = taskResolutionStatusToFields(nextStatus, locked.kind)
     await updateTaskRequestRow(client, params.taskId, {
-      lifecycle_status: taskFields.lifecycle_status,
+      lifecycleStatus: taskFields.lifecycleStatus,
       outcome: taskFields.outcome,
       revision: sql`revision + 1`,
-      resolved_by_participant_id: params.resolverParticipantId,
-      resolved_at: sql`NOW()`,
+      resolvedByParticipantId: params.resolverParticipantId,
+      resolvedAt: sql`NOW()`,
     })
 
     await updateTaskResolutionPayload(client, params.taskId, resolutionPayload)
@@ -3802,9 +3800,9 @@ export async function markRuntimeAuthorizationTaskSuperseded(
   const resolutionPayload = parseJsonObject(existing.resolution_payload)
   const task = await withDbTransaction(async (client) => {
     await updateTaskRequestRow(client, taskId, {
-      lifecycle_status: "cancelled",
+      lifecycleStatus: "cancelled",
       revision: sql`revision + 1`,
-      resolved_at: sql`NOW()`,
+      resolvedAt: sql`NOW()`,
     })
     await updateTaskResolutionPayload(client, taskId, {
       ...resolutionPayload,

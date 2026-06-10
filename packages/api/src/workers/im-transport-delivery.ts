@@ -394,8 +394,8 @@ export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
           })
           return row
             ? {
-                externalId: String(row.external_id),
-                displayName: row.display_name ?? undefined,
+                externalId: String(row.externalId),
+                displayName: row.displayName ?? undefined,
               }
             : null
         },

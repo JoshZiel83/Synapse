@@ -30,14 +30,14 @@ async function hasWorkspaceDefaultContactVisibilityGrant(
   workspaceId: string
 ): Promise<boolean> {
   const row = await db
-    .selectFrom("workspace_app_grants as app_grant")
-    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
-    .innerJoin("workspace_apps as app", "app.id", "app_grant.workspace_app_id")
+    .selectFrom("workspaceAppGrants as app_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
+    .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
     .select("app_grant.id")
     .where("app.kind", "=", resourceType)
-    .where("app_grant.workspace_app_id", "=", resourceId)
+    .where("app_grant.workspaceAppId", "=", resourceId)
     .where("subj.kind", "=", "workspace")
-    .where("subj.workspace_id", "=", workspaceId)
+    .where("subj.workspaceId", "=", workspaceId)
     .where("app_grant.status", "=", "active")
     .where(
       sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(app_grant.permissions)`
@@ -73,22 +73,22 @@ export async function deriveRequiresContactApprovalMany(
     out.set(id, true)
   }
   const rows = await db
-    .selectFrom("workspace_app_grants as app_grant")
-    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
-    .innerJoin("workspace_apps as app", "app.id", "app_grant.workspace_app_id")
-    .select(["app_grant.workspace_app_id as resource_id"])
+    .selectFrom("workspaceAppGrants as app_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
+    .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
+    .select(["app_grant.workspaceAppId as resourceId"])
     .where("app.kind", "=", resourceType)
-    .where("app_grant.workspace_app_id", "in", [...resourceIds])
+    .where("app_grant.workspaceAppId", "in", [...resourceIds])
     .where("subj.kind", "=", "workspace")
-    .where("subj.workspace_id", "=", workspaceId)
+    .where("subj.workspaceId", "=", workspaceId)
     .where("app_grant.status", "=", "active")
     .where(
       sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(app_grant.permissions)`
     )
     .execute()
-  for (const row of rows as Array<{ resource_id: string | null }>) {
-    if (row.resource_id) {
-      out.set(row.resource_id, false)
+  for (const row of rows as Array<{ resourceId: string | null }>) {
+    if (row.resourceId) {
+      out.set(row.resourceId, false)
     }
   }
   return out
@@ -132,12 +132,12 @@ export async function setRequiresContactApproval(
   }
 
   await db
-    .updateTable("workspace_app_grants")
+    .updateTable("workspaceAppGrants")
     .set({
       status: WORKSPACE_APP_GRANT_STATUS.REVOKED,
-      revoked_at: new Date(),
+      revokedAt: new Date(),
     } as any)
-    .where("workspace_app_id", "=", params.resourceId)
+    .where("workspaceAppId", "=", params.resourceId)
     .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
     .where(
       sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(permissions)`
@@ -158,20 +158,20 @@ export async function grantApprovedContactVisibility(
   }
 ) {
   const subjectId = await db
-    .selectFrom("access_subjects")
+    .selectFrom("accessSubjects")
     .select("id")
-    .where("workspace_member_id", "=", params.grantedToMemberId)
+    .where("workspaceMemberId", "=", params.grantedToMemberId)
     .where("kind", "=", "workspace_member")
     .executeTakeFirst()
   if (subjectId) {
     const existing = await db
-      .selectFrom("workspace_app_grants")
+      .selectFrom("workspaceAppGrants")
       .select("id")
-      .where("workspace_id", "=", params.workspaceId)
-      .where("workspace_app_id", "=", params.resourceId)
-      .where("subject_id", "=", subjectId.id)
+      .where("workspaceId", "=", params.workspaceId)
+      .where("workspaceAppId", "=", params.resourceId)
+      .where("subjectId", "=", subjectId.id)
       .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
-      .where("scope_subject_id", "is", null)
+      .where("scopeSubjectId", "is", null)
       .where(
         sql<boolean>`'contact_visible'::workspace_app_grant_permission = ANY(permissions)`
       )

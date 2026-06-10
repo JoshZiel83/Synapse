@@ -71,15 +71,15 @@ async function resolvePluginPresentation(
   if (!upstream) return null
   const row = await livePluginInstallations(db)
     .innerJoin(
-      "plugin_package_version_specs as spec",
-      "spec.catalog_version_id",
-      "plugin_installations_live.catalog_version_id"
+      "pluginPackageVersionSpecs as spec",
+      "spec.catalogVersionId",
+      "pluginInstallationsLive.catalogVersionId"
     )
-    .select(["spec.tool_manifest as tool_manifest"])
-    .where("plugin_installations_live.id", "=", installationId)
+    .select(["spec.toolManifest as toolManifest"])
+    .where("pluginInstallationsLive.id", "=", installationId)
     .executeTakeFirst()
   if (!row) return null
-  const manifest = Array.isArray(row.tool_manifest) ? row.tool_manifest : []
+  const manifest = Array.isArray(row.toolManifest) ? row.toolManifest : []
   for (const entry of manifest) {
     const rec = asRecord(entry)
     if (!rec) continue

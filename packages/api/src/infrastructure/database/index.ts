@@ -25,6 +25,19 @@ type RequiredSchemaSpec = {
   reason: string
 }
 
+/**
+ * Map a camelCase Kysely table/column identifier back to its physical
+ * snake_case name. The Kysely surface is now fully camelCase
+ * (`CamelCasePlugin`), but Postgres — and therefore `information_schema` — keeps
+ * the snake_case names. This bootstrap probe runs raw SQL against
+ * `information_schema`, so identifiers must be snake-ified at the boundary. This
+ * matches Kysely's own default `createSnakeCaseMapper` for these identifiers
+ * (insert `_` before each uppercase letter, lowercased).
+ */
+function toPhysicalName(identifier: string): string {
+  return identifier.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`)
+}
+
 type RequiredSchemaIssue = {
   table: string
   missingColumns: string[]
@@ -43,12 +56,12 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "workspace bootstrap and navigation",
   },
   {
-    table: "workspace_members",
+    table: "workspaceMembers",
     requiredColumns: ["workspace_id", "user_id", "trust_level"],
     reason: "base workspace access",
   },
   {
-    table: "workspace_relationship_profiles",
+    table: "workspaceRelationshipProfiles",
     requiredColumns: [
       "workspace_id",
       "subject_id",
@@ -60,7 +73,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "workspace-scoped relationship identities and QR profiles",
   },
   {
-    table: "workspace_friend_requests",
+    table: "workspaceFriendRequests",
     requiredColumns: [
       "requester_workspace_member_id",
       "target_subject_id",
@@ -69,7 +82,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "workspace-scoped relationship requests",
   },
   {
-    table: "workspace_friend_entries",
+    table: "workspaceFriendEntries",
     requiredColumns: [
       "workspace_id",
       "owner_workspace_member_id",
@@ -78,7 +91,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "workspace-scoped relationship entries",
   },
   {
-    table: "direct_conversation_bindings",
+    table: "directConversationBindings",
     requiredColumns: [
       "conversation_id",
       "participant_one_subject_id",
@@ -87,12 +100,12 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "authoritative direct-conversation uniqueness",
   },
   {
-    table: "workspace_member_preferences",
+    table: "workspaceMemberPreferences",
     requiredColumns: ["workspace_member_id", "chief_actor_id"],
     reason: "workspace-level chief actor preferences",
   },
   {
-    table: "transport_accounts",
+    table: "transportAccounts",
     requiredColumns: [
       "workspace_id",
       "transport_kind",
@@ -103,12 +116,12 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "IM transport account ownership",
   },
   {
-    table: "platform_access_bindings",
+    table: "platformAccessBindings",
     requiredColumns: ["user_id", "access_key", "source"],
     reason: "platform access bindings",
   },
   {
-    table: "workspace_access_bindings",
+    table: "workspaceAccessBindings",
     requiredColumns: ["workspace_member_id", "access_key"],
     reason: "workspace access bindings",
   },
@@ -128,12 +141,12 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "Better Auth verification table",
   },
   {
-    table: "device_code",
+    table: "deviceCode",
     requiredColumns: ["id", "device_code", "user_code", "status", "expires_at"],
     reason: "Better Auth deviceAuthorization (cross-device QR login)",
   },
   {
-    table: "realtime_event_outbox",
+    table: "realtimeEventOutbox",
     requiredColumns: [
       "event_type",
       "workspace_id",
@@ -146,7 +159,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "transactional realtime event outbox",
   },
   {
-    table: "tool_call_tasks",
+    table: "toolCallTasks",
     requiredColumns: [
       "session_id",
       "principal_subject_id",
@@ -163,12 +176,12 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "unified task governance and lifecycle persistence",
   },
   {
-    table: "tool_call_task_output_chunks",
+    table: "toolCallTaskOutputChunks",
     requiredColumns: ["task_id", "seq", "stream", "text_value"],
     reason: "task output tail persistence",
   },
   {
-    table: "tool_call_task_runtime_authorization",
+    table: "toolCallTaskRuntimeAuthorization",
     requiredColumns: [
       "task_id",
       "device_id",
@@ -190,7 +203,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "runtime authorization task detail (CTI)",
   },
   {
-    table: "tool_call_task_response_commands",
+    table: "toolCallTaskResponseCommands",
     requiredColumns: [
       "task_id",
       "command_id",
@@ -202,7 +215,7 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "task resolution command dedupe and replay",
   },
   {
-    table: "runtime_authorization_grants",
+    table: "runtimeAuthorizationGrants",
     requiredColumns: [
       "workspace_id",
       "device_id",
@@ -274,7 +287,9 @@ export async function testConnection(): Promise<boolean> {
 }
 
 export async function inspectRequiredSchema(): Promise<RequiredSchemaIssue[]> {
-  const tableNames = REQUIRED_SCHEMA_SPECS.map((spec) => spec.table)
+  const tableNames = REQUIRED_SCHEMA_SPECS.map((spec) =>
+    toPhysicalName(spec.table)
+  )
   const sql = `SELECT table_name, column_name
      FROM information_schema.columns
      WHERE table_schema = 'public'
@@ -300,11 +315,12 @@ export async function inspectRequiredSchema(): Promise<RequiredSchemaIssue[]> {
   }
 
   return REQUIRED_SCHEMA_SPECS.flatMap((spec) => {
-    const existingColumns = columnsByTable.get(spec.table)
+    const physicalTable = toPhysicalName(spec.table)
+    const existingColumns = columnsByTable.get(physicalTable)
     if (!existingColumns) {
       return [
         {
-          table: spec.table,
+          table: physicalTable,
           missingColumns: [...spec.requiredColumns],
           reason: spec.reason,
         },
@@ -320,7 +336,7 @@ export async function inspectRequiredSchema(): Promise<RequiredSchemaIssue[]> {
 
     return [
       {
-        table: spec.table,
+        table: physicalTable,
         missingColumns,
         reason: spec.reason,
       },

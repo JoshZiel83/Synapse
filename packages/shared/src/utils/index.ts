@@ -14,7 +14,7 @@ import type {
   ConversationTypeMask,
   WorkItemStatus,
 } from "../types/index.js"
-import { WORK_ITEM_TRANSITIONS } from "../types/index.js"
+import { WORK_ITEM_TRANSITIONS } from "../work-item/index.js"
 
 export function generateId(): string {
   // crypto.randomUUID is available in every runtime this ships to (Node 18+,

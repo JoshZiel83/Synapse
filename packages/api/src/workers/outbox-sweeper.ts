@@ -232,7 +232,7 @@ async function bumpEnqueueRetryCount(linkId: string): Promise<number> {
   // slot so non-QQ connectors flowing through the same sweeper don't
   // grow `metadata.qq.*` ghost keys.
   const row = await db
-    .selectFrom("transport_message_links")
+    .selectFrom("transportMessageLinks")
     .select(["metadata"])
     .where("id", "=", linkId)
     .limit(1)
@@ -559,7 +559,7 @@ function checkSweeperBudget(candidate: SweepCandidate): BudgetCheck {
 async function bumpSweeperRetryStamp(linkId: string): Promise<void> {
   // Same pattern as bumpEnqueueRetryCount but for sweeper bookkeeping.
   const row = await db
-    .selectFrom("transport_message_links")
+    .selectFrom("transportMessageLinks")
     .select(["metadata"])
     .where("id", "=", linkId)
     .limit(1)
@@ -582,9 +582,9 @@ async function bumpSweeperRetryStamp(linkId: string): Promise<void> {
 
 async function markDeadLetter(linkId: string): Promise<void> {
   await db
-    .updateTable("transport_message_links")
+    .updateTable("transportMessageLinks")
     .set({
-      delivery_status: "failed",
+      deliveryStatus: "failed",
       metadata: sql`transport_message_links.metadata || ${JSON.stringify({
         lastError: "exceeded_sweeper_retry_budget",
       })}::jsonb`,

@@ -29,9 +29,9 @@ function runReplayQuery(
   remoteAgentIds: string[]
 ) {
   return sql<{
-    remote_agent_id: string
-    active_task_id: string
-    lifecycle_status: string
+    remoteAgentId: string
+    activeTaskId: string
+    lifecycleStatus: string
   }>`
     SELECT
       ctx.remote_agent_id,
@@ -58,7 +58,7 @@ async function buildAgentMachineFixture(db: Kysely<any>) {
   const ws = await db
     .insertInto("workspaces")
     .values({
-      owner_id: user.id as string,
+      ownerId: user.id as string,
       slug: `ws-${rid()}`,
       name: `${NS} ws`,
     })
@@ -66,54 +66,54 @@ async function buildAgentMachineFixture(db: Kysely<any>) {
     .executeTakeFirstOrThrow()
   const conv = await db
     .insertInto("conversations")
-    .values({ kind: "group", workspace_id: ws.id as string, title: `${NS} c` })
+    .values({ kind: "group", workspaceId: ws.id as string, title: `${NS} c` })
     .returning("id")
     .executeTakeFirstOrThrow()
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: remoteAgentId,
-      workspace_id: ws.id as string,
+      workspaceId: ws.id as string,
       kind: "remote_agent",
-      display_name: `${NS} agent`,
+      displayName: `${NS} agent`,
       status: "active",
     } as any)
     .execute()
   const agent = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: remoteAgentId,
       title: `${NS} agent`,
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const machine = await db
-    .insertInto("remote_agent_machines")
+    .insertInto("remoteAgentMachines")
     .values({
-      workspace_id: ws.id as string,
+      workspaceId: ws.id as string,
       title: `${NS} machine`,
-      api_key_hash: `hash-${rid()}-${rid()}`,
+      apiKeyHash: `hash-${rid()}-${rid()}`,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   await db
-    .insertInto("remote_agent_bindings")
+    .insertInto("remoteAgentBindings")
     .values({
-      remote_agent_id: agent.id as string,
-      machine_id: machine.id as string,
-      runtime_kind: "claude_code",
+      remoteAgentId: agent.id as string,
+      machineId: machine.id as string,
+      runtimeKind: "claude_code",
     } as any)
     .execute()
 
   // The remote_agent principal subject (parent task's delivery key).
   const subject = await db
-    .insertInto("access_subjects")
+    .insertInto("accessSubjects")
     .values({
       kind: "remote_agent",
-      workspace_id: ws.id as string,
-      remote_agent_id: agent.id as string,
+      workspaceId: ws.id as string,
+      remoteAgentId: agent.id as string,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -137,17 +137,17 @@ async function mintTask(
   lifecycle: string
 ): Promise<string> {
   const row = await db
-    .insertInto("tool_call_tasks")
+    .insertInto("toolCallTasks")
     .values({
-      workspace_id: fx.workspaceId,
-      conversation_id: fx.conversationId,
-      executor_kind: "user_input",
-      delivery_kind: "remote_agent_channel",
-      human_surface: "needs_response",
-      principal_subject_id: fx.remoteAgentSubjectId,
-      source_tool_name: `${NS}.tool`,
-      request_key: `rk-${rid()}`,
-      lifecycle_status: lifecycle,
+      workspaceId: fx.workspaceId,
+      conversationId: fx.conversationId,
+      executorKind: "user_input",
+      deliveryKind: "remote_agent_channel",
+      humanSurface: "needs_response",
+      principalSubjectId: fx.remoteAgentSubjectId,
+      sourceToolName: `${NS}.tool`,
+      requestKey: `rk-${rid()}`,
+      lifecycleStatus: lifecycle,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -164,11 +164,11 @@ test(
       // A resolved (completed) active task should be replayed.
       const resolvedTask = await mintTask(db, fx, "completed")
       await db
-        .insertInto("remote_agent_conversation_contexts")
+        .insertInto("remoteAgentConversationContexts")
         .values({
-          remote_agent_id: fx.remoteAgentId,
-          conversation_id: fx.conversationId,
-          active_task_id: resolvedTask,
+          remoteAgentId: fx.remoteAgentId,
+          conversationId: fx.conversationId,
+          activeTaskId: resolvedTask,
         } as any)
         .execute()
 
@@ -177,12 +177,12 @@ test(
 
       assert.equal(result.rows.length, 1, "the completed task is replayed")
       const row = result.rows[0] as {
-        remote_agent_id: string
-        active_task_id: string
-        lifecycle_status: string
+        remoteAgentId: string
+        activeTaskId: string
+        lifecycleStatus: string
       }
-      assert.equal(row.active_task_id, resolvedTask)
-      assert.equal(row.lifecycle_status, "completed")
+      assert.equal(row.activeTaskId, resolvedTask)
+      assert.equal(row.lifecycleStatus, "completed")
     })
   }
 )
@@ -197,11 +197,11 @@ test(
       // A non-terminal (auth_required) active task must be skipped.
       const pendingTask = await mintTask(db, fx, "auth_required")
       await db
-        .insertInto("remote_agent_conversation_contexts")
+        .insertInto("remoteAgentConversationContexts")
         .values({
-          remote_agent_id: fx.remoteAgentId,
-          conversation_id: fx.conversationId,
-          active_task_id: pendingTask,
+          remoteAgentId: fx.remoteAgentId,
+          conversationId: fx.conversationId,
+          activeTaskId: pendingTask,
         } as any)
         .execute()
 

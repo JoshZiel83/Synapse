@@ -111,7 +111,7 @@ export async function persistCatalogSync(
   return db.transaction().execute(async (trx) => {
     const device = await trx
       .selectFrom("devices")
-      .select(["id", "workspace_id"])
+      .select(["id", "workspaceId"])
       .where("id", "=", input.deviceId)
       .executeTakeFirst()
     if (!device) {
@@ -132,7 +132,7 @@ export async function persistCatalogSync(
       })
       seenExposureIds.add(exposureId)
       await ensureCapability(trx, {
-        workspaceId: device.workspace_id as string,
+        workspaceId: device.workspaceId as string,
         exposureId,
       })
       const { revisionId, isNew } = await ensureCatalogRevision(trx, {
@@ -162,36 +162,36 @@ export async function persistCatalogSync(
     let offlineExposureCount = 0
     let removedToolCount = 0
     const allExposureIds = await trx
-      .selectFrom("device_exposures")
+      .selectFrom("deviceExposures")
       .select(["id"])
-      .where("device_id", "=", input.deviceId)
+      .where("deviceId", "=", input.deviceId)
       .execute()
     const staleExposureIds = allExposureIds
       .map((r) => r.id as string)
       .filter((id) => !seenExposureIds.has(id))
     if (staleExposureIds.length > 0) {
       const updated = await trx
-        .updateTable("device_exposures")
+        .updateTable("deviceExposures")
         .set({
-          runtime_status: "offline",
+          runtimeStatus: "offline",
         } as never)
         .where("id", "in", staleExposureIds)
-        .where("runtime_status", "!=", "offline")
+        .where("runtimeStatus", "!=", "offline")
         .executeTakeFirst()
       offlineExposureCount = Number(updated?.numUpdatedRows ?? 0n)
     }
     for (const [exposureId, seenToolIds] of seenToolIdsByExposure) {
       const allToolIds = await trx
-        .selectFrom("device_tools")
+        .selectFrom("deviceTools")
         .select(["id"])
-        .where("exposure_id", "=", exposureId)
+        .where("exposureId", "=", exposureId)
         .execute()
       const stale = allToolIds
         .map((r) => r.id as string)
         .filter((id) => !seenToolIds.has(id))
       if (stale.length === 0) continue
       const updated = await trx
-        .updateTable("device_tools")
+        .updateTable("deviceTools")
         .set({
           status: "removed",
         } as never)
@@ -221,24 +221,24 @@ async function upsertExposure(
   }
 ): Promise<string> {
   const existing = await trx
-    .selectFrom("device_exposures")
+    .selectFrom("deviceExposures")
     .select(["id"])
-    .where("device_id", "=", args.deviceId)
-    .where("stable_key", "=", args.exposure.stable_key)
+    .where("deviceId", "=", args.deviceId)
+    .where("stableKey", "=", args.exposure.stable_key)
     .executeTakeFirst()
   const metadata = sql`${JSON.stringify(args.exposure.metadata ?? {})}::jsonb`
   if (existing) {
     await trx
-      .updateTable("device_exposures")
+      .updateTable("deviceExposures")
       .set({
-        service_id: args.serviceId,
-        display_name: args.exposure.display_name,
+        serviceId: args.serviceId,
+        displayName: args.exposure.display_name,
         description: args.exposure.description ?? null,
         transport: args.exposure.transport,
-        builtin_kind: args.exposure.builtin_kind ?? null,
-        runtime_status: "healthy",
-        last_seen_at: sql`NOW()`,
-        last_healthy_at: sql`NOW()`,
+        builtinKind: args.exposure.builtin_kind ?? null,
+        runtimeStatus: "healthy",
+        lastSeenAt: sql`NOW()`,
+        lastHealthyAt: sql`NOW()`,
         metadata,
       } as never)
       .where("id", "=", existing.id as string)
@@ -246,18 +246,18 @@ async function upsertExposure(
     return existing.id as string
   }
   const inserted = await trx
-    .insertInto("device_exposures")
+    .insertInto("deviceExposures")
     .values({
-      device_id: args.deviceId,
-      service_id: args.serviceId,
-      stable_key: args.exposure.stable_key,
-      display_name: args.exposure.display_name,
+      deviceId: args.deviceId,
+      serviceId: args.serviceId,
+      stableKey: args.exposure.stable_key,
+      displayName: args.exposure.display_name,
       description: args.exposure.description ?? null,
       transport: args.exposure.transport,
-      builtin_kind: args.exposure.builtin_kind ?? null,
-      runtime_status: "healthy",
-      last_seen_at: sql`NOW()`,
-      last_healthy_at: sql`NOW()`,
+      builtinKind: args.exposure.builtin_kind ?? null,
+      runtimeStatus: "healthy",
+      lastSeenAt: sql`NOW()`,
+      lastHealthyAt: sql`NOW()`,
       metadata,
     } as never)
     .returning("id")
@@ -270,23 +270,23 @@ async function ensureCapability(
   args: { workspaceId: string; exposureId: string }
 ): Promise<void> {
   const capabilityOwner = await trx
-    .selectFrom("device_exposures as exposure")
-    .innerJoin("devices as device", "device.id", "exposure.device_id")
-    .select(["device.owner_workspace_member_id", "exposure.display_name"])
+    .selectFrom("deviceExposures as exposure")
+    .innerJoin("devices as device", "device.id", "exposure.deviceId")
+    .select(["device.ownerWorkspaceMemberId", "exposure.displayName"])
     .where("exposure.id", "=", args.exposureId)
     .executeTakeFirst()
   const existing = await trx
-    .selectFrom("device_capabilities")
+    .selectFrom("deviceCapabilities")
     .select(["id"])
-    .where("exposure_id", "=", args.exposureId)
+    .where("exposureId", "=", args.exposureId)
     .executeTakeFirst()
   if (existing) {
     await updateWorkspaceAppRoot(trx, {
       id: existing.id as string,
       displayName:
-        (capabilityOwner?.display_name as string | null) || "Device capability",
+        (capabilityOwner?.displayName as string | null) || "Device capability",
       ownerWorkspaceMemberId:
-        (capabilityOwner?.owner_workspace_member_id as string | null) ?? null,
+        (capabilityOwner?.ownerWorkspaceMemberId as string | null) ?? null,
     })
     return
   }
@@ -296,16 +296,16 @@ async function ensureCapability(
     workspaceId: args.workspaceId,
     kind: "device_capability",
     displayName:
-      (capabilityOwner?.display_name as string | null) || "Device capability",
+      (capabilityOwner?.displayName as string | null) || "Device capability",
     ownerWorkspaceMemberId:
-      (capabilityOwner?.owner_workspace_member_id as string | null) ?? null,
+      (capabilityOwner?.ownerWorkspaceMemberId as string | null) ?? null,
     status: "active",
   })
   await trx
-    .insertInto("device_capabilities")
+    .insertInto("deviceCapabilities")
     .values({
       id: capabilityId,
-      exposure_id: args.exposureId,
+      exposureId: args.exposureId,
     } as never)
     .execute()
 }
@@ -315,30 +315,30 @@ async function ensureCatalogRevision(
   args: { exposureId: string; schemaHash: string }
 ): Promise<{ revisionId: string; isNew: boolean }> {
   const latest = await trx
-    .selectFrom("device_catalog_revisions")
-    .select(["id", "revision_seq", "schema_hash", "status"])
-    .where("exposure_id", "=", args.exposureId)
-    .orderBy("revision_seq", "desc")
+    .selectFrom("deviceCatalogRevisions")
+    .select(["id", "revisionSeq", "schemaHash", "status"])
+    .where("exposureId", "=", args.exposureId)
+    .orderBy("revisionSeq", "desc")
     .limit(1)
     .executeTakeFirst()
   if (
     latest &&
-    (latest.schema_hash as string) === args.schemaHash &&
+    (latest.schemaHash as string) === args.schemaHash &&
     (latest.status as string) === "active"
   ) {
     return { revisionId: latest.id as string, isNew: false }
   }
   if (latest && (latest.status as string) === "active") {
     await trx
-      .updateTable("device_catalog_revisions")
+      .updateTable("deviceCatalogRevisions")
       .set({
         status: "superseded",
-        invalidated_at: sql`NOW()`,
+        invalidatedAt: sql`NOW()`,
       } as never)
       .where("id", "=", latest.id as string)
       .execute()
   }
-  const latestSeqRaw = latest?.revision_seq
+  const latestSeqRaw = latest?.revisionSeq
   const latestSeqNumber =
     typeof latestSeqRaw === "bigint"
       ? Number(latestSeqRaw)
@@ -349,13 +349,13 @@ async function ensureCatalogRevision(
           : 0
   const nextSeqNumber = latestSeqNumber + 1
   const inserted = await trx
-    .insertInto("device_catalog_revisions")
+    .insertInto("deviceCatalogRevisions")
     .values({
-      exposure_id: args.exposureId,
-      revision_seq: nextSeqNumber,
-      schema_hash: args.schemaHash,
+      exposureId: args.exposureId,
+      revisionSeq: nextSeqNumber,
+      schemaHash: args.schemaHash,
       status: "active",
-      activated_at: sql`NOW()`,
+      activatedAt: sql`NOW()`,
     } as never)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -380,30 +380,30 @@ async function upsertTools(
   for (const tool of args.tools) {
     const definitionHash = toolDefinitionHash(tool)
     const existingTool = await trx
-      .selectFrom("device_tools")
-      .select(["id", "latest_revision_id"])
-      .where("exposure_id", "=", args.exposureId)
-      .where("stable_key", "=", tool.stable_key)
+      .selectFrom("deviceTools")
+      .select(["id", "latestRevisionId"])
+      .where("exposureId", "=", args.exposureId)
+      .where("stableKey", "=", tool.stable_key)
       .executeTakeFirst()
     let toolId: string
     if (existingTool) {
       toolId = existingTool.id as string
       await trx
-        .updateTable("device_tools")
+        .updateTable("deviceTools")
         .set({
-          current_name: tool.name,
+          currentName: tool.name,
           status: "active",
-          last_seen_at: sql`NOW()`,
+          lastSeenAt: sql`NOW()`,
         } as never)
         .where("id", "=", toolId)
         .execute()
     } else {
       const insertedTool = await trx
-        .insertInto("device_tools")
+        .insertInto("deviceTools")
         .values({
-          exposure_id: args.exposureId,
-          stable_key: tool.stable_key,
-          current_name: tool.name,
+          exposureId: args.exposureId,
+          stableKey: tool.stable_key,
+          currentName: tool.name,
           status: "active",
         } as never)
         .returning("id")
@@ -413,38 +413,38 @@ async function upsertTools(
     seenToolIds.add(toolId)
 
     const existingRevision = await trx
-      .selectFrom("device_tool_revisions")
-      .select(["id", "definition_hash"])
-      .where("tool_id", "=", toolId)
-      .where("catalog_revision_id", "=", args.catalogRevisionId)
+      .selectFrom("deviceToolRevisions")
+      .select(["id", "definitionHash"])
+      .where("toolId", "=", toolId)
+      .where("catalogRevisionId", "=", args.catalogRevisionId)
       .executeTakeFirst()
     let revisionId: string
     if (existingRevision) {
       revisionId = existingRevision.id as string
-      if ((existingRevision.definition_hash as string) !== definitionHash) {
+      if ((existingRevision.definitionHash as string) !== definitionHash) {
         await trx
-          .updateTable("device_tool_revisions")
+          .updateTable("deviceToolRevisions")
           .set({
-            tool_name: tool.name,
+            toolName: tool.name,
             description: tool.description,
-            input_schema: sql`${JSON.stringify(tool.input_schema)}::jsonb`,
+            inputSchema: sql`${JSON.stringify(tool.input_schema)}::jsonb`,
             annotations: sql`${JSON.stringify(tool.annotations ?? {})}::jsonb`,
-            definition_hash: definitionHash,
+            definitionHash: definitionHash,
           } as never)
           .where("id", "=", revisionId)
           .execute()
       }
     } else {
       const insertedRevision = await trx
-        .insertInto("device_tool_revisions")
+        .insertInto("deviceToolRevisions")
         .values({
-          tool_id: toolId,
-          catalog_revision_id: args.catalogRevisionId,
-          tool_name: tool.name,
+          toolId: toolId,
+          catalogRevisionId: args.catalogRevisionId,
+          toolName: tool.name,
           description: tool.description,
-          input_schema: sql`${JSON.stringify(tool.input_schema)}::jsonb`,
+          inputSchema: sql`${JSON.stringify(tool.input_schema)}::jsonb`,
           annotations: sql`${JSON.stringify(tool.annotations ?? {})}::jsonb`,
-          definition_hash: definitionHash,
+          definitionHash: definitionHash,
         } as never)
         .returning("id")
         .executeTakeFirstOrThrow()
@@ -452,8 +452,8 @@ async function upsertTools(
       writtenRevisions += 1
     }
     await trx
-      .updateTable("device_tools")
-      .set({ latest_revision_id: revisionId } as never)
+      .updateTable("deviceTools")
+      .set({ latestRevisionId: revisionId } as never)
       .where("id", "=", toolId)
       .execute()
     assignedTools[tool.name] = {

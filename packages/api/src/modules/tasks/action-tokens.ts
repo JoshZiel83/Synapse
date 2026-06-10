@@ -72,13 +72,13 @@ export async function mintActionToken(
   const expiresAt = new Date(expiresAtMs)
   await runBuilder(
     executor,
-    db.insertInto("tool_call_task_action_tokens").values({
+    db.insertInto("toolCallTaskActionTokens").values({
       token,
-      task_id: params.taskId,
+      taskId: params.taskId,
       payload: sql`${JSON.stringify(
         params.payload
-      )}::jsonb` as unknown as TableInsert<"tool_call_task_action_tokens">["payload"],
-      expires_at: expiresAt,
+      )}::jsonb` as unknown as TableInsert<"toolCallTaskActionTokens">["payload"],
+      expiresAt: expiresAt,
     })
   )
   return {
@@ -94,17 +94,17 @@ export async function lookupActionToken(
 ): Promise<ActionTokenRecord | null> {
   if (!token || typeof token !== "string") return null
   const row = await db
-    .selectFrom("tool_call_task_action_tokens")
-    .select(["token", "task_id", "payload", "expires_at"])
+    .selectFrom("toolCallTaskActionTokens")
+    .select(["token", "taskId", "payload", "expiresAt"])
     .where("token", "=", token)
     .limit(1)
     .executeTakeFirst()
   if (!row) return null
-  const expiresAt = row.expires_at
+  const expiresAt = row.expiresAt
   if (expiresAt.getTime() < Date.now()) return null
   return {
     token: row.token,
-    taskId: row.task_id,
+    taskId: row.taskId,
     payload: (row.payload ?? {}) as unknown as ActionTokenPayload,
     expiresAt,
   }
@@ -117,8 +117,8 @@ export async function lookupActionToken(
  */
 export async function sweepExpiredActionTokens(): Promise<number> {
   const result = await db
-    .deleteFrom("tool_call_task_action_tokens")
-    .where("expires_at", "<", sql<Date>`NOW()`)
+    .deleteFrom("toolCallTaskActionTokens")
+    .where("expiresAt", "<", sql<Date>`NOW()`)
     .executeTakeFirst()
   return Number(result.numDeletedRows ?? 0)
 }

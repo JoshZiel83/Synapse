@@ -57,12 +57,12 @@ async function loadWorkspaceMemberTransportAccountRow(params: {
   transportKind: "weixin"
 }) {
   return db
-    .selectFrom("transport_accounts")
+    .selectFrom("transportAccounts")
     .selectAll()
-    .where("workspace_id", "=", params.workspaceId)
-    .where("transport_kind", "=", params.transportKind)
-    .where("owner_scope", "=", "workspace_member")
-    .where("owner_workspace_member_id", "=", params.workspaceMemberId)
+    .where("workspaceId", "=", params.workspaceId)
+    .where("transportKind", "=", params.transportKind)
+    .where("ownerScope", "=", "workspace_member")
+    .where("ownerWorkspaceMemberId", "=", params.workspaceMemberId)
     .orderBy(
       sql<number>`CASE
         WHEN status = 'active' THEN 0
@@ -70,8 +70,8 @@ async function loadWorkspaceMemberTransportAccountRow(params: {
         ELSE 2
       END`
     )
-    .orderBy("updated_at", "desc")
-    .orderBy("created_at", "desc")
+    .orderBy("updatedAt", "desc")
+    .orderBy("createdAt", "desc")
     .limit(1)
     .executeTakeFirst()
 }
@@ -81,10 +81,10 @@ async function loadWorkspaceMemberDisplayName(params: {
   workspaceMemberId: string
 }) {
   const row = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("users as u", "u.id", "wm.user_id")
+    .selectFrom("workspaceMembers as wm")
+    .innerJoin("users as u", "u.id", "wm.userId")
     .select("u.name as name")
-    .where("wm.workspace_id", "=", params.workspaceId)
+    .where("wm.workspaceId", "=", params.workspaceId)
     .where("wm.id", "=", params.workspaceMemberId)
     .limit(1)
     .executeTakeFirst()
@@ -96,10 +96,10 @@ export async function getCurrentUserWeixinBinding(params: {
   userId: string
 }): Promise<CurrentUserWeixinBindingSummary | null> {
   const workspaceMember = await db
-    .selectFrom("workspace_members")
+    .selectFrom("workspaceMembers")
     .select("id")
-    .where("workspace_id", "=", params.workspaceId)
-    .where("user_id", "=", params.userId)
+    .where("workspaceId", "=", params.workspaceId)
+    .where("userId", "=", params.userId)
     .limit(1)
     .executeTakeFirst()
   if (!workspaceMember?.id) {
@@ -206,10 +206,10 @@ export async function linkCurrentUserWeixinBinding(params: {
   userId: string
 }): Promise<CurrentUserWeixinBindingSummary> {
   const currentWorkspaceMember = await db
-    .selectFrom("workspace_members")
+    .selectFrom("workspaceMembers")
     .select("id")
-    .where("workspace_id", "=", params.workspaceId)
-    .where("user_id", "=", params.userId)
+    .where("workspaceId", "=", params.workspaceId)
+    .where("userId", "=", params.userId)
     .limit(1)
     .executeTakeFirst()
   if (!currentWorkspaceMember?.id) {

@@ -56,11 +56,11 @@ function nonEmptyString(value: unknown): string | undefined {
 async function getWorkspaceOwnerId(workspaceId: string) {
   const row = await db
     .selectFrom("workspaces")
-    .select("owner_id")
+    .select("ownerId")
     .where("id", "=", workspaceId)
     .limit(1)
     .executeTakeFirst()
-  const ownerId = row?.owner_id
+  const ownerId = row?.ownerId
   if (!ownerId) {
     throw new Error(`Workspace ${workspaceId} not found`)
   }
@@ -190,9 +190,9 @@ export async function ingestInboundEnvelope(params: {
     throw new Error("Failed to create sender transport address")
   }
   let linkedWorkspaceMemberId =
-    typeof senderAddress.workspace_member_id === "string" &&
-    senderAddress.workspace_member_id.trim()
-      ? senderAddress.workspace_member_id
+    typeof senderAddress.workspaceMemberId === "string" &&
+    senderAddress.workspaceMemberId.trim()
+      ? senderAddress.workspaceMemberId
       : undefined
   if (!linkedWorkspaceMemberId) {
     const pendingAutoLinkWorkspaceMemberId =

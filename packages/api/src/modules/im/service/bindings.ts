@@ -39,50 +39,46 @@ export async function getConversationTransportBinding(params: {
   conversationId: string
 }) {
   const row = await db
-    .selectFrom("conversation_transport_bindings as ctb")
-    .innerJoin("transport_accounts as ta", "ta.id", "ctb.transport_account_id")
-    .innerJoin(
-      "transport_endpoints as te",
-      "te.id",
-      "ctb.transport_endpoint_id"
-    )
+    .selectFrom("conversationTransportBindings as ctb")
+    .innerJoin("transportAccounts as ta", "ta.id", "ctb.transportAccountId")
+    .innerJoin("transportEndpoints as te", "te.id", "ctb.transportEndpointId")
     .select([
-      "ctb.id as binding_id",
-      "ctb.workspace_id",
-      "ctb.conversation_id",
-      "ctb.outbound_enabled",
-      "ctb.inbound_actor_mode",
-      "ctb.inbound_actor_id",
-      "ctb.metadata as binding_metadata",
-      "ctb.created_at as binding_created_at",
-      "ctb.updated_at as binding_updated_at",
+      "ctb.id as bindingId",
+      "ctb.workspaceId as workspaceId",
+      "ctb.conversationId as conversationId",
+      "ctb.outboundEnabled as outboundEnabled",
+      "ctb.inboundActorMode as inboundActorMode",
+      "ctb.inboundActorId as inboundActorId",
+      "ctb.metadata as bindingMetadata",
+      "ctb.createdAt as bindingCreatedAt",
+      "ctb.updatedAt as bindingUpdatedAt",
       "ta.id",
-      "ta.account_key",
-      "ta.display_name",
-      "ta.transport_kind",
-      "ta.owner_scope",
-      "ta.owner_workspace_member_id",
-      "ta.inbound_actor_mode as account_inbound_actor_mode",
-      "ta.inbound_actor_id as account_inbound_actor_id",
-      "ta.connection_mode",
+      "ta.accountKey as accountKey",
+      "ta.displayName as displayName",
+      "ta.transportKind as transportKind",
+      "ta.ownerScope as ownerScope",
+      "ta.ownerWorkspaceMemberId as ownerWorkspaceMemberId",
+      "ta.inboundActorMode as accountInboundActorMode",
+      "ta.inboundActorId as accountInboundActorId",
+      "ta.connectionMode as connectionMode",
       "ta.status",
       "ta.credentials",
       "ta.config",
       "ta.metadata",
-      "ta.created_at",
-      "ta.updated_at",
-      "te.id as endpoint_id",
-      "te.transport_account_id",
-      "te.endpoint_type",
-      "te.external_id as endpoint_external_id",
-      "te.parent_external_id",
-      "te.display_name as endpoint_display_name",
-      "te.metadata as endpoint_metadata",
-      "te.created_at as endpoint_created_at",
-      "te.updated_at as endpoint_updated_at",
+      "ta.createdAt as createdAt",
+      "ta.updatedAt as updatedAt",
+      "te.id as endpointId",
+      "te.transportAccountId as transportAccountId",
+      "te.endpointType as endpointType",
+      "te.externalId as endpointExternalId",
+      "te.parentExternalId as parentExternalId",
+      "te.displayName as endpointDisplayName",
+      "te.metadata as endpointMetadata",
+      "te.createdAt as endpointCreatedAt",
+      "te.updatedAt as endpointUpdatedAt",
     ])
-    .where("ctb.workspace_id", "=", params.workspaceId)
-    .where("ctb.conversation_id", "=", params.conversationId)
+    .where("ctb.workspaceId", "=", params.workspaceId)
+    .where("ctb.conversationId", "=", params.conversationId)
     .limit(1)
     .executeTakeFirst()
 
@@ -108,12 +104,12 @@ export async function hasConversationTransportBinding(params: {
 }): Promise<boolean> {
   const executor = params.queryable ?? db
   let query = executor
-    .selectFrom("conversation_transport_bindings")
+    .selectFrom("conversationTransportBindings")
     .select(sql<number>`1`.as("one"))
-    .where("conversation_id", "=", params.conversationId)
+    .where("conversationId", "=", params.conversationId)
     .limit(1)
   if (params.workspaceId !== undefined) {
-    query = query.where("workspace_id", "=", params.workspaceId)
+    query = query.where("workspaceId", "=", params.workspaceId)
   }
   const row = await query.executeTakeFirst()
   return Boolean(row)
@@ -125,51 +121,47 @@ export async function findConversationTransportBindingByEndpoint(params: {
   endpointExternalId: string
 }) {
   const row = await db
-    .selectFrom("conversation_transport_bindings as ctb")
-    .innerJoin("transport_accounts as ta", "ta.id", "ctb.transport_account_id")
-    .innerJoin(
-      "transport_endpoints as te",
-      "te.id",
-      "ctb.transport_endpoint_id"
-    )
+    .selectFrom("conversationTransportBindings as ctb")
+    .innerJoin("transportAccounts as ta", "ta.id", "ctb.transportAccountId")
+    .innerJoin("transportEndpoints as te", "te.id", "ctb.transportEndpointId")
     .select([
-      "ctb.id as binding_id",
-      "ctb.workspace_id",
-      "ctb.conversation_id",
-      "ctb.outbound_enabled",
-      "ctb.inbound_actor_mode",
-      "ctb.inbound_actor_id",
-      "ctb.metadata as binding_metadata",
-      "ctb.created_at as binding_created_at",
-      "ctb.updated_at as binding_updated_at",
+      "ctb.id as bindingId",
+      "ctb.workspaceId as workspaceId",
+      "ctb.conversationId as conversationId",
+      "ctb.outboundEnabled as outboundEnabled",
+      "ctb.inboundActorMode as inboundActorMode",
+      "ctb.inboundActorId as inboundActorId",
+      "ctb.metadata as bindingMetadata",
+      "ctb.createdAt as bindingCreatedAt",
+      "ctb.updatedAt as bindingUpdatedAt",
       "ta.id",
-      "ta.account_key",
-      "ta.display_name",
-      "ta.transport_kind",
-      "ta.owner_scope",
-      "ta.owner_workspace_member_id",
-      "ta.inbound_actor_mode as account_inbound_actor_mode",
-      "ta.inbound_actor_id as account_inbound_actor_id",
-      "ta.connection_mode",
+      "ta.accountKey as accountKey",
+      "ta.displayName as displayName",
+      "ta.transportKind as transportKind",
+      "ta.ownerScope as ownerScope",
+      "ta.ownerWorkspaceMemberId as ownerWorkspaceMemberId",
+      "ta.inboundActorMode as accountInboundActorMode",
+      "ta.inboundActorId as accountInboundActorId",
+      "ta.connectionMode as connectionMode",
       "ta.status",
       "ta.credentials",
       "ta.config",
       "ta.metadata",
-      "ta.created_at",
-      "ta.updated_at",
-      "te.id as endpoint_id",
-      "te.transport_account_id",
-      "te.endpoint_type",
-      "te.external_id as endpoint_external_id",
-      "te.parent_external_id",
-      "te.display_name as endpoint_display_name",
-      "te.metadata as endpoint_metadata",
-      "te.created_at as endpoint_created_at",
-      "te.updated_at as endpoint_updated_at",
+      "ta.createdAt as createdAt",
+      "ta.updatedAt as updatedAt",
+      "te.id as endpointId",
+      "te.transportAccountId as transportAccountId",
+      "te.endpointType as endpointType",
+      "te.externalId as endpointExternalId",
+      "te.parentExternalId as parentExternalId",
+      "te.displayName as endpointDisplayName",
+      "te.metadata as endpointMetadata",
+      "te.createdAt as endpointCreatedAt",
+      "te.updatedAt as endpointUpdatedAt",
     ])
-    .where("ctb.transport_account_id", "=", params.transportAccountId)
-    .where("te.endpoint_type", "=", params.endpointType)
-    .where("te.external_id", "=", params.endpointExternalId.trim())
+    .where("ctb.transportAccountId", "=", params.transportAccountId)
+    .where("te.endpointType", "=", params.endpointType)
+    .where("te.externalId", "=", params.endpointExternalId.trim())
     .limit(1)
     .executeTakeFirst()
 
@@ -202,14 +194,14 @@ export async function upsertConversationTransportBinding(params: {
   // rather than a raw FK violation (and to fail before the endpoint upsert).
   const conversationRow = await db
     .selectFrom("conversations")
-    .select("workspace_id")
+    .select("workspaceId")
     .where("id", "=", params.conversationId)
     .limit(1)
     .executeTakeFirst()
   if (!conversationRow) {
     throw new Error("Conversation not found")
   }
-  if (conversationRow.workspace_id !== params.workspaceId) {
+  if (conversationRow.workspaceId !== params.workspaceId) {
     throw new Error("Conversation does not belong to the binding's workspace")
   }
 
@@ -219,13 +211,13 @@ export async function upsertConversationTransportBinding(params: {
   // account-mismatched). The trigger is the hard enforcement; this surfaces a
   // clean error instead of a raw trigger exception.
   const conflictingExternal = await db
-    .selectFrom("conversation_participants as cp")
-    .innerJoin("access_subjects as asx", "asx.id", "cp.subject_id")
-    .innerJoin("transport_addresses as ta", "ta.id", "asx.transport_address_id")
+    .selectFrom("conversationParticipants as cp")
+    .innerJoin("accessSubjects as asx", "asx.id", "cp.subjectId")
+    .innerJoin("transportAddresses as ta", "ta.id", "asx.transportAddressId")
     .select("cp.id")
-    .where("cp.conversation_id", "=", params.conversationId)
+    .where("cp.conversationId", "=", params.conversationId)
     .where("asx.kind", "=", "external")
-    .where("ta.transport_account_id", "!=", params.transportAccountId)
+    .where("ta.transportAccountId", "!=", params.transportAccountId)
     .limit(1)
     .executeTakeFirst()
   if (conflictingExternal) {
@@ -235,7 +227,7 @@ export async function upsertConversationTransportBinding(params: {
   }
 
   assertSupportedEndpointType(
-    account.transport_kind as TransportKind,
+    account.transportKind as TransportKind,
     params.endpointType
   )
   const inboundActorMode = params.inboundActorMode || "inherit_account"
@@ -251,7 +243,7 @@ export async function upsertConversationTransportBinding(params: {
   // (webhook confirmation, etc) is satisfied. Generic helper only
   // applies the override when the caller did NOT pass an explicit
   // `outboundEnabled`, so manual UI flips stay authoritative.
-  const connector = tryGetConnector(account.transport_kind as TransportKind)
+  const connector = tryGetConnector(account.transportKind as TransportKind)
   const defaults = connector?.getBindingDefaults?.({
     account: normalizeAccountRow(account),
     endpoint: {
@@ -273,24 +265,24 @@ export async function upsertConversationTransportBinding(params: {
 
   await withDbTransaction(async (trx) => {
     const endpointRow = await trx
-      .insertInto("transport_endpoints")
+      .insertInto("transportEndpoints")
       .values({
         id: uuidv4(),
-        transport_account_id: params.transportAccountId,
-        endpoint_type: params.endpointType,
-        external_id: params.endpointExternalId.trim(),
-        parent_external_id: params.parentExternalId?.trim() || null,
-        display_name: params.endpointDisplayName?.trim() || null,
+        transportAccountId: params.transportAccountId,
+        endpointType: params.endpointType,
+        externalId: params.endpointExternalId.trim(),
+        parentExternalId: params.parentExternalId?.trim() || null,
+        displayName: params.endpointDisplayName?.trim() || null,
         metadata: (params.metadata ||
-          {}) as TableInsert<"transport_endpoints">["metadata"],
-        created_at: sql`NOW()`,
+          {}) as TableInsert<"transportEndpoints">["metadata"],
+        createdAt: sql`NOW()`,
       })
       .onConflict((oc) =>
         oc
-          .columns(["transport_account_id", "endpoint_type", "external_id"])
+          .columns(["transportAccountId", "endpointType", "externalId"])
           .doUpdateSet({
-            parent_external_id: sql`excluded.parent_external_id`,
-            display_name: sql`COALESCE(excluded.display_name, transport_endpoints.display_name)`,
+            parentExternalId: sql`excluded.parent_external_id`,
+            displayName: sql`COALESCE(excluded.display_name, transport_endpoints.display_name)`,
             metadata: sql`transport_endpoints.metadata || excluded.metadata`,
           })
       )
@@ -302,27 +294,27 @@ export async function upsertConversationTransportBinding(params: {
     }
 
     await trx
-      .insertInto("conversation_transport_bindings")
+      .insertInto("conversationTransportBindings")
       .values({
         id: uuidv4(),
-        workspace_id: params.workspaceId,
-        conversation_id: params.conversationId,
-        transport_account_id: params.transportAccountId,
-        transport_endpoint_id: endpointId,
-        outbound_enabled: effectiveOutboundEnabled,
-        inbound_actor_mode: inboundActorMode,
-        inbound_actor_id: inboundActorId,
+        workspaceId: params.workspaceId,
+        conversationId: params.conversationId,
+        transportAccountId: params.transportAccountId,
+        transportEndpointId: endpointId,
+        outboundEnabled: effectiveOutboundEnabled,
+        inboundActorMode: inboundActorMode,
+        inboundActorId: inboundActorId,
         metadata:
-          effectiveMetadata as TableInsert<"conversation_transport_bindings">["metadata"],
-        created_at: sql`NOW()`,
+          effectiveMetadata as TableInsert<"conversationTransportBindings">["metadata"],
+        createdAt: sql`NOW()`,
       })
       .onConflict((oc) =>
-        oc.column("conversation_id").doUpdateSet({
-          transport_account_id: sql`excluded.transport_account_id`,
-          transport_endpoint_id: sql`excluded.transport_endpoint_id`,
-          outbound_enabled: sql`excluded.outbound_enabled`,
-          inbound_actor_mode: sql`excluded.inbound_actor_mode`,
-          inbound_actor_id: sql`excluded.inbound_actor_id`,
+        oc.column("conversationId").doUpdateSet({
+          transportAccountId: sql`excluded.transport_account_id`,
+          transportEndpointId: sql`excluded.transport_endpoint_id`,
+          outboundEnabled: sql`excluded.outbound_enabled`,
+          inboundActorMode: sql`excluded.inbound_actor_mode`,
+          inboundActorId: sql`excluded.inbound_actor_id`,
           metadata: sql`excluded.metadata`,
         })
       )
@@ -379,20 +371,20 @@ export async function updateConversationTransportSettings(params: {
 
   const updates: Record<string, unknown> = {}
   if (params.outboundEnabled !== undefined) {
-    updates.outbound_enabled = params.outboundEnabled
+    updates.outboundEnabled = params.outboundEnabled
   }
   if (
     params.inboundActorMode !== undefined ||
     params.inboundActorId !== undefined
   ) {
-    updates.inbound_actor_mode = nextInboundActorMode
-    updates.inbound_actor_id = resolvedInboundActorId
+    updates.inboundActorMode = nextInboundActorMode
+    updates.inboundActorId = resolvedInboundActorId
   }
   if (params.metadata !== undefined) {
     updates.metadata = {
       ...parseJsonObject(existing.metadata),
       ...(params.metadata || {}),
-    } as TableInsert<"conversation_transport_bindings">["metadata"]
+    } as TableInsert<"conversationTransportBindings">["metadata"]
   }
 
   // Wrap in a tx so the outbound_enabled change + projection recovery
@@ -401,10 +393,10 @@ export async function updateConversationTransportSettings(params: {
   // though the operator just re-enabled outbound.
   await db.transaction().execute(async (tx) => {
     await tx
-      .updateTable("conversation_transport_bindings")
+      .updateTable("conversationTransportBindings")
       .set(updates)
-      .where("workspace_id", "=", params.workspaceId)
-      .where("conversation_id", "=", params.conversationId)
+      .where("workspaceId", "=", params.workspaceId)
+      .where("conversationId", "=", params.conversationId)
       .execute()
 
     // Recovery: if outbound just flipped false → true, re-arm any
@@ -435,13 +427,13 @@ export async function updateTransportSessionSettings(params: {
   metadata?: Record<string, unknown>
 }) {
   const row = await db
-    .selectFrom("conversation_transport_bindings")
-    .select("conversation_id")
-    .where("workspace_id", "=", params.workspaceId)
-    .where("transport_endpoint_id", "=", params.transportEndpointId)
+    .selectFrom("conversationTransportBindings")
+    .select("conversationId")
+    .where("workspaceId", "=", params.workspaceId)
+    .where("transportEndpointId", "=", params.transportEndpointId)
     .limit(1)
     .executeTakeFirst()
-  const conversationId = row?.conversation_id as string | undefined
+  const conversationId = row?.conversationId as string | undefined
   if (!conversationId) {
     throw new Error("Transport session not found")
   }

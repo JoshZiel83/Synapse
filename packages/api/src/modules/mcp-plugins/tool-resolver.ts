@@ -76,23 +76,17 @@ interface ResolveParams extends Omit<RuntimeActorContext, "actorId"> {
 }
 
 type VisiblePluginRow = {
-  installation_id: string
-  owner_workspace_id: string
-  installation_status: "active" | "disabled" | "error" | "archived"
-  catalog_item_id: string
-  item_slug: string
-  publisher_slug: string
+  installationId: string
+  ownerWorkspaceId: string
+  installationStatus: "active" | "disabled" | "error" | "archived"
+  catalogItemId: string
+  itemSlug: string
+  publisherSlug: string
   transport: PluginSpecTransport
-  entry_point: string | null
-  tool_manifest: unknown
-  reuse_scope:
-    | "turn"
-    | "session"
-    | "workspace"
-    | "conversation"
-    | "actor"
-    | null
-  conversation_type_mask_override: number | null
+  entryPoint: string | null
+  toolManifest: unknown
+  reuseScope: "turn" | "session" | "workspace" | "conversation" | "actor" | null
+  conversationTypeMaskOverride: number | null
 }
 
 type VisibleAccessBindingRow = {
@@ -217,7 +211,7 @@ async function buildVisibilitySubjectIds(params: ResolveParams) {
   }
 }
 
-function publicReuseScope(scope: VisiblePluginRow["reuse_scope"]) {
+function publicReuseScope(scope: VisiblePluginRow["reuseScope"]) {
   return scope || "conversation"
 }
 
@@ -270,33 +264,29 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
   }
 
   const rows = await db
-    .selectFrom("workspace_app_grants as app_grant")
-    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
-    .leftJoin(
-      "access_subjects as scope",
-      "scope.id",
-      "app_grant.scope_subject_id"
-    )
+    .selectFrom("workspaceAppGrants as app_grant")
+    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
+    .leftJoin("accessSubjects as scope", "scope.id", "app_grant.scopeSubjectId")
     .select([
       "app_grant.id",
-      "app_grant.workspace_id",
-      "app_grant.workspace_app_id as resource_id",
-      "app_grant.conversation_type_mask_override",
+      "app_grant.workspaceId",
+      "app_grant.workspaceAppId as resourceId",
+      "app_grant.conversationTypeMaskOverride",
       "app_grant.status",
-      "app_grant.created_by_workspace_member_id",
+      "app_grant.createdByWorkspaceMemberId",
       "app_grant.reason",
-      "app_grant.created_at",
-      "app_grant.revoked_at",
-      "subj.kind as subject_kind",
-      "subj.workspace_id as subject_workspace_id_via_join",
-      "subj.workspace_member_id as subject_workspace_member_id_via_join",
-      "subj.actor_id as subject_actor_id_via_join",
-      "subj.remote_agent_id as subject_remote_agent_id_via_join",
-      "subj.conversation_id as subject_conversation_id_via_join",
-      "scope.kind as scope_kind",
-      "scope.conversation_id as scope_conversation_id_via_join",
+      "app_grant.createdAt",
+      "app_grant.revokedAt",
+      "subj.kind as subjectKind",
+      "subj.workspaceId as subjectWorkspaceIdViaJoin",
+      "subj.workspaceMemberId as subjectWorkspaceMemberIdViaJoin",
+      "subj.actorId as subjectActorIdViaJoin",
+      "subj.remoteAgentId as subjectRemoteAgentIdViaJoin",
+      "subj.conversationId as subjectConversationIdViaJoin",
+      "scope.kind as scopeKind",
+      "scope.conversationId as scopeConversationIdViaJoin",
     ])
-    .where("app_grant.workspace_app_id", "in", params.resourceIds)
+    .where("app_grant.workspaceAppId", "in", params.resourceIds)
     .where("app_grant.status", "=", "active")
     .where(
       sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
@@ -306,17 +296,17 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
   const map = new Map<string, VisibleAccessBindingRow[]>()
   for (const rawRow of rows) {
     const row = rawRow as typeof rawRow & {
-      subject_kind?: string | null
-      subject_workspace_id_via_join?: string | null
-      subject_workspace_member_id_via_join?: string | null
-      subject_actor_id_via_join?: string | null
-      subject_remote_agent_id_via_join?: string | null
-      subject_conversation_id_via_join?: string | null
-      scope_kind?: string | null
-      scope_conversation_id_via_join?: string | null
+      subjectKind?: string | null
+      subjectWorkspaceIdViaJoin?: string | null
+      subjectWorkspaceMemberIdViaJoin?: string | null
+      subjectActorIdViaJoin?: string | null
+      subjectRemoteAgentIdViaJoin?: string | null
+      subjectConversationIdViaJoin?: string | null
+      scopeKind?: string | null
+      scopeConversationIdViaJoin?: string | null
     }
     let target_type: VisibleAccessBindingRow["target_type"] | null
-    switch (row.subject_kind) {
+    switch (row.subjectKind) {
       case "workspace":
         target_type = "workspace"
         break
@@ -339,31 +329,28 @@ async function loadVisibleAccessBindings(params: { resourceIds: string[] }) {
       // Unknown subject kind — fail closed by dropping the row entirely.
       continue
     }
-    const subjectActorId = row.subject_actor_id_via_join ?? null
-    const subjectRemoteAgentId = row.subject_remote_agent_id_via_join ?? null
+    const subjectActorId = row.subjectActorIdViaJoin ?? null
+    const subjectRemoteAgentId = row.subjectRemoteAgentIdViaJoin ?? null
     const subjectConversationId =
-      row.scope_conversation_id_via_join ??
-      row.subject_conversation_id_via_join ??
-      null
+      row.scopeConversationIdViaJoin ?? row.subjectConversationIdViaJoin ?? null
     const visible: VisibleAccessBindingRow = {
       id: row.id,
-      workspace_id: row.workspace_id,
+      workspace_id: row.workspaceId,
       resource_type: "plugin_installation",
-      resource_id: row.resource_id,
+      resource_id: row.resourceId,
       target_type,
-      subject_workspace_id: row.subject_workspace_id_via_join ?? null,
-      subject_workspace_member_id:
-        row.subject_workspace_member_id_via_join ?? null,
+      subject_workspace_id: row.subjectWorkspaceIdViaJoin ?? null,
+      subject_workspace_member_id: row.subjectWorkspaceMemberIdViaJoin ?? null,
       subject_actor_id: subjectActorId,
       subject_remote_agent_id: subjectRemoteAgentId,
       subject_conversation_id: subjectConversationId,
-      conversation_type_mask_override: row.conversation_type_mask_override,
+      conversation_type_mask_override: row.conversationTypeMaskOverride,
       status: row.status,
-      created_by_workspace_member_id: row.created_by_workspace_member_id,
+      created_by_workspace_member_id: row.createdByWorkspaceMemberId,
       reason: row.reason,
       metadata: {},
-      created_at: row.created_at ? new Date(row.created_at) : null,
-      revoked_at: row.revoked_at ? new Date(row.revoked_at) : null,
+      created_at: row.createdAt ? new Date(row.createdAt) : null,
+      revoked_at: row.revokedAt ? new Date(row.revokedAt) : null,
       actor_id: subjectActorId,
       remote_agent_id: subjectRemoteAgentId,
       conversation_id: subjectConversationId,
@@ -438,26 +425,26 @@ async function loadVisiblePlugins(params: ResolveParams) {
     await buildVisibilitySubjectIds(params)
   const visibleInstallationIds = new Set<string>()
   const grantRows = await db
-    .selectFrom("workspace_app_grants as app_grant")
-    .select("app_grant.workspace_app_id")
+    .selectFrom("workspaceAppGrants as app_grant")
+    .select("app_grant.workspaceAppId")
     .distinct()
     .where("app_grant.status", "=", "active")
-    .where("app_grant.subject_id", "in", subjectIds)
+    .where("app_grant.subjectId", "in", subjectIds)
     .where(
       sql<boolean>`'use'::workspace_app_grant_permission = ANY(app_grant.permissions)`
     )
     .where((eb) =>
       runtimeScopeSubjectIds.length > 0
         ? eb.or([
-            eb("app_grant.scope_subject_id", "is", null),
-            eb("app_grant.scope_subject_id", "in", runtimeScopeSubjectIds),
+            eb("app_grant.scopeSubjectId", "is", null),
+            eb("app_grant.scopeSubjectId", "in", runtimeScopeSubjectIds),
           ])
-        : eb("app_grant.scope_subject_id", "is", null)
+        : eb("app_grant.scopeSubjectId", "is", null)
     )
     .execute()
 
   for (const row of grantRows) {
-    visibleInstallationIds.add(row.workspace_app_id)
+    visibleInstallationIds.add(row.workspaceAppId)
   }
 
   if (visibleInstallationIds.size === 0) {
@@ -465,59 +452,55 @@ async function loadVisiblePlugins(params: ResolveParams) {
   }
 
   const installationRows = await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin("catalogItems as item", "item.id", "installation.catalogItemId")
+    .innerJoin("publishers as publisher", "publisher.id", "item.publisherId")
     .innerJoin(
-      "catalog_items as item",
-      "item.id",
-      "installation.catalog_item_id"
-    )
-    .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
-    .innerJoin(
-      "plugin_package_version_specs as spec",
-      "spec.catalog_version_id",
-      "installation.catalog_version_id"
+      "pluginPackageVersionSpecs as spec",
+      "spec.catalogVersionId",
+      "installation.catalogVersionId"
     )
     .select([
-      "installation.id as installation_id",
-      "app.workspace_id as owner_workspace_id",
-      "app.status as installation_status",
-      "installation.catalog_item_id",
-      "item.slug as item_slug",
-      "publisher.slug as publisher_slug",
+      "installation.id as installationId",
+      "app.workspaceId as ownerWorkspaceId",
+      "app.status as installationStatus",
+      "installation.catalogItemId",
+      "item.slug as itemSlug",
+      "publisher.slug as publisherSlug",
       "spec.transport",
-      "spec.entry_point",
-      "spec.tool_manifest",
+      "spec.entryPoint",
+      "spec.toolManifest",
       sql<number | null>`app.conversation_type_mask_override`.as(
-        "conversation_type_mask_override"
+        "conversationTypeMaskOverride"
       ),
-      "installation.reuse_scope",
+      "installation.reuseScope",
     ])
     .where("installation.id", "in", Array.from(visibleInstallationIds))
     .where("app.status", "=", "active")
-    .where("app.deleted_at", "is", null)
-    .orderBy("installation.updated_at", "desc")
+    .where("app.deletedAt", "is", null)
+    .orderBy("installation.updatedAt", "desc")
     .execute()
 
   const [bindingsByInstallationId, workspacePolicyMap] = await Promise.all([
     loadVisibleAccessBindings({
-      resourceIds: installationRows.map((row) => row.installation_id),
+      resourceIds: installationRows.map((row) => row.installationId),
     }),
     getWorkspaceCapabilityConversationTypePolicyMap(
-      installationRows.map((row) => row.owner_workspace_id)
+      installationRows.map((row) => row.ownerWorkspaceId)
     ),
   ])
 
   return installationRows.filter((row) => {
     const workspaceConversationTypeMask =
-      workspacePolicyMap.get(row.owner_workspace_id)?.plugin_installation ||
+      workspacePolicyMap.get(row.ownerWorkspaceId)?.plugin_installation ||
       DEFAULT_CONVERSATION_TYPE_MASK
     const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
       workspaceConversationTypeMask,
-      row.conversation_type_mask_override
+      row.conversationTypeMaskOverride
     )
     const matchingBindings = (
-      bindingsByInstallationId.get(row.installation_id) || []
+      bindingsByInstallationId.get(row.installationId) || []
     ).filter(
       (binding) =>
         accessBindingMatchesContext(binding, params) &&
@@ -542,7 +525,7 @@ async function resolveTools(
   const tools: ProjectedToolDefinition[] = []
 
   for (const plugin of visiblePlugins) {
-    if (!plugin.reuse_scope) {
+    if (!plugin.reuseScope) {
       continue
     }
 
@@ -556,26 +539,26 @@ async function resolveTools(
     const serverTransport = plugin.transport as McpServerTransport
 
     try {
-      const resolved = await resolveInstallationConfig(plugin.installation_id)
-      const reuseScope = publicReuseScope(plugin.reuse_scope)
+      const resolved = await resolveInstallationConfig(plugin.installationId)
+      const reuseScope = publicReuseScope(plugin.reuseScope)
       const runtimeInstance = await getOrCreateInstance({
-        pluginId: plugin.catalog_item_id,
+        pluginId: plugin.catalogItemId,
         installationId: resolved.installationId,
-        pluginSlug: plugin.item_slug,
-        orgSlug: plugin.publisher_slug || "plugin",
+        pluginSlug: plugin.itemSlug,
+        orgSlug: plugin.publisherSlug || "plugin",
         transport: serverTransport,
-        entryPoint: plugin.entry_point || "",
+        entryPoint: plugin.entryPoint || "",
         scope: reuseScope,
         scopeId: resolveReuseOwnerKey(reuseScope, params, turnOwnerKey),
         config: resolved.config,
-        workspaceId: plugin.owner_workspace_id,
+        workspaceId: plugin.ownerWorkspaceId,
       })
 
       const manifest = asArray<{
         name: string
         description?: string
         inputSchema?: Record<string, unknown>
-      }>(plugin.tool_manifest)
+      }>(plugin.toolManifest)
       const upstreamTools =
         runtimeInstance.tools.length > 0
           ? runtimeInstance.tools
@@ -587,7 +570,7 @@ async function resolveTools(
         // on the ref; keep the bracketed description hint for the model.
         const projected: ProjectedToolDefinition = {
           ...tool,
-          description: `[${plugin.publisher_slug || "plugin"}/${plugin.item_slug}] ${tool.description}`,
+          description: `[${plugin.publisherSlug || "plugin"}/${plugin.itemSlug}] ${tool.description}`,
           ref,
         }
         tools.push(projected)
@@ -600,7 +583,7 @@ async function resolveTools(
     } catch (error: any) {
       log.error(
         { err: error.message },
-        `[MCP ToolResolver] Failed to initialize plugin ${plugin.publisher_slug || "plugin"}/${plugin.item_slug}`
+        `[MCP ToolResolver] Failed to initialize plugin ${plugin.publisherSlug || "plugin"}/${plugin.itemSlug}`
       )
     }
   }

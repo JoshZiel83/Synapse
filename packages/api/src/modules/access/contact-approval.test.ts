@@ -66,10 +66,10 @@ test(
       })
 
       const count = await db
-        .selectFrom("workspace_app_grants as app_grant")
-        .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
+        .selectFrom("workspaceAppGrants as app_grant")
+        .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
         .select(({ fn }) => fn.countAll<string>().as("count"))
-        .where("app_grant.workspace_app_id", "=", actorId)
+        .where("app_grant.workspaceAppId", "=", actorId)
         .where("app_grant.source", "=", WORKSPACE_APP_GRANT_SOURCE.SYSTEM)
         .where("app_grant.status", "=", "active")
         .where(
@@ -126,19 +126,19 @@ test(
       })
 
       const row = await db
-        .selectFrom("workspace_app_grants as app_grant")
-        .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
+        .selectFrom("workspaceAppGrants as app_grant")
+        .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
         .select([
           "app_grant.id",
-          "subj.kind as subject_kind",
-          "subj.workspace_member_id as workspace_member_id",
+          "subj.kind as subjectKind",
+          "subj.workspaceMemberId as workspaceMemberId",
         ])
         .where("app_grant.id", "=", grantId)
         .executeTakeFirstOrThrow()
 
       assert.equal(row.id, grantId)
-      assert.equal(row.subject_kind, SUBJECT_KIND.WORKSPACE_MEMBER)
-      assert.equal(row.workspace_member_id, memberId)
+      assert.equal(row.subjectKind, SUBJECT_KIND.WORKSPACE_MEMBER)
+      assert.equal(row.workspaceMemberId, memberId)
     })
   }
 )

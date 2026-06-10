@@ -56,20 +56,20 @@ maybe(
     const ws = (
       await db
         .insertInto("workspaces")
-        .values({ owner_id: u1, slug: `ws-${rid()}`, name: "W" })
+        .values({ ownerId: u1, slug: `ws-${rid()}`, name: "W" })
         .returning("id")
         .executeTakeFirstOrThrow()
     ).id as string
     const m2 = (
       await db
-        .insertInto("workspace_members")
-        .values({ workspace_id: ws, user_id: u2, trust_level: "member" })
+        .insertInto("workspaceMembers")
+        .values({ workspaceId: ws, userId: u2, trustLevel: "member" })
         .returning("id")
         .executeTakeFirstOrThrow()
     ).id as string
     await db
-      .insertInto("workspace_members")
-      .values({ workspace_id: ws, user_id: u1, trust_level: "member" })
+      .insertInto("workspaceMembers")
+      .values({ workspaceId: ws, userId: u1, trustLevel: "member" })
       .returning("id")
       .executeTakeFirstOrThrow()
 
@@ -90,11 +90,11 @@ maybe(
     )
 
     const part = await db
-      .selectFrom("conversation_participants as cp")
-      .innerJoin("access_subjects as s", "s.id", "cp.subject_id")
+      .selectFrom("conversationParticipants as cp")
+      .innerJoin("accessSubjects as s", "s.id", "cp.subjectId")
       .select(["cp.id"])
-      .where("cp.conversation_id", "=", cid)
-      .where("s.workspace_member_id", "=", m2)
+      .where("cp.conversationId", "=", cid)
+      .where("s.workspaceMemberId", "=", m2)
       .executeTakeFirstOrThrow()
 
     await removeChatConversationParticipant({

@@ -1,4 +1,4 @@
-import { Kysely, PostgresDialect } from "kysely"
+import { CamelCasePlugin, Kysely, PostgresDialect } from "kysely"
 import type { Insertable, Selectable, Transaction, Updateable } from "kysely"
 import type pg from "pg"
 import { pool } from "./index.js"
@@ -22,6 +22,12 @@ export function createDb(pgPool: pg.Pool): KyselyDb {
     dialect: new PostgresDialect({
       pool: pgPool,
     }),
+    // Postgres stays snake_case; the TS side is fully camelCase (codegen
+    // `camelCase: true`). `maintainNestedObjectKeys: true` is MANDATORY — the
+    // plugin must NOT recurse into JSONB values (signed-envelope fragments,
+    // JSON-Schema keywords, provider SDK keys, opaque metadata must survive
+    // verbatim). See docs/architecture-boundary-refactor-master-plan.md §3.2/§4.
+    plugins: [new CamelCasePlugin({ maintainNestedObjectKeys: true })],
   })
 }
 

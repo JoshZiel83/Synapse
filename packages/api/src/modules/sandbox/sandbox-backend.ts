@@ -258,7 +258,7 @@ async function defaultLocalFailCleanup(args: {
   }
   if (args.pairingSessionId) {
     await db
-      .updateTable("device_pairing_sessions")
+      .updateTable("devicePairingSessions")
       .set({ status: "cancelled" } as never)
       .where("id", "=", args.pairingSessionId)
       .where("status", "=", "pending")

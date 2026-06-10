@@ -60,27 +60,27 @@ type WorkspaceMemberAccess = {
 
 type ActorRow = {
   id: string
-  workspace_id: string
-  owner_workspace_member_id: string | null
-  is_active: boolean
+  workspaceId: string
+  ownerWorkspaceMemberId: string | null
+  isActive: boolean
 }
 
 type RemoteAgentRow = {
   id: string
-  workspace_id: string
-  owner_workspace_member_id: string | null
-  is_active: boolean
-  is_public_shared: boolean
+  workspaceId: string
+  ownerWorkspaceMemberId: string | null
+  isActive: boolean
+  isPublicShared: boolean
 }
 
 type ConversationRow = {
   id: string
-  workspace_id: string
+  workspaceId: string
   kind: "direct" | "group"
 }
 
 type ResourceGrantMatch = {
-  resource_id: string
+  resourceId: string
 }
 
 async function loadWorkspaceMemberAccess(
@@ -88,38 +88,38 @@ async function loadWorkspaceMemberAccess(
   workspaceMemberId: string
 ): Promise<WorkspaceMemberAccess | null> {
   const row = await db
-    .selectFrom("workspace_members as wm")
-    .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
+    .selectFrom("workspaceMembers as wm")
+    .innerJoin("workspaces as w", "w.id", "wm.workspaceId")
     .select([
       "wm.id",
-      "wm.workspace_id",
-      "wm.user_id",
-      "wm.trust_level",
-      "w.owner_id",
+      "wm.workspaceId",
+      "wm.userId",
+      "wm.trustLevel",
+      "w.ownerId",
     ])
     .where("wm.id", "=", workspaceMemberId)
     // Soft delete (§8.4): a left/removed member or a soft-deleted workspace
     // grants no access.
     .where("wm.status", "=", "active")
-    .where("w.deleted_at", "is", null)
+    .where("w.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) return null
 
   const accessRows = await db
-    .selectFrom("workspace_access_bindings")
-    .select("access_key")
-    .where("workspace_member_id", "=", workspaceMemberId)
+    .selectFrom("workspaceAccessBindings")
+    .select("accessKey")
+    .where("workspaceMemberId", "=", workspaceMemberId)
     .where("status", "=", ACCESS_BINDING_STATUS.ACTIVE)
     .execute()
 
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    userId: row.user_id,
-    trustLevel: row.trust_level,
-    ownerId: row.owner_id,
-    accessKeys: accessRows.map((entry) => entry.access_key),
+    workspaceId: row.workspaceId,
+    userId: row.userId,
+    trustLevel: row.trustLevel,
+    ownerId: row.ownerId,
+    accessKeys: accessRows.map((entry) => entry.accessKey),
   }
 }
 
@@ -129,15 +129,15 @@ async function loadActorRow(
 ): Promise<ActorRow | null> {
   return (await db
     .selectFrom("actors as actor")
-    .innerJoin("workspace_apps as app", "app.id", "actor.id")
+    .innerJoin("workspaceApps as app", "app.id", "actor.id")
     .select([
       "actor.id",
-      "app.workspace_id",
-      "app.owner_workspace_member_id",
-      sql<boolean>`app.status = 'active'`.as("is_active"),
+      "app.workspaceId",
+      "app.ownerWorkspaceMemberId",
+      sql<boolean>`app.status = 'active'`.as("isActive"),
     ])
     .where("actor.id", "=", actorId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()) as ActorRow | null
 }
@@ -171,7 +171,7 @@ async function loadConversationRow(
     .selectFrom("conversations as conversation")
     .select([
       "conversation.id as id",
-      "conversation.workspace_id as workspace_id",
+      "conversation.workspaceId as workspaceId",
       "conversation.kind as kind",
     ])
     .where("conversation.id", "=", conversationId)
@@ -182,12 +182,12 @@ async function loadConversationRow(
 
 async function loadPlatformAccessKeysForUser(db: KyselyDb, userId: string) {
   const rows = await db
-    .selectFrom("platform_access_bindings")
-    .select("access_key")
-    .where("user_id", "=", userId)
+    .selectFrom("platformAccessBindings")
+    .select("accessKey")
+    .where("userId", "=", userId)
     .where("status", "=", "active")
     .execute()
-  return rows.map((row) => row.access_key)
+  return rows.map((row) => row.accessKey)
 }
 
 function isWorkspaceOwnerOrAdmin(access: WorkspaceMemberAccess) {
@@ -280,11 +280,11 @@ async function hasActiveConversationMembership(
     return null
   }
   return db
-    .selectFrom("conversation_participants")
-    .select(["id", "role_key"])
-    .where("conversation_id", "=", params.conversationId)
+    .selectFrom("conversationParticipants")
+    .select(["id", "roleKey"])
+    .where("conversationId", "=", params.conversationId)
     .where("state", "=", "active")
-    .where("subject_id", "=", subjectId)
+    .where("subjectId", "=", subjectId)
     .limit(1)
     .executeTakeFirst()
 }
@@ -310,10 +310,10 @@ async function hasConversationPermission(
       workspaceMemberId: subject.id,
     })
     const sameWorkspace =
-      Boolean(conversation.workspace_id) &&
-      access.workspaceId === conversation.workspace_id
+      Boolean(conversation.workspaceId) &&
+      access.workspaceId === conversation.workspaceId
     const isConversationAdmin =
-      membership?.role_key === "owner" || membership?.role_key === "admin"
+      membership?.roleKey === "owner" || membership?.roleKey === "admin"
     const isWorkspaceConversationAdmin =
       sameWorkspace &&
       workspacePermissionFromAccess(access, "manage_conversations")
@@ -369,7 +369,7 @@ async function hasActorPermission(
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const actor = await loadActorRow(db, actorId)
-  if (!actor || !actor.is_active) {
+  if (!actor || !actor.isActive) {
     return false
   }
 
@@ -397,14 +397,14 @@ async function hasActorPermission(
   }
 
   const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== actor.workspace_id) {
+  if (!access || access.workspaceId !== actor.workspaceId) {
     return false
   }
 
   const canManage =
     isWorkspaceOwnerOrAdmin(access) ||
     hasWorkspaceAccessKey(access, "actor_admin") ||
-    actor.owner_workspace_member_id === access.id ||
+    actor.ownerWorkspaceMemberId === access.id ||
     (await hasWorkspaceAppGrant(db, {
       resourceType: "actor",
       resourceId: actorId,
@@ -422,7 +422,7 @@ async function hasActorPermission(
   //   - owners stay implicitly visible to themselves, and
   //   - everyone else needs an explicit contact_visible grant.
   const canUse =
-    actor.owner_workspace_member_id === access.id ||
+    actor.ownerWorkspaceMemberId === access.id ||
     (await hasWorkspaceAppGrant(db, {
       resourceType: "actor",
       resourceId: actorId,
@@ -463,7 +463,7 @@ async function hasRemoteAgentPermission(
   runtimeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const remoteAgent = await loadRemoteAgentRow(db, remoteAgentId)
-  if (!remoteAgent || !remoteAgent.is_active) {
+  if (!remoteAgent || !remoteAgent.isActive) {
     return false
   }
 
@@ -476,12 +476,12 @@ async function hasRemoteAgentPermission(
     return false
   }
 
-  const sameWorkspace = access.workspaceId === remoteAgent.workspace_id
+  const sameWorkspace = access.workspaceId === remoteAgent.workspaceId
   const canManage =
     sameWorkspace &&
     (isWorkspaceOwnerOrAdmin(access) ||
       hasWorkspaceAccessKey(access, "remote_agent_admin") ||
-      remoteAgent.owner_workspace_member_id === access.id ||
+      remoteAgent.ownerWorkspaceMemberId === access.id ||
       (await hasWorkspaceAppGrant(db, {
         resourceType: "remote_agent",
         resourceId: remoteAgentId,
@@ -497,7 +497,7 @@ async function hasRemoteAgentPermission(
   // Cross-workspace `is_public_shared` still requires an explicit binding to
   // be granted; the publishing workspace's auto-write happens on create.
   const canUse =
-    (sameWorkspace && remoteAgent.owner_workspace_member_id === access.id) ||
+    (sameWorkspace && remoteAgent.ownerWorkspaceMemberId === access.id) ||
     (await hasWorkspaceAppGrant(db, {
       resourceType: "remote_agent",
       resourceId: remoteAgentId,
@@ -526,12 +526,12 @@ async function hasRemoteAgentPermission(
 }
 
 type ResourceGrantRow = {
-  resource_id: string
-  subject_kind: string
-  subject_workspace_id_via_join: string | null
-  subject_workspace_member_id_via_join: string | null
-  subject_actor_id_via_join: string | null
-  subject_conversation_id_via_join: string | null
+  resourceId: string
+  subjectKind: string
+  subjectWorkspaceIdViaJoin: string | null
+  subjectWorkspaceMemberIdViaJoin: string | null
+  subjectActorIdViaJoin: string | null
+  subjectConversationIdViaJoin: string | null
 }
 
 type LegacyBindableResourceTypeLocal = "automation_event_source"
@@ -553,7 +553,7 @@ const BINDABLE_WORKSPACE_APP_KIND: Record<
 function bindableResourceIdColumn(
   resourceType: LegacyBindableResourceTypeLocal
 ) {
-  return "automation_event_source_id"
+  return "automationEventSourceId"
 }
 
 async function listResourceGrantRows(
@@ -580,18 +580,18 @@ async function listResourceGrantRows(
   const resourceIdColumn = bindableResourceIdColumn(resourceType)
 
   let query = db
-    .selectFrom("resource_access_bindings as binding")
-    .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
+    .selectFrom("resourceAccessBindings as binding")
+    .innerJoin("accessSubjects as subj", "subj.id", "binding.subjectId")
     .select([
-      sql<string>`binding.automation_event_source_id::text`.as("resource_id"),
-      sql<string>`subj.kind`.as("subject_kind"),
-      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
+      sql<string>`binding.automation_event_source_id::text`.as("resourceId"),
+      sql<string>`subj.kind`.as("subjectKind"),
+      sql<string | null>`subj.workspace_id`.as("subjectWorkspaceIdViaJoin"),
       sql<string | null>`subj.workspace_member_id`.as(
-        "subject_workspace_member_id_via_join"
+        "subjectWorkspaceMemberIdViaJoin"
       ),
-      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
+      sql<string | null>`subj.actor_id`.as("subjectActorIdViaJoin"),
       sql<string | null>`subj.conversation_id`.as(
-        "subject_conversation_id_via_join"
+        "subjectConversationIdViaJoin"
       ),
     ])
     .where("binding.status", "=", "active")
@@ -603,12 +603,12 @@ async function listResourceGrantRows(
   if (runtimeScopeSubjectIds && runtimeScopeSubjectIds.length > 0) {
     query = query.where((eb) =>
       eb.or([
-        eb("binding.scope_subject_id", "is", null),
-        eb("binding.scope_subject_id", "in", [...runtimeScopeSubjectIds]),
+        eb("binding.scopeSubjectId", "is", null),
+        eb("binding.scopeSubjectId", "in", [...runtimeScopeSubjectIds]),
       ])
     )
   } else {
-    query = query.where("binding.scope_subject_id", "is", null)
+    query = query.where("binding.scopeSubjectId", "is", null)
   }
 
   if (resourceId) {
@@ -628,10 +628,10 @@ async function listResourceGrantRows(
       eb.or([
         eb.and([
           eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", subject.id),
+          eb("subj.workspaceId", "=", subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
+          ? [eb("binding.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -640,10 +640,10 @@ async function listResourceGrantRows(
       eb.or([
         eb.and([
           eb("subj.kind", "=", "actor"),
-          eb("subj.actor_id", "=", subject.id),
+          eb("subj.actorId", "=", subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
+          ? [eb("binding.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -655,10 +655,10 @@ async function listResourceGrantRows(
       eb.or([
         eb.and([
           eb("subj.kind", "=", "remote_agent"),
-          eb("subj.remote_agent_id", "=", subject.id),
+          eb("subj.remoteAgentId", "=", subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
+          ? [eb("binding.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -678,14 +678,14 @@ async function listResourceGrantRows(
       eb.or([
         eb.and([
           eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", access.workspaceId),
+          eb("subj.workspaceId", "=", access.workspaceId),
         ]),
         eb.and([
           eb("subj.kind", "=", "workspace_member"),
-          eb("subj.workspace_member_id", "=", subject.id),
+          eb("subj.workspaceMemberId", "=", subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("binding.subject_id", "in", extraRuntimeSubjectIds)]
+          ? [eb("binding.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -713,24 +713,24 @@ async function listWorkspaceAppGrantRows(
   }
 ): Promise<ResourceGrantRow[]> {
   let query = db
-    .selectFrom("workspace_app_grants as app_grant")
-    .innerJoin("workspace_apps as app", "app.id", "app_grant.workspace_app_id")
-    .innerJoin("access_subjects as subj", "subj.id", "app_grant.subject_id")
+    .selectFrom("workspaceAppGrants as app_grant")
+    .innerJoin("workspaceApps as app", "app.id", "app_grant.workspaceAppId")
+    .innerJoin("accessSubjects as subj", "subj.id", "app_grant.subjectId")
     .select([
-      "app_grant.workspace_app_id as resource_id",
-      sql<string>`subj.kind`.as("subject_kind"),
-      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
+      "app_grant.workspaceAppId as resourceId",
+      sql<string>`subj.kind`.as("subjectKind"),
+      sql<string | null>`subj.workspace_id`.as("subjectWorkspaceIdViaJoin"),
       sql<string | null>`subj.workspace_member_id`.as(
-        "subject_workspace_member_id_via_join"
+        "subjectWorkspaceMemberIdViaJoin"
       ),
-      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
+      sql<string | null>`subj.actor_id`.as("subjectActorIdViaJoin"),
       sql<string | null>`subj.conversation_id`.as(
-        "subject_conversation_id_via_join"
+        "subjectConversationIdViaJoin"
       ),
     ])
     .where("app_grant.status", "=", "active")
     .where("app.kind", "=", params.resourceType)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .where(
       sql<boolean>`${params.requiredGrantPermission}::workspace_app_grant_permission = ANY(app_grant.permissions)`
     )
@@ -744,16 +744,16 @@ async function listWorkspaceAppGrantRows(
   if (runtimeScopeSubjectIds.length > 0) {
     query = query.where((eb) =>
       eb.or([
-        eb("app_grant.scope_subject_id", "is", null),
-        eb("app_grant.scope_subject_id", "in", [...runtimeScopeSubjectIds]),
+        eb("app_grant.scopeSubjectId", "is", null),
+        eb("app_grant.scopeSubjectId", "in", [...runtimeScopeSubjectIds]),
       ])
     )
   } else {
-    query = query.where("app_grant.scope_subject_id", "is", null)
+    query = query.where("app_grant.scopeSubjectId", "is", null)
   }
 
   if (params.resourceId) {
-    query = query.where("app_grant.workspace_app_id", "=", params.resourceId)
+    query = query.where("app_grant.workspaceAppId", "=", params.resourceId)
   }
 
   const extraRuntimeSubjectIds =
@@ -766,10 +766,10 @@ async function listWorkspaceAppGrantRows(
       eb.or([
         eb.and([
           eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", params.subject.id),
+          eb("subj.workspaceId", "=", params.subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subject_id", "in", extraRuntimeSubjectIds)]
+          ? [eb("app_grant.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -778,10 +778,10 @@ async function listWorkspaceAppGrantRows(
       eb.or([
         eb.and([
           eb("subj.kind", "=", "actor"),
-          eb("subj.actor_id", "=", params.subject.id),
+          eb("subj.actorId", "=", params.subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subject_id", "in", extraRuntimeSubjectIds)]
+          ? [eb("app_grant.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -790,10 +790,10 @@ async function listWorkspaceAppGrantRows(
       eb.or([
         eb.and([
           eb("subj.kind", "=", "remote_agent"),
-          eb("subj.remote_agent_id", "=", params.subject.id),
+          eb("subj.remoteAgentId", "=", params.subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subject_id", "in", extraRuntimeSubjectIds)]
+          ? [eb("app_grant.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -806,14 +806,14 @@ async function listWorkspaceAppGrantRows(
       eb.or([
         eb.and([
           eb("subj.kind", "=", "workspace"),
-          eb("subj.workspace_id", "=", access.workspaceId),
+          eb("subj.workspaceId", "=", access.workspaceId),
         ]),
         eb.and([
           eb("subj.kind", "=", "workspace_member"),
-          eb("subj.workspace_member_id", "=", params.subject.id),
+          eb("subj.workspaceMemberId", "=", params.subject.id),
         ]),
         ...(extraRuntimeSubjectIds
-          ? [eb("app_grant.subject_id", "in", extraRuntimeSubjectIds)]
+          ? [eb("app_grant.subjectId", "in", extraRuntimeSubjectIds)]
           : []),
       ])
     )
@@ -886,7 +886,7 @@ async function listGrantedResourceIds(
     runtimeScopeSubjectIds,
     runtimeSubjectIds
   )
-  const ids = Array.from(new Set(rows.map((row) => row.resource_id)))
+  const ids = Array.from(new Set(rows.map((row) => row.resourceId)))
   return typeof limit === "number" && limit > 0 ? ids.slice(0, limit) : ids
 }
 
@@ -914,7 +914,7 @@ async function listGrantedWorkspaceAppIds(
     runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
     runtimeSubjectIds: params.runtimeSubjectIds,
   })
-  const ids = Array.from(new Set(rows.map((row) => row.resource_id)))
+  const ids = Array.from(new Set(rows.map((row) => row.resourceId)))
   return typeof params.limit === "number" && params.limit > 0
     ? ids.slice(0, params.limit)
     : ids
@@ -957,25 +957,25 @@ async function listManageableWorkspaceAppIds(
     )
   if (workspacePermissionFromAccess(access, params.manageAccessKey)) {
     const rows = await db
-      .selectFrom("workspace_apps_live as app")
+      .selectFrom("workspaceAppsLive as app")
       .select(["app.id", "app.status"])
-      .where("app.workspace_id", "=", access.workspaceId)
+      .where("app.workspaceId", "=", access.workspaceId)
       .where("app.kind", "=", appKind)
-      .where("app.deleted_at", "is", null)
-      .orderBy("app.created_at", "desc")
+      .where("app.deletedAt", "is", null)
+      .orderBy("app.createdAt", "desc")
       .execute()
     return finalizeResourceIdList([manageableIds(rows)], params.limit)
   }
 
   const [ownRows, grantRows] = await Promise.all([
     db
-      .selectFrom("workspace_apps_live as app")
+      .selectFrom("workspaceAppsLive as app")
       .select(["app.id", "app.status"])
-      .where("app.workspace_id", "=", access.workspaceId)
+      .where("app.workspaceId", "=", access.workspaceId)
       .where("app.kind", "=", appKind)
-      .where("app.deleted_at", "is", null)
-      .where("app.owner_workspace_member_id", "=", access.id)
-      .orderBy("app.created_at", "desc")
+      .where("app.deletedAt", "is", null)
+      .where("app.ownerWorkspaceMemberId", "=", access.id)
+      .orderBy("app.createdAt", "desc")
       .execute(),
     listWorkspaceAppGrantRows(db, {
       resourceType: params.resourceType,
@@ -987,20 +987,18 @@ async function listManageableWorkspaceAppIds(
     }),
   ])
 
-  const grantedIds = Array.from(
-    new Set(grantRows.map((row) => row.resource_id))
-  )
+  const grantedIds = Array.from(new Set(grantRows.map((row) => row.resourceId)))
   const grantedRows =
     grantedIds.length === 0
       ? []
       : await db
-          .selectFrom("workspace_apps_live as app")
+          .selectFrom("workspaceAppsLive as app")
           .select(["app.id", "app.status"])
           .where("app.id", "in", grantedIds)
-          .where("app.workspace_id", "=", access.workspaceId)
+          .where("app.workspaceId", "=", access.workspaceId)
           .where("app.kind", "=", appKind)
-          .where("app.deleted_at", "is", null)
-          .orderBy("app.created_at", "desc")
+          .where("app.deletedAt", "is", null)
+          .orderBy("app.createdAt", "desc")
           .execute()
 
   return finalizeResourceIdList(
@@ -1208,11 +1206,11 @@ async function hasInstalledSkillPermission(
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const manageablePermissions = ["view", "edit", "grant", "delete"] as const
   const row = await db
-    .selectFrom("installed_skills as skill")
-    .innerJoin("workspace_apps as app", "app.id", "skill.id")
-    .select(["app.workspace_id", "app.owner_workspace_member_id", "app.status"])
+    .selectFrom("installedSkills as skill")
+    .innerJoin("workspaceApps as app", "app.id", "skill.id")
+    .select(["app.workspaceId", "app.ownerWorkspaceMemberId", "app.status"])
     .where("skill.id", "=", skillId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) {
@@ -1233,8 +1231,8 @@ async function hasInstalledSkillPermission(
   return resolveBindableResourceAccess(db, {
     resourceType: "installed_skill",
     resourceId: skillId,
-    workspaceId: row.workspace_id,
-    ownerWorkspaceMemberId: row.owner_workspace_member_id,
+    workspaceId: row.workspaceId,
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
     manageAccessKey: "manage_skills",
     grantablePermissions: ["use", "view"],
     manageablePermissions,
@@ -1257,11 +1255,11 @@ async function hasPluginInstallationPermission(
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const manageablePermissions = ["view", "edit", "grant", "delete"] as const
   const row = await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
-    .select(["app.workspace_id", "app.owner_workspace_member_id", "app.status"])
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .select(["app.workspaceId", "app.ownerWorkspaceMemberId", "app.status"])
     .where("installation.id", "=", installationId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) {
@@ -1282,8 +1280,8 @@ async function hasPluginInstallationPermission(
   return resolveBindableResourceAccess(db, {
     resourceType: "plugin_installation",
     resourceId: installationId,
-    workspaceId: row.workspace_id,
-    ownerWorkspaceMemberId: row.owner_workspace_member_id,
+    workspaceId: row.workspaceId,
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
     manageAccessKey: "manage_plugins",
     grantablePermissions: ["use", "view"],
     manageablePermissions,
@@ -1304,10 +1302,10 @@ async function hasDevicePermission(
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const row = await db
     .selectFrom("devices")
-    .select(["workspace_id", "owner_workspace_member_id"])
+    .select(["workspaceId", "ownerWorkspaceMemberId"])
     .where("id", "=", deviceId)
     // Soft delete (§8): a soft-deleted/closed device is never authorizable.
-    .where("deleted_at", "is", null)
+    .where("deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) {
@@ -1326,13 +1324,13 @@ async function hasDevicePermission(
   }
 
   const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== row.workspace_id) {
+  if (!access || access.workspaceId !== row.workspaceId) {
     return false
   }
 
   const canManage =
     workspacePermissionFromAccess(access, "manage_devices") ||
-    row.owner_workspace_member_id === access.id
+    row.ownerWorkspaceMemberId === access.id
 
   switch (permission) {
     case "view":
@@ -1353,19 +1351,19 @@ async function hasExposurePermission(
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const row = await db
-    .selectFrom("device_exposures as exposure")
-    .innerJoin("devices as device", "device.id", "exposure.device_id")
-    .select(["device.id as device_id"])
+    .selectFrom("deviceExposures as exposure")
+    .innerJoin("devices as device", "device.id", "exposure.deviceId")
+    .select(["device.id as deviceId"])
     .where("exposure.id", "=", exposureId)
     .limit(1)
     .executeTakeFirst()
-  if (!row?.device_id) {
+  if (!row?.deviceId) {
     return false
   }
   return hasDevicePermission(
     db,
     subject,
-    row.device_id,
+    row.deviceId,
     permission === "view" ? "view" : "manage"
   )
 }
@@ -1380,22 +1378,22 @@ async function hasCapabilityPermission(
 ): Promise<boolean> {
   const managementVisiblePermissions = ["edit", "grant", "delete"] as const
   const row = await db
-    .selectFrom("device_capabilities as capability")
-    .innerJoin("workspace_apps as app", "app.id", "capability.id")
+    .selectFrom("deviceCapabilities as capability")
+    .innerJoin("workspaceApps as app", "app.id", "capability.id")
     .innerJoin(
-      "device_exposures as exposure",
+      "deviceExposures as exposure",
       "exposure.id",
-      "capability.exposure_id"
+      "capability.exposureId"
     )
-    .innerJoin("devices as device", "device.id", "exposure.device_id")
+    .innerJoin("devices as device", "device.id", "exposure.deviceId")
     .select([
-      "app.workspace_id",
+      "app.workspaceId",
       "app.status",
-      "device.id as device_id",
-      "device.owner_workspace_member_id",
+      "device.id as deviceId",
+      "device.ownerWorkspaceMemberId",
     ])
     .where("capability.id", "=", capabilityId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()
   if (!row) {
@@ -1416,8 +1414,8 @@ async function hasCapabilityPermission(
   return resolveBindableResourceAccess(db, {
     resourceType: "device_capability",
     resourceId: capabilityId,
-    workspaceId: row.workspace_id,
-    ownerWorkspaceMemberId: row.owner_workspace_member_id,
+    workspaceId: row.workspaceId,
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
     manageAccessKey: "manage_devices",
     grantablePermissions: ["use", "view", "request_runtime_authorization"],
     manageablePermissions: [
@@ -1460,13 +1458,13 @@ async function listActorIds(
   const [ownActors, grantedIds] = await Promise.all([
     db
       .selectFrom("actors as a")
-      .innerJoin("workspace_apps as app", "app.id", "a.id")
+      .innerJoin("workspaceApps as app", "app.id", "a.id")
       .select("a.id")
-      .where("app.workspace_id", "=", access.workspaceId)
-      .where("app.deleted_at", "is", null)
+      .where("app.workspaceId", "=", access.workspaceId)
+      .where("app.deletedAt", "is", null)
       .where("app.status", "=", "active")
-      .where("app.owner_workspace_member_id", "=", access.id)
-      .orderBy("a.created_at", "desc")
+      .where("app.ownerWorkspaceMemberId", "=", access.id)
+      .orderBy("a.createdAt", "desc")
       .execute(),
     listGrantedWorkspaceAppIds(db, {
       resourceType: "actor",
@@ -1503,14 +1501,14 @@ async function listRemoteAgentIds(
   // the relationship/friend model and is handled outside this grant lookup.
   const [ownAgents, grantedIds] = await Promise.all([
     db
-      .selectFrom("remote_agents as agent")
-      .innerJoin("workspace_apps as app", "app.id", "agent.id")
+      .selectFrom("remoteAgents as agent")
+      .innerJoin("workspaceApps as app", "app.id", "agent.id")
       .select("agent.id")
       .where("app.status", "=", "active")
-      .where("app.deleted_at", "is", null)
-      .where("app.workspace_id", "=", access.workspaceId)
-      .where("app.owner_workspace_member_id", "=", access.id)
-      .orderBy("agent.created_at", "desc")
+      .where("app.deletedAt", "is", null)
+      .where("app.workspaceId", "=", access.workspaceId)
+      .where("app.ownerWorkspaceMemberId", "=", access.id)
+      .orderBy("agent.createdAt", "desc")
       .execute(),
     listGrantedWorkspaceAppIds(db, {
       resourceType: "remote_agent",
@@ -1537,29 +1535,29 @@ async function listModelGroupIds(
       return []
     }
     const rows = await db
-      .selectFrom("model_groups as mg")
+      .selectFrom("modelGroups as mg")
       .distinct()
-      .leftJoin("model_group_grants as mgg", (join) =>
-        join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
+      .leftJoin("modelGroupGrants as mgg", (join) =>
+        join.onRef("mgg.groupId", "=", "mg.id").on("mgg.status", "=", "active")
       )
-      .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
+      .leftJoin("accessSubjects as mgs", "mgs.id", "mgg.subjectId")
       .select("mg.id")
-      .where("mg.is_enabled", "=", true)
+      .where("mg.isEnabled", "=", true)
       .where((eb) =>
         eb.or([
           eb.and([
-            eb("mg.owner_type", "=", "workspace"),
-            eb("mg.owner_workspace_id", "=", actor.workspace_id),
+            eb("mg.ownerType", "=", "workspace"),
+            eb("mg.ownerWorkspaceId", "=", actor.workspaceId),
           ]),
           eb("mgs.kind", "=", "platform"),
           eb.and([
             eb("mgs.kind", "=", "workspace"),
-            eb("mgs.workspace_id", "=", actor.workspace_id),
+            eb("mgs.workspaceId", "=", actor.workspaceId),
           ]),
           eb.and([
             eb("mgs.kind", "=", "actor"),
-            eb("mgs.workspace_id", "=", actor.workspace_id),
-            eb("mgs.actor_id", "=", subject.id),
+            eb("mgs.workspaceId", "=", actor.workspaceId),
+            eb("mgs.actorId", "=", subject.id),
           ]),
         ])
       )
@@ -1578,32 +1576,32 @@ async function listModelGroupIds(
   }
 
   const rows = await db
-    .selectFrom("model_groups as mg")
+    .selectFrom("modelGroups as mg")
     .distinct()
-    .leftJoin("model_group_grants as mgg", (join) =>
-      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
+    .leftJoin("modelGroupGrants as mgg", (join) =>
+      join.onRef("mgg.groupId", "=", "mg.id").on("mgg.status", "=", "active")
     )
-    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
+    .leftJoin("accessSubjects as mgs", "mgs.id", "mgg.subjectId")
     .select("mg.id")
-    .where("mg.is_enabled", "=", true)
+    .where("mg.isEnabled", "=", true)
     .where((eb) =>
       eb.or([
         eb.and([
-          eb("mg.owner_type", "=", "workspace"),
-          eb("mg.owner_workspace_id", "=", access.workspaceId),
+          eb("mg.ownerType", "=", "workspace"),
+          eb("mg.ownerWorkspaceId", "=", access.workspaceId),
         ]),
         eb.and([
-          eb("mg.owner_type", "=", "workspace_member"),
-          eb("mg.owner_workspace_member_id", "=", access.id),
+          eb("mg.ownerType", "=", "workspace_member"),
+          eb("mg.ownerWorkspaceMemberId", "=", access.id),
         ]),
         eb("mgs.kind", "=", "platform"),
         eb.and([
           eb("mgs.kind", "=", "workspace"),
-          eb("mgs.workspace_id", "=", access.workspaceId),
+          eb("mgs.workspaceId", "=", access.workspaceId),
         ]),
         eb.and([
           eb("mgs.kind", "=", "workspace_member"),
-          eb("mgs.workspace_member_id", "=", access.id),
+          eb("mgs.workspaceMemberId", "=", access.id),
         ]),
       ])
     )
@@ -1619,18 +1617,18 @@ async function hasModelGroupPermission(
   permission: string
 ): Promise<boolean> {
   const row = await db
-    .selectFrom("model_groups")
+    .selectFrom("modelGroups")
     .select([
       "id",
-      "owner_type",
-      "owner_workspace_id",
-      "owner_workspace_member_id",
-      "is_enabled",
+      "ownerType",
+      "ownerWorkspaceId",
+      "ownerWorkspaceMemberId",
+      "isEnabled",
     ])
     .where("id", "=", groupId)
     .limit(1)
     .executeTakeFirst()
-  if (!row || !row.is_enabled) {
+  if (!row || !row.isEnabled) {
     return false
   }
 
@@ -1648,21 +1646,21 @@ async function hasModelGroupPermission(
     }
 
     if (
-      row.owner_type === "workspace_member" &&
-      row.owner_workspace_member_id === access.id
+      row.ownerType === "workspace_member" &&
+      row.ownerWorkspaceMemberId === access.id
     ) {
       return true
     }
 
     if (
-      row.owner_type === "workspace" &&
-      row.owner_workspace_id === access.workspaceId &&
+      row.ownerType === "workspace" &&
+      row.ownerWorkspaceId === access.workspaceId &&
       workspacePermissionFromAccess(access, "manage_models")
     ) {
       return true
     }
 
-    if (row.owner_type === "platform") {
+    if (row.ownerType === "platform") {
       return hasPlatformPermission(
         db,
         { type: "workspace_member", id: access.id },
@@ -1676,18 +1674,18 @@ async function hasModelGroupPermission(
 
 type MemorySpaceLoadedRow = {
   id: string
-  workspace_id: string
-  owner_subject_id: string
-  scope_subject_id: string | null
-  namespace_key: string
-  owner_kind: string
-  owner_workspace_id: string | null
-  owner_actor_id: string | null
-  owner_remote_agent_id: string | null
-  owner_workspace_member_id: string | null
-  owner_conversation_id: string | null
-  scope_kind: string | null
-  scope_conversation_id: string | null
+  workspaceId: string
+  ownerSubjectId: string
+  scopeSubjectId: string | null
+  namespaceKey: string
+  ownerKind: string
+  ownerWorkspaceId: string | null
+  ownerActorId: string | null
+  ownerRemoteAgentId: string | null
+  ownerWorkspaceMemberId: string | null
+  ownerConversationId: string | null
+  scopeKind: string | null
+  scopeConversationId: string | null
 }
 
 async function loadMemorySpaceWithSubjects(
@@ -1695,31 +1693,31 @@ async function loadMemorySpaceWithSubjects(
   memorySpaceId: string
 ): Promise<MemorySpaceLoadedRow | null> {
   const row = await db
-    .selectFrom("memory_spaces as ms")
+    .selectFrom("memorySpaces as ms")
     .innerJoin(
-      "access_subjects as owner_subj",
+      "accessSubjects as owner_subj",
       "owner_subj.id",
-      "ms.owner_subject_id"
+      "ms.ownerSubjectId"
     )
     .leftJoin(
-      "access_subjects as scope_subj",
+      "accessSubjects as scope_subj",
       "scope_subj.id",
-      "ms.scope_subject_id"
+      "ms.scopeSubjectId"
     )
     .select([
       "ms.id as id",
-      "ms.workspace_id as workspace_id",
-      "ms.owner_subject_id as owner_subject_id",
-      "ms.scope_subject_id as scope_subject_id",
-      "ms.namespace_key as namespace_key",
-      "owner_subj.kind as owner_kind",
-      "owner_subj.workspace_id as owner_workspace_id",
-      "owner_subj.actor_id as owner_actor_id",
-      "owner_subj.remote_agent_id as owner_remote_agent_id",
-      "owner_subj.workspace_member_id as owner_workspace_member_id",
-      "owner_subj.conversation_id as owner_conversation_id",
-      "scope_subj.kind as scope_kind",
-      "scope_subj.conversation_id as scope_conversation_id",
+      "ms.workspaceId as workspaceId",
+      "ms.ownerSubjectId as ownerSubjectId",
+      "ms.scopeSubjectId as scopeSubjectId",
+      "ms.namespaceKey as namespaceKey",
+      "owner_subj.kind as ownerKind",
+      "owner_subj.workspaceId as ownerWorkspaceId",
+      "owner_subj.actorId as ownerActorId",
+      "owner_subj.remoteAgentId as ownerRemoteAgentId",
+      "owner_subj.workspaceMemberId as ownerWorkspaceMemberId",
+      "owner_subj.conversationId as ownerConversationId",
+      "scope_subj.kind as scopeKind",
+      "scope_subj.conversationId as scopeConversationId",
     ])
     .where("ms.id", "=", memorySpaceId)
     .limit(1)
@@ -1773,8 +1771,8 @@ async function hasMemorySpaceOwnerImplicitPermission(
     runtimeContext?.runtimeSubjectIds?.includes(subjectId) ?? false
 
   const scopeOk =
-    !space.scope_subject_id ||
-    (runtimeContext?.runtimeScopeSubjectIds?.includes(space.scope_subject_id) ??
+    !space.scopeSubjectId ||
+    (runtimeContext?.runtimeScopeSubjectIds?.includes(space.scopeSubjectId) ??
       false)
 
   const adminManageOverride = async (): Promise<boolean> => {
@@ -1782,7 +1780,7 @@ async function hasMemorySpaceOwnerImplicitPermission(
     return hasWorkspacePermission(
       db,
       subject,
-      space.workspace_id,
+      space.workspaceId,
       "manage_memories"
     )
   }
@@ -1791,14 +1789,14 @@ async function hasMemorySpaceOwnerImplicitPermission(
     return adminManageOverride()
   }
 
-  switch (space.owner_kind) {
+  switch (space.ownerKind) {
     case "workspace_member":
-      if (inRuntime(space.owner_subject_id)) {
+      if (inRuntime(space.ownerSubjectId)) {
         return true // all permissions
       }
       return adminManageOverride()
     case "actor":
-      if (inRuntime(space.owner_subject_id)) {
+      if (inRuntime(space.ownerSubjectId)) {
         return permission !== "manage"
       }
       // Curation path (post-D4 round 4 narrowing): admins / actor_admin /
@@ -1812,15 +1810,15 @@ async function hasMemorySpaceOwnerImplicitPermission(
       // (admin/*_admin/creator) — not `canUse`, which would have admitted
       // anyone with an `actor.memory_edit` grant.
       if (
-        space.owner_actor_id &&
+        space.ownerActorId &&
         permission === "write" &&
-        (await hasActorPermission(db, subject, space.owner_actor_id, "edit"))
+        (await hasActorPermission(db, subject, space.ownerActorId, "edit"))
       ) {
         return true
       }
       return adminManageOverride()
     case "remote_agent":
-      if (inRuntime(space.owner_subject_id)) {
+      if (inRuntime(space.ownerSubjectId)) {
         return (
           permission === "read" ||
           permission === "recall" ||
@@ -1830,12 +1828,12 @@ async function hasMemorySpaceOwnerImplicitPermission(
       }
       // Same write-only curation pattern as actor — see comment above.
       if (
-        space.owner_remote_agent_id &&
+        space.ownerRemoteAgentId &&
         permission === "write" &&
         (await hasRemoteAgentPermission(
           db,
           subject,
-          space.owner_remote_agent_id,
+          space.ownerRemoteAgentId,
           "edit"
         ))
       ) {
@@ -1847,33 +1845,31 @@ async function hasMemorySpaceOwnerImplicitPermission(
         if (subject.type === "actor") {
           const actor = await loadActorRow(db, subject.id)
           return Boolean(
-            actor &&
-            actor.workspace_id === space.workspace_id &&
-            actor.is_active
+            actor && actor.workspaceId === space.workspaceId && actor.isActive
           )
         }
-        return hasWorkspacePermission(db, subject, space.workspace_id, "view")
+        return hasWorkspacePermission(db, subject, space.workspaceId, "view")
       }
       return hasWorkspacePermission(
         db,
         subject,
-        space.workspace_id,
+        space.workspaceId,
         "manage_memories"
       )
     case "conversation":
-      if (!space.owner_conversation_id) return false
+      if (!space.ownerConversationId) return false
       if (permission === "manage" || permission === "delete") {
         return hasConversationPermission(
           db,
           subject,
-          space.owner_conversation_id,
+          space.ownerConversationId,
           permission === "manage" ? "manage" : "memory_delete"
         )
       }
       return hasConversationPermission(
         db,
         subject,
-        space.owner_conversation_id,
+        space.ownerConversationId,
         permission === "read" || permission === "recall"
           ? "memory_read"
           : "memory_edit"
@@ -1894,11 +1890,8 @@ async function hasMemoryItemPermission(
   }
 ): Promise<boolean> {
   const row = await db
-    .selectFrom("memory_items as mi")
-    .select([
-      "mi.id as memory_item_id",
-      "mi.memory_space_id as memory_space_id",
-    ])
+    .selectFrom("memoryItems as mi")
+    .select(["mi.id as memoryItemId", "mi.memorySpaceId as memorySpaceId"])
     .where("mi.id", "=", memoryItemId)
     .limit(1)
     .executeTakeFirst()
@@ -1909,7 +1902,7 @@ async function hasMemoryItemPermission(
     await hasMemorySpacePermission(
       db,
       subject,
-      row.memory_space_id,
+      row.memorySpaceId,
       permission,
       runtimeContext
     )
@@ -1926,8 +1919,8 @@ async function hasMemoryItemPermission(
     const grantPermission = mapEvaluatorPermissionToMemoryPermission(permission)
     if (grantPermission) {
       const granted = await memoryGrantMatches(db, {
-        memorySpaceId: row.memory_space_id,
-        memoryItemId: row.memory_item_id,
+        memorySpaceId: row.memorySpaceId,
+        memoryItemId: row.memoryItemId,
         permission: grantPermission,
         runtimeSubjectIds: runtimeContext.runtimeSubjectIds,
         runtimeScopeSubjectIds: runtimeContext.runtimeScopeSubjectIds ?? [],
@@ -2053,31 +2046,31 @@ export async function hasMemorySpaceOwnerImplicitPermissionForTuple(
   // (admin/creator) paths can resolve the underlying resource.
   const synthetic: MemorySpaceLoadedRow = {
     id: "(synthetic-not-in-db)",
-    workspace_id: tuple.workspaceId,
-    owner_subject_id: tuple.ownerSubjectId,
-    scope_subject_id: tuple.scopeSubjectId,
-    namespace_key: "(synthetic)",
-    owner_kind: tuple.owner.kind,
-    owner_workspace_id:
+    workspaceId: tuple.workspaceId,
+    ownerSubjectId: tuple.ownerSubjectId,
+    scopeSubjectId: tuple.scopeSubjectId,
+    namespaceKey: "(synthetic)",
+    ownerKind: tuple.owner.kind,
+    ownerWorkspaceId:
       tuple.owner.kind === SUBJECT_KIND.WORKSPACE
         ? tuple.owner.workspaceId
         : null,
-    owner_actor_id:
+    ownerActorId:
       tuple.owner.kind === SUBJECT_KIND.ACTOR ? tuple.owner.actorId : null,
-    owner_remote_agent_id:
+    ownerRemoteAgentId:
       tuple.owner.kind === SUBJECT_KIND.REMOTE_AGENT
         ? tuple.owner.remoteAgentId
         : null,
-    owner_workspace_member_id:
+    ownerWorkspaceMemberId:
       tuple.owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER
         ? tuple.owner.memberId
         : null,
-    owner_conversation_id:
+    ownerConversationId:
       tuple.owner.kind === SUBJECT_KIND.CONVERSATION
         ? tuple.owner.conversationId
         : null,
-    scope_kind: tuple.scope?.kind ?? null,
-    scope_conversation_id:
+    scopeKind: tuple.scope?.kind ?? null,
+    scopeConversationId:
       tuple.scope?.kind === SUBJECT_KIND.CONVERSATION
         ? tuple.scope.conversationId
         : null,

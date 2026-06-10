@@ -70,45 +70,41 @@ export async function loadDeviceCapabilityToolsForSubjects(
   // bash tool — without distinctOn the projection surfaces it twice and the
   // planner sees duplicate names).
   let query = db
-    .selectFrom("device_capabilities as dc")
-    .innerJoin("workspace_apps as app", "app.id", "dc.id")
-    .innerJoin("workspace_app_grants as rab", (join) =>
+    .selectFrom("deviceCapabilities as dc")
+    .innerJoin("workspaceApps as app", "app.id", "dc.id")
+    .innerJoin("workspaceAppGrants as rab", (join) =>
       join
-        .onRef("rab.workspace_app_id", "=", "dc.id")
+        .onRef("rab.workspaceAppId", "=", "dc.id")
         .on("rab.status", "=", "active")
     )
-    .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
-    .innerJoin("devices as d", "d.id", "dx.device_id")
-    .innerJoin("device_tools as dt", "dt.exposure_id", "dx.id")
+    .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
+    .innerJoin("devices as d", "d.id", "dx.deviceId")
+    .innerJoin("deviceTools as dt", "dt.exposureId", "dx.id")
+    .innerJoin("deviceToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
     .innerJoin(
-      "device_tool_revisions as dtr",
-      "dtr.id",
-      "dt.latest_revision_id"
-    )
-    .innerJoin(
-      "device_catalog_revisions as dcr",
+      "deviceCatalogRevisions as dcr",
       "dcr.id",
-      "dtr.catalog_revision_id"
+      "dtr.catalogRevisionId"
     )
     .distinctOn(["dt.id"])
     .select([
       "d.id as device_id",
       "d.title as device_name",
-      "dx.service_id as device_service_id",
+      "dx.serviceId as device_service_id",
       "dx.id as device_exposure_id",
       "dc.id as device_capability_id",
       "dt.id as device_tool_id",
       "dtr.id as device_tool_revision_id",
       "dcr.id as catalog_revision_id",
       "dx.transport as transport",
-      "dx.builtin_kind as builtin_kind",
-      "dx.stable_key as exposure_stable_key",
+      "dx.builtinKind as builtin_kind",
+      "dx.stableKey as exposure_stable_key",
       "dx.metadata as exposure_metadata",
-      "dt.current_name as visible_tool_name",
+      "dt.currentName as visible_tool_name",
       "dtr.description as visible_description",
-      "dtr.input_schema as input_schema",
-      "app.conversation_type_mask_override as capability_conversation_type_mask_override",
-      "d.conversation_type_mask_override as device_conversation_type_mask_override",
+      "dtr.inputSchema as input_schema",
+      "app.conversationTypeMaskOverride as capability_conversation_type_mask_override",
+      "d.conversationTypeMaskOverride as device_conversation_type_mask_override",
       // Commit 8: surface device.platform so the commandline matcher can
       // apply Windows-specific guards (cwd unsupported in v1) at projection
       // time instead of relying solely on device-side bottom-of-stack
@@ -122,31 +118,31 @@ export async function loadDeviceCapabilityToolsForSubjects(
       // "approved-but-unrunnable" for arm-only or x64-only manifests.
       "d.arch as device_arch",
     ])
-    .where("app.workspace_id", "=", params.workspaceId)
-    .where("app.deleted_at", "is", null)
+    .where("app.workspaceId", "=", params.workspaceId)
+    .where("app.deletedAt", "is", null)
     // Soft-delete (§8.6): a soft-closed sandbox device keeps its child rows for
     // audit, but its tools must NOT be projected/resolved. Filter on device
     // liveness here (the projection joins device_* child tables directly rather
     // than through devices_live).
-    .where("d.deleted_at", "is", null)
+    .where("d.deletedAt", "is", null)
     .where("app.status", "=", "active")
     .where("dt.status", "=", "active")
     .where("dcr.status", "=", "active")
-    .where("dx.runtime_status", "in", ["healthy", "degraded"])
-    .where("rab.subject_id", "in", params.subjectIds)
+    .where("dx.runtimeStatus", "in", ["healthy", "degraded"])
+    .where("rab.subjectId", "in", params.subjectIds)
     .where(
       sql<boolean>`'use'::workspace_app_grant_permission = ANY(rab.permissions)`
     )
   if (params.runtimeScopeSubjectIds.length > 0) {
     query = query.where((eb) =>
       eb.or([
-        eb("rab.scope_subject_id", "is", null),
-        eb("rab.scope_subject_id", "in", params.runtimeScopeSubjectIds),
+        eb("rab.scopeSubjectId", "is", null),
+        eb("rab.scopeSubjectId", "in", params.runtimeScopeSubjectIds),
       ])
     )
   } else {
     // No scope context — only unscoped bindings apply.
-    query = query.where("rab.scope_subject_id", "is", null)
+    query = query.where("rab.scopeSubjectId", "is", null)
   }
   const rows = await query.orderBy("dt.id").execute()
   return rows.map((row) => ({
@@ -260,40 +256,40 @@ export async function setActiveDeviceCapabilitiesForTarget(
     // not be torn down by an unrelated `actor + scope=conversation B` write,
     // and an unscoped binding must not be torn down by any scoped write.
     let revoke = trx
-      .updateTable("workspace_app_grants")
+      .updateTable("workspaceAppGrants")
       .set({
         status: "revoked",
-        revoked_at: new Date(),
+        revokedAt: new Date(),
       } as never)
-      .where("subject_id", "=", subjectId)
-      .where("workspace_id", "=", params.workspaceId)
+      .where("subjectId", "=", subjectId)
+      .where("workspaceId", "=", params.workspaceId)
       .where(
         sql<boolean>`'use'::workspace_app_grant_permission = ANY(permissions)`
       )
       .where("status", "=", "active")
     if (scopeSubjectId) {
-      revoke = revoke.where("scope_subject_id", "=", scopeSubjectId)
+      revoke = revoke.where("scopeSubjectId", "=", scopeSubjectId)
     } else {
-      revoke = revoke.where("scope_subject_id", "is", null)
+      revoke = revoke.where("scopeSubjectId", "is", null)
     }
     await revoke.execute()
 
     if (params.deviceCapabilityIds.length === 0) return
 
     const rows = params.deviceCapabilityIds.map((capabilityId) => ({
-      workspace_id: params.workspaceId,
-      workspace_app_id: capabilityId,
-      subject_id: subjectId,
-      scope_subject_id: scopeSubjectId ?? null,
+      workspaceId: params.workspaceId,
+      workspaceAppId: capabilityId,
+      subjectId: subjectId,
+      scopeSubjectId: scopeSubjectId ?? null,
       permissions: ["use"],
       status: "active",
       source: "manual",
-      created_by_workspace_member_id: params.createdByWorkspaceMemberId ?? null,
+      createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
       reason: params.reason ?? null,
     }))
 
     await trx
-      .insertInto("workspace_app_grants")
+      .insertInto("workspaceAppGrants")
       .values(rows as never)
       .execute()
   })
@@ -307,22 +303,22 @@ export async function listActiveDeviceCapabilitiesForTarget(params: {
     params.target
   )
   let query = db
-    .selectFrom("workspace_app_grants")
-    .select("workspace_app_id")
-    .where("workspace_id", "=", params.workspaceId)
-    .where("subject_id", "=", subjectId)
+    .selectFrom("workspaceAppGrants")
+    .select("workspaceAppId")
+    .where("workspaceId", "=", params.workspaceId)
+    .where("subjectId", "=", subjectId)
     .where("status", "=", "active")
     .where(
       sql<boolean>`'use'::workspace_app_grant_permission = ANY(permissions)`
     )
   if (scopeSubjectId) {
-    query = query.where("scope_subject_id", "=", scopeSubjectId)
+    query = query.where("scopeSubjectId", "=", scopeSubjectId)
   } else {
-    query = query.where("scope_subject_id", "is", null)
+    query = query.where("scopeSubjectId", "is", null)
   }
   const rows = await query.execute()
   return rows
-    .map((r) => r.workspace_app_id as string | null)
+    .map((r) => r.workspaceAppId as string | null)
     .filter((v): v is string => v !== null)
 }
 
@@ -345,18 +341,18 @@ export async function addDeviceCapabilitiesForTarget(
     { db: dbHandle }
   )
   const rows = params.deviceCapabilityIds.map((capabilityId) => ({
-    workspace_id: params.workspaceId,
-    workspace_app_id: capabilityId,
-    subject_id: subjectId,
-    scope_subject_id: scopeSubjectId ?? null,
+    workspaceId: params.workspaceId,
+    workspaceAppId: capabilityId,
+    subjectId: subjectId,
+    scopeSubjectId: scopeSubjectId ?? null,
     permissions: ["use"],
     status: "active",
     source: "manual",
-    created_by_workspace_member_id: params.createdByWorkspaceMemberId ?? null,
+    createdByWorkspaceMemberId: params.createdByWorkspaceMemberId ?? null,
     reason: params.reason ?? null,
   }))
   await dbHandle
-    .insertInto("workspace_app_grants")
+    .insertInto("workspaceAppGrants")
     .values(rows as never)
     .onConflict((oc) => oc.doNothing())
     .execute()
@@ -379,22 +375,22 @@ export async function revokeDeviceCapabilitiesForTarget(
     { db: dbHandle }
   )
   let revoke = dbHandle
-    .updateTable("workspace_app_grants")
+    .updateTable("workspaceAppGrants")
     .set({
       status: "revoked",
-      revoked_at: new Date(),
+      revokedAt: new Date(),
     } as never)
-    .where("subject_id", "=", subjectId)
-    .where("workspace_id", "=", params.workspaceId)
+    .where("subjectId", "=", subjectId)
+    .where("workspaceId", "=", params.workspaceId)
     .where("status", "=", "active")
-    .where("workspace_app_id", "in", params.deviceCapabilityIds)
+    .where("workspaceAppId", "in", params.deviceCapabilityIds)
     .where(
       sql<boolean>`'use'::workspace_app_grant_permission = ANY(permissions)`
     )
   if (scopeSubjectId) {
-    revoke = revoke.where("scope_subject_id", "=", scopeSubjectId)
+    revoke = revoke.where("scopeSubjectId", "=", scopeSubjectId)
   } else {
-    revoke = revoke.where("scope_subject_id", "is", null)
+    revoke = revoke.where("scopeSubjectId", "is", null)
   }
   await revoke.execute()
 }

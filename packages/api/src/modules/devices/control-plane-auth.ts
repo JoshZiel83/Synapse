@@ -70,11 +70,11 @@ export async function authenticateDeviceHello(
     }
   }
   const service = await executor
-    .selectFrom("device_services")
-    .select(["id", "device_id"])
+    .selectFrom("deviceServices")
+    .select(["id", "deviceId"])
     .where("id", "=", input.serviceId)
     .executeTakeFirst()
-  if (!service || (service.device_id as string) !== input.deviceId) {
+  if (!service || (service.deviceId as string) !== input.deviceId) {
     return {
       ok: false,
       code: "service_not_found",
@@ -82,10 +82,10 @@ export async function authenticateDeviceHello(
     }
   }
   const key = await executor
-    .selectFrom("device_service_keys")
-    .select(["id", "pubkey", "pubkey_fingerprint", "revoked_at"])
-    .where("service_id", "=", input.serviceId)
-    .where("revoked_at", "is", null)
+    .selectFrom("deviceServiceKeys")
+    .select(["id", "pubkey", "pubkeyFingerprint", "revokedAt"])
+    .where("serviceId", "=", input.serviceId)
+    .where("revokedAt", "is", null)
     .executeTakeFirst()
   if (!key) {
     return {
@@ -139,6 +139,6 @@ export async function authenticateDeviceHello(
     deviceId: input.deviceId,
     serviceId: input.serviceId,
     serviceKeyId: key.id as string,
-    pubkeyFingerprint: key.pubkey_fingerprint as string,
+    pubkeyFingerprint: key.pubkeyFingerprint as string,
   }
 }

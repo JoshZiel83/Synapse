@@ -35,7 +35,7 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
   const ws = await db
     .insertInto("workspaces")
     .values({
-      owner_id: user.id as string,
+      ownerId: user.id as string,
       slug: `ws-${rid()}`,
       name: `${NS} ws`,
     })
@@ -47,21 +47,21 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 async function newRemoteAgent(db: Kysely<any>, wsId: string): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: remoteAgentId,
-      workspace_id: wsId,
+      workspaceId: wsId,
       kind: "remote_agent",
-      display_name: `${NS} agent`,
+      displayName: `${NS} agent`,
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: remoteAgentId,
       title: `${NS} agent`,
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -73,7 +73,7 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: wsId,
+      workspaceId: wsId,
       title: `${NS} conv`,
     })
     .returning("id")
@@ -117,10 +117,10 @@ test(
         remoteAgentId,
       })
       await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conversationId,
-          subject_id: remoteAgentSubjectId,
+          conversationId: conversationId,
+          subjectId: remoteAgentSubjectId,
           state: "active",
         } as any)
         .execute()

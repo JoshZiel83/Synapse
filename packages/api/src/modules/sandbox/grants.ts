@@ -58,14 +58,14 @@ export async function resolveDeviceBuiltinIds(
   dbh: KyselyDb = db
 ): Promise<DeviceBuiltinIds> {
   const rows = await dbh
-    .selectFrom("device_exposures as e")
-    .innerJoin("device_capabilities as c", "c.exposure_id", "e.id")
-    .innerJoin("workspace_apps as app", "app.id", "c.id")
-    .select(["e.id as exposure_id", "c.id as capability_id", "e.builtin_kind"])
-    .where("e.device_id", "=", deviceId)
-    .where("app.deleted_at", "is", null)
+    .selectFrom("deviceExposures as e")
+    .innerJoin("deviceCapabilities as c", "c.exposureId", "e.id")
+    .innerJoin("workspaceApps as app", "app.id", "c.id")
+    .select(["e.id as exposureId", "c.id as capabilityId", "e.builtinKind"])
+    .where("e.deviceId", "=", deviceId)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "=", "active")
-    .where("e.builtin_kind", "in", ["filesystem", "commandline"])
+    .where("e.builtinKind", "in", ["filesystem", "commandline"])
     .execute()
 
   let fsExposure: string | null = null
@@ -73,12 +73,12 @@ export async function resolveDeviceBuiltinIds(
   let cmdExposure: string | null = null
   let cmdCapability: string | null = null
   for (const row of rows) {
-    if (row.builtin_kind === "filesystem") {
-      fsExposure = row.exposure_id as string
-      fsCapability = row.capability_id as string
-    } else if (row.builtin_kind === "commandline") {
-      cmdExposure = row.exposure_id as string
-      cmdCapability = row.capability_id as string
+    if (row.builtinKind === "filesystem") {
+      fsExposure = row.exposureId as string
+      fsCapability = row.capabilityId as string
+    } else if (row.builtinKind === "commandline") {
+      cmdExposure = row.exposureId as string
+      cmdCapability = row.capabilityId as string
     }
   }
   if (!fsExposure || !fsCapability) {
@@ -206,17 +206,17 @@ export async function revokeSandboxGrants(params: {
   // Layer 1: resolve THIS device's capability ids, then targeted-revoke only
   // those bindings (leaving other capabilities the actor/conversation may hold).
   const deviceCapabilityRows = await db
-    .selectFrom("device_capabilities as capability")
-    .innerJoin("workspace_apps as app", "app.id", "capability.id")
+    .selectFrom("deviceCapabilities as capability")
+    .innerJoin("workspaceApps as app", "app.id", "capability.id")
     .select("capability.id")
-    .where("app.workspace_id", "=", params.workspaceId)
+    .where("app.workspaceId", "=", params.workspaceId)
     .where(
-      "capability.exposure_id",
+      "capability.exposureId",
       "in",
       db
-        .selectFrom("device_exposures")
+        .selectFrom("deviceExposures")
         .select("id")
-        .where("device_id", "=", params.deviceId)
+        .where("deviceId", "=", params.deviceId)
     )
     .execute()
   const deviceCapabilityIds = deviceCapabilityRows.map((r) => r.id as string)
@@ -238,13 +238,13 @@ export async function revokeSandboxGrants(params: {
   // alone would remove them — but we revoke first for a clean audit trail and
   // so a teardown that stops short of deleteDevice still leaves no live grants.
   await db
-    .updateTable("runtime_authorization_grants")
+    .updateTable("runtimeAuthorizationGrants")
     .set({
       status: "revoked",
-      revoked_at: new Date(),
+      revokedAt: new Date(),
     } as never)
-    .where("device_id", "=", params.deviceId)
-    .where("workspace_id", "=", params.workspaceId)
+    .where("deviceId", "=", params.deviceId)
+    .where("workspaceId", "=", params.workspaceId)
     .where("status", "=", "active")
     .execute()
 }

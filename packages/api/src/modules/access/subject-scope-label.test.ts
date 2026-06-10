@@ -59,7 +59,7 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
   const ws = await db
     .insertInto("workspaces")
     .values({
-      owner_id: user.id as string,
+      ownerId: user.id as string,
       slug: `ws-${rid()}`,
       name: `${NS} ws`,
     })
@@ -71,12 +71,12 @@ async function newWorkspace(db: Kysely<any>): Promise<string> {
 async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: actorId,
-      workspace_id: wsId,
+      workspaceId: wsId,
       kind: "actor",
-      display_name: `${NS} actor`,
+      displayName: `${NS} actor`,
       status: "active",
     } as any)
     .execute()
@@ -86,7 +86,7 @@ async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
       id: actorId,
       role: "assistant",
       title: `${NS} actor`,
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -97,21 +97,21 @@ async function newRemoteAgent(db: Kysely<any>, wsId: string): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   const agentName = `agent-${rid()}`
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: remoteAgentId,
-      workspace_id: wsId,
+      workspaceId: wsId,
       kind: "remote_agent",
-      display_name: agentName,
+      displayName: agentName,
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: remoteAgentId,
       title: `${NS} agent`,
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -123,7 +123,7 @@ async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: wsId,
+      workspaceId: wsId,
       title: `${NS} conv`,
     })
     .returning("id")
@@ -145,11 +145,11 @@ async function newWorkspaceMember(
     .returning("id")
     .executeTakeFirstOrThrow()
   const member = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: wsId,
-      user_id: user.id as string,
-      trust_level: "member",
+      workspaceId: wsId,
+      userId: user.id as string,
+      trustLevel: "member",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -162,14 +162,14 @@ async function newAutomationEventSource(
 ): Promise<string> {
   const memberId = await newWorkspaceMember(db, wsId, "creator")
   const row = await db
-    .insertInto("automation_event_sources")
+    .insertInto("automationEventSources")
     .values({
-      workspace_id: wsId,
-      provider_kind: "internal",
-      source_key: `src-${rid()}`,
+      workspaceId: wsId,
+      providerKind: "internal",
+      sourceKey: `src-${rid()}`,
       name: "source",
-      created_by_kind: "workspace_member",
-      created_by_workspace_member_id: memberId,
+      createdByKind: "workspace_member",
+      createdByWorkspaceMemberId: memberId,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -217,7 +217,7 @@ test(
           resourceId: eventSourceId,
           target: { subject: remoteAgentRef(remoteAgentId) },
         })
-      await db.insertInto("resource_access_bindings").values(unscoped).execute()
+      await db.insertInto("resourceAccessBindings").values(unscoped).execute()
 
       // Scoped remote_agent grant.
       const convId = await newConversation(db, wsId)
@@ -233,7 +233,7 @@ test(
           },
         }
       )
-      await db.insertInto("resource_access_bindings").values(scoped).execute()
+      await db.insertInto("resourceAccessBindings").values(scoped).execute()
 
       const rows = await loadAutomationEventSourceAccessBindingRowsForSources(
         db,
@@ -293,9 +293,9 @@ test(
           target: { subject: remoteAgentRef(remoteAgentB) },
         }
       )
-      await db.insertInto("resource_access_bindings").values(aValues).execute()
+      await db.insertInto("resourceAccessBindings").values(aValues).execute()
       // Must NOT collide with the prior insert.
-      await db.insertInto("resource_access_bindings").values(bValues).execute()
+      await db.insertInto("resourceAccessBindings").values(bValues).execute()
 
       const subjA = await upsertAccessSubject(db, {
         kind: SUBJECT_KIND.REMOTE_AGENT,
@@ -312,12 +312,12 @@ test(
       )
 
       const rows = await db
-        .selectFrom("resource_access_bindings")
-        .select(["id", "subject_id"])
-        .where("automation_event_source_id", "=", eventSourceId)
+        .selectFrom("resourceAccessBindings")
+        .select(["id", "subjectId"])
+        .where("automationEventSourceId", "=", eventSourceId)
         .where("status", "=", "active")
         .execute()
-      const subjectIds = rows.map((r) => r.subject_id as string).sort()
+      const subjectIds = rows.map((r) => r.subjectId as string).sort()
       assert.deepEqual(
         subjectIds,
         [subjA, subjB].sort(),
@@ -353,7 +353,7 @@ test(
           target: { subject: actorRef(grantedActor) },
         })
       await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(unscopedValues)
         .execute()
 
@@ -373,28 +373,28 @@ test(
       // including scope_subject_id this insert must persist a distinct
       // row.
       await db
-        .insertInto("resource_access_bindings")
+        .insertInto("resourceAccessBindings")
         .values(scopedValues)
         .execute()
 
       const rows = await db
-        .selectFrom("resource_access_bindings as binding")
+        .selectFrom("resourceAccessBindings as binding")
         .leftJoin(
-          "access_subjects as scope_subj",
+          "accessSubjects as scope_subj",
           "scope_subj.id",
-          "binding.scope_subject_id"
+          "binding.scopeSubjectId"
         )
         .select([
           "binding.id as id",
-          "binding.scope_subject_id as scope_subject_id",
-          "scope_subj.conversation_id as scope_conversation_id",
+          "binding.scopeSubjectId as scopeSubjectId",
+          "scope_subj.conversationId as scopeConversationId",
         ])
-        .where("binding.automation_event_source_id", "=", eventSourceId)
+        .where("binding.automationEventSourceId", "=", eventSourceId)
         .where("binding.status", "=", "active")
         .execute()
       assert.equal(rows.length, 2, "both unscoped and scoped rows must exist")
       const scopes = rows
-        .map((r) => r.scope_conversation_id ?? null)
+        .map((r) => r.scopeConversationId ?? null)
         .sort((a, b) => (a ?? "").localeCompare(b ?? ""))
       assert.deepEqual(
         scopes,

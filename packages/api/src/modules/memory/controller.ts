@@ -350,28 +350,28 @@ async function requireMemoryPermission(
         : undefined
     if (!conversationId) {
       const spaceAnchor = await db
-        .selectFrom("memory_items as mi")
-        .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
+        .selectFrom("memoryItems as mi")
+        .innerJoin("memorySpaces as ms", "ms.id", "mi.memorySpaceId")
         .innerJoin(
-          "access_subjects as owner_subj",
+          "accessSubjects as owner_subj",
           "owner_subj.id",
-          "ms.owner_subject_id"
+          "ms.ownerSubjectId"
         )
         .leftJoin(
-          "access_subjects as scope_subj",
+          "accessSubjects as scope_subj",
           "scope_subj.id",
-          "ms.scope_subject_id"
+          "ms.scopeSubjectId"
         )
         .select([
-          "owner_subj.conversation_id as owner_conv",
-          "scope_subj.conversation_id as scope_conv",
+          "owner_subj.conversationId as ownerConv",
+          "scope_subj.conversationId as scopeConv",
         ])
         .where("mi.id", "=", memoryId)
-        .where("mi.workspace_id", "=", workspaceId)
+        .where("mi.workspaceId", "=", workspaceId)
         .limit(1)
         .executeTakeFirst()
       conversationId =
-        spaceAnchor?.scope_conv ?? spaceAnchor?.owner_conv ?? undefined
+        spaceAnchor?.scopeConv ?? spaceAnchor?.ownerConv ?? undefined
     }
     try {
       const ctx = await buildRuntimePrincipalContext(db, {
@@ -972,12 +972,12 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     reply: FastifyReply
   ): Promise<boolean> {
     const row = await db
-      .selectFrom("memory_spaces")
-      .select(["id", "workspace_id"])
+      .selectFrom("memorySpaces")
+      .select(["id", "workspaceId"])
       .where("id", "=", spaceId)
       .limit(1)
       .executeTakeFirst()
-    if (!row || row.workspace_id !== workspaceId) {
+    if (!row || row.workspaceId !== workspaceId) {
       reply.status(404).send({ error: "memory space not found in workspace" })
       return false
     }
@@ -1056,15 +1056,15 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         const body = createMemoryGrantSchema.parse(request.body)
         if (body.memoryItemId) {
           const itemRow = await db
-            .selectFrom("memory_items")
-            .select(["id", "memory_space_id", "workspace_id"])
+            .selectFrom("memoryItems")
+            .select(["id", "memorySpaceId", "workspaceId"])
             .where("id", "=", body.memoryItemId)
             .limit(1)
             .executeTakeFirst()
           if (
             !itemRow ||
-            itemRow.memory_space_id !== spaceId ||
-            itemRow.workspace_id !== workspaceId
+            itemRow.memorySpaceId !== spaceId ||
+            itemRow.workspaceId !== workspaceId
           ) {
             return reply
               .status(404)
@@ -1146,15 +1146,15 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         )
           return
         const grantRow = await db
-          .selectFrom("memory_access_grants")
-          .select(["id", "memory_space_id", "workspace_id"])
+          .selectFrom("memoryAccessGrants")
+          .select(["id", "memorySpaceId", "workspaceId"])
           .where("id", "=", grantId)
           .limit(1)
           .executeTakeFirst()
         if (
           !grantRow ||
-          grantRow.memory_space_id !== spaceId ||
-          grantRow.workspace_id !== workspaceId
+          grantRow.memorySpaceId !== spaceId ||
+          grantRow.workspaceId !== workspaceId
         ) {
           return reply.status(404).send({ error: "grant not found in space" })
         }

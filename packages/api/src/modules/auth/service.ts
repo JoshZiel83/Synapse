@@ -47,18 +47,18 @@ type UserRow = {
   id: string
   email: string
   name: string
-  avatar_file_id: string | null
-  created_at: Date | null
-  updated_at: Date | null
+  avatarFileId: string | null
+  createdAt: Date | null
+  updatedAt: Date | null
 }
 
 const userSelection = [
   "id",
   "email",
   "name",
-  "avatar_file_id",
-  "created_at",
-  "updated_at",
+  "avatarFileId",
+  "createdAt",
+  "updatedAt",
 ] as const
 
 function mapUserRow(row: UserRow): User {
@@ -66,14 +66,12 @@ function mapUserRow(row: UserRow): User {
     id: row.id,
     email: row.email,
     name: row.name,
-    avatarUrl: row.avatar_file_id
-      ? getFileUrlById(row.avatar_file_id)
-      : undefined,
+    avatarUrl: row.avatarFileId ? getFileUrlById(row.avatarFileId) : undefined,
     createdAt: serializeInstant(
-      requireInstantDate(row.created_at, "user.created_at")
+      requireInstantDate(row.createdAt, "user.created_at")
     ),
     updatedAt: serializeInstant(
-      requireInstantDate(row.updated_at, "user.updated_at")
+      requireInstantDate(row.updatedAt, "user.updated_at")
     ),
   }
 }
@@ -107,7 +105,7 @@ export async function updateProfile(
   const nextName = input.name === undefined ? current.name : input.name.trim()
   const nextAvatarFileId =
     input.avatarFileId === undefined
-      ? (current.avatar_file_id ?? null)
+      ? (current.avatarFileId ?? null)
       : input.avatarFileId
 
   if (nextAvatarFileId) {
@@ -132,7 +130,7 @@ export async function updateProfile(
     .updateTable("users")
     .set({
       name: nextName,
-      avatar_file_id: nextAvatarFileId ?? null,
+      avatarFileId: nextAvatarFileId ?? null,
     })
     .where("id", "=", userId)
     .returning(userSelection)
@@ -182,7 +180,7 @@ async function rejectIfUserDeleted(
     .selectFrom("users")
     .select("id")
     .where("id", "=", authed.user.id)
-    .where("deleted_at", "is", null)
+    .where("deletedAt", "is", null)
     .executeTakeFirst()
   return live ? authed : null
 }

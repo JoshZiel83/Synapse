@@ -913,3 +913,78 @@ export const PLUGIN_TRANSPORTS = [
   "sse",
   "filesystem",
 ] as const
+
+// ============================================================================
+// Tool-result origin kinds (runtime tuple; the `ToolResultOriginKind` type is
+// derived from this in types/index.ts). Migrated here from types/index.ts so
+// that the types barrel stays type-only — see
+// docs/architecture-boundary-refactor-master-plan.md §2.2.1.
+// ============================================================================
+export const TOOL_RESULT_ORIGIN_KINDS = [
+  "system",
+  "plugin",
+  "device",
+  "provider_native",
+  "model_response",
+] as const
+
+// ============================================================================
+// Enum runtime guards (migrated from types/index.ts §2.2.1). They live next to
+// their backing tuples; the narrowing types are derived locally from the same
+// tuples (canonical source), and re-exported from types/index.ts for the
+// existing `@synapse/shared` / `@synapse/shared/types` consumers.
+// ============================================================================
+
+export type TransportKind = (typeof TRANSPORT_KINDS)[number]
+export type TaskRequestKind = (typeof TASK_REQUEST_KINDS)[number]
+export type TargetedTaskRequestKind =
+  (typeof TARGETED_TASK_REQUEST_KINDS)[number]
+
+/**
+ * Runtime guard for `TransportKind`. Use instead of hard-coding
+ * `value === "feishu" || value === "weixin"` chains in dispatch sites —
+ * those drift out of sync when new transports land.
+ */
+export function isTransportKind(value: unknown): value is TransportKind {
+  return (
+    typeof value === "string" &&
+    (TRANSPORT_KINDS as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * Static fallback label for a `TransportKind`. Intentionally NOT
+ * exhaustiveness-checked: adding a new transport must not require
+ * editing this file. The authoritative display name is on
+ * `TransportConnectorCapability.displayName`; this helper only fires
+ * when the metadata provider hasn't mounted yet (client) or no
+ * connector is registered (server-side prose).
+ */
+export function describeTransportKind(kind: TransportKind): string {
+  switch (kind) {
+    case "feishu":
+      return "Feishu"
+    case "weixin":
+      return "WeChat"
+    case "wecom":
+      return "WeCom"
+    default:
+      return String(kind)
+  }
+}
+
+export function isTaskRequestKind(value: unknown): value is TaskRequestKind {
+  return (
+    typeof value === "string" &&
+    (TASK_REQUEST_KINDS as readonly string[]).includes(value)
+  )
+}
+
+export function isTargetedTaskRequestKind(
+  value: unknown
+): value is TargetedTaskRequestKind {
+  return (
+    typeof value === "string" &&
+    (TARGETED_TASK_REQUEST_KINDS as readonly string[]).includes(value)
+  )
+}

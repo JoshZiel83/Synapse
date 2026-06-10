@@ -16,13 +16,13 @@ import { db } from "../../infrastructure/database/kysely.js"
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 
 type IntegrationInstallationRow = {
-  installation_id: string
-  workspace_id: string
-  installation_status: "active" | "disabled" | "error" | "archived"
-  config_data: unknown
-  org_slug: string
-  item_slug: string
-  spec_metadata: unknown
+  installationId: string
+  workspaceId: string
+  installationStatus: "active" | "disabled" | "error" | "archived"
+  configData: unknown
+  orgSlug: string
+  itemSlug: string
+  specMetadata: unknown
 }
 
 type IntegrationWebhookIngressResult =
@@ -116,13 +116,13 @@ function integrationProviderFromRow(
   row: IntegrationInstallationRow
 ): AutomationIntegrationProvider | null {
   const metadataProvider = readString(
-    asObject(row.spec_metadata).integrationProvider
+    asObject(row.specMetadata).integrationProvider
   )
   if (metadataProvider === "github" || metadataProvider === "gitlab") {
     return metadataProvider
   }
-  if (row.org_slug === "github" || row.org_slug === "gitlab") {
-    return row.org_slug
+  if (row.orgSlug === "github" || row.orgSlug === "gitlab") {
+    return row.orgSlug
   }
   return null
 }
@@ -387,38 +387,34 @@ export async function getIntegrationInstallation(
   options?: { allowInactive?: boolean }
 ): Promise<ResolvedIntegrationInstallation> {
   const row = (await db
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
+    .innerJoin("catalogItems as item", "item.id", "installation.catalogItemId")
+    .innerJoin("publishers as publisher", "publisher.id", "item.publisherId")
     .innerJoin(
-      "catalog_items as item",
-      "item.id",
-      "installation.catalog_item_id"
-    )
-    .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
-    .innerJoin(
-      "plugin_package_version_specs as spec",
-      "spec.catalog_version_id",
-      "installation.catalog_version_id"
+      "pluginPackageVersionSpecs as spec",
+      "spec.catalogVersionId",
+      "installation.catalogVersionId"
     )
     .select([
-      "installation.id as installation_id",
-      "app.workspace_id as workspace_id",
-      "app.status as installation_status",
-      "installation.config_data",
-      "publisher.slug as org_slug",
-      "item.slug as item_slug",
-      "spec.metadata as spec_metadata",
+      "installation.id as installationId",
+      "app.workspaceId as workspaceId",
+      "app.status as installationStatus",
+      "installation.configData",
+      "publisher.slug as orgSlug",
+      "item.slug as itemSlug",
+      "spec.metadata as specMetadata",
     ])
     .where("installation.id", "=", installationId)
-    .where("app.workspace_id", "=", workspaceId)
-    .where("app.deleted_at", "is", null)
+    .where("app.workspaceId", "=", workspaceId)
+    .where("app.deletedAt", "is", null)
     .limit(1)
     .executeTakeFirst()) as IntegrationInstallationRow | undefined
 
   if (!row) {
     throw new Error(`Integration installation ${installationId} was not found`)
   }
-  if (row.installation_status !== "active" && !options?.allowInactive) {
+  if (row.installationStatus !== "active" && !options?.allowInactive) {
     throw new Error(`Integration installation ${installationId} is not active`)
   }
 
@@ -435,12 +431,12 @@ export async function getIntegrationInstallation(
   }
 
   return {
-    id: row.installation_id,
-    workspaceId: row.workspace_id,
+    id: row.installationId,
+    workspaceId: row.workspaceId,
     provider,
-    orgSlug: row.org_slug,
-    itemSlug: row.item_slug,
-    configData: decryptSensitiveFields(asObject(row.config_data)),
+    orgSlug: row.orgSlug,
+    itemSlug: row.itemSlug,
+    configData: decryptSensitiveFields(asObject(row.configData)),
   }
 }
 

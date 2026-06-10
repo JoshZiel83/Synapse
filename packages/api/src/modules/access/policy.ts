@@ -121,11 +121,11 @@ async function loadConversationTargetRecord(
       eb
         .exists(
           eb
-            .selectFrom("conversation_transport_bindings as b")
+            .selectFrom("conversationTransportBindings as b")
             .select("b.id")
-            .whereRef("b.conversation_id", "=", "c.id")
+            .whereRef("b.conversationId", "=", "c.id")
         )
-        .as("is_im"),
+        .as("isIm"),
     ])
     .where("c.id", "=", conversationId)
     .limit(1)
@@ -133,7 +133,7 @@ async function loadConversationTargetRecord(
   if (!row) {
     return null
   }
-  const isIm = Boolean(row.is_im)
+  const isIm = Boolean(row.isIm)
   const conversationTypeKey = resolveConversationTypeKey(row.kind, isIm)
   if (!conversationTypeKey) {
     return null
@@ -173,10 +173,10 @@ async function isSubjectActiveParticipantInConversation(
   }
 ): Promise<boolean> {
   const row = await db
-    .selectFrom("conversation_participants")
+    .selectFrom("conversationParticipants")
     .select("id")
-    .where("conversation_id", "=", params.conversationId)
-    .where("subject_id", "=", params.subjectId)
+    .where("conversationId", "=", params.conversationId)
+    .where("subjectId", "=", params.subjectId)
     .where("state", "=", "active")
     .limit(1)
     .executeTakeFirst()

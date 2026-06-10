@@ -372,24 +372,24 @@ async function defaultPollBootstrapConsumed(
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const row = await db
-      .selectFrom("device_pairing_sessions")
-      .select(["status", "device_id"])
+      .selectFrom("devicePairingSessions")
+      .select(["status", "deviceId"])
       .where("id", "=", pairingSessionId)
       .executeTakeFirst()
     if (row) {
       const status = row.status as string
-      if (status === "consumed" && row.device_id) {
+      if (status === "consumed" && row.deviceId) {
         const svc = await db
-          .selectFrom("device_services")
+          .selectFrom("deviceServices")
           .select("id")
-          .where("device_id", "=", row.device_id as string)
-          .where("service_kind", "=", "device_runtime")
-          .orderBy("created_at", "desc")
+          .where("deviceId", "=", row.deviceId as string)
+          .where("serviceKind", "=", "device_runtime")
+          .orderBy("createdAt", "desc")
           .limit(1)
           .executeTakeFirst()
         if (svc) {
           return {
-            deviceId: row.device_id as string,
+            deviceId: row.deviceId as string,
             deviceServiceId: svc.id as string,
           }
         }
@@ -441,7 +441,7 @@ async function defaultDockerFailCleanup(
   // consumed session is left as-is (the device delete already handled its FK).
   if (args.pairingSessionId) {
     await db
-      .updateTable("device_pairing_sessions")
+      .updateTable("devicePairingSessions")
       .set({ status: "cancelled" } as never)
       .where("id", "=", args.pairingSessionId)
       .where("status", "=", "pending")

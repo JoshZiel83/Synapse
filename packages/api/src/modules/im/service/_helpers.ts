@@ -62,97 +62,97 @@ export function readTrimmedString(
 
 type TransportAccountRow = {
   id: string
-  workspace_id: string | null
-  transport_kind: TransportKind
-  account_key: string
-  display_name: string | null
-  owner_scope?: TransportAccountOwnerScope | null
-  owner_workspace_member_id?: string | null
-  account_inbound_actor_mode?: TransportAccountInboundActorMode | null
-  inbound_actor_mode?:
+  workspaceId: string | null
+  transportKind: TransportKind
+  accountKey: string
+  displayName: string | null
+  ownerScope?: TransportAccountOwnerScope | null
+  ownerWorkspaceMemberId?: string | null
+  accountInboundActorMode?: TransportAccountInboundActorMode | null
+  inboundActorMode?:
     | TransportAccountInboundActorMode
     | TransportConversationInboundActorMode
     | null
-  account_inbound_actor_id?: string | null
-  inbound_actor_id?: string | null
-  connection_mode: TransportConnectionMode
+  accountInboundActorId?: string | null
+  inboundActorId?: string | null
+  connectionMode: TransportConnectionMode
   status: TransportAccountStatus
   credentials: unknown
   config: unknown
   metadata: unknown
-  created_at: Date
-  updated_at: Date
+  createdAt: Date
+  updatedAt: Date
 }
 
 type TransportEndpointRow = {
-  endpoint_id?: string | null
+  endpointId?: string | null
   id?: string | null
-  transport_account_id: string
-  endpoint_type: TransportEndpointType
-  endpoint_external_id?: string | null
-  external_id?: string | null
-  parent_external_id?: string | null
-  endpoint_display_name?: string | null
-  display_name?: string | null
-  endpoint_metadata?: unknown
+  transportAccountId: string
+  endpointType: TransportEndpointType
+  endpointExternalId?: string | null
+  externalId?: string | null
+  parentExternalId?: string | null
+  endpointDisplayName?: string | null
+  displayName?: string | null
+  endpointMetadata?: unknown
   metadata?: unknown
-  endpoint_created_at?: Date | null
-  created_at?: Date | null
-  endpoint_updated_at?: Date | null
-  updated_at?: Date | null
+  endpointCreatedAt?: Date | null
+  createdAt?: Date | null
+  endpointUpdatedAt?: Date | null
+  updatedAt?: Date | null
 }
 
 type ConversationTransportBindingRow = TransportAccountRow &
   TransportEndpointRow & {
-    binding_id?: string | null
-    conversation_id: string | null
-    outbound_enabled: boolean | null
-    binding_metadata?: unknown
-    binding_created_at?: Date | null
-    binding_updated_at?: Date | null
+    bindingId?: string | null
+    conversationId: string | null
+    outboundEnabled: boolean | null
+    bindingMetadata?: unknown
+    bindingCreatedAt?: Date | null
+    bindingUpdatedAt?: Date | null
   }
 
 type TransportSessionRow = ConversationTransportBindingRow & {
-  account_workspace_id?: string | null
-  conversation_title?: string | null
-  last_inbound_at?: Date | null
-  last_outbound_at?: Date | null
+  accountWorkspaceId?: string | null
+  conversationTitle?: string | null
+  lastInboundAt?: Date | null
+  lastOutboundAt?: Date | null
 }
 
 type TransportExternalUserRow = {
   id: string
-  workspace_id: string
-  transport_account_id: string
-  transport_kind: TransportKind
-  account_display_name?: string | null
-  external_id: string
-  display_name?: string | null
-  linked_workspace_member_id?: string | null
-  linked_workspace_member_name?: string | null
+  workspaceId: string
+  transportAccountId: string
+  transportKind: TransportKind
+  accountDisplayName?: string | null
+  externalId: string
+  displayName?: string | null
+  linkedWorkspaceMemberId?: string | null
+  linkedWorkspaceMemberName?: string | null
   metadata: unknown
-  created_at: Date
-  updated_at: Date
+  createdAt: Date
+  updatedAt: Date
   sessions?: unknown
 }
 
 type TransportMessageLinkRow = {
   id: string
-  workspace_id: string
-  conversation_id: string
-  item_id: string
-  transport_account_id: string
-  transport_endpoint_id: string
-  transport_kind: TransportKind
+  workspaceId: string
+  conversationId: string
+  itemId: string
+  transportAccountId: string
+  transportEndpointId: string
+  transportKind: TransportKind
   direction: "inbound" | "outbound"
-  delivery_status: TransportDeliveryStatus
-  external_message_id?: string | null
-  external_reply_to_id?: string | null
-  external_thread_id?: string | null
-  external_emoji_reactions?: unknown
+  deliveryStatus: TransportDeliveryStatus
+  externalMessageId?: string | null
+  externalReplyToId?: string | null
+  externalThreadId?: string | null
+  externalEmojiReactions?: unknown
   metadata: unknown
-  delivered_at?: Date | null
-  created_at?: Date | null
-  updated_at?: Date | null
+  deliveredAt?: Date | null
+  createdAt?: Date | null
+  updatedAt?: Date | null
 }
 
 export function normalizeAccountRow(
@@ -160,31 +160,28 @@ export function normalizeAccountRow(
 ): TransportAccountSummary {
   return {
     id: row.id,
-    workspaceId: row.workspace_id || "",
-    transportKind: row.transport_kind,
-    accountKey: row.account_key,
-    displayName: row.display_name || row.account_key,
+    workspaceId: row.workspaceId || "",
+    transportKind: row.transportKind,
+    accountKey: row.accountKey,
+    displayName: row.displayName || row.accountKey,
     ownerScope:
-      (row.owner_scope as TransportAccountOwnerScope | undefined) ||
-      "workspace",
-    ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
+      (row.ownerScope as TransportAccountOwnerScope | undefined) || "workspace",
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId || undefined,
     inboundActorMode:
-      (row.account_inbound_actor_mode as
+      (row.accountInboundActorMode as
         | TransportAccountInboundActorMode
         | undefined) ||
-      (row.inbound_actor_mode as
-        | TransportAccountInboundActorMode
-        | undefined) ||
+      (row.inboundActorMode as TransportAccountInboundActorMode | undefined) ||
       "none",
     inboundActorId:
-      row.account_inbound_actor_id || row.inbound_actor_id || undefined,
-    connectionMode: row.connection_mode,
+      row.accountInboundActorId || row.inboundActorId || undefined,
+    connectionMode: row.connectionMode,
     status: row.status,
     credentials: parseJsonObject(row.credentials),
     config: parseJsonObject(row.config),
     metadata: parseJsonObject(row.metadata),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
   }
 }
 
@@ -193,19 +190,19 @@ export function normalizeEndpointRow(
   transportKind: TransportKind
 ): TransportEndpointSummary {
   return {
-    id: row.endpoint_id || row.id || "",
-    transportAccountId: row.transport_account_id,
+    id: row.endpointId || row.id || "",
+    transportAccountId: row.transportAccountId,
     transportKind,
-    endpointType: row.endpoint_type,
-    externalId: row.endpoint_external_id || row.external_id || "",
-    parentExternalId: row.parent_external_id || undefined,
-    displayName: row.endpoint_display_name || row.display_name || undefined,
-    metadata: parseJsonObject(row.endpoint_metadata || row.metadata),
+    endpointType: row.endpointType,
+    externalId: row.endpointExternalId || row.externalId || "",
+    parentExternalId: row.parentExternalId || undefined,
+    displayName: row.endpointDisplayName || row.displayName || undefined,
+    metadata: parseJsonObject(row.endpointMetadata || row.metadata),
     createdAt: serializeOptionalInstant(
-      row.endpoint_created_at || row.created_at
+      row.endpointCreatedAt || row.createdAt
     )!,
     updatedAt: serializeOptionalInstant(
-      row.endpoint_updated_at || row.updated_at
+      row.endpointUpdatedAt || row.updatedAt
     )!,
   }
 }
@@ -215,58 +212,54 @@ export function normalizeBindingRow(
 ): ConversationTransportBindingSummary {
   const account = normalizeAccountRow(row)
   return {
-    id: row.binding_id || row.id,
-    conversationId: row.conversation_id || "",
-    workspaceId: row.workspace_id || account.workspaceId,
-    transportKind: row.transport_kind,
-    outboundEnabled: Boolean(row.outbound_enabled),
+    id: row.bindingId || row.id,
+    conversationId: row.conversationId || "",
+    workspaceId: row.workspaceId || account.workspaceId,
+    transportKind: row.transportKind,
+    outboundEnabled: Boolean(row.outboundEnabled),
     inboundActorMode:
-      (row.inbound_actor_mode as
+      (row.inboundActorMode as
         | TransportConversationInboundActorMode
         | undefined) || "inherit_account",
-    inboundActorId: row.inbound_actor_id || undefined,
-    metadata: parseJsonObject(row.binding_metadata || row.metadata),
-    createdAt: serializeOptionalInstant(
-      row.binding_created_at || row.created_at
-    )!,
-    updatedAt: serializeOptionalInstant(
-      row.binding_updated_at || row.updated_at
-    )!,
+    inboundActorId: row.inboundActorId || undefined,
+    metadata: parseJsonObject(row.bindingMetadata || row.metadata),
+    createdAt: serializeOptionalInstant(row.bindingCreatedAt || row.createdAt)!,
+    updatedAt: serializeOptionalInstant(row.bindingUpdatedAt || row.updatedAt)!,
     account,
-    endpoint: normalizeEndpointRow(row, row.transport_kind),
+    endpoint: normalizeEndpointRow(row, row.transportKind),
   }
 }
 
 export function normalizeTransportSessionRow(
   row: TransportSessionRow
 ): TransportSessionSummary {
-  const workspaceId = row.account_workspace_id || row.workspace_id || ""
-  const account = normalizeAccountRow({ ...row, workspace_id: workspaceId })
+  const workspaceId = row.accountWorkspaceId || row.workspaceId || ""
+  const account = normalizeAccountRow({ ...row, workspaceId })
   return {
-    id: row.endpoint_id || row.binding_id || row.id,
+    id: row.endpointId || row.bindingId || row.id,
     workspaceId,
-    transportKind: row.transport_kind,
-    outboundEnabled: Boolean(row.outbound_enabled),
+    transportKind: row.transportKind,
+    outboundEnabled: Boolean(row.outboundEnabled),
     inboundActorMode:
-      (row.inbound_actor_mode as
+      (row.inboundActorMode as
         | TransportConversationInboundActorMode
         | undefined) || "inherit_account",
-    inboundActorId: row.inbound_actor_id || undefined,
+    inboundActorId: row.inboundActorId || undefined,
     metadata: parseJsonObject(
-      row.binding_metadata || row.endpoint_metadata || row.metadata
+      row.bindingMetadata || row.endpointMetadata || row.metadata
     ),
     createdAt: serializeOptionalInstant(
-      row.binding_created_at || row.endpoint_created_at || row.created_at
+      row.bindingCreatedAt || row.endpointCreatedAt || row.createdAt
     )!,
     updatedAt: serializeOptionalInstant(
-      row.binding_updated_at || row.endpoint_updated_at || row.updated_at
+      row.bindingUpdatedAt || row.endpointUpdatedAt || row.updatedAt
     )!,
-    conversationId: row.conversation_id || undefined,
-    conversationTitle: readTrimmedString(row, "conversation_title"),
-    lastInboundAt: serializeOptionalInstant(row.last_inbound_at),
-    lastOutboundAt: serializeOptionalInstant(row.last_outbound_at),
+    conversationId: row.conversationId || undefined,
+    conversationTitle: readTrimmedString(row, "conversationTitle"),
+    lastInboundAt: serializeOptionalInstant(row.lastInboundAt),
+    lastOutboundAt: serializeOptionalInstant(row.lastOutboundAt),
     account,
-    endpoint: normalizeEndpointRow(row, row.transport_kind),
+    endpoint: normalizeEndpointRow(row, row.transportKind),
   }
 }
 
@@ -275,23 +268,23 @@ export function normalizeTransportExternalUserRow(
 ): TransportExternalUserSummary {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    transportAccountId: row.transport_account_id,
-    transportKind: row.transport_kind,
-    accountDisplayName: row.account_display_name || "Transport account",
-    externalId: row.external_id,
-    displayName: row.display_name || undefined,
-    linkedWorkspaceMemberId: row.linked_workspace_member_id || undefined,
-    linkedWorkspaceMemberName: row.linked_workspace_member_name || undefined,
+    workspaceId: row.workspaceId,
+    transportAccountId: row.transportAccountId,
+    transportKind: row.transportKind,
+    accountDisplayName: row.accountDisplayName || "Transport account",
+    externalId: row.externalId,
+    displayName: row.displayName || undefined,
+    linkedWorkspaceMemberId: row.linkedWorkspaceMemberId || undefined,
+    linkedWorkspaceMemberName: row.linkedWorkspaceMemberName || undefined,
     metadata: parseJsonObject(row.metadata),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
     sessions: parseJsonArray<any>(row.sessions),
   }
 }
 
 export function normalizeTransportMessageLinkRow(row: TransportMessageLinkRow) {
-  const rawReactions = row.external_emoji_reactions
+  const rawReactions = row.externalEmojiReactions
   const reactions: Record<string, string> = {}
   if (
     rawReactions &&
@@ -306,21 +299,21 @@ export function normalizeTransportMessageLinkRow(row: TransportMessageLinkRow) {
   }
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    itemId: row.item_id,
-    transportAccountId: row.transport_account_id,
-    transportEndpointId: row.transport_endpoint_id,
-    transportKind: row.transport_kind as TransportKind,
+    workspaceId: row.workspaceId,
+    conversationId: row.conversationId,
+    itemId: row.itemId,
+    transportAccountId: row.transportAccountId,
+    transportEndpointId: row.transportEndpointId,
+    transportKind: row.transportKind as TransportKind,
     direction: row.direction as "inbound" | "outbound",
-    deliveryStatus: row.delivery_status as TransportDeliveryStatus,
-    externalMessageId: row.external_message_id || undefined,
-    externalReplyToId: row.external_reply_to_id || undefined,
-    externalThreadId: row.external_thread_id || undefined,
+    deliveryStatus: row.deliveryStatus as TransportDeliveryStatus,
+    externalMessageId: row.externalMessageId || undefined,
+    externalReplyToId: row.externalReplyToId || undefined,
+    externalThreadId: row.externalThreadId || undefined,
     externalEmojiReactions: reactions,
     metadata: parseJsonObject(row.metadata),
-    deliveredAt: serializeOptionalInstant(row.delivered_at),
-    createdAt: serializeOptionalInstant(row.created_at),
-    updatedAt: serializeOptionalInstant(row.updated_at),
+    deliveredAt: serializeOptionalInstant(row.deliveredAt),
+    createdAt: serializeOptionalInstant(row.createdAt),
+    updatedAt: serializeOptionalInstant(row.updatedAt),
   }
 }

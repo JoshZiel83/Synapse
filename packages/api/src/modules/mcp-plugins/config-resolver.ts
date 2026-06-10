@@ -43,21 +43,21 @@ export async function resolveInstallationConfig(
     // (archived) installs — same definition as plugin_installations_live /
     // manifest liveValues. Read the base table (not the _live view) so the NOT
     // NULL column types are preserved (views type every column nullable).
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
     .innerJoin(
-      "plugin_package_version_specs as spec",
-      "spec.catalog_version_id",
-      "installation.catalog_version_id"
+      "pluginPackageVersionSpecs as spec",
+      "spec.catalogVersionId",
+      "installation.catalogVersionId"
     )
     .select([
-      "installation.catalog_item_id",
-      "installation.config_data",
-      "spec.default_config",
-      "spec.config_schema",
+      "installation.catalogItemId",
+      "installation.configData",
+      "spec.defaultConfig",
+      "spec.configSchema",
     ])
     .where("installation.id", "=", installationId)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
@@ -71,14 +71,14 @@ export async function resolveInstallationConfig(
   }
 
   const merged = mergeConfigs(
-    asObject(row.default_config),
-    asObject(row.config_data)
+    asObject(row.defaultConfig),
+    asObject(row.configData)
   )
   const decrypted = decryptSensitiveFields(merged)
   const withConnections = await resolveAuthConnectionRefs(decrypted)
 
   return {
-    pluginId: row.catalog_item_id,
+    pluginId: row.catalogItemId,
     installationId,
     config: withConnections,
   }

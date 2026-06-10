@@ -44,7 +44,7 @@ export async function buildAutomationEventSourceAccessBindingInsertValues(
     reason?: string | null
     source?: AutomationEventSourceBindingSource
   }
-): Promise<TableInsert<"resource_access_bindings">> {
+): Promise<TableInsert<"resourceAccessBindings">> {
   const ref = accessGrantTargetToSubjectRef(input.target)
   const subjectId = await upsertAccessSubject(db, ref)
   const scopeRef = accessGrantTargetScopeRef(input.target)
@@ -52,17 +52,17 @@ export async function buildAutomationEventSourceAccessBindingInsertValues(
     ? await upsertAccessSubject(db, scopeRef)
     : null
   return {
-    workspace_id: input.workspaceId,
-    resource_type: input.resourceType,
-    automation_event_source_id: input.resourceId,
-    subject_id: subjectId,
-    scope_subject_id: scopeSubjectId,
-    conversation_type_mask_override: input.conversationTypeMaskOverride ?? null,
+    workspaceId: input.workspaceId,
+    resourceType: input.resourceType,
+    automationEventSourceId: input.resourceId,
+    subjectId: subjectId,
+    scopeSubjectId: scopeSubjectId,
+    conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
     status: "active" as const,
     source: input.source ?? "manual",
-    created_by_workspace_member_id: input.createdByWorkspaceMemberId ?? null,
+    createdByWorkspaceMemberId: input.createdByWorkspaceMemberId ?? null,
     reason: input.reason ?? null,
-  } satisfies TableInsert<"resource_access_bindings">
+  } satisfies TableInsert<"resourceAccessBindings">
 }
 
 /**
@@ -80,7 +80,7 @@ export async function buildAutomationEventSourceAccessBindingInsertValuesOn(
     reason?: string | null
     source?: AutomationEventSourceBindingSource
   }
-): Promise<TableInsert<"resource_access_bindings">> {
+): Promise<TableInsert<"resourceAccessBindings">> {
   const ref = accessGrantTargetToSubjectRef(input.target)
   const subjectId = await upsertAccessSubjectOn(client, ref)
   const scopeRef = accessGrantTargetScopeRef(input.target)
@@ -88,17 +88,17 @@ export async function buildAutomationEventSourceAccessBindingInsertValuesOn(
     ? await upsertAccessSubjectOn(client, scopeRef)
     : null
   return {
-    workspace_id: input.workspaceId,
-    resource_type: input.resourceType,
-    automation_event_source_id: input.resourceId,
-    subject_id: subjectId,
-    scope_subject_id: scopeSubjectId,
-    conversation_type_mask_override: input.conversationTypeMaskOverride ?? null,
+    workspaceId: input.workspaceId,
+    resourceType: input.resourceType,
+    automationEventSourceId: input.resourceId,
+    subjectId: subjectId,
+    scopeSubjectId: scopeSubjectId,
+    conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
     status: "active" as const,
     source: input.source ?? "manual",
-    created_by_workspace_member_id: input.createdByWorkspaceMemberId ?? null,
+    createdByWorkspaceMemberId: input.createdByWorkspaceMemberId ?? null,
     reason: input.reason ?? null,
-  } satisfies TableInsert<"resource_access_bindings">
+  } satisfies TableInsert<"resourceAccessBindings">
 }
 
 // ---------- P3 consolidation: unified read / mutate entry points ----------
@@ -118,7 +118,7 @@ export async function insertAutomationEventSourceAccessBindingReturningIdOn(
   const result = await runBuilder<{ id: string }>(
     client,
     defaultDb
-      .insertInto("resource_access_bindings")
+      .insertInto("resourceAccessBindings")
       .values(values)
       .returning("id")
   )
@@ -141,10 +141,7 @@ export async function insertAutomationEventSourceAccessBindingReturningRowOn(
   )
   const result = await runBuilder<AutomationEventSourceBindingRow>(
     client,
-    defaultDb
-      .insertInto("resource_access_bindings")
-      .values(values)
-      .returningAll()
+    defaultDb.insertInto("resourceAccessBindings").values(values).returningAll()
   )
   const inserted = result.rows[0]
   if (!inserted) {
@@ -161,54 +158,53 @@ export async function insertAutomationEventSourceAccessBindingReturningRowOn(
  * subject without a second lookup.
  */
 export function augmentInsertedBindingRowWithTarget<
-  T extends { subject_id: string | null; scope_subject_id?: string | null },
+  T extends { subjectId: string | null; scopeSubjectId?: string | null },
 >(
   inserted: T,
   target: AutomationEventSourceBindingTarget
 ): T & {
-  scope_subject_id: string | null
-  subject_kind: string
-  subject_workspace_id_via_join: string | null
-  subject_workspace_member_id_via_join: string | null
-  subject_actor_id_via_join: string | null
-  subject_remote_agent_id_via_join: string | null
-  subject_conversation_id_via_join: string | null
-  scope_kind: string | null
-  scope_workspace_id_via_join: string | null
-  scope_conversation_id_via_join: string | null
+  scopeSubjectId: string | null
+  subjectKind: string
+  subjectWorkspaceIdViaJoin: string | null
+  subjectWorkspaceMemberIdViaJoin: string | null
+  subjectActorIdViaJoin: string | null
+  subjectRemoteAgentIdViaJoin: string | null
+  subjectConversationIdViaJoin: string | null
+  scopeKind: string | null
+  scopeWorkspaceIdViaJoin: string | null
+  scopeConversationIdViaJoin: string | null
 } {
   return {
     ...inserted,
-    scope_subject_id:
-      (inserted as { scope_subject_id?: string | null }).scope_subject_id ??
-      null,
-    subject_kind: target.subject.kind,
-    subject_workspace_id_via_join:
+    scopeSubjectId:
+      (inserted as { scopeSubjectId?: string | null }).scopeSubjectId ?? null,
+    subjectKind: target.subject.kind,
+    subjectWorkspaceIdViaJoin:
       target.subject.kind === "workspace"
         ? (target.subject as { workspaceId: string }).workspaceId
         : null,
-    subject_workspace_member_id_via_join:
+    subjectWorkspaceMemberIdViaJoin:
       target.subject.kind === "workspace_member"
         ? (target.subject as { memberId: string }).memberId
         : null,
-    subject_actor_id_via_join:
+    subjectActorIdViaJoin:
       target.subject.kind === "actor"
         ? (target.subject as { actorId: string }).actorId
         : null,
-    subject_remote_agent_id_via_join:
+    subjectRemoteAgentIdViaJoin:
       target.subject.kind === "remote_agent"
         ? (target.subject as { remoteAgentId: string }).remoteAgentId
         : null,
-    subject_conversation_id_via_join:
+    subjectConversationIdViaJoin:
       target.subject.kind === "conversation"
         ? (target.subject as { conversationId: string }).conversationId
         : null,
-    scope_kind: target.scope?.kind ?? null,
-    scope_workspace_id_via_join:
+    scopeKind: target.scope?.kind ?? null,
+    scopeWorkspaceIdViaJoin:
       target.scope?.kind === "workspace"
         ? (target.scope as { workspaceId: string }).workspaceId
         : null,
-    scope_conversation_id_via_join:
+    scopeConversationIdViaJoin:
       target.scope?.kind === "conversation"
         ? (target.scope as { conversationId: string }).conversationId
         : null,
@@ -241,49 +237,47 @@ export async function listAutomationEventSourceAccessGrants(
 ): Promise<AutomationEventSourceAccessGrant[]> {
   const column = resourceIdColumnFor(input.resourceType)
   let query = db
-    .selectFrom("resource_access_bindings as binding")
-    .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
+    .selectFrom("resourceAccessBindings as binding")
+    .innerJoin("accessSubjects as subj", "subj.id", "binding.subjectId")
     .leftJoin(
-      "access_subjects as scope_subj",
+      "accessSubjects as scope_subj",
       "scope_subj.id",
-      "binding.scope_subject_id"
+      "binding.scopeSubjectId"
     )
     .select([
       "binding.id",
-      "binding.workspace_id",
-      "binding.resource_type",
-      "binding.automation_event_source_id",
-      "binding.conversation_type_mask_override",
+      "binding.workspaceId",
+      "binding.resourceType",
+      "binding.automationEventSourceId",
+      "binding.conversationTypeMaskOverride",
       "binding.status",
       "binding.source",
-      "binding.created_by_workspace_member_id",
+      "binding.createdByWorkspaceMemberId",
       "binding.reason",
-      "binding.created_at",
-      "binding.revoked_at",
-      "binding.scope_subject_id",
-      "binding.subject_id",
-      sql<string>`${sql.ref(column)}::text`.as("resource_id"),
-      "subj.kind as subject_kind",
-      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
+      "binding.createdAt",
+      "binding.revokedAt",
+      "binding.scopeSubjectId",
+      "binding.subjectId",
+      sql<string>`${sql.ref(column)}::text`.as("resourceId"),
+      "subj.kind as subjectKind",
+      sql<string | null>`subj.workspace_id`.as("subjectWorkspaceIdViaJoin"),
       sql<string | null>`subj.workspace_member_id`.as(
-        "subject_workspace_member_id_via_join"
+        "subjectWorkspaceMemberIdViaJoin"
       ),
-      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
+      sql<string | null>`subj.actor_id`.as("subjectActorIdViaJoin"),
       sql<string | null>`subj.remote_agent_id`.as(
-        "subject_remote_agent_id_via_join"
+        "subjectRemoteAgentIdViaJoin"
       ),
       sql<string | null>`subj.conversation_id`.as(
-        "subject_conversation_id_via_join"
+        "subjectConversationIdViaJoin"
       ),
-      sql<string | null>`scope_subj.kind`.as("scope_kind"),
-      sql<string | null>`scope_subj.workspace_id`.as(
-        "scope_workspace_id_via_join"
-      ),
+      sql<string | null>`scope_subj.kind`.as("scopeKind"),
+      sql<string | null>`scope_subj.workspace_id`.as("scopeWorkspaceIdViaJoin"),
       sql<string | null>`scope_subj.conversation_id`.as(
-        "scope_conversation_id_via_join"
+        "scopeConversationIdViaJoin"
       ),
     ] as const)
-    .where("binding.resource_type", "=", input.resourceType)
+    .where("binding.resourceType", "=", input.resourceType)
     .where(sql.ref(column), "=", input.resourceId)
   if (!input.includeRevoked) {
     query = query.where("binding.status", "=", "active")
@@ -309,10 +303,10 @@ export async function revokeAutomationEventSourceAccessBinding(
   }
 ): Promise<boolean> {
   const result = await db
-    .updateTable("resource_access_bindings")
+    .updateTable("resourceAccessBindings")
     .set({
       status: "revoked" as const,
-      revoked_at: sql`NOW()`,
+      revokedAt: sql`NOW()`,
     })
     .where("id", "=", input.bindingId)
     .where("status", "=", "active")
@@ -346,10 +340,10 @@ export async function updateAutomationEventSourceAccessBindingTargets(
     ? await upsertAccessSubject(db, scopeRef)
     : null
   await db
-    .updateTable("resource_access_bindings")
+    .updateTable("resourceAccessBindings")
     .set({
-      subject_id: subjectId,
-      scope_subject_id: scopeSubjectId,
+      subjectId: subjectId,
+      scopeSubjectId: scopeSubjectId,
     })
     .where("id", "=", input.bindingId)
     .execute()
@@ -380,47 +374,45 @@ function bindingRowSelectFor(
 ) {
   const column = resourceIdColumnFor(resourceType)
   return db
-    .selectFrom("resource_access_bindings as binding")
-    .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
+    .selectFrom("resourceAccessBindings as binding")
+    .innerJoin("accessSubjects as subj", "subj.id", "binding.subjectId")
     .leftJoin(
-      "access_subjects as scope_subj",
+      "accessSubjects as scope_subj",
       "scope_subj.id",
-      "binding.scope_subject_id"
+      "binding.scopeSubjectId"
     )
     .select([
       "binding.id",
-      "binding.workspace_id",
-      "binding.resource_type",
-      "binding.automation_event_source_id",
-      "binding.subject_id",
-      "binding.scope_subject_id",
-      sql<string>`${sql.ref(column)}::text`.as("resource_id"),
-      sql<string>`subj.kind`.as("subject_kind"),
-      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
+      "binding.workspaceId",
+      "binding.resourceType",
+      "binding.automationEventSourceId",
+      "binding.subjectId",
+      "binding.scopeSubjectId",
+      sql<string>`${sql.ref(column)}::text`.as("resourceId"),
+      sql<string>`subj.kind`.as("subjectKind"),
+      sql<string | null>`subj.workspace_id`.as("subjectWorkspaceIdViaJoin"),
       sql<string | null>`subj.workspace_member_id`.as(
-        "subject_workspace_member_id_via_join"
+        "subjectWorkspaceMemberIdViaJoin"
       ),
       sql<string | null>`subj.remote_agent_id`.as(
-        "subject_remote_agent_id_via_join"
+        "subjectRemoteAgentIdViaJoin"
       ),
-      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
+      sql<string | null>`subj.actor_id`.as("subjectActorIdViaJoin"),
       sql<string | null>`subj.conversation_id`.as(
-        "subject_conversation_id_via_join"
+        "subjectConversationIdViaJoin"
       ),
-      sql<string | null>`scope_subj.kind`.as("scope_kind"),
-      sql<string | null>`scope_subj.workspace_id`.as(
-        "scope_workspace_id_via_join"
-      ),
+      sql<string | null>`scope_subj.kind`.as("scopeKind"),
+      sql<string | null>`scope_subj.workspace_id`.as("scopeWorkspaceIdViaJoin"),
       sql<string | null>`scope_subj.conversation_id`.as(
-        "scope_conversation_id_via_join"
+        "scopeConversationIdViaJoin"
       ),
-      "binding.conversation_type_mask_override",
+      "binding.conversationTypeMaskOverride",
       "binding.status",
       "binding.source",
-      "binding.created_by_workspace_member_id",
+      "binding.createdByWorkspaceMemberId",
       "binding.reason",
-      "binding.created_at",
-      "binding.revoked_at",
+      "binding.createdAt",
+      "binding.revokedAt",
     ] as const)
 }
 
@@ -440,17 +432,17 @@ export async function loadAutomationEventSourceAccessBindingRowsForSources(
   if (input.resourceIds.length === 0) return []
   const column = resourceIdColumnFor(input.resourceType)
   let query = bindingRowSelectFor(db, input.resourceType)
-    .where("binding.resource_type", "=", input.resourceType)
+    .where("binding.resourceType", "=", input.resourceType)
     .where(sql.ref(column), "in", input.resourceIds)
   if (input.workspaceId) {
-    query = query.where("binding.workspace_id", "=", input.workspaceId)
+    query = query.where("binding.workspaceId", "=", input.workspaceId)
   }
   if (!input.includeRevoked) {
     query = query.where("binding.status", "=", "active")
   }
   const rows = await query
     .orderBy(sql.ref(column))
-    .orderBy("binding.created_at")
+    .orderBy("binding.createdAt")
     .execute()
   return rows.map((row) => normalizeAutomationEventSourceAccessBindingRow(row))
 }
@@ -495,7 +487,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndCon
   if (input.resourceIds.length === 0) return []
   const column = resourceIdColumnFor(input.resourceType)
   let query = bindingRowSelectFor(db, input.resourceType)
-    .where("binding.resource_type", "=", input.resourceType)
+    .where("binding.resourceType", "=", input.resourceType)
     .where(sql.ref(column), "in", input.resourceIds)
   if (!input.includeRevoked) {
     query = query.where("binding.status", "=", "active")
@@ -504,14 +496,14 @@ export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndCon
     const conditions = [
       eb.and([
         eb("subj.kind", "=", "workspace"),
-        eb("subj.workspace_id", "=", input.contextWorkspaceId),
+        eb("subj.workspaceId", "=", input.contextWorkspaceId),
       ]),
     ]
     if (input.workspaceMemberId) {
       conditions.push(
         eb.and([
           eb("subj.kind", "=", "workspace_member"),
-          eb("subj.workspace_member_id", "=", input.workspaceMemberId),
+          eb("subj.workspaceMemberId", "=", input.workspaceMemberId),
         ])
       )
     }
@@ -519,7 +511,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndCon
       conditions.push(
         eb.and([
           eb("subj.kind", "=", "actor"),
-          eb("subj.actor_id", "=", input.actorId),
+          eb("subj.actorId", "=", input.actorId),
         ])
       )
     }
@@ -527,7 +519,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndCon
       conditions.push(
         eb.and([
           eb("subj.kind", "=", "remote_agent"),
-          eb("subj.remote_agent_id", "=", input.remoteAgentId),
+          eb("subj.remoteAgentId", "=", input.remoteAgentId),
         ])
       )
     }
@@ -535,7 +527,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndCon
       conditions.push(
         eb.and([
           eb("subj.kind", "=", "conversation"),
-          eb("subj.conversation_id", "=", input.conversationId),
+          eb("subj.conversationId", "=", input.conversationId),
         ])
       )
     }
@@ -543,17 +535,17 @@ export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndCon
   })
   query = query.where((eb) => {
     const scopeConds = [
-      eb("binding.scope_subject_id", "is", null),
+      eb("binding.scopeSubjectId", "is", null),
       eb.and([
         eb("scope_subj.kind", "=", "workspace"),
-        eb("scope_subj.workspace_id", "=", input.contextWorkspaceId),
+        eb("scope_subj.workspaceId", "=", input.contextWorkspaceId),
       ]),
     ]
     if (input.conversationId) {
       scopeConds.push(
         eb.and([
           eb("scope_subj.kind", "=", "conversation"),
-          eb("scope_subj.conversation_id", "=", input.conversationId),
+          eb("scope_subj.conversationId", "=", input.conversationId),
         ])
       )
     }
@@ -561,7 +553,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndCon
   })
   const rows = await query
     .orderBy(sql.ref(column))
-    .orderBy("binding.created_at")
+    .orderBy("binding.createdAt")
     .execute()
   return rows.map((row) => normalizeAutomationEventSourceAccessBindingRow(row))
 }
@@ -580,7 +572,7 @@ export async function hasAnyAutomationEventSourceAccessBindingOn(
 ): Promise<boolean> {
   const column = resourceIdColumnForRaw(input.resourceType)
   let builder = defaultDb
-    .selectFrom("resource_access_bindings")
+    .selectFrom("resourceAccessBindings")
     .select(sql`1`.as("one"))
     .where(sql.ref(column), "=", input.resourceId)
   if (input.activeOnly) {
@@ -622,18 +614,18 @@ export async function findActiveAutomationEventSourceAccessBindingIdBySubject(
   const result = await runBuilder<{ id: string }>(
     client,
     defaultDb
-      .selectFrom("resource_access_bindings")
+      .selectFrom("resourceAccessBindings")
       .select("id")
-      .where("workspace_id", "=", input.workspaceId)
+      .where("workspaceId", "=", input.workspaceId)
       .where(sql.ref(column), "=", input.resourceId)
-      .where("subject_id", "=", input.subjectId)
+      .where("subjectId", "=", input.subjectId)
       .where(
         sql`scope_subject_id IS NOT DISTINCT FROM ${
           input.scopeSubjectId ?? null
         }::uuid` as unknown as never
       )
       .where("status", "=", "active")
-      .orderBy("created_at", "desc")
+      .orderBy("createdAt", "desc")
       .limit(1)
   )
   return result.rows[0]?.id ?? null
@@ -651,13 +643,13 @@ export async function updateAutomationEventSourceAccessGrantConversationTypeMask
   }
 ): Promise<void> {
   let query = db
-    .updateTable("resource_access_bindings")
+    .updateTable("resourceAccessBindings")
     .set({
-      conversation_type_mask_override: input.conversationTypeMaskOverride,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
     })
     .where("id", "=", input.bindingId)
   if (input.workspaceId) {
-    query = query.where("workspace_id", "=", input.workspaceId)
+    query = query.where("workspaceId", "=", input.workspaceId)
   }
   await query.execute()
 }
@@ -673,8 +665,8 @@ export async function revokeAutomationEventSourceAccessBindingsByIdsOn(
   await runBuilder(
     client,
     defaultDb
-      .updateTable("resource_access_bindings")
-      .set({ status: "revoked", revoked_at: sql`NOW()` })
+      .updateTable("resourceAccessBindings")
+      .set({ status: "revoked", revokedAt: sql`NOW()` })
       .where("id", "in", bindingIds)
       .where("status", "=", "active")
   )
@@ -698,8 +690,8 @@ export async function revokeAutomationEventSourceAccessBindingsForSourceOn(
   await runBuilder(
     client,
     defaultDb
-      .updateTable("resource_access_bindings")
-      .set({ status: "revoked", revoked_at: sql`NOW()` })
+      .updateTable("resourceAccessBindings")
+      .set({ status: "revoked", revokedAt: sql`NOW()` })
       .where(sql.ref(column), "=", input.resourceId)
       .where("status", "=", "active")
   )
@@ -717,8 +709,8 @@ export async function revokeAutomationEventSourceAccessBindingsForSource(
 ): Promise<void> {
   const column = resourceIdColumnForRaw(input.resourceType)
   await db
-    .updateTable("resource_access_bindings")
-    .set({ status: "revoked", revoked_at: sql`NOW()` })
+    .updateTable("resourceAccessBindings")
+    .set({ status: "revoked", revokedAt: sql`NOW()` })
     .where(sql.ref(column), "=", input.resourceId)
     .where("status", "=", "active")
     .execute()
@@ -743,10 +735,10 @@ export async function getAutomationEventSourceAccessBindingRowById(
     input.bindingId
   )
   if (input.workspaceId) {
-    query = query.where("binding.workspace_id", "=", input.workspaceId)
+    query = query.where("binding.workspaceId", "=", input.workspaceId)
   }
   if (input.resourceType) {
-    query = query.where("binding.resource_type", "=", input.resourceType)
+    query = query.where("binding.resourceType", "=", input.resourceType)
   }
   if (input.resourceType && input.resourceId) {
     const column = resourceIdColumnFor(input.resourceType)
@@ -832,8 +824,12 @@ export async function listAutomationEventSourceIdsByBindingFilter(
     INNER JOIN access_subjects subj ON subj.id = binding.subject_id
     WHERE ${conditions.join(" AND ")}
   `
-  const result = await db.executeQuery<{ resource_id: string }>(
+  // Routed through the Kysely executor (db.executeQuery), so CamelCasePlugin
+  // camelCases the top-level result keys at runtime: the SQL alias
+  // `resource_id` comes back as `resourceId`. Keep the SQL alias snake_case
+  // (physical), but type + read the result key as camelCase.
+  const result = await db.executeQuery<{ resourceId: string }>(
     CompiledQuery.raw(sqlText, values)
   )
-  return result.rows.map((row) => row.resource_id)
+  return result.rows.map((row) => row.resourceId)
 }

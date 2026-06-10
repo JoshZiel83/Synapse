@@ -232,10 +232,10 @@ test(
         actorId,
       })
       await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conversationId,
-          subject_id: actorSubjectId,
+          conversationId: conversationId,
+          subjectId: actorSubjectId,
           state: "active",
         })
         .execute()
@@ -289,10 +289,10 @@ test(
         remoteAgentId,
       })
       await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conversationId,
-          subject_id: remoteAgentSubjectId,
+          conversationId: conversationId,
+          subjectId: remoteAgentSubjectId,
           state: "active",
         })
         .execute()
@@ -346,10 +346,10 @@ test(
         memberId,
       })
       await db
-        .insertInto("conversation_participants")
+        .insertInto("conversationParticipants")
         .values({
-          conversation_id: conversationId,
-          subject_id: memberSubjectId,
+          conversationId: conversationId,
+          subjectId: memberSubjectId,
           state: "active",
         })
         .execute()
@@ -383,7 +383,7 @@ async function insertWorkspace(db: AnyDb, ownerId: string): Promise<string> {
   const row = await db
     .insertInto("workspaces")
     .values({
-      owner_id: ownerId,
+      ownerId: ownerId,
       slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
       name: "test workspace",
     })
@@ -400,7 +400,7 @@ async function insertConversation(
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       title: "test conversation",
     })
     .returning("id")
@@ -411,12 +411,12 @@ async function insertConversation(
 async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
   const actorId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: actorId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "actor",
-      display_name: "test actor",
+      displayName: "test actor",
       status: "active",
     } as any)
     .execute()
@@ -426,7 +426,7 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
       id: actorId,
       role: "assistant",
       title: "test",
-      current_version: 1,
+      currentVersion: 1,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -439,21 +439,21 @@ async function insertRemoteAgent(
 ): Promise<string> {
   const remoteAgentId = crypto.randomUUID()
   await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
       id: remoteAgentId,
-      workspace_id: workspaceId,
+      workspaceId: workspaceId,
       kind: "remote_agent",
-      display_name: "test remote agent",
+      displayName: "test remote agent",
       status: "active",
     } as any)
     .execute()
   const row = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: remoteAgentId,
       title: "test remote agent",
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -466,11 +466,11 @@ async function insertWorkspaceMember(
 ): Promise<string> {
   const userId = await insertUser(db)
   const row = await db
-    .insertInto("workspace_members")
+    .insertInto("workspaceMembers")
     .values({
-      workspace_id: workspaceId,
-      user_id: userId,
-      trust_level: "member",
+      workspaceId: workspaceId,
+      userId: userId,
+      trustLevel: "member",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()

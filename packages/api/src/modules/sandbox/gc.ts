@@ -51,10 +51,12 @@ export async function runContentGc(
   let manifestsUnreadable = 0
 
   // 1. Snapshots: manifest blob + every content sha inside each manifest.
-  const snapshots = await sql<{ manifest_sha256: string }>`
+  // NOTE: CamelCasePlugin camelCases the result keys of raw sql`...`.execute()
+  // queries too, so reads below use camelCase even though the SQL is snake_case.
+  const snapshots = await sql<{ manifestSha256: string }>`
     SELECT DISTINCT manifest_sha256 FROM file_snapshots`.execute(dbh)
   for (const row of snapshots.rows) {
-    const manifestSha = row.manifest_sha256
+    const manifestSha = row.manifestSha256
     if (!manifestSha) continue
     reachable.add(manifestSha)
     try {
@@ -75,22 +77,22 @@ export async function runContentGc(
     "memory_item_parts",
     "context_archive_frame_parts",
   ] as const) {
-    const parts = await sql<{ ref_sha256: string }>`
+    const parts = await sql<{ refSha256: string }>`
       SELECT DISTINCT ref_sha256 FROM ${sql.ref(table)} WHERE ref_sha256 IS NOT NULL`.execute(
       dbh
     )
     for (const p of parts.rows) {
-      if (p.ref_sha256) reachable.add(p.ref_sha256)
+      if (p.refSha256) reachable.add(p.refSha256)
     }
   }
 
   // 3. Entity assets by content.
-  const assets = await sql<{ content_sha256: string }>`
+  const assets = await sql<{ contentSha256: string }>`
     SELECT DISTINCT content_sha256 FROM file_assets WHERE content_sha256 IS NOT NULL`.execute(
     dbh
   )
   for (const a of assets.rows) {
-    if (a.content_sha256) reachable.add(a.content_sha256)
+    if (a.contentSha256) reachable.add(a.contentSha256)
   }
 
   // 4. Pending conflict-sidecar content blobs (round-11 follow-up). These are
@@ -124,17 +126,17 @@ const PENDING_REFRESH_KEY = "_sandboxPendingRefreshConflicts"
  * snapshot/part/asset (round-11 follow-up), so GC must treat them as roots.
  * Tolerant of shape drift: only string contentSha on kind!="symlink" entries.
  */
-async function collectPendingSidecarShas(
-  dbh: Executor
-): Promise<Set<string>> {
+async function collectPendingSidecarShas(dbh: Executor): Promise<Set<string>> {
   const out = new Set<string>()
   // Only sessions that actually carry a pending store (keeps the scan cheap).
-  const rows = await sql<{ collaboration_state: unknown }>`
+  // The SELECTed column surfaces as `collaborationState` (CamelCasePlugin); the
+  // JSONB `?` containment in the WHERE clause uses the physical column name.
+  const rows = await sql<{ collaborationState: unknown }>`
     SELECT collaboration_state FROM sessions
       WHERE collaboration_state ? ${PENDING_COMMIT_KEY}
          OR collaboration_state ? ${PENDING_REFRESH_KEY}`.execute(dbh)
   for (const row of rows.rows) {
-    const state = (row.collaboration_state ?? {}) as Record<string, unknown>
+    const state = (row.collaborationState ?? {}) as Record<string, unknown>
     // Commit store: { subpath: { paths, sidecars: [{contentSha,kind}] } }
     collectFromSidecarMap(
       out,

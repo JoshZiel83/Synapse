@@ -16,19 +16,19 @@ export function auditMiddleware(app: FastifyInstance) {
 
       try {
         await db
-          .insertInto("audit_logs")
+          .insertInto("auditLogs")
           .values({
-            workspace_id: (request.params as any)?.workspaceId || null,
-            user_id: (request as any).user?.userId || null,
+            workspaceId: (request.params as any)?.workspaceId || null,
+            userId: (request as any).user?.userId || null,
             action,
-            resource_type: deriveResourceType(request.url),
-            resource_id: (request.params as any)?.id || null,
+            resourceType: deriveResourceType(request.url),
+            resourceId: (request.params as any)?.id || null,
             details: {
               method: request.method,
               url: request.url,
               statusCode: reply.statusCode,
-            } as TableInsert<"audit_logs">["details"],
-            ip_address: request.ip,
+            } as TableInsert<"auditLogs">["details"],
+            ipAddress: request.ip,
           })
           .execute()
       } catch (err) {

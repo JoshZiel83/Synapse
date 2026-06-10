@@ -16,67 +16,67 @@ export async function listTransportExternalUsers(params: {
   transportAccountId?: string
 }): Promise<TransportExternalUserSummary[]> {
   const activity = db
-    .selectFrom("conversation_participant_addresses as cpa_activity")
+    .selectFrom("conversationParticipantAddresses as cpa_activity")
     .innerJoin(
-      "conversation_participants as cm_activity",
+      "conversationParticipants as cm_activity",
       "cm_activity.id",
-      "cpa_activity.conversation_participant_id"
+      "cpa_activity.conversationParticipantId"
     )
     .innerJoin(
-      "transport_message_links as tml",
-      "tml.conversation_id",
-      "cm_activity.conversation_id"
+      "transportMessageLinks as tml",
+      "tml.conversationId",
+      "cm_activity.conversationId"
     )
-    .select("cpa_activity.transport_address_id")
-    .select(sql<Date | null>`MAX(tml.created_at)`.as("last_seen_at"))
-    .groupBy("cpa_activity.transport_address_id")
+    .select("cpa_activity.transportAddressId")
+    .select(sql<Date | null>`MAX(tml.created_at)`.as("lastSeenAt"))
+    .groupBy("cpa_activity.transportAddressId")
     .as("activity")
 
   let builder = db
-    .selectFrom("transport_addresses as ta")
+    .selectFrom("transportAddresses as ta")
     .innerJoin(
-      "transport_accounts as account",
+      "transportAccounts as account",
       "account.id",
-      "ta.transport_account_id"
+      "ta.transportAccountId"
     )
     .leftJoin(
-      "workspace_members as linked_wm",
+      "workspaceMembers as linked_wm",
       "linked_wm.id",
-      "ta.workspace_member_id"
+      "ta.workspaceMemberId"
     )
-    .leftJoin("users as linked_user", "linked_user.id", "linked_wm.user_id")
+    .leftJoin("users as linked_user", "linked_user.id", "linked_wm.userId")
     .leftJoin(
-      "conversation_participant_addresses as cpa",
-      "cpa.transport_address_id",
+      "conversationParticipantAddresses as cpa",
+      "cpa.transportAddressId",
       "ta.id"
     )
     .leftJoin(
-      "conversation_participants as cm",
+      "conversationParticipants as cm",
       "cm.id",
-      "cpa.conversation_participant_id"
+      "cpa.conversationParticipantId"
     )
-    .leftJoin("conversations as c", "c.id", "cm.conversation_id")
+    .leftJoin("conversations as c", "c.id", "cm.conversationId")
     .leftJoin(
-      "conversation_transport_bindings as ctb",
-      "ctb.conversation_id",
+      "conversationTransportBindings as ctb",
+      "ctb.conversationId",
       "c.id"
     )
-    .leftJoin("transport_endpoints as te", "te.id", "ctb.transport_endpoint_id")
-    .leftJoin(activity, "activity.transport_address_id", "ta.id")
+    .leftJoin("transportEndpoints as te", "te.id", "ctb.transportEndpointId")
+    .leftJoin(activity, "activity.transportAddressId", "ta.id")
     .select([
       "ta.id",
-      "ta.workspace_id",
-      "ta.transport_account_id",
-      "ta.transport_kind",
-      "ta.external_id",
-      "ta.display_name",
+      "ta.workspaceId",
+      "ta.transportAccountId",
+      "ta.transportKind",
+      "ta.externalId",
+      "ta.displayName",
       "ta.metadata",
-      "ta.created_at",
-      "ta.updated_at",
-      "account.display_name as account_display_name",
-      "linked_wm.id as linked_workspace_member_id",
-      "linked_user.name as linked_workspace_member_name",
-      "activity.last_seen_at as last_seen_at",
+      "ta.createdAt",
+      "ta.updatedAt",
+      "account.displayName as accountDisplayName",
+      "linked_wm.id as linkedWorkspaceMemberId",
+      "linked_user.name as linkedWorkspaceMemberName",
+      "activity.lastSeenAt as lastSeenAt",
       sql<any>`COALESCE(
         jsonb_agg(
           DISTINCT jsonb_build_object(
@@ -91,12 +91,12 @@ export async function listTransportExternalUsers(params: {
         '[]'::jsonb
       )`.as("sessions"),
     ])
-    .where("ta.workspace_id", "=", params.workspaceId)
-    .where("ta.address_type", "=", "user")
+    .where("ta.workspaceId", "=", params.workspaceId)
+    .where("ta.addressType", "=", "user")
 
   if (params.transportAccountId) {
     builder = builder.where(
-      "ta.transport_account_id",
+      "ta.transportAccountId",
       "=",
       params.transportAccountId
     )
@@ -105,16 +105,16 @@ export async function listTransportExternalUsers(params: {
   const rows = await builder
     .groupBy([
       "ta.id",
-      "account.display_name",
+      "account.displayName",
       "linked_user.id",
       "linked_user.name",
-      "activity.last_seen_at",
+      "activity.lastSeenAt",
     ])
     .orderBy(
       sql`COALESCE(activity.last_seen_at, ta.updated_at, ta.created_at)`,
       "desc"
     )
-    .orderBy("ta.created_at", "desc")
+    .orderBy("ta.createdAt", "desc")
     .execute()
 
   return rows.map(normalizeTransportExternalUserRow)

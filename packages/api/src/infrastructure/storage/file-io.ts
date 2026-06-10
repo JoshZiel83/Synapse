@@ -74,60 +74,60 @@ async function createStoredFile(
     // Upsert the content_blobs row (sha256 PK). ON CONFLICT DO NOTHING: a
     // dedup hit means the row already exists with identical content.
     await trx
-      .insertInto("content_blobs")
+      .insertInto("contentBlobs")
       .values({
         sha256: blobRef.sha256,
-        size_bytes: String(blobRef.sizeBytes),
+        sizeBytes: String(blobRef.sizeBytes),
         backend: "local_cas",
-        locator_json: toJsonObject({}),
+        locatorJson: toJsonObject({}),
       })
       .onConflict((oc) => oc.column("sha256").doNothing())
       .execute()
 
     const asset = await trx
-      .insertInto("file_assets")
+      .insertInto("fileAssets")
       .values({
-        workspace_id: params.workspaceId,
-        content_sha256: blobRef.sha256,
-        original_name: normalizedOriginalName,
-        mime_type: resolvedMimeType,
-        content_kind: contentKind,
-        size_bytes: String(blobRef.sizeBytes),
-        uploader_user_id: params.uploaderUserId,
-        initiator_actor_id: params.origin.initiatorActorId ?? null,
-        source_family: params.origin.family,
-        source_system: params.origin.system,
-        parent_asset_id: params.origin.parentFileId ?? null,
-        details_json: toJsonObject(normalizeDetails(params.origin.details)),
+        workspaceId: params.workspaceId,
+        contentSha256: blobRef.sha256,
+        originalName: normalizedOriginalName,
+        mimeType: resolvedMimeType,
+        contentKind: contentKind,
+        sizeBytes: String(blobRef.sizeBytes),
+        uploaderUserId: params.uploaderUserId,
+        initiatorActorId: params.origin.initiatorActorId ?? null,
+        sourceFamily: params.origin.family,
+        sourceSystem: params.origin.system,
+        parentAssetId: params.origin.parentFileId ?? null,
+        detailsJson: toJsonObject(normalizeDetails(params.origin.details)),
       })
       .returning([
         "id",
-        "workspace_id",
-        "uploader_user_id",
-        "original_name",
-        "mime_type",
-        "content_kind",
-        "size_bytes",
-        "content_sha256",
-        "created_at",
+        "workspaceId",
+        "uploaderUserId",
+        "originalName",
+        "mimeType",
+        "contentKind",
+        "sizeBytes",
+        "contentSha256",
+        "createdAt",
       ])
       .executeTakeFirstOrThrow()
 
     return {
       id: asset.id,
       assetId: asset.id,
-      workspaceId: asset.workspace_id,
-      uploaderUserId: asset.uploader_user_id,
-      originalName: asset.original_name,
+      workspaceId: asset.workspaceId,
+      uploaderUserId: asset.uploaderUserId,
+      originalName: asset.originalName,
       url: getStableFileUrl(asset.id),
       fullUrl: getStableFullFileUrl(asset.id),
-      mimeType: asset.mime_type,
-      contentKind: asset.content_kind,
-      sizeBytes: Number(asset.size_bytes),
-      sha256: asset.content_sha256,
+      mimeType: asset.mimeType,
+      contentKind: asset.contentKind,
+      sizeBytes: Number(asset.sizeBytes),
+      sha256: asset.contentSha256,
       storageBackend: "local_cas" as FileStorageBackend,
       originSummary: toFileOriginSummary(params.origin),
-      createdAt: serializeInstant(asset.created_at),
+      createdAt: serializeInstant(asset.createdAt),
     } satisfies StoredFileRecord
   })
 

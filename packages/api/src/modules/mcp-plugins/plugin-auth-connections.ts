@@ -65,11 +65,11 @@ const dbRunner: QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
     .executeQuery<T>(CompiledQuery.raw(text, params ?? []))
     .then((r) => ({ rows: r.rows as T[] }))
 
-type PluginAuthSessionRow = TableRow<"plugin_auth_sessions">
+type PluginAuthSessionRow = TableRow<"pluginAuthSessions">
 
-type PluginConnectionRow = TableRow<"plugin_connections"> & {
-  catalog_item_id: string
-  catalog_version_id: string | null
+type PluginConnectionRow = TableRow<"pluginConnections"> & {
+  catalogItemId: string
+  catalogVersionId: string | null
 }
 
 type PluginAuthSpec = {
@@ -80,10 +80,10 @@ type PluginAuthSpec = {
 }
 
 type InstallationConfigRow = {
-  catalog_item_id: string
-  catalog_version_id: string
-  config_data: unknown
-  default_config: unknown
+  catalogItemId: string
+  catalogVersionId: string
+  configData: unknown
+  defaultConfig: unknown
 }
 
 type OAuthTransientPayload = {
@@ -223,7 +223,7 @@ function encryptDeep(value: unknown): unknown {
 function getAuthChallenge(
   row: PluginAuthSessionRow
 ): PluginAuthSession["challenge"] | undefined {
-  const challenge = asObject(row.challenge_payload)
+  const challenge = asObject(row.challengePayload)
   const kind = asString(challenge.kind)
   if (!kind) return undefined
   if (kind !== "redirect" && kind !== "qr_code" && kind !== "none") {
@@ -247,18 +247,18 @@ function getAuthChallenge(
 function mapConnectionRow(row: PluginConnectionRow): PluginAuthConnection {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    packageId: row.catalog_item_id,
-    bindingKey: row.binding_key,
+    workspaceId: row.workspaceId,
+    packageId: row.catalogItemId,
+    bindingKey: row.bindingKey,
     driver: row.driver as PluginAuthConnection["driver"],
-    externalAccountId: row.external_account_id || undefined,
-    displayName: row.display_name || undefined,
-    avatarUrl: row.avatar_url || undefined,
+    externalAccountId: row.externalAccountId || undefined,
+    displayName: row.displayName || undefined,
+    avatarUrl: row.avatarUrl || undefined,
     status: row.status as PluginAuthConnection["status"],
-    expiresAt: serializeOptionalInstant(row.expires_at),
-    publicPayload: asObject(row.public_payload),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
+    expiresAt: serializeOptionalInstant(row.expiresAt),
+    publicPayload: asObject(row.publicPayload),
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
   }
 }
 
@@ -266,27 +266,27 @@ function mapSessionRow(row: PluginAuthSessionRow): PluginAuthSession {
   const metadata = asObject(row.metadata)
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    packageId: row.catalog_item_id,
-    revisionId: row.catalog_version_id || undefined,
-    bindingKey: row.binding_key,
+    workspaceId: row.workspaceId,
+    packageId: row.catalogItemId,
+    revisionId: row.catalogVersionId || undefined,
+    bindingKey: row.bindingKey,
     driver: row.driver as PluginAuthSession["driver"],
-    workspaceMemberId: row.workspace_member_id,
+    workspaceMemberId: row.workspaceMemberId,
     status: row.status as PluginAuthSession["status"],
     phase: (row.phase as PluginAuthSession["phase"] | null) || undefined,
     state: row.state || undefined,
     challenge: getAuthChallenge(row),
-    errorCode: row.error_code || undefined,
-    errorMessage: row.error_message || undefined,
-    resultPreview: asObject(row.result_preview),
+    errorCode: row.errorCode || undefined,
+    errorMessage: row.errorMessage || undefined,
+    resultPreview: asObject(row.resultPreview),
     authConnectionId:
       typeof metadata.consumedConnectionId === "string"
         ? metadata.consumedConnectionId
         : undefined,
     metadata,
-    expiresAt: serializeInstant(row.expires_at),
-    createdAt: serializeInstant(row.created_at),
-    updatedAt: serializeInstant(row.updated_at),
+    expiresAt: serializeInstant(row.expiresAt),
+    createdAt: serializeInstant(row.createdAt),
+    updatedAt: serializeInstant(row.updatedAt),
   }
 }
 
@@ -296,10 +296,10 @@ async function getPluginAuthSpec(
 ): Promise<PluginAuthSpec> {
   const result = await db.executeQuery(
     sql<{
-      catalog_item_id: string
-      catalog_version_id: string | null
-      default_config: unknown
-      auth_bindings: unknown
+      catalogItemId: string
+      catalogVersionId: string | null
+      defaultConfig: unknown
+      authBindings: unknown
     }>`SELECT
         item.id AS catalog_item_id,
         version.id AS catalog_version_id,
@@ -321,11 +321,11 @@ async function getPluginAuthSpec(
 
   const row = result.rows[0]!
   return {
-    catalogItemId: row.catalog_item_id,
-    catalogVersionId: row.catalog_version_id,
-    defaultConfig: asObject(row.default_config),
-    authBindings: Array.isArray(row.auth_bindings)
-      ? (row.auth_bindings as PluginAuthBindingDefinition[])
+    catalogItemId: row.catalogItemId,
+    catalogVersionId: row.catalogVersionId,
+    defaultConfig: asObject(row.defaultConfig),
+    authBindings: Array.isArray(row.authBindings)
+      ? (row.authBindings as PluginAuthBindingDefinition[])
       : [],
   }
 }
@@ -347,11 +347,11 @@ async function getSessionRow(
   workspaceMemberId: string
 ) {
   const row = await db
-    .selectFrom("plugin_auth_sessions")
+    .selectFrom("pluginAuthSessions")
     .selectAll()
     .where("id", "=", sessionId)
-    .where("workspace_id", "=", workspaceId)
-    .where("workspace_member_id", "=", workspaceMemberId)
+    .where("workspaceId", "=", workspaceId)
+    .where("workspaceMemberId", "=", workspaceMemberId)
     .limit(1)
     .executeTakeFirst()
   if (!row) {
@@ -362,7 +362,7 @@ async function getSessionRow(
 
 async function getSessionRowByState(state: string) {
   const row = await db
-    .selectFrom("plugin_auth_sessions")
+    .selectFrom("pluginAuthSessions")
     .selectAll()
     .where("state", "=", state)
     .limit(1)
@@ -379,23 +379,23 @@ async function getConnectionRow(connectionId: string, workspaceId?: string) {
     // it and its parent installation are live (deleted_at IS NULL AND status ∈
     // liveValues — excludes archived install / expired-revoked connection). Base
     // tables (not _live views) so NOT NULL column types survive.
-    .selectFrom("plugin_connections as connection")
+    .selectFrom("pluginConnections as connection")
     .innerJoin(
-      "plugin_installations as installation",
+      "pluginInstallations as installation",
       "installation.id",
-      "connection.installation_id"
+      "connection.installationId"
     )
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
     .selectAll("connection")
-    .select(["installation.catalog_item_id", "installation.catalog_version_id"])
+    .select(["installation.catalogItemId", "installation.catalogVersionId"])
     .where("connection.id", "=", connectionId)
-    .where("connection.deleted_at", "is", null)
+    .where("connection.deletedAt", "is", null)
     .where("connection.status", "in", PLUGIN_CONNECTION_LIVE_STATUSES)
-    .where("app.deleted_at", "is", null)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
 
   if (workspaceId) {
-    builder = builder.where("connection.workspace_id", "=", workspaceId)
+    builder = builder.where("connection.workspaceId", "=", workspaceId)
   }
 
   const row = await builder.limit(1).executeTakeFirst()
@@ -411,22 +411,22 @@ async function getInstallationConfigRow(
 ): Promise<InstallationConfigRow> {
   const row = await db
     // Live predicate (review F16): exclude tombstoned + non-live-status installs.
-    .selectFrom("plugin_installations as installation")
-    .innerJoin("workspace_apps as app", "app.id", "installation.id")
+    .selectFrom("pluginInstallations as installation")
+    .innerJoin("workspaceApps as app", "app.id", "installation.id")
     .innerJoin(
-      "plugin_package_version_specs as spec",
-      "spec.catalog_version_id",
-      "installation.catalog_version_id"
+      "pluginPackageVersionSpecs as spec",
+      "spec.catalogVersionId",
+      "installation.catalogVersionId"
     )
     .select([
-      "installation.catalog_item_id",
-      "installation.catalog_version_id",
-      "installation.config_data",
-      "spec.default_config",
+      "installation.catalogItemId",
+      "installation.catalogVersionId",
+      "installation.configData",
+      "spec.defaultConfig",
     ])
     .where("installation.id", "=", installationId)
-    .where("app.workspace_id", "=", workspaceId)
-    .where("app.deleted_at", "is", null)
+    .where("app.workspaceId", "=", workspaceId)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "in", PLUGIN_INSTALLATION_LIVE_STATUSES)
     .limit(1)
     .executeTakeFirst()
@@ -465,7 +465,7 @@ async function buildDraftConfig(input: {
     input.installationId,
     input.workspaceId
   )
-  if (row.catalog_item_id !== input.pluginId) {
+  if (row.catalogItemId !== input.pluginId) {
     throw new PluginAuthError(
       400,
       "Installation does not belong to this plugin"
@@ -474,7 +474,7 @@ async function buildDraftConfig(input: {
 
   return mergeConfigLayers(
     input.defaultConfig,
-    decryptSensitiveFields(asObject(row.config_data)),
+    decryptSensitiveFields(asObject(row.configData)),
     input.draftConfig || {}
   )
 }
@@ -752,12 +752,12 @@ async function buildFeishuAppScopeInspection(input: {
 
 async function expirePluginAuthSession(sessionId: string) {
   const expired = await db
-    .updateTable("plugin_auth_sessions")
+    .updateTable("pluginAuthSessions")
     .set({
       status: "expired",
       phase: null,
-      error_code: "AUTH_SESSION_EXPIRED",
-      error_message: "Auth session expired",
+      errorCode: "AUTH_SESSION_EXPIRED",
+      errorMessage: "Auth session expired",
     })
     .where("id", "=", sessionId)
     .returningAll()
@@ -770,13 +770,11 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
     return row
   }
 
-  if (row.expires_at.getTime() <= Date.now()) {
+  if (row.expiresAt.getTime() <= Date.now()) {
     return expirePluginAuthSession(row.id)
   }
 
-  const transientPayload = asObject(
-    decryptDeep(asObject(row.transient_payload))
-  )
+  const transientPayload = asObject(decryptDeep(asObject(row.transientPayload)))
   const mijiaPayload = asObject(transientPayload.mijia)
 
   try {
@@ -792,7 +790,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
         }
 
         const updated = await db
-          .updateTable("plugin_auth_sessions")
+          .updateTable("pluginAuthSessions")
           .set({
             phase: progress.phase,
           })
@@ -804,17 +802,17 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
       case "completed": {
         const resultPayload = buildMijiaResultPayload(progress.authState)
         const updated = await db
-          .updateTable("plugin_auth_sessions")
+          .updateTable("pluginAuthSessions")
           .set({
             status: "completed",
             phase: null,
-            result_preview: buildMijiaResultPreview(
+            resultPreview: buildMijiaResultPreview(
               progress.authState
-            ) as TableInsert<"plugin_auth_sessions">["result_preview"],
-            result_payload:
-              resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
-            error_code: null,
-            error_message: null,
+            ) as TableInsert<"pluginAuthSessions">["resultPreview"],
+            resultPayload:
+              resultPayload as TableInsert<"pluginAuthSessions">["resultPayload"],
+            errorCode: null,
+            errorMessage: null,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -823,12 +821,12 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
       }
       case "expired": {
         const expired = await db
-          .updateTable("plugin_auth_sessions")
+          .updateTable("pluginAuthSessions")
           .set({
             status: "expired",
             phase: null,
-            error_code: progress.errorCode,
-            error_message: progress.errorMessage,
+            errorCode: progress.errorCode,
+            errorMessage: progress.errorMessage,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -837,12 +835,12 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
       }
       case "failed": {
         const failed = await db
-          .updateTable("plugin_auth_sessions")
+          .updateTable("pluginAuthSessions")
           .set({
             status: "failed",
             phase: null,
-            error_code: progress.errorCode,
-            error_message: progress.errorMessage,
+            errorCode: progress.errorCode,
+            errorMessage: progress.errorMessage,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -858,12 +856,12 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
         ? error.message
         : "Unable to complete Mijia authorization."
     const failed = await db
-      .updateTable("plugin_auth_sessions")
+      .updateTable("pluginAuthSessions")
       .set({
         status: "failed",
         phase: null,
-        error_code: "MIJIA_AUTH_ERROR",
-        error_message: message,
+        errorCode: "MIJIA_AUTH_ERROR",
+        errorMessage: message,
       })
       .where("id", "=", row.id)
       .returningAll()
@@ -877,13 +875,11 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
     return row
   }
 
-  if (row.expires_at.getTime() <= Date.now()) {
+  if (row.expiresAt.getTime() <= Date.now()) {
     return expirePluginAuthSession(row.id)
   }
 
-  const transientPayload = asObject(
-    decryptDeep(asObject(row.transient_payload))
-  )
+  const transientPayload = asObject(decryptDeep(asObject(row.transientPayload)))
 
   try {
     const progress = await progressFeishuCliSetup(transientPayload as any)
@@ -892,19 +888,19 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         const nextTransient =
           progress.transientPayload || (transientPayload as any)
         const nextChallenge =
-          progress.challengePayload || asObject(row.challenge_payload)
-        const nextExpiresAt = progress.expiresAt || row.expires_at
+          progress.challengePayload || asObject(row.challengePayload)
+        const nextExpiresAt = progress.expiresAt || row.expiresAt
 
         const updated = await db
-          .updateTable("plugin_auth_sessions")
+          .updateTable("pluginAuthSessions")
           .set({
             phase: "pending_scan",
-            challenge_payload:
-              nextChallenge as TableInsert<"plugin_auth_sessions">["challenge_payload"],
-            transient_payload: encryptDeep(
+            challengePayload:
+              nextChallenge as TableInsert<"pluginAuthSessions">["challengePayload"],
+            transientPayload: encryptDeep(
               nextTransient
-            ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
-            expires_at:
+            ) as TableInsert<"pluginAuthSessions">["transientPayload"],
+            expiresAt:
               typeof nextExpiresAt === "string"
                 ? parseInstantString(nextExpiresAt)
                 : nextExpiresAt,
@@ -936,16 +932,16 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         })
 
         const updated = await db
-          .updateTable("plugin_auth_sessions")
+          .updateTable("pluginAuthSessions")
           .set({
             status: "completed",
             phase: null,
-            result_preview:
-              resultPreview as TableInsert<"plugin_auth_sessions">["result_preview"],
-            result_payload:
-              resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
-            error_code: null,
-            error_message: null,
+            resultPreview:
+              resultPreview as TableInsert<"pluginAuthSessions">["resultPreview"],
+            resultPayload:
+              resultPayload as TableInsert<"pluginAuthSessions">["resultPayload"],
+            errorCode: null,
+            errorMessage: null,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -954,12 +950,12 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
       }
       case "expired": {
         const expired = await db
-          .updateTable("plugin_auth_sessions")
+          .updateTable("pluginAuthSessions")
           .set({
             status: "expired",
             phase: null,
-            error_code: progress.errorCode,
-            error_message: progress.errorMessage,
+            errorCode: progress.errorCode,
+            errorMessage: progress.errorMessage,
           })
           .where("id", "=", row.id)
           .returningAll()
@@ -971,18 +967,18 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           transientPayload,
         })
         const failed = await db
-          .updateTable("plugin_auth_sessions")
+          .updateTable("pluginAuthSessions")
           .set({
             status: "failed",
             phase: null,
-            result_preview: {
+            resultPreview: {
               features: normalizeFeishuFeatureKeys(
                 transientPayload.requestedFeatures
               ),
               appScopeStatus,
-            } as TableInsert<"plugin_auth_sessions">["result_preview"],
-            error_code: progress.errorCode,
-            error_message: buildFeishuScopeInspectionErrorMessage({
+            } as TableInsert<"pluginAuthSessions">["resultPreview"],
+            errorCode: progress.errorCode,
+            errorMessage: buildFeishuScopeInspectionErrorMessage({
               baseMessage: progress.errorMessage,
               inspection: appScopeStatus,
             }),
@@ -1001,12 +997,12 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
         ? error.message
         : "Unable to complete Feishu authorization."
     const failed = await db
-      .updateTable("plugin_auth_sessions")
+      .updateTable("pluginAuthSessions")
       .set({
         status: "failed",
         phase: null,
-        error_code: "FEISHU_AUTH_ERROR",
-        error_message: message,
+        errorCode: "FEISHU_AUTH_ERROR",
+        errorMessage: message,
       })
       .where("id", "=", row.id)
       .returningAll()
@@ -1079,7 +1075,7 @@ async function refreshOAuthConnection(
     )
   }
 
-  const storedSecretPayload = asObject(row.secret_payload)
+  const storedSecretPayload = asObject(row.secretPayload)
   const secretPayload = asObject(decryptDeep(storedSecretPayload))
   const refreshToken = asString(secretPayload.refreshToken)
   if (!refreshToken) {
@@ -1149,10 +1145,10 @@ async function refreshOAuthConnection(
   const expiresAt =
     typeof tokenResponse.expires_in === "number"
       ? serializeInstant(new Date(Date.now() + tokenResponse.expires_in * 1000))
-      : row.expires_at
+      : row.expiresAt
 
   const publicPayload = {
-    ...asObject(row.public_payload),
+    ...asObject(row.publicPayload),
     ...(typeof tokenResponse.scope === "string"
       ? {
           scopes: tokenResponse.scope.split(/\s+/).filter(Boolean),
@@ -1175,14 +1171,14 @@ async function refreshOAuthConnection(
   }
 
   await db
-    .updateTable("plugin_connections")
+    .updateTable("pluginConnections")
     .set({
-      public_payload:
-        publicPayload as TableInsert<"plugin_connections">["public_payload"],
-      secret_payload:
-        nextSecretPayload as TableInsert<"plugin_connections">["secret_payload"],
+      publicPayload:
+        publicPayload as TableInsert<"pluginConnections">["publicPayload"],
+      secretPayload:
+        nextSecretPayload as TableInsert<"pluginConnections">["secretPayload"],
       status: "active",
-      expires_at:
+      expiresAt:
         typeof expiresAt === "string"
           ? parseInstantString(expiresAt)
           : expiresAt,
@@ -1194,9 +1190,9 @@ async function refreshOAuthConnection(
 }
 
 async function refreshFeishuConnection(row: PluginConnectionRow) {
-  const storedSecretPayload = asObject(row.secret_payload)
+  const storedSecretPayload = asObject(row.secretPayload)
   const secretPayload = asObject(decryptDeep(storedSecretPayload))
-  const publicPayload = asObject(row.public_payload)
+  const publicPayload = asObject(row.publicPayload)
   const brand = asString(publicPayload.brand) === "lark" ? "lark" : "feishu"
   const appId = asString(secretPayload.appId)
   const appSecret = asString(secretPayload.appSecret)
@@ -1235,14 +1231,14 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
   }
 
   await db
-    .updateTable("plugin_connections")
+    .updateTable("pluginConnections")
     .set({
-      public_payload:
-        nextPublicPayload as TableInsert<"plugin_connections">["public_payload"],
-      secret_payload:
-        nextSecretPayload as TableInsert<"plugin_connections">["secret_payload"],
+      publicPayload:
+        nextPublicPayload as TableInsert<"pluginConnections">["publicPayload"],
+      secretPayload:
+        nextSecretPayload as TableInsert<"pluginConnections">["secretPayload"],
       status: "active",
-      expires_at: expiresAt,
+      expiresAt: expiresAt,
     })
     .where("id", "=", row.id)
     .execute()
@@ -1256,7 +1252,7 @@ async function refreshFeishuConnection(row: PluginConnectionRow) {
 // connection store) before the credentials are forwarded. The decrypted
 // secret_payload is the internal MijiaAuthState.
 async function refreshMijiaConnection(row: PluginConnectionRow) {
-  const secretPayload = asObject(decryptDeep(asObject(row.secret_payload)))
+  const secretPayload = asObject(decryptDeep(asObject(row.secretPayload)))
   const nextState = await refreshMijiaSessionTokens(
     secretPayload as unknown as MijiaAuthState
   )
@@ -1267,13 +1263,13 @@ async function refreshMijiaConnection(row: PluginConnectionRow) {
 async function ensureFreshPluginConnection(row: PluginConnectionRow) {
   if (
     row.status !== "active" ||
-    !row.expires_at ||
-    row.expires_at.getTime() > Date.now() + 60_000
+    !row.expiresAt ||
+    row.expiresAt.getTime() > Date.now() + 60_000
   ) {
     return row
   }
 
-  if (!row.catalog_item_id) {
+  if (!row.catalogItemId) {
     throw new PluginAuthError(
       400,
       "Auth connection is missing its plugin binding"
@@ -1281,18 +1277,18 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
   }
 
   const installationRow = await getInstallationConfigRow(
-    row.installation_id,
-    row.workspace_id
+    row.installationId,
+    row.workspaceId
   )
   const configData = mergeConfigLayers(
-    asObject(installationRow.default_config),
-    decryptSensitiveFields(asObject(installationRow.config_data))
+    asObject(installationRow.defaultConfig),
+    decryptSensitiveFields(asObject(installationRow.configData))
   )
   const spec = await getPluginAuthSpec(
-    row.catalog_item_id,
-    row.catalog_version_id || installationRow.catalog_version_id
+    row.catalogItemId,
+    row.catalogVersionId || installationRow.catalogVersionId
   )
-  const binding = getBinding(spec.authBindings, row.binding_key)
+  const binding = getBinding(spec.authBindings, row.bindingKey)
 
   try {
     switch (row.driver) {
@@ -1310,7 +1306,7 @@ async function ensureFreshPluginConnection(row: PluginConnectionRow) {
     }
   } catch {
     await db
-      .updateTable("plugin_connections")
+      .updateTable("pluginConnections")
       .set({
         status: "expired",
       })
@@ -1338,13 +1334,13 @@ export async function startPluginAuthSession(input: {
       input.installationId,
       input.workspaceId
     )
-    if (installationRow.catalog_item_id !== input.pluginId) {
+    if (installationRow.catalogItemId !== input.pluginId) {
       throw new PluginAuthError(
         400,
         "Installation does not belong to this plugin"
       )
     }
-    catalogVersionId = installationRow.catalog_version_id
+    catalogVersionId = installationRow.catalogVersionId
   }
 
   const spec = await getPluginAuthSpec(input.pluginId, catalogVersionId || null)
@@ -1427,28 +1423,28 @@ export async function startPluginAuthSession(input: {
       }
 
       const inserted = await db
-        .insertInto("plugin_auth_sessions")
+        .insertInto("pluginAuthSessions")
         .values({
-          workspace_id: input.workspaceId,
-          catalog_item_id: spec.catalogItemId,
-          catalog_version_id: spec.catalogVersionId,
-          installation_id: input.installationId || null,
-          binding_key: binding.key,
+          workspaceId: input.workspaceId,
+          catalogItemId: spec.catalogItemId,
+          catalogVersionId: spec.catalogVersionId,
+          installationId: input.installationId || null,
+          bindingKey: binding.key,
           driver: binding.driver,
-          workspace_member_id: input.workspaceMemberId,
+          workspaceMemberId: input.workspaceMemberId,
           status: "pending",
           phase: "awaiting_callback",
           state,
-          challenge_payload: {
+          challengePayload: {
             kind: "redirect",
             url: authorizeUrl.toString(),
             openMode: "popup",
-          } as TableInsert<"plugin_auth_sessions">["challenge_payload"],
-          transient_payload:
-            transientPayload as TableInsert<"plugin_auth_sessions">["transient_payload"],
+          } as TableInsert<"pluginAuthSessions">["challengePayload"],
+          transientPayload:
+            transientPayload as TableInsert<"pluginAuthSessions">["transientPayload"],
           metadata: (input.metadata ||
-            {}) as TableInsert<"plugin_auth_sessions">["metadata"],
-          expires_at: sql`NOW() + INTERVAL '1 hour'`,
+            {}) as TableInsert<"pluginAuthSessions">["metadata"],
+          expiresAt: sql`NOW() + INTERVAL '1 hour'`,
         })
         .returningAll()
         .executeTakeFirstOrThrow()
@@ -1462,26 +1458,26 @@ export async function startPluginAuthSession(input: {
         locale: draftConfig.locale,
       })
       const inserted = await db
-        .insertInto("plugin_auth_sessions")
+        .insertInto("pluginAuthSessions")
         .values({
-          workspace_id: input.workspaceId,
-          catalog_item_id: spec.catalogItemId,
-          catalog_version_id: spec.catalogVersionId,
-          installation_id: input.installationId || null,
-          binding_key: binding.key,
+          workspaceId: input.workspaceId,
+          catalogItemId: spec.catalogItemId,
+          catalogVersionId: spec.catalogVersionId,
+          installationId: input.installationId || null,
+          bindingKey: binding.key,
           driver: binding.driver,
-          workspace_member_id: input.workspaceMemberId,
+          workspaceMemberId: input.workspaceMemberId,
           status: "pending",
           phase: "pending_scan",
           state: null,
-          challenge_payload:
-            result.challengePayload as TableInsert<"plugin_auth_sessions">["challenge_payload"],
-          transient_payload: encryptDeep(
+          challengePayload:
+            result.challengePayload as TableInsert<"pluginAuthSessions">["challengePayload"],
+          transientPayload: encryptDeep(
             result.transientPayload
-          ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
+          ) as TableInsert<"pluginAuthSessions">["transientPayload"],
           metadata: (input.metadata ||
-            {}) as TableInsert<"plugin_auth_sessions">["metadata"],
-          expires_at: parseInstantString(result.expiresAt),
+            {}) as TableInsert<"pluginAuthSessions">["metadata"],
+          expiresAt: parseInstantString(result.expiresAt),
         })
         .returningAll()
         .executeTakeFirstOrThrow()
@@ -1508,9 +1504,9 @@ export async function startPluginAuthSession(input: {
           existingConnectionRef.connectionId,
           input.workspaceId
         )
-        const publicPayload = asObject(connectionRow.public_payload)
+        const publicPayload = asObject(connectionRow.publicPayload)
         const secretPayload = asObject(
-          decryptDeep(asObject(connectionRow.secret_payload))
+          decryptDeep(asObject(connectionRow.secretPayload))
         )
         const appId = asString(secretPayload.appId)
         const appSecret = asString(secretPayload.appSecret)
@@ -1528,26 +1524,26 @@ export async function startPluginAuthSession(input: {
         existingAppCredentials
       )
       const inserted = await db
-        .insertInto("plugin_auth_sessions")
+        .insertInto("pluginAuthSessions")
         .values({
-          workspace_id: input.workspaceId,
-          catalog_item_id: spec.catalogItemId,
-          catalog_version_id: spec.catalogVersionId,
-          installation_id: input.installationId || null,
-          binding_key: binding.key,
+          workspaceId: input.workspaceId,
+          catalogItemId: spec.catalogItemId,
+          catalogVersionId: spec.catalogVersionId,
+          installationId: input.installationId || null,
+          bindingKey: binding.key,
           driver: binding.driver,
-          workspace_member_id: input.workspaceMemberId,
+          workspaceMemberId: input.workspaceMemberId,
           status: "pending",
           phase: "pending_scan",
           state: null,
-          challenge_payload:
-            result.challengePayload as TableInsert<"plugin_auth_sessions">["challenge_payload"],
-          transient_payload: encryptDeep(
+          challengePayload:
+            result.challengePayload as TableInsert<"pluginAuthSessions">["challengePayload"],
+          transientPayload: encryptDeep(
             result.transientPayload
-          ) as TableInsert<"plugin_auth_sessions">["transient_payload"],
+          ) as TableInsert<"pluginAuthSessions">["transientPayload"],
           metadata: (input.metadata ||
-            {}) as TableInsert<"plugin_auth_sessions">["metadata"],
-          expires_at: parseInstantString(result.expiresAt),
+            {}) as TableInsert<"pluginAuthSessions">["metadata"],
+          expiresAt: parseInstantString(result.expiresAt),
         })
         .returningAll()
         .executeTakeFirstOrThrow()
@@ -1576,7 +1572,7 @@ export async function getPluginAuthSession(
     row = await progressFeishuPluginAuthSession(row)
   } else if (
     row.status === "pending" &&
-    row.expires_at.getTime() <= Date.now()
+    row.expiresAt.getTime() <= Date.now()
   ) {
     row = await expirePluginAuthSession(row.id)
   }
@@ -1600,10 +1596,8 @@ export async function inspectPluginAuthSession(input: {
     )
   }
 
-  const transientPayload = asObject(
-    decryptDeep(asObject(row.transient_payload))
-  )
-  const resultPayload = asObject(row.result_payload)
+  const transientPayload = asObject(decryptDeep(asObject(row.transientPayload)))
+  const resultPayload = asObject(row.resultPayload)
   const inspection = await buildFeishuAppScopeInspection({
     transientPayload,
     resultPayload,
@@ -1615,7 +1609,7 @@ export async function inspectPluginAuthSession(input: {
     )
   }
 
-  const previousPreview = asObject(row.result_preview)
+  const previousPreview = asObject(row.resultPreview)
   const nextPreview = {
     ...previousPreview,
     features:
@@ -1626,10 +1620,10 @@ export async function inspectPluginAuthSession(input: {
     appScopeStatus: inspection,
   }
   const updated = await db
-    .updateTable("plugin_auth_sessions")
+    .updateTable("pluginAuthSessions")
     .set({
-      result_preview:
-        nextPreview as TableInsert<"plugin_auth_sessions">["result_preview"],
+      resultPreview:
+        nextPreview as TableInsert<"pluginAuthSessions">["resultPreview"],
     })
     .where("id", "=", row.id)
     .returningAll()
@@ -1652,9 +1646,9 @@ export async function handlePluginAuthCallback(input: {
 
   const session = await getSessionRowByState(input.state)
 
-  if (session.expires_at.getTime() <= Date.now()) {
+  if (session.expiresAt.getTime() <= Date.now()) {
     await db
-      .updateTable("plugin_auth_sessions")
+      .updateTable("pluginAuthSessions")
       .set({
         status: "expired",
       })
@@ -1665,12 +1659,12 @@ export async function handlePluginAuthCallback(input: {
 
   if (input.error) {
     const failed = await db
-      .updateTable("plugin_auth_sessions")
+      .updateTable("pluginAuthSessions")
       .set({
         status: "failed",
         phase: null,
-        error_code: input.error,
-        error_message: input.errorDescription || input.error,
+        errorCode: input.error,
+        errorMessage: input.errorDescription || input.error,
       })
       .where("id", "=", session.id)
       .returningAll()
@@ -1685,7 +1679,7 @@ export async function handlePluginAuthCallback(input: {
       }
 
       const transientPayload = asObject(
-        decryptDeep(asObject(session.transient_payload))
+        decryptDeep(asObject(session.transientPayload))
       )
       const oauth = asObject(transientPayload.oauth) as OAuthTransientPayload
       if (
@@ -1775,16 +1769,16 @@ export async function handlePluginAuthCallback(input: {
       }
 
       const updated = await db
-        .updateTable("plugin_auth_sessions")
+        .updateTable("pluginAuthSessions")
         .set({
           status: "completed",
           phase: null,
-          result_preview:
-            resultPreview as TableInsert<"plugin_auth_sessions">["result_preview"],
-          result_payload:
-            resultPayload as TableInsert<"plugin_auth_sessions">["result_payload"],
-          error_code: null,
-          error_message: null,
+          resultPreview:
+            resultPreview as TableInsert<"pluginAuthSessions">["resultPreview"],
+          resultPayload:
+            resultPayload as TableInsert<"pluginAuthSessions">["resultPayload"],
+          errorCode: null,
+          errorMessage: null,
         })
         .where("id", "=", session.id)
         .returningAll()
@@ -1844,7 +1838,7 @@ export async function attachAuthConnectionsToConfig(input: {
     }
 
     const metadata = asObject(session.metadata)
-    const bindingKey = session.binding_key
+    const bindingKey = session.bindingKey
     if (field.authBindingKey && bindingKey !== field.authBindingKey) {
       throw new PluginAuthError(
         400,
@@ -1862,7 +1856,7 @@ export async function attachAuthConnectionsToConfig(input: {
         input.workspaceId
       )
     } else {
-      const normalizedPayload = asObject(session.result_payload)
+      const normalizedPayload = asObject(session.resultPayload)
       const publicPayload = asObject(normalizedPayload.publicPayload)
       const secretPayload = asObject(normalizedPayload.secretPayload)
       if (Object.keys(secretPayload).length === 0) {
@@ -2010,7 +2004,7 @@ export async function resolveAuthConnectionRefs(
     const row = await ensureFreshPluginConnection(
       await getConnectionRow(ref.connectionId)
     )
-    let secretPayload = asObject(decryptDeep(asObject(row.secret_payload)))
+    let secretPayload = asObject(decryptDeep(asObject(row.secretPayload)))
     if (row.status !== "active") {
       // Fail-closed: never forward a non-active connection's secrets. Clear the
       // whole payload (not just OAuth's accessToken) so drivers like Mijia,
@@ -2022,14 +2016,14 @@ export async function resolveAuthConnectionRefs(
     resolved[key] = {
       type: "auth_connection",
       connectionId: row.id,
-      bindingKey: row.binding_key,
+      bindingKey: row.bindingKey,
       driver: row.driver,
-      externalAccountId: row.external_account_id || undefined,
-      displayName: row.display_name || undefined,
-      avatarUrl: row.avatar_url || undefined,
+      externalAccountId: row.externalAccountId || undefined,
+      displayName: row.displayName || undefined,
+      avatarUrl: row.avatarUrl || undefined,
       status: row.status,
-      expiresAt: row.expires_at || undefined,
-      publicPayload: asObject(row.public_payload),
+      expiresAt: row.expiresAt || undefined,
+      publicPayload: asObject(row.publicPayload),
       secretPayload,
     }
   }

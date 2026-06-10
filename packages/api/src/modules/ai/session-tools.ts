@@ -183,14 +183,14 @@ function getToolContextConversationParticipants(ctx: ToolResolveContext) {
 function getThreadConversationId(
   session:
     | {
-        conversation_id?: string
-        conversation_kind?: string
+        conversationId?: string
+        conversationKind?: string
       }
     | null
     | undefined
 ) {
-  return isThreadConversationKind(session?.conversation_kind)
-    ? session?.conversation_id || null
+  return isThreadConversationKind(session?.conversationKind)
+    ? session?.conversationId || null
     : null
 }
 
@@ -237,11 +237,11 @@ async function listCurrentSessionAutomationRules(params: {
     throwToolError("Session not found")
   }
   const participant = await requireCurrentAutomationParticipant({
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
     actorId: params.actorId,
   })
   const rules = await listAutomationRules(params.workspaceId, {
-    conversationId: session.conversation_id,
+    conversationId: session.conversationId,
   })
   return rules.filter((rule) => rule.createdByParticipantId === participant.id)
 }
@@ -392,9 +392,9 @@ function isGroupVisibleDoc(doc: ActorDoc): boolean {
 function summarizeInviteableActor(row: {
   title?: string | null
   role?: string | null
-  actor_docs?: unknown
+  actorDocs?: unknown
 }): string | undefined {
-  const docs = parseActorDocs(row.actor_docs).filter(isGroupVisibleDoc)
+  const docs = parseActorDocs(row.actorDocs).filter(isGroupVisibleDoc)
   const summary = summarizeActorForRole(docs, row.title || row.role || "Actor")
     .replace(/\s+/g, " ")
     .trim()
@@ -962,15 +962,15 @@ async function listInviteableActors(params: {
 }): Promise<InviteableActor[]> {
   const result = await db
     .selectFrom("actors as a")
-    .innerJoin("workspace_apps as app", "app.id", "a.id")
-    .leftJoin("actor_versions as current_version", (join) =>
+    .innerJoin("workspaceApps as app", "app.id", "a.id")
+    .leftJoin("actorVersions as current_version", (join) =>
       join
-        .onRef("current_version.actor_id", "=", "a.id")
-        .onRef("current_version.version", "=", "a.current_version")
+        .onRef("current_version.actorId", "=", "a.id")
+        .onRef("current_version.version", "=", "a.currentVersion")
     )
     .select([
       "a.id",
-      "app.display_name",
+      "app.displayName",
       "a.title",
       "a.role",
       sql`COALESCE(
@@ -989,10 +989,10 @@ async function listInviteableActors(params: {
           WHERE avd.actor_version_id = current_version.id
         ),
         '[]'::jsonb
-      )`.as("actor_docs"),
+      )`.as("actorDocs"),
     ])
-    .where("app.workspace_id", "=", params.workspaceId)
-    .where("app.deleted_at", "is", null)
+    .where("app.workspaceId", "=", params.workspaceId)
+    .where("app.deletedAt", "is", null)
     .where("app.status", "=", "active")
     .where("a.id", "<>", params.actorId)
     .where(
@@ -1005,13 +1005,13 @@ async function listInviteableActors(params: {
         AND cp.state = 'active'
     )`
     )
-    .orderBy("app.display_name", "asc")
+    .orderBy("app.displayName", "asc")
     .orderBy("a.id", "asc")
     .execute()
 
   return result.map((row) => ({
     id: row.id as string,
-    displayName: row.display_name as string,
+    displayName: row.displayName as string,
     title: (row.title as string | null) || undefined,
     role: (row.role as string | null) || undefined,
     summary: summarizeInviteableActor(row),
@@ -1166,7 +1166,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
-        conversationId: session.conversation_id,
+        conversationId: session.conversationId,
         actorId: context.actorId,
       })
 
@@ -1186,8 +1186,8 @@ export function registerCallableToolPlugins(): void {
           workspaceId: context.workspaceId,
           actorId: context.actorId,
           sessionId: context.sessionId,
-          conversationId: session.conversation_id,
-          conversationKind: session.conversation_kind,
+          conversationId: session.conversationId,
+          conversationKind: session.conversationKind,
           isImConversation: session.isImConversation,
           skillInstanceId,
           assetPath: path || undefined,
@@ -1379,7 +1379,7 @@ export function registerCallableToolPlugins(): void {
       })
 
       await sendConversationMessageFromParticipant({
-        workspaceId: session.workspace_id,
+        workspaceId: session.workspaceId,
         conversationId,
         senderParticipantId: senderParticipant.id,
         sessionId: context.sessionId,
@@ -1610,7 +1610,7 @@ export function registerCallableToolPlugins(): void {
           typeof (input as any).targetParticipantId === "string"
             ? String((input as any).targetParticipantId)
             : undefined,
-        conversationKind: session.conversation_kind,
+        conversationKind: session.conversationKind,
         candidates,
       })
       if (!resolution.candidate) {
@@ -1731,7 +1731,7 @@ export function registerCallableToolPlugins(): void {
           "Current session is not attached to a thread conversation"
         )
       }
-      assertPlanModeConversationKind(session.conversation_kind)
+      assertPlanModeConversationKind(session.conversationKind)
       if (session.collaborationMode !== "default") {
         throwToolError(
           "enter_plan_mode is only available when the session is in default mode."
@@ -1844,7 +1844,7 @@ export function registerCallableToolPlugins(): void {
       if (!session) {
         throwToolError("Session not found")
       }
-      assertPlanModeConversationKind(session.conversation_kind)
+      assertPlanModeConversationKind(session.conversationKind)
       if (session.collaborationMode !== "plan_drafting") {
         throwToolError("update_plan is only available while drafting a plan.")
       }
@@ -2024,7 +2024,7 @@ export function registerCallableToolPlugins(): void {
           "Current session is not attached to a thread conversation"
         )
       }
-      assertPlanModeConversationKind(session.conversation_kind)
+      assertPlanModeConversationKind(session.conversationKind)
       if (session.collaborationMode !== "plan_drafting") {
         throwToolError(
           "exit_plan_mode is only available while drafting a plan."
@@ -2054,7 +2054,7 @@ export function registerCallableToolPlugins(): void {
           typeof (input as any).targetParticipantId === "string"
             ? String((input as any).targetParticipantId)
             : undefined,
-        conversationKind: session.conversation_kind,
+        conversationKind: session.conversationKind,
         candidates,
       })
       if (!resolution.candidate) {
@@ -2495,7 +2495,7 @@ export function registerCallableToolPlugins(): void {
           "Current session is not attached to a thread conversation"
         )
       }
-      if (!isGroupConversationKind(session.conversation_kind)) {
+      if (!isGroupConversationKind(session.conversationKind)) {
         throwToolError("invite_actor is only available in group conversations.")
       }
       if (session.isImConversation) {
@@ -2506,7 +2506,7 @@ export function registerCallableToolPlugins(): void {
       const requesterAllowed = await canActorUseInviteActorTool({
         actorId: context.actorId,
         conversationId,
-        conversationKind: session.conversation_kind,
+        conversationKind: session.conversationKind,
         isImConversation: session.isImConversation,
       })
       if (!requesterAllowed) {
@@ -2524,7 +2524,7 @@ export function registerCallableToolPlugins(): void {
       }
 
       const candidates = await listInviteableActors({
-        workspaceId: session.workspace_id,
+        workspaceId: session.workspaceId,
         conversationId,
         actorId: context.actorId,
       })
@@ -2634,7 +2634,7 @@ export function registerCallableToolPlugins(): void {
         }
         const addResult = await addConversationParticipants({
           conversationId,
-          workspaceId: session.workspace_id,
+          workspaceId: session.workspaceId,
           actorIds: uniqueActors.map((candidate) => candidate.id),
         })
         const invitedActorIds = new Set(
@@ -2660,7 +2660,7 @@ export function registerCallableToolPlugins(): void {
         }
 
         await sendConversationMessageFromParticipant({
-          workspaceId: session.workspace_id,
+          workspaceId: session.workspaceId,
           conversationId,
           senderParticipantId: inviterMember?.id,
           sessionId: context.sessionId,
@@ -2758,7 +2758,7 @@ export function registerCallableToolPlugins(): void {
       const result = await runMemorySearch(context.workspaceId, {
         queryText,
         actorId: context.actorId,
-        conversationId: session.conversation_id,
+        conversationId: session.conversationId,
         limit,
         metadata: {
           sessionId: context.sessionId,
@@ -2902,7 +2902,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
-        conversationId: session.conversation_id,
+        conversationId: session.conversationId,
         actorId: context.actorId,
       })
 
@@ -2950,7 +2950,7 @@ export function registerCallableToolPlugins(): void {
           {
             name,
             description: `Self-scheduled wakeup for session ${context.sessionId}`,
-            conversationId: session.conversation_id,
+            conversationId: session.conversationId,
             trigger: {
               triggerKind: "schedule",
               scheduleKind: scheduleKind as any,
@@ -3055,7 +3055,7 @@ export function registerCallableToolPlugins(): void {
           status: "active",
         },
         {
-          conversationId: session.conversation_id,
+          conversationId: session.conversationId,
           actorId: context.actorId,
         }
       )
@@ -3211,7 +3211,7 @@ export function registerCallableToolPlugins(): void {
         throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
-        conversationId: session.conversation_id,
+        conversationId: session.conversationId,
         actorId: context.actorId,
       })
 
@@ -3265,7 +3265,7 @@ export function registerCallableToolPlugins(): void {
           {
             name,
             description: `Self event subscription for session ${context.sessionId}`,
-            conversationId: session.conversation_id,
+            conversationId: session.conversationId,
             trigger: {
               triggerKind: "event",
               eventSourceId,

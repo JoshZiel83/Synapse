@@ -124,21 +124,21 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
       // JOIN reverse-lookup: pull device_id / exposure_id / builtin_kind /
       // workspace_id / status. Verify they line up before the write.
       const row = await db
-        .selectFrom("device_capabilities as dc")
-        .innerJoin("workspace_apps as app", "app.id", "dc.id")
-        .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
-        .innerJoin("devices as d", "d.id", "dx.device_id")
+        .selectFrom("deviceCapabilities as dc")
+        .innerJoin("workspaceApps as app", "app.id", "dc.id")
+        .innerJoin("deviceExposures as dx", "dx.id", "dc.exposureId")
+        .innerJoin("devices as d", "d.id", "dx.deviceId")
         .select([
-          "d.id as device_id",
-          "app.workspace_id as workspace_id",
-          "dx.id as exposure_id",
-          "dx.stable_key as exposure_stable_key",
-          "dx.builtin_kind as builtin_kind",
-          "dx.runtime_status as runtime_status",
+          "d.id as deviceId",
+          "app.workspaceId as workspaceId",
+          "dx.id as exposureId",
+          "dx.stableKey as exposureStableKey",
+          "dx.builtinKind as builtinKind",
+          "dx.runtimeStatus as runtimeStatus",
           "app.status as status",
         ])
         .where("dc.id", "=", parsed.data.device_capability_id)
-        .where("app.deleted_at", "is", null)
+        .where("app.deletedAt", "is", null)
         .executeTakeFirst()
       if (!row) {
         reply.status(404).send({
@@ -147,7 +147,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         })
         return
       }
-      if (row.workspace_id !== pathWorkspaceId) {
+      if (row.workspaceId !== pathWorkspaceId) {
         reply.status(400).send({
           code: "workspace_id_mismatch",
           message: "device_capability does not belong to this workspace",
@@ -161,17 +161,17 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         })
         return
       }
-      if (row.runtime_status === "offline") {
+      if (row.runtimeStatus === "offline") {
         reply.status(409).send({
           code: "device_exposure_offline",
           message: "underlying device exposure is offline",
         })
         return
       }
-      if (policy.capability !== row.builtin_kind) {
+      if (policy.capability !== row.builtinKind) {
         reply.status(400).send({
           code: "capability_mismatch",
-          message: `policy.capability=${policy.capability} but exposure.builtin_kind=${row.builtin_kind}`,
+          message: `policy.capability=${policy.capability} but exposure.builtin_kind=${row.builtinKind}`,
         })
         return
       }
@@ -187,7 +187,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
         policy.browser.operations.length > 0
       ) {
         const allowedOps = allowedBrowserOperationsForExposureStableKey(
-          row.exposure_stable_key as string
+          row.exposureStableKey as string
         )
         if (allowedOps) {
           const bad = policy.browser.operations.filter(
@@ -196,7 +196,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           if (bad.length > 0) {
             reply.status(400).send({
               code: "operations_not_allowed_for_exposure",
-              message: `operations not served by exposure ${row.exposure_stable_key}: ${bad.join(", ")}`,
+              message: `operations not served by exposure ${row.exposureStableKey}: ${bad.join(", ")}`,
               allowed: [...allowedOps],
             })
             return
@@ -214,9 +214,9 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           // maps to subject=workspace + retention=until_revoked + the parsed
           // policy. No scope (workspace grants are unscoped).
           workspaceId: pathWorkspaceId,
-          deviceId: row.device_id,
+          deviceId: row.deviceId,
           deviceCapabilityId: parsed.data.device_capability_id,
-          deviceExposureId: row.exposure_id,
+          deviceExposureId: row.exposureId,
           subject: workspaceRef(pathWorkspaceId),
           retention: "until_revoked",
           policy,

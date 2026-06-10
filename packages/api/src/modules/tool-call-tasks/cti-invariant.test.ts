@@ -67,7 +67,7 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
   const ws = await db
     .insertInto("workspaces")
     .values({
-      owner_id: user.id as string,
+      ownerId: user.id as string,
       slug: `ws-${rid()}`,
       name: `${NS} ws`,
     })
@@ -77,84 +77,84 @@ async function buildFixture(db: Kysely<any>): Promise<Fixture> {
     .insertInto("conversations")
     .values({
       kind: "group",
-      workspace_id: ws.id as string,
+      workspaceId: ws.id as string,
       title: `${NS} conv`,
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const agentRoot = await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
-      workspace_id: ws.id as string,
+      workspaceId: ws.id as string,
       kind: "remote_agent",
-      display_name: `${NS} agent`,
+      displayName: `${NS} agent`,
       status: "active",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const agent = await db
-    .insertInto("remote_agents")
+    .insertInto("remoteAgents")
     .values({
       id: agentRoot.id as string,
       title: `${NS} agent`,
-      runtime_kind: "claude_code",
+      runtimeKind: "claude_code",
     })
     .returning("id")
     .executeTakeFirstOrThrow()
   const subject = await db
-    .insertInto("access_subjects")
+    .insertInto("accessSubjects")
     .values({
       kind: "remote_agent",
-      workspace_id: ws.id as string,
-      remote_agent_id: agent.id as string,
+      workspaceId: ws.id as string,
+      remoteAgentId: agent.id as string,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const dev = await db
     .insertInto("devices")
     .values({
-      workspace_id: ws.id as string,
+      workspaceId: ws.id as string,
       title: `${NS} device`,
-      public_key: `pk-${rid()}`,
-      public_key_fingerprint: `fp-${rid()}-${rid()}`,
-      trust_status: "trusted",
+      publicKey: `pk-${rid()}`,
+      publicKeyFingerprint: `fp-${rid()}-${rid()}`,
+      trustStatus: "trusted",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const svc = await db
-    .insertInto("device_services")
+    .insertInto("deviceServices")
     .values({
-      device_id: dev.id as string,
-      service_kind: "device_runtime",
+      deviceId: dev.id as string,
+      serviceKind: "device_runtime",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const exp = await db
-    .insertInto("device_exposures")
+    .insertInto("deviceExposures")
     .values({
-      device_id: dev.id as string,
-      service_id: svc.id as string,
-      stable_key: `exp-${rid()}`,
-      display_name: `${NS} exposure`,
+      deviceId: dev.id as string,
+      serviceId: svc.id as string,
+      stableKey: `exp-${rid()}`,
+      displayName: `${NS} exposure`,
       transport: "stdio",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const capRoot = await db
-    .insertInto("workspace_apps")
+    .insertInto("workspaceApps")
     .values({
-      workspace_id: ws.id as string,
+      workspaceId: ws.id as string,
       kind: "device_capability",
-      display_name: `${NS} capability`,
+      displayName: `${NS} capability`,
       status: "active",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   const cap = await db
-    .insertInto("device_capabilities")
+    .insertInto("deviceCapabilities")
     .values({
       id: capRoot.id as string,
-      exposure_id: exp.id as string,
+      exposureId: exp.id as string,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -249,9 +249,9 @@ test(
 
       // And the detail row is actually present, keyed to the parent.
       const detail = await db
-        .selectFrom("tool_call_task_runtime_authorization")
-        .select("task_id")
-        .where("task_id", "=", task!.id)
+        .selectFrom("toolCallTaskRuntimeAuthorization")
+        .select("taskId")
+        .where("taskId", "=", task!.id)
         .executeTakeFirst()
       assert.ok(detail, "detail row should have been written in the same tx")
     })

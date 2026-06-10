@@ -37,65 +37,61 @@ export async function getToolCallLogs(
 ) {
   const limit = Math.min(filters?.limit || 50, 200)
   let statement = db
-    .selectFrom("tool_calls as tc")
-    .innerJoin("conversations as c", "c.id", "tc.conversation_id")
-    .innerJoin("turns as t", "t.id", "tc.turn_id")
-    .leftJoin(
-      "plugin_installations as pi",
-      "pi.id",
-      "tc.plugin_installation_id"
-    )
-    .leftJoin("tool_results as tr", (join) =>
-      join.onRef("tr.tool_call_id", "=", "tc.id").on("tr.result_index", "=", 0)
+    .selectFrom("toolCalls as tc")
+    .innerJoin("conversations as c", "c.id", "tc.conversationId")
+    .innerJoin("turns as t", "t.id", "tc.turnId")
+    .leftJoin("pluginInstallations as pi", "pi.id", "tc.pluginInstallationId")
+    .leftJoin("toolResults as tr", (join) =>
+      join.onRef("tr.toolCallId", "=", "tc.id").on("tr.resultIndex", "=", 0)
     )
     .select([
       "tc.id",
-      "tc.conversation_id",
-      "tc.session_id",
-      "tc.turn_id",
-      "t.actor_id",
-      "tc.provider_call_id",
-      "tc.tool_name",
-      "tc.source_kind",
-      "tc.source_snapshot",
-      "tc.plugin_installation_id",
-      "tc.device_tool_id",
-      "tc.normalized_input",
+      "tc.conversationId",
+      "tc.sessionId",
+      "tc.turnId",
+      "t.actorId",
+      "tc.providerCallId",
+      "tc.toolName",
+      "tc.sourceKind",
+      "tc.sourceSnapshot",
+      "tc.pluginInstallationId",
+      "tc.deviceToolId",
+      "tc.normalizedInput",
       "tc.status",
-      "tc.created_at",
-      "tc.completed_at",
-      "tr.is_error",
-      "tr.error_message",
-      "tr.metadata as result_metadata",
+      "tc.createdAt",
+      "tc.completedAt",
+      "tr.isError",
+      "tr.errorMessage",
+      "tr.metadata as resultMetadata",
     ])
-    .where("c.workspace_id", "=", workspaceId)
+    .where("c.workspaceId", "=", workspaceId)
 
   if (filters?.sessionId) {
-    statement = statement.where("tc.session_id", "=", filters.sessionId)
+    statement = statement.where("tc.sessionId", "=", filters.sessionId)
   }
   if (filters?.actorId) {
-    statement = statement.where("t.actor_id", "=", filters.actorId)
+    statement = statement.where("t.actorId", "=", filters.actorId)
   }
   if (filters?.pluginId) {
     statement = statement.where((eb) =>
       eb.or([
-        eb("tc.plugin_installation_id", "=", filters.pluginId!),
-        eb("pi.catalog_item_id", "=", filters.pluginId!),
+        eb("tc.pluginInstallationId", "=", filters.pluginId!),
+        eb("pi.catalogItemId", "=", filters.pluginId!),
       ])
     )
   }
   if (filters?.before) {
-    statement = statement.where("tc.created_at", "<", new Date(filters.before))
+    statement = statement.where("tc.createdAt", "<", new Date(filters.before))
   }
 
   const rows = await statement
-    .orderBy("tc.created_at", "desc")
+    .orderBy("tc.createdAt", "desc")
     .limit(limit)
     .execute()
   return rows.map((row) => ({
     ...row,
-    normalized_input: redactSecrets(
-      row.normalized_input as Record<string, unknown>
+    normalizedInput: redactSecrets(
+      row.normalizedInput as Record<string, unknown>
     ),
   }))
 }
@@ -111,12 +107,12 @@ export async function getEventLogs(
 ) {
   const limit = Math.min(filters?.limit || 50, 200)
   let statement = db
-    .selectFrom("runtime_events")
+    .selectFrom("runtimeEvents")
     .selectAll()
-    .where("workspace_id", "=", workspaceId)
+    .where("workspaceId", "=", workspaceId)
 
   if (filters?.eventType) {
-    statement = statement.where("event_type", "=", filters.eventType)
+    statement = statement.where("eventType", "=", filters.eventType)
   }
   if (filters?.pluginId) {
     statement = statement.where(
@@ -124,8 +120,8 @@ export async function getEventLogs(
     )
   }
   if (filters?.before) {
-    statement = statement.where("created_at", "<", new Date(filters.before))
+    statement = statement.where("createdAt", "<", new Date(filters.before))
   }
 
-  return statement.orderBy("created_at", "desc").limit(limit).execute()
+  return statement.orderBy("createdAt", "desc").limit(limit).execute()
 }

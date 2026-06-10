@@ -178,16 +178,16 @@ test("handleQqInteractionCreate: happy approve path → resolve + ack", async ()
     getTransportAddressByExternalId: async () =>
       ({
         id: "addr-1",
-        workspace_id: "ws-1",
-        transport_account_id: "acc-1",
-        transport_kind: "qq",
-        address_type: "user",
-        external_id: "c2c:U1",
-        display_name: null,
-        workspace_member_id: "wm-1",
+        workspaceId: "ws-1",
+        transportAccountId: "acc-1",
+        transportKind: "qq",
+        addressType: "user",
+        externalId: "c2c:U1",
+        displayName: null,
+        workspaceMemberId: "wm-1",
         metadata: {},
-        created_at: new Date(),
-        updated_at: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
       }) as any,
     getTaskSummary: async () =>
       ({
@@ -250,7 +250,7 @@ test("handleQqInteractionCreate: same event replayed → same commandId (determi
       getTransportAddressByExternalId: async () =>
         ({
           id: "addr",
-          workspace_member_id: "wm",
+          workspaceMemberId: "wm",
         }) as any,
       getTaskSummary: async () =>
         ({
@@ -327,7 +327,7 @@ test("handleQqInteractionCreate: transient resolve error → do NOT ack (user re
       expiresAt: new Date(Date.now() + 60_000),
     }),
     getTransportAddressByExternalId: async () =>
-      ({ id: "addr", workspace_member_id: "wm" }) as any,
+      ({ id: "addr", workspaceMemberId: "wm" }) as any,
     getTaskSummary: async () =>
       ({
         id: "ir-z",
@@ -366,7 +366,7 @@ test("handleQqInteractionCreate: permanent resolve error → ack + drop", async 
       expiresAt: new Date(Date.now() + 60_000),
     }),
     getTransportAddressByExternalId: async () =>
-      ({ id: "addr", workspace_member_id: "wm" }) as any,
+      ({ id: "addr", workspaceMemberId: "wm" }) as any,
     getTaskSummary: async () =>
       ({
         id: "ir-p",

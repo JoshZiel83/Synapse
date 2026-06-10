@@ -35,14 +35,14 @@ export interface TransactionalRealtimeRecipient {
 type EventHandler = (event: SystemEvent) => void | Promise<void>
 
 type RealtimeEventOutboxRow = Pick<
-  TableRow<"realtime_event_outbox">,
+  TableRow<"realtimeEventOutbox">,
   | "id"
-  | "event_timestamp"
+  | "eventTimestamp"
   | "payload"
-  | "recipient_workspace_member_id"
-  | "workspace_id"
+  | "recipientWorkspaceMemberId"
+  | "workspaceId"
 > & {
-  event_type: TransactionalRealtimeEventType
+  eventType: TransactionalRealtimeEventType
 }
 
 const handlers: Map<string, Set<EventHandler>> = new Map()
@@ -109,11 +109,11 @@ async function claimPendingRealtimeOutboxEntries(limit: number) {
 
 async function markRealtimeOutboxEntryDispatched(id: string) {
   await db
-    .updateTable("realtime_event_outbox")
+    .updateTable("realtimeEventOutbox")
     .set({
       status: "dispatched",
-      last_error: null,
-      dispatched_at: sql`NOW()`,
+      lastError: null,
+      dispatchedAt: sql`NOW()`,
     })
     .where("id", "=", id)
     .execute()
@@ -122,11 +122,11 @@ async function markRealtimeOutboxEntryDispatched(id: string) {
 async function markRealtimeOutboxEntryFailed(id: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   await db
-    .updateTable("realtime_event_outbox")
+    .updateTable("realtimeEventOutbox")
     .set({
       status: "failed",
-      last_error: message,
-      available_at: sql`NOW() + (LEAST(attempts, 6) * INTERVAL '5 seconds')`,
+      lastError: message,
+      availableAt: sql`NOW() + (LEAST(attempts, 6) * INTERVAL '5 seconds')`,
     })
     .where("id", "=", id)
     .execute()
@@ -136,20 +136,20 @@ async function materializeRealtimeOutboxEvent(
   entry: RealtimeEventOutboxRow
 ): Promise<SystemEvent> {
   const payload = parseJsonObject(entry.payload)
-  const timestamp = eventTimestampToIso(entry.event_timestamp)
+  const timestamp = eventTimestampToIso(entry.eventTimestamp)
 
-  switch (entry.event_type) {
+  switch (entry.eventType) {
     case "chat.sync.event":
       return {
-        type: entry.event_type,
-        workspaceId: entry.workspace_id,
-        recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
+        type: entry.eventType,
+        workspaceId: entry.workspaceId,
+        recipientWorkspaceMemberId: entry.recipientWorkspaceMemberId,
         payload,
         timestamp,
       }
     default:
       throw new Error(
-        `Unsupported realtime outbox event type ${entry.event_type}`
+        `Unsupported realtime outbox event type ${entry.eventType}`
       )
   }
 }
@@ -200,15 +200,15 @@ export async function enqueueTransactionalEventDeliveries(
 
   await runBuilder(
     queryable,
-    db.insertInto("realtime_event_outbox").values(
+    db.insertInto("realtimeEventOutbox").values(
       recipients.map((recipient) => ({
-        available_at: new Date(),
-        event_timestamp: parseInstantString(event.timestamp),
-        event_type: event.type,
+        availableAt: new Date(),
+        eventTimestamp: parseInstantString(event.timestamp),
+        eventType: event.type,
         payload: (event.payload ||
-          {}) as TableInsert<"realtime_event_outbox">["payload"],
-        workspace_id: recipient.workspaceId,
-        recipient_workspace_member_id: recipient.workspaceMemberId,
+          {}) as TableInsert<"realtimeEventOutbox">["payload"],
+        workspaceId: recipient.workspaceId,
+        recipientWorkspaceMemberId: recipient.workspaceMemberId,
       }))
     )
   )
@@ -289,10 +289,10 @@ export async function gcRealtimeEventOutbox(
   // transaction. Indexed on (status, available_at, created_at) so the
   // status filter is cheap.
   const result = await db
-    .deleteFrom("realtime_event_outbox")
+    .deleteFrom("realtimeEventOutbox")
     .where("status", "=", "dispatched")
     .where(
-      "updated_at",
+      "updatedAt",
       "<",
       sql<Date>`NOW() - (${String(retentionHours)} || ' hours')::interval`
     )
@@ -318,15 +318,15 @@ export async function recoverStuckProcessingRealtimeOutboxEntries(
 ) {
   if (timeoutMs <= 0) return 0
   const result = await db
-    .updateTable("realtime_event_outbox")
+    .updateTable("realtimeEventOutbox")
     .set({
       status: "failed",
-      last_error: "recovered: stuck in processing past timeout",
-      available_at: sql`NOW()`,
+      lastError: "recovered: stuck in processing past timeout",
+      availableAt: sql`NOW()`,
     })
     .where("status", "=", "processing")
     .where(
-      "processing_started_at",
+      "processingStartedAt",
       "<",
       sql<Date>`NOW() - (${String(timeoutMs)} || ' milliseconds')::interval`
     )

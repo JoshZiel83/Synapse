@@ -83,8 +83,8 @@ import {
   normalizeConversationCatalogEntry,
   type ConversationCatalogEntry,
 } from "@synapse/shared"
+import { isChatTaskResolveConflictResponse } from "@synapse/shared"
 import {
-  isChatTaskResolveConflictResponse,
   type ChatTaskResolvePayload,
   type FileRecordView,
 } from "@synapse/shared/types"

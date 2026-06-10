@@ -46,10 +46,10 @@ export type ToolCallTaskDeliveryKind = ToolCallTasksDeliveryKind
 export type ToolCallTaskHumanSurface = ToolCallTasksHumanSurface
 export type ToolCallTaskExecutorKind = ToolCallTasksExecutorKind
 
-type ToolCallTaskRow = TableRow<"tool_call_tasks">
+type ToolCallTaskRow = TableRow<"toolCallTasks">
 type ToolCallTaskOutputChunkRow = Pick<
-  TableRow<"tool_call_task_output_chunks">,
-  "created_at" | "metadata" | "seq" | "stream" | "text_value"
+  TableRow<"toolCallTaskOutputChunks">,
+  "createdAt" | "metadata" | "seq" | "stream" | "textValue"
 >
 
 export interface ToolCallTaskRecord {
@@ -187,58 +187,56 @@ function mapToolCallTaskRow(
 
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    executorKind: row.executor_kind as ToolCallTaskExecutorKind,
-    deliveryKind: row.delivery_kind as ToolCallTaskDeliveryKind,
-    humanSurface: row.human_surface as ToolCallTaskHumanSurface,
-    principalSubjectId: row.principal_subject_id,
-    sessionId: row.session_id || undefined,
-    remoteAgentRunId: row.remote_agent_run_id || undefined,
-    turnId: row.turn_id || undefined,
-    sourceToolCallId: row.source_tool_call_id || undefined,
-    sourceToolName: row.source_tool_name,
-    lifecycleStatus: row.lifecycle_status as ToolCallTaskLifecycleStatus,
+    workspaceId: row.workspaceId,
+    conversationId: row.conversationId,
+    executorKind: row.executorKind as ToolCallTaskExecutorKind,
+    deliveryKind: row.deliveryKind as ToolCallTaskDeliveryKind,
+    humanSurface: row.humanSurface as ToolCallTaskHumanSurface,
+    principalSubjectId: row.principalSubjectId,
+    sessionId: row.sessionId || undefined,
+    remoteAgentRunId: row.remoteAgentRunId || undefined,
+    turnId: row.turnId || undefined,
+    sourceToolCallId: row.sourceToolCallId || undefined,
+    sourceToolName: row.sourceToolName,
+    lifecycleStatus: row.lifecycleStatus as ToolCallTaskLifecycleStatus,
     outcome: (row.outcome as ToolCallTaskOutcome | null) || undefined,
-    statusMessage: row.status_message || undefined,
-    supportsCancel: row.supports_cancel === true,
-    supportsOutputTail: row.supports_output_tail === true,
+    statusMessage: row.statusMessage || undefined,
+    supportsCancel: row.supportsCancel === true,
+    supportsOutputTail: row.supportsOutputTail === true,
     revision:
       typeof row.revision === "number"
         ? row.revision
         : Number(row.revision || 1),
-    requestKey: row.request_key,
-    requesterParticipantId: row.requester_participant_id || undefined,
-    targetParticipantId: row.target_participant_id || undefined,
-    resolvedByParticipantId: row.resolved_by_participant_id || undefined,
-    resolvedAt: serializeOptionalInstant(row.resolved_at),
-    requestPayload: parseJsonObject(row.request_payload),
-    immediateResultPayload: parseJsonObject(row.immediate_result_payload),
-    finalResultPayload: parseJsonObject(row.final_result_payload),
-    finalErrorPayload: parseJsonObject(row.final_error_payload),
+    requestKey: row.requestKey,
+    requesterParticipantId: row.requesterParticipantId || undefined,
+    targetParticipantId: row.targetParticipantId || undefined,
+    resolvedByParticipantId: row.resolvedByParticipantId || undefined,
+    resolvedAt: serializeOptionalInstant(row.resolvedAt),
+    requestPayload: parseJsonObject(row.requestPayload),
+    immediateResultPayload: parseJsonObject(row.immediateResultPayload),
+    finalResultPayload: parseJsonObject(row.finalResultPayload),
+    finalErrorPayload: parseJsonObject(row.finalErrorPayload),
     metadata: parseJsonObject(row.metadata),
-    conversationItemId: row.conversation_item_id || undefined,
-    completionItemId: row.completion_item_id || undefined,
-    deadlineAt: serializeOptionalInstant(row.deadline_at),
-    expiresAt: serializeOptionalInstant(row.expires_at),
+    conversationItemId: row.conversationItemId || undefined,
+    completionItemId: row.completionItemId || undefined,
+    deadlineAt: serializeOptionalInstant(row.deadlineAt),
+    expiresAt: serializeOptionalInstant(row.expiresAt),
     retentionTtlMs:
-      typeof row.retention_ttl_ms === "number"
-        ? row.retention_ttl_ms
-        : undefined,
-    retainUntil: serializeOptionalInstant(row.retain_until),
-    cancelRequestedAt: serializeOptionalInstant(row.cancel_requested_at),
-    cancelReason: row.cancel_reason || undefined,
+      typeof row.retentionTtlMs === "number" ? row.retentionTtlMs : undefined,
+    retainUntil: serializeOptionalInstant(row.retainUntil),
+    cancelRequestedAt: serializeOptionalInstant(row.cancelRequestedAt),
+    cancelReason: row.cancelReason || undefined,
     lastOutputSeq:
-      typeof row.last_output_seq === "number"
-        ? row.last_output_seq
-        : Number(row.last_output_seq || 0),
-    lastOutputAt: serializeOptionalInstant(row.last_output_at),
-    completedAt: serializeOptionalInstant(row.completed_at),
+      typeof row.lastOutputSeq === "number"
+        ? row.lastOutputSeq
+        : Number(row.lastOutputSeq || 0),
+    lastOutputAt: serializeOptionalInstant(row.lastOutputAt),
+    completedAt: serializeOptionalInstant(row.completedAt),
     createdAt: serializeInstant(
-      requireInstantDate(row.created_at, `Tool-call task ${row.id} created_at`)
+      requireInstantDate(row.createdAt, `Tool-call task ${row.id} created_at`)
     ),
     updatedAt: serializeInstant(
-      requireInstantDate(row.updated_at, `Tool-call task ${row.id} updated_at`)
+      requireInstantDate(row.updatedAt, `Tool-call task ${row.id} updated_at`)
     ),
   } satisfies ToolCallTaskRecord
 }
@@ -272,39 +270,39 @@ export async function insertToolCallTask(
     await assertSessionAllowsToolCallTasks(executor, params.sessionId)
   }
 
-  const row: TableInsert<"tool_call_tasks"> = {
-    workspace_id: params.workspaceId,
-    conversation_id: params.conversationId,
-    executor_kind: params.executorKind,
-    delivery_kind: params.deliveryKind,
-    human_surface: params.humanSurface,
-    principal_subject_id: params.principalSubjectId,
-    session_id: params.sessionId || null,
-    remote_agent_run_id: params.remoteAgentRunId || null,
-    turn_id: params.turnId || null,
-    source_tool_call_id: params.sourceToolCallId || null,
-    source_tool_name: params.sourceToolName,
-    lifecycle_status: params.lifecycleStatus || "working",
-    status_message: params.statusMessage || null,
-    supports_cancel: params.supportsCancel === true,
-    supports_output_tail: params.supportsOutputTail === true,
-    request_key: params.requestKey,
-    requester_participant_id: params.requesterParticipantId || null,
-    target_participant_id: params.targetParticipantId || null,
-    request_payload: (params.requestPayload ||
-      {}) as TableInsert<"tool_call_tasks">["request_payload"],
-    immediate_result_payload: (params.immediateResultPayload ||
-      {}) as TableInsert<"tool_call_tasks">["immediate_result_payload"],
+  const row: TableInsert<"toolCallTasks"> = {
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    executorKind: params.executorKind,
+    deliveryKind: params.deliveryKind,
+    humanSurface: params.humanSurface,
+    principalSubjectId: params.principalSubjectId,
+    sessionId: params.sessionId || null,
+    remoteAgentRunId: params.remoteAgentRunId || null,
+    turnId: params.turnId || null,
+    sourceToolCallId: params.sourceToolCallId || null,
+    sourceToolName: params.sourceToolName,
+    lifecycleStatus: params.lifecycleStatus || "working",
+    statusMessage: params.statusMessage || null,
+    supportsCancel: params.supportsCancel === true,
+    supportsOutputTail: params.supportsOutputTail === true,
+    requestKey: params.requestKey,
+    requesterParticipantId: params.requesterParticipantId || null,
+    targetParticipantId: params.targetParticipantId || null,
+    requestPayload: (params.requestPayload ||
+      {}) as TableInsert<"toolCallTasks">["requestPayload"],
+    immediateResultPayload: (params.immediateResultPayload ||
+      {}) as TableInsert<"toolCallTasks">["immediateResultPayload"],
     metadata: (params.metadata ||
-      {}) as TableInsert<"tool_call_tasks">["metadata"],
-    deadline_at: toDate(params.deadlineAt),
-    expires_at: toDate(params.expiresAt),
-    retention_ttl_ms: params.retentionTtlMs ?? null,
-    retain_until: toDate(params.retainUntil),
+      {}) as TableInsert<"toolCallTasks">["metadata"],
+    deadlineAt: toDate(params.deadlineAt),
+    expiresAt: toDate(params.expiresAt),
+    retentionTtlMs: params.retentionTtlMs ?? null,
+    retainUntil: toDate(params.retainUntil),
   }
 
   const createdRow = await executor
-    .insertInto("tool_call_tasks")
+    .insertInto("toolCallTasks")
     .values(row)
     .returningAll()
     .executeTakeFirst()
@@ -335,41 +333,41 @@ export async function insertToolCallTaskDeduped(
   }
 
   const createdRow = await executor
-    .insertInto("tool_call_tasks")
+    .insertInto("toolCallTasks")
     .values({
-      workspace_id: params.workspaceId,
-      conversation_id: params.conversationId,
-      executor_kind: params.executorKind,
-      delivery_kind: params.deliveryKind,
-      human_surface: params.humanSurface,
-      principal_subject_id: params.principalSubjectId,
-      session_id: params.sessionId || null,
-      remote_agent_run_id: params.remoteAgentRunId || null,
-      turn_id: params.turnId || null,
-      source_tool_call_id: params.sourceToolCallId || null,
-      source_tool_name: params.sourceToolName,
-      lifecycle_status: params.lifecycleStatus || "working",
-      status_message: params.statusMessage || null,
-      supports_cancel: params.supportsCancel === true,
-      supports_output_tail: params.supportsOutputTail === true,
-      request_key: params.requestKey,
-      requester_participant_id: params.requesterParticipantId || null,
-      target_participant_id: params.targetParticipantId || null,
-      request_payload: (params.requestPayload ||
-        {}) as TableInsert<"tool_call_tasks">["request_payload"],
-      immediate_result_payload: (params.immediateResultPayload ||
-        {}) as TableInsert<"tool_call_tasks">["immediate_result_payload"],
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      executorKind: params.executorKind,
+      deliveryKind: params.deliveryKind,
+      humanSurface: params.humanSurface,
+      principalSubjectId: params.principalSubjectId,
+      sessionId: params.sessionId || null,
+      remoteAgentRunId: params.remoteAgentRunId || null,
+      turnId: params.turnId || null,
+      sourceToolCallId: params.sourceToolCallId || null,
+      sourceToolName: params.sourceToolName,
+      lifecycleStatus: params.lifecycleStatus || "working",
+      statusMessage: params.statusMessage || null,
+      supportsCancel: params.supportsCancel === true,
+      supportsOutputTail: params.supportsOutputTail === true,
+      requestKey: params.requestKey,
+      requesterParticipantId: params.requesterParticipantId || null,
+      targetParticipantId: params.targetParticipantId || null,
+      requestPayload: (params.requestPayload ||
+        {}) as TableInsert<"toolCallTasks">["requestPayload"],
+      immediateResultPayload: (params.immediateResultPayload ||
+        {}) as TableInsert<"toolCallTasks">["immediateResultPayload"],
       metadata: (params.metadata ||
-        {}) as TableInsert<"tool_call_tasks">["metadata"],
-      deadline_at: toDate(params.deadlineAt),
-      expires_at: toDate(params.expiresAt),
-      retention_ttl_ms: params.retentionTtlMs ?? null,
-      retain_until: toDate(params.retainUntil),
+        {}) as TableInsert<"toolCallTasks">["metadata"],
+      deadlineAt: toDate(params.deadlineAt),
+      expiresAt: toDate(params.expiresAt),
+      retentionTtlMs: params.retentionTtlMs ?? null,
+      retainUntil: toDate(params.retainUntil),
     })
     .onConflict((oc) =>
       oc
-        .columns(["workspace_id", "request_key"])
-        .where("lifecycle_status", "in", [
+        .columns(["workspaceId", "requestKey"])
+        .where("lifecycleStatus", "in", [
           "submitted",
           "working",
           "input_required",
@@ -392,11 +390,11 @@ export async function findLiveToolCallTaskByRequestKey(
   requestKey: string
 ): Promise<ToolCallTaskRecord | null> {
   const row = await executor
-    .selectFrom("tool_call_tasks")
+    .selectFrom("toolCallTasks")
     .selectAll()
-    .where("workspace_id", "=", workspaceId)
-    .where("request_key", "=", requestKey)
-    .where("lifecycle_status", "in", [
+    .where("workspaceId", "=", workspaceId)
+    .where("requestKey", "=", requestKey)
+    .where("lifecycleStatus", "in", [
       "submitted",
       "working",
       "input_required",
@@ -459,7 +457,7 @@ export async function createToolCallTaskDeduped(
 
 export async function getToolCallTask(taskId: string) {
   const row = await db
-    .selectFrom("tool_call_tasks")
+    .selectFrom("toolCallTasks")
     .selectAll()
     .where("id", "=", taskId)
     .limit(1)
@@ -487,19 +485,19 @@ export async function appendToolCallTaskOutput(
 
   let appendedSeq: number
   if (typeof chunk.seq === "number") {
-    const row: TableInsert<"tool_call_task_output_chunks"> = {
-      task_id: taskId,
+    const row: TableInsert<"toolCallTaskOutputChunks"> = {
+      taskId: taskId,
       seq: chunk.seq,
       stream: chunk.stream,
-      text_value: text,
+      textValue: text,
       metadata: (chunk.metadata ||
-        {}) as TableInsert<"tool_call_task_output_chunks">["metadata"],
-      created_at: toDate(chunk.createdAt) ?? undefined,
+        {}) as TableInsert<"toolCallTaskOutputChunks">["metadata"],
+      createdAt: toDate(chunk.createdAt) ?? undefined,
     }
     await db
-      .insertInto("tool_call_task_output_chunks")
+      .insertInto("toolCallTaskOutputChunks")
       .values(row)
-      .onConflict((oc) => oc.columns(["task_id", "seq"]).doNothing())
+      .onConflict((oc) => oc.columns(["taskId", "seq"]).doNothing())
       .execute()
     appendedSeq = Math.max(0, chunk.seq)
   } else {
@@ -570,10 +568,10 @@ export async function getToolCallTaskForSession(
   taskId: string
 ) {
   const row = await db
-    .selectFrom("tool_call_tasks")
+    .selectFrom("toolCallTasks")
     .selectAll()
     .where("id", "=", taskId)
-    .where("session_id", "=", sessionId)
+    .where("sessionId", "=", sessionId)
     .limit(1)
     .executeTakeFirst()
 
@@ -586,16 +584,16 @@ export async function listToolCallTasksForSession(params: {
   limit?: number
 }) {
   let statement = db
-    .selectFrom("tool_call_tasks")
+    .selectFrom("toolCallTasks")
     .selectAll()
-    .where("session_id", "=", params.sessionId)
+    .where("sessionId", "=", params.sessionId)
 
   if (params.statuses && params.statuses.length > 0) {
-    statement = statement.where("lifecycle_status", "in", params.statuses)
+    statement = statement.where("lifecycleStatus", "in", params.statuses)
   }
 
   const result = await statement
-    .orderBy("created_at", "desc")
+    .orderBy("createdAt", "desc")
     .limit(Math.min(Math.max(params.limit || 20, 1), 100))
     .execute()
 
@@ -616,9 +614,9 @@ export async function getToolCallTaskOutput(params: {
     params.stream && params.stream !== "combined" ? params.stream : null
 
   let statement = db
-    .selectFrom("tool_call_task_output_chunks")
-    .select(["seq", "stream", "text_value", "metadata", "created_at"])
-    .where("task_id", "=", params.taskId)
+    .selectFrom("toolCallTaskOutputChunks")
+    .select(["seq", "stream", "textValue", "metadata", "createdAt"])
+    .where("taskId", "=", params.taskId)
 
   if (afterSeq > 0) {
     statement = statement.where("seq", ">", String(afterSeq))
@@ -638,10 +636,10 @@ export async function getToolCallTaskOutput(params: {
   return orderedRows.map((row) => ({
     seq: typeof row.seq === "number" ? row.seq : Number(row.seq || 0),
     stream: row.stream as ToolCallTaskOutputChunk["stream"],
-    text: row.text_value,
+    text: row.textValue,
     createdAt: serializeInstant(
       requireInstantDate(
-        row.created_at,
+        row.createdAt,
         "Tool-call task output chunk created_at"
       )
     ),
@@ -702,58 +700,57 @@ async function updateToolCallTaskRecord(
   // TTL sweep already finished it). This is what makes terminalization safe to
   // retry after the task has already reached a terminal lifecycle.
   let update = db
-    .updateTable("tool_call_tasks")
+    .updateTable("toolCallTasks")
     .set({
-      lifecycle_status: nextStatus,
+      lifecycleStatus: nextStatus,
       outcome:
         params.outcome ??
         (existing.outcome as ToolCallTaskOutcome | undefined) ??
         null,
-      status_message: params.statusMessage ?? existing.statusMessage ?? null,
-      supports_cancel: params.supportsCancel ?? existing.supportsCancel,
-      supports_output_tail:
+      statusMessage: params.statusMessage ?? existing.statusMessage ?? null,
+      supportsCancel: params.supportsCancel ?? existing.supportsCancel,
+      supportsOutputTail:
         params.supportsOutputTail ?? existing.supportsOutputTail,
-      immediate_result_payload: (params.immediateResultPayload ??
+      immediateResultPayload: (params.immediateResultPayload ??
         existing.immediateResultPayload ??
-        {}) as TableInsert<"tool_call_tasks">["immediate_result_payload"],
-      final_result_payload: (params.finalResultPayload ??
+        {}) as TableInsert<"toolCallTasks">["immediateResultPayload"],
+      finalResultPayload: (params.finalResultPayload ??
         existing.finalResultPayload ??
-        {}) as TableInsert<"tool_call_tasks">["final_result_payload"],
-      final_error_payload: (params.finalErrorPayload ??
+        {}) as TableInsert<"toolCallTasks">["finalResultPayload"],
+      finalErrorPayload: (params.finalErrorPayload ??
         existing.finalErrorPayload ??
-        {}) as TableInsert<"tool_call_tasks">["final_error_payload"],
-      metadata: nextMetadata as TableInsert<"tool_call_tasks">["metadata"],
-      conversation_item_id:
+        {}) as TableInsert<"toolCallTasks">["finalErrorPayload"],
+      metadata: nextMetadata as TableInsert<"toolCallTasks">["metadata"],
+      conversationItemId:
         params.conversationItemId ?? existing.conversationItemId ?? null,
-      completion_item_id:
+      completionItemId:
         params.completionItemId ?? existing.completionItemId ?? null,
-      resolved_by_participant_id:
+      resolvedByParticipantId:
         params.resolvedByParticipantId ??
         existing.resolvedByParticipantId ??
         null,
-      resolved_at: toDate(params.resolvedAt ?? existing.resolvedAt ?? null),
-      deadline_at: toDate(params.deadlineAt ?? existing.deadlineAt ?? null),
-      expires_at: toDate(params.expiresAt ?? existing.expiresAt ?? null),
-      retention_ttl_ms:
-        params.retentionTtlMs ?? existing.retentionTtlMs ?? null,
-      retain_until: toDate(params.retainUntil ?? existing.retainUntil ?? null),
-      cancel_requested_at: toDate(
+      resolvedAt: toDate(params.resolvedAt ?? existing.resolvedAt ?? null),
+      deadlineAt: toDate(params.deadlineAt ?? existing.deadlineAt ?? null),
+      expiresAt: toDate(params.expiresAt ?? existing.expiresAt ?? null),
+      retentionTtlMs: params.retentionTtlMs ?? existing.retentionTtlMs ?? null,
+      retainUntil: toDate(params.retainUntil ?? existing.retainUntil ?? null),
+      cancelRequestedAt: toDate(
         params.cancelRequestedAt ?? existing.cancelRequestedAt ?? null
       ),
-      cancel_reason: params.cancelReason ?? existing.cancelReason ?? null,
-      last_output_seq: params.lastOutputSeq ?? existing.lastOutputSeq ?? 0,
-      last_output_at: toDate(
+      cancelReason: params.cancelReason ?? existing.cancelReason ?? null,
+      lastOutputSeq: params.lastOutputSeq ?? existing.lastOutputSeq ?? 0,
+      lastOutputAt: toDate(
         params.lastOutputAt ?? existing.lastOutputAt ?? null
       ),
-      completed_at: nextCompletedAt,
-      updated_at: new Date(),
+      completedAt: nextCompletedAt,
+      updatedAt: new Date(),
     })
     .where("id", "=", taskId)
 
   // Guard: any status-changing write must not touch an already-terminal row.
   if (params.lifecycleStatus !== undefined) {
     update = update.where(
-      "lifecycle_status",
+      "lifecycleStatus",
       "in",
       NON_TERMINAL_TOOL_CALL_TASK_STATUSES
     )
@@ -810,15 +807,15 @@ async function resolvePrincipalForDelivery(subjectId: string): Promise<{
   remoteAgentId?: string
 }> {
   const row = await db
-    .selectFrom("access_subjects")
-    .select(["kind", "actor_id", "remote_agent_id"])
+    .selectFrom("accessSubjects")
+    .select(["kind", "actorId", "remoteAgentId"])
     .where("id", "=", subjectId)
     .limit(1)
     .executeTakeFirst()
   if (!row) return {}
   return {
-    actorId: row.actor_id || undefined,
-    remoteAgentId: row.remote_agent_id || undefined,
+    actorId: row.actorId || undefined,
+    remoteAgentId: row.remoteAgentId || undefined,
   }
 }
 
@@ -842,28 +839,28 @@ async function emitTaskNotice(
   // device result vs socket-close fail vs TTL sweep) thus deliver exactly once;
   // the losers see zero rows and skip delivery (no duplicate wakeup).
   const flipRow = await db
-    .updateTable("tool_call_tasks")
+    .updateTable("toolCallTasks")
     .set({
-      lifecycle_status: lifecycleStatus,
+      lifecycleStatus: lifecycleStatus,
       outcome:
         params.outcome ??
         (record.outcome as ToolCallTaskOutcome | undefined) ??
         null,
-      status_message: params.summary ?? record.statusMessage ?? null,
-      final_result_payload: (params.finalResultPayload ??
+      statusMessage: params.summary ?? record.statusMessage ?? null,
+      finalResultPayload: (params.finalResultPayload ??
         record.finalResultPayload ??
-        {}) as TableInsert<"tool_call_tasks">["final_result_payload"],
-      final_error_payload: (params.finalErrorPayload ??
+        {}) as TableInsert<"toolCallTasks">["finalResultPayload"],
+      finalErrorPayload: (params.finalErrorPayload ??
         record.finalErrorPayload ??
-        {}) as TableInsert<"tool_call_tasks">["final_error_payload"],
+        {}) as TableInsert<"toolCallTasks">["finalErrorPayload"],
       metadata: (params.metadata
         ? { ...record.metadata, ...params.metadata }
-        : record.metadata) as TableInsert<"tool_call_tasks">["metadata"],
-      completed_at: new Date(),
-      updated_at: new Date(),
+        : record.metadata) as TableInsert<"toolCallTasks">["metadata"],
+      completedAt: new Date(),
+      updatedAt: new Date(),
     })
     .where("id", "=", record.id)
-    .where("lifecycle_status", "in", NON_TERMINAL_TOOL_CALL_TASK_STATUSES)
+    .where("lifecycleStatus", "in", NON_TERMINAL_TOOL_CALL_TASK_STATUSES)
     .returningAll()
     .executeTakeFirst()
 
@@ -1004,9 +1001,9 @@ async function deliverTaskNotice(
         const updatedRecord = completionItemId
           ? (mapToolCallTaskRow(
               (await trx
-                .updateTable("tool_call_tasks")
+                .updateTable("toolCallTasks")
                 .set({
-                  completion_item_id: completionItemId,
+                  completionItemId: completionItemId,
                 })
                 .where("id", "=", record.id)
                 .returningAll()

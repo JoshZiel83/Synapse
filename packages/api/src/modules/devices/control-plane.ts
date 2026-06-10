@@ -216,11 +216,11 @@ async function validateFrpEdgeUrl(args: {
   // out of sync (re-registered without re-reading the ack) or is attempting
   // to claim a peer's route — either way we reject.
   const row = await args.executor
-    .selectFrom("device_services")
-    .select(["tunnel_path_token"])
+    .selectFrom("deviceServices")
+    .select(["tunnelPathToken"])
     .where("id", "=", args.deviceServiceId)
     .executeTakeFirst()
-  const expectedToken = (row?.tunnel_path_token as string | null) ?? null
+  const expectedToken = (row?.tunnelPathToken as string | null) ?? null
   if (!expectedToken) {
     return {
       ok: false,
@@ -286,11 +286,11 @@ async function validateLocalLoopbackUrl(args: {
   // status comparison (matching getActiveMountsForSession) so the file_mount_status
   // enum compares against literals without a parameterized-text cast mismatch.
   const liveLocalMount = await args.executor
-    .selectFrom("file_mounts as m")
-    .innerJoin("device_services as s", "s.device_id", "m.device_id")
+    .selectFrom("fileMounts as m")
+    .innerJoin("deviceServices as s", "s.deviceId", "m.deviceId")
     .select("m.id")
     .where("s.id", "=", args.deviceServiceId)
-    .where("m.sandbox_backend", "=", "local")
+    .where("m.sandboxBackend", "=", "local")
     .where(sql<boolean>`m.status NOT IN ('closed', 'failed')`)
     .limit(1)
     .executeTakeFirst()
@@ -338,26 +338,26 @@ async function insertControlPlaneSession(args: {
 }): Promise<string> {
   const sessionId = randomUUID()
   await db
-    .insertInto("device_control_plane_sessions")
+    .insertInto("deviceControlPlaneSessions")
     .values({
       id: sessionId,
-      device_id: args.deviceId,
-      service_id: args.serviceId,
-      protocol_version: 1,
-      client_version: args.clientVersion,
+      deviceId: args.deviceId,
+      serviceId: args.serviceId,
+      protocolVersion: 1,
+      clientVersion: args.clientVersion,
       status: "active",
       transport: "websocket",
-      remote_addr: args.remoteAddr,
-      last_sequence: 0,
-      last_heartbeat_at: sql`NOW()`,
-      started_at: sql`NOW()`,
+      remoteAddr: args.remoteAddr,
+      lastSequence: 0,
+      lastHeartbeatAt: sql`NOW()`,
+      startedAt: sql`NOW()`,
     } as never)
     .execute()
   await db
-    .updateTable("device_services")
+    .updateTable("deviceServices")
     .set({
-      current_session_id: sessionId,
-      last_seen_at: sql`NOW()`,
+      currentSessionId: sessionId,
+      lastSeenAt: sql`NOW()`,
     } as never)
     .where("id", "=", args.serviceId)
     .execute()
@@ -374,17 +374,17 @@ async function insertControlPlaneSession(args: {
 async function ensureTunnelPathToken(serviceId: string): Promise<string> {
   const fresh = randomBytes(32).toString("hex")
   await db
-    .updateTable("device_services")
-    .set({ tunnel_path_token: fresh } as never)
+    .updateTable("deviceServices")
+    .set({ tunnelPathToken: fresh } as never)
     .where("id", "=", serviceId)
-    .where("tunnel_path_token", "is", null)
+    .where("tunnelPathToken", "is", null)
     .execute()
   const row = await db
-    .selectFrom("device_services")
-    .select(["tunnel_path_token"])
+    .selectFrom("deviceServices")
+    .select(["tunnelPathToken"])
     .where("id", "=", serviceId)
     .executeTakeFirst()
-  const token = (row?.tunnel_path_token as string | null) ?? null
+  const token = (row?.tunnelPathToken as string | null) ?? null
   if (!token) {
     throw new Error(
       `device_services ${serviceId} disappeared while issuing tunnel_path_token`
@@ -399,30 +399,30 @@ async function closeControlPlaneSession(
 ): Promise<void> {
   try {
     const sessionRow = await db
-      .selectFrom("device_control_plane_sessions")
-      .select("device_id")
+      .selectFrom("deviceControlPlaneSessions")
+      .select("deviceId")
       .where("id", "=", sessionId)
       .executeTakeFirst()
     await db
-      .updateTable("device_control_plane_sessions")
+      .updateTable("deviceControlPlaneSessions")
       .set({
         status: "closed",
-        ended_at: sql`NOW()`,
-        close_reason: reason,
+        endedAt: sql`NOW()`,
+        closeReason: reason,
       } as never)
       .where("id", "=", sessionId)
       .execute()
     await db
-      .updateTable("device_services")
+      .updateTable("deviceServices")
       .set({
-        current_session_id: null,
+        currentSessionId: null,
       } as never)
-      .where("current_session_id", "=", sessionId)
+      .where("currentSessionId", "=", sessionId)
       .execute()
     // Task unification (design §3.6): fail in-flight device_tool tasks so the
     // waiting agent is woken instead of hanging when the device drops.
-    if (sessionRow?.device_id) {
-      await failInFlightDeviceTasksForDevice(sessionRow.device_id).catch(
+    if (sessionRow?.deviceId) {
+      await failInFlightDeviceTasksForDevice(sessionRow.deviceId).catch(
         () => undefined
       )
     }
@@ -528,11 +528,11 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 try {
                   const deviceRow = await db
                     .selectFrom("devices")
-                    .select(["workspace_id"])
+                    .select(["workspaceId"])
                     .where("id", "=", result.deviceId)
                     .executeTakeFirst()
                   state.authenticatedWorkspaceId =
-                    (deviceRow?.workspace_id as string | undefined) ?? null
+                    (deviceRow?.workspaceId as string | undefined) ?? null
                 } catch {
                   /* workspace lookup is best-effort; event.emit will
                    * surface a structured error if it tries to write without

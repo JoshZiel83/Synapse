@@ -48,9 +48,9 @@ import { redactDeep } from "./tool-presentation/redact.js"
 
 const log = createLogger("session.runtime")
 
-type ToolResultRow = TableRow<"tool_results">
-type ToolResultPartRow = TableRow<"tool_result_parts">
-type ToolCallTaskRow = TableRow<"tool_call_tasks">
+type ToolResultRow = TableRow<"toolResults">
+type ToolResultPartRow = TableRow<"toolResultParts">
+type ToolCallTaskRow = TableRow<"toolCallTasks">
 
 function runtimeHashKey(conversationId: string) {
   return `runtime:conversation:${conversationId}`
@@ -84,18 +84,18 @@ function mapWakeupSourceTypeToTrigger(
   return sourceType
 }
 
-function mapWakeupRow(row: TableRow<"session_wakeups">): ActorRuntimeWakeup {
+function mapWakeupRow(row: TableRow<"sessionWakeups">): ActorRuntimeWakeup {
   const metadata = parseMetadata(row.metadata)
   return {
     wakeupId: row.id,
-    sourceType: row.source_type,
-    sourceItemId: row.source_item_id || undefined,
-    sourceSessionId: row.source_session_id || undefined,
-    sourceParticipantType: row.source_participant_type || undefined,
-    sourceParticipantId: row.source_participant_id || undefined,
-    sourceName: row.source_name || undefined,
+    sourceType: row.sourceType,
+    sourceItemId: row.sourceItemId || undefined,
+    sourceSessionId: row.sourceSessionId || undefined,
+    sourceParticipantType: row.sourceParticipantType || undefined,
+    sourceParticipantId: row.sourceParticipantId || undefined,
+    sourceName: row.sourceName || undefined,
     summary: row.summary,
-    reasonText: row.reason_text || undefined,
+    reasonText: row.reasonText || undefined,
     status: row.status,
     activationKind:
       typeof metadata.activationKind === "string"
@@ -103,8 +103,8 @@ function mapWakeupRow(row: TableRow<"session_wakeups">): ActorRuntimeWakeup {
         : undefined,
     delivery:
       typeof metadata.delivery === "string" ? metadata.delivery : undefined,
-    createdAt: serializeInstant(row.created_at),
-    attachedAt: serializeOptionalInstant(row.attached_at),
+    createdAt: serializeInstant(row.createdAt),
+    attachedAt: serializeOptionalInstant(row.attachedAt),
   }
 }
 
@@ -113,11 +113,11 @@ async function loadRuntimeWakeups(
   statuses: SessionWakeupStatus[] = ["pending", "attached"]
 ) {
   const rows = await db
-    .selectFrom("session_wakeups")
+    .selectFrom("sessionWakeups")
     .selectAll()
-    .where("session_id", "=", sessionId)
+    .where("sessionId", "=", sessionId)
     .where("status", "in", statuses)
-    .orderBy("created_at", "asc")
+    .orderBy("createdAt", "asc")
     .execute()
 
   return rows.map(mapWakeupRow)
@@ -254,7 +254,7 @@ function mapToolActivityState(params: {
 }
 
 function mapTaskLifecycleToRuntimeTaskStatus(
-  lifecycleStatus: ToolCallTaskRow["lifecycle_status"] | undefined
+  lifecycleStatus: ToolCallTaskRow["lifecycleStatus"] | undefined
 ): ActorRuntimeTurnActivityItem["taskStatus"] | undefined {
   if (!lifecycleStatus) return undefined
   if (lifecycleStatus === "submitted") return "working"
@@ -267,9 +267,9 @@ async function loadActiveTurnIdForSession(sessionId: string) {
   const row = await db
     .selectFrom("turns")
     .select("id")
-    .where("session_id", "=", sessionId)
+    .where("sessionId", "=", sessionId)
     .where("status", "=", "running")
-    .orderBy("started_at", "desc")
+    .orderBy("startedAt", "desc")
     .limit(1)
     .executeTakeFirst()
 
@@ -280,33 +280,33 @@ async function loadProcessingTargetsForTurn(
   turnId: string
 ): Promise<ActorRuntimeProcessingTarget[]> {
   const rows = await db
-    .selectFrom("session_wakeups")
+    .selectFrom("sessionWakeups")
     .select([
       "id",
-      "source_participant_type",
-      "source_participant_id",
-      "source_name",
+      "sourceParticipantType",
+      "sourceParticipantId",
+      "sourceName",
       "summary",
-      "created_at",
-      "attached_at",
+      "createdAt",
+      "attachedAt",
     ])
-    .where("turn_id", "=", turnId)
+    .where("turnId", "=", turnId)
     .where("status", "=", "attached")
-    .orderBy("created_at", "asc")
+    .orderBy("createdAt", "asc")
     .execute()
 
   return rows.map((row) => ({
     wakeupId: row.id,
     participantType:
-      (row.source_participant_type as SessionWakeupSourceParticipantType | null) ||
+      (row.sourceParticipantType as SessionWakeupSourceParticipantType | null) ||
       undefined,
-    participantId: row.source_participant_id || undefined,
-    name: row.source_name || row.summary,
+    participantId: row.sourceParticipantId || undefined,
+    name: row.sourceName || row.summary,
     summary: row.summary || undefined,
     createdAt: serializeInstant(
-      requireInstantDate(row.created_at, "session_wakeups.created_at")
+      requireInstantDate(row.createdAt, "session_wakeups.created_at")
     ),
-    attachedAt: serializeOptionalInstant(row.attached_at),
+    attachedAt: serializeOptionalInstant(row.attachedAt),
   }))
 }
 
@@ -317,18 +317,18 @@ async function loadProcessingTargetsForTurn(
 function buildResultBodyBlocks(params: {
   resultParts: any[]
   latestResult?: {
-    is_error?: boolean | null
-    error_message?: string | null
+    isError?: boolean | null
+    errorMessage?: string | null
     metadata?: unknown
   }
   task?: {
-    status_message?: string | null
-    final_result_payload?: unknown
-    final_error_payload?: unknown
+    statusMessage?: string | null
+    finalResultPayload?: unknown
+    finalErrorPayload?: unknown
   }
   outputChunks?: Array<{
     stream: string
-    text_value: string
+    textValue: string
   }>
 }): CanonicalContentBlock[] {
   if (params.resultParts.length > 0) {
@@ -338,13 +338,13 @@ function buildResultBodyBlocks(params: {
   if (params.outputChunks && params.outputChunks.length > 0) {
     return buildTextBlocksFromLines(
       params.outputChunks
-        .map((chunk) => `[${chunk.stream}] ${chunk.text_value}`)
+        .map((chunk) => `[${chunk.stream}] ${chunk.textValue}`)
         .join("\n")
     )
   }
 
-  const finalErrorPayload = parseJsonValue(params.task?.final_error_payload)
-  const finalResultPayload = parseJsonValue(params.task?.final_result_payload)
+  const finalErrorPayload = parseJsonValue(params.task?.finalErrorPayload)
+  const finalResultPayload = parseJsonValue(params.task?.finalResultPayload)
   if (
     finalErrorPayload &&
     Object.keys(asRecord(finalErrorPayload)).length > 0
@@ -358,12 +358,12 @@ function buildResultBodyBlocks(params: {
     return buildTextBlocksFromLines(prettyJson(finalResultPayload))
   }
 
-  if (params.latestResult?.error_message) {
-    return buildTextBlocksFromLines(params.latestResult.error_message)
+  if (params.latestResult?.errorMessage) {
+    return buildTextBlocksFromLines(params.latestResult.errorMessage)
   }
 
-  if (params.task?.status_message) {
-    return buildTextBlocksFromLines(params.task.status_message)
+  if (params.task?.statusMessage) {
+    return buildTextBlocksFromLines(params.task.statusMessage)
   }
 
   return []
@@ -382,19 +382,19 @@ function readToolMeta(metadata: unknown): Record<string, unknown> | undefined {
 async function buildToolActivityDetail(turnId: string) {
   const turnRow = await db
     .selectFrom("turns")
-    .innerJoin("sessions as s", "s.id", "turns.session_id")
-    .innerJoin("actors as a", "a.id", "turns.actor_id")
-    .innerJoin("workspace_apps as app", "app.id", "a.id")
+    .innerJoin("sessions as s", "s.id", "turns.sessionId")
+    .innerJoin("actors as a", "a.id", "turns.actorId")
+    .innerJoin("workspaceApps as app", "app.id", "a.id")
     .select([
       "turns.id",
-      "turns.session_id",
-      "turns.conversation_id",
-      "turns.actor_id",
-      "turns.started_at",
-      "turns.updated_at",
-      "turns.completed_at",
-      "s.workspace_id",
-      "app.display_name as actor_display_name",
+      "turns.sessionId",
+      "turns.conversationId",
+      "turns.actorId",
+      "turns.startedAt",
+      "turns.updatedAt",
+      "turns.completedAt",
+      "s.workspaceId",
+      "app.displayName as actorDisplayName",
     ])
     .where("turns.id", "=", turnId)
     .limit(1)
@@ -405,11 +405,11 @@ async function buildToolActivityDetail(turnId: string) {
   }
 
   const toolCalls = await db
-    .selectFrom("tool_calls")
+    .selectFrom("toolCalls")
     .selectAll()
-    .where("turn_id", "=", turnId)
-    .orderBy("created_at", "asc")
-    .orderBy("call_index", "asc")
+    .where("turnId", "=", turnId)
+    .orderBy("createdAt", "asc")
+    .orderBy("callIndex", "asc")
     .execute()
 
   const toolCallIds = toolCalls.map((row) => row.id)
@@ -418,75 +418,75 @@ async function buildToolActivityDetail(turnId: string) {
   const latestTasksByToolCall = new Map<string, ToolCallTaskRow>()
   const outputChunksByTaskId = new Map<
     string,
-    Array<{ stream: string; text_value: string }>
+    Array<{ stream: string; textValue: string }>
   >()
 
   if (toolCallIds.length > 0) {
     const results = await db
-      .selectFrom("tool_results")
+      .selectFrom("toolResults")
       .selectAll()
-      .where("tool_call_id", "in", toolCallIds)
-      .orderBy("tool_call_id", "asc")
-      .orderBy("result_index", "desc")
+      .where("toolCallId", "in", toolCallIds)
+      .orderBy("toolCallId", "asc")
+      .orderBy("resultIndex", "desc")
       .execute()
 
     for (const row of results) {
-      if (!latestResultsByToolCall.has(row.tool_call_id)) {
-        latestResultsByToolCall.set(row.tool_call_id, row)
+      if (!latestResultsByToolCall.has(row.toolCallId)) {
+        latestResultsByToolCall.set(row.toolCallId, row)
       }
     }
 
     const resultIds = [...latestResultsByToolCall.values()].map((row) => row.id)
     if (resultIds.length > 0) {
       const resultParts = await db
-        .selectFrom("tool_result_parts")
+        .selectFrom("toolResultParts")
         .selectAll()
-        .where("tool_result_id", "in", resultIds)
-        .orderBy("tool_result_id", "asc")
+        .where("toolResultId", "in", resultIds)
+        .orderBy("toolResultId", "asc")
         .orderBy("ordinal", "asc")
         .execute()
 
       for (const row of resultParts) {
-        const existing = resultPartsByResultId.get(row.tool_result_id) || []
+        const existing = resultPartsByResultId.get(row.toolResultId) || []
         existing.push(row)
-        resultPartsByResultId.set(row.tool_result_id, existing)
+        resultPartsByResultId.set(row.toolResultId, existing)
       }
     }
 
     const tasks = await db
-      .selectFrom("tool_call_tasks")
+      .selectFrom("toolCallTasks")
       .selectAll()
-      .where("source_tool_call_id", "in", toolCallIds)
-      .orderBy("created_at", "desc")
+      .where("sourceToolCallId", "in", toolCallIds)
+      .orderBy("createdAt", "desc")
       .execute()
 
     for (const row of tasks) {
       if (
-        row.source_tool_call_id &&
-        !latestTasksByToolCall.has(row.source_tool_call_id)
+        row.sourceToolCallId &&
+        !latestTasksByToolCall.has(row.sourceToolCallId)
       ) {
-        latestTasksByToolCall.set(row.source_tool_call_id, row)
+        latestTasksByToolCall.set(row.sourceToolCallId, row)
       }
     }
 
     const taskIds = [...latestTasksByToolCall.values()].map((row) => row.id)
     if (taskIds.length > 0) {
       const outputRows = await db
-        .selectFrom("tool_call_task_output_chunks")
-        .select(["task_id", "stream", "text_value", "seq"])
-        .where("task_id", "in", taskIds)
-        .orderBy("task_id", "asc")
+        .selectFrom("toolCallTaskOutputChunks")
+        .select(["taskId", "stream", "textValue", "seq"])
+        .where("taskId", "in", taskIds)
+        .orderBy("taskId", "asc")
         .orderBy("seq", "desc")
         .execute()
 
       for (const row of outputRows) {
-        const existing = outputChunksByTaskId.get(row.task_id) || []
+        const existing = outputChunksByTaskId.get(row.taskId) || []
         if (existing.length >= 8) continue
         existing.push({
           stream: row.stream,
-          text_value: row.text_value,
+          textValue: row.textValue,
         })
-        outputChunksByTaskId.set(row.task_id, existing)
+        outputChunksByTaskId.set(row.taskId, existing)
       }
 
       for (const [taskId, chunks] of outputChunksByTaskId) {
@@ -502,7 +502,7 @@ async function buildToolActivityDetail(turnId: string) {
     const latestResult = latestResultsByToolCall.get(toolCall.id)
     const task = latestTasksByToolCall.get(toolCall.id)
     const taskStatus = mapTaskLifecycleToRuntimeTaskStatus(
-      task?.lifecycle_status
+      task?.lifecycleStatus
     )
     const resultParts = latestResult
       ? resultPartsByResultId.get(latestResult.id) || []
@@ -511,20 +511,20 @@ async function buildToolActivityDetail(turnId: string) {
     const state = mapToolActivityState({
       toolCallStatus: toolCall.status,
       taskStatus,
-      latestResultIsError: latestResult?.is_error === true,
+      latestResultIsError: latestResult?.isError === true,
     })
     const toolSource = getToolSource(
-      toolCall.source_kind,
-      toolCall.source_snapshot
+      toolCall.sourceKind,
+      toolCall.sourceSnapshot
     )
     const displayDetailStatus = getToolDisplayDetail({
       toolCallStatus: toolCall.status,
       taskStatus,
-      statusMessage: task?.status_message || undefined,
+      statusMessage: task?.statusMessage || undefined,
       errorMessage:
-        latestResult?.error_message ||
-        (typeof task?.final_error_payload === "object"
-          ? prettyJson(task.final_error_payload)
+        latestResult?.errorMessage ||
+        (typeof task?.finalErrorPayload === "object"
+          ? prettyJson(task.finalErrorPayload)
           : undefined),
     })
 
@@ -532,19 +532,19 @@ async function buildToolActivityDetail(turnId: string) {
     // (snapshot.stableKey), then render request + result. Redaction is a single
     // deep secretlint pass over the rendered output before it enters the snapshot.
     const descriptor = await resolveToolPresentation({
-      sourceKind: toolCall.source_kind,
-      sourceSnapshot: toolCall.source_snapshot,
-      pluginInstallationId: toolCall.plugin_installation_id,
+      sourceKind: toolCall.sourceKind,
+      sourceSnapshot: toolCall.sourceSnapshot,
+      pluginInstallationId: toolCall.pluginInstallationId,
     })
-    const args = asRecord(parseJsonValue(toolCall.normalized_input))
+    const args = asRecord(parseJsonValue(toolCall.normalizedInput))
     const request = renderToolRequest(descriptor, args)
     const resultData: ToolResultData = {
       meta: readToolMeta(latestResult?.metadata),
-      task: parseJsonValue(task?.final_result_payload),
+      task: parseJsonValue(task?.finalResultPayload),
       error:
-        latestResult?.error_message ||
-        (typeof task?.final_error_payload === "object"
-          ? prettyJson(task.final_error_payload)
+        latestResult?.errorMessage ||
+        (typeof task?.finalErrorPayload === "object"
+          ? prettyJson(task.finalErrorPayload)
           : undefined) ||
         undefined,
       bodyBlocks: buildResultBodyBlocks({
@@ -567,8 +567,8 @@ async function buildToolActivityDetail(turnId: string) {
 
     items.push({
       toolCallId: toolCall.id,
-      toolKind: toolCall.source_kind,
-      toolName: toolCall.tool_name,
+      toolKind: toolCall.sourceKind,
+      toolName: toolCall.toolName,
       ...(toolSource ? { source: toolSource } : {}),
       icon: rendered.icon,
       state,
@@ -587,19 +587,19 @@ async function buildToolActivityDetail(turnId: string) {
       resultBlocks: rendered.resultBlocks,
       taskStatus,
       startedAt: serializeInstant(
-        requireInstantDate(toolCall.created_at, "tool_calls.created_at")
+        requireInstantDate(toolCall.createdAt, "tool_calls.created_at")
       ),
       updatedAt: pickLatestTimestamp(
-        serializeOptionalInstant(task?.updated_at),
-        serializeOptionalInstant(latestResult?.created_at),
-        serializeOptionalInstant(toolCall.completed_at),
+        serializeOptionalInstant(task?.updatedAt),
+        serializeOptionalInstant(latestResult?.createdAt),
+        serializeOptionalInstant(toolCall.completedAt),
         serializeInstant(
-          requireInstantDate(toolCall.created_at, "tool_calls.created_at")
+          requireInstantDate(toolCall.createdAt, "tool_calls.created_at")
         )
       )!,
       completedAt:
-        serializeOptionalInstant(toolCall.completed_at) ||
-        serializeOptionalInstant(task?.completed_at) ||
+        serializeOptionalInstant(toolCall.completedAt) ||
+        serializeOptionalInstant(task?.completedAt) ||
         undefined,
     })
   }
@@ -607,25 +607,23 @@ async function buildToolActivityDetail(turnId: string) {
   const updatedAt = pickLatestTimestamp(
     ...processingTargets.map((target) => target.attachedAt || target.createdAt),
     ...items.map((item) => item.updatedAt),
-    serializeOptionalInstant(turnRow.completed_at),
-    serializeInstant(
-      requireInstantDate(turnRow.updated_at, "turns.updated_at")
-    ),
-    serializeOptionalInstant(turnRow.started_at)
+    serializeOptionalInstant(turnRow.completedAt),
+    serializeInstant(requireInstantDate(turnRow.updatedAt, "turns.updated_at")),
+    serializeOptionalInstant(turnRow.startedAt)
   )!
 
   return {
-    conversationId: turnRow.conversation_id,
-    actorId: turnRow.actor_id,
-    actorDisplayName: turnRow.actor_display_name || "Unknown",
+    conversationId: turnRow.conversationId,
+    actorId: turnRow.actorId,
+    actorDisplayName: turnRow.actorDisplayName || "Unknown",
     turnId: turnRow.id,
-    sessionId: turnRow.session_id,
+    sessionId: turnRow.sessionId,
     startedAt:
-      serializeOptionalInstant(turnRow.started_at) ||
+      serializeOptionalInstant(turnRow.startedAt) ||
       // `turns` no longer has a created_at column; for legacy/test rows that
       // still carry NULL started_at, fall back to the always-present updated_at.
       serializeInstant(
-        requireInstantDate(turnRow.updated_at, "turns.updated_at")
+        requireInstantDate(turnRow.updatedAt, "turns.updated_at")
       ),
     updatedAt,
     processingTargets,
@@ -736,14 +734,14 @@ export async function getConversationRuntimeMap(conversationIds: string[]) {
 
   const sessionResult = await db
     .selectFrom("sessions as s")
-    .innerJoin("conversations as c", "c.id", "s.conversation_id")
-    .select(["s.id", "s.actor_id", "s.conversation_id"])
-    .where("s.conversation_id", "in", conversationIds)
+    .innerJoin("conversations as c", "c.id", "s.conversationId")
+    .select(["s.id", "s.actorId", "s.conversationId"])
+    .where("s.conversationId", "in", conversationIds)
     .where("c.kind", "in", [...THREAD_CONVERSATION_KINDS])
     .execute()
 
   const missingSessions = sessionResult.filter(
-    (row) => !runtimeMap[row.conversation_id]?.[row.actor_id]
+    (row) => !runtimeMap[row.conversationId]?.[row.actorId]
   )
   if (missingSessions.length === 0) {
     return runtimeMap
@@ -753,7 +751,7 @@ export async function getConversationRuntimeMap(conversationIds: string[]) {
     missingSessions.map(async (row) => {
       const snapshot = await buildSessionRuntimeSnapshot(row.id)
       return snapshot
-        ? { conversationId: row.conversation_id as string, snapshot }
+        ? { conversationId: row.conversationId as string, snapshot }
         : null
     })
   )
@@ -1010,14 +1008,14 @@ export async function insertSessionWakeupRow(
   executor: Executor,
   params: EnqueueSessionWakeupParams
 ): Promise<{
-  created: TableRow<"session_wakeups">
+  created: TableRow<"sessionWakeups">
   reusedExistingWakeup: boolean
 }> {
-  let created: TableRow<"session_wakeups"> | undefined
+  let created: TableRow<"sessionWakeups"> | undefined
   let reusedExistingWakeup = false
 
   if (params.sourceItemId) {
-    const insertResult = await sql<TableRow<"session_wakeups">>`
+    const insertResult = await sql<TableRow<"sessionWakeups">>`
         INSERT INTO session_wakeups (
           id,
           session_id,
@@ -1059,12 +1057,12 @@ export async function insertSessionWakeupRow(
 
     if (!created) {
       const existing = await executor
-        .selectFrom("session_wakeups")
+        .selectFrom("sessionWakeups")
         .selectAll()
-        .where("session_id", "=", params.sessionId)
-        .where("source_type", "=", params.sourceType)
-        .where("source_item_id", "=", params.sourceItemId)
-        .orderBy("created_at", "desc")
+        .where("sessionId", "=", params.sessionId)
+        .where("sourceType", "=", params.sourceType)
+        .where("sourceItemId", "=", params.sourceItemId)
+        .orderBy("createdAt", "desc")
         .limit(1)
         .execute()
       created = existing[0]
@@ -1072,23 +1070,23 @@ export async function insertSessionWakeupRow(
     }
   } else {
     created = await executor
-      .insertInto("session_wakeups")
+      .insertInto("sessionWakeups")
       .values({
         id: crypto.randomUUID(),
-        session_id: params.sessionId,
-        source_type: params.sourceType,
-        source_item_id: null,
-        source_session_id: params.sourceSessionId || null,
-        source_participant_type: params.sourceParticipantType || null,
-        source_participant_id: params.sourceParticipantId || null,
-        source_name: params.sourceName || null,
+        sessionId: params.sessionId,
+        sourceType: params.sourceType,
+        sourceItemId: null,
+        sourceSessionId: params.sourceSessionId || null,
+        sourceParticipantType: params.sourceParticipantType || null,
+        sourceParticipantId: params.sourceParticipantId || null,
+        sourceName: params.sourceName || null,
         summary: params.summary,
-        reason_text: params.reasonText || null,
-        automation_execution_id: params.automationExecutionId || null,
-        automation_occurrence_id: params.automationOccurrenceId || null,
+        reasonText: params.reasonText || null,
+        automationExecutionId: params.automationExecutionId || null,
+        automationOccurrenceId: params.automationOccurrenceId || null,
         status: "pending",
         metadata: (params.metadata ||
-          {}) as TableInsert<"session_wakeups">["metadata"],
+          {}) as TableInsert<"sessionWakeups">["metadata"],
       })
       .returningAll()
       .executeTakeFirst()
@@ -1179,13 +1177,13 @@ export async function attachPendingWakeupsToTurn(
   executor: Executor = db
 ) {
   const rows = await executor
-    .updateTable("session_wakeups")
+    .updateTable("sessionWakeups")
     .set({
       status: "attached",
-      turn_id: turnId,
-      attached_at: sql`NOW()`,
+      turnId: turnId,
+      attachedAt: sql`NOW()`,
     })
-    .where("session_id", "=", sessionId)
+    .where("sessionId", "=", sessionId)
     .where("status", "=", "pending")
     .returningAll()
     .execute()
@@ -1195,12 +1193,12 @@ export async function attachPendingWakeupsToTurn(
 
 export async function markTurnWakeupsProcessed(turnId: string) {
   await db
-    .updateTable("session_wakeups")
+    .updateTable("sessionWakeups")
     .set({
       status: "processed",
-      processed_at: sql`NOW()`,
+      processedAt: sql`NOW()`,
     })
-    .where("turn_id", "=", turnId)
+    .where("turnId", "=", turnId)
     .where("status", "=", "attached")
     .execute()
 }
@@ -1210,12 +1208,12 @@ export async function markTurnWakeupsDropped(
   executor: Executor = db
 ) {
   await executor
-    .updateTable("session_wakeups")
+    .updateTable("sessionWakeups")
     .set({
       status: "dropped",
-      processed_at: sql`NOW()`,
+      processedAt: sql`NOW()`,
     })
-    .where("turn_id", "=", turnId)
+    .where("turnId", "=", turnId)
     .where("status", "=", "attached")
     .execute()
 }
@@ -1231,13 +1229,13 @@ export async function restoreTurnWakeupsToPending(
   executor: Executor = db
 ) {
   await executor
-    .updateTable("session_wakeups")
+    .updateTable("sessionWakeups")
     .set({
       status: "pending",
-      turn_id: null,
-      attached_at: null,
+      turnId: null,
+      attachedAt: null,
     })
-    .where("turn_id", "=", turnId)
+    .where("turnId", "=", turnId)
     .where("status", "=", "attached")
     .execute()
 }
@@ -1247,9 +1245,9 @@ export async function getPendingWakeupCount(
   executor: Executor = db
 ) {
   const row = await executor
-    .selectFrom("session_wakeups")
+    .selectFrom("sessionWakeups")
     .select(({ fn }) => fn.count<number>("id").as("count"))
-    .where("session_id", "=", sessionId)
+    .where("sessionId", "=", sessionId)
     .where("status", "=", "pending")
     .executeTakeFirst()
 
@@ -1258,11 +1256,11 @@ export async function getPendingWakeupCount(
 
 export async function getPendingWakeups(sessionId: string) {
   const rows = await db
-    .selectFrom("session_wakeups")
+    .selectFrom("sessionWakeups")
     .selectAll()
-    .where("session_id", "=", sessionId)
+    .where("sessionId", "=", sessionId)
     .where("status", "=", "pending")
-    .orderBy("created_at", "asc")
+    .orderBy("createdAt", "asc")
     .execute()
 
   return rows.map(mapWakeupRow)

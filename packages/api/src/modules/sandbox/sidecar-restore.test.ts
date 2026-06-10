@@ -77,7 +77,7 @@ test(
 
     await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      [{ mountSubpath: "actor", materializedDir: liveActor }],
       {
         peekCommit: async () => pendingCommit,
         peekRefresh: async () => emptyRefresh,
@@ -126,7 +126,7 @@ test(
 
     await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "conversation", materialized_dir: liveConv }],
+      [{ mountSubpath: "conversation", materializedDir: liveConv }],
       {
         peekCommit: async () => ({}),
         peekRefresh: async () => refresh,
@@ -174,7 +174,7 @@ test(
 
     const result = await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      [{ mountSubpath: "actor", materializedDir: liveActor }],
       {
         peekCommit: async () => pendingCommit,
         peekRefresh: async () => emptyRefresh,
@@ -222,7 +222,7 @@ test(
 
     const result = await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      [{ mountSubpath: "actor", materializedDir: liveActor }],
       {
         peekCommit: async () => pendingCommit,
         peekRefresh: async () => emptyRefresh,
@@ -263,7 +263,7 @@ test(
 
     const result = await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "conversation", materialized_dir: liveConv }],
+      [{ mountSubpath: "conversation", materializedDir: liveConv }],
       {
         peekCommit: async () => ({}),
         peekRefresh: async () => refresh,
@@ -308,7 +308,7 @@ test(
 
     const result = await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      [{ mountSubpath: "actor", materializedDir: liveActor }],
       {
         peekCommit: async () => pendingCommit,
         peekRefresh: async () => emptyRefresh,
@@ -353,7 +353,7 @@ test(
 
     const result = await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      [{ mountSubpath: "actor", materializedDir: liveActor }],
       {
         peekCommit: async () => pendingCommit,
         peekRefresh: async () => emptyRefresh,
@@ -398,7 +398,7 @@ test(
 
     const result = await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      [{ mountSubpath: "actor", materializedDir: liveActor }],
       {
         peekCommit: async () => pendingCommit,
         peekRefresh: async () => emptyRefresh,
@@ -460,7 +460,7 @@ test(
 
     const result = await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      [{ mountSubpath: "actor", materializedDir: liveActor }],
       {
         peekCommit: async () => pendingCommit,
         peekRefresh: async () => emptyRefresh,
@@ -511,7 +511,7 @@ test(
 
     const result = await restorePendingSidecarsImpl(
       "sess-irrelevant",
-      [{ mount_subpath: "actor", materialized_dir: liveActor }],
+      [{ mountSubpath: "actor", materializedDir: liveActor }],
       {
         peekCommit: async () => pendingCommit,
         peekRefresh: async () => emptyRefresh,

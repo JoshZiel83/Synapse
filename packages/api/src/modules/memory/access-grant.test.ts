@@ -135,7 +135,7 @@ test(
         subject: actorRef(otherActor),
         permissions: [MEMORY_PERMISSION.READ, MEMORY_PERMISSION.RECALL],
       })
-      assert.equal(grant.memory_space_id, space)
+      assert.equal(grant.memorySpaceId, space)
       assert.equal(grant.status, "active")
       // permissions returns as either a JS array (pg driver auto-parsed) or
       // a PG array literal string; normalize before comparing so we don't

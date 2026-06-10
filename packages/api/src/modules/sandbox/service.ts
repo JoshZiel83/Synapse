@@ -288,17 +288,17 @@ function buildSandboxRefFromMounts(
   sessionId: string,
   mounts: FileMountRow[]
 ): SandboxRef | null {
-  const deviceId = mounts.find((m) => m.device_id)?.device_id ?? null
+  const deviceId = mounts.find((m) => m.deviceId)?.deviceId ?? null
   const sandboxResourceId =
-    mounts.find((m) => m.sandbox_resource_id)?.sandbox_resource_id ?? ""
-  const hostPid = mounts.find((m) => m.host_pid)?.host_pid ?? undefined
+    mounts.find((m) => m.sandboxResourceId)?.sandboxResourceId ?? ""
+  const hostPid = mounts.find((m) => m.hostPid)?.hostPid ?? undefined
   // Nothing to kill (crash before any runtime was started). The caller still
   // closes the mounts; there's no process/container to reap.
   if (!deviceId && !sandboxResourceId && hostPid === undefined) return null
-  const backend = (mounts.find((m) => m.sandbox_backend)?.sandbox_backend ??
+  const backend = (mounts.find((m) => m.sandboxBackend)?.sandboxBackend ??
     "local") as SandboxBackendKind
   const pairingSessionId =
-    mounts.find((m) => m.pairing_session_id)?.pairing_session_id ?? undefined
+    mounts.find((m) => m.pairingSessionId)?.pairingSessionId ?? undefined
   return {
     backend,
     sandboxId: sessionId,
@@ -319,7 +319,7 @@ function buildSandboxRefFromMounts(
  * alive so the caller recovers rather than handing back a dead sandbox.
  */
 async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
-  const sessionId = mounts[0]?.session_id
+  const sessionId = mounts[0]?.sessionId
   if (sessionId) {
     const live = liveSandboxHandles.get(sessionId)
     if (live) {
@@ -368,13 +368,13 @@ async function isSandboxRuntimeAlive(mounts: FileMountRow[]): Promise<boolean> {
  */
 export async function reconcileSandboxes(): Promise<void> {
   const rows = await db
-    .selectFrom("file_mounts")
-    .select("session_id")
+    .selectFrom("fileMounts")
+    .select("sessionId")
     .where("status", "in", ["provisioning", "active", "committing"])
-    .groupBy("session_id")
+    .groupBy("sessionId")
     .execute()
   const liveSessionIds = new Set<string>()
-  for (const { session_id } of rows) {
+  for (const { sessionId: session_id } of rows) {
     const sessionId = session_id as string
     try {
       const mounts = await getActiveMountsForSession(db, sessionId)
@@ -408,9 +408,9 @@ export async function reconcileSandboxes(): Promise<void> {
     ? true
     : Boolean(
         await db
-          .selectFrom("file_mounts")
+          .selectFrom("fileMounts")
           .select("id")
-          .where("sandbox_backend", "=", "docker")
+          .where("sandboxBackend", "=", "docker")
           .limit(1)
           .executeTakeFirst()
       )
@@ -433,14 +433,14 @@ async function loadSessionContext(
 ): Promise<SessionContext | null> {
   const row = await db
     .selectFrom("sessions")
-    .select(["workspace_id", "conversation_id", "actor_id"])
+    .select(["workspaceId", "conversationId", "actorId"])
     .where("id", "=", sessionId)
     .executeTakeFirst()
   if (!row) return null
   return {
-    workspaceId: row.workspace_id as string,
-    conversationId: row.conversation_id as string,
-    actorId: row.actor_id as string,
+    workspaceId: row.workspaceId as string,
+    conversationId: row.conversationId as string,
+    actorId: row.actorId as string,
   }
 }
 
@@ -539,7 +539,7 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
   for (const s of specs) {
     const spaceId = await s.ensure()
     const space = await getFileSpace(db, spaceId)
-    const baseSnapshotId = space?.current_snapshot_id ?? null
+    const baseSnapshotId = space?.currentSnapshotId ?? null
     const baseManifestSha = baseSnapshotId
       ? await getSnapshotManifestSha(db, baseSnapshotId)
       : null
@@ -600,8 +600,7 @@ export async function provisionSandbox(
     allActive &&
     (await isSandboxRuntimeAlive(existing))
   ) {
-    const deviceIdForEndpoint =
-      existing.find((m) => m.device_id)?.device_id ?? ""
+    const deviceIdForEndpoint = existing.find((m) => m.deviceId)?.deviceId ?? ""
     fastPathOk = await fastPathEndpointReady({
       sessionId,
       deviceId: deviceIdForEndpoint,
@@ -616,7 +615,7 @@ export async function provisionSandbox(
     // device_exposures. A bare exposure check is looser — it would report
     // commandline "enabled" for a device whose capability was revoked or whose
     // exposure never went healthy, misleading the UI/caller.
-    const deviceId = existing.find((m) => m.device_id)?.device_id ?? ""
+    const deviceId = existing.find((m) => m.deviceId)?.deviceId ?? ""
     let commandlineEnabled = false
     if (deviceId) {
       try {
@@ -917,11 +916,11 @@ async function waitForCatalog(
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const ready = await db
-      .selectFrom("device_exposures")
+      .selectFrom("deviceExposures")
       .select("id")
-      .where("device_id", "=", deviceId)
-      .where("builtin_kind", "=", "filesystem")
-      .where("runtime_status", "=", "healthy")
+      .where("deviceId", "=", deviceId)
+      .where("builtinKind", "=", "filesystem")
+      .where("runtimeStatus", "=", "healthy")
       .limit(1)
       .executeTakeFirst()
     if (ready) return
@@ -975,11 +974,11 @@ async function resolveDeviceRuntimeServiceId(
   deviceId: string
 ): Promise<string | null> {
   const svc = await db
-    .selectFrom("device_services")
+    .selectFrom("deviceServices")
     .select("id")
-    .where("device_id", "=", deviceId)
-    .where("service_kind", "=", "device_runtime")
-    .orderBy("created_at", "desc")
+    .where("deviceId", "=", deviceId)
+    .where("serviceKind", "=", "device_runtime")
+    .orderBy("createdAt", "desc")
     .limit(1)
     .executeTakeFirst()
   return (svc?.id as string | undefined) ?? null
@@ -1093,18 +1092,18 @@ export async function refreshSpaces(
   const sidecarsBySubpath: Record<string, ConflictSidecarRef[]> = {}
   const syncFailuresBySubpath: Record<string, string> = {}
   for (const mount of mounts) {
-    if (mount.mount_subpath === "actor-conversation") continue
-    if (!mount.materialized_dir) continue
+    if (mount.mountSubpath === "actor-conversation") continue
+    if (!mount.materializedDir) continue
 
     try {
-      const space = await getFileSpace(deps.dbh, mount.file_space_id)
-      const head = space?.current_snapshot_id ?? null
-      if (!head || head === mount.base_snapshot_id) continue // nothing new
+      const space = await getFileSpace(deps.dbh, mount.fileSpaceId)
+      const head = space?.currentSnapshotId ?? null
+      if (!head || head === mount.baseSnapshotId) continue // nothing new
 
       const headManifest = await getSnapshotManifestSha(deps.dbh, head)
       if (!headManifest) continue
-      const baseManifest = mount.base_snapshot_id
-        ? await getSnapshotManifestSha(deps.dbh, mount.base_snapshot_id)
+      const baseManifest = mount.baseSnapshotId
+        ? await getSnapshotManifestSha(deps.dbh, mount.baseSnapshotId)
         : null
 
       // R12-1: DEFER the head-overwrite of conflicting live paths. The sync
@@ -1115,14 +1114,13 @@ export async function refreshSpaces(
       // working != head and the next turn re-derives the conflict (no silent
       // loss of the notice).
       const sync = await deps.sync({
-        dir: mount.materialized_dir,
+        dir: mount.materializedDir,
         baseManifestSha256: baseManifest ?? undefined,
         toManifestSha256: headManifest,
         deferConflictApply: true,
       })
       if (sync.deferred_conflicts.length > 0) {
-        deferredConflictsBySubpath[mount.mount_subpath] =
-          sync.deferred_conflicts
+        deferredConflictsBySubpath[mount.mountSubpath] = sync.deferred_conflicts
       }
       // Surface every sidecar the helper actually wrote — INCLUDING when the
       // sync stopped early (round-9 #2). The Rust paths are mount-relative
@@ -1134,15 +1132,15 @@ export async function refreshSpaces(
       // re-materialized after teardown.
       const mountSidecars: ConflictSidecarRef[] = sync.conflict_sidecars.map(
         (c) => ({
-          original: `/${mount.mount_subpath}${c.original}`,
-          sidecar: `/${mount.mount_subpath}${c.sidecar}`,
+          original: `/${mount.mountSubpath}${c.original}`,
+          sidecar: `/${mount.mountSubpath}${c.sidecar}`,
           kind: c.kind,
           contentSha: c.content_sha ?? undefined,
           target: c.target ?? undefined,
         })
       )
       if (mountSidecars.length > 0) {
-        sidecarsBySubpath[mount.mount_subpath] = mountSidecars
+        sidecarsBySubpath[mount.mountSubpath] = mountSidecars
       }
       if (sync.incomplete) {
         // The helper STOPPED EARLY on a per-path failure: the live dir is only
@@ -1151,9 +1149,9 @@ export async function refreshSpaces(
         // fail-closed). But the sidecars written before the stop ARE surfaced
         // above, so the agent still learns where its preserved copies are
         // (round-9 #2: don't orphan an already-written sidecar).
-        syncFailuresBySubpath[mount.mount_subpath] = sync.incomplete
+        syncFailuresBySubpath[mount.mountSubpath] = sync.incomplete
         console.error(
-          `[sandbox] refresh sync incomplete for mount ${mount.id} (${mount.mount_subpath}); base left unadvanced for next-turn retry: ${sync.incomplete}`
+          `[sandbox] refresh sync incomplete for mount ${mount.id} (${mount.mountSubpath}); base left unadvanced for next-turn retry: ${sync.incomplete}`
         )
         continue
       }
@@ -1173,18 +1171,18 @@ export async function refreshSpaces(
           recordPendingRefreshConflictsOn(txq, sessionId, {
             deferredConflictsBySubpath:
               sync.deferred_conflicts.length > 0
-                ? { [mount.mount_subpath]: sync.deferred_conflicts }
+                ? { [mount.mountSubpath]: sync.deferred_conflicts }
                 : {},
             sidecarsBySubpath:
               mountSidecars.length > 0
-                ? { [mount.mount_subpath]: mountSidecars }
+                ? { [mount.mountSubpath]: mountSidecars }
                 : {},
           })
         )
         // (2) NOW overwrite the conflicting live paths with head.
         if (sync.deferred_conflicts.length > 0) {
           await deps.applyHead({
-            dir: mount.materialized_dir,
+            dir: mount.materializedDir,
             toManifestSha256: headManifest,
             paths: sync.deferred_conflicts,
           })
@@ -1204,9 +1202,9 @@ export async function refreshSpaces(
       // the same base and self-heals. CONTINUE so other mounts still refresh +
       // surface notices.
       const msg = err instanceof Error ? err.message : String(err)
-      syncFailuresBySubpath[mount.mount_subpath] = msg
+      syncFailuresBySubpath[mount.mountSubpath] = msg
       console.error(
-        `[sandbox] refresh sync failed for mount ${mount.id} (${mount.mount_subpath}); base left unadvanced for next-turn retry:`,
+        `[sandbox] refresh sync failed for mount ${mount.id} (${mount.mountSubpath}); base left unadvanced for next-turn retry:`,
         err
       )
     }
@@ -1434,14 +1432,14 @@ function defaultCommitDeps(): CommitDeps {
         // advances base — so a persist failure leaves working != committed and
         // the next turn re-derives the conflict (no silent loss).
         const res = await syncDir({
-          dir: mount.materialized_dir!,
+          dir: mount.materializedDir!,
           baseManifestSha256: baseManifestSha ?? undefined,
           toManifestSha256: committedManifestSha,
           deferConflictApply: true,
         })
         const sidecars = res.conflict_sidecars.map((c) => ({
-          original: `/${mount.mount_subpath}${c.original}`,
-          sidecar: `/${mount.mount_subpath}${c.sidecar}`,
+          original: `/${mount.mountSubpath}${c.original}`,
+          sidecar: `/${mount.mountSubpath}${c.sidecar}`,
           kind: c.kind,
           contentSha: c.content_sha ?? undefined,
           target: c.target ?? undefined,
@@ -1466,7 +1464,7 @@ function defaultCommitDeps(): CommitDeps {
     },
     applyHead: async (mount, committedManifestSha, paths) => {
       await applyHeadForConflicts({
-        dir: mount.materialized_dir!,
+        dir: mount.materializedDir!,
         toManifestSha256: committedManifestSha,
         paths,
       })
@@ -1497,18 +1495,18 @@ export async function commitSpaces(
   }
 
   for (const mount of mounts) {
-    if (!subpaths.includes(mount.mount_subpath)) continue
-    if (!mount.materialized_dir) continue
+    if (!subpaths.includes(mount.mountSubpath)) continue
+    if (!mount.materializedDir) continue
 
     const result = await commitOneMount(ctx.workspaceId, sessionId, mount, deps)
     if (result.snapshotId) {
-      out.snapshotIdBySubpath[mount.mount_subpath] = result.snapshotId
+      out.snapshotIdBySubpath[mount.mountSubpath] = result.snapshotId
     }
     if (result.conflicts.length > 0) {
-      out.conflictsBySubpath[mount.mount_subpath] = result.conflicts
+      out.conflictsBySubpath[mount.mountSubpath] = result.conflicts
     }
     if (result.sidecars.length > 0) {
-      out.sidecarsBySubpath[mount.mount_subpath] = result.sidecars
+      out.sidecarsBySubpath[mount.mountSubpath] = result.sidecars
     }
   }
   // P1: the pending commit conflict is now persisted PER-MOUNT inside
@@ -1568,11 +1566,11 @@ async function recordPendingCommitConflicts(
     withDbTransaction(fn)
 ): Promise<void> {
   await runInTx(async (txq) => {
-    const existing = await sql<{ collaboration_state: unknown }>`
+    const existing = await sql<{ collaborationState: unknown }>`
       SELECT collaboration_state FROM sessions WHERE id = ${sessionId} FOR UPDATE`.execute(
       txq
     )
-    const state = (existing.rows[0]?.collaboration_state ?? {}) as Record<
+    const state = (existing.rows[0]?.collaborationState ?? {}) as Record<
       string,
       unknown
     >
@@ -1645,10 +1643,10 @@ export async function peekPendingCommitConflicts(
 ): Promise<Record<string, PendingCommitConflict>> {
   const row = await db
     .selectFrom("sessions")
-    .select("collaboration_state")
+    .select("collaborationState")
     .where("id", "=", sessionId)
     .executeTakeFirst()
-  const state = (row?.collaboration_state ?? {}) as Record<string, unknown>
+  const state = (row?.collaborationState ?? {}) as Record<string, unknown>
   const pending = normalizePendingConflicts(state[PENDING_CONFLICTS_KEY])
   return Object.keys(pending).length > 0 ? pending : {}
 }
@@ -1660,7 +1658,7 @@ export async function clearPendingCommitConflicts(
   await db
     .updateTable("sessions")
     .set({
-      collaboration_state: sql`COALESCE(collaboration_state, '{}'::jsonb) - ${PENDING_CONFLICTS_KEY}::text`,
+      collaborationState: sql`COALESCE(collaboration_state, '{}'::jsonb) - ${PENDING_CONFLICTS_KEY}::text`,
     } as never)
     .where("id", "=", sessionId)
     .execute()
@@ -1781,11 +1779,11 @@ async function recordPendingRefreshConflictsOn(
     "deferredConflictsBySubpath" | "sidecarsBySubpath"
   >
 ): Promise<void> {
-  const existing = await sql<{ collaboration_state: unknown }>`
+  const existing = await sql<{ collaborationState: unknown }>`
     SELECT collaboration_state FROM sessions WHERE id = ${sessionId} FOR UPDATE`.execute(
     txq
   )
-  const state = (existing.rows[0]?.collaboration_state ?? {}) as Record<
+  const state = (existing.rows[0]?.collaborationState ?? {}) as Record<
     string,
     unknown
   >
@@ -1815,10 +1813,10 @@ export async function peekPendingRefreshConflicts(
 > {
   const row = await db
     .selectFrom("sessions")
-    .select("collaboration_state")
+    .select("collaborationState")
     .where("id", "=", sessionId)
     .executeTakeFirst()
-  const state = (row?.collaboration_state ?? {}) as Record<string, unknown>
+  const state = (row?.collaborationState ?? {}) as Record<string, unknown>
   return normalizePendingRefresh(state[PENDING_REFRESH_KEY])
 }
 
@@ -1829,7 +1827,7 @@ export async function clearPendingRefreshConflicts(
   await db
     .updateTable("sessions")
     .set({
-      collaboration_state: sql`COALESCE(collaboration_state, '{}'::jsonb) - ${PENDING_REFRESH_KEY}::text`,
+      collaborationState: sql`COALESCE(collaboration_state, '{}'::jsonb) - ${PENDING_REFRESH_KEY}::text`,
     } as never)
     .where("id", "=", sessionId)
     .execute()
@@ -1860,7 +1858,7 @@ async function restorePendingSidecars(
  */
 export async function restorePendingSidecarsImpl(
   sessionId: string,
-  mounts: Pick<FileMountRow, "mount_subpath" | "materialized_dir">[],
+  mounts: Pick<FileMountRow, "mountSubpath" | "materializedDir">[],
   deps: {
     peekCommit: (s: string) => Promise<Record<string, PendingCommitConflict>>
     peekRefresh: (
@@ -1875,8 +1873,7 @@ export async function restorePendingSidecarsImpl(
 ): Promise<{ ok: boolean; failedSidecars: SidecarRestoreFailure[] }> {
   const dirBySubpath = new Map<string, string>()
   for (const m of mounts) {
-    if (m.materialized_dir)
-      dirBySubpath.set(m.mount_subpath, m.materialized_dir)
+    if (m.materializedDir) dirBySubpath.set(m.mountSubpath, m.materializedDir)
   }
 
   // Collect EVERY pending sidecar ref up front (deduped by leaf). Even if there
@@ -1984,10 +1981,10 @@ async function commitOneMount(
     )
   }
   // Read current head OUTSIDE the lock as `latest`.
-  const space = await getFileSpace(deps.dbh, mount.file_space_id)
-  const latestSnapshotId = space?.current_snapshot_id ?? null
-  const baseManifest = mount.base_snapshot_id
-    ? await getSnapshotManifestSha(deps.dbh, mount.base_snapshot_id)
+  const space = await getFileSpace(deps.dbh, mount.fileSpaceId)
+  const latestSnapshotId = space?.currentSnapshotId ?? null
+  const baseManifest = mount.baseSnapshotId
+    ? await getSnapshotManifestSha(deps.dbh, mount.baseSnapshotId)
     : null
   const latestManifest = latestSnapshotId
     ? await getSnapshotManifestSha(deps.dbh, latestSnapshotId)
@@ -1995,7 +1992,7 @@ async function commitOneMount(
 
   // Scan + CAS-ingest the live dir (slow; no DB lock held).
   const scan = await scanCommitDir({
-    dir: mount.materialized_dir!,
+    dir: mount.materializedDir!,
     baseManifestSha256: baseManifest ?? undefined,
     latestManifestSha256: latestManifest ?? undefined,
   })
@@ -2049,7 +2046,7 @@ async function commitOneMount(
     if (scan.conflict_paths.length > 0) {
       await recordPendingCommitConflicts(
         sessionId,
-        { [mount.mount_subpath]: { paths: scan.conflict_paths, sidecars } },
+        { [mount.mountSubpath]: { paths: scan.conflict_paths, sidecars } },
         deps.runInTx
       )
     }
@@ -2064,7 +2061,7 @@ async function commitOneMount(
     if (deferredConflicts.length > 0) {
       await deps.applyHead(mount, latestManifest, deferredConflicts)
     }
-    if (latestSnapshotId && mount.base_snapshot_id !== latestSnapshotId) {
+    if (latestSnapshotId && mount.baseSnapshotId !== latestSnapshotId) {
       await updateFileMount(deps.dbh, mount.id, {
         baseSnapshotId: latestSnapshotId,
       })
@@ -2087,7 +2084,7 @@ async function commitOneMount(
       }
       return appendSnapshot(txq, {
         workspaceId,
-        fileSpaceId: mount.file_space_id,
+        fileSpaceId: mount.fileSpaceId,
         expectedParentSnapshotId: latestSnapshotId,
         manifestSha256: scan.manifest_sha256,
         entryCount: scan.entry_count,
@@ -2119,7 +2116,7 @@ async function commitOneMount(
     if (scan.conflict_paths.length > 0) {
       await recordPendingCommitConflicts(
         sessionId,
-        { [mount.mount_subpath]: { paths: scan.conflict_paths, sidecars } },
+        { [mount.mountSubpath]: { paths: scan.conflict_paths, sidecars } },
         deps.runInTx
       )
     }
@@ -2191,7 +2188,7 @@ export async function teardownSandbox(
     console.error(`[sandbox] teardown commit failed for ${sessionId}:`, err)
   }
 
-  const deviceId = mounts.find((m) => m.device_id)?.device_id ?? null
+  const deviceId = mounts.find((m) => m.deviceId)?.deviceId ?? null
 
   // ② stop the runtime the backend started. Prefer the in-process handle
   // (keyed by sessionId); else rebuild a SandboxRef from the persisted mount
@@ -2245,7 +2242,7 @@ export async function teardownSandbox(
     for (const mount of mounts) {
       await updateFileMount(db, mount.id, {
         status: "failed",
-        errorMessage: `teardown commit failed (live dir preserved at ${mount.materialized_dir}): ${message}`,
+        errorMessage: `teardown commit failed (live dir preserved at ${mount.materializedDir}): ${message}`,
       }).catch(() => {})
     }
     console.error(
@@ -2315,7 +2312,7 @@ export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsR
   // runtime is per-session, not per-mount) before touching any of its dirs.
   const bySession = new Map<string, FileMountRow[]>()
   for (const mount of mounts) {
-    const sid = mount.session_id as string
+    const sid = mount.sessionId as string
     const list = bySession.get(sid)
     if (list) list.push(mount)
     else bySession.set(sid, [mount])
@@ -2394,10 +2391,10 @@ async function ensureRuntimeStoppedForRecovery(
 async function recoverOneFailedMount(
   mount: FileMountRow
 ): Promise<"recovered" | "stillFailed" | "skipped"> {
-  if (!mount.materialized_dir) return "skipped"
+  if (!mount.materializedDir) return "skipped"
   // The dir may have been cleaned already (e.g. by a later successful run);
   // skip if it's gone — there's nothing to recover.
-  if (!existsSync(mount.materialized_dir)) {
+  if (!existsSync(mount.materializedDir)) {
     await updateFileMount(db, mount.id, {
       status: "closed",
       closedAt: true,
@@ -2407,8 +2404,8 @@ async function recoverOneFailedMount(
   }
   try {
     const result = await commitOneMount(
-      mount.workspace_id,
-      mount.session_id,
+      mount.workspaceId,
+      mount.sessionId,
       mount,
       defaultCommitDeps()
     )
@@ -2416,12 +2413,12 @@ async function recoverOneFailedMount(
     await updateFileMount(db, mount.id, {
       status: "closed",
       closedAt: true,
-      resultSnapshotId: result.snapshotId ?? mount.result_snapshot_id,
+      resultSnapshotId: result.snapshotId ?? mount.resultSnapshotId,
       errorMessage: result.conflicts.length
         ? `recovered with conflicts: ${result.conflicts.join(", ")}`
         : null,
     })
-    await rm(mount.materialized_dir, { recursive: true, force: true }).catch(
+    await rm(mount.materializedDir, { recursive: true, force: true }).catch(
       () => {}
     )
     return "recovered"
