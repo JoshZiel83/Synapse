@@ -184,10 +184,10 @@ export default function PluginInstallationWorkbench({
             <>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span>
-                  {selectedInstallation.is_enabled ? "Enabled" : "Disabled"}
+                  {selectedInstallation.isEnabled ? "Enabled" : "Disabled"}
                 </span>
                 <Switch
-                  checked={Boolean(selectedInstallation.is_enabled)}
+                  checked={Boolean(selectedInstallation.isEnabled)}
                   onCheckedChange={(checked) =>
                     void handleToggleInstallation(checked)
                   }
@@ -240,7 +240,7 @@ export default function PluginInstallationWorkbench({
                           <div
                             className={cn(
                               "inline-flex items-center gap-2 text-xs whitespace-nowrap",
-                              installation.is_enabled
+                              installation.isEnabled
                                 ? "text-emerald-600 dark:text-emerald-300"
                                 : "text-muted-foreground"
                             )}
@@ -248,21 +248,21 @@ export default function PluginInstallationWorkbench({
                             <span
                               className={cn(
                                 "size-2 rounded-full",
-                                installation.is_enabled
+                                installation.isEnabled
                                   ? "bg-emerald-500"
                                   : "bg-muted-foreground/35"
                               )}
                             />
-                            {installation.is_enabled ? "Enabled" : "Disabled"}
+                            {installation.isEnabled ? "Enabled" : "Disabled"}
                           </div>
                         </div>
                         <p className="text-sm text-muted-foreground">
                           {getPluginInstallationDetails(installation)}
                         </p>
                         <p className="text-xs text-muted-foreground/80">
-                          {installation.org_display_name
-                            ? `${installation.org_display_name} · v${installation.plugin_version}`
-                            : `Version ${installation.plugin_version}`}
+                          {installation.orgDisplayName
+                            ? `${installation.orgDisplayName} · v${installation.pluginVersion}`
+                            : `Version ${installation.pluginVersion}`}
                         </p>
                       </div>
                     </button>

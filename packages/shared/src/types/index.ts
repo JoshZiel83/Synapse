@@ -4597,3 +4597,20 @@ export type {
   WorkspaceInvitePublicView,
   WorkspaceInviteRedeemResult,
 } from "../schemas/workspace-invites.js"
+export type {
+  ModelGroupView,
+  ModelGroupItemView,
+  ModelGroupGrantView,
+  ModelGroupDetailView,
+  ActorModelGroupAssignmentView,
+  ModelGroupItemVersionView,
+} from "../schemas/model-groups.js"
+export type {
+  PluginAuthorizationView,
+  MarketplacePluginCategoryView,
+  MarketplacePluginPublisherSummary,
+  MarketplacePluginView,
+  MarketplacePublisherView,
+  PluginCategoryView,
+  PluginInstallationDetailView,
+} from "../schemas/mcp-plugins.js"

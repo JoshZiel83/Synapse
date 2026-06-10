@@ -15,9 +15,9 @@ export type ModelGroupScopeFilter = ModelGroupScope | "all"
 export type ModelGroupScopeAuto = ModelGroupScope | "auto"
 
 export type ModelGroupSummaryRecord = {
-  workspace_id: string | null
-  owner_type?: ModelGroupOwnerType
-  routing_strategy: ModelGroupRoutingStrategy
+  workspaceId: string | null
+  ownerType?: ModelGroupOwnerType
+  routingStrategy: ModelGroupRoutingStrategy
 }
 
 export const MODEL_GROUP_ROUTING_OPTIONS: Array<{
@@ -51,15 +51,15 @@ export function getModelGroupStrategyLabel(
 }
 
 export function resolveModelGroupScope(
-  group: Pick<ModelGroupSummaryRecord, "owner_type" | "workspace_id">
+  group: Pick<ModelGroupSummaryRecord, "ownerType" | "workspaceId">
 ): ModelGroupScope {
   if (
-    group.owner_type === MODEL_GROUP_OWNER_TYPE.PLATFORM ||
-    (!group.owner_type && !group.workspace_id)
+    group.ownerType === MODEL_GROUP_OWNER_TYPE.PLATFORM ||
+    (!group.ownerType && !group.workspaceId)
   ) {
     return MODEL_GROUP_OWNER_TYPE.PLATFORM
   }
-  if (group.owner_type === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
+  if (group.ownerType === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     return MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER
   }
   return MODEL_GROUP_OWNER_TYPE.WORKSPACE

@@ -40,12 +40,12 @@ export default function InstalledList() {
   }
 
   const hasRequiredConfigMissing = (install: any): boolean => {
-    const fields: any[] = install.config_fields || []
+    const fields: any[] = install.configFields || []
     const required = fields.filter((field) => field.required)
     if (required.length === 0) return false
-    const configData = install.config_data || {}
+    const configData = install.configData || {}
     const configState = new Map<string, { isConfigured?: boolean }>(
-      (install.config_state || []).map((state: any) => [state.key, state])
+      (install.configState || []).map((state: any) => [state.key, state])
     )
     return required.some((field: any) => {
       if (field.type === "auth_connection") {
@@ -89,13 +89,13 @@ export default function InstalledList() {
             <CardContent className="flex items-center justify-between p-4">
               <div className="flex items-center gap-3">
                 <PluginIcon
-                  iconUrl={install.plugin_icon_url}
+                  iconUrl={install.pluginIconUrl}
                   title={
                     translate(
-                      install.plugin_display_name_i18n,
+                      install.pluginDisplayNameI18n,
                       locale,
-                      install.default_locale || "en"
-                    ) || install.plugin_display_name
+                      install.defaultLocale || "en"
+                    ) || install.pluginDisplayName
                   }
                   transport={install.transport}
                   containerClassName="h-10 w-10 rounded-lg bg-blue-500/10"
@@ -104,14 +104,14 @@ export default function InstalledList() {
                 <div className="space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <Link
-                      href={`/dashboard/plugins/${install.plugin_id}`}
+                      href={`/dashboard/plugins/${install.pluginId}`}
                       className="text-sm font-medium hover:text-blue-600"
                     >
                       {translate(
-                        install.plugin_display_name_i18n,
+                        install.pluginDisplayNameI18n,
                         locale,
-                        install.default_locale || "en"
-                      ) || install.plugin_display_name}
+                        install.defaultLocale || "en"
+                      ) || install.pluginDisplayName}
                     </Link>
                     {configMissing && (
                       <Badge
@@ -130,16 +130,16 @@ export default function InstalledList() {
                     {getPluginInstallationDetails(install)}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {install.org_display_name
-                      ? `${install.org_display_name} · v${install.plugin_version}`
-                      : `Version ${install.plugin_version}`}
+                    {install.orgDisplayName
+                      ? `${install.orgDisplayName} · v${install.pluginVersion}`
+                      : `Version ${install.pluginVersion}`}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-3">
                 <Switch
-                  checked={install.is_enabled}
+                  checked={install.isEnabled}
                   onCheckedChange={(checked) => handleToggle(install, checked)}
                 />
                 <Button

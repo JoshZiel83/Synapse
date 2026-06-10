@@ -7,9 +7,9 @@ import { api } from "./api"
 
 export type IntegrationInstallationView = {
   id: string
-  org_slug?: string
-  plugin_slug?: string
-  plugin_display_name?: string
+  orgSlug?: string
+  pluginSlug?: string
+  pluginDisplayName?: string
   status?: string
 }
 
@@ -56,8 +56,8 @@ export function listIntegrationInstallations(
 ) {
   return installations.filter(
     (installation) =>
-      installation.org_slug === provider &&
-      installation.plugin_slug === "official-mcp" &&
+      installation.orgSlug === provider &&
+      installation.pluginSlug === "official-mcp" &&
       installation.status === "active"
   )
 }

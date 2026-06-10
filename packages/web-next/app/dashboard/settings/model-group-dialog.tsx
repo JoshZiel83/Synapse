@@ -57,9 +57,9 @@ export default function ModelGroupDialog({
       setName(group.name || "")
       setDescription(group.description || "")
       setStrategy(
-        group.routing_strategy || MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER
+        group.routingStrategy || MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER
       )
-      setIsDefault(group.is_default || false)
+      setIsDefault(group.isDefault || false)
       setSelectedScope(scope)
     } else {
       setName("")

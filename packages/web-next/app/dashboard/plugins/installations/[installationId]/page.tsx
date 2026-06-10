@@ -31,11 +31,11 @@ export default function PluginInstallationPage() {
 
         const currentInstallation = data.installation
         const [pluginData, installData] = await Promise.all([
-          api.getMarketplacePlugin(currentInstallation.plugin_id),
+          api.getMarketplacePlugin(currentInstallation.pluginId),
           api.getInstallations(
             workspaceId,
             new URLSearchParams({
-              pluginId: currentInstallation.plugin_id,
+              pluginId: currentInstallation.pluginId,
             }).toString()
           ),
         ])
@@ -81,7 +81,7 @@ export default function PluginInstallationPage() {
           size="sm"
           onClick={() =>
             router.push(
-              `/dashboard/plugins/${installation.plugin_id}?installationId=${installation.id}`
+              `/dashboard/plugins/${installation.pluginId}?installationId=${installation.id}`
             )
           }
         >
@@ -105,7 +105,7 @@ export default function PluginInstallationPage() {
             )
           }
           onCreateInstallation={() =>
-            router.push(`/dashboard/plugins/${installation.plugin_id}/install`)
+            router.push(`/dashboard/plugins/${installation.pluginId}/install`)
           }
           onInstallationsChanged={async (updatedInstallation) => {
             if (!workspaceId) return
@@ -114,7 +114,7 @@ export default function PluginInstallationPage() {
               api.getInstallations(
                 workspaceId,
                 new URLSearchParams({
-                  pluginId: installation.plugin_id,
+                  pluginId: installation.pluginId,
                 }).toString()
               ),
             ])

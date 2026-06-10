@@ -46,36 +46,36 @@ import {
 
 type ModelGroupSummary = {
   id: string
-  workspace_id: string | null
-  owner_type?: ModelGroupOwnerType
-  owner_workspace_id?: string | null
-  owner_workspace_member_id?: string | null
+  workspaceId: string | null
+  ownerType?: ModelGroupOwnerType
+  ownerWorkspaceId?: string | null
+  ownerWorkspaceMemberId?: string | null
   name: string
   description: string
-  routing_strategy: ModelGroupRoutingStrategy
-  is_default: boolean
-  is_active?: boolean
-  created_at: Timestamp
+  routingStrategy: ModelGroupRoutingStrategy
+  isDefault: boolean
+  isActive?: boolean
+  createdAt: Timestamp
 }
 
 type ModelItem = {
   id: string
-  group_id: string
-  binding_id: string
-  display_name: string
+  groupId: string | null
+  bindingId: string
+  displayName: string
   priority: number
   weight: number
-  is_enabled: boolean
-  current_version_id: string | null
-  version: number
-  provider_kind: string
-  vendor: string
-  base_url: string
-  model_name: string
-  max_output_tokens: number
-  capability_tags: string[]
+  isEnabled: boolean
+  currentVersionId: string | null
+  version: number | null
+  providerKind: string
+  vendor: string | null
+  baseUrl: string | null
+  modelName: string | null
+  maxOutputTokens: number | null
+  capabilityTags: string[]
   features?: Record<string, unknown>
-  provider_options?: Record<string, unknown>
+  providerOptions?: Record<string, unknown>
 }
 
 type GroupDetail = ModelGroupSummary & {
@@ -132,12 +132,12 @@ function createFormState(item?: ModelItem | null): ModelItemFormState {
   const vendor = item?.vendor || DEFAULT_VENDOR
 
   return {
-    displayName: item?.display_name || "",
+    displayName: item?.displayName || "",
     vendor,
     apiKey: "",
-    baseUrl: item?.base_url || getDefaultModelBaseUrl(vendor),
-    modelName: item?.model_name || getDefaultModelName(vendor),
-    maxOutputTokens: String(item?.max_output_tokens || 4096),
+    baseUrl: item?.baseUrl || getDefaultModelBaseUrl(vendor),
+    modelName: item?.modelName || getDefaultModelName(vendor),
+    maxOutputTokens: String(item?.maxOutputTokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
     apiStyle: features.apiStyle === "responses" ? "responses" : "chat",
@@ -150,10 +150,10 @@ function createFormState(item?: ModelItem | null): ModelItemFormState {
         : [],
     crossTurnToolHistory: Boolean(features.crossTurnToolHistory),
     providerOptionsText:
-      item?.provider_options && Object.keys(item.provider_options).length > 0
-        ? JSON.stringify(item.provider_options, null, 2)
+      item?.providerOptions && Object.keys(item.providerOptions).length > 0
+        ? JSON.stringify(item.providerOptions, null, 2)
         : "",
-    isEnabled: item ? Boolean(item.is_enabled) : true,
+    isEnabled: item ? Boolean(item.isEnabled) : true,
   }
 }
 
@@ -209,7 +209,7 @@ function GroupListItem({
             <div className="truncate text-sm font-medium text-foreground">
               {group.name}
             </div>
-            {group.is_default ? (
+            {group.isDefault ? (
               <Badge variant="outline">
                 <Star className="mr-1 size-3" />
                 Default
@@ -221,7 +221,7 @@ function GroupListItem({
             </Badge>
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
-            {getModelGroupStrategyLabel(group.routing_strategy)}
+            {getModelGroupStrategyLabel(group.routingStrategy)}
           </div>
           {group.description ? (
             <div className="mt-1 truncate text-sm text-muted-foreground">
@@ -251,12 +251,12 @@ function ConfigListItem({
         selected
           ? "border-primary bg-accent"
           : "border-transparent hover:bg-accent/60"
-      } ${item.is_enabled ? "" : "opacity-60"}`}
+      } ${item.isEnabled ? "" : "opacity-60"}`}
     >
       <div className="flex items-start gap-3">
         <div
           className={`mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-2xl ${
-            item.is_enabled
+            item.isEnabled
               ? "bg-emerald-500/10 text-emerald-500"
               : "bg-muted text-muted-foreground"
           }`}
@@ -266,27 +266,25 @@ function ConfigListItem({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <div className="truncate text-sm font-medium text-foreground">
-              {item.display_name}
+              {item.displayName}
             </div>
             <Badge variant="secondary">v{item.version || 1}</Badge>
             {item.vendor ? (
               <Badge variant="outline">{item.vendor}</Badge>
             ) : null}
-            {item.provider_kind ? (
-              <Badge variant="outline">{item.provider_kind}</Badge>
+            {item.providerKind ? (
+              <Badge variant="outline">{item.providerKind}</Badge>
             ) : null}
-            {!item.is_enabled ? (
-              <Badge variant="outline">Disabled</Badge>
-            ) : null}
+            {!item.isEnabled ? <Badge variant="outline">Disabled</Badge> : null}
           </div>
           <div className="mt-1 truncate text-sm text-muted-foreground">
-            {item.model_name || "No model configured"}
+            {item.modelName || "No model configured"}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <span>Priority {item.priority}</span>
             <span>Weight {item.weight}</span>
-            {item.max_output_tokens ? (
-              <span>{item.max_output_tokens} tokens</span>
+            {item.maxOutputTokens ? (
+              <span>{item.maxOutputTokens} tokens</span>
             ) : null}
           </div>
         </div>
@@ -441,7 +439,7 @@ export default function ModelGroupBrowser({
     if (!needle) return groups
     return groups.filter((group) => {
       const haystack =
-        `${group.name} ${group.description} ${group.routing_strategy}`.toLowerCase()
+        `${group.name} ${group.description} ${group.routingStrategy}`.toLowerCase()
       return haystack.includes(needle)
     })
   }, [deferredGroupSearch, groups])
@@ -454,7 +452,7 @@ export default function ModelGroupBrowser({
         : "No workspace model groups configured"
 
   const editorTitle = currentItem
-    ? currentItem.display_name
+    ? currentItem.displayName
     : selectedGroup
       ? "New Model Config"
       : "Select a model group"
@@ -696,10 +694,10 @@ export default function ModelGroupBrowser({
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <Badge variant="secondary">
                       {getModelGroupStrategyLabel(
-                        selectedGroup.routing_strategy
+                        selectedGroup.routingStrategy
                       )}
                     </Badge>
-                    {selectedGroup.is_default ? (
+                    {selectedGroup.isDefault ? (
                       <Badge variant="outline">Default</Badge>
                     ) : null}
                   </div>
@@ -1252,7 +1250,7 @@ export default function ModelGroupBrowser({
                           </span>
                           <span className="font-medium text-foreground">
                             {getModelGroupStrategyLabel(
-                              selectedGroup.routing_strategy
+                              selectedGroup.routingStrategy
                             )}
                           </span>
                         </div>

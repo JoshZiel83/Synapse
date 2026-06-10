@@ -197,8 +197,8 @@ function translate(
 function getIntegrationProvider(
   plugin: any
 ): AutomationIntegrationProvider | null {
-  const orgSlug = plugin?.org_slug
-  const pluginSlug = plugin?.plugin_slug || plugin?.slug
+  const orgSlug = plugin?.orgSlug
+  const pluginSlug = plugin?.pluginSlug || plugin?.slug
   if (pluginSlug !== "official-mcp") return null
   if (orgSlug === "github" || orgSlug === "gitlab") {
     return orgSlug
@@ -311,10 +311,10 @@ function getFeishuAppScopeStatus(
 }
 
 function deriveConfigFields(plugin: any): PluginConfigFieldDefinition[] {
-  if (Array.isArray(plugin.config_fields) && plugin.config_fields.length > 0) {
-    return plugin.config_fields
+  if (Array.isArray(plugin.configFields) && plugin.configFields.length > 0) {
+    return plugin.configFields
   }
-  const schema = plugin.config_schema || {}
+  const schema = plugin.configSchema || {}
   const properties = schema.properties || {}
   const requiredFields = new Set<string>(
     Array.isArray(schema.required) ? schema.required : []
@@ -329,7 +329,7 @@ function deriveConfigFields(plugin: any): PluginConfigFieldDefinition[] {
     titleI18n: { en: value.title || value.description || key },
     descriptionI18n: value.description ? { en: value.description } : undefined,
     required: requiredFields.has(key),
-    defaultValue: plugin.default_config?.[key],
+    defaultValue: plugin.defaultConfig?.[key],
     secret: value.sensitive === true,
   }))
 }
@@ -341,9 +341,9 @@ function deriveInstallFlow(
   options?: { includePlacementSteps?: boolean }
 ): PluginInstallStep[] {
   const baseSteps =
-    Array.isArray(plugin.install_flow?.steps) &&
-    plugin.install_flow.steps.length > 0
-      ? plugin.install_flow.steps.filter((step: PluginInstallStep) => {
+    Array.isArray(plugin.installFlow?.steps) &&
+    plugin.installFlow.steps.length > 0
+      ? plugin.installFlow.steps.filter((step: PluginInstallStep) => {
           const kind = step.kind as string
           return kind !== "confirm" && kind !== "attachment_scope"
         })
@@ -381,10 +381,7 @@ function buildInitialConfig(
   plugin: any,
   configFields: PluginConfigFieldDefinition[]
 ) {
-  const initial = { ...(plugin.default_config || {}) } as Record<
-    string,
-    unknown
-  >
+  const initial = { ...(plugin.defaultConfig || {}) } as Record<string, unknown>
   for (const field of configFields) {
     if (initial[field.key] !== undefined) continue
     if (field.defaultValue !== undefined) {
@@ -587,8 +584,8 @@ export default function InstallDialog({
   const { installPlugin, updateInstallation } = usePluginStore()
 
   const locale = useMemo(
-    () => getLocale(plugin.default_locale),
-    [plugin.default_locale]
+    () => getLocale(plugin.defaultLocale),
+    [plugin.defaultLocale]
   )
   const integrationProvider = useMemo(
     () => getIntegrationProvider(plugin),
@@ -610,8 +607,8 @@ export default function InstallDialog({
     [integrationProvider]
   )
   const authBindings = useMemo<PluginAuthBindingDefinition[]>(
-    () => plugin.auth_bindings || [],
-    [plugin.auth_bindings]
+    () => plugin.authBindings || [],
+    [plugin.authBindings]
   )
   const authBindingMap = useMemo(
     () => new Map(authBindings.map((binding) => [binding.key, binding])),
@@ -624,10 +621,10 @@ export default function InstallDialog({
     [defaultActorId, lifecyclePreviewScopeType]
   )
   const [lifecycleScope, setLifecycleScope] = useState<PluginReuseScope>(
-    ((initialInstallation?.lifecycle_scope as PluginReuseScope | undefined) ||
+    ((initialInstallation?.lifecycleScope as PluginReuseScope | undefined) ||
       defaultLifecycleScope ||
-      plugin.lifecycle_scope ||
-      plugin.default_reuse_scope ||
+      plugin.lifecycleScope ||
+      plugin.defaultReuseScope ||
       "conversation") as PluginReuseScope
   )
   const [selectedActorId, setSelectedActorId] = useState(defaultActorId || "")
@@ -636,7 +633,7 @@ export default function InstallDialog({
   const [conversations, setConversations] = useState<any[]>([])
   const [configData, setConfigData] = useState<Record<string, unknown>>(() => ({
     ...buildInitialConfig(plugin, configFields),
-    ...(initialInstallation?.config_data || {}),
+    ...(initialInstallation?.configData || {}),
   }))
   const [saving, setSaving] = useState(false)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
@@ -649,7 +646,7 @@ export default function InstallDialog({
       buildInitialAuthFields(
         {
           ...buildInitialConfig(plugin, configFields),
-          ...(initialInstallation?.config_data || {}),
+          ...(initialInstallation?.configData || {}),
         },
         configFields
       )
@@ -667,7 +664,7 @@ export default function InstallDialog({
     useState(false)
   const authPollers = useRef<Record<string, number>>({})
 
-  const validationRules: ValidationRule[] = plugin.validation_rules || []
+  const validationRules: ValidationRule[] = plugin.validationRules || []
   const resolvedIncludeAccessStep = includeAccessStep ?? presentation === "page"
   const installSteps = useMemo<InstallFlowStep[]>(() => {
     const nextSteps: InstallFlowStep[] = [...setupSteps]
@@ -737,14 +734,14 @@ export default function InstallDialog({
   const installLifecycleOptions = useMemo(
     () =>
       normalizeSupportedReuseScopes(
-        currentInstallation?.supported_reuse_scopes ||
-          currentInstallation?.plugin_supported_reuse_scopes ||
-          plugin.supported_reuse_scopes
+        currentInstallation?.supportedReuseScopes ||
+          currentInstallation?.pluginSupportedReuseScopes ||
+          plugin.supportedReuseScopes
       ),
     [
-      currentInstallation?.plugin_supported_reuse_scopes,
-      currentInstallation?.supported_reuse_scopes,
-      plugin.supported_reuse_scopes,
+      currentInstallation?.pluginSupportedReuseScopes,
+      currentInstallation?.supportedReuseScopes,
+      plugin.supportedReuseScopes,
     ]
   )
   const currentAuthStepState = currentAuthStepField
@@ -1237,7 +1234,7 @@ export default function InstallDialog({
       <div className="flex flex-wrap gap-2">
         {installSteps.map((step, index) => {
           const label =
-            translate(step.titleI18n, locale, plugin.default_locale || "en") ||
+            translate(step.titleI18n, locale, plugin.defaultLocale || "en") ||
             step.id
           const isCurrent = index === currentStepIndex
           const isComplete = index < currentStepIndex
@@ -1302,7 +1299,7 @@ export default function InstallDialog({
             {translate(
               currentStep.action.buttonLabelI18n,
               locale,
-              plugin.default_locale || "en"
+              plugin.defaultLocale || "en"
             ) || "Authorize"}
           </Button>
         </div>
@@ -1320,7 +1317,7 @@ export default function InstallDialog({
             {translate(
               currentStep.action.buttonLabelI18n,
               locale,
-              plugin.default_locale || "en"
+              plugin.defaultLocale || "en"
             ) || "Open link"}
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
@@ -1338,17 +1335,17 @@ export default function InstallDialog({
       : undefined
     const authState = authFields[field.key]
     const label =
-      translate(field.titleI18n, locale, plugin.default_locale || "en") ||
+      translate(field.titleI18n, locale, plugin.defaultLocale || "en") ||
       field.key
     const description = translate(
       field.descriptionI18n,
       locale,
-      plugin.default_locale || "en"
+      plugin.defaultLocale || "en"
     )
     const placeholder = translate(
       field.placeholderI18n,
       locale,
-      plugin.default_locale || "en"
+      plugin.defaultLocale || "en"
     )
 
     if (field.type === "boolean") {
@@ -1426,7 +1423,7 @@ export default function InstallDialog({
                   {translate(
                     option.labelI18n,
                     locale,
-                    plugin.default_locale || "en"
+                    plugin.defaultLocale || "en"
                   ) || option.value}
                 </option>
               ))}
@@ -1468,12 +1465,12 @@ export default function InstallDialog({
                 translate(
                   option.labelI18n,
                   locale,
-                  plugin.default_locale || "en"
+                  plugin.defaultLocale || "en"
                 ) || option.value
               const optionDescription = translate(
                 option.descriptionI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               )
               const checked = selectedValues.has(option.value)
               return (
@@ -1559,7 +1556,7 @@ export default function InstallDialog({
         ? translate(
             binding.displayNameI18n,
             locale,
-            plugin.default_locale || "en"
+            plugin.defaultLocale || "en"
           ) || binding.key
         : field.authBindingKey || "binding"
       const challengeMetadata = getAuthChallengeMetadata(authState)
@@ -1854,7 +1851,7 @@ export default function InstallDialog({
               {translate(
                 currentStep.titleI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               ) || currentStep.id}
             </h3>
             {currentStep.descriptionI18n && (
@@ -1862,7 +1859,7 @@ export default function InstallDialog({
                 {translate(
                   currentStep.descriptionI18n,
                   locale,
-                  plugin.default_locale || "en"
+                  plugin.defaultLocale || "en"
                 )}
               </p>
             )}
@@ -1878,7 +1875,7 @@ export default function InstallDialog({
               {translate(
                 currentStep.helpTextI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               ) || "Open setup guide"}
               <ExternalLink className="h-3 w-3" />
             </a>
@@ -2129,13 +2126,13 @@ export default function InstallDialog({
           <div className="flex">
             <div className="mr-4 shrink-0">
               <PluginIcon
-                iconUrl={plugin.icon_url}
+                iconUrl={plugin.iconUrl}
                 title={
                   translate(
-                    plugin.display_name_i18n,
+                    plugin.displayNameI18n,
                     locale,
-                    plugin.default_locale || "en"
-                  ) || plugin.display_name
+                    plugin.defaultLocale || "en"
+                  ) || plugin.displayName
                 }
                 transport={plugin.transport}
                 className="h-8 w-8"
@@ -2145,16 +2142,16 @@ export default function InstallDialog({
             <div>
               <h2 className="text-lg font-bold text-gray-900 dark:text-white">
                 {translate(
-                  plugin.display_name_i18n,
+                  plugin.displayNameI18n,
                   locale,
-                  plugin.default_locale || "en"
-                ) || plugin.display_name}
+                  plugin.defaultLocale || "en"
+                ) || plugin.displayName}
               </h2>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {translate(
-                  plugin.description_i18n,
+                  plugin.descriptionI18n,
                   locale,
-                  plugin.default_locale || "en"
+                  plugin.defaultLocale || "en"
                 ) || "Install this plugin by following its guided setup flow."}
               </p>
             </div>
@@ -2217,10 +2214,10 @@ export default function InstallDialog({
         <DialogHeader>
           <DialogTitle>
             {translate(
-              plugin.display_name_i18n,
+              plugin.displayNameI18n,
               locale,
-              plugin.default_locale || "en"
-            ) || plugin.display_name}
+              plugin.defaultLocale || "en"
+            ) || plugin.displayName}
           </DialogTitle>
         </DialogHeader>
         {content}

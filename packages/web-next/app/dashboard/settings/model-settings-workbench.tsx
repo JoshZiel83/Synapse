@@ -79,50 +79,50 @@ type GrantScope = ModelGroupGrantScope
 
 type ModelGroupSummary = {
   id: string
-  workspace_id: string | null
-  owner_type?: ModelGroupOwnerType
-  owner_workspace_id?: string | null
-  owner_workspace_member_id?: string | null
+  workspaceId: string | null
+  ownerType?: ModelGroupOwnerType
+  ownerWorkspaceId?: string | null
+  ownerWorkspaceMemberId?: string | null
   name: string
   description: string
-  routing_strategy: ModelGroupRoutingStrategy
-  is_default: boolean
-  is_active?: boolean
-  created_at: Timestamp
+  routingStrategy: ModelGroupRoutingStrategy
+  isDefault: boolean
+  isActive?: boolean
+  createdAt: Timestamp
 }
 
 type ModelGroupGrant = {
   id: string
-  group_id: string
-  grant_scope: ModelGroupGrantScope
-  workspace_id: string | null
-  workspace_member_id: string | null
-  actor_id: string | null
+  groupId: string
+  grantScope: ModelGroupGrantScope
+  workspaceId: string | null
+  workspaceMemberId: string | null
+  actorId: string | null
   status: ModelGroupGrantStatus
   grantedByWorkspaceMemberId?: string | null
   reason?: string | null
-  created_at?: Timestamp | null
-  revoked_at?: Timestamp | null
+  createdAt?: Timestamp | null
+  revokedAt?: Timestamp | null
 }
 
 type ModelItem = {
   id: string
-  group_id: string
-  binding_id: string
-  current_version_id: string | null
-  display_name: string
+  groupId: string | null
+  bindingId: string
+  currentVersionId: string | null
+  displayName: string
   priority: number
   weight: number
-  is_enabled: boolean
-  version: number
-  provider_kind: string
-  vendor: string
-  base_url: string
-  model_name: string
-  max_output_tokens: number
-  capability_tags: string[]
+  isEnabled: boolean
+  version: number | null
+  providerKind: string
+  vendor: string | null
+  baseUrl: string | null
+  modelName: string | null
+  maxOutputTokens: number | null
+  capabilityTags: string[]
   features?: Record<string, unknown>
-  provider_options?: Record<string, unknown>
+  providerOptions?: Record<string, unknown>
 }
 
 type GroupDetail = ModelGroupSummary & {
@@ -193,15 +193,15 @@ function createDraft(item?: ModelItem | null): ConfigDraft {
   const vendor = item?.vendor || DEFAULT_VENDOR
 
   return {
-    displayName: item?.display_name || "",
+    displayName: item?.displayName || "",
     vendor,
     apiKey: "",
-    baseUrl: item?.base_url || getDefaultModelBaseUrl(vendor),
-    modelName: item?.model_name || getDefaultModelName(vendor),
-    maxOutputTokens: String(item?.max_output_tokens || 4096),
+    baseUrl: item?.baseUrl || getDefaultModelBaseUrl(vendor),
+    modelName: item?.modelName || getDefaultModelName(vendor),
+    maxOutputTokens: String(item?.maxOutputTokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
-    isEnabled: item ? Boolean(item.is_enabled) : true,
+    isEnabled: item ? Boolean(item.isEnabled) : true,
     apiStyle: features.apiStyle === "responses" ? "responses" : "chat",
     serverTools: Array.isArray(features.serverTools)
       ? features.serverTools
@@ -212,8 +212,8 @@ function createDraft(item?: ModelItem | null): ConfigDraft {
         : [],
     crossTurnToolHistory: Boolean(features.crossTurnToolHistory),
     providerOptionsText:
-      item?.provider_options && Object.keys(item.provider_options).length > 0
-        ? JSON.stringify(item.provider_options, null, 2)
+      item?.providerOptions && Object.keys(item.providerOptions).length > 0
+        ? JSON.stringify(item.providerOptions, null, 2)
         : "",
   }
 }
@@ -378,37 +378,35 @@ function grantTargetLabel(
   currentWorkspaceMemberId: string | null,
   currentUser: WorkbenchUser | null
 ) {
-  switch (grant.grant_scope) {
+  switch (grant.grantScope) {
     case MODEL_GROUP_GRANT_SCOPE.PLATFORM:
       return "Platform"
     case MODEL_GROUP_GRANT_SCOPE.WORKSPACE:
       return (
-        workspaces.find((workspace) => workspace.id === grant.workspace_id)
+        workspaces.find((workspace) => workspace.id === grant.workspaceId)
           ?.name || "Workspace"
       )
     case MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER: {
       if (
-        grant.workspace_member_id &&
-        currentWorkspaceMemberId === grant.workspace_member_id
+        grant.workspaceMemberId &&
+        currentWorkspaceMemberId === grant.workspaceMemberId
       ) {
         return currentUser?.name || currentUser?.email || "Current member"
       }
-      const member = members.find(
-        (item) => item.id === grant.workspace_member_id
-      )
+      const member = members.find((item) => item.id === grant.workspaceMemberId)
       return (
         member?.userName ||
         member?.userEmail ||
-        grant.workspace_member_id ||
+        grant.workspaceMemberId ||
         "Member"
       )
     }
     case MODEL_GROUP_GRANT_SCOPE.ACTOR: {
-      const actor = actors.find((item) => item.id === grant.actor_id)
+      const actor = actors.find((item) => item.id === grant.actorId)
       return (
         actor?.displayName ||
         actor?.definition?.title ||
-        grant.actor_id ||
+        grant.actorId ||
         "Actor"
       )
     }
@@ -1086,7 +1084,7 @@ export default function ModelSettingsWorkbench() {
         }
         return (
           rank(left) - rank(right) ||
-          Number(right.is_default) - Number(left.is_default) ||
+          Number(right.isDefault) - Number(left.isDefault) ||
           left.name.localeCompare(right.name)
         )
       })
@@ -1223,7 +1221,7 @@ export default function ModelSettingsWorkbench() {
     if (!needle) return groups
     return groups.filter((group) => {
       const haystack =
-        `${group.name} ${group.description} ${group.routing_strategy}`.toLowerCase()
+        `${group.name} ${group.description} ${group.routingStrategy}`.toLowerCase()
       return haystack.includes(needle)
     })
   }, [deferredGroupSearch, groups])
@@ -1607,9 +1605,9 @@ export default function ModelSettingsWorkbench() {
                     Refresh
                   </Button>
                   <Select
-                    value={selectedGroup.routing_strategy}
+                    value={selectedGroup.routingStrategy}
                     onValueChange={(value) => {
-                      if (value === selectedGroup.routing_strategy) return
+                      if (value === selectedGroup.routingStrategy) return
                       void handleUpdateGroupSettings(
                         { routingStrategy: value },
                         "routing"
@@ -1628,7 +1626,7 @@ export default function ModelSettingsWorkbench() {
                       ))}
                     </SelectContent>
                   </Select>
-                  {selectedGroup.is_default ? (
+                  {selectedGroup.isDefault ? (
                     <Button variant="outline" disabled>
                       Default
                     </Button>
@@ -1746,7 +1744,7 @@ export default function ModelSettingsWorkbench() {
                               <div className="flex min-w-0 items-center gap-3">
                                 <div
                                   className={`flex size-10 shrink-0 items-center justify-center rounded-2xl ${
-                                    item.is_enabled
+                                    item.isEnabled
                                       ? "bg-emerald-500/10 text-emerald-500"
                                       : "bg-muted text-muted-foreground"
                                   }`}
@@ -1756,7 +1754,7 @@ export default function ModelSettingsWorkbench() {
                                 <div className="min-w-0">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <span className="truncate font-medium text-foreground">
-                                      {item.display_name}
+                                      {item.displayName}
                                     </span>
                                     <Badge variant="secondary">
                                       v{item.version || 1}
@@ -1766,18 +1764,18 @@ export default function ModelSettingsWorkbench() {
                                         {item.vendor}
                                       </Badge>
                                     ) : null}
-                                    {item.provider_kind ? (
+                                    {item.providerKind ? (
                                       <Badge variant="outline">
-                                        {item.provider_kind}
+                                        {item.providerKind}
                                       </Badge>
                                     ) : null}
-                                    {!item.is_enabled ? (
+                                    {!item.isEnabled ? (
                                       <Badge variant="outline">Disabled</Badge>
                                     ) : null}
                                   </div>
                                   <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                                     <span>
-                                      {item.model_name || "No model configured"}
+                                      {item.modelName || "No model configured"}
                                     </span>
                                     <span>Priority {item.priority}</span>
                                     <span>Weight {item.weight}</span>
@@ -1856,7 +1854,7 @@ export default function ModelSettingsWorkbench() {
                                 </span>
                                 <Badge variant="outline">
                                   {getModelGroupGrantScopeLabel(
-                                    grant.grant_scope
+                                    grant.grantScope
                                   )}
                                 </Badge>
                               </div>

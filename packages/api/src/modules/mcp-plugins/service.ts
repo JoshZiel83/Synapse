@@ -34,6 +34,11 @@ import type {
   McpValidationRule,
   PluginReuseScopeV2,
   RuntimeBindingScope,
+  MarketplacePluginView,
+  MarketplacePluginCategoryView,
+  MarketplacePublisherView,
+  PluginCategoryView,
+  PluginInstallationDetailView,
 } from "@synapse/shared"
 import { CompiledQuery, sql, type RawBuilder, type SqlBool } from "kysely"
 import {
@@ -523,7 +528,7 @@ function authorizationFromRuntimePermissions(
   }
 }
 
-function mapPluginView(row: PluginCatalogRow) {
+function mapPluginView(row: PluginCatalogRow): MarketplacePluginView {
   const itemMetadata = asObject(row.item_metadata)
   const specMetadata = asObject(row.spec_metadata)
   const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope)
@@ -547,95 +552,111 @@ function mapPluginView(row: PluginCatalogRow) {
   )
   const setupSteps = asArray<McpSetupStep>(specMetadata.setupSteps)
   const installFlow = asObject(row.spec_install_flow)
-  const categories = asArray<JsonObject>(row.categories_json).map(
-    (category) => ({
-      id: String(category.id || ""),
-      slug: String(category.slug || ""),
-      display_name: String(category.display_name || ""),
-      description: String(category.description || ""),
-      display_name_i18n: asObject(category.display_name_i18n),
-      description_i18n: asObject(category.description_i18n),
-      default_locale:
-        typeof category.default_locale === "string"
-          ? category.default_locale
-          : "en",
-    })
-  )
+  const categories: MarketplacePluginCategoryView[] = asArray<JsonObject>(
+    row.categories_json
+  ).map((category) => ({
+    id: String(category.id || ""),
+    slug: String(category.slug || ""),
+    displayName: String(category.display_name || ""),
+    description: String(category.description || ""),
+    displayNameI18n: asObject(category.display_name_i18n) as Record<
+      string,
+      string
+    >,
+    descriptionI18n: asObject(category.description_i18n) as Record<
+      string,
+      string
+    >,
+    defaultLocale:
+      typeof category.default_locale === "string"
+        ? category.default_locale
+        : "en",
+  }))
 
   return {
     id: row.item_id,
-    org_id: row.publisher_id,
+    orgId: row.publisher_id,
     slug: row.item_slug,
-    display_name: row.item_display_name,
-    display_name_i18n: asObject(itemMetadata.displayNameI18n),
+    displayName: row.item_display_name,
+    displayNameI18n: asObject(itemMetadata.displayNameI18n) as Record<
+      string,
+      string
+    >,
     description: row.item_summary,
-    description_i18n: asObject(itemMetadata.descriptionI18n),
-    long_description: row.item_long_description,
-    long_description_i18n: asObject(itemMetadata.longDescriptionI18n),
-    summary_i18n: asObject(itemMetadata.summaryI18n),
-    default_locale:
+    descriptionI18n: asObject(itemMetadata.descriptionI18n) as Record<
+      string,
+      string
+    >,
+    longDescription: row.item_long_description,
+    longDescriptionI18n: asObject(itemMetadata.longDescriptionI18n) as Record<
+      string,
+      string
+    >,
+    summaryI18n: asObject(itemMetadata.summaryI18n) as Record<string, string>,
+    defaultLocale:
       typeof itemMetadata.defaultLocale === "string"
         ? itemMetadata.defaultLocale
         : "en",
-    icon_url: row.item_icon_file_id
+    iconUrl: row.item_icon_file_id
       ? getFileUrlById(row.item_icon_file_id)
       : null,
     version: row.version_value || "1.0.0",
     transport: row.spec_transport || "builtin",
-    entry_point: row.spec_entry_point || "",
-    lifecycle_scope: defaultReuseScope,
-    default_reuse_scope: defaultReuseScope,
-    default_conversation_type_mask: defaultConversationTypeMask,
-    supported_reuse_scopes: supportedReuseScopes,
-    config_schema: asObject(row.spec_config_schema),
-    config_fields: configFields,
-    default_config: asObject(row.spec_default_config),
-    tools_manifest: asArray(row.spec_tool_manifest),
-    validation_rules: validationRules,
-    setup_steps: setupSteps,
-    install_flow:
-      Object.keys(installFlow).length > 0 ? installFlow : { steps: setupSteps },
-    auth_bindings: asArray<PluginAuthBindingDefinition>(row.spec_auth_bindings),
+    entryPoint: row.spec_entry_point || "",
+    lifecycleScope: defaultReuseScope,
+    defaultReuseScope: defaultReuseScope,
+    defaultConversationTypeMask: defaultConversationTypeMask,
+    supportedReuseScopes: supportedReuseScopes,
+    configSchema: asObject(row.spec_config_schema),
+    configFields: configFields,
+    defaultConfig: asObject(row.spec_default_config),
+    toolsManifest: asArray(row.spec_tool_manifest),
+    validationRules: validationRules,
+    setupSteps: setupSteps,
+    installFlow: (Object.keys(installFlow).length > 0
+      ? installFlow
+      : { steps: setupSteps }) as unknown as PluginInstallFlow,
+    authBindings: asArray<PluginAuthBindingDefinition>(row.spec_auth_bindings),
     authorization,
     tags: row.item_tags || [],
     categories,
-    category_slugs: categories.map((category) => category.slug),
-    is_active: row.item_is_active,
-    is_builtin: row.item_source_kind === "builtin" || row.publisher_is_builtin,
-    download_count: row.item_download_count || 0,
-    created_at: presentInstant(row.item_created_at),
-    updated_at: presentInstant(row.item_updated_at),
-    org_slug: row.publisher_slug,
-    org_display_name: row.publisher_display_name,
+    categorySlugs: categories.map((category) => category.slug),
+    isActive: row.item_is_active,
+    isBuiltin: row.item_source_kind === "builtin" || row.publisher_is_builtin,
+    downloadCount: row.item_download_count || 0,
+    createdAt: presentInstant(row.item_created_at),
+    updatedAt: presentInstant(row.item_updated_at),
+    orgSlug: row.publisher_slug,
+    orgDisplayName: row.publisher_display_name,
     publisher: {
       id: row.publisher_id,
       slug: row.publisher_slug,
-      display_name: row.publisher_display_name,
+      displayName: row.publisher_display_name,
       description: row.publisher_description,
-      is_verified: row.publisher_is_verified,
+      isVerified: row.publisher_is_verified,
     },
-    requires_handshake: parseBoolean(row.spec_requires_handshake),
+    requiresHandshake: parseBoolean(row.spec_requires_handshake),
     metadata: specMetadata,
   }
 }
 
-function mapPublisherView(row: PublisherRow) {
+function mapPublisherView(row: PublisherRow): MarketplacePublisherView {
   return {
     id: row.id,
     slug: row.slug,
-    display_name: row.displayName,
+    displayName: row.displayName,
     description: row.description || "",
-    logo_url: row.logoFileId ? getFileUrlById(row.logoFileId) : null,
-    is_builtin: Boolean(row.isBuiltin),
-    is_verified: Boolean(row.isVerified),
-    owner_user_id: row.ownerUserId,
-    workspace_id: row.workspaceId,
-    plugin_count:
+    logoUrl: row.logoFileId ? getFileUrlById(row.logoFileId) : null,
+    isBuiltin: Boolean(row.isBuiltin),
+    isVerified: Boolean(row.isVerified),
+    ownerUserId: row.ownerUserId,
+    workspaceId: row.workspaceId,
+    pluginCount:
       typeof row.pluginCount === "number"
         ? row.pluginCount
         : Number(row.pluginCount || 0),
-    created_at: presentInstant(row.createdAt),
-    updated_at: presentInstant(row.updatedAt),
+    createdAt: presentInstant(row.createdAt),
+    updatedAt: presentInstant(row.updatedAt),
   }
 }
 
@@ -1110,9 +1131,9 @@ function buildInstallationPayload(
   row: InstallationRow,
   plugin: ReturnType<typeof mapPluginView>,
   workspaceConversationTypeMask: number
-) {
+): PluginInstallationDetailView {
   const sourceDefaultConversationTypeMask = normalizeConversationTypeMask(
-    plugin.default_conversation_type_mask,
+    plugin.defaultConversationTypeMask,
     DEFAULT_CONVERSATION_TYPE_MASK
   )
   const effectiveConversationTypeMask = resolveNarrowedConversationTypeMask(
@@ -1124,61 +1145,61 @@ function buildInstallationPayload(
       config_data: row.config_data,
       updated_at: row.installation_updated_at,
     },
-    plugin.config_schema || {},
-    plugin.config_fields || [],
-    plugin.auth_bindings || []
+    plugin.configSchema || {},
+    plugin.configFields || [],
+    plugin.authBindings || []
   )
 
   return {
     id: row.installation_id,
-    workspace_id: row.root_workspace_id,
-    plugin_id: row.catalog_item_id,
-    lifecycle_scope: publicReuseScope(row.reuse_scope),
-    default_reuse_scope: plugin.default_reuse_scope,
-    source_default_conversation_type_mask: sourceDefaultConversationTypeMask,
-    workspace_conversation_type_mask: workspaceConversationTypeMask,
-    conversation_type_mask_override:
+    workspaceId: row.root_workspace_id,
+    pluginId: row.catalog_item_id,
+    lifecycleScope: publicReuseScope(row.reuse_scope),
+    defaultReuseScope: plugin.defaultReuseScope,
+    sourceDefaultConversationTypeMask: sourceDefaultConversationTypeMask,
+    workspaceConversationTypeMask: workspaceConversationTypeMask,
+    conversationTypeMaskOverride:
       row.root_conversation_type_mask_override ?? null,
-    effective_conversation_type_mask: effectiveConversationTypeMask,
-    supported_reuse_scopes: plugin.supported_reuse_scopes || [],
-    is_enabled: row.root_status === "active",
+    effectiveConversationTypeMask: effectiveConversationTypeMask,
+    supportedReuseScopes: plugin.supportedReuseScopes || [],
+    isEnabled: row.root_status === "active",
     status: row.root_status,
-    config_data: sanitizedConfig,
-    config_state: configState,
-    approved_runtime_permissions: row.approved_runtime_permissions || [],
+    configData: sanitizedConfig,
+    configState: configState,
+    approvedRuntimePermissions: row.approved_runtime_permissions || [],
     ownerWorkspaceMemberId: row.root_owner_workspace_member_id,
-    created_at: presentInstant(row.installation_created_at),
-    updated_at: presentInstant(row.installation_updated_at),
-    source_catalog_item_id: row.source_catalog_item_id,
-    source_catalog_version_id: row.source_catalog_version_id,
-    source_sync_mode: row.source_sync_mode,
-    plugin_slug: plugin.slug,
-    plugin_display_name: plugin.display_name,
-    plugin_description: plugin.description,
-    plugin_display_name_i18n: plugin.display_name_i18n,
-    plugin_description_i18n: plugin.description_i18n,
-    plugin_long_description_i18n: plugin.long_description_i18n,
-    plugin_summary_i18n: plugin.summary_i18n,
-    default_locale: plugin.default_locale,
+    createdAt: presentInstant(row.installation_created_at),
+    updatedAt: presentInstant(row.installation_updated_at),
+    sourceCatalogItemId: row.source_catalog_item_id,
+    sourceCatalogVersionId: row.source_catalog_version_id,
+    sourceSyncMode: row.source_sync_mode,
+    pluginSlug: plugin.slug,
+    pluginDisplayName: plugin.displayName,
+    pluginDescription: plugin.description,
+    pluginDisplayNameI18n: plugin.displayNameI18n,
+    pluginDescriptionI18n: plugin.descriptionI18n,
+    pluginLongDescriptionI18n: plugin.longDescriptionI18n,
+    pluginSummaryI18n: plugin.summaryI18n,
+    defaultLocale: plugin.defaultLocale,
     transport: plugin.transport,
-    plugin_lifecycle_scope: plugin.lifecycle_scope,
-    plugin_default_reuse_scope: plugin.default_reuse_scope,
-    plugin_supported_reuse_scopes: plugin.supported_reuse_scopes || [],
-    tools_manifest: plugin.tools_manifest,
-    plugin_icon_url: plugin.icon_url,
-    plugin_categories: plugin.categories || [],
-    plugin_category_slugs: plugin.category_slugs || [],
-    plugin_version: plugin.version,
-    config_schema: plugin.config_schema,
-    config_fields: plugin.config_fields,
-    install_flow: plugin.install_flow,
-    auth_bindings: plugin.auth_bindings,
-    is_builtin: plugin.is_builtin,
-    plugin_validation_rules: plugin.validation_rules,
-    plugin_setup_steps: plugin.setup_steps,
-    org_id: plugin.org_id,
-    org_slug: plugin.org_slug,
-    org_display_name: plugin.org_display_name,
+    pluginLifecycleScope: plugin.lifecycleScope,
+    pluginDefaultReuseScope: plugin.defaultReuseScope,
+    pluginSupportedReuseScopes: plugin.supportedReuseScopes || [],
+    toolsManifest: plugin.toolsManifest,
+    pluginIconUrl: plugin.iconUrl,
+    pluginCategories: plugin.categories || [],
+    pluginCategorySlugs: plugin.categorySlugs || [],
+    pluginVersion: plugin.version,
+    configSchema: plugin.configSchema,
+    configFields: plugin.configFields,
+    installFlow: plugin.installFlow,
+    authBindings: plugin.authBindings,
+    isBuiltin: plugin.isBuiltin,
+    pluginValidationRules: plugin.validationRules,
+    pluginSetupSteps: plugin.setupSteps,
+    orgId: plugin.orgId,
+    orgSlug: plugin.orgSlug,
+    orgDisplayName: plugin.orgDisplayName,
     authorization: plugin.authorization,
     revision: {
       authorization: plugin.authorization,
@@ -1684,20 +1705,26 @@ export async function listPluginCategories() {
     .orderBy("displayName", "asc")
     .execute()
 
-  return rows.map((row) => {
+  return rows.map((row): PluginCategoryView => {
     const metadata = asObject(row.metadata)
     return {
       id: row.id,
       slug: row.slug,
-      display_name: row.displayName,
-      description: row.description,
-      display_name_i18n: asObject(metadata.displayNameI18n),
-      description_i18n: asObject(metadata.descriptionI18n),
-      default_locale:
+      displayName: row.displayName,
+      description: row.description || "",
+      displayNameI18n: asObject(metadata.displayNameI18n) as Record<
+        string,
+        string
+      >,
+      descriptionI18n: asObject(metadata.descriptionI18n) as Record<
+        string,
+        string
+      >,
+      defaultLocale:
         typeof metadata.defaultLocale === "string"
           ? metadata.defaultLocale
           : "en",
-      sort_order: row.sortOrder,
+      sortOrder: row.sortOrder,
     }
   })
 }
@@ -1734,11 +1761,11 @@ export async function installPluginUnified(data: {
 }) {
   const plugin = await getPlugin(data.pluginId)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
-    plugin.supported_reuse_scopes,
-    plugin.default_reuse_scope || "conversation"
+    plugin.supportedReuseScopes,
+    plugin.defaultReuseScope || "conversation"
   )
   const lifecycleScope =
-    data.lifecycleScope || plugin.default_reuse_scope || "conversation"
+    data.lifecycleScope || plugin.defaultReuseScope || "conversation"
   assertSupportedReuseScope(supportedReuseScopes, lifecycleScope, plugin.slug)
   const approvedRuntimePermissions =
     plugin.authorization?.requiredPermissions || []
@@ -1747,7 +1774,7 @@ export async function installPluginUnified(data: {
     config: Record<string, unknown>,
     ex: Executor
   ) {
-    if (plugin.entry_point !== "feishu/app") {
+    if (plugin.entryPoint !== "feishu/app") {
       return
     }
 
@@ -1815,11 +1842,10 @@ export async function installPluginUnified(data: {
       id: installationId,
       workspaceId: data.workspaceId,
       kind: "plugin_installation",
-      displayName: plugin.display_name,
+      displayName: plugin.displayName,
       ownerWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
       status: "active",
-      conversationTypeMaskOverride:
-        plugin.default_conversation_type_mask ?? null,
+      conversationTypeMaskOverride: plugin.defaultConversationTypeMask ?? null,
     })
     const insertedInstallation = await takeFirstOn<{ id: string }>(
       client,
@@ -1845,15 +1871,15 @@ export async function installPluginUnified(data: {
       installationId,
       workspaceId: data.workspaceId,
       workspaceMemberId: data.installedByWorkspaceMemberId || "",
-      configFields: plugin.config_fields || [],
-      authBindings: plugin.auth_bindings || [],
+      configFields: plugin.configFields || [],
+      authBindings: plugin.authBindings || [],
       configData: resolvedConfigBase,
       authSessionIds: data.authSessionIds,
       run: runnerFn(client),
     })
     const validation = validateConfig(
       resolvedConfig,
-      plugin.validation_rules || []
+      plugin.validationRules || []
     )
     if (!validation.valid) {
       throw new McpPluginError(
@@ -1864,7 +1890,7 @@ export async function installPluginUnified(data: {
     await validateResolvedConfigForInstall(resolvedConfig, client)
     const encryptedConfig = encryptSensitiveFields(
       resolvedConfig,
-      plugin.config_schema || {}
+      plugin.configSchema || {}
     )
 
     await runBuilder(
@@ -2056,8 +2082,8 @@ export async function updateInstallation(
   const nextLifecycleScope =
     data.lifecycleScope || publicReuseScope(row.reuse_scope)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
-    plugin.supported_reuse_scopes,
-    plugin.default_reuse_scope || "conversation"
+    plugin.supportedReuseScopes,
+    plugin.defaultReuseScope || "conversation"
   )
   assertSupportedReuseScope(
     supportedReuseScopes,
@@ -2069,7 +2095,7 @@ export async function updateInstallation(
     ? mergeConfigForUpdate(
         asObject(row.config_data),
         data.configData,
-        plugin.config_fields || []
+        plugin.configFields || []
       )
     : asObject(row.config_data)
 
@@ -2097,7 +2123,7 @@ export async function updateInstallation(
     config: Record<string, unknown>,
     ex: Executor
   ) {
-    if (plugin.entry_point !== "feishu/app") {
+    if (plugin.entryPoint !== "feishu/app") {
       return
     }
 
@@ -2162,8 +2188,8 @@ export async function updateInstallation(
               data.updatedByWorkspaceMemberId ||
               row.root_owner_workspace_member_id ||
               "",
-            configFields: plugin.config_fields || [],
-            authBindings: plugin.auth_bindings || [],
+            configFields: plugin.configFields || [],
+            authBindings: plugin.authBindings || [],
             configData: mergedConfig,
             authSessionIds: data.authSessionIds,
             run,
@@ -2173,7 +2199,7 @@ export async function updateInstallation(
     if (data.configData || data.authSessionIds) {
       const validation = validateConfig(
         resolvedConfig,
-        plugin.validation_rules || []
+        plugin.validationRules || []
       )
       if (!validation.valid) {
         throw new McpPluginError(
@@ -2190,7 +2216,7 @@ export async function updateInstallation(
     if (data.configData || data.authSessionIds) {
       const encryptedConfig = encryptSensitiveFields(
         resolvedConfig,
-        plugin.config_schema || {}
+        plugin.configSchema || {}
       )
       await client
         .updateTable("pluginInstallations")
@@ -2266,7 +2292,7 @@ export async function getPluginInstallationGrantState(
       mapAccessRowToGrant(binding, {
         workspaceConversationTypeMask,
         instanceConversationTypeMaskOverride:
-          installation.conversation_type_mask_override ?? null,
+          installation.conversationTypeMaskOverride ?? null,
       })
     )
 
@@ -2276,13 +2302,12 @@ export async function getPluginInstallationGrantState(
       requiredPermissions: plugin.authorization?.requiredPermissions || [],
       suggestedAccessTargetType: "workspace",
       sourceDefaultConversationTypeMask:
-        installation.source_default_conversation_type_mask ||
+        installation.sourceDefaultConversationTypeMask ||
         DEFAULT_CONVERSATION_TYPE_MASK,
       workspaceConversationTypeMask,
       conversationTypeMaskOverride:
-        installation.conversation_type_mask_override ?? null,
-      effectiveConversationTypeMask:
-        installation.effective_conversation_type_mask,
+        installation.conversationTypeMaskOverride ?? null,
+      effectiveConversationTypeMask: installation.effectiveConversationTypeMask,
       reason: plugin.authorization?.reason,
       effectivePermissions:
         grants.length > 0
@@ -2316,7 +2341,7 @@ export async function createPluginInstallationGrant(input: {
   })
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    installation.conversation_type_mask_override ?? null
+    installation.conversationTypeMaskOverride ?? null
   )
   const effectiveConversationTypeMask =
     assertGrantConversationTypeOverrideAllowed({
@@ -2370,7 +2395,7 @@ export async function createPluginInstallationGrant(input: {
     return mapAccessRowToGrant(existing, {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
-        installation.conversation_type_mask_override ?? null,
+        installation.conversationTypeMaskOverride ?? null,
     })
   }
 
@@ -2408,7 +2433,7 @@ export async function createPluginInstallationGrant(input: {
   return mapAccessRowToGrant(result.accessRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
-      installation.conversation_type_mask_override ?? null,
+      installation.conversationTypeMaskOverride ?? null,
   })
 }
 
@@ -2429,7 +2454,7 @@ export async function updatePluginInstallationGrant(input: {
     return mapAccessRowToGrant(accessRow, {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
-        installation.conversation_type_mask_override ?? null,
+        installation.conversationTypeMaskOverride ?? null,
     })
   }
 
@@ -2442,7 +2467,7 @@ export async function updatePluginInstallationGrant(input: {
   }
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    installation.conversation_type_mask_override ?? null
+    installation.conversationTypeMaskOverride ?? null
   )
   const accessRowTarget = installationAccessRowToTarget(accessRow)
   const effectiveConversationTypeMask =
@@ -2481,7 +2506,7 @@ export async function updatePluginInstallationGrant(input: {
   return mapAccessRowToGrant(updatedAccessRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
-      installation.conversation_type_mask_override ?? null,
+      installation.conversationTypeMaskOverride ?? null,
   })
 }
 

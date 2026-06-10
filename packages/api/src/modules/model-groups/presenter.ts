@@ -5,9 +5,14 @@ import {
 } from "@synapse/shared"
 import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
 import type {
+  ActorModelGroupAssignmentView,
   ModelGroupGrantScope,
+  ModelGroupGrantView,
+  ModelGroupItemVersionView,
+  ModelGroupItemView,
   ModelGroupOwnerType,
   ModelGroupRoutingStrategy,
+  ModelGroupView,
 } from "@synapse/shared/types"
 import {
   serializeInstant,
@@ -15,7 +20,7 @@ import {
 } from "../../infrastructure/datetime.js"
 
 /**
- * Model-groups presentation layer: DB row → app-facing snake_case view. Owns
+ * Model-groups presentation layer: DB row → app-facing camelCase view. Owns
  * the outward semantic transforms (Date → IsoInstantString via
  * serializeInstant) so the service/controller never call serializeInstant
  * (guard-layering r3) and never define map*Row (r4). DB-row types are taken
@@ -141,76 +146,145 @@ export function dbRowToGrantRow(
   }
 }
 
-export function presentGroupRow(row: ModelGroupRow) {
+export function presentGroupRow(row: ModelGroupRow): ModelGroupView {
   return {
     id: row.id,
-    owner_type: row.ownerType,
-    owner_workspace_id: row.ownerWorkspaceId,
-    owner_workspace_member_id: row.ownerWorkspaceMemberId,
-    workspace_id: row.ownerWorkspaceId,
+    ownerType: row.ownerType,
+    ownerWorkspaceId: row.ownerWorkspaceId,
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId,
+    workspaceId: row.ownerWorkspaceId,
     scope: row.ownerType,
     name: row.name,
     description: row.description || "",
-    routing_strategy: row.routingStrategy,
-    attempt_policy: asObject(row.attemptPolicy),
-    is_default: Boolean(row.isDefault),
-    is_active: Boolean(row.isEnabled),
+    routingStrategy: row.routingStrategy,
+    attemptPolicy: asObject(row.attemptPolicy),
+    isDefault: Boolean(row.isDefault),
+    isActive: Boolean(row.isEnabled),
     createdByWorkspaceMemberId: row.createdByWorkspaceMemberId || null,
-    created_at:
+    createdAt:
       serializeOptionalInstant(row.createdAt) ||
       serializeOptionalInstant(row.updatedAt) ||
       serializeInstant(new Date(0)),
-    updated_at:
+    updatedAt:
       serializeOptionalInstant(row.updatedAt) ||
       serializeOptionalInstant(row.createdAt) ||
       serializeInstant(new Date(0)),
   }
 }
 
-export function presentGroupItem(row: ModelGroupItemRow) {
+export function presentGroupItem(row: ModelGroupItemRow): ModelGroupItemView {
   const features = asObject(row.features)
   const providerKind =
     row.providerKind || getProviderKindForVendor(row.vendor || "anthropic")
 
   return {
     id: row.itemId ?? row.id ?? "",
-    group_id: row.groupId,
-    binding_id: row.bindingId ?? row.itemId ?? row.id ?? "",
-    current_version_id: row.currentVersionId || null,
-    display_name: row.displayName || "",
+    groupId: row.groupId,
+    bindingId: row.bindingId ?? row.itemId ?? row.id ?? "",
+    currentVersionId: row.currentVersionId || null,
+    displayName: row.displayName || "",
     priority: row.priority ?? 0,
     weight: row.weight ?? 1,
-    is_enabled: Boolean(row.itemEnabled ?? row.isEnabled),
+    isEnabled: Boolean(row.itemEnabled ?? row.isEnabled),
     version: row.version || null,
-    provider_kind: providerKind,
+    providerKind,
     vendor: row.vendor || null,
-    base_url: row.baseUrl || null,
-    model_name: row.modelName || null,
-    max_output_tokens: row.maxOutputTokens || null,
-    capability_tags: row.capabilityTags || [],
+    baseUrl: row.baseUrl || null,
+    modelName: row.modelName || null,
+    maxOutputTokens: row.maxOutputTokens || null,
+    capabilityTags: row.capabilityTags || [],
     features,
-    provider_options: asObject(row.providerOptions),
-    request_timeout_ms: row.requestTimeoutMs ?? null,
-    max_retries: row.maxRetries ?? null,
-    created_at: row.createdAt || undefined,
-    updated_at: row.updatedAt || undefined,
+    providerOptions: asObject(row.providerOptions),
+    requestTimeoutMs: row.requestTimeoutMs ?? null,
+    maxRetries: row.maxRetries ?? null,
+    createdAt: serializeOptionalInstant(row.createdAt) ?? null,
+    updatedAt: serializeOptionalInstant(row.updatedAt) ?? null,
   }
 }
 
 export function presentGrantRow(
   row: ModelGroupGrantRow & { id: string; group_id: string }
-) {
+): ModelGroupGrantView {
   return {
     id: row.id,
-    group_id: row.group_id,
-    grant_scope: row.grant_scope,
-    workspace_id: row.workspace_id,
-    workspace_member_id: row.workspace_member_id,
-    actor_id: row.actor_id,
+    groupId: row.group_id,
+    grantScope: row.grant_scope,
+    workspaceId: row.workspace_id,
+    workspaceMemberId: row.workspace_member_id,
+    actorId: row.actor_id,
     status: row.status,
     grantedByWorkspaceMemberId: row.granted_by_workspace_member_id || null,
     reason: row.reason || null,
-    created_at: serializeOptionalInstant(row.created_at),
-    revoked_at: serializeOptionalInstant(row.revoked_at),
+    createdAt: serializeOptionalInstant(row.created_at) ?? null,
+    revokedAt: serializeOptionalInstant(row.revoked_at) ?? null,
+  }
+}
+
+export type ActorModelGroupAssignmentRow = {
+  actorId: string
+  groupId: string
+  priority: number | null
+  createdAt: Date | null
+  groupName: string
+  routingStrategy: ModelGroupRoutingStrategy
+  isDefault: boolean
+  workspaceId: string | null
+  ownerType: ModelGroupOwnerType
+  ownerWorkspaceMemberId: string | null
+}
+
+export function presentActorModelGroup(
+  row: ActorModelGroupAssignmentRow
+): ActorModelGroupAssignmentView {
+  return {
+    actorId: row.actorId,
+    groupId: row.groupId,
+    priority: row.priority ?? 0,
+    createdAt: serializeOptionalInstant(row.createdAt) ?? null,
+    groupName: row.groupName,
+    routingStrategy: row.routingStrategy,
+    isDefault: Boolean(row.isDefault),
+    workspaceId: row.workspaceId ?? null,
+    ownerType: row.ownerType,
+    ownerWorkspaceMemberId: row.ownerWorkspaceMemberId ?? null,
+  }
+}
+
+export type ModelGroupItemVersionRow = {
+  id: string
+  bindingId: string | null
+  version: number | null
+  providerKind: string | null
+  vendor: string | null
+  baseUrl: string | null
+  modelName: string | null
+  maxOutputTokens: number | null
+  capabilityTags: string[] | null
+  features?: unknown
+  providerOptions?: unknown
+  requestTimeoutMs: number | null
+  maxRetries: number | null
+  createdAt: Date | null
+}
+
+export function presentItemVersion(
+  row: ModelGroupItemVersionRow
+): ModelGroupItemVersionView {
+  return {
+    id: row.id,
+    bindingId: row.bindingId || "",
+    version: row.version ?? 0,
+    providerKind:
+      row.providerKind || getProviderKindForVendor(row.vendor || "anthropic"),
+    vendor: row.vendor || "",
+    baseUrl: row.baseUrl || "",
+    modelName: row.modelName || null,
+    maxOutputTokens: row.maxOutputTokens ?? null,
+    capabilityTags: row.capabilityTags || [],
+    features: asObject(row.features),
+    providerOptions: asObject(row.providerOptions),
+    requestTimeoutMs: row.requestTimeoutMs ?? null,
+    maxRetries: row.maxRetries ?? null,
+    createdAt: serializeOptionalInstant(row.createdAt) ?? null,
   }
 }

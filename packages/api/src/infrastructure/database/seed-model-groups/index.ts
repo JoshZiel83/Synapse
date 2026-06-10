@@ -235,7 +235,7 @@ export async function applyModelGroups(doc: ModelGroupsFile): Promise<{
     if (match) {
       const full = await getModelGroup(match.id)
       assertNoDuplicateNames(
-        full.items.map((i) => i.display_name),
+        full.items.map((i) => i.displayName),
         `items in group "${group.name}"`
       )
       plans.push({
@@ -243,7 +243,7 @@ export async function applyModelGroups(doc: ModelGroupsFile): Promise<{
         group,
         groupId: match.id,
         isDefault: match.is_default,
-        seen: new Set(full.items.map((i) => i.display_name)),
+        seen: new Set(full.items.map((i) => i.displayName)),
       })
       continue
     }

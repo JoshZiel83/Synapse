@@ -26,7 +26,7 @@ import { PluginIcon, getLocale, translate } from "./plugin-ui"
 
 type PluginInstallationEntry = {
   id: string
-  plugin_id?: string | null
+  pluginId?: string | null
 }
 
 type PluginMarketplaceCategory = {
@@ -38,16 +38,16 @@ type PluginMarketplaceCategory = {
 
 type PluginMarketplaceEntry = {
   id: string
-  display_name?: string
-  display_name_i18n?: Record<string, string>
-  default_locale?: string
-  summary_i18n?: Record<string, string>
-  description_i18n?: Record<string, string>
+  displayName?: string
+  displayNameI18n?: Record<string, string>
+  defaultLocale?: string
+  summaryI18n?: Record<string, string>
+  descriptionI18n?: Record<string, string>
   description?: string
-  org_display_name?: string
+  orgDisplayName?: string
   tags?: string[]
   categories?: PluginMarketplaceCategory[]
-  icon_url?: string
+  iconUrl?: string
   transport?: string
 }
 
@@ -81,7 +81,7 @@ export default function PluginsPage() {
     const next = new Map<string, PluginInstallationEntry[]>()
 
     for (const installation of typedInstallations) {
-      const pluginId = installation.plugin_id
+      const pluginId = installation.pluginId
       if (!pluginId) continue
       const current = next.get(pluginId) || []
       current.push(installation)
@@ -98,24 +98,24 @@ export default function PluginsPage() {
       if (!normalizedSearch) return true
       const title =
         translate(
-          plugin.display_name_i18n,
+          plugin.displayNameI18n,
           locale,
-          plugin.default_locale || "en"
+          plugin.defaultLocale || "en"
         ) ||
-        plugin.display_name ||
+        plugin.displayName ||
         ""
       const summary =
         translate(
-          plugin.summary_i18n || plugin.description_i18n,
+          plugin.summaryI18n || plugin.descriptionI18n,
           locale,
-          plugin.default_locale || "en"
+          plugin.defaultLocale || "en"
         ) ||
         plugin.description ||
         ""
       const haystack = [
         title,
         summary,
-        plugin.org_display_name || "",
+        plugin.orgDisplayName || "",
         ...(plugin.tags || []),
       ]
         .join(" ")
@@ -177,17 +177,17 @@ export default function PluginsPage() {
           {[...configuredPlugins, ...unconfiguredPlugins].map((plugin) => {
             const title =
               translate(
-                plugin.display_name_i18n,
+                plugin.displayNameI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               ) ||
-              plugin.display_name ||
+              plugin.displayName ||
               "Untitled plugin"
             const summary =
               translate(
-                plugin.summary_i18n || plugin.description_i18n,
+                plugin.summaryI18n || plugin.descriptionI18n,
                 locale,
-                plugin.default_locale || "en"
+                plugin.defaultLocale || "en"
               ) ||
               plugin.description ||
               ""
@@ -212,7 +212,7 @@ export default function PluginsPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-3">
                       <PluginIcon
-                        iconUrl={plugin.icon_url}
+                        iconUrl={plugin.iconUrl}
                         title={title}
                         transport={plugin.transport}
                         containerClassName="size-14 rounded-[18px]"
@@ -279,10 +279,8 @@ export default function PluginsPage() {
 
                 <AppCardContent className="flex flex-col gap-3">
                   <div className="flex flex-wrap gap-2">
-                    {plugin.org_display_name ? (
-                      <Badge variant="secondary">
-                        {plugin.org_display_name}
-                      </Badge>
+                    {plugin.orgDisplayName ? (
+                      <Badge variant="secondary">{plugin.orgDisplayName}</Badge>
                     ) : null}
                     {(plugin.categories || []).slice(0, 2).map((category) => (
                       <Badge key={category.slug} variant="secondary">

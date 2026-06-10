@@ -243,21 +243,15 @@ function buildWorkspaceAppGrantSummary(
 ): WorkspaceAppGrantSummary | null {
   if (!installation) return null
   const sourceDefaultConversationTypeMask = readOwnerNumber(
-    (installation as any).sourceDefaultConversationTypeMask ??
-      (installation as any).source_default_conversation_type_mask
+    (installation as any).sourceDefaultConversationTypeMask
   )
   const workspaceConversationTypeMask = readOwnerNumber(
-    (installation as any).workspaceConversationTypeMask ??
-      (installation as any).workspace_conversation_type_mask
+    (installation as any).workspaceConversationTypeMask
   )
   const conversationTypeMaskOverride =
-    readOwnerNumber(
-      (installation as any).conversationTypeMaskOverride ??
-        (installation as any).conversation_type_mask_override
-    ) ?? null
+    readOwnerNumber((installation as any).conversationTypeMaskOverride) ?? null
   const effectiveConversationTypeMask = readOwnerNumber(
-    (installation as any).effectiveConversationTypeMask ??
-      (installation as any).effective_conversation_type_mask
+    (installation as any).effectiveConversationTypeMask
   )
 
   if (

@@ -146,12 +146,12 @@ export default function ModelItemDialog({
     if (item) {
       const resolvedVendor = item.vendor || DEFAULT_VENDOR
       const features = item.features || {}
-      setDisplayName(item.display_name || "")
+      setDisplayName(item.displayName || "")
       setVendor(resolvedVendor)
       setApiKey("") // Never pre-fill API key for security
-      setBaseUrl(item.base_url || "")
-      setModelName(item.model_name || "")
-      setMaxOutputTokens(String(item.max_output_tokens || 4096))
+      setBaseUrl(item.baseUrl || "")
+      setModelName(item.modelName || "")
+      setMaxOutputTokens(String(item.maxOutputTokens || 4096))
       setPriority(String(item.priority ?? 0))
       setWeight(String(item.weight ?? 100))
       setApiStyle(features.apiStyle === "responses" ? "responses" : "chat")
@@ -171,8 +171,8 @@ export default function ModelItemDialog({
       )
       setCrossTurnToolHistory(Boolean(features.crossTurnToolHistory))
       setProviderOptionsText(
-        item.provider_options && Object.keys(item.provider_options).length > 0
-          ? JSON.stringify(item.provider_options, null, 2)
+        item.providerOptions && Object.keys(item.providerOptions).length > 0
+          ? JSON.stringify(item.providerOptions, null, 2)
           : ""
       )
     } else {

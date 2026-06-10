@@ -47,19 +47,19 @@ export default function PluginAdvancedStep({
     if (!installation) return
 
     setLifecycleScope(
-      (installation.lifecycle_scope || "turn") as PluginReuseScope
+      (installation.lifecycleScope || "turn") as PluginReuseScope
     )
   }, [installation])
 
   const allowedReuseScopes = useMemo(
     () =>
       normalizeSupportedReuseScopes(
-        installation?.supported_reuse_scopes ||
-          installation?.plugin_supported_reuse_scopes
+        installation?.supportedReuseScopes ||
+          installation?.pluginSupportedReuseScopes
       ),
     [
-      installation?.plugin_supported_reuse_scopes,
-      installation?.supported_reuse_scopes,
+      installation?.pluginSupportedReuseScopes,
+      installation?.supportedReuseScopes,
     ]
   )
 

@@ -22,11 +22,15 @@ import type {
 import {
   asObject,
   dbRowToGrantRow,
+  presentActorModelGroup,
   presentGrantRow,
   presentGroupItem,
   presentGroupRow,
+  presentItemVersion,
+  type ActorModelGroupAssignmentRow,
   type ModelGroupGrantDbRow,
   type ModelGroupItemRow,
+  type ModelGroupItemVersionRow,
   type ModelGroupRow,
 } from "./presenter.js"
 
@@ -1070,7 +1074,7 @@ export async function getItemVersions(itemId: string, groupId?: string) {
     throw new ModelGroupError(404, "Model group item not found")
   }
 
-  return db
+  const rows = await db
     .selectFrom("modelBindingVersions as v")
     .select([
       "v.id",
@@ -1091,6 +1095,7 @@ export async function getItemVersions(itemId: string, groupId?: string) {
     .where("v.bindingId", "=", itemId)
     .orderBy("v.version", "desc")
     .execute()
+  return rows.map((row) => presentItemVersion(row as ModelGroupItemVersionRow))
 }
 
 export async function getActorModelGroups(
@@ -1151,7 +1156,10 @@ export async function getActorModelGroups(
     )
   }
 
-  return statement.orderBy("amga.priority", "asc").execute()
+  const rows = await statement.orderBy("amga.priority", "asc").execute()
+  return rows.map((row) =>
+    presentActorModelGroup(row as ActorModelGroupAssignmentRow)
+  )
 }
 
 export async function setActorModelGroups(

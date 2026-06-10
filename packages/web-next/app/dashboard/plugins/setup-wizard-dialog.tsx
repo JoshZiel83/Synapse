@@ -43,7 +43,7 @@ export default function SetupWizardDialog({
   const { workspaceId } = useWorkspace()
   const { installPlugin } = usePluginStore()
 
-  const allSteps: SetupStep[] = plugin.setup_steps || []
+  const allSteps: SetupStep[] = plugin.setupSteps || []
 
   const [currentStep, setCurrentStep] = useState(0)
   const [configValues, setConfigValues] = useState<
@@ -61,7 +61,7 @@ export default function SetupWizardDialog({
   const isLastStep = currentStep === allSteps.length - 1
   const stepValues = configValues[step?.id] || {}
 
-  const schema = plugin.config_schema || {}
+  const schema = plugin.configSchema || {}
   const schemaProperties = schema.properties || {}
 
   const handleFieldChange = (field: string, value: string) => {
@@ -143,7 +143,7 @@ export default function SetupWizardDialog({
       <DialogContent className="max-w-md border-gray-200 bg-white ring-1 ring-gray-200 dark:border-white/10 dark:bg-gray-900 dark:ring-white/10">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            Setup {plugin.display_name}
+            Setup {plugin.displayName}
           </DialogTitle>
         </DialogHeader>
 

@@ -1001,8 +1001,8 @@ export default function EventSourcesPage() {
                               key={installation.id}
                               value={installation.id}
                             >
-                              {installation.plugin_display_name ||
-                                installation.plugin_slug ||
+                              {installation.pluginDisplayName ||
+                                installation.pluginSlug ||
                                 installation.id}
                             </SelectItem>
                           )

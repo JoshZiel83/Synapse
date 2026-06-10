@@ -12,22 +12,18 @@ interface Props {
 }
 
 export default function PluginHeroCard({ plugin, eyebrow, action }: Props) {
-  const locale = getLocale(plugin?.default_locale)
+  const locale = getLocale(plugin?.defaultLocale)
   const title =
-    translate(
-      plugin?.display_name_i18n,
-      locale,
-      plugin?.default_locale || "en"
-    ) ||
-    plugin?.display_name ||
+    translate(plugin?.displayNameI18n, locale, plugin?.defaultLocale || "en") ||
+    plugin?.displayName ||
     "Plugin"
   const description =
     translate(
-      plugin?.long_description_i18n || plugin?.description_i18n,
+      plugin?.longDescriptionI18n || plugin?.descriptionI18n,
       locale,
-      plugin?.default_locale || "en"
+      plugin?.defaultLocale || "en"
     ) ||
-    plugin?.long_description ||
+    plugin?.longDescription ||
     plugin?.description ||
     "No description provided."
   const primaryCategory = Array.isArray(plugin?.categories)
@@ -42,7 +38,7 @@ export default function PluginHeroCard({ plugin, eyebrow, action }: Props) {
     : null
   const details = [
     transportLabels[plugin?.transport] || plugin?.transport,
-    plugin?.org_display_name,
+    plugin?.orgDisplayName,
     primaryCategoryLabel,
   ].filter(Boolean)
 
@@ -52,7 +48,7 @@ export default function PluginHeroCard({ plugin, eyebrow, action }: Props) {
         <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
           <div className="flex min-w-0 items-start gap-4">
             <PluginIcon
-              iconUrl={plugin?.icon_url}
+              iconUrl={plugin?.iconUrl}
               title={title}
               transport={plugin?.transport}
               containerClassName="h-20 w-20 rounded-[24px]"

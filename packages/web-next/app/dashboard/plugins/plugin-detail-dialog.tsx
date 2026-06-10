@@ -64,11 +64,11 @@ export default function PluginDetailDialog({
   onInstall,
   onClose,
 }: Props) {
-  const tools = plugin.tools_manifest || []
-  const configFields = plugin.config_fields || []
+  const tools = plugin.toolsManifest || []
+  const configFields = plugin.configFields || []
   const hasRequiredConfig = configFields.some((field: any) => field.required)
-  const locale = getLocale(plugin.default_locale)
-  const iconUrl = resolveFileUrl(plugin.icon_url)
+  const locale = getLocale(plugin.defaultLocale)
+  const iconUrl = resolveFileUrl(plugin.iconUrl)
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
@@ -79,7 +79,7 @@ export default function PluginDetailDialog({
               {iconUrl ? (
                 <img
                   src={iconUrl}
-                  alt={plugin.display_name}
+                  alt={plugin.displayName}
                   className="h-8 w-8 rounded-md object-contain"
                 />
               ) : plugin.transport === "http" ? (
@@ -93,13 +93,13 @@ export default function PluginDetailDialog({
             <div>
               <DialogTitle>
                 {translate(
-                  plugin.display_name_i18n,
+                  plugin.displayNameI18n,
                   locale,
-                  plugin.default_locale || "en"
-                ) || plugin.display_name}
+                  plugin.defaultLocale || "en"
+                ) || plugin.displayName}
               </DialogTitle>
               <p className="text-sm text-muted-foreground">
-                {plugin.org_display_name} · v{plugin.version}
+                {plugin.orgDisplayName} · v{plugin.version}
               </p>
             </div>
           </div>
@@ -108,11 +108,11 @@ export default function PluginDetailDialog({
         <div className="mt-2 space-y-4">
           <p className="text-sm text-muted-foreground">
             {translate(
-              plugin.long_description_i18n || plugin.description_i18n,
+              plugin.longDescriptionI18n || plugin.descriptionI18n,
               locale,
-              plugin.default_locale || "en"
+              plugin.defaultLocale || "en"
             ) ||
-              plugin.long_description ||
+              plugin.longDescription ||
               plugin.description}
           </p>
 
@@ -128,8 +128,7 @@ export default function PluginDetailDialog({
               className="border-gray-200 dark:border-white/10"
             >
               Runtime:{" "}
-              {reuseScopeLabels[plugin.lifecycle_scope] ||
-                plugin.lifecycle_scope}
+              {reuseScopeLabels[plugin.lifecycleScope] || plugin.lifecycleScope}
             </Badge>
             {(plugin.categories || []).map((category: any) => (
               <Badge

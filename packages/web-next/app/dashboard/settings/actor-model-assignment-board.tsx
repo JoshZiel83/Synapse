@@ -35,20 +35,20 @@ type GroupRecord = {
   id: string
   name: string
   scope?: "workspace" | "platform" | "workspace_member"
-  owner_type?: "workspace" | "platform" | "workspace_member"
-  routing_strategy: string
-  is_default: boolean
+  ownerType?: "workspace" | "platform" | "workspace_member"
+  routingStrategy: string
+  isDefault: boolean
 }
 
 type AssignedGroupRecord = {
-  actor_id: string
-  group_id: string
+  actorId: string
+  groupId: string
   priority: number
-  group_name: string
-  routing_strategy: string
-  is_default: boolean
-  workspace_id: string | null
-  owner_type?: "workspace" | "platform" | "workspace_member"
+  groupName: string
+  routingStrategy: string
+  isDefault: boolean
+  workspaceId: string | null
+  ownerType?: "workspace" | "platform" | "workspace_member"
 }
 
 type DragState =
@@ -72,22 +72,22 @@ function normalizeVisibleGroup(group: any): GroupRecord {
     id: group.id,
     name: group.name,
     scope: group.scope,
-    owner_type: group.owner_type,
-    routing_strategy: group.routing_strategy,
-    is_default: Boolean(group.is_default),
+    ownerType: group.ownerType,
+    routingStrategy: group.routingStrategy,
+    isDefault: Boolean(group.isDefault),
   }
 }
 
 function normalizeAssignedGroup(group: any): AssignedGroupRecord {
   return {
-    actor_id: group.actor_id,
-    group_id: group.group_id,
+    actorId: group.actorId,
+    groupId: group.groupId,
     priority: group.priority,
-    group_name: group.group_name,
-    routing_strategy: group.routing_strategy,
-    is_default: Boolean(group.is_default),
-    workspace_id: group.workspace_id ?? null,
-    owner_type: group.owner_type,
+    groupName: group.groupName,
+    routingStrategy: group.routingStrategy,
+    isDefault: Boolean(group.isDefault),
+    workspaceId: group.workspaceId ?? null,
+    ownerType: group.ownerType,
   }
 }
 
@@ -104,8 +104,8 @@ function actorRoleTone(role: string) {
   }
 }
 
-function groupScopeLabel(group: { scope?: string; owner_type?: string }) {
-  switch (group.scope || group.owner_type) {
+function groupScopeLabel(group: { scope?: string; ownerType?: string }) {
+  switch (group.scope || group.ownerType) {
     case "platform":
       return "Platform"
     case "workspace_member":
@@ -124,14 +124,14 @@ function sameAssignment(
     const target = right[index]
     return (
       target &&
-      group.group_id === target.group_id &&
+      group.groupId === target.groupId &&
       group.priority === target.priority
     )
   })
 }
 
 function assignmentSignature(groups: AssignedGroupRecord[]) {
-  return groups.map((group) => `${group.group_id}:${group.priority}`).join("|")
+  return groups.map((group) => `${group.groupId}:${group.priority}`).join("|")
 }
 
 function AssignedCard({
@@ -158,13 +158,13 @@ function AssignedCard({
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">#{index + 1}</Badge>
           <span className="truncate font-medium text-foreground">
-            {group.group_name}
+            {group.groupName}
           </span>
           <Badge variant="outline">{groupScopeLabel(group)}</Badge>
-          {group.is_default ? <Badge variant="outline">Default</Badge> : null}
+          {group.isDefault ? <Badge variant="outline">Default</Badge> : null}
         </div>
         <div className="mt-1 text-sm text-muted-foreground">
-          {group.routing_strategy.replaceAll("_", " ")}
+          {group.routingStrategy.replaceAll("_", " ")}
         </div>
       </div>
       <Button variant="ghost" size="icon" onClick={onRemove}>
@@ -336,7 +336,7 @@ export default function ActorModelAssignmentBoard() {
     () =>
       visibleGroups.filter(
         (group) =>
-          !assignedGroups.some((assigned) => assigned.group_id === group.id)
+          !assignedGroups.some((assigned) => assigned.groupId === group.id)
       ),
     [assignedGroups, visibleGroups]
   )
@@ -361,7 +361,7 @@ export default function ActorModelAssignmentBoard() {
           currentWorkspaceId,
           currentActorId,
           snapshot.map((group, index) => ({
-            groupId: group.group_id,
+            groupId: group.groupId,
             priority: index,
           }))
         )
@@ -407,19 +407,19 @@ export default function ActorModelAssignmentBoard() {
     if (!dragState || !selectedActor) return
 
     if (dragState.source === "available") {
-      if (assignedGroups.some((group) => group.group_id === dragState.group.id))
+      if (assignedGroups.some((group) => group.groupId === dragState.group.id))
         return
 
       const next = [...assignedGroups]
       next.splice(targetIndex, 0, {
-        actor_id: selectedActor.id,
-        group_id: dragState.group.id,
+        actorId: selectedActor.id,
+        groupId: dragState.group.id,
         priority: targetIndex,
-        group_name: dragState.group.name,
-        routing_strategy: dragState.group.routing_strategy,
-        is_default: dragState.group.is_default,
-        workspace_id: null,
-        owner_type: dragState.group.scope || dragState.group.owner_type,
+        groupName: dragState.group.name,
+        routingStrategy: dragState.group.routingStrategy,
+        isDefault: dragState.group.isDefault,
+        workspaceId: null,
+        ownerType: dragState.group.scope || dragState.group.ownerType,
       })
       reorderAssigned(next)
     } else {
@@ -608,7 +608,7 @@ export default function ActorModelAssignmentBoard() {
                     {assignedGroups.length > 0 ? (
                       assignedGroups.map((group, index) => (
                         <div
-                          key={group.group_id}
+                          key={group.groupId}
                           className="flex flex-col gap-2"
                         >
                           <AssignedCard
@@ -617,7 +617,7 @@ export default function ActorModelAssignmentBoard() {
                             onRemove={() =>
                               reorderAssigned(
                                 assignedGroups.filter(
-                                  (item) => item.group_id !== group.group_id
+                                  (item) => item.groupId !== group.groupId
                                 )
                               )
                             }
@@ -681,12 +681,12 @@ export default function ActorModelAssignmentBoard() {
                               <Badge variant="outline">
                                 {groupScopeLabel(group)}
                               </Badge>
-                              {group.is_default ? (
+                              {group.isDefault ? (
                                 <Badge variant="outline">Default</Badge>
                               ) : null}
                             </div>
                             <div className="mt-1 text-sm text-muted-foreground">
-                              {group.routing_strategy.replaceAll("_", " ")}
+                              {group.routingStrategy.replaceAll("_", " ")}
                             </div>
                           </div>
                           <Button
@@ -697,14 +697,14 @@ export default function ActorModelAssignmentBoard() {
                               reorderAssigned([
                                 ...assignedGroups,
                                 {
-                                  actor_id: selectedActor.id,
-                                  group_id: group.id,
+                                  actorId: selectedActor.id,
+                                  groupId: group.id,
                                   priority: assignedGroups.length,
-                                  group_name: group.name,
-                                  routing_strategy: group.routing_strategy,
-                                  is_default: group.is_default,
-                                  workspace_id: null,
-                                  owner_type: group.scope || group.owner_type,
+                                  groupName: group.name,
+                                  routingStrategy: group.routingStrategy,
+                                  isDefault: group.isDefault,
+                                  workspaceId: null,
+                                  ownerType: group.scope || group.ownerType,
                                 },
                               ])
                             }}

@@ -35,21 +35,21 @@ function normalizeActor(actor: any): Actor {
 }
 
 interface AssignedGroup {
-  actor_id: string
-  group_id: string
+  actorId: string
+  groupId: string
   priority: number
-  group_name: string
-  routing_strategy: string
-  is_default: boolean
-  workspace_id: string | null
+  groupName: string
+  routingStrategy: string
+  isDefault: boolean
+  workspaceId: string | null
 }
 
 interface ModelGroup {
   id: string
   name: string
-  workspace_id: string | null
-  is_default: boolean
-  routing_strategy: string
+  workspaceId: string | null
+  isDefault: boolean
+  routingStrategy: string
 }
 
 export default function ActorAssignment() {
@@ -89,19 +89,19 @@ export default function ActorAssignment() {
   }
 
   const handleAddGroup = (groupId: string) => {
-    if (assignedGroups.some((g) => g.group_id === groupId)) return
+    if (assignedGroups.some((g) => g.groupId === groupId)) return
     const group = groups.find((g) => g.id === groupId)
     if (!group) return
     setAssignedGroups((prev) => [
       ...prev,
       {
-        actor_id: selectedActor!.id,
-        group_id: groupId,
+        actorId: selectedActor!.id,
+        groupId: groupId,
         priority: prev.length,
-        group_name: group.name,
-        routing_strategy: group.routing_strategy,
-        is_default: group.is_default,
-        workspace_id: group.workspace_id,
+        groupName: group.name,
+        routingStrategy: group.routingStrategy,
+        isDefault: group.isDefault,
+        workspaceId: group.workspaceId,
       },
     ])
   }
@@ -109,7 +109,7 @@ export default function ActorAssignment() {
   const handleRemoveGroup = (groupId: string) => {
     setAssignedGroups((prev) =>
       prev
-        .filter((g) => g.group_id !== groupId)
+        .filter((g) => g.groupId !== groupId)
         .map((g, i) => ({ ...g, priority: i }))
     )
   }
@@ -140,7 +140,7 @@ export default function ActorAssignment() {
         workspaceId,
         selectedActor.id,
         assignedGroups.map((g) => ({
-          groupId: g.group_id,
+          groupId: g.groupId,
           priority: g.priority,
         }))
       )
@@ -153,7 +153,7 @@ export default function ActorAssignment() {
   }
 
   const availableGroups = groups.filter(
-    (g) => !assignedGroups.some((ag) => ag.group_id === g.id)
+    (g) => !assignedGroups.some((ag) => ag.groupId === g.id)
   )
 
   const roleBadgeStyle = (role: string) => {
@@ -251,7 +251,7 @@ export default function ActorAssignment() {
               <div className="space-y-2">
                 {assignedGroups.map((g, idx) => (
                   <div
-                    key={g.group_id}
+                    key={g.groupId}
                     className="flex items-center gap-2 rounded-lg border border-gray-200 bg-background/30 p-3 dark:border-white/10"
                   >
                     <div className="flex flex-col gap-0.5">
@@ -276,9 +276,9 @@ export default function ActorAssignment() {
                           #{idx + 1}
                         </Badge>
                         <span className="text-sm font-medium">
-                          {g.group_name}
+                          {g.groupName}
                         </span>
-                        {g.is_default && (
+                        {g.isDefault && (
                           <Badge className="border-amber-500/20 bg-amber-500/10 text-xs text-amber-400">
                             Default
                           </Badge>
@@ -288,7 +288,7 @@ export default function ActorAssignment() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => handleRemoveGroup(g.group_id)}
+                      onClick={() => handleRemoveGroup(g.groupId)}
                       className="h-8 w-8 text-muted-foreground hover:text-red-400"
                     >
                       <Trash2 className="h-4 w-4" />

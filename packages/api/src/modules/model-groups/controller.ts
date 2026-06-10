@@ -154,7 +154,7 @@ async function requirePlatformGroup(
   reply: FastifyReply
 ) {
   const group = await getModelGroup(request.params.groupId)
-  if (group.owner_type !== "platform") {
+  if (group.ownerType !== "platform") {
     reply.status(404).send({ error: "Model group not found" })
     return null
   }
@@ -174,8 +174,8 @@ async function requireWorkspaceMemberOwnedGroup(
   }
   const group = await getModelGroup(request.params.groupId)
   if (
-    group.owner_type !== "workspace_member" ||
-    group.owner_workspace_member_id !== workspaceMemberId
+    group.ownerType !== "workspace_member" ||
+    group.ownerWorkspaceMemberId !== workspaceMemberId
   ) {
     reply.status(404).send({ error: "Model group not found" })
     return null
