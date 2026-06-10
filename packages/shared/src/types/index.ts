@@ -4587,3 +4587,13 @@ export interface PluginInstallationRecord {
 
 // buildConversationMessageRef / parseConversationMessageRef moved to
 // ../conversation/index.ts (§2.2.1); re-exported via the package root barrel.
+
+// ── Schema-first app contracts (type-only re-export, §2.2 / §5.1) ──
+// The runtime zod schemas live under ../schemas/* and are reachable via the
+// `@synapse/shared/schemas` subpath; here we surface only the inferred types so
+// the root barrel stays zod-free.
+export type {
+  WorkspaceInviteView,
+  WorkspaceInvitePublicView,
+  WorkspaceInviteRedeemResult,
+} from "../schemas/workspace-invites.js"

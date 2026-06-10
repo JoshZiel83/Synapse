@@ -1,60 +1,44 @@
 import crypto from "node:crypto"
-import type { Timestamp } from "@synapse/shared"
-import type { WorkspaceInvitesTrustLevel } from "../../infrastructure/database/generated/db.js"
+import { sql } from "kysely"
+import type { WorkspaceInvitesTrustLevel } from "../../../infrastructure/database/generated/db.js"
 import {
   db,
   withDbTransaction,
   type TableRow,
-} from "../../infrastructure/database/kysely.js"
-import { parseInstantString } from "../../infrastructure/datetime.js"
-import { sql } from "kysely"
-import { assignOfficialChiefActorPreference } from "./service.js"
+} from "../../../infrastructure/database/kysely.js"
+import { parseInstantString } from "../../../infrastructure/datetime.js"
+import type { Timestamp } from "@synapse/shared"
+import { assignOfficialChiefActorPreference } from "../service.js"
 
-// ── Token generation ──
+/**
+ * Invite data-access layer. The ONLY invite file allowed to touch
+ * `generated/db` / `TableRow` / SQL (guard-layering r1/r2/r4). Returns DB
+ * records (camelCase, Date instants) — the presenter turns these into the
+ * app-facing `WorkspaceInviteView`.
+ */
+
+export type WorkspaceInviteRecord = TableRow<"workspaceInvites">
+
+export type WorkspaceInviteWithWorkspaceNameRecord = WorkspaceInviteRecord & {
+  workspaceName: string | null
+}
 
 export function generateInviteToken(): string {
   return crypto.randomBytes(6).toString("base64url").slice(0, 8)
 }
 
-// ── Row mapper ──
-
-type InviteRow = TableRow<"workspaceInvites"> & {
-  workspaceName?: string | null
-}
-
-function mapInviteRow(row: InviteRow | undefined | null) {
-  if (!row) return null
-  return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    token: row.token,
-    createdByWorkspaceMemberId: row.createdByWorkspaceMemberId,
-    trustLevel: row.trustLevel,
-    maxUses: row.maxUses ?? null,
-    useCount: row.useCount,
-    expiresAt: row.expiresAt ?? null,
-    isRevoked: row.isRevoked,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    workspaceName: row.workspaceName ?? undefined,
-  }
-}
-
-// ── CRUD ──
-
-export async function createInvite(input: {
+export async function insertInvite(input: {
   workspaceId: string
   createdByWorkspaceMemberId: string
   trustLevel?: WorkspaceInvitesTrustLevel
   maxUses?: number
   expiresAt?: Timestamp
-}) {
-  const token = generateInviteToken()
-  const row = await db
+}): Promise<WorkspaceInviteRecord | undefined> {
+  return db
     .insertInto("workspaceInvites")
     .values({
       workspaceId: input.workspaceId,
-      token,
+      token: generateInviteToken(),
       createdByWorkspaceMemberId: input.createdByWorkspaceMemberId,
       trustLevel: input.trustLevel || "member",
       maxUses: input.maxUses ?? null,
@@ -62,23 +46,59 @@ export async function createInvite(input: {
     })
     .returningAll()
     .executeTakeFirst()
-  return mapInviteRow(row)
 }
 
-export async function getInviteByToken(token: string) {
-  const row = await db
+export async function findInviteWithWorkspaceName(
+  token: string
+): Promise<WorkspaceInviteWithWorkspaceNameRecord | undefined> {
+  return db
     .selectFrom("workspaceInvites as wi")
     .innerJoin("workspaces as w", "w.id", "wi.workspaceId")
     .selectAll("wi")
     .select("w.name as workspaceName")
     .where("wi.token", "=", token)
     .executeTakeFirst()
-  return row ? mapInviteRow(row) : null
 }
 
-export async function redeemInvite(token: string, userId: string) {
-  const result = await withDbTransaction(async (trx) => {
-    // Lock the invite row
+export async function listActiveInvitesByWorkspace(
+  workspaceId: string
+): Promise<WorkspaceInviteRecord[]> {
+  return db
+    .selectFrom("workspaceInvites")
+    .selectAll()
+    .where("workspaceId", "=", workspaceId)
+    .where("isRevoked", "=", false)
+    .orderBy("createdAt", "desc")
+    .execute()
+}
+
+export async function updateInviteRevoked(
+  inviteId: string,
+  workspaceId: string
+): Promise<WorkspaceInviteRecord | undefined> {
+  return db
+    .updateTable("workspaceInvites")
+    .set({ isRevoked: true })
+    .where("id", "=", inviteId)
+    .where("workspaceId", "=", workspaceId)
+    .returningAll()
+    .executeTakeFirst()
+}
+
+/**
+ * Transactional redeem: locks the invite, validates liveness, adds the member,
+ * assigns the official chief actor preference, and bumps the use count.
+ * Returns the joined workspace id/name + granted trust level.
+ */
+export async function redeemInviteTx(
+  token: string,
+  userId: string
+): Promise<{
+  workspaceId: string
+  workspaceName: string | null
+  trustLevel: WorkspaceInvitesTrustLevel
+}> {
+  return withDbTransaction(async (trx) => {
     const invite = await trx
       .selectFrom("workspaceInvites")
       .selectAll()
@@ -105,7 +125,6 @@ export async function redeemInvite(token: string, userId: string) {
       throw new Error("Invite has reached maximum uses")
     }
 
-    // Check if already a member
     const memberCheck = await trx
       .selectFrom("workspaceMembers")
       .select("id")
@@ -116,7 +135,6 @@ export async function redeemInvite(token: string, userId: string) {
       throw new Error("Already a member of this workspace")
     }
 
-    // Add as member
     const memberRow = await trx
       .insertInto("workspaceMembers")
       .values({
@@ -136,49 +154,16 @@ export async function redeemInvite(token: string, userId: string) {
       memberRow.id
     )
 
-    // Increment use count
     await trx
       .updateTable("workspaceInvites")
-      .set({
-        useCount: sql`use_count + 1`,
-      })
+      .set({ useCount: sql`use_count + 1` })
       .where("id", "=", invite.id)
       .execute()
 
     return {
       workspaceId: invite.workspaceId,
-      workspaceName: workspace?.name,
+      workspaceName: workspace?.name ?? null,
       trustLevel: invite.trustLevel,
     }
   })
-
-  return {
-    workspaceId: result.workspaceId,
-    workspaceName: result.workspaceName,
-    trustLevel: result.trustLevel,
-  }
-}
-
-export async function listWorkspaceInvites(workspaceId: string) {
-  const rows = await db
-    .selectFrom("workspaceInvites")
-    .selectAll()
-    .where("workspaceId", "=", workspaceId)
-    .where("isRevoked", "=", false)
-    .orderBy("createdAt", "desc")
-    .execute()
-  return rows.map((row) => mapInviteRow(row)!)
-}
-
-export async function revokeInvite(inviteId: string, workspaceId: string) {
-  const row = await db
-    .updateTable("workspaceInvites")
-    .set({
-      isRevoked: true,
-    })
-    .where("id", "=", inviteId)
-    .where("workspaceId", "=", workspaceId)
-    .returningAll()
-    .executeTakeFirst()
-  return mapInviteRow(row)
 }

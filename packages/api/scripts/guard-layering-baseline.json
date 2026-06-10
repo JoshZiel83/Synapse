@@ -7,7 +7,6 @@
     "packages/api/src/modules/model-groups/service.ts",
     "packages/api/src/modules/platform/admin-service.ts",
     "packages/api/src/modules/tool-call-tasks/service.ts",
-    "packages/api/src/modules/workspace/invite-service.ts",
     "packages/api/src/modules/workspace/service.ts"
   ],
   "r2_tablerow_in_service_ctrl": [
@@ -60,7 +59,6 @@
     "packages/api/src/modules/tasks/service.ts",
     "packages/api/src/modules/tool-call-tasks/service.ts",
     "packages/api/src/modules/workspace-apps/service.ts",
-    "packages/api/src/modules/workspace/invite-service.ts",
     "packages/api/src/modules/workspace/service.ts"
   ],
   "r7_dual_naming": [

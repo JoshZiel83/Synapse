@@ -40,11 +40,17 @@ import {
 } from "../capabilities/conversation-type-policies.js"
 import {
   createInvite,
-  getInviteByToken,
+  getPublicInviteInfo,
   redeemInvite,
   listWorkspaceInvites,
   revokeInvite,
-} from "./invite-service.js"
+} from "./invite/service.js"
+import {
+  WorkspaceInvitePublicViewSchema,
+  WorkspaceInviteRedeemResultSchema,
+  WorkspaceInviteViewSchema,
+} from "@synapse/shared/schemas"
+import { sendData } from "../../infrastructure/http/respond.js"
 
 // ── Schemas ──
 
@@ -546,8 +552,11 @@ export async function handleCreateInvite(
     maxUses: parsed.data.maxUses,
     expiresAt: parsed.data.expiresAt,
   })
+  if (!invite) {
+    return reply.status(500).send({ error: "Failed to create invite" })
+  }
 
-  return reply.status(201).send(invite)
+  return sendData(reply, WorkspaceInviteViewSchema, invite, 201)
 }
 
 export async function handleListInvites(
@@ -563,7 +572,7 @@ export async function handleListInvites(
   if (!allowed) return
 
   const invites = await listWorkspaceInvites(request.params.workspaceId)
-  return reply.send({ data: invites })
+  return sendData(reply, WorkspaceInviteViewSchema.array(), invites)
 }
 
 export async function handleRevokeInvite(
@@ -584,30 +593,25 @@ export async function handleRevokeInvite(
   if (!revoked) {
     return reply.status(404).send({ error: "Invite not found" })
   }
-  return reply.send(revoked)
+  return sendData(reply, WorkspaceInviteViewSchema, revoked)
 }
 
 export async function handleGetInviteInfo(
   request: FastifyRequest<{ Params: TokenParams }>,
   reply: FastifyReply
 ) {
-  const invite = await getInviteByToken(request.params.token)
-  if (!invite || invite.isRevoked) {
-    return reply.status(404).send({ error: "Invite not found or revoked" })
-  }
-  if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
-    return reply.status(410).send({ error: "Invite has expired" })
-  }
-  if (invite.maxUses !== null && invite.useCount >= invite.maxUses) {
+  const lookup = await getPublicInviteInfo(request.params.token)
+  if (!lookup.ok) {
+    if (lookup.reason === "not_found") {
+      return reply.status(404).send({ error: "Invite not found or revoked" })
+    }
+    if (lookup.reason === "expired") {
+      return reply.status(410).send({ error: "Invite has expired" })
+    }
     return reply.status(410).send({ error: "Invite has reached maximum uses" })
   }
 
-  // Return public info only
-  return reply.send({
-    token: invite.token,
-    workspaceName: invite.workspaceName,
-    trustLevel: invite.trustLevel,
-  })
+  return sendData(reply, WorkspaceInvitePublicViewSchema, lookup.view)
 }
 
 export async function handleRedeemInvite(
@@ -617,7 +621,7 @@ export async function handleRedeemInvite(
   const userId = (request as any).user!.userId
   try {
     const result = await redeemInvite(request.params.token, userId)
-    return reply.send(result)
+    return sendData(reply, WorkspaceInviteRedeemResultSchema, result)
   } catch (err: any) {
     const msg = err.message || "Failed to redeem invite"
     if (msg === "Already a member of this workspace") {
