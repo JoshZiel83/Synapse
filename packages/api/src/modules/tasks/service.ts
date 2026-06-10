@@ -83,7 +83,7 @@ import {
 import { upsertTaskTransportProjection } from "./transport-projections.js"
 
 /** Run raw SQL (text+params) on db / trx. */
-async function runOn<T = any>(
+async function runOn<T extends object = Record<string, unknown>>(
   executor: Executor,
   text: string,
   params: readonly unknown[] = []
@@ -101,7 +101,7 @@ async function runOn<T = any>(
 }
 
 /** `runOn` bound to the top-level db. */
-function runOnDb<T = any>(
+function runOnDb<T extends object = Record<string, unknown>>(
   text: string,
   params: readonly unknown[] = []
 ): Promise<{ rows: T[]; rowCount?: number | null }> {

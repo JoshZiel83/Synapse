@@ -69,15 +69,83 @@ type WorkspaceMemberAccess = {
 }
 
 type WorkspaceAppRow = {
+  id: string | null
+  workspace_id: string | null
+  kind: WorkspaceAppKind | null
+  display_name: string | null
+  owner_workspace_member_id: string | null
+  status: string | null
+  conversation_type_mask_override: number | null
+  created_at: Date | null
+  updated_at: Date | null
+  deleted_at?: Date | null
+}
+
+type WorkspaceAppGrantViewRow = {
+  id: string
+  kind: string
+  workspace_id: string | null
+  workspace_app_id: string
+  permissions: WorkspaceAppGrantPermission[]
+  status: string
+  source: string
+  created_by_workspace_member_id: string | null
+  reason: string | null
+  conversation_type_mask_override: number | null
+  created_at: Date | null
+  revoked_at: Date | null
+  workspace_member_id: string | null
+  actor_id: string | null
+  remote_agent_id: string | null
+  conversation_id: string | null
+  scope_kind: string | null
+  scope_workspace_id_via_join?: string | null
+  scope_conversation_id_via_join?: string | null
+}
+
+type WorkspaceAppGrantRequestViewRow = {
+  id: string
+  workspace_id: string
+  workspace_app_id: string
+  requested_permissions: WorkspaceAppGrantPermission[]
+  requester_workspace_member_id: string
+  status: string
+  resolved_by_workspace_member_id: string | null
+  resolved_at: Date | null
+  reason: string | null
+  created_at: Date | null
+  updated_at: Date | null
+  grantee_kind?: string | null
+  grantee_workspace_id_via_join?: string | null
+  grantee_workspace_member_id_via_join?: string | null
+  grantee_actor_id_via_join?: string | null
+  grantee_remote_agent_id_via_join?: string | null
+  grantee_conversation_id_via_join?: string | null
+  grantee_scope_kind?: string | null
+  grantee_scope_workspace_id_via_join?: string | null
+  grantee_scope_conversation_id_via_join?: string | null
+}
+
+function isCompleteWorkspaceAppRow(
+  row: WorkspaceAppRow | null
+): row is WorkspaceAppRow & {
   id: string
   workspace_id: string
   kind: WorkspaceAppKind
   display_name: string
-  owner_workspace_member_id: string | null
   status: string
-  conversation_type_mask_override: number | null
   created_at: Date
   updated_at: Date
+} {
+  return Boolean(
+    row?.id &&
+    row.workspace_id &&
+    row.kind &&
+    row.display_name &&
+    row.status &&
+    row.created_at &&
+    row.updated_at
+  )
 }
 
 const IMPLICIT_OWNER_VISIBLE_WORKSPACE_APP_KINDS = [
@@ -102,6 +170,9 @@ function workspaceAppKindAdminKey(kind: WorkspaceAppKind): string {
 }
 
 function mapWorkspaceAppRow(row: WorkspaceAppRow): WorkspaceAppView {
+  if (!isCompleteWorkspaceAppRow(row)) {
+    throw new Error("workspace app row is missing required fields")
+  }
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -166,15 +237,22 @@ function subjectRefToTarget(input: {
   return scope ? { subject, scope } : { subject }
 }
 
-function mapGrantRow(row: any): WorkspaceAppGrant {
+function mapGrantRow(row: WorkspaceAppGrantViewRow): WorkspaceAppGrant {
+  if (!row.created_at) {
+    throw new Error("workspace app grant row is missing created_at")
+  }
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
+    workspaceId: row.workspace_id || "",
     workspaceAppId: row.workspace_app_id,
-    target: subjectRefToTarget(row),
+    target: subjectRefToTarget({
+      ...row,
+      scope_workspace_id: row.scope_workspace_id_via_join || null,
+      scope_conversation_id: row.scope_conversation_id_via_join || null,
+    }),
     permissions: row.permissions,
-    status: row.status,
-    source: row.source,
+    status: row.status as WorkspaceAppGrant["status"],
+    source: row.source as WorkspaceAppGrant["source"],
     grantedByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     reason: row.reason || undefined,
     conversationTypeMaskOverride:
@@ -184,25 +262,30 @@ function mapGrantRow(row: any): WorkspaceAppGrant {
   }
 }
 
-function mapGrantRequestRow(row: any): WorkspaceAppGrantRequest {
+function mapGrantRequestRow(
+  row: WorkspaceAppGrantRequestViewRow
+): WorkspaceAppGrantRequest {
+  if (!row.grantee_kind || !row.created_at || !row.updated_at) {
+    throw new Error("workspace app grant request row is missing joined fields")
+  }
   return {
     id: row.id,
     workspaceId: row.workspace_id,
     workspaceAppId: row.workspace_app_id,
     grantee: subjectRefToTarget({
       kind: row.grantee_kind,
-      workspace_id: row.grantee_workspace_id_via_join,
-      workspace_member_id: row.grantee_workspace_member_id_via_join,
-      actor_id: row.grantee_actor_id_via_join,
-      remote_agent_id: row.grantee_remote_agent_id_via_join,
-      conversation_id: row.grantee_conversation_id_via_join,
-      scope_kind: row.grantee_scope_kind,
-      scope_workspace_id: row.grantee_scope_workspace_id_via_join,
-      scope_conversation_id: row.grantee_scope_conversation_id_via_join,
+      workspace_id: row.grantee_workspace_id_via_join || null,
+      workspace_member_id: row.grantee_workspace_member_id_via_join || null,
+      actor_id: row.grantee_actor_id_via_join || null,
+      remote_agent_id: row.grantee_remote_agent_id_via_join || null,
+      conversation_id: row.grantee_conversation_id_via_join || null,
+      scope_kind: row.grantee_scope_kind || null,
+      scope_workspace_id: row.grantee_scope_workspace_id_via_join || null,
+      scope_conversation_id: row.grantee_scope_conversation_id_via_join || null,
     }),
     requestedPermissions: row.requested_permissions,
     requesterWorkspaceMemberId: row.requester_workspace_member_id,
-    status: row.status,
+    status: row.status as WorkspaceAppGrantRequest["status"],
     resolvedByWorkspaceMemberId:
       row.resolved_by_workspace_member_id || undefined,
     resolvedAt: serializeOptionalInstant(row.resolved_at),
@@ -306,7 +389,10 @@ async function requireManageWorkspaceApp(
     app.owner_workspace_member_id === access.workspaceMemberId ||
     (await hasManageGrant(appId, access.workspaceMemberId))
   ) {
-    return { access, app: app as unknown as WorkspaceAppRow }
+    if (!isCompleteWorkspaceAppRow(app)) {
+      throw new Error("Workspace app row is incomplete")
+    }
+    return { access, app }
   }
   throw new Error("Not allowed to manage this workspace app")
 }
@@ -348,7 +434,12 @@ export async function listWorkspaceAppsInventory(params: {
         : null
     })
   )
-  return filtered.filter(Boolean).map((row) => mapWorkspaceAppRow(row! as any))
+  const visible: WorkspaceAppView[] = []
+  for (const row of filtered) {
+    if (!isCompleteWorkspaceAppRow(row)) continue
+    visible.push(mapWorkspaceAppRow(row))
+  }
+  return visible
 }
 
 export async function discoverWorkspaceAppsForMember(params: {
@@ -432,11 +523,12 @@ export async function discoverWorkspaceAppsForMember(params: {
     .execute()
 
   const byId = new Map<string, WorkspaceAppView>()
-  for (const row of grantRows as any[]) {
-    byId.set(row.id, mapWorkspaceAppRow(row as any))
+  for (const row of grantRows) {
+    byId.set(row.id, mapWorkspaceAppRow(row))
   }
-  for (const row of implicitOwnerRows as any[]) {
-    byId.set(row.id, mapWorkspaceAppRow(row as any))
+  for (const row of implicitOwnerRows) {
+    if (!isCompleteWorkspaceAppRow(row)) continue
+    byId.set(row.id, mapWorkspaceAppRow(row))
   }
   return Array.from(byId.values())
 }

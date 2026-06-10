@@ -164,12 +164,12 @@ type PublisherRow = {
   id: string
   slug: string
   display_name: string
-  description: string
+  description: string | null
   logo_file_id: string | null
   owner_user_id: string | null
   workspace_id: string | null
-  is_builtin: boolean
-  is_verified: boolean
+  is_builtin: boolean | null
+  is_verified: boolean | null
   created_at: Date
   updated_at: Date
   plugin_count?: string | number | null
@@ -616,10 +616,10 @@ function mapPublisherView(row: PublisherRow) {
     id: row.id,
     slug: row.slug,
     display_name: row.display_name,
-    description: row.description,
+    description: row.description || "",
     logo_url: row.logo_file_id ? getFileUrlById(row.logo_file_id) : null,
-    is_builtin: row.is_builtin,
-    is_verified: row.is_verified,
+    is_builtin: Boolean(row.is_builtin),
+    is_verified: Boolean(row.is_verified),
     owner_user_id: row.owner_user_id,
     workspace_id: row.workspace_id,
     plugin_count:
@@ -1007,8 +1007,8 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       "app_grant.source",
       "app_grant.created_by_workspace_member_id",
       "app_grant.reason",
-      sql<string>`app_grant.created_at::text`.as("created_at"),
-      sql<string | null>`app_grant.revoked_at::text`.as("revoked_at"),
+      "app_grant.created_at",
+      "app_grant.revoked_at",
     ])
     .where("app_grant.workspace_app_id", "=", installationId)
     .where(
@@ -1020,7 +1020,10 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
     query = query.where("app_grant.status", "=", "active")
   }
 
-  return (await query.execute()) as unknown as InstallationAccessRow[]
+  return (await query.execute()).map((row) => ({
+    ...row,
+    created_at: row.created_at || new Date(0),
+  }))
 }
 
 function buildPluginGrantPlan(input: {
@@ -1510,7 +1513,7 @@ export async function createOrganization(data: {
     .returningAll()
     .executeTakeFirstOrThrow()
 
-  return mapPublisherView(row as unknown as PublisherRow)
+  return mapPublisherView(row)
 }
 
 export async function listOrganizations() {
@@ -1530,7 +1533,7 @@ export async function listOrganizations() {
     .orderBy("publisher.display_name", "asc")
     .execute()
 
-  return rows.map((row) => mapPublisherView(row as unknown as PublisherRow))
+  return rows.map((row) => mapPublisherView(row))
 }
 
 export async function getOrganization(id: string) {
@@ -1546,7 +1549,7 @@ export async function getOrganization(id: string) {
     throw new McpPluginError(404, "Publisher not found")
   }
 
-  return mapPublisherView(row as unknown as PublisherRow)
+  return mapPublisherView(row)
 }
 
 export async function getOrganizationBySlug(slug: string) {
@@ -1558,7 +1561,7 @@ export async function getOrganizationBySlug(slug: string) {
     .limit(1)
     .executeTakeFirst()
 
-  return row ? mapPublisherView(row as unknown as PublisherRow) : null
+  return row ? mapPublisherView(row) : null
 }
 
 export async function createPlugin(data: {
@@ -2388,7 +2391,7 @@ export async function createPluginInstallationGrant(input: {
       source: inserted.source,
       createdByWorkspaceMemberId: inserted.created_by_workspace_member_id,
       reason: inserted.reason,
-      createdAt: inserted.created_at,
+      createdAt: inserted.created_at || new Date(0),
       revokedAt: inserted.revoked_at,
     })
     return {

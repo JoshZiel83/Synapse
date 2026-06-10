@@ -88,7 +88,7 @@ export async function insertMemoryAccessGrant(
     } as any)
     .returningAll()
     .executeTakeFirstOrThrow()
-  return result as unknown as MemoryAccessGrantRow
+  return result
 }
 
 /**
@@ -122,7 +122,7 @@ export async function listActiveMemoryAccessGrants(
     .where("status", "=", MEMORY_ACCESS_GRANT_STATUS.ACTIVE)
     .orderBy("created_at", "desc")
     .execute()
-  return rows as unknown as MemoryAccessGrantRow[]
+  return rows
 }
 
 /**

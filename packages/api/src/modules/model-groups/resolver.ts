@@ -287,7 +287,7 @@ async function listCandidateGroups(
   })
 }
 
-async function listGroupItems(groupId: string) {
+async function listGroupItems(groupId: string): Promise<GroupItemRow[]> {
   // Flat read: model_bindings (the item) joined to its current version row.
   // Reads go through the soft-delete _live view so deleted bindings are excluded.
   const result = await db
@@ -322,7 +322,49 @@ async function listGroupItems(groupId: string) {
     .where("mb.is_enabled", "=", true)
     .where("mb.current_version_id", "is not", null)
     .execute()
-  return result as unknown as GroupItemRow[]
+  return result.map((row) => ({
+    group_id: row.group_id || "",
+    group_name: row.group_name || "",
+    routing_strategy: row.routing_strategy || "priority_failover",
+    attempt_policy:
+      row.attempt_policy &&
+      typeof row.attempt_policy === "object" &&
+      !Array.isArray(row.attempt_policy)
+        ? (row.attempt_policy as Record<string, unknown>)
+        : null,
+    item_id: row.item_id || "",
+    priority: row.priority ?? 0,
+    weight: row.weight ?? 1,
+    item_enabled: row.item_enabled ?? false,
+    binding_id: row.binding_id || row.item_id || "",
+    display_name: row.display_name || "",
+    current_version_id: row.current_version_id,
+    provider_kind: row.provider_kind,
+    vendor: row.vendor,
+    api_key: row.api_key,
+    base_url: row.base_url,
+    model_name: row.model_name,
+    max_output_tokens: row.max_output_tokens,
+    capability_tags: Array.isArray(row.capability_tags)
+      ? row.capability_tags.filter(
+          (item): item is string => typeof item === "string"
+        )
+      : null,
+    features:
+      row.features &&
+      typeof row.features === "object" &&
+      !Array.isArray(row.features)
+        ? (row.features as Record<string, unknown>)
+        : null,
+    provider_options:
+      row.provider_options &&
+      typeof row.provider_options === "object" &&
+      !Array.isArray(row.provider_options)
+        ? (row.provider_options as Record<string, unknown>)
+        : null,
+    request_timeout_ms: row.request_timeout_ms,
+    max_retries: row.max_retries,
+  }))
 }
 
 function toResolvedModelConfig(row: GroupItemRow): ResolvedModelConfig | null {

@@ -64,11 +64,7 @@ import {
   getWorkspaceCapabilityConversationTypeMask,
   getWorkspaceCapabilityConversationTypePolicyMap,
 } from "../capabilities/conversation-type-policies.js"
-import {
-  readAutomationEventSourceAccessBindingTarget,
-  type AutomationEventSourceBindingRow,
-  type AutomationEventSourceBindingTarget,
-} from "../access/bindings.js"
+import { type AutomationEventSourceBindingTarget } from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import { upsertAccessSubjectOn } from "../access/subject-registry.js"
 import {
@@ -218,7 +214,7 @@ function runnerFn(executor: Executor): QueryRunner {
 }
 
 /** Run raw SQL on an explicit executor (db / trx). */
-function runOn<T extends QueryRow = any>(
+function runOn<T extends QueryRow = QueryRow>(
   executor: Executor,
   text: string,
   params?: unknown[]
@@ -227,7 +223,7 @@ function runOn<T extends QueryRow = any>(
 }
 
 /** Run raw SQL on the top-level db. */
-function runOnDb<T extends QueryRow = any>(
+function runOnDb<T extends QueryRow = QueryRow>(
   text: string,
   params?: unknown[]
 ): Promise<QueryResultLike<T>> {
@@ -383,7 +379,7 @@ export type SkillAccessRow = {
   source: "manual" | "approval" | "system"
   created_by_workspace_member_id: string | null
   reason: string | null
-  created_at: Date
+  created_at: Date | null
   revoked_at: Date | null
 }
 
@@ -796,7 +792,8 @@ function buildSkillAttachmentFromCatalogFile(
     path: row.path,
     mediaType: row.media_type || undefined,
     contentBlocks: normalizeStoredBlocks(row.content_blocks),
-    createdAt: serializeInstant(row.created_at),
+    createdAt:
+      serializeOptionalInstant(row.created_at) || dateToIsoInstant(new Date(0)),
     updatedAt: serializeInstant(row.updated_at),
   }
 }
@@ -922,6 +919,10 @@ function resolvePublicUseScope(row: SkillAccessRow): SkillAccessSuggestion {
   }
 }
 
+function skillAccessCreatedAtMs(row: SkillAccessRow): number {
+  return row.created_at?.getTime?.() ?? 0
+}
+
 function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
   const statusOrder: Record<SkillAccessRow["status"], number> = {
     active: 0,
@@ -941,7 +942,7 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
   if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
     return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope]
   }
-  return right.created_at.getTime() - left.created_at.getTime()
+  return skillAccessCreatedAtMs(right) - skillAccessCreatedAtMs(left)
 }
 
 function compareVisibleBindingPriority(
@@ -966,13 +967,14 @@ function compareVisibleBindingPriority(
   if (scopeOrder[left.bind_scope] !== scopeOrder[right.bind_scope]) {
     return scopeOrder[left.bind_scope] - scopeOrder[right.bind_scope]
   }
-  return right.created_at.getTime() - left.created_at.getTime()
+  return skillAccessCreatedAtMs(right) - skillAccessCreatedAtMs(left)
 }
 
 function selectInitialSkillGrant(accessRows: SkillAccessRow[]) {
   const activeRows = accessRows.filter((row) => row.status === "active")
   return [...activeRows].sort(
-    (left, right) => left.created_at.getTime() - right.created_at.getTime()
+    (left, right) =>
+      skillAccessCreatedAtMs(left) - skillAccessCreatedAtMs(right)
   )[0]
 }
 
@@ -1138,7 +1140,8 @@ function buildInstalledSkillPayload(
       row.source_catalog_item_id && row.source_is_customized
     ),
     ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
-    createdAt: serializeInstant(row.created_at),
+    createdAt:
+      serializeOptionalInstant(row.created_at) || dateToIsoInstant(new Date(0)),
     updatedAt: serializeInstant(row.updated_at),
     sourceSkillId: row.source_catalog_item_id || undefined,
     sourcePackageSlug: row.source_slug || undefined,
@@ -1185,15 +1188,42 @@ function skillBindingToAccessTarget(
   binding: SkillAccessRow,
   _fallbackWorkspaceId: string
 ): CapabilityAccessTarget {
-  // Round 11 review (P3): no fail-open fallback. The earlier version
-  // caught decode failures and returned `{ subject: workspaceRef(...) }`
-  // — but the callers (updateInstalledSkillGrant /
-  // updateInstalledSkill) feed the result into permission gates, so a
-  // silent workspace fallback would widen access on malformed rows. If
-  // the projection is missing the via_join fields readAutomationEventSourceAccessBindingTarget
-  // expects, that's a load-path bug; propagate it instead of laundering
-  // it into a workspace grant.
-  return readAutomationEventSourceAccessBindingTarget(binding as any)
+  switch (binding.bind_scope) {
+    case "workspace":
+      return { subject: workspaceRef(binding.workspace_id) }
+    case "workspace_member":
+      if (!binding.workspace_member_id) {
+        throw new Error(
+          "workspace_member skill binding missing workspace_member_id"
+        )
+      }
+      return { subject: workspaceMemberRef(binding.workspace_member_id) }
+    case "conversation":
+      if (!binding.conversation_id) {
+        throw new Error("conversation skill binding missing conversation_id")
+      }
+      return { subject: conversationRef(binding.conversation_id) }
+    case "actor":
+      if (!binding.actor_id) {
+        throw new Error("actor skill binding missing actor_id")
+      }
+      return {
+        subject: actorRef(binding.actor_id),
+        ...(binding.conversation_id
+          ? { scope: conversationRef(binding.conversation_id) }
+          : {}),
+      }
+    case "remote_agent":
+      if (!binding.remote_agent_id) {
+        throw new Error("remote_agent skill binding missing remote_agent_id")
+      }
+      return {
+        subject: remoteAgentRef(binding.remote_agent_id),
+        ...(binding.conversation_id
+          ? { scope: conversationRef(binding.conversation_id) }
+          : {}),
+      }
+  }
 }
 
 function buildAvailableSkillPayload(
@@ -1656,10 +1686,8 @@ async function loadInstalledSkillRows(params: {
 // D3: legacy `legacyCapabilityAccessTargetOrThrow` / `legacyAccessGrantTargetOrThrow`
 // helpers removed — all CapabilityAccessTarget values are now ScopedSubjectTarget.
 
-export function buildSkillAccessRow(
-  row: AutomationEventSourceBindingRow
-): SkillAccessRow {
-  const target = readAutomationEventSourceAccessBindingTarget(row as any)
+export function buildSkillAccessRow(row: SkillAccessRow): SkillAccessRow {
+  const target = skillBindingToAccessTarget(row, row.workspace_id)
   const label = subjectScopeLabel(target)
   let bindScope: RuntimeBindingScope
   switch (label) {
@@ -1694,7 +1722,7 @@ export function buildSkillAccessRow(
   return {
     id: row.id,
     workspace_id: row.workspace_id,
-    skill_id: row.resource_id,
+    skill_id: row.skill_id,
     bind_scope: bindScope,
     conversation_id: conversationId,
     actor_id: actorId,
@@ -1705,7 +1733,7 @@ export function buildSkillAccessRow(
     source: row.source as SkillAccessRow["source"],
     created_by_workspace_member_id: row.created_by_workspace_member_id,
     reason: row.reason,
-    created_at: row.created_at,
+    created_at: row.created_at || new Date(0),
     revoked_at: row.revoked_at,
   }
 }
@@ -1761,9 +1789,13 @@ async function loadAccessBindingsBySkillIds(
   const rows = await query.execute()
 
   const map = new Map<string, SkillAccessRow[]>()
-  for (const row of rows as unknown as SkillAccessRow[]) {
-    const existing = map.get(row.skill_id) || []
-    existing.push(row)
+  for (const row of rows) {
+    const normalizedRow: SkillAccessRow = {
+      ...row,
+      created_at: row.created_at || new Date(0),
+    }
+    const existing = map.get(normalizedRow.skill_id) || []
+    existing.push(normalizedRow)
     map.set(row.skill_id, existing)
   }
   return map
@@ -1854,7 +1886,8 @@ function mapSkillAccessRowToGrant(
     reason: row.reason || undefined,
     conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
     effectiveConversationTypeMask,
-    createdAt: serializeInstant(row.created_at),
+    createdAt:
+      serializeOptionalInstant(row.created_at) || dateToIsoInstant(new Date(0)),
     revokedAt: serializeOptionalInstant(row.revoked_at),
   }
 }

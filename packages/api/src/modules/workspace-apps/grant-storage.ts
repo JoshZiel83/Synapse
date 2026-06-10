@@ -38,7 +38,7 @@ export type WorkspaceAppGrantRow = {
   source: "manual" | "approval" | "system"
   created_by_workspace_member_id: string | null
   reason: string | null
-  created_at: Date
+  created_at: Date | null
   revoked_at: Date | null
 }
 
@@ -54,8 +54,8 @@ export type WorkspaceAppGrantRequestRow = {
   resolved_by_workspace_member_id: string | null
   resolved_at: Date | null
   reason: string | null
-  created_at: Date
-  updated_at: Date
+  created_at: Date | null
+  updated_at: Date | null
 }
 
 export type InsertWorkspaceAppGrantInput = {
@@ -153,7 +153,7 @@ export async function insertWorkspaceAppGrant(
     } as any)
     .returningAll()
     .executeTakeFirstOrThrow()
-  return inserted as unknown as WorkspaceAppGrantRow
+  return inserted
 }
 
 export async function revokeWorkspaceAppGrant(
@@ -201,7 +201,7 @@ export async function listActiveWorkspaceAppGrants(
     .where("status", "=", WORKSPACE_APP_GRANT_STATUS.ACTIVE)
     .orderBy("created_at", "desc")
     .execute()
-  return rows as unknown as WorkspaceAppGrantRow[]
+  return rows
 }
 
 export async function insertWorkspaceAppGrantRequest(
@@ -272,7 +272,7 @@ export async function insertWorkspaceAppGrantRequest(
     )
     .executeTakeFirst()
   if (existing) {
-    return existing as unknown as WorkspaceAppGrantRequestRow
+    return existing
   }
 
   const inserted = await run
@@ -289,7 +289,7 @@ export async function insertWorkspaceAppGrantRequest(
     } as any)
     .returningAll()
     .executeTakeFirstOrThrow()
-  return inserted as unknown as WorkspaceAppGrantRequestRow
+  return inserted
 }
 
 export async function cancelWorkspaceAppGrantRequest(
@@ -345,7 +345,7 @@ export async function listWorkspaceAppGrantRequests(
     )
   }
   const rows = await query.execute()
-  return rows as unknown as WorkspaceAppGrantRequestRow[]
+  return rows
 }
 
 export async function resolveWorkspaceAppGrantRequest(params: {
@@ -462,7 +462,7 @@ export async function resolveWorkspaceAppGrantRequest(params: {
       .returningAll()
       .executeTakeFirstOrThrow()
 
-    return updated as unknown as WorkspaceAppGrantRequestRow
+    return updated
   }
 
   if (params.executor) {

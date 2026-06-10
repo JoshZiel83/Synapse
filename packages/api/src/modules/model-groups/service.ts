@@ -89,8 +89,8 @@ type ModelGroupRow = {
   is_default: boolean
   is_enabled: boolean
   created_by_workspace_member_id: string | null
-  created_at: Date
-  updated_at: Date
+  created_at: Date | null
+  updated_at: Date | null
 }
 
 type ModelGroupGrantRow = {
@@ -110,7 +110,7 @@ type ModelGroupGrantRow = {
 
 type ModelGroupGrantDbRow = {
   id: string
-  group_id: string
+  group_id: string | null
   status: "active" | "revoked"
   reason: string | null
   created_at: Date | null
@@ -124,12 +124,38 @@ type ModelGroupGrantDbRow = {
   mgs_actor_id?: string | null
 }
 
+type ModelGroupItemRow = {
+  id?: string | null
+  item_id?: string | null
+  group_id: string | null
+  binding_id?: string | null
+  current_version_id?: string | null
+  display_name: string | null
+  priority: number | null
+  weight: number | null
+  item_enabled?: boolean | null
+  is_enabled?: boolean | null
+  version?: number | null
+  provider_kind?: string | null
+  vendor?: string | null
+  base_url?: string | null
+  model_name?: string | null
+  max_output_tokens?: number | null
+  capability_tags?: string[] | null
+  features?: unknown
+  provider_options?: unknown
+  request_timeout_ms?: number | null
+  max_retries?: number | null
+  created_at: Date | null
+  updated_at: Date | null
+}
+
 function dbRowToGrantRow(
   row: ModelGroupGrantDbRow
 ): ModelGroupGrantRow & { id: string; group_id: string } {
   return {
     id: row.id,
-    group_id: row.group_id,
+    group_id: row.group_id || "",
     grant_scope: row.mgs_kind
       ? subjectKindToModelGroupGrantScope(row.mgs_kind as SubjectRef["kind"])
       : MODEL_GROUP_GRANT_SCOPE.PLATFORM,
@@ -192,24 +218,30 @@ function mapGroupRow(row: ModelGroupRow) {
     is_default: Boolean(row.is_default),
     is_active: Boolean(row.is_enabled),
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || null,
-    created_at: serializeInstant(row.created_at),
-    updated_at: serializeInstant(row.updated_at),
+    created_at:
+      serializeOptionalInstant(row.created_at) ||
+      serializeOptionalInstant(row.updated_at) ||
+      serializeInstant(new Date(0)),
+    updated_at:
+      serializeOptionalInstant(row.updated_at) ||
+      serializeOptionalInstant(row.created_at) ||
+      serializeInstant(new Date(0)),
   }
 }
 
-function mapGroupItem(row: any) {
+function mapGroupItem(row: ModelGroupItemRow) {
   const features = asObject(row.features)
   const providerKind =
     row.provider_kind || getProviderKindForVendor(row.vendor || "anthropic")
 
   return {
-    id: row.item_id ?? row.id,
+    id: row.item_id ?? row.id ?? "",
     group_id: row.group_id,
-    binding_id: row.binding_id ?? row.item_id ?? row.id,
+    binding_id: row.binding_id ?? row.item_id ?? row.id ?? "",
     current_version_id: row.current_version_id || null,
-    display_name: row.display_name,
-    priority: row.priority,
-    weight: row.weight,
+    display_name: row.display_name || "",
+    priority: row.priority ?? 0,
+    weight: row.weight ?? 1,
     is_enabled: Boolean(row.item_enabled ?? row.is_enabled),
     version: row.version || null,
     provider_kind: providerKind,
@@ -222,8 +254,8 @@ function mapGroupItem(row: any) {
     provider_options: asObject(row.provider_options),
     request_timeout_ms: row.request_timeout_ms ?? null,
     max_retries: row.max_retries ?? null,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    created_at: row.created_at || undefined,
+    updated_at: row.updated_at || undefined,
   }
 }
 

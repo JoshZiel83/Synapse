@@ -137,6 +137,19 @@ export interface RuntimeAuthorizationGrantCandidate {
   sourceTaskIdOnRow?: string
 }
 
+type RuntimeAuthorizationGrantCandidateRow =
+  TableRow<"runtime_authorization_grants"> & {
+    subject_kind: string
+    subject_workspace_id: string | null
+    subject_workspace_member_id: string | null
+    subject_actor_id: string | null
+    subject_remote_agent_id: string | null
+    subject_conversation_id: string | null
+    scope_kind: string | null
+    scope_workspace_id: string | null
+    scope_conversation_id: string | null
+  }
+
 /**
  * Helper: hydrate a candidate row's joined access_subjects view into a typed
  * SubjectRef. Throws InvalidGrantSubjectRowError if the joined columns can't
@@ -429,7 +442,9 @@ export function mapRuntimeAuthorizationGrantCandidate(
   }
 }
 
-function rowToCandidate(row: any): RuntimeAuthorizationGrantCandidate {
+function rowToCandidate(
+  row: RuntimeAuthorizationGrantCandidateRow
+): RuntimeAuthorizationGrantCandidate {
   const subject = subjectRowToRef({
     kind: row.subject_kind,
     workspaceId: row.subject_workspace_id,
@@ -451,7 +466,7 @@ function rowToCandidate(row: any): RuntimeAuthorizationGrantCandidate {
   const rawPolicy = parseJsonObject(row.policy)
   const validationResult = validateGrantPolicyForCapability(rawPolicy)
   return {
-    rawRow: row as TableRow<"runtime_authorization_grants">,
+    rawRow: row,
     rawPolicy,
     policyValidationResult: validationResult,
     subject,
@@ -641,7 +656,7 @@ async function createGrantInKyselyTx(
       "scope_subj.id",
       "g.scope_subject_id"
     )
-    .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
+    .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.id", "=", inserted.id)
     .limit(1)
     .executeTakeFirst()
@@ -672,11 +687,14 @@ export async function getRuntimeAuthorizationGrant(
       "scope_subj.id",
       "g.scope_subject_id"
     )
-    .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
+    .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.id", "=", id)
     .limit(1)
   const row = queryable
-    ? await takeFirstOn<any>(queryable, statement)
+    ? await takeFirstOn<RuntimeAuthorizationGrantCandidateRow>(
+        queryable,
+        statement
+      )
     : await statement.executeTakeFirst()
   if (!row) return null
   const candidate = rowToCandidate(row)
@@ -1414,7 +1432,7 @@ async function listCandidatesForDispatch(params: {
       "scope_subj.id",
       "g.scope_subject_id"
     )
-    .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
+    .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.workspace_id", "=", params.workspaceId)
     .where("g.device_id", "=", params.deviceId)
     .where("g.device_capability_id", "=", params.deviceCapabilityId)
@@ -1452,7 +1470,7 @@ async function listCandidatesForDispatch(params: {
     .orderBy("g.created_at", "desc")
     .execute()
   return rows
-    .map((row: any) => {
+    .map((row) => {
       try {
         return rowToCandidate(row)
       } catch (err) {
@@ -1494,7 +1512,7 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
       "scope_subj.id",
       "g.scope_subject_id"
     )
-    .select(runtimeAuthorizationGrantSelectColumns() as unknown as any)
+    .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.workspace_id", "=", input.workspaceId)
     .where("g.device_capability_id", "=", input.deviceCapabilityId)
     .orderBy("g.created_at", "desc")
@@ -1504,7 +1522,7 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
   const rows = await query.execute()
   const valid: RuntimeAuthorizationGrantRecord[] = []
   const corrupt: CorruptGrantRow[] = []
-  for (const row of rows as any[]) {
+  for (const row of rows) {
     let candidate: RuntimeAuthorizationGrantCandidate
     try {
       candidate = rowToCandidate(row)
@@ -1512,7 +1530,7 @@ export async function listDeviceCapabilityRuntimeAuthorizationGrantsForDashboard
       // Subject row corruption case (rare, gated by trigger).
       corrupt.push({
         rowId: row.id,
-        capability: row.policy?.capability,
+        capability: parseJsonObject(row.policy)?.capability,
         validatorFailure: {
           kind: "parse_error",
           issues: [

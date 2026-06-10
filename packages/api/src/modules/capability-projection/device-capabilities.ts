@@ -149,7 +149,15 @@ export async function loadDeviceCapabilityToolsForSubjects(
     query = query.where("rab.scope_subject_id", "is", null)
   }
   const rows = await query.orderBy("dt.id").execute()
-  return rows as unknown as DeviceCapabilityToolRow[]
+  return rows.map((row) => ({
+    ...row,
+    exposure_metadata:
+      row.exposure_metadata &&
+      typeof row.exposure_metadata === "object" &&
+      !Array.isArray(row.exposure_metadata)
+        ? (row.exposure_metadata as Record<string, unknown>)
+        : null,
+  }))
 }
 
 export interface AccessTargetInput {

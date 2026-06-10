@@ -84,7 +84,7 @@ function mapWakeupSourceTypeToTrigger(
   return sourceType
 }
 
-function mapWakeupRow(row: any): ActorRuntimeWakeup {
+function mapWakeupRow(row: TableRow<"session_wakeups">): ActorRuntimeWakeup {
   const metadata = parseMetadata(row.metadata)
   return {
     wakeupId: row.id,

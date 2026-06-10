@@ -3,9 +3,12 @@ import type {
   CanonicalContextItem,
   ConversationMessage,
 } from "@synapse/shared"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import { parseJsonObjectOrUndefined as parseJsonObject } from "@synapse/shared"
 import type {
   CanonicalArchiveFrame,
+  CanonicalArchiveFrameRole,
+  CanonicalArchiveChainScope,
   CanonicalArchivePoint,
   ProviderContextManifest,
   ProviderContextWindow,
@@ -24,6 +27,37 @@ const SHARED_ARCHIVE_TAIL_TARGET = 24
 const PRIVATE_ARCHIVE_TAIL_TARGET = 32
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+type ArchivePointRow = {
+  id: string
+  chain_scope: CanonicalArchiveChainScope
+  conversation_id: string
+  session_id: string | null
+  parent_archive_point_id: string | null
+  covers_until_sequence: number | string | null
+  metadata: unknown
+  created_at: Date | string
+}
+
+type ArchiveFrameQueryRow = {
+  id: string
+  role: CanonicalArchiveFrameRole
+  frame_type: string
+  tool_calls: unknown
+  tool_results: unknown
+  source_item_ids: unknown
+  metadata: unknown
+  part_id: string | null
+  part_ordinal: number | null
+  part_type: string | null
+  text_value: string | null
+  ref_path: string | null
+  ref_sha256: string | null
+  json_value: unknown
+  mime_type: string | null
+  name: string | null
+  part_metadata: unknown
+}
 
 function parseJsonArray<T>(value: unknown): T[] | undefined {
   if (!value) return undefined
@@ -64,7 +98,7 @@ async function loadArchivePoint(
   archivePointId: string,
   executor: Executor = db
 ): Promise<CanonicalArchivePoint | null> {
-  const pointResult = await sql<any>`
+  const pointResult = await sql<ArchivePointRow>`
     SELECT *
     FROM context_archive_points
     WHERE id = ${archivePointId}
@@ -73,7 +107,7 @@ async function loadArchivePoint(
   const point = pointResult.rows[0]
   if (!point) return null
 
-  const framesResult = await sql<any>`
+  const framesResult = await sql<ArchiveFrameQueryRow>`
     SELECT caf.*,
            cap.id AS part_id,
            cap.ordinal AS part_ordinal,
@@ -90,7 +124,22 @@ async function loadArchivePoint(
     WHERE caf.archive_point_id = ${archivePointId}
     ORDER BY caf.ordinal ASC, cap.ordinal ASC`.execute(executor)
 
-  const frameMap = new Map<string, { row: any; parts: any[] }>()
+  const frameMap = new Map<
+    string,
+    {
+      row: ArchiveFrameQueryRow
+      parts: Array<{
+        part_type: string | null
+        text_value: string | null
+        ref_path: string | null
+        ref_sha256: string | null
+        json_value: unknown
+        mime_type: string | null
+        name: string | null
+        metadata: unknown
+      }>
+    }
+  >()
   for (const row of framesResult.rows) {
     if (!frameMap.has(row.id)) {
       frameMap.set(row.id, { row, parts: [] })
@@ -133,7 +182,10 @@ async function loadArchivePoint(
     coversUntilSequence: Number(point.covers_until_sequence || 0),
     frames,
     metadata: parseJsonObject(point.metadata),
-    createdAt: point.created_at?.toISOString?.() || point.created_at,
+    createdAt:
+      point.created_at instanceof Date
+        ? assertIsoInstant(point.created_at.toISOString())
+        : assertIsoInstant(point.created_at),
   }
 }
 

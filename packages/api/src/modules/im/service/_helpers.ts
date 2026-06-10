@@ -13,10 +13,13 @@
 
 import type {
   TransportAccountInboundActorMode,
+  TransportAccountStatus,
   TransportAccountOwnerScope,
   TransportAccountSummary,
+  TransportConnectionMode,
   TransportConversationInboundActorMode,
   TransportDeliveryStatus,
+  TransportEndpointType,
   TransportEndpointSummary,
   TransportExternalUserSummary,
   TransportKind,
@@ -57,13 +60,110 @@ export function readTrimmedString(
   return undefined
 }
 
-export function normalizeAccountRow(row: any): TransportAccountSummary {
+type TransportAccountRow = {
+  id: string
+  workspace_id: string | null
+  transport_kind: TransportKind
+  account_key: string
+  display_name: string | null
+  owner_scope?: TransportAccountOwnerScope | null
+  owner_workspace_member_id?: string | null
+  account_inbound_actor_mode?: TransportAccountInboundActorMode | null
+  inbound_actor_mode?:
+    | TransportAccountInboundActorMode
+    | TransportConversationInboundActorMode
+    | null
+  account_inbound_actor_id?: string | null
+  inbound_actor_id?: string | null
+  connection_mode: TransportConnectionMode
+  status: TransportAccountStatus
+  credentials: unknown
+  config: unknown
+  metadata: unknown
+  created_at: Date
+  updated_at: Date
+}
+
+type TransportEndpointRow = {
+  endpoint_id?: string | null
+  id?: string | null
+  transport_account_id: string
+  endpoint_type: TransportEndpointType
+  endpoint_external_id?: string | null
+  external_id?: string | null
+  parent_external_id?: string | null
+  endpoint_display_name?: string | null
+  display_name?: string | null
+  endpoint_metadata?: unknown
+  metadata?: unknown
+  endpoint_created_at?: Date | null
+  created_at?: Date | null
+  endpoint_updated_at?: Date | null
+  updated_at?: Date | null
+}
+
+type ConversationTransportBindingRow = TransportAccountRow &
+  TransportEndpointRow & {
+    binding_id?: string | null
+    conversation_id: string | null
+    outbound_enabled: boolean | null
+    binding_metadata?: unknown
+    binding_created_at?: Date | null
+    binding_updated_at?: Date | null
+  }
+
+type TransportSessionRow = ConversationTransportBindingRow & {
+  account_workspace_id?: string | null
+  conversation_title?: string | null
+  last_inbound_at?: Date | null
+  last_outbound_at?: Date | null
+}
+
+type TransportExternalUserRow = {
+  id: string
+  workspace_id: string
+  transport_account_id: string
+  transport_kind: TransportKind
+  account_display_name?: string | null
+  external_id: string
+  display_name?: string | null
+  linked_workspace_member_id?: string | null
+  linked_workspace_member_name?: string | null
+  metadata: unknown
+  created_at: Date
+  updated_at: Date
+  sessions?: unknown
+}
+
+type TransportMessageLinkRow = {
+  id: string
+  workspace_id: string
+  conversation_id: string
+  item_id: string
+  transport_account_id: string
+  transport_endpoint_id: string
+  transport_kind: TransportKind
+  direction: "inbound" | "outbound"
+  delivery_status: TransportDeliveryStatus
+  external_message_id?: string | null
+  external_reply_to_id?: string | null
+  external_thread_id?: string | null
+  external_emoji_reactions?: unknown
+  metadata: unknown
+  delivered_at?: Date | null
+  created_at?: Date | null
+  updated_at?: Date | null
+}
+
+export function normalizeAccountRow(
+  row: TransportAccountRow
+): TransportAccountSummary {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
+    workspaceId: row.workspace_id || "",
     transportKind: row.transport_kind,
     accountKey: row.account_key,
-    displayName: row.display_name,
+    displayName: row.display_name || row.account_key,
     ownerScope:
       (row.owner_scope as TransportAccountOwnerScope | undefined) ||
       "workspace",
@@ -89,15 +189,15 @@ export function normalizeAccountRow(row: any): TransportAccountSummary {
 }
 
 export function normalizeEndpointRow(
-  row: any,
+  row: TransportEndpointRow,
   transportKind: TransportKind
 ): TransportEndpointSummary {
   return {
-    id: row.endpoint_id || row.id,
+    id: row.endpoint_id || row.id || "",
     transportAccountId: row.transport_account_id,
     transportKind,
     endpointType: row.endpoint_type,
-    externalId: row.endpoint_external_id || row.external_id,
+    externalId: row.endpoint_external_id || row.external_id || "",
     parentExternalId: row.parent_external_id || undefined,
     displayName: row.endpoint_display_name || row.display_name || undefined,
     metadata: parseJsonObject(row.endpoint_metadata || row.metadata),
@@ -111,13 +211,13 @@ export function normalizeEndpointRow(
 }
 
 export function normalizeBindingRow(
-  row: any
+  row: ConversationTransportBindingRow
 ): ConversationTransportBindingSummary {
   const account = normalizeAccountRow(row)
   return {
     id: row.binding_id || row.id,
-    conversationId: row.conversation_id,
-    workspaceId: row.workspace_id,
+    conversationId: row.conversation_id || "",
+    workspaceId: row.workspace_id || account.workspaceId,
     transportKind: row.transport_kind,
     outboundEnabled: Boolean(row.outbound_enabled),
     inboundActorMode:
@@ -138,9 +238,9 @@ export function normalizeBindingRow(
 }
 
 export function normalizeTransportSessionRow(
-  row: any
+  row: TransportSessionRow
 ): TransportSessionSummary {
-  const workspaceId = row.account_workspace_id || row.workspace_id
+  const workspaceId = row.account_workspace_id || row.workspace_id || ""
   const account = normalizeAccountRow({ ...row, workspace_id: workspaceId })
   return {
     id: row.endpoint_id || row.binding_id || row.id,
@@ -171,7 +271,7 @@ export function normalizeTransportSessionRow(
 }
 
 export function normalizeTransportExternalUserRow(
-  row: any
+  row: TransportExternalUserRow
 ): TransportExternalUserSummary {
   return {
     id: row.id,
@@ -190,7 +290,7 @@ export function normalizeTransportExternalUserRow(
   }
 }
 
-export function normalizeTransportMessageLinkRow(row: any) {
+export function normalizeTransportMessageLinkRow(row: TransportMessageLinkRow) {
   const rawReactions = row.external_emoji_reactions
   const reactions: Record<string, string> = {}
   if (

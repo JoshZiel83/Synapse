@@ -167,7 +167,7 @@ async function loadConversationRow(
   db: KyselyDb,
   conversationId: string
 ): Promise<ConversationRow | null> {
-  return (await db
+  const row = await db
     .selectFrom("conversations as conversation")
     .select([
       "conversation.id as id",
@@ -176,7 +176,8 @@ async function loadConversationRow(
     ])
     .where("conversation.id", "=", conversationId)
     .limit(1)
-    .executeTakeFirst()) as unknown as ConversationRow | null
+    .executeTakeFirst()
+  return row ?? null
 }
 
 async function loadPlatformAccessKeysForUser(db: KyselyDb, userId: string) {
@@ -692,7 +693,7 @@ async function listResourceGrantRows(
     return []
   }
 
-  return (await query.execute()) as unknown as ResourceGrantRow[]
+  return await query.execute()
 }
 
 async function listWorkspaceAppGrantRows(
@@ -820,7 +821,7 @@ async function listWorkspaceAppGrantRows(
     return []
   }
 
-  return (await query.execute()) as unknown as ResourceGrantRow[]
+  return await query.execute()
 }
 
 async function hasResourceGrant(
@@ -1723,7 +1724,7 @@ async function loadMemorySpaceWithSubjects(
     .where("ms.id", "=", memorySpaceId)
     .limit(1)
     .executeTakeFirst()
-  return (row as unknown as MemorySpaceLoadedRow | undefined) ?? null
+  return row ?? null
 }
 
 /**

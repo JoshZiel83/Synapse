@@ -72,7 +72,7 @@ const MAX_ATTEMPTS = 5
 const TOKEN_SWEEP_EVERY_TICKS = 60 // ≈ every 5 min
 
 /** Run raw SQL (text+params) on the transaction/db executor. */
-async function runOn<T = any>(
+async function runOn<T extends object = Record<string, unknown>>(
   executor: Executor,
   text: string,
   params: readonly unknown[] = []

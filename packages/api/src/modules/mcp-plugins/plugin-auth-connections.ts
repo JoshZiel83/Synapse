@@ -19,7 +19,11 @@ import {
   decryptSensitiveFields,
   encrypt,
 } from "../../infrastructure/crypto/index.js"
-import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
+import {
+  db,
+  type TableInsert,
+  type TableRow,
+} from "../../infrastructure/database/kysely.js"
 import {
   parseInstantString,
   serializeInstant,
@@ -47,13 +51,13 @@ import {
 import { normalizeFeishuFeatureKeys } from "./feishu/features.js"
 
 type JsonObject = Record<string, unknown>
-type QueryRunner = <T extends pg.QueryResultRow = any>(
+type QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params?: any[]
 ) => Promise<{ rows: T[] }>
 
 /** Default {@link QueryRunner} backed by the top-level Kysely db. */
-const dbRunner: QueryRunner = <T extends pg.QueryResultRow = any>(
+const dbRunner: QueryRunner = <T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params?: any[]
 ) =>
@@ -61,47 +65,11 @@ const dbRunner: QueryRunner = <T extends pg.QueryResultRow = any>(
     .executeQuery<T>(CompiledQuery.raw(text, params ?? []))
     .then((r) => ({ rows: r.rows as T[] }))
 
-type PluginAuthSessionRow = {
-  id: string
-  workspace_id: string
+type PluginAuthSessionRow = TableRow<"plugin_auth_sessions">
+
+type PluginConnectionRow = TableRow<"plugin_connections"> & {
   catalog_item_id: string
   catalog_version_id: string | null
-  installation_id: string | null
-  binding_key: string
-  driver: string
-  workspace_member_id: string
-  status: string
-  phase: string | null
-  state: string | null
-  challenge_payload: unknown
-  transient_payload: unknown
-  error_code: string | null
-  error_message: string | null
-  result_preview: unknown
-  result_payload: unknown
-  metadata: unknown
-  expires_at: Date
-  created_at: Date
-  updated_at: Date
-}
-
-type PluginConnectionRow = {
-  id: string
-  workspace_id: string
-  installation_id: string
-  catalog_item_id: string
-  catalog_version_id?: string | null
-  binding_key: string
-  driver: string
-  external_account_id: string | null
-  display_name: string | null
-  avatar_url: string | null
-  status: string
-  expires_at: Date | null
-  public_payload: unknown
-  secret_payload: unknown
-  created_at: Date
-  updated_at: Date
 }
 
 type PluginAuthSpec = {
@@ -389,7 +357,7 @@ async function getSessionRow(
   if (!row) {
     throw new PluginAuthError(404, "Auth session not found")
   }
-  return row as unknown as PluginAuthSessionRow
+  return row
 }
 
 async function getSessionRowByState(state: string) {
@@ -402,7 +370,7 @@ async function getSessionRowByState(state: string) {
   if (!row) {
     throw new PluginAuthError(404, "Auth session not found")
   }
-  return row as unknown as PluginAuthSessionRow
+  return row
 }
 
 async function getConnectionRow(connectionId: string, workspaceId?: string) {
@@ -434,7 +402,7 @@ async function getConnectionRow(connectionId: string, workspaceId?: string) {
   if (!row) {
     throw new PluginAuthError(404, "Auth connection not found")
   }
-  return row as unknown as PluginConnectionRow
+  return row
 }
 
 async function getInstallationConfigRow(
@@ -467,7 +435,7 @@ async function getInstallationConfigRow(
     throw new PluginAuthError(404, "Installation not found")
   }
 
-  return row as unknown as InstallationConfigRow
+  return row
 }
 
 function mergeConfigLayers(...layers: Record<string, unknown>[]) {
@@ -794,7 +762,7 @@ async function expirePluginAuthSession(sessionId: string) {
     .where("id", "=", sessionId)
     .returningAll()
     .executeTakeFirstOrThrow()
-  return expired as unknown as PluginAuthSessionRow
+  return expired
 }
 
 async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
@@ -831,7 +799,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
           .where("id", "=", row.id)
           .returningAll()
           .executeTakeFirstOrThrow()
-        return updated as unknown as PluginAuthSessionRow
+        return updated
       }
       case "completed": {
         const resultPayload = buildMijiaResultPayload(progress.authState)
@@ -851,7 +819,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
           .where("id", "=", row.id)
           .returningAll()
           .executeTakeFirstOrThrow()
-        return updated as unknown as PluginAuthSessionRow
+        return updated
       }
       case "expired": {
         const expired = await db
@@ -865,7 +833,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
           .where("id", "=", row.id)
           .returningAll()
           .executeTakeFirstOrThrow()
-        return expired as unknown as PluginAuthSessionRow
+        return expired
       }
       case "failed": {
         const failed = await db
@@ -879,7 +847,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
           .where("id", "=", row.id)
           .returningAll()
           .executeTakeFirstOrThrow()
-        return failed as unknown as PluginAuthSessionRow
+        return failed
       }
       default:
         return row
@@ -900,7 +868,7 @@ async function progressMijiaPluginAuthSession(row: PluginAuthSessionRow) {
       .where("id", "=", row.id)
       .returningAll()
       .executeTakeFirstOrThrow()
-    return failed as unknown as PluginAuthSessionRow
+    return failed
   }
 }
 
@@ -944,7 +912,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           .where("id", "=", row.id)
           .returningAll()
           .executeTakeFirstOrThrow()
-        return updated as unknown as PluginAuthSessionRow
+        return updated
       }
       case "completed": {
         const appScopeStatus = await buildFeishuAppScopeInspection({
@@ -982,7 +950,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           .where("id", "=", row.id)
           .returningAll()
           .executeTakeFirstOrThrow()
-        return updated as unknown as PluginAuthSessionRow
+        return updated
       }
       case "expired": {
         const expired = await db
@@ -996,7 +964,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           .where("id", "=", row.id)
           .returningAll()
           .executeTakeFirstOrThrow()
-        return expired as unknown as PluginAuthSessionRow
+        return expired
       }
       case "failed": {
         const appScopeStatus = await buildFeishuAppScopeInspection({
@@ -1022,7 +990,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
           .where("id", "=", row.id)
           .returningAll()
           .executeTakeFirstOrThrow()
-        return failed as unknown as PluginAuthSessionRow
+        return failed
       }
       default:
         return row
@@ -1043,7 +1011,7 @@ async function progressFeishuPluginAuthSession(row: PluginAuthSessionRow) {
       .where("id", "=", row.id)
       .returningAll()
       .executeTakeFirstOrThrow()
-    return failed as unknown as PluginAuthSessionRow
+    return failed
   }
 }
 
@@ -1486,7 +1454,7 @@ export async function startPluginAuthSession(input: {
         .executeTakeFirstOrThrow()
 
       return {
-        session: mapSessionRow(inserted as unknown as PluginAuthSessionRow),
+        session: mapSessionRow(inserted),
       }
     }
     case "mijia_qr_login": {
@@ -1519,7 +1487,7 @@ export async function startPluginAuthSession(input: {
         .executeTakeFirstOrThrow()
 
       return {
-        session: mapSessionRow(inserted as unknown as PluginAuthSessionRow),
+        session: mapSessionRow(inserted),
       }
     }
     case "feishu_cli_setup": {
@@ -1585,7 +1553,7 @@ export async function startPluginAuthSession(input: {
         .executeTakeFirstOrThrow()
 
       return {
-        session: mapSessionRow(inserted as unknown as PluginAuthSessionRow),
+        session: mapSessionRow(inserted),
       }
     }
     default:
@@ -1668,7 +1636,7 @@ export async function inspectPluginAuthSession(input: {
     .executeTakeFirstOrThrow()
 
   return {
-    session: mapSessionRow(updated as unknown as PluginAuthSessionRow),
+    session: mapSessionRow(updated),
   }
 }
 
@@ -1707,7 +1675,7 @@ export async function handlePluginAuthCallback(input: {
       .where("id", "=", session.id)
       .returningAll()
       .executeTakeFirstOrThrow()
-    return mapSessionRow(failed as unknown as PluginAuthSessionRow)
+    return mapSessionRow(failed)
   }
 
   switch (session.driver) {
@@ -1822,7 +1790,7 @@ export async function handlePluginAuthCallback(input: {
         .returningAll()
         .executeTakeFirstOrThrow()
 
-      return mapSessionRow(updated as unknown as PluginAuthSessionRow)
+      return mapSessionRow(updated)
     }
     default:
       throw new PluginAuthError(

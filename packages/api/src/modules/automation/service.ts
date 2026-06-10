@@ -89,7 +89,7 @@ import {
   mapAutomationEventSourceAccessBindingToGrant,
   normalizeAutomationEventSourceAccessBindingRow,
   readAutomationEventSourceAccessBindingTarget,
-  type AutomationEventSourceBindingRow,
+  type AutomationEventSourceBindingJoinedRow,
 } from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
@@ -270,7 +270,7 @@ type TargetParticipantRow = {
   target_participant_id: string
 }
 
-type AutomationEventSourceAccessRow = AutomationEventSourceBindingRow
+type AutomationEventSourceAccessRow = AutomationEventSourceBindingJoinedRow
 
 type AutomationEventSourceAccessContext = {
   conversationId: string
@@ -1411,7 +1411,7 @@ function automationEventSourceGrantApplies(params: {
     return false
   }
 
-  const target = readAutomationEventSourceAccessBindingTarget(params.row as any)
+  const target = readAutomationEventSourceAccessBindingTarget(params.row)
   const subject = target.subject
   const scope = target.scope
   switch (subject.kind) {
@@ -1625,10 +1625,7 @@ export async function grantAutomationEventSourceAccess(input: {
       })
 
     return {
-      binding: {
-        ...binding,
-        resource_id: binding.automation_event_source_id!,
-      } as AutomationEventSourceBindingRow,
+      binding,
     }
   })
 

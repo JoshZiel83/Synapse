@@ -3,6 +3,7 @@ import {
   runBuilder,
   takeFirstOn,
   type Executor,
+  type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { queueConversationTransportProjection } from "../im/service.js"
@@ -53,6 +54,27 @@ import { v4 as uuidv4 } from "uuid"
 
 const log = createLogger("session")
 
+type SessionRow = TableRow<"sessions"> & {
+  actor_display_name?: string | null
+  conversation_kind?: string | null
+  conversation_is_im?: unknown
+  conversation_title?: string | null
+}
+
+type SessionMessageItemRow = {
+  id: string
+  session_id: string | null
+  conversation_id: string
+  sequence: number | string
+  workspace_id: string
+  subtype: string
+  role: TableRow<"conversation_items">["role"]
+  from_actor_id: string | null
+  from_workspace_member_id: string | null
+  created_at: Date
+  metadata: unknown
+}
+
 function parseJsonObject(value: unknown): Record<string, unknown> {
   if (!value) return {}
   if (typeof value === "string") {
@@ -76,7 +98,7 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-function normalizeSessionRow(row: any) {
+function normalizeSessionRow(row: SessionRow | null) {
   if (!row) return null
   return {
     ...row,
@@ -92,6 +114,15 @@ function normalizeSessionRow(row: any) {
     isGroupConversation: isGroupConversationKind(row.conversation_kind),
     hasThreadContext: isThreadConversationKind(row.conversation_kind),
   }
+}
+
+function normalizeSessionMessageRole(
+  row: Pick<SessionMessageItemRow, "role" | "subtype">
+): SessionMessage["role"] {
+  if (row.subtype === "tool_result" || row.role === "tool") {
+    return "tool_result"
+  }
+  return row.role
 }
 
 async function getActorJoinVersionId(actorId: UUID) {
@@ -111,7 +142,9 @@ async function getActorJoinVersionId(actorId: UUID) {
   return row?.actor_version_id || undefined
 }
 
-async function loadSession(sessionId: UUID): Promise<any | null> {
+async function loadSession(
+  sessionId: UUID
+): Promise<ReturnType<typeof normalizeSessionRow>> {
   const row = await db
     .selectFrom("sessions as s")
     .innerJoin("actors as a", "a.id", "s.actor_id")
@@ -560,26 +593,26 @@ export async function getSessionMessages(
     .orderBy("cip.ordinal", "asc")
     .execute()
 
-  const partsByItem = new Map<string, any[]>()
+  const partsByItem = new Map<string, TableRow<"conversation_item_parts">[]>()
   for (const row of partRows) {
     if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, [])
     partsByItem.get(row.item_id)!.push(row)
   }
 
-  return items.map((row: any) => {
+  return items.map((row: SessionMessageItemRow) => {
     const item = { ...row, parts: partsByItem.get(row.id) || [] }
     return {
       id: row.id,
-      sessionId: row.session_id,
+      sessionId,
       conversationId: row.conversation_id,
       sequence: row.sequence,
       workspaceId: row.workspace_id,
-      role: row.subtype || row.role,
+      role: normalizeSessionMessageRole(row),
       contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
       fromActorId: row.from_actor_id || undefined,
       fromWorkspaceMemberId: row.from_workspace_member_id || undefined,
       metadata: buildMetadataFromItem(item),
-      createdAt: row.created_at,
+      createdAt: row.created_at.toISOString() as SessionMessage["createdAt"],
     }
   })
 }

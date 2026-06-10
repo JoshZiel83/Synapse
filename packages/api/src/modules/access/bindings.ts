@@ -47,6 +47,19 @@ export type AutomationEventSourceBindingRow =
     revoked_at: Date | null
   }
 
+export type AutomationEventSourceBindingJoinedRow =
+  AutomationEventSourceBindingRow & {
+    subject_kind?: string | null
+    subject_workspace_id_via_join?: string | null
+    subject_workspace_member_id_via_join?: string | null
+    subject_actor_id_via_join?: string | null
+    subject_remote_agent_id_via_join?: string | null
+    subject_conversation_id_via_join?: string | null
+    scope_kind?: string | null
+    scope_workspace_id_via_join?: string | null
+    scope_conversation_id_via_join?: string | null
+  }
+
 export function readAutomationEventSourceAccessBindingResourceId(
   row: Pick<
     AutomationEventSourceBindingStorageRow,
@@ -434,17 +447,7 @@ function scopeInContext(
 }
 
 export function mapAutomationEventSourceAccessBindingToGrant(
-  row: AutomationEventSourceBindingRow & {
-    subject_kind?: string | null
-    subject_workspace_id_via_join?: string | null
-    subject_workspace_member_id_via_join?: string | null
-    subject_actor_id_via_join?: string | null
-    subject_remote_agent_id_via_join?: string | null
-    subject_conversation_id_via_join?: string | null
-    scope_kind?: string | null
-    scope_workspace_id_via_join?: string | null
-    scope_conversation_id_via_join?: string | null
-  },
+  row: AutomationEventSourceBindingJoinedRow,
   fallbackReason?: string,
   options?: {
     effectiveConversationTypeMask?: number

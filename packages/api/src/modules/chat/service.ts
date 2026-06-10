@@ -649,7 +649,7 @@ function rootQueryable(): Executor {
  * `db` or a transaction `trx` — the chat module's raw-SQL execution path.
  * Routes through Kysely's `CompiledQuery.raw`.
  */
-async function runOn<T = any>(
+async function runOn<T extends object = Record<string, unknown>>(
   executor: Executor,
   text: string,
   params: readonly unknown[] = []
@@ -661,7 +661,7 @@ async function runOn<T = any>(
 }
 
 /** `runOn` bound to the top-level `db` (replaces the old pool-scoped executeSql). */
-function runOnDb<T = any>(
+function runOnDb<T extends object = Record<string, unknown>>(
   text: string,
   params: readonly unknown[] = []
 ): Promise<{ rows: T[]; rowCount?: number | null }> {

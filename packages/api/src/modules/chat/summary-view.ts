@@ -2,10 +2,31 @@ import {
   CONVERSATION_KIND,
   CONVERSATION_PARTICIPANT_TYPE,
 } from "@synapse/shared"
+import { assertIsoInstant } from "@synapse/shared/datetime"
 import { getFileUrlById } from "../files/service.js"
 import { listConversationParticipants } from "./service.js"
 
-export function mapConversationParticipant(row: any) {
+type ConversationParticipantRow = Awaited<
+  ReturnType<typeof listConversationParticipants>
+>[number]
+
+type ConversationSummaryRow = {
+  id: string
+  kind: "direct" | "group"
+  is_im?: boolean | null
+  isIm?: boolean | null
+  transport_kind?: string | null
+  title?: string | null
+  avatar_url?: string | null
+  last_message?: string | null
+  last_message_sender_type?: string | null
+  last_message_sender_name?: string | null
+  last_message_at?: string | null
+  unread_count?: number | null
+  created_at: string
+}
+
+export function mapConversationParticipant(row: ConversationParticipantRow) {
   if (row.remote_agent_id) {
     return {
       participantId: row.id,
@@ -57,7 +78,7 @@ export function mapConversationParticipant(row: any) {
     participantId: row.id,
     participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
     workspaceMemberId: row.workspace_member_id || undefined,
-    id: row.workspace_member_id,
+    id: row.workspace_member_id || undefined,
     name: row.user_name || "User",
     avatarUrl: row.user_avatar_file_id
       ? getFileUrlById(row.user_avatar_file_id)
@@ -68,7 +89,7 @@ export function mapConversationParticipant(row: any) {
 }
 
 function buildConversationPresentation(params: {
-  row: any
+  row: ConversationSummaryRow
   participants: ReturnType<typeof mapConversationParticipant>[]
   viewerWorkspaceMemberId: string
   canManageConversation: boolean
@@ -154,27 +175,27 @@ function buildConversationPresentation(params: {
 }
 
 export async function mapConversationSummaryView(
-  row: any,
+  row: ConversationSummaryRow,
   viewer: string | { workspaceMemberId: string }
 ) {
   const viewerWorkspaceMemberId =
     typeof viewer === "string" ? viewer : viewer.workspaceMemberId
   const conversationParticipants = (
     await listConversationParticipants(row.id)
-  ).filter((participant: any) => participant.state === "active")
+  ).filter((participant) => participant.state === "active")
   const mappedParticipants = conversationParticipants.map(
     mapConversationParticipant
   )
   const actorParticipants = mappedParticipants.filter(
-    (participant: any) =>
+    (participant) =>
       participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
   )
   const hasOpenLane = conversationParticipants.some(
-    (participant: any) =>
+    (participant) =>
       participant.actor_id && participant.session_status !== "closed"
   )
   const viewerMembership = conversationParticipants.find(
-    (participant: any) =>
+    (participant) =>
       participant.state === "active" &&
       participant.participant_type === "workspace_member" &&
       participant.workspace_member_id === viewerWorkspaceMemberId
@@ -206,19 +227,20 @@ export async function mapConversationSummaryView(
     participants: mappedParticipants,
     members: mappedParticipants,
     actorParticipants,
-    lastMessage: row.last_message
-      ? {
-          content: row.last_message,
-          role:
-            row.last_message_sender_type === "user"
-              ? ("user" as const)
-              : ("assistant" as const),
-          actorName: row.last_message_sender_name,
-          createdAt: row.last_message_at,
-        }
-      : undefined,
+    lastMessage:
+      row.last_message && row.last_message_at
+        ? {
+            content: row.last_message,
+            role:
+              row.last_message_sender_type === "user"
+                ? ("user" as const)
+                : ("assistant" as const),
+            actorName: row.last_message_sender_name || undefined,
+            createdAt: assertIsoInstant(row.last_message_at),
+          }
+        : undefined,
     unreadCount: row.unread_count || 0,
-    createdAt: row.created_at,
+    createdAt: assertIsoInstant(row.created_at),
     title: presentation.title,
     name: presentation.title,
     avatarUrl: presentation.avatarUrl,

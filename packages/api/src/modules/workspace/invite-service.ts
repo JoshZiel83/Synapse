@@ -1,7 +1,11 @@
 import crypto from "node:crypto"
 import type { Timestamp } from "@synapse/shared"
 import type { WorkspaceInvitesTrustLevel } from "../../infrastructure/database/generated/db.js"
-import { db, withDbTransaction } from "../../infrastructure/database/kysely.js"
+import {
+  db,
+  withDbTransaction,
+  type TableRow,
+} from "../../infrastructure/database/kysely.js"
 import { parseInstantString } from "../../infrastructure/datetime.js"
 import { sql } from "kysely"
 import { assignOfficialChiefActorPreference } from "./service.js"
@@ -14,7 +18,12 @@ export function generateInviteToken(): string {
 
 // ── Row mapper ──
 
-function mapInviteRow(row: any) {
+type InviteRow = TableRow<"workspace_invites"> & {
+  workspace_name?: string | null
+}
+
+function mapInviteRow(row: InviteRow | undefined | null) {
+  if (!row) return null
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -158,7 +167,7 @@ export async function listWorkspaceInvites(workspaceId: string) {
     .where("is_revoked", "=", false)
     .orderBy("created_at", "desc")
     .execute()
-  return rows.map(mapInviteRow)
+  return rows.map((row) => mapInviteRow(row)!)
 }
 
 export async function revokeInvite(inviteId: string, workspaceId: string) {
@@ -171,5 +180,5 @@ export async function revokeInvite(inviteId: string, workspaceId: string) {
     .where("workspace_id", "=", workspaceId)
     .returningAll()
     .executeTakeFirst()
-  return row ? mapInviteRow(row) : null
+  return mapInviteRow(row)
 }

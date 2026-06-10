@@ -4,6 +4,7 @@ import {
   withDbTransaction,
   type Executor,
   type TableInsert,
+  type TableRow,
 } from "../../infrastructure/database/kysely.js"
 import { serializeOptionalInstant } from "../../infrastructure/datetime.js"
 import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/database/seeds/actors/index.js"
@@ -43,6 +44,38 @@ export interface AddMemberInput {
 }
 
 export type WorkspaceAccessKey = WorkspaceAccessBindingsAccessKey
+
+type WorkspaceViewRow = Pick<
+  TableRow<"workspaces">,
+  | "id"
+  | "name"
+  | "slug"
+  | "description"
+  | "owner_id"
+  | "is_trusted"
+  | "created_at"
+  | "updated_at"
+>
+
+type WorkspaceMemberViewRow = Pick<
+  TableRow<"workspace_members">,
+  "id" | "workspace_id" | "user_id" | "trust_level" | "joined_at"
+> & {
+  owner_id?: string | null
+  access_keys?: string[] | null
+}
+
+type WorkspaceChiefActorPreferenceRow = {
+  workspace_id: string
+  workspace_member_id: string
+  chief_actor_id: string | null
+  created_at: Date
+  updated_at: Date
+  chief_actor_display_name: string | null
+  chief_actor_role: string | null
+  chief_actor_title: string | null
+  chief_actor_avatar_file_id: string | null
+}
 
 function deriveWorkspaceTrustLevel(row: {
   owner_id?: string | null
@@ -330,7 +363,7 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
     const officialActorTemplates = await loadOfficialActorTemplates(trx)
     const installedActors: Array<{
-      actorRow: Record<string, unknown>
+      actorRow: TableRow<"actors">
       template: LoadedOfficialActorTemplate
     }> = []
 
@@ -436,10 +469,12 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
 
     return {
       workspace: mapWorkspaceRow(workspace),
-      secretary: mapActorRow(
-        chiefActor.actorRow,
-        chiefActor.template.actorDocs
-      ),
+      secretary: mapActorRow({
+        row: chiefActor.actorRow,
+        workspaceId: String(workspace.id),
+        displayName: chiefActor.template.actorDisplayName,
+        docs: chiefActor.template.actorDocs,
+      }),
       installedTemplatePackageIds: officialActorTemplates.map(
         (template) => template.packageId
       ),
@@ -902,7 +937,7 @@ export async function revokeWorkspaceAccess(
 
 // ── Row mappers ──
 
-function mapWorkspaceRow(row: any) {
+function mapWorkspaceRow(row: WorkspaceViewRow) {
   return {
     id: row.id,
     name: row.name,
@@ -915,12 +950,18 @@ function mapWorkspaceRow(row: any) {
   }
 }
 
-function mapActorRow(row: any, docs: ActorDoc[]) {
+function mapActorRow(params: {
+  row: TableRow<"actors">
+  workspaceId: string
+  displayName: string
+  docs: ActorDoc[]
+}) {
+  const { row, workspaceId, displayName, docs } = params
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
+    workspaceId,
     definition: {
-      name: row.name,
+      name: displayName,
       role: row.role,
       title: row.title,
       avatarFileId: row.avatar_file_id ?? undefined,
@@ -935,14 +976,14 @@ function mapActorRow(row: any, docs: ActorDoc[]) {
         : {},
     },
     currentVersion: Number(row.current_version || 1),
-    isActive: row.is_active,
+    isActive: true,
     isPublicShared: Boolean(row.is_public_shared),
     createdAt: serializeOptionalInstant(row.created_at),
     updatedAt: serializeOptionalInstant(row.updated_at),
   }
 }
 
-function mapMemberRow(row: any) {
+function mapMemberRow(row: WorkspaceMemberViewRow) {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -954,7 +995,7 @@ function mapMemberRow(row: any) {
 }
 
 function mapWorkspaceChiefActorPreferenceRow(
-  row: any
+  row: WorkspaceChiefActorPreferenceRow
 ): WorkspaceChiefActorPreference {
   const chiefActorId =
     row.chief_actor_id && row.chief_actor_display_name
@@ -970,7 +1011,7 @@ function mapWorkspaceChiefActorPreferenceRow(
         ? {
             id: chiefActorId,
             displayName: row.chief_actor_display_name,
-            role: row.chief_actor_role,
+            role: (row.chief_actor_role as ActorRole | null) || "assistant",
             title: row.chief_actor_title || row.chief_actor_role || "Actor",
             avatarUrl: row.chief_actor_avatar_file_id
               ? getFileUrlById(row.chief_actor_avatar_file_id)

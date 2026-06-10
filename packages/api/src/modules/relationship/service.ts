@@ -1331,7 +1331,7 @@ async function buildContactHubEntryMap(params: {
         "=",
         viewerWorkspaceMember?.workspaceMemberId || ""
       )
-      .orderBy("created_at", "desc")
+      .orderBy("e.created_at", "desc")
       .execute(),
     viewerWorkspaceMember
       ? db

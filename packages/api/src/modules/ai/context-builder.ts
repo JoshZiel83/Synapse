@@ -141,6 +141,29 @@ export async function loadExecutionToolResultsForSession(
   return out
 }
 
+type ContextAuthorParticipantRow = {
+  id?: string
+  actor_id?: string | null
+  workspace_member_id?: string | null
+  user_id?: string | null
+  participant_name?: string | null
+  user_name?: string | null
+  display_name?: string | null
+}
+
+type ContextAuthorSourceRow = {
+  authorParticipant?: ContextAuthorParticipantRow | null
+  author_participant?: ContextAuthorParticipantRow | null
+  authorParticipantId?: string | null
+  author_participant_id?: string | null
+  author_actor_id?: string | null
+  author_user_id?: string | null
+  author_name?: string | null
+  role?: string | null
+  sessionId?: string | null
+  session_id?: string | null
+}
+
 function mimeToCategory(mimeType: string): CanonicalFileCategory {
   if (mimeType.startsWith("image/")) return "image"
   if (mimeType.startsWith("audio/")) return "audio"
@@ -235,7 +258,7 @@ export function itemPartsToCanonicalBlocks(
 }
 
 function buildAuthor(
-  row: any,
+  row: ContextAuthorSourceRow,
   actorId?: string
 ): CanonicalContextAuthor | undefined {
   const authorParticipant = row.authorParticipant || row.author_participant
@@ -247,9 +270,9 @@ function buildAuthor(
       row.author_participant_id
     const resolvedActorId = authorParticipant?.actor_id || row.author_actor_id
     return {
-      participantId: participantId,
+      participantId: participantId || undefined,
       participantType: "actor",
-      actorId: resolvedActorId,
+      actorId: resolvedActorId || undefined,
       sessionId: row.sessionId || row.session_id || undefined,
       name:
         authorParticipant?.participant_name ||
@@ -265,9 +288,10 @@ function buildAuthor(
       participantId:
         authorParticipant?.id ||
         row.authorParticipantId ||
-        row.author_participant_id,
+        row.author_participant_id ||
+        undefined,
       participantType: "workspace_member",
-      userId: authorParticipant?.user_id || row.author_user_id,
+      userId: authorParticipant?.user_id || row.author_user_id || undefined,
       sessionId: row.sessionId || row.session_id || undefined,
       name:
         authorParticipant?.user_name ||
@@ -283,7 +307,8 @@ function buildAuthor(
       participantId:
         authorParticipant?.id ||
         row.authorParticipantId ||
-        row.author_participant_id,
+        row.author_participant_id ||
+        undefined,
       participantType: "system",
       sessionId: row.sessionId || row.session_id || undefined,
       name: authorParticipant?.display_name || row.author_name || "System",

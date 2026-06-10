@@ -14,6 +14,7 @@ import {
 import type {
   AutomationEventSourceBindingResourceType,
   AutomationEventSourceBindingTarget,
+  AutomationEventSourceBindingJoinedRow,
 } from "./bindings.js"
 import {
   accessGrantTargetScopeRef,
@@ -133,7 +134,7 @@ export async function insertAutomationEventSourceAccessBindingReturningRowOn(
   params: Parameters<
     typeof buildAutomationEventSourceAccessBindingInsertValuesOn
   >[1]
-): Promise<AutomationEventSourceBindingRow> {
+): Promise<AutomationEventSourceBindingJoinedRow> {
   const values = await buildAutomationEventSourceAccessBindingInsertValuesOn(
     client,
     params
@@ -149,10 +150,7 @@ export async function insertAutomationEventSourceAccessBindingReturningRowOn(
   if (!inserted) {
     throw new Error("Failed to insert resource_access_bindings row")
   }
-  return augmentInsertedBindingRowWithTarget(
-    inserted,
-    params.target
-  ) as AutomationEventSourceBindingRow
+  return augmentInsertedBindingRowWithTarget(inserted, params.target)
 }
 
 /**
@@ -292,7 +290,9 @@ export async function listAutomationEventSourceAccessGrants(
   }
   const rows = await query.execute()
   return rows.map((row) =>
-    mapAutomationEventSourceAccessBindingToGrant(row as any)
+    mapAutomationEventSourceAccessBindingToGrant(
+      normalizeAutomationEventSourceAccessBindingRow(row)
+    )
   )
 }
 
@@ -436,7 +436,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSources(
     workspaceId?: string
     includeRevoked?: boolean
   }
-): Promise<AutomationEventSourceBindingRow[]> {
+): Promise<AutomationEventSourceBindingJoinedRow[]> {
   if (input.resourceIds.length === 0) return []
   const column = resourceIdColumnFor(input.resourceType)
   let query = bindingRowSelectFor(db, input.resourceType)
@@ -452,11 +452,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSources(
     .orderBy(sql.ref(column))
     .orderBy("binding.created_at")
     .execute()
-  return rows.map((row) =>
-    normalizeAutomationEventSourceAccessBindingRow(
-      row as unknown as AutomationEventSourceBindingRow
-    )
-  )
+  return rows.map((row) => normalizeAutomationEventSourceAccessBindingRow(row))
 }
 
 /**
@@ -470,7 +466,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSource(
     workspaceId?: string
     includeRevoked?: boolean
   }
-): Promise<AutomationEventSourceBindingRow[]> {
+): Promise<AutomationEventSourceBindingJoinedRow[]> {
   return loadAutomationEventSourceAccessBindingRowsForSources(db, {
     resourceType: input.resourceType,
     resourceIds: [input.resourceId],
@@ -567,11 +563,7 @@ export async function loadAutomationEventSourceAccessBindingRowsForSourcesAndCon
     .orderBy(sql.ref(column))
     .orderBy("binding.created_at")
     .execute()
-  return rows.map((row) =>
-    normalizeAutomationEventSourceAccessBindingRow(
-      row as unknown as AutomationEventSourceBindingRow
-    )
-  )
+  return rows.map((row) => normalizeAutomationEventSourceAccessBindingRow(row))
 }
 
 /**
@@ -762,9 +754,7 @@ export async function getAutomationEventSourceAccessBindingRowById(
   }
   const row = await query.executeTakeFirst()
   if (!row) return null
-  return normalizeAutomationEventSourceAccessBindingRow(
-    row as unknown as AutomationEventSourceBindingRow
-  )
+  return normalizeAutomationEventSourceAccessBindingRow(row)
 }
 
 /**
