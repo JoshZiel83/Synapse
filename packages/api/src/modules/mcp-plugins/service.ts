@@ -45,6 +45,7 @@ import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conv
 import {
   db,
   runBuilder,
+  snakeCaseTopLevelKeys,
   takeFirstOn,
   withDbTransaction,
   type Executor,
@@ -97,7 +98,13 @@ function runnerFn(executor: Executor): QueryRunner {
   return <T extends QueryRow>(text: string, params?: unknown[]) =>
     executor
       .executeQuery<T>(CompiledQuery.raw(text, params ? [...params] : []))
-      .then((r) => ({ rows: r.rows as T[] })) as Promise<QueryResultLike<T>>
+      .then((r) => ({
+        // CamelCasePlugin camelCases top-level keys of every result row,
+        // including these raw rows whose `AS snake_case` aliases the module's
+        // row types + reads expect snake. Re-snake the top-level keys (JSONB
+        // values untouched) so the runtime rows match the declared <RowType>.
+        rows: r.rows.map((row) => snakeCaseTopLevelKeys(row)) as T[],
+      })) as Promise<QueryResultLike<T>>
 }
 
 type JsonObject = Record<string, unknown>
@@ -891,7 +898,9 @@ async function loadPluginCatalogRows(whereClause: RawBuilder<unknown>) {
       ${whereClause}
     `.compile(db)
   )
-  return result.rows
+  // Re-snake the CamelCasePlugin-transformed top-level keys: this query's
+  // `AS snake_case` aliases + PluginCatalogRow + mapPluginView all read snake.
+  return result.rows.map((row) => snakeCaseTopLevelKeys(row))
 }
 
 async function loadPluginCatalogMapByVersionIds(versionIds: string[]) {
@@ -973,7 +982,8 @@ async function loadInstallationRows(
       ORDER BY installation.created_at DESC`.compile(db)
   )
 
-  return result.rows
+  // Re-snake CamelCasePlugin-transformed top-level keys to match InstallationRow.
+  return result.rows.map((row) => snakeCaseTopLevelKeys(row))
 }
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
