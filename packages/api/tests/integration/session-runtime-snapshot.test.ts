@@ -120,6 +120,40 @@ async function buildSessionFixture(): Promise<{
   }
 }
 
+async function createRunningTurnFixture(params: {
+  sessionId: string
+  conversationId: string
+  actorId: string
+  startedAt?: Date | null
+  updatedAt?: Date
+}) {
+  if (!client) throw new Error("fixtures missing")
+  const turnId = uuidv4()
+  const updatedAt = params.updatedAt || new Date()
+  await client.query(
+    `INSERT INTO turns (
+       id,
+       session_id,
+       conversation_id,
+       actor_id,
+       trigger_type,
+       status,
+       started_at,
+       updated_at
+     )
+     VALUES ($1, $2, $3, $4, 'user_message', 'running', $5, $6)`,
+    [
+      turnId,
+      params.sessionId,
+      params.conversationId,
+      params.actorId,
+      params.startedAt ?? null,
+      updatedAt,
+    ]
+  )
+  return { turnId, updatedAt }
+}
+
 async function stageBlockedCache(opts: {
   workspaceId: string
   sessionId: string
@@ -431,5 +465,45 @@ test("worker early-return-no-pending-wakeups publish clears cached blocked-failu
     clean!.lastError,
     undefined,
     "early-return idle snapshot must not carry the previous failure's lastError"
+  )
+})
+
+test("running snapshot with an active turn and no tool calls does not depend on turns.created_at", async () => {
+  const fixture = await buildSessionFixture()
+  const updatedAt = new Date("2026-06-10T03:00:14.950Z")
+  const turn = await createRunningTurnFixture({
+    sessionId: fixture.sessionId,
+    conversationId: fixture.conversationId,
+    actorId: fixture.actorId,
+    startedAt: null,
+    updatedAt,
+  })
+
+  await updateSessionStatus(fixture.sessionId, "running", {
+    errorMessage: null,
+  })
+
+  const snapshot = await publishSessionRuntime(
+    fixture.workspaceId,
+    fixture.sessionId,
+    {
+      laneState: "running",
+      health: "ok",
+      phase: "thinking",
+      activeTurnId: turn.turnId,
+    }
+  )
+
+  assert.ok(snapshot, "running publish should produce a snapshot")
+  assert.ok(
+    snapshot!.currentTurnPreview,
+    "active turn should hydrate a preview even before any tool call rows exist"
+  )
+  assert.equal(snapshot!.currentTurnPreview!.turnId, turn.turnId)
+  assert.equal(snapshot!.currentTurnPreview!.totalToolCallCount, 0)
+  assert.equal(
+    snapshot!.currentTurnPreview!.startedAt,
+    updatedAt.toISOString(),
+    "NULL turns.started_at should fall back to turns.updated_at"
   )
 })

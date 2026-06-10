@@ -48,6 +48,10 @@ import { redactDeep } from "./tool-presentation/redact.js"
 
 const log = createLogger("session.runtime")
 
+type ToolResultRow = TableRow<"tool_results">
+type ToolResultPartRow = TableRow<"tool_result_parts">
+type ToolCallTaskRow = TableRow<"tool_call_tasks">
+
 function runtimeHashKey(conversationId: string) {
   return `runtime:conversation:${conversationId}`
 }
@@ -249,6 +253,16 @@ function mapToolActivityState(params: {
   return "completed"
 }
 
+function mapTaskLifecycleToRuntimeTaskStatus(
+  lifecycleStatus: ToolCallTaskRow["lifecycle_status"] | undefined
+): ActorRuntimeTurnActivityItem["taskStatus"] | undefined {
+  if (!lifecycleStatus) return undefined
+  if (lifecycleStatus === "submitted") return "working"
+  if (lifecycleStatus === "auth_required") return "input_required"
+  if (lifecycleStatus === "expired") return "failed"
+  return lifecycleStatus
+}
+
 async function loadActiveTurnIdForSession(sessionId: string) {
   const row = await db
     .selectFrom("turns")
@@ -376,7 +390,6 @@ async function buildToolActivityDetail(turnId: string) {
       "turns.session_id",
       "turns.conversation_id",
       "turns.actor_id",
-      "created_at",
       "turns.started_at",
       "turns.updated_at",
       "turns.completed_at",
@@ -400,9 +413,9 @@ async function buildToolActivityDetail(turnId: string) {
     .execute()
 
   const toolCallIds = toolCalls.map((row) => row.id)
-  const latestResultsByToolCall = new Map<string, any>()
-  const resultPartsByResultId = new Map<string, any[]>()
-  const latestTasksByToolCall = new Map<string, any>()
+  const latestResultsByToolCall = new Map<string, ToolResultRow>()
+  const resultPartsByResultId = new Map<string, ToolResultPartRow[]>()
+  const latestTasksByToolCall = new Map<string, ToolCallTaskRow>()
   const outputChunksByTaskId = new Map<
     string,
     Array<{ stream: string; text_value: string }>
@@ -488,13 +501,16 @@ async function buildToolActivityDetail(turnId: string) {
   for (const toolCall of toolCalls) {
     const latestResult = latestResultsByToolCall.get(toolCall.id)
     const task = latestTasksByToolCall.get(toolCall.id)
+    const taskStatus = mapTaskLifecycleToRuntimeTaskStatus(
+      task?.lifecycle_status
+    )
     const resultParts = latestResult
       ? resultPartsByResultId.get(latestResult.id) || []
       : []
     const outputChunks = task ? outputChunksByTaskId.get(task.id) || [] : []
     const state = mapToolActivityState({
       toolCallStatus: toolCall.status,
-      taskStatus: task?.status || undefined,
+      taskStatus,
       latestResultIsError: latestResult?.is_error === true,
     })
     const toolSource = getToolSource(
@@ -503,7 +519,7 @@ async function buildToolActivityDetail(turnId: string) {
     )
     const displayDetailStatus = getToolDisplayDetail({
       toolCallStatus: toolCall.status,
-      taskStatus: task?.status || undefined,
+      taskStatus,
       statusMessage: task?.status_message || undefined,
       errorMessage:
         latestResult?.error_message ||
@@ -569,7 +585,7 @@ async function buildToolActivityDetail(turnId: string) {
         : {}),
       requestBlocks: rendered.requestBlocks,
       resultBlocks: rendered.resultBlocks,
-      taskStatus: task?.status || undefined,
+      taskStatus,
       startedAt: serializeInstant(
         requireInstantDate(toolCall.created_at, "tool_calls.created_at")
       ),
@@ -606,8 +622,10 @@ async function buildToolActivityDetail(turnId: string) {
     sessionId: turnRow.session_id,
     startedAt:
       serializeOptionalInstant(turnRow.started_at) ||
+      // `turns` no longer has a created_at column; for legacy/test rows that
+      // still carry NULL started_at, fall back to the always-present updated_at.
       serializeInstant(
-        requireInstantDate(turnRow.created_at, "turns.created_at")
+        requireInstantDate(turnRow.updated_at, "turns.updated_at")
       ),
     updatedAt,
     processingTargets,
