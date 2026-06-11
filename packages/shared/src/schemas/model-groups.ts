@@ -1,11 +1,33 @@
 import { z } from "zod"
 import {
+  CANONICAL_FILE_CATEGORIES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_GRANT_STATUSES,
   MODEL_GROUP_OWNER_TYPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
 } from "../constants/enums.js"
 import { IsoInstantStringSchema } from "./datetime.js"
+
+/**
+ * Model-binding feature flags (a JSONB column). Known optional fields are
+ * validated; `.passthrough()` keeps forward-compatible extra keys rather than
+ * stripping them (the column is author/runtime extensible). Mirrors the
+ * relevant subset of ResolvedModelConfig in ../types/index.ts.
+ */
+export const ModelBindingFeaturesSchema = z
+  .object({
+    apiStyle: z.enum(["chat", "responses"]).optional(),
+    serverTools: z.array(z.enum(["web_search", "web_fetch"])).optional(),
+    multimodal: z
+      .object({
+        supported: z.boolean(),
+        types: z.array(z.enum(CANONICAL_FILE_CATEGORIES)),
+      })
+      .optional(),
+    crossTurnToolHistory: z.boolean().optional(),
+  })
+  .passthrough()
+export type ModelBindingFeatures = z.infer<typeof ModelBindingFeaturesSchema>
 
 /**
  * App-facing contracts for the model-groups settings surface. These are the
@@ -52,7 +74,7 @@ export const ModelGroupItemViewSchema = z.strictObject({
   modelName: z.string().nullable(),
   maxOutputTokens: z.number().nullable(),
   capabilityTags: z.array(z.string()),
-  features: z.record(z.string(), z.unknown()),
+  features: ModelBindingFeaturesSchema,
   providerOptions: z.record(z.string(), z.unknown()),
   requestTimeoutMs: z.number().nullable(),
   maxRetries: z.number().nullable(),
@@ -112,7 +134,7 @@ export const ModelGroupItemVersionViewSchema = z.strictObject({
   modelName: z.string().nullable(),
   maxOutputTokens: z.number().nullable(),
   capabilityTags: z.array(z.string()),
-  features: z.record(z.string(), z.unknown()),
+  features: ModelBindingFeaturesSchema,
   providerOptions: z.record(z.string(), z.unknown()),
   requestTimeoutMs: z.number().nullable(),
   maxRetries: z.number().nullable(),

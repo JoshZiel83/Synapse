@@ -12,6 +12,10 @@ import {
 
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
+import type {
+  ActorModelGroupAssignmentView,
+  ModelGroupView,
+} from "@synapse/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -67,7 +71,7 @@ function normalizeActor(actor: any): ActorRecord {
   }
 }
 
-function normalizeVisibleGroup(group: any): GroupRecord {
+function normalizeVisibleGroup(group: ModelGroupView): GroupRecord {
   return {
     id: group.id,
     name: group.name,
@@ -78,7 +82,9 @@ function normalizeVisibleGroup(group: any): GroupRecord {
   }
 }
 
-function normalizeAssignedGroup(group: any): AssignedGroupRecord {
+function normalizeAssignedGroup(
+  group: ActorModelGroupAssignmentView
+): AssignedGroupRecord {
   return {
     actorId: group.actorId,
     groupId: group.groupId,
@@ -292,10 +298,10 @@ export default function ActorModelAssignmentBoard() {
 
         if (cancelled) return
 
-        const nextAssigned = ((assignedResponse?.groups ?? []) as any[]).map(
+        const nextAssigned = (assignedResponse?.groups ?? []).map(
           normalizeAssignedGroup
         )
-        const nextVisible = ((visibleResponse?.groups ?? []) as any[]).map(
+        const nextVisible = (visibleResponse?.groups ?? []).map(
           normalizeVisibleGroup
         )
         setAssignedGroups(nextAssigned)
@@ -365,7 +371,7 @@ export default function ActorModelAssignmentBoard() {
             priority: index,
           }))
         )
-        const nextAssigned = ((response?.groups ?? []) as any[]).map(
+        const nextAssigned = (response?.groups ?? []).map(
           normalizeAssignedGroup
         )
 
@@ -445,10 +451,10 @@ export default function ActorModelAssignmentBoard() {
         api.getActorModelGroups(workspaceId, selectedActorId),
         api.getVisibleActorModelGroups(workspaceId, selectedActorId),
       ])
-      const nextAssigned = ((assignedResponse?.groups ?? []) as any[]).map(
+      const nextAssigned = (assignedResponse?.groups ?? []).map(
         normalizeAssignedGroup
       )
-      const nextVisible = ((visibleResponse?.groups ?? []) as any[]).map(
+      const nextVisible = (visibleResponse?.groups ?? []).map(
         normalizeVisibleGroup
       )
       setAssignedGroups(nextAssigned)

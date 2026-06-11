@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useEffect, useState } from "react"
 import {
   MODEL_GROUP_OWNER_TYPE,
+  type ModelGroupItemView,
   type ModelGroupOwnerType,
   type ModelGroupRoutingStrategy,
 } from "@synapse/shared"
@@ -32,23 +33,7 @@ import {
   type ModelGroupScopeAuto,
 } from "./model-group-shared"
 
-interface ModelItem {
-  id: string
-  groupId: string | null
-  bindingId: string
-  displayName: string
-  priority: number
-  weight: number
-  isEnabled: boolean
-  currentVersionId: string | null
-  version: number | null
-  providerKind: string
-  vendor: string | null
-  baseUrl: string | null
-  modelName: string | null
-  maxOutputTokens: number | null
-  capabilityTags: string[]
-}
+type ModelItem = ModelGroupItemView
 
 interface GroupDetail {
   id: string

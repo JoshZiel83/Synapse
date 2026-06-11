@@ -8,6 +8,7 @@ import {
   getProviderKindForVendor,
   listModelVendorDefinitions,
   vendorSupportsServerTools,
+  type ModelGroupItemView,
 } from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
@@ -36,7 +37,7 @@ interface ModelItemDialogProps {
   onOpenChange: (open: boolean) => void
   groupId: string
   scope?: "workspace" | "platform" | "workspace_member"
-  item: any | null
+  item: ModelGroupItemView | null
   onSaved: () => void
 }
 
